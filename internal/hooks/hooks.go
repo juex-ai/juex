@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/juex-ai/juex/internal/environment"
 )
 
 const (
@@ -115,17 +117,26 @@ type Observer interface {
 }
 
 type Runner struct {
-	hooks []CommandHook
+	hooks       []CommandHook
+	environment environment.Snapshot
 }
 
 func NewRunner(cfg Config) (*Runner, error) {
+	return NewRunnerWithOptions(cfg, RunnerOptions{})
+}
+
+type RunnerOptions struct {
+	Environment environment.Snapshot
+}
+
+func NewRunnerWithOptions(cfg Config, opts RunnerOptions) (*Runner, error) {
 	hooks := append([]CommandHook(nil), cfg.Commands...)
 	for i := range hooks {
 		if err := validateHook(hooks[i]); err != nil {
 			return nil, err
 		}
 	}
-	return &Runner{hooks: hooks}, nil
+	return &Runner{hooks: hooks, environment: opts.Environment}, nil
 }
 
 func (r *Runner) Empty() bool {
@@ -155,7 +166,7 @@ func (r *Runner) Run(ctx context.Context, req Request) ([]Result, error) {
 		if req.Observer != nil {
 			req.Observer.HookStarted(hook, req)
 		}
-		result, err := runCommandHook(ctx, hook, req)
+		result, err := runCommandHook(ctx, hook, req, r.environment)
 		if err != nil {
 			if req.Observer != nil {
 				req.Observer.HookErrored(result, err)
@@ -211,7 +222,7 @@ func LoadFileConfig(path, source string, requireTrust bool) (Config, error) {
 	return ResolveFileConfig(fc, source, requireTrust)
 }
 
-func runCommandHook(parent context.Context, hook CommandHook, req Request) (Result, error) {
+func runCommandHook(parent context.Context, hook CommandHook, req Request, snapshot environment.Snapshot) (Result, error) {
 	start := time.Now()
 	result := Result{Hook: hook, EventName: req.EventName, ToolName: req.ToolName}
 	timeout := hook.TimeoutSeconds
@@ -225,11 +236,15 @@ func runCommandHook(parent context.Context, hook CommandHook, req Request) (Resu
 	if err != nil {
 		return result, fmt.Errorf("hooks: encode input for %q: %w", hook.Name, err)
 	}
-	cmd := exec.CommandContext(ctx, hook.Command[0], hook.Command[1:]...)
+	command, err := snapshot.LookPath(hook.Command[0])
+	if err != nil {
+		return result, fmt.Errorf("hooks: %s executable %q: %w", hook.Name, hook.Command[0], err)
+	}
+	cmd := exec.CommandContext(ctx, command, hook.Command[1:]...)
 	if req.CWD != "" {
 		cmd.Dir = req.CWD
 	}
-	cmd.Env = os.Environ()
+	cmd.Env = snapshot.Environ()
 	cmd.Stdin = bytes.NewReader(input)
 	limit := hook.MaxOutputBytes
 	if limit <= 0 {

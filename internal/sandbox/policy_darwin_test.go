@@ -47,6 +47,34 @@ func TestDarwinProfileBlocksConfiguredPaths(t *testing.T) {
 	}
 }
 
+func TestDarwinBackendRestoresTargetEnvironmentInsideSandbox(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.Enabled = true
+	got, err := (DefaultRunner{
+		RuntimeOS: "darwin",
+		LookPath:  func(string) (string, error) { return "/usr/bin/sandbox-exec", nil },
+	}).Prepare(context.Background(), Request{
+		Policy: policy,
+		Spec: ExecSpec{
+			Binary: "/bin/sh",
+			Args:   []string{"-c", "true"},
+			Env:    []string{"PATH=/usr/bin", "LD_PRELOAD=/tmp/inject.dylib", "EMPTY="},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(got.Env, "\n"), "LD_PRELOAD") {
+		t.Fatalf("wrapper environment leaked loader variable: %#v", got.Env)
+	}
+	args := strings.Join(got.Args, "\x00")
+	for _, want := range []string{"/usr/bin/env", "LD_PRELOAD=/tmp/inject.dylib", "EMPTY=", "/bin/sh"} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("args missing %q: %#v", want, got.Args)
+		}
+	}
+}
+
 func TestDarwinReadOnlyBackendAllowsWorkspaceWriteOnly(t *testing.T) {
 	if _, err := exec.LookPath("sandbox-exec"); err != nil {
 		t.Skip("sandbox-exec unavailable")

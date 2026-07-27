@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/eventmedia"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/sandbox"
@@ -26,6 +27,7 @@ type ManagerOptions struct {
 	ConfigPath    string
 	StateDir      string
 	WorkDir       string
+	Environment   environment.Snapshot
 	Shell         config.ShellProfile
 	Sandbox       sandbox.Policy
 	SandboxRunner sandbox.Runner

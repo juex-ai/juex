@@ -34,6 +34,34 @@ func TestLinuxReadOnlyProvidesWritableDevicesAndTemp(t *testing.T) {
 	}
 }
 
+func TestLinuxBackendRestoresTargetEnvironmentInsideSandbox(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.Enabled = true
+	got, err := (DefaultRunner{
+		RuntimeOS: "linux",
+		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+	}).Prepare(context.Background(), Request{
+		Policy: policy,
+		Spec: ExecSpec{
+			Binary: "/bin/sh",
+			Args:   []string{"-c", "true"},
+			Env:    []string{"PATH=/usr/bin", "LD_PRELOAD=/tmp/inject.so", "EMPTY="},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(got.Env, "\n"), "LD_PRELOAD") {
+		t.Fatalf("wrapper environment leaked loader variable: %#v", got.Env)
+	}
+	args := strings.Join(got.Args, "\x00")
+	for _, want := range []string{"--setenv\x00LD_PRELOAD\x00/tmp/inject.so", "--setenv\x00EMPTY\x00", "/bin/sh"} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("args missing %q: %#v", want, got.Args)
+		}
+	}
+}
+
 func TestLinuxBlockedPathsAreMasked(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "secret-file")

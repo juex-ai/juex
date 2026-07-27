@@ -63,6 +63,31 @@ juex init --scope workspace
 juex doctor
 ```
 
+Juex loads a runtime environment once for `run`, `repl`, `serve`, and manual
+session compaction. `environment.load_dotenv` defaults to `true` and reads
+exactly `<WorkDir>/.env`; parent directories are never searched and dotenv
+content is parsed as data, not evaluated by a shell. A missing file is fine,
+while malformed input fails startup with its path and line. Restart the runtime
+after changing YAML or `.env`.
+
+```yaml
+environment:
+  load_dotenv: true
+  variables:
+    NODE_ENV: production
+```
+
+Environment precedence is user-global YAML, workspace `.env`, workspace YAML,
+explicit `--config` YAML, the environment inherited at launch, child-local
+MCP/Observable values, then Juex-owned runtime injection. Inherited values
+therefore preserve existing service and shell overrides. `--config` never
+changes the `.env` location. Keep non-secret defaults in YAML and secrets in a
+gitignored workspace `.env`: every configured value is intentionally granted
+to provider code and managed MCP, Observable, hook, shell, and grep processes.
+Juex rejects portable-name violations, NUL bytes, Windows case conflicts, and
+bootstrap/runtime names such as `JUEX_HOME`, `HOME`, `USERPROFILE`, `WORKDIR`,
+`JUEX_WORKDIR`, and `JUEX_EXT_DIR`.
+
 For non-interactive setup, pass the provider, model, and key explicitly:
 
 ```bash
@@ -190,7 +215,7 @@ operate on an agent. `juex init` sets up either the shared user config
 
 | Command | Purpose |
 | --- | --- |
-| `juex doctor` | Run read-only checks for workspace identity, config, credentials, connectivity, shell, MCP, and skills. |
+| `juex doctor` | Run read-only checks for workspace identity, config, value-free environment metadata, credentials, connectivity, shell, MCP, and skills. |
 | `juex bundle --session <id> --out debug.tar.gz` | Create a redacted portable debug bundle for one session. |
 
 ### Fleet (all agents under `$JUEX_HOME`)
@@ -224,7 +249,10 @@ initialize `termux-services`, and use Termux:Boot when startup after device
 reboot is required. Installed services persist the absolute entries from the
 installer's `PATH`, prepend the JueX executable directory and `~/.local/bin`,
 and add platform defaults. Resident agents and their MCP servers therefore do
-not depend on an interactive shell profile such as `.zshrc`.
+not depend on an interactive shell profile such as `.zshrc`. Each detached
+`juex -C <workspace> serve --headless` child resolves that workspace's own
+YAML and `.env`; the Fleet supervisor never imports one agent's environment
+into another.
 
 ## Runtime Files
 
@@ -508,7 +536,9 @@ completions and failures into the conversation as UI-only hook trace rows.
 debugging one session. The archive includes a manifest, runtime snapshot,
 conversation, events, observability files, and logs when present. Redaction is
 enabled by default for secret-like values; use `--include-artifacts` or
-`--include-worktree-summary` to add optional context.
+`--include-worktree-summary` to add optional context. Configured runtime
+environment values are always removed from every bundled payload, even with
+`--redact=false`; runtime metadata contains only key, source, and source path.
 
 `--debug` enables detailed session-local observability. `--log-level` accepts
 `debug`, `info`, `warn`, or `error`; the default is `info`, and `--debug`

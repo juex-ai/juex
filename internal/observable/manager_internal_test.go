@@ -9,8 +9,47 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/events"
 )
+
+func TestCommandRunnerEnvironmentPrecedence(t *testing.T) {
+	snapshot, err := environment.Resolve(environment.Options{Layers: []environment.Layer{{
+		Source: environment.SourceWorkspaceConfig,
+		Path:   "/work/.juex/juex.yaml",
+		Values: map[string]string{
+			"CONFIGURED_MARKER": "configured",
+			"SHARED_MARKER":     "configured",
+		},
+		Strict: true,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newRunner(runnerOptions{
+		workDir:     "/work",
+		environment: snapshot,
+		spec: commandRuntimeSpec{CommandSourceSpec: CommandSourceSpec{
+			Env: map[string]string{
+				"SHARED_MARKER": "child",
+				"WORKDIR":       "/wrong",
+			},
+		}},
+	})
+	got := map[string]string{}
+	for _, item := range r.env() {
+		key, value, ok := strings.Cut(item, "=")
+		if ok {
+			got[key] = value
+		}
+	}
+	if got["CONFIGURED_MARKER"] != "configured" || got["SHARED_MARKER"] != "child" {
+		t.Fatalf("resolved and child environment = %#v", got)
+	}
+	if got["WORKDIR"] != "/work" || got["JUEX_WORKDIR"] != "/work" {
+		t.Fatalf("reserved environment did not win: %#v", got)
+	}
+}
 
 type blockingRunOnceSource struct {
 	*fakeSourceRuntime

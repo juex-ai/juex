@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -730,6 +731,37 @@ func TestMCPClient_EnvVarReachesServer(t *testing.T) {
 	}
 }
 
+func TestMCPClient_ResolvedEnvironmentReachesServer(t *testing.T) {
+	snapshot, err := environment.Resolve(environment.Options{Layers: []environment.Layer{{
+		Source: environment.SourceWorkspaceConfig,
+		Path:   "/work/.juex/juex.yaml",
+		Values: map[string]string{
+			"JUEX_FAKE_MCP":     "1",
+			"JUEX_FAKE_MCP_TAG": "from-snapshot",
+		},
+		Strict: true,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, err := ConnectWithOptions(ctx, "fake", ServerSpec{Command: os.Args[0]}, ConnectOptions{
+		Environment: snapshot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	out, err := client.CallTool(ctx, "envcheck", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "tag=from-snapshot" {
+		t.Fatalf("resolved environment not propagated, got %q", out)
+	}
+}
+
 func TestPrepareConfig_ExpandsWorkDirAndInjectsEnv(t *testing.T) {
 	parent := t.TempDir()
 	workDir := filepath.Join(parent, "workspace")
@@ -768,8 +800,8 @@ func TestPrepareConfig_ExpandsWorkDirAndInjectsEnv(t *testing.T) {
 	if alpha.Env["JUEX_WORKDIR"] != workDir {
 		t.Fatalf("JUEX_WORKDIR = %q, want %q", alpha.Env["JUEX_WORKDIR"], workDir)
 	}
-	if alpha.Env["WORKDIR"] != "custom:"+workDir {
-		t.Fatalf("WORKDIR override = %q", alpha.Env["WORKDIR"])
+	if alpha.Env["WORKDIR"] != workDir {
+		t.Fatalf("WORKDIR reserved injection = %q, want %q", alpha.Env["WORKDIR"], workDir)
 	}
 	if alpha.Env["OTHER"] != "${OTHER}" {
 		t.Fatalf("unknown env variable should remain literal, got %q", alpha.Env["OTHER"])

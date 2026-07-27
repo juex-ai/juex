@@ -446,6 +446,96 @@ func TestFleetLifecycleAndSupervisorAdoption(t *testing.T) {
 	}
 }
 
+func TestFleetChildrenLoadIndependentWorkspaceDotenvOnRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiled-binary fleet dotenv isolation is slow")
+	}
+	binary := buildJuex(t)
+	envMCP := buildFleetEnvMCP(t)
+	home := t.TempDir()
+	environment := fleetE2EEnvironment(home)
+
+	type workspaceCase struct {
+		id        string
+		workDir   string
+		wantValue string
+		address   agentstate.AgentAddress
+	}
+	cases := []workspaceCase{
+		{id: "aaaaaaaa", workDir: t.TempDir(), wantValue: "workspace-alpha"},
+		{id: "bbbbbbbb", workDir: t.TempDir(), wantValue: "workspace-beta"},
+	}
+	for i := range cases {
+		item := &cases[i]
+		item.address = writeFleetE2EAgent(t, home, item.workDir, item.id)
+		if err := os.WriteFile(
+			filepath.Join(item.workDir, ".env"),
+			[]byte("FLEET_ENV_SENTINEL="+item.wantValue+"\n"),
+			0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeMCPConfig(item.workDir, envMCP, nil); err != nil {
+			t.Fatal(err)
+		}
+		address := item.address
+		t.Cleanup(func() {
+			shutdownFleetAgent(t, address)
+		})
+
+		stdout, stderr, err := runFleetE2E(
+			binary,
+			environment,
+			"",
+			"start",
+			item.id,
+		)
+		if err != nil {
+			t.Fatalf(
+				"fleet start %s: %v\nstdout:\n%s\nstderr:\n%s",
+				item.id,
+				err,
+				stdout,
+				stderr,
+			)
+		}
+		probeFleetRuntime(t, waitFleetRuntime(t, item.address))
+		waitFleetEnvironmentValue(t, item.workDir, item.wantValue)
+	}
+
+	firstSeen := filepath.Join(cases[0].workDir, "fleet-env-seen")
+	if err := os.Remove(firstSeen); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(cases[0].workDir, ".env"),
+		[]byte("FLEET_ENV_SENTINEL=workspace-alpha-restarted\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, err := runFleetE2E(
+		binary,
+		environment,
+		"",
+		"restart",
+		cases[0].id,
+	)
+	if err != nil {
+		t.Fatalf(
+			"fleet restart %s: %v\nstdout:\n%s\nstderr:\n%s",
+			cases[0].id,
+			err,
+			stdout,
+			stderr,
+		)
+	}
+	waitFleetEnvironmentValue(t, cases[0].workDir, "workspace-alpha-restarted")
+	waitFleetEnvironmentValue(t, cases[1].workDir, "workspace-beta")
+	probeFleetRuntime(t, waitFleetRuntime(t, cases[0].address))
+	probeFleetRuntime(t, waitFleetRuntime(t, cases[1].address))
+}
+
 type fleetSupervisor struct {
 	cmd    *exec.Cmd
 	lines  <-chan string
@@ -680,6 +770,7 @@ func fleetE2EEnvironmentForProvider(
 		"PROVIDER_API_BASE",
 		"PROVIDER_API_KEY",
 		"PROVIDER_API_MODEL",
+		"FLEET_ENV_SENTINEL",
 	)
 	return append(
 		environment,
@@ -693,6 +784,58 @@ func fleetE2EEnvironmentForProvider(
 		"PROVIDER_API_BASE="+baseURL,
 		"PROVIDER_API_KEY=test-key",
 		"PROVIDER_API_MODEL="+model,
+	)
+}
+
+func buildFleetEnvMCP(t *testing.T) string {
+	t.Helper()
+	name := "env-mcp"
+	if goruntime.GOOS == "windows" {
+		name += ".exe"
+	}
+	out := filepath.Join(t.TempDir(), name)
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(
+		"go",
+		"build",
+		"-o",
+		out,
+		"./tests/e2e/testdata/env-mcp",
+	)
+	command.Dir = root
+	if buildOut, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build env MCP: %v\n%s", err, buildOut)
+	}
+	return out
+}
+
+func waitFleetEnvironmentValue(t *testing.T, workDir, want string) {
+	t.Helper()
+	path := filepath.Join(workDir, "fleet-env-seen")
+	deadline := time.Now().Add(15 * time.Second)
+	var last string
+	var lastErr error
+	for time.Now().Before(deadline) {
+		body, err := os.ReadFile(path)
+		if err == nil {
+			last = string(body)
+			if last == want {
+				return
+			}
+		} else {
+			lastErr = err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf(
+		"workspace %s environment observation = %q, want %q (last error: %v)",
+		workDir,
+		last,
+		want,
+		lastErr,
 	)
 }
 

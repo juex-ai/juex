@@ -47,11 +47,11 @@ func PrepareConfigWithOptions(cfg Config, opts PrepareOptions) Config {
 		for i, arg := range spec.Args {
 			prepared.Args[i] = expandRuntimeEnvRefs(arg, runtimeEnv)
 		}
-		for k, v := range runtimeEnv {
-			prepared.Env[k] = v
-		}
 		for k, v := range spec.Env {
 			prepared.Env[k] = expandRuntimeEnvRefs(v, runtimeEnv)
+		}
+		for k, v := range runtimeEnv {
+			prepared.Env[k] = v
 		}
 		out.MCPServers[name] = prepared
 	}

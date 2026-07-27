@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/eventmedia"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/observable"
@@ -103,6 +104,47 @@ func TestManager_StartAllCapturesAndDeliversObservation(t *testing.T) {
 	}
 	if len(listed) != 1 || listed[0].ID != gotDelivered[0].ID {
 		t.Fatalf("observations = %+v", listed)
+	}
+}
+
+func TestManagerCommandPropagatesResolvedEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("environment", "environment")
+	writeObservableConfig(t, dir, spec)
+	snapshot, err := environment.Resolve(environment.Options{Layers: []environment.Layer{{
+		Source: environment.SourceDotenv,
+		Path:   filepath.Join(dir, ".env"),
+		Values: map[string]string{"OBSERVABLE_RUNTIME_MARKER": "from-snapshot"},
+		Strict: true,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered := make(chan observable.ObservationRecord, 1)
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath:  configPath(dir),
+		StateDir:    stateDir(dir),
+		WorkDir:     dir,
+		Environment: snapshot,
+		Deliver: func(_ context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
+			delivered <- record
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.StartAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case record := <-delivered:
+		if record.Content != "from-snapshot" {
+			t.Fatalf("record = %+v", record)
+		}
+	case <-time.After(asyncWaitTimeout):
+		t.Fatal("timed out waiting for observable environment record")
 	}
 }
 
@@ -1800,6 +1842,9 @@ func TestObservableHelperProcess(t *testing.T) {
 	switch mode {
 	case "json-once":
 		_, _ = os.Stdout.WriteString(`{"type":"lark_notification","level":"info","content":"hello from observable"}` + "\n")
+		os.Exit(0)
+	case "environment":
+		_, _ = os.Stdout.WriteString(`{"type":"environment","level":"info","content":"` + os.Getenv("OBSERVABLE_RUNTIME_MARKER") + `"}` + "\n")
 		os.Exit(0)
 	case "json-then-wait":
 		_, _ = os.Stdout.WriteString(`{"type":"lark_notification","level":"info","content":"quiet observable"}` + "\n")

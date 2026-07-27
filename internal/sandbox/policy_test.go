@@ -42,6 +42,32 @@ func TestDefaultRunnerReturnsOriginalSpecWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestLauncherEnvironmentDefersLoaderVariablesUntilSandboxedTarget(t *testing.T) {
+	env := []string{
+		"PATH=/usr/bin",
+		"LD_PRELOAD=/tmp/inject.so",
+		"LD_LIBRARY_PATH=/tmp/lib",
+		"DYLD_INSERT_LIBRARIES=/tmp/inject.dylib",
+		"GLIBC_TUNABLES=glibc.malloc.check=3",
+		"SAFE=value",
+	}
+	got := strings.Join(launcherEnvironment(env), "\n")
+	for _, forbidden := range []string{"LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "GLIBC_TUNABLES"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("launcher environment contains %s: %q", forbidden, got)
+		}
+	}
+	for _, want := range []string{"PATH=/usr/bin", "SAFE=value"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("launcher environment missing %s: %q", want, got)
+		}
+	}
+	assignments := environmentAssignments(env)
+	if len(assignments) != len(env) {
+		t.Fatalf("target assignments = %#v, want %d entries", assignments, len(env))
+	}
+}
+
 func TestDefaultRunnerWindowsEnabledFailsClosed(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.Enabled = true

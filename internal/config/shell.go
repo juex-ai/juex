@@ -405,7 +405,11 @@ func detectShellEnvironment(opts ShellResolveOptions) string {
 }
 
 func resolveShellProfileForConfig(cfg *Config) error {
-	profile, err := ResolveShellProfile(cfg.shellConfig, ShellResolveOptions{})
+	snapshot := cfg.EnvironmentSnapshot()
+	profile, err := ResolveShellProfile(cfg.shellConfig, ShellResolveOptions{
+		LookupEnv: snapshot.Lookup,
+		LookPath:  snapshot.LookPath,
+	})
 	if err != nil {
 		return err
 	}

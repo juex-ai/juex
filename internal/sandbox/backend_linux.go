@@ -46,12 +46,16 @@ func prepareLinux(lookPath func(string) (string, error), req Request) (ExecSpec,
 			args = append(args, "--chdir", abs)
 		}
 	}
+	for _, assignment := range environmentAssignments(req.Spec.Env) {
+		args = append(args, "--setenv", assignment[0], assignment[1])
+	}
 	args = append(args, "--")
 	args = append(args, req.Spec.Binary)
 	args = append(args, req.Spec.Args...)
 	wrapped := cloneExecSpec(req.Spec)
 	wrapped.Binary = helper
 	wrapped.Args = args
+	wrapped.Env = launcherEnvironment(req.Spec.Env)
 	return wrapped, nil
 }
 

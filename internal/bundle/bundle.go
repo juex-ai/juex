@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/version"
 )
 
@@ -41,7 +42,6 @@ type Options struct {
 	IncludeWorktreeSummary bool
 	IncludeArtifacts       bool
 	Now                    func() time.Time
-	Env                    []string
 	Config                 config.Config
 	ExtraFiles             []ExtraFile
 }
@@ -80,15 +80,15 @@ type ManifestEntry struct {
 }
 
 type RuntimeSnapshot struct {
-	WorkDir    string              `json:"work_dir"`
-	SessionID  string              `json:"session_id"`
-	SessionDir string              `json:"session_dir"`
-	Provider   RuntimeProvider     `json:"provider"`
-	Version    version.Info        `json:"version"`
-	OS         string              `json:"os"`
-	Arch       string              `json:"arch"`
-	Paths      config.RuntimePaths `json:"paths"`
-	Env        map[string]string   `json:"env,omitempty"`
+	WorkDir     string                 `json:"work_dir"`
+	SessionID   string                 `json:"session_id"`
+	SessionDir  string                 `json:"session_dir"`
+	Provider    RuntimeProvider        `json:"provider"`
+	Version     version.Info           `json:"version"`
+	OS          string                 `json:"os"`
+	Arch        string                 `json:"arch"`
+	Paths       config.RuntimePaths    `json:"paths"`
+	Environment []environment.Metadata `json:"environment,omitempty"`
 }
 
 type RuntimeProvider struct {
@@ -96,7 +96,6 @@ type RuntimeProvider struct {
 	Protocol string `json:"protocol,omitempty"`
 	Model    string `json:"model,omitempty"`
 	BaseURL  string `json:"base_url,omitempty"`
-	APIKey   string `json:"api_key,omitempty"`
 }
 
 type archiveEntry struct {
@@ -160,7 +159,7 @@ func Create(opts Options) (Result, error) {
 		GeneratedAt:   now(),
 		WorkDir:       workDir,
 		SessionID:     opts.SessionID,
-		Redacted:      opts.Redact,
+		Redacted:      opts.Redact || entriesContainRedaction(entries),
 		Version:       version.Build(),
 		Entries:       manifestEntries(entries),
 	}
@@ -169,7 +168,23 @@ func Create(opts Options) (Result, error) {
 		return Result{}, err
 	}
 	manifestBytes = append(manifestBytes, '\n')
-	entries = append([]archiveEntry{newEntry(pathInBundle("manifest.json"), "", manifestBytes, false, true)}, entries...)
+	manifestBytes, manifestEnvironmentRedacted, err := opts.Config.EnvironmentSnapshot().RedactConfiguredJSON(manifestBytes)
+	if err != nil {
+		return Result{}, err
+	}
+	if manifestEnvironmentRedacted && !manifest.Redacted {
+		manifest.Redacted = true
+		manifestBytes, err = json.MarshalIndent(manifest, "", "  ")
+		if err != nil {
+			return Result{}, err
+		}
+		manifestBytes = append(manifestBytes, '\n')
+		manifestBytes, _, err = opts.Config.EnvironmentSnapshot().RedactConfiguredJSON(manifestBytes)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	entries = append([]archiveEntry{newEntry(pathInBundle("manifest.json"), "", manifestBytes, manifestEnvironmentRedacted, true)}, entries...)
 
 	if err := writeArchive(outPath, entries, now(), opts.Force); err != nil {
 		return Result{}, err
@@ -178,7 +193,7 @@ func Create(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Path: outPath, SessionID: sessionID, Files: len(entries), Bytes: st.Size(), Redacted: opts.Redact}, nil
+	return Result{Path: outPath, SessionID: sessionID, Files: len(entries), Bytes: st.Size(), Redacted: manifest.Redacted}, nil
 }
 
 func collectEntries(opts Options, workDir, sessionDir string, now time.Time) ([]archiveEntry, error) {
@@ -241,8 +256,64 @@ func collectEntries(opts Options, workDir, sessionDir string, now time.Time) ([]
 		}
 		entries = append(entries, newEntry(pathInBundle(path), "", data, redacted, false))
 	}
+	snapshot := opts.Config.EnvironmentSnapshot()
+	for i := range entries {
+		data, redacted := redactConfiguredArchiveData(snapshot, entries[i].Path, entries[i].Data)
+		if !redacted {
+			continue
+		}
+		entry := entries[i]
+		entries[i] = newEntry(entry.Path, entry.SourcePath, data, true, entry.Required)
+	}
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
 	return entries, nil
+}
+
+func redactConfiguredArchiveData(snapshot environment.Snapshot, archivePath string, data []byte) ([]byte, bool) {
+	switch strings.ToLower(filepath.Ext(archivePath)) {
+	case ".json":
+		if redacted, changed, err := snapshot.RedactConfiguredJSON(data); err == nil {
+			return redacted, changed
+		}
+	case ".jsonl":
+		lines := bytes.SplitAfter(data, []byte{'\n'})
+		var output bytes.Buffer
+		changed := false
+		for _, line := range lines {
+			if len(line) == 0 {
+				continue
+			}
+			hasNewline := line[len(line)-1] == '\n'
+			payload := line
+			if hasNewline {
+				payload = line[:len(line)-1]
+			}
+			if len(bytes.TrimSpace(payload)) == 0 {
+				output.Write(payload)
+			} else if redacted, lineChanged, err := snapshot.RedactConfiguredJSON(payload); err == nil {
+				output.Write(bytes.TrimSuffix(redacted, []byte{'\n'}))
+				changed = changed || lineChanged
+			} else {
+				redacted, lineChanged := snapshot.RedactConfiguredValues(payload)
+				output.Write(redacted)
+				changed = changed || lineChanged
+			}
+			if hasNewline {
+				output.WriteByte('\n')
+			}
+		}
+		return output.Bytes(), changed
+	}
+	return snapshot.RedactConfiguredValues(data)
+}
+
+func entriesContainRedaction(entries []archiveEntry) bool {
+	for _, entry := range entries {
+		if entry.Redacted {
+			return true
+		}
+	}
+	return false
 }
 
 func runtimeSnapshot(opts Options, workDir, sessionDir string) RuntimeSnapshot {
@@ -259,13 +330,12 @@ func runtimeSnapshot(opts Options, workDir, sessionDir string) RuntimeSnapshot {
 			Protocol: cfg.ProviderProtocol,
 			Model:    cfg.Model,
 			BaseURL:  cfg.BaseURL,
-			APIKey:   cfg.APIKey,
 		},
-		Version: version.Build(),
-		OS:      runtime.GOOS,
-		Arch:    runtime.GOARCH,
-		Paths:   cfg.RuntimePaths(),
-		Env:     envMap(opts.Env),
+		Version:     version.Build(),
+		OS:          runtime.GOOS,
+		Arch:        runtime.GOARCH,
+		Paths:       cfg.RuntimePaths(),
+		Environment: cfg.EnvironmentSnapshot().ConfiguredMetadata(),
 	}
 }
 
@@ -428,21 +498,6 @@ func isWindowsAbsolutePath(path string) bool {
 	}
 	drive := path[0]
 	return (drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z')
-}
-
-func envMap(env []string) map[string]string {
-	if len(env) == 0 {
-		env = os.Environ()
-	}
-	out := map[string]string{}
-	for _, item := range env {
-		key, value, ok := strings.Cut(item, "=")
-		if !ok || strings.TrimSpace(key) == "" {
-			continue
-		}
-		out[key] = value
-	}
-	return out
 }
 
 func isRedactableArchivePath(path string) bool {

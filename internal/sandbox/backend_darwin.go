@@ -16,9 +16,15 @@ func prepareDarwin(lookPath func(string) (string, error), req Request) (ExecSpec
 		return ExecSpec{}, err
 	}
 	wrapped := cloneExecSpec(req.Spec)
-	original := append([]string{req.Spec.Binary}, req.Spec.Args...)
+	original := []string{"/usr/bin/env"}
+	for _, assignment := range environmentAssignments(req.Spec.Env) {
+		original = append(original, assignment[0]+"="+assignment[1])
+	}
+	original = append(original, req.Spec.Binary)
+	original = append(original, req.Spec.Args...)
 	wrapped.Binary = helper
 	wrapped.Args = append([]string{"-p", profile}, original...)
+	wrapped.Env = launcherEnvironment(req.Spec.Env)
 	return wrapped, nil
 }
 

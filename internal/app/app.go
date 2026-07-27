@@ -257,11 +257,15 @@ func New(opts Options) (*App, error) {
 		DefaultTimeoutSeconds: toolTimeoutSeconds,
 	})
 	chunkedWrites := tools.NewChunkedWriteManager(runtimePaths.WorkDir, sandbox.NewPathGuard(runtimePaths.WorkDir, cfg.SandboxPolicy()))
+	runtimeEnvironment := cfg.EnvironmentSnapshot()
+	sandboxRunner := sandbox.DefaultRunner{LookPath: cfg.LaunchEnvironmentSnapshot().LookPath}
 	tools.RegisterBuiltins(reg, tools.BuiltinOptions{
 		WorkDir:            runtimePaths.WorkDir,
+		Environment:        runtimeEnvironment,
 		Shell:              toolsShellProfile(cfg.Shell),
 		ShellSessions:      shellSessions,
 		Sandbox:            cfg.SandboxPolicy(),
+		SandboxRunner:      sandboxRunner,
 		ToolTimeoutSeconds: toolTimeoutSeconds,
 		ChunkedWrites:      chunkedWrites,
 	})
@@ -357,7 +361,9 @@ func New(opts Options) (*App, error) {
 			}}
 		},
 	}
-	hookRunner, err := hooks.NewRunner(resourceGraph.HooksConfig())
+	hookRunner, err := hooks.NewRunnerWithOptions(resourceGraph.HooksConfig(), hooks.RunnerOptions{
+		Environment: runtimeEnvironment,
+	})
 	if err != nil {
 		closeSessionResources()
 		return nil, err
@@ -447,9 +453,10 @@ func New(opts Options) (*App, error) {
 		ConfigPath:    cfg.ObservablesConfigPath(),
 		StateDir:      cfg.ObservablesStateDir(),
 		WorkDir:       runtimePaths.WorkDir,
+		Environment:   runtimeEnvironment,
 		Shell:         cfg.Shell,
 		Sandbox:       cfg.SandboxPolicy(),
-		SandboxRunner: nil,
+		SandboxRunner: sandboxRunner,
 		Bus:           bus,
 		Deliver:       a.DeliverObservation,
 	})
@@ -496,6 +503,7 @@ func New(opts Options) (*App, error) {
 		connectOpts := mcp.ConnectOptions{
 			Stderr:        stderr,
 			ForwardStderr: opts.Verbose,
+			Environment:   runtimeEnvironment,
 		}
 		if sess.Kind == session.KindPrimary {
 			connectOpts.EnableClaudeChannel = true

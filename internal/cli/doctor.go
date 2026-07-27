@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/providerreadiness"
 	"github.com/juex-ai/juex/internal/skills"
@@ -37,8 +37,9 @@ type doctorCheck struct {
 }
 
 type doctorResult struct {
-	Status doctorStatus  `json:"status"`
-	Checks []doctorCheck `json:"checks"`
+	Status      doctorStatus         `json:"status"`
+	Checks      []doctorCheck        `json:"checks"`
+	environment environment.Snapshot `json:"-"`
 }
 
 type doctorExitError struct {
@@ -119,7 +120,7 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 			Suggestion: "fix juex.yaml or " + initNoConfigSuggestion,
 		})
 		checks = append(checks, doctorWorkdirCheck(workDir))
-		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks}
+		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: cfg.EnvironmentSnapshot()}
 	}
 	cfg.WorkDir = workDir
 	if err := ensureSelectedRuntimeConfig(cfg); err != nil {
@@ -130,18 +131,21 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 			Suggestion: initNoConfigSuggestion,
 		})
 		checks = append(checks, doctorWorkdirCheck(workDir))
-		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks}
+		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: cfg.EnvironmentSnapshot()}
 	}
 
 	checks = append(checks, doctorConfigCheck(cfg))
+	checks = append(checks, doctorEnvironmentCheck(cfg))
 	checks = append(checks, doctorCredentialsCheck(cfg))
 	checks = append(checks, doctorConnectivityCheck(ctx, cfg, offline))
 	checks = append(checks, doctorShellCheck(cfg))
-	checks = append(checks, doctorRipgrepCheck(toolruntime.ResolveRipgrep))
+	checks = append(checks, doctorRipgrepCheck(func() (toolruntime.ResolvedRipgrep, error) {
+		return toolruntime.ResolveRipgrepWithEnvironment(cfg.EnvironmentSnapshot())
+	}))
 	checks = append(checks, doctorWorkdirCheck(workDir))
 	checks = append(checks, doctorMCPCheck(cfg))
 	checks = append(checks, doctorSkillsCheck(cfg))
-	return doctorResult{Status: worstDoctorStatus(checks), Checks: checks}
+	return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: cfg.EnvironmentSnapshot()}
 }
 
 func doctorAgentCheck(workDir string) doctorCheck {
@@ -205,6 +209,43 @@ func doctorConfigCheck(cfg config.Config) doctorCheck {
 
 func doctorCredentialsCheck(cfg config.Config) doctorCheck {
 	return doctorCheckFromReadiness("credentials", providerreadiness.CheckCredentials(cfg.ProviderSelection()))
+}
+
+func doctorEnvironmentCheck(cfg config.Config) doctorCheck {
+	status := cfg.EnvironmentStatus()
+	metadata := cfg.EnvironmentSnapshot().ConfiguredMetadata()
+	variables := make([]map[string]string, 0, len(metadata))
+	for _, item := range metadata {
+		detail := map[string]string{
+			"key":    item.Key,
+			"source": string(item.Source),
+		}
+		if item.Path != "" {
+			detail["path"] = item.Path
+		}
+		variables = append(variables, detail)
+	}
+	message := fmt.Sprintf("%d configured environment variable(s)", len(metadata))
+	switch {
+	case !status.DotenvEnabled:
+		message += "; dotenv loading disabled"
+	case status.DotenvLoaded:
+		message += "; loaded " + status.DotenvPath
+	default:
+		message += "; no " + status.DotenvPath
+	}
+	return doctorCheck{
+		Name:    "environment",
+		Status:  doctorStatusOK,
+		Message: message,
+		Details: map[string]any{
+			"dotenv_path":      status.DotenvPath,
+			"dotenv_enabled":   status.DotenvEnabled,
+			"dotenv_loaded":    status.DotenvLoaded,
+			"configured_count": status.ConfiguredVariables,
+			"variables":        variables,
+		},
+	}
 }
 
 func doctorConnectivityCheck(ctx context.Context, cfg config.Config, offline bool) doctorCheck {
@@ -286,7 +327,7 @@ func doctorMCPCheck(cfg config.Config) doctorCheck {
 	}
 	var failures []string
 	for _, spec := range servers {
-		if err := commandExecutable(spec.Command); err != nil {
+		if err := commandExecutable(cfg, spec.Command); err != nil {
 			failures = append(failures, spec.Command+": "+err.Error())
 		}
 	}
@@ -308,12 +349,12 @@ func doctorSkillsCheck(cfg config.Config) doctorCheck {
 	return doctorCheck{Name: "skills", Status: doctorStatusOK, Message: fmt.Sprintf("%d skill(s) loaded", len(loader.All()))}
 }
 
-func commandExecutable(command string) error {
+func commandExecutable(cfg config.Config, command string) error {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return fmt.Errorf("command is empty")
 	}
-	_, err := exec.LookPath(command)
+	_, err := cfg.EnvironmentSnapshot().LookPath(command)
 	return err
 }
 
@@ -332,15 +373,24 @@ func worstDoctorStatus(checks []doctorCheck) doctorStatus {
 
 func renderDoctorResult(cmd *cobra.Command, format string, result doctorResult) {
 	if format == "json" {
-		cmdPrintln(cmd, mustJSON(result))
+		data, _, err := result.environment.RedactConfiguredJSON([]byte(mustJSON(result)))
+		if err != nil {
+			cmdPrintln(cmd, `{"status":"fail","checks":[]}`)
+			return
+		}
+		cmdPrintln(cmd, string(data))
 		return
 	}
+	var output strings.Builder
 	for _, check := range result.Checks {
 		line := fmt.Sprintf("%-4s %-14s %s", strings.ToUpper(string(check.Status)), check.Name, check.Message)
 		if check.Suggestion != "" {
 			line += " (" + check.Suggestion + ")"
 		}
-		cmdPrintln(cmd, line)
+		output.WriteString(line)
+		output.WriteByte('\n')
 	}
-	cmdPrintln(cmd, "status: "+string(result.Status))
+	output.WriteString("status: " + string(result.Status))
+	data, _ := result.environment.RedactConfiguredValues([]byte(output.String()))
+	cmdPrintln(cmd, string(data))
 }

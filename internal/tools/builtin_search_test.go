@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/sandbox"
 )
 
@@ -550,9 +551,19 @@ func TestRipgrepRunnerUsesSandboxRunnerAndExcludesBlockedDescendant(t *testing.T
 	policy.Enabled = true
 	policy.FileSystem.BlockedPaths = []string{"private["}
 	sandboxRunner := &fakeSandboxRunner{}
+	snapshot, err := environment.Resolve(environment.Options{Layers: []environment.Layer{{
+		Source: environment.SourceDotenv,
+		Path:   filepath.Join(root, ".env"),
+		Values: map[string]string{"GREP_RUNTIME_MARKER": "from-snapshot"},
+		Strict: true,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	runner := NewRipgrepRunner(RipgrepRunnerOptions{
 		RipgrepPath:   rg,
 		WorkDir:       root,
+		Environment:   snapshot,
 		Sandbox:       policy,
 		SandboxRunner: sandboxRunner,
 	})
@@ -562,6 +573,9 @@ func TestRipgrepRunnerUsesSandboxRunnerAndExcludesBlockedDescendant(t *testing.T
 	}
 	if sandboxRunner.calls != 1 {
 		t.Fatalf("sandbox runner calls = %d, want 1", sandboxRunner.calls)
+	}
+	if got := strings.Join(sandboxRunner.specs[0].Env, "\n"); !strings.Contains(got, "GREP_RUNTIME_MARKER=from-snapshot") {
+		t.Fatalf("ripgrep environment = %q", got)
 	}
 	output := formatGrepResult(result)
 	if !strings.Contains(output, "public") || strings.Contains(output, "secret") {

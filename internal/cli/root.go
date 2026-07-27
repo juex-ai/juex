@@ -388,9 +388,10 @@ func writeConfigMessages(cmd *cobra.Command, cfg config.Config) {
 }
 
 type runtimeConfigLifecycle struct {
-	state *agentstate.Ephemeral
-	keep  bool
-	path  string
+	state              *agentstate.Ephemeral
+	keep               bool
+	path               string
+	restoreEnvironment func() error
 }
 
 func loadRuntimeConfigForCommand(cmd *cobra.Command, flags *persistentFlags, keep bool) (config.Config, *runtimeConfigLifecycle, error) {
@@ -403,38 +404,54 @@ func loadRuntimeConfigForCommand(cmd *cobra.Command, flags *persistentFlags, kee
 		return cfg, nil, err
 	}
 	writeConfigMessages(cmd, cfg)
-	if policy != agentStateEphemeral {
-		return cfg, nil, nil
+	lifecycle := &runtimeConfigLifecycle{}
+	if policy == agentStateEphemeral {
+		state, err := agentstate.CreateEphemeral(cfg.WorkDir)
+		if err != nil {
+			return cfg, nil, err
+		}
+		cfg.AgentID = state.Resolution.Agent.ID
+		cfg.AgentName = state.Resolution.Agent.Name
+		cfg.AgentStateDir = state.Resolution.Address.StateDir()
+		cfg.AgentAddress = state.Resolution.Address
+		lifecycle.state = state
+		lifecycle.keep = keep
+		lifecycle.path = state.Resolution.Address.StateDir()
 	}
-	state, err := agentstate.CreateEphemeral(cfg.WorkDir)
+	restore, err := cfg.EnvironmentSnapshot().Activate()
 	if err != nil {
+		if lifecycle.state != nil {
+			_ = lifecycle.state.Remove()
+		}
 		return cfg, nil, err
 	}
-	cfg.AgentID = state.Resolution.Agent.ID
-	cfg.AgentName = state.Resolution.Agent.Name
-	cfg.AgentStateDir = state.Resolution.Address.StateDir()
-	cfg.AgentAddress = state.Resolution.Address
-	return cfg, &runtimeConfigLifecycle{
-		state: state,
-		keep:  keep,
-		path:  state.Resolution.Address.StateDir(),
-	}, nil
+	lifecycle.restoreEnvironment = restore
+	return cfg, lifecycle, nil
 }
 
 func (lifecycle *runtimeConfigLifecycle) finish(cmd *cobra.Command, primary error) error {
-	if lifecycle == nil || lifecycle.state == nil {
+	if lifecycle == nil {
 		return primary
 	}
-	if lifecycle.keep {
-		fmt.Fprintln(cmd.ErrOrStderr(), "juex: kept ephemeral state at "+lifecycle.path)
-		return primary
-	}
-	if err := lifecycle.state.Remove(); err != nil {
-		if primary != nil {
-			fmt.Fprintln(cmd.ErrOrStderr(), "juex: warning: "+err.Error())
-			return primary
+	if lifecycle.state != nil {
+		if lifecycle.keep {
+			fmt.Fprintln(cmd.ErrOrStderr(), "juex: kept ephemeral state at "+lifecycle.path)
+		} else if err := lifecycle.state.Remove(); err != nil {
+			if primary != nil {
+				fmt.Fprintln(cmd.ErrOrStderr(), "juex: warning: "+err.Error())
+			} else {
+				primary = err
+			}
 		}
-		return err
+	}
+	if lifecycle.restoreEnvironment != nil {
+		if err := lifecycle.restoreEnvironment(); err != nil {
+			if primary != nil {
+				fmt.Fprintln(cmd.ErrOrStderr(), "juex: warning: restore environment: "+err.Error())
+			} else {
+				primary = fmt.Errorf("juex: restore environment: %w", err)
+			}
+		}
 	}
 	return primary
 }

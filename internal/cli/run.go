@@ -411,11 +411,16 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		Warnings:        a.AttachmentWarnings(len(attachments)),
 	}
 
+	planJSON := []byte(mustJSON(plan))
+	planJSON, _, err = cfg.EnvironmentSnapshot().RedactConfiguredJSON(planJSON)
+	if err != nil {
+		return err
+	}
 	if jsonOut {
-		cmdPrintln(cmd, mustJSON(plan))
+		cmdPrintln(cmd, string(planJSON))
 	} else {
 		cmdPrintln(cmd, "DRY RUN — would execute:")
-		cmdPrintln(cmd, mustJSON(plan))
+		cmdPrintln(cmd, string(planJSON))
 	}
 	return &dryRunOK{msg: "dry run complete"}
 }

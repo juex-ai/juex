@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 )
 
 type OutsideWorkspaceAccess string
@@ -107,6 +108,40 @@ func cloneExecSpec(spec ExecSpec) ExecSpec {
 		Dir:    spec.Dir,
 		Env:    append([]string(nil), spec.Env...),
 	}
+}
+
+// launcherEnvironment removes variables that could inject code into a
+// sandbox wrapper before its policy is active. Backends restore the complete
+// target environment inside the sandbox boundary.
+func launcherEnvironment(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, item := range env {
+		key, _, ok := strings.Cut(item, "=")
+		if ok && unsafePreSandboxVariable(key) {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func unsafePreSandboxVariable(key string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(key))
+	return strings.HasPrefix(upper, "LD_") ||
+		strings.HasPrefix(upper, "DYLD_") ||
+		upper == "GLIBC_TUNABLES"
+}
+
+func environmentAssignments(env []string) [][2]string {
+	out := make([][2]string, 0, len(env))
+	for _, item := range env {
+		key, value, ok := strings.Cut(item, "=")
+		if !ok || key == "" {
+			continue
+		}
+		out = append(out, [2]string{key, value})
+	}
+	return out
 }
 
 func requestedPolicyText(policy Policy) string {

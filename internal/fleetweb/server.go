@@ -358,6 +358,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request, selector s
 			writeFleetError(w, err)
 			return
 		}
+		configState, err = fleet.RedactAgentConfig(configState)
+		if err != nil {
+			writeFleetError(w, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, configState)
 	case http.MethodPut:
 		var body struct {
@@ -388,6 +393,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request, selector s
 			selector,
 			[]byte(*body.Content),
 		)
+		if err != nil {
+			writeFleetError(w, err)
+			return
+		}
+		configState, err = fleet.RedactAgentConfig(configState)
 		if err != nil {
 			writeFleetError(w, err)
 			return

@@ -26,6 +26,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -114,6 +115,7 @@ type Notification struct {
 type ConnectOptions struct {
 	OnNotification      func(Notification)
 	EnableClaudeChannel bool
+	Environment         environment.Snapshot
 	// Stderr receives MCP server stderr only when ForwardStderr is true.
 	// Stderr is always retained in a bounded diagnostic tail for startup
 	// errors so normal CLI output is not polluted by server logs.
@@ -167,8 +169,12 @@ func ConnectWithOptions(ctx context.Context, name string, spec ServerSpec, opts 
 	if spec.Command == "" {
 		return nil, fmt.Errorf("mcp[%s]: missing command", name)
 	}
-	cmd := exec.CommandContext(ctx, spec.Command, spec.Args...)
-	cmd.Env = mergeEnv(spec.Env)
+	command, err := opts.Environment.LookPath(spec.Command)
+	if err != nil {
+		return nil, fmt.Errorf("mcp[%s]: resolve command %q: %w", name, spec.Command, err)
+	}
+	cmd := exec.CommandContext(ctx, command, spec.Args...)
+	cmd.Env = opts.Environment.Environ(spec.Env)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -519,14 +525,6 @@ func rpcIDKey(raw json.RawMessage) string {
 		return n.String()
 	}
 	return string(raw)
-}
-
-func mergeEnv(extra map[string]string) []string {
-	env := os.Environ()
-	for k, v := range extra {
-		env = append(env, k+"="+v)
-	}
-	return env
 }
 
 func copyServerStderr(name string, r io.Reader, tail *stderrTailBuffer, opts ConnectOptions) {

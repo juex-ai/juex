@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/sandbox"
 )
 
@@ -49,6 +50,7 @@ type SearchRunner interface {
 type RipgrepRunnerOptions struct {
 	RipgrepPath   string
 	WorkDir       string
+	Environment   environment.Snapshot
 	Sandbox       sandbox.Policy
 	SandboxRunner sandbox.Runner
 	MaxMatches    int
@@ -122,7 +124,7 @@ func (r *RipgrepRunner) Grep(ctx context.Context, req GrepRequest) (GrepResult, 
 	combinedArgs = append(combinedArgs, blockedArgs...)
 	combinedArgs = append(combinedArgs, args[insertAt:]...)
 	args = combinedArgs
-	spec := sandbox.ExecSpec{Binary: rgPath, Args: args, Dir: cwd}
+	spec := sandbox.ExecSpec{Binary: rgPath, Args: args, Dir: cwd, Env: r.opts.Environment.Environ()}
 	if r.opts.Sandbox.Enabled {
 		runner := r.opts.SandboxRunner
 		if runner == nil {
@@ -301,7 +303,7 @@ func (r *RipgrepRunner) ripgrepPath() (string, error) {
 			}
 			return
 		}
-		resolved, err := ResolveRipgrep()
+		resolved, err := ResolveRipgrepWithEnvironment(r.opts.Environment)
 		if err != nil {
 			r.resolveErr = err
 			return

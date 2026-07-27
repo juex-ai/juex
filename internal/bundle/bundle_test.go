@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -39,10 +40,6 @@ func TestCreateIncludesSessionFilesManifestAndRedacts(t *testing.T) {
 		OutPath:   out,
 		Redact:    true,
 		Now:       fixedBundleTime,
-		Env: []string{
-			"PROVIDER_API_KEY=sk-env-secret",
-			"PATH=/bin",
-		},
 		Config: config.Config{
 			ProviderID:       "openai",
 			ProviderProtocol: "openai/responses",
@@ -87,7 +84,6 @@ func TestCreateIncludesSessionFilesManifestAndRedacts(t *testing.T) {
 		"raw-secret",
 		"session-cookie",
 		"sk-debug-secret",
-		"sk-env-secret",
 		"sk-config-secret",
 	} {
 		if strings.Contains(all, leaked) {
@@ -120,6 +116,70 @@ func TestCreateIncludesSessionFilesManifestAndRedacts(t *testing.T) {
 		if entry.Size != int64(len(body)) {
 			t.Fatalf("size mismatch for %s: %d != %d", entry.Path, entry.Size, len(body))
 		}
+	}
+}
+
+func TestCreateEnvironmentMetadataNeverIncludesValuesRegardlessOfRedaction(t *testing.T) {
+	const secret = "bundle-environment-secret-sentinel"
+	home := t.TempDir()
+	work := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("JUEX_HOME", "")
+	if err := os.MkdirAll(filepath.Join(work, ".juex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, ".env"), []byte("BUNDLE_ENV_SECRET="+secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadWithOptions(config.LoadOptions{
+		WorkDir:    work,
+		AgentState: config.AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AgentStateDir = filepath.Join(work, ".juex")
+	sessionID := "20260727T120000-environment"
+	seedBundleSession(t, work, sessionID, map[string]string{
+		"session.json":       `{"kind":"primary"}`,
+		"conversation.jsonl": "{}\n",
+		"events.jsonl":       "{}\n",
+		"notes.md":           "captured " + secret + "\n",
+	})
+
+	for _, redact := range []bool{false, true} {
+		t.Run(strconv.FormatBool(redact), func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "debug.tar.gz")
+			result, err := Create(Options{
+				WorkDir:   work,
+				SessionID: sessionID,
+				OutPath:   out,
+				Redact:    redact,
+				Config:    cfg,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.Redacted {
+				t.Fatal("mandatory environment-value redaction was not reported")
+			}
+			files := readBundleArchive(t, out)
+			all := string(joinBundleFiles(files))
+			if strings.Contains(all, secret) {
+				t.Fatalf("bundle leaked environment value with redact=%t:\n%s", redact, all)
+			}
+			var snapshot RuntimeSnapshot
+			runtimeBody := files["juex-debug-bundle/runtime.json"]
+			if err := json.Unmarshal(runtimeBody, &snapshot); err != nil {
+				t.Fatalf("decode runtime metadata: %v\n%s", err, runtimeBody)
+			}
+			if len(snapshot.Environment) != 1 ||
+				snapshot.Environment[0].Key != "BUNDLE_ENV_SECRET" ||
+				snapshot.Environment[0].Source != "dotenv" {
+				t.Fatalf("runtime environment metadata = %+v", snapshot.Environment)
+			}
+		})
 	}
 }
 

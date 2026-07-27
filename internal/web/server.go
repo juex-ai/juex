@@ -667,6 +667,7 @@ func (s *Server) ensureMCPStarted(ctx context.Context) (err error) {
 	mgr, err := mcp.NewManagerLayeredSoft(ctx, mcpConfigs, mcp.ConnectOptions{
 		OnNotification:      handleNotification,
 		EnableClaudeChannel: true,
+		Environment:         s.opts.Cfg.EnvironmentSnapshot(),
 	})
 	if err != nil {
 		s.recordMCPError(err)
