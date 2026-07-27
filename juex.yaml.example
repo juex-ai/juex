@@ -19,10 +19,6 @@ model: openai:gpt-4.1
 # this workspace or run. JUEX_HOME/extensions remains enabled.
 # enable_user_agents_resources: true
 
-# Deprecated one-release alias; it warns and the new spelling above wins when
-# both are present.
-# enable_user_global_resources: true
-
 # Optional extension bundles live at ~/.juex/extensions/<name> and
 # .juex/extensions/<name>. Each bundle may contain skills/<skill>/SKILL.md,
 # mcp.json, and hooks.yaml. Work-local extension hooks must set trusted: true

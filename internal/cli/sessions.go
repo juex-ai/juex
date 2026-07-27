@@ -101,6 +101,14 @@ func renderSessionsTable(cmd *cobra.Command, infos []session.Info) {
 	}
 }
 
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
 type sessionsShowOutput struct {
 	session.Info
 	Messages []llm.Message `json:"messages"`

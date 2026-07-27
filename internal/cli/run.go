@@ -115,7 +115,7 @@ func newRunCmd(flags *persistentFlags) *cobra.Command {
 		ephemeral   bool
 		keep        bool
 		attachPaths []string
-		rf          resumeFlags
+		alias       string
 	)
 	cmd := &cobra.Command{
 		Use:   "run [flags] [prompt]",
@@ -178,10 +178,6 @@ execution is printed and the process exits with code 10.`,
 				return emit(jsonOut, cmd.ErrOrStderr(), &usageError{msg: "pass --new or --side, not both"},
 					"use --new for a new primary session or --side for a side session", false)
 			}
-			if (newSession || sideSession) && (rf.Resume != "" || rf.Session != "") {
-				return emit(jsonOut, cmd.ErrOrStderr(), &usageError{msg: "pass --new/--side or --resume/--session, not both"},
-					"use 'juex sessions activate <id>' before the default run path", false)
-			}
 			if len(attachPaths) > 0 {
 				if _, handled, parseErr := app.ParseSlashCommand(prompt); handled || parseErr != nil {
 					message := "slash commands cannot include attachments"
@@ -201,12 +197,6 @@ execution is printed and the process exits with code 10.`,
 				return runDryRun(cmd, flags, cfg, prompt, preparedAttachments.Infos(), jsonOut)
 			}
 
-			resumeDir, err := resolveSessionDir(rf, cfg.SessionsDir(), cfg.HistoryPath(), cmd.InOrStdin(), cmd.OutOrStdout(), stdinIsTTY())
-			if err != nil {
-				return emit(jsonOut, cmd.ErrOrStderr(), err,
-					"see 'juex sessions list' for valid ids", false)
-			}
-
 			mode := app.SessionModeAttachActive
 			if newSession {
 				mode = app.SessionModeNewPrimary
@@ -221,8 +211,7 @@ execution is printed and the process exits with code 10.`,
 				LogLevel:    flags.logLevel,
 				WorkDir:     cfg.WorkDir,
 				Stderr:      cmd.ErrOrStderr(),
-				ResumeDir:   resumeDir,
-				Alias:       rf.Alias,
+				Alias:       alias,
 				SessionMode: mode,
 			})
 			if err != nil {
@@ -285,10 +274,7 @@ execution is printed and the process exits with code 10.`,
 	cmd.Flags().BoolVar(&newSession, "new", false, "create a new primary session and make it active")
 	cmd.Flags().BoolVar(&sideSession, "side", false, "create a side session without changing the active primary")
 	cmd.Flags().StringArrayVar(&attachPaths, "attach", nil, "attach an image to this turn (repeatable; relative to workdir)")
-	cmd.Flags().StringVar(&rf.Resume, "resume", "", "deprecated: resume a past session by id, alias, or 'last'; use sessions activate")
-	cmd.Flags().Lookup("resume").NoOptDefVal = resumePick
-	cmd.Flags().StringVar(&rf.Session, "session", "", "resume a specific session id")
-	cmd.Flags().StringVar(&rf.Alias, "alias", "", "set or update the session alias")
+	cmd.Flags().StringVar(&alias, "alias", "", "set or update the session alias")
 	declareAgentStatePolicy(cmd, agentStateMint)
 	return cmd
 }

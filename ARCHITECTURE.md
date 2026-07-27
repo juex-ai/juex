@@ -55,7 +55,6 @@ juex/
 │   │   ├── root.go
 │   │   ├── run.go
 │   │   ├── repl.go
-│   │   ├── resume.go
 │   │   ├── schema.go
 │   │   ├── listen.go
 │   │   ├── sessions.go
@@ -1144,7 +1143,6 @@ Persistent flags inherited by all subcommands:
 | `--config` |  | unset (path to `juex.yaml` override) |
 | `--cwd` | `-C` | `$PWD` (mirrors `git -C`) |
 | `--enable-user-agents-resources` |  | config value (true/false or 1/0) |
-| `--enable-user-global-resources` |  | deprecated alias; warns and defers to the new spelling when both are present |
 | `--verbose` |  | false (stream events to stderr) |
 
 Every executable Cobra command declares an agent-state policy through an
@@ -1643,7 +1641,6 @@ compaction:
 | `model` | active model reference in `provider:model` form |
 | `fallback_models` | optional ordered `provider:model` list used after eligible request failures; an explicit empty list clears an inherited list |
 | `enable_user_agents_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores only `~/.agents/AGENTS.md`, `~/.agents/skills`, and `~/.agents/mcp.json`; `$JUEX_HOME/extensions` remains enabled |
-| `enable_user_global_resources` | deprecated one-release alias for `enable_user_agents_resources`; emits a warning, and the new spelling wins when both appear in one file |
 | `skills.prompt_budget_chars` | optional compact skill catalog budget in characters; defaults to `8000` and is capped by the model context-window policy |
 | `skills.include` | optional filesystem skill-name whitelist applied after user, extension, and project merging; when non-empty, `skills.exclude` is ignored; required builtin guides remain loaded |
 | `skills.exclude` | optional filesystem skill-name blacklist applied after merging when `skills.include` is empty; required builtin guides remain loaded |

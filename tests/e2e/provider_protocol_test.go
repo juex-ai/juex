@@ -302,7 +302,7 @@ providers:
 		t.Fatalf("first run = %+v", first)
 	}
 
-	secondCmd := exec.Command(bin, "-C", work, "run", "--session", first.SessionID, "--json", "second turn")
+	secondCmd := exec.Command(bin, "-C", work, "run", "--json", "second turn")
 	secondCmd.Env = env
 	secondOut, err := secondCmd.CombinedOutput()
 	if err != nil {

@@ -1116,57 +1116,15 @@ func TestLoadFromFile_EnableUserAgentsResourcesRejectsInvalidBool(t *testing.T) 
 	}
 }
 
-func TestLoadFromFile_DeprecatedUserGlobalResourcesAliasWorksAndWarns(t *testing.T) {
+func TestLoadFromFile_RemovedUserGlobalResourcesKeyIsUnknown(t *testing.T) {
 	prepareConfigTest(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "juex.yaml")
-	writeTextFile(t, path, "enable_user_global_resources: false\n")
-
-	cfg, err := LoadFromFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.EnableUserAgentsResources {
-		t.Fatal("deprecated resource key did not set the resolved value")
-	}
-	if len(cfg.DeprecationWarnings) != 1 ||
-		!strings.Contains(cfg.DeprecationWarnings[0], "enable_user_global_resources is deprecated") ||
-		!strings.Contains(cfg.DeprecationWarnings[0], "enable_user_agents_resources") {
-		t.Fatalf("deprecation warnings = %v", cfg.DeprecationWarnings)
-	}
-}
-
-func TestLoadFromFile_CanonicalUserAgentsResourcesKeyWinsOverDeprecatedAlias(t *testing.T) {
-	prepareConfigTest(t)
+	key := "enable_user_global_" + "resources"
 	path := filepath.Join(t.TempDir(), "juex.yaml")
-	writeTextFile(t, path, strings.Join([]string{
-		"enable_user_global_resources: false",
-		"enable_user_agents_resources: true",
-		"",
-	}, "\n"))
-
-	cfg, err := LoadFromFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cfg.EnableUserAgentsResources {
-		t.Fatal("canonical resource key did not win over deprecated alias")
-	}
-	if len(cfg.DeprecationWarnings) != 1 {
-		t.Fatalf("deprecation warnings = %v", cfg.DeprecationWarnings)
-	}
-}
-
-func TestLoadFromFile_DeprecatedUserGlobalResourcesAliasRejectsInvalidBool(t *testing.T) {
-	prepareConfigTest(t)
-	path := filepath.Join(t.TempDir(), "juex.yaml")
-	writeTextFile(t, path, "enable_user_global_resources: maybe\n")
+	writeTextFile(t, path, key+": false\n")
 
 	_, err := LoadFromFile(path)
-	if err == nil ||
-		!strings.Contains(err.Error(), "enable_user_global_resources") ||
-		!strings.Contains(err.Error(), "expected boolean value") {
-		t.Fatalf("err = %v, want deprecated alias boolean parse error", err)
+	if err == nil || !strings.Contains(err.Error(), "field "+key+" not found") {
+		t.Fatalf("err = %v, want strict unknown-field error for %s", err, key)
 	}
 }
 

@@ -94,7 +94,7 @@ if the selected provider/model ref is missing from the provider config. For each
 selected model it creates an isolated temp workdir, copies only that
 provider/model into a temp config, and runs Juex with a temp `HOME` so global
 MCP servers and skills are not loaded; it also passes
-`--enable-user-global-resources=false`. The temp config contains credentials and
+`--enable-user-agents-resources=false`. The temp config contains credentials and
 is deleted after success unless `--keep` is passed.
 Each case runs one live agent workflow that must use `read`, `write`, `edit`,
 `grep`, `exec_command`, and `write_stdin`, including a `tty:true` command with

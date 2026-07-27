@@ -51,16 +51,15 @@ type Config struct {
 	Fleet                     FleetConfig
 	EnableUserAgentsResources bool
 
-	HomeAgentsDir       string // ~/.agents (user-global resources)
-	HomeJuexDir         string // $JUEX_HOME or ~/.juex
-	WorkDir             string // explicit; defaults to os.Getwd()
-	AgentID             string
-	AgentName           string
-	AgentStateDir       string
-	AgentAddress        agentstate.AgentAddress
-	AgentStateNotices   []string
-	DeprecationWarnings []string
-	agentStateLoaded    bool
+	HomeAgentsDir     string // ~/.agents (user-global resources)
+	HomeJuexDir       string // $JUEX_HOME or ~/.juex
+	WorkDir           string // explicit; defaults to os.Getwd()
+	AgentID           string
+	AgentName         string
+	AgentStateDir     string
+	AgentAddress      agentstate.AgentAddress
+	AgentStateNotices []string
+	agentStateLoaded  bool
 
 	modelRef        string
 	shellConfig     ShellConfig
@@ -83,18 +82,17 @@ type LoadOptions struct {
 }
 
 type fileConfig struct {
-	Model                     string                            `yaml:"model"`
-	FallbackModels            *[]string                         `yaml:"fallback_models"`
-	EnableUserAgentsResources optionalBool                      `yaml:"enable_user_agents_resources"`
-	EnableUserGlobalResources deprecatedUserGlobalResourcesBool `yaml:"enable_user_global_resources"`
-	Providers                 []providerConfig                  `yaml:"providers"`
-	Compaction                compactionConfig                  `yaml:"compaction"`
-	Hooks                     hooks.FileConfig                  `yaml:"hooks"`
-	Runtime                   runtimeConfig                     `yaml:"runtime"`
-	Shell                     *ShellConfig                      `yaml:"shell"`
-	Sandbox                   sandboxConfig                     `yaml:"sandbox"`
-	Skills                    skillsConfig                      `yaml:"skills"`
-	Fleet                     *fleetFileConfig                  `yaml:"fleet"`
+	Model                     string           `yaml:"model"`
+	FallbackModels            *[]string        `yaml:"fallback_models"`
+	EnableUserAgentsResources optionalBool     `yaml:"enable_user_agents_resources"`
+	Providers                 []providerConfig `yaml:"providers"`
+	Compaction                compactionConfig `yaml:"compaction"`
+	Hooks                     hooks.FileConfig `yaml:"hooks"`
+	Runtime                   runtimeConfig    `yaml:"runtime"`
+	Shell                     *ShellConfig     `yaml:"shell"`
+	Sandbox                   sandboxConfig    `yaml:"sandbox"`
+	Skills                    skillsConfig     `yaml:"skills"`
+	Fleet                     *fleetFileConfig `yaml:"fleet"`
 }
 
 type providerConfig struct {
@@ -676,16 +674,6 @@ func applyYAMLData(cfg *Config, data []byte, source, hookSource string, requireH
 	if fc.FallbackModels != nil {
 		cfg.FallbackModels = append([]string(nil), (*fc.FallbackModels)...)
 	}
-	if fc.EnableUserGlobalResources.Set {
-		cfg.EnableUserAgentsResources = fc.EnableUserGlobalResources.Value
-		appendDeprecationWarning(
-			cfg,
-			fmt.Sprintf(
-				"%s: enable_user_global_resources is deprecated; use enable_user_agents_resources",
-				source,
-			),
-		)
-	}
 	if fc.EnableUserAgentsResources.Set {
 		cfg.EnableUserAgentsResources = fc.EnableUserAgentsResources.Value
 	}
@@ -722,15 +710,6 @@ func applyYAMLData(cfg *Config, data []byte, source, hookSource string, requireH
 	return nil
 }
 
-func appendDeprecationWarning(cfg *Config, warning string) {
-	for _, existing := range cfg.DeprecationWarnings {
-		if existing == warning {
-			return
-		}
-	}
-	cfg.DeprecationWarnings = append(cfg.DeprecationWarnings, warning)
-}
-
 func applyHooksConfig(cfg *Config, fileHooks hooks.FileConfig, source string, requireTrust bool) error {
 	resolved, err := hooks.ResolveFileConfig(fileHooks, source, requireTrust)
 	if err != nil {
@@ -743,17 +722,6 @@ func applyHooksConfig(cfg *Config, fileHooks hooks.FileConfig, source string, re
 type optionalBool struct {
 	Set   bool
 	Value bool
-}
-
-type deprecatedUserGlobalResourcesBool struct {
-	optionalBool
-}
-
-func (b *deprecatedUserGlobalResourcesBool) UnmarshalYAML(node *yaml.Node) error {
-	if err := b.optionalBool.UnmarshalYAML(node); err != nil {
-		return fmt.Errorf("enable_user_global_resources: %w", err)
-	}
-	return nil
 }
 
 func (b *optionalBool) UnmarshalYAML(node *yaml.Node) error {

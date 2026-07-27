@@ -322,6 +322,44 @@ func TestRemovedServeCommandAndLegacyFlagAreUnknown(t *testing.T) {
 	}
 }
 
+func TestRemovedSessionSelectorFlagsAreUnknown(t *testing.T) {
+	removedNames := []string{"re" + "sume", "ses" + "sion"}
+	for _, commandName := range []string{"run", "repl"} {
+		command, _, err := newRootCmd().Find([]string{commandName})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if command.Flags().Lookup("alias") == nil {
+			t.Fatalf("%s command lost --alias", commandName)
+		}
+		for _, name := range removedNames {
+			if command.Flags().Lookup(name) != nil {
+				t.Errorf("%s command still exposes removed flag --%s", commandName, name)
+			}
+
+			root := newRootCmd()
+			root.SetArgs([]string{commandName, "--" + name, "value", "prompt"})
+			err := root.Execute()
+			if err == nil || !strings.Contains(err.Error(), "unknown flag: --"+name) {
+				t.Errorf("%s --%s error = %v, want Cobra unknown flag", commandName, name, err)
+			}
+		}
+	}
+}
+
+func TestRemovedUserGlobalResourcesFlagIsUnknown(t *testing.T) {
+	name := "enable-user-global-" + "resources"
+	root := newRootCmd()
+	if root.PersistentFlags().Lookup(name) != nil {
+		t.Fatalf("root still exposes removed flag --%s", name)
+	}
+	root.SetArgs([]string{"--" + name + "=false", "version"})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "unknown flag: --"+name) {
+		t.Fatalf("error = %v, want Cobra unknown flag", err)
+	}
+}
+
 func TestPersistentFlagsParsedAtRoot(t *testing.T) {
 	// `juex --verbose run` should propagate verbose to the run command.
 	// We can't easily run `run` end-to-end here (no stub provider), but we
@@ -384,13 +422,11 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		`"name": "include-worktree-summary"`,
 		`"name": "addr"`,
 		`"name": "unsafe-bind-any"`,
-		`"name": "resume"`,  // flag
-		`"name": "session"`, // flag
+		`"name": "session"`, // bundle flag
 		`"name": "config"`,  // persistent flag
 		`"name": "cwd"`,     // persistent flag dumped on subcommands
 		`"name": "model"`,
 		`"name": "enable-user-agents-resources"`,
-		`"name": "enable-user-global-resources"`,
 		`"name": "debug"`,
 		`"name": "log-level"`,
 		`"shorthand": "C"`,
@@ -686,113 +722,6 @@ func TestLoadConfig_EnableUserAgentsResourcesFlagRejectsInvalidBool(t *testing.T
 	var usageErr *usageError
 	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--enable-user-agents-resources") {
 		t.Fatalf("err = %T %v, want usage error for enable-user-agents-resources", err, err)
-	}
-}
-
-func TestLoadConfig_DeprecatedUserGlobalResourcesFlagWorksAndNewWins(t *testing.T) {
-	setHomeForCLITest(t)
-	work := t.TempDir()
-	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-
-	legacyCfg, err := loadConfig(&persistentFlags{
-		cwd:                       work,
-		enableUserGlobalResources: "false",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if legacyCfg.EnableUserAgentsResources {
-		t.Fatal("deprecated resource flag did not set the resolved value")
-	}
-
-	cfg, err := loadConfig(&persistentFlags{
-		cwd:                       work,
-		enableUserGlobalResources: "false",
-		enableUserAgentsResources: "true",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cfg.EnableUserAgentsResources {
-		t.Fatal("canonical resource flag did not win over deprecated alias")
-	}
-}
-
-func TestRoot_DeprecatedUserGlobalResourcesFlagWarns(t *testing.T) {
-	root := newRootCmd()
-	var stderr bytes.Buffer
-	root.SetErr(&stderr)
-	root.SetArgs([]string{"--enable-user-global-resources=false", "version"})
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{
-		"juex: warning:",
-		"--enable-user-global-resources is deprecated",
-		"--enable-user-agents-resources",
-	} {
-		if !strings.Contains(stderr.String(), want) {
-			t.Fatalf("stderr missing %q:\n%s", want, stderr.String())
-		}
-	}
-}
-
-func TestLoadRuntimeConfigForCommand_DeprecatedUserGlobalResourcesKeyWarns(t *testing.T) {
-	setHomeForCLITest(t)
-	work := t.TempDir()
-	path := filepath.Join(work, ".juex", "juex.yaml")
-	if err := writeJuexConfigFile(path, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	if err := appendTextFile(path, "enable_user_global_resources: false\n"); err != nil {
-		t.Fatal(err)
-	}
-
-	root := newRootCmd()
-	var stderr bytes.Buffer
-	root.SetErr(&stderr)
-	runCmd, _, err := root.Find([]string{"run"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg, lifecycle, err := loadRuntimeConfigForCommand(runCmd, &persistentFlags{cwd: work}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if lifecycle != nil {
-		t.Fatal("durable run config unexpectedly created an ephemeral lifecycle")
-	}
-	if cfg.EnableUserAgentsResources {
-		t.Fatal("deprecated resource key did not set the resolved value")
-	}
-	for _, want := range []string{
-		"juex: warning:",
-		"enable_user_global_resources is deprecated",
-		"enable_user_agents_resources",
-	} {
-		if !strings.Contains(stderr.String(), want) {
-			t.Fatalf("stderr missing %q:\n%s", want, stderr.String())
-		}
-	}
-}
-
-func TestLoadConfig_DeprecatedUserGlobalResourcesFlagRejectsInvalidBool(t *testing.T) {
-	setHomeForCLITest(t)
-	work := t.TempDir()
-	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := loadConfig(&persistentFlags{
-		cwd:                       work,
-		enableUserGlobalResources: "maybe",
-		enableUserAgentsResources: "true",
-	})
-	var usageErr *usageError
-	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--enable-user-global-resources") {
-		t.Fatalf("err = %T %v, want deprecated flag usage error", err, err)
 	}
 }
 
@@ -2020,61 +1949,6 @@ func setHomeForCLITest(t *testing.T) string {
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Setenv("CODEX_HOME", filepath.Join(home, "missing-codex-home"))
 	return home
-}
-
-func TestRunCmd_ResumeAndSessionMutuallyExclusive(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configFile := dir + "/juex.yaml"
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--resume", "--session", "abc", "x"})
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if _, ok := err.(*usageError); !ok {
-		t.Fatalf("got %T", err)
-	}
-}
-
-func TestRunCmd_SessionFlagNotFound(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	dir := t.TempDir()
-	configFile := dir + "/juex.yaml"
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--session", "missing", "x"})
-	err := root.Execute()
-	if _, ok := err.(*notFoundError); !ok {
-		t.Fatalf("got %T: %v", err, err)
-	}
-}
-
-func TestREPLCmd_AcceptsResumeFlags(t *testing.T) {
-	dir := t.TempDir()
-	configFile := dir + "/juex.yaml"
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "repl", "--resume", "--session", "x"})
-	err := root.Execute()
-	if _, ok := err.(*usageError); !ok {
-		t.Fatalf("got %T: %v", err, err)
-	}
 }
 
 func TestListenCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {

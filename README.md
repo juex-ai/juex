@@ -291,14 +291,12 @@ extension bundles under `$JUEX_HOME/extensions/<name>/`. Set
 `enable_user_agents_resources: false` in `juex.yaml`, or pass
 `--enable-user-agents-resources=false`, to ignore only the personal
 `~/.agents` resources for a run. Home extension bundles remain enabled because
-they are explicit configuration of the selected JueX home. The deprecated
-`enable_user_global_resources` key and `--enable-user-global-resources` flag
-remain aliases for one release and warn with the new spelling. Project-local
+they are explicit configuration of the selected JueX home. Project-local
 AGENTS.md, skills, and MCP servers still come from `.agents/`, and project
-extension bundles still come from `.juex/extensions/<name>/`. Extension
-bundles may provide `skills/`, `mcp.json`, and `hooks.yaml`; runtime status
-reports them with source `ext:<name>`. Work-local extension hooks must set
-`trusted: true`; JueX-home extension hooks are trusted by location.
+extension bundles still come from `.juex/extensions/<name>/`. Extension bundles
+may provide `skills/`, `mcp.json`, and `hooks.yaml`; runtime status reports them
+with source `ext:<name>`. Work-local extension hooks must set `trusted: true`;
+JueX-home extension hooks are trusted by location.
 Extension MCP servers receive `JUEX_EXT_DIR` alongside `WORKDIR` and
 `JUEX_WORKDIR`. Identity-owned runtime state lives under
 `$JUEX_HOME/agents/<id>`; workspace artifacts and Observable
