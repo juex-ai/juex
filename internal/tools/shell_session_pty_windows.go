@@ -84,6 +84,11 @@ func startPTYSession(cmd *exec.Cmd, session *shellSession) (io.WriteCloser, erro
 
 	startupInfo := windows.StartupInfoEx{}
 	startupInfo.StartupInfo.Cb = uint32(unsafe.Sizeof(startupInfo))
+	// A redirected parent can otherwise copy its standard handles into the
+	// child and bypass ConPTY. STARTF_USESTDHANDLES with null values is
+	// deliberate: console attachment replaces null standard handles with the
+	// pseudoconsole handles instead of retaining the parent's redirected ones.
+	startupInfo.StartupInfo.Flags = windows.STARTF_USESTDHANDLES
 	startupInfo.ProcThreadAttributeList = attrList.List()
 
 	commandLine, err := windows.UTF16PtrFromString(windowsCommandLine(cmd.Args))
