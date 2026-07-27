@@ -309,6 +309,10 @@ func TestCIWorkflowExercisesReleaseInstaller(t *testing.T) {
 		"GITHUB_PATH",
 		"juex version",
 		"juex.exe version",
+		`cp -R .tmp/ci-ripgrep/. "$package_root/"`,
+		`Copy-Item -Path ".tmp/ci-ripgrep/*" -Destination $packageRoot`,
+		`${package_root}/bin/juex`,
+		`$packageRoot "bin/juex.exe"`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("ci.yml missing %q", want)
