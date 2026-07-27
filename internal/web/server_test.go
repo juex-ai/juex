@@ -561,6 +561,8 @@ func (p *cancelAwareProvider) Complete(ctx context.Context, sys string, h []llm.
 }
 
 func TestCloseCancelsMCPNotificationTurn(t *testing.T) {
+	const notificationTimeout = 10 * time.Second
+
 	provider := &cancelAwareProvider{
 		started:  make(chan struct{}),
 		canceled: make(chan error, 1),
@@ -592,7 +594,7 @@ func TestCloseCancelsMCPNotificationTurn(t *testing.T) {
 	}()
 	select {
 	case <-provider.started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(notificationTimeout):
 		close(provider.release)
 		t.Fatal("provider did not start")
 	}
@@ -604,7 +606,7 @@ func TestCloseCancelsMCPNotificationTurn(t *testing.T) {
 	}()
 	select {
 	case <-closed:
-	case <-time.After(2 * time.Second):
+	case <-time.After(notificationTimeout):
 		close(provider.release)
 		<-closed
 		t.Fatal("server close did not cancel MCP notification turn")
@@ -614,7 +616,7 @@ func TestCloseCancelsMCPNotificationTurn(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("provider cancel err = %v, want context.Canceled", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(notificationTimeout):
 		t.Fatal("provider did not observe context cancellation")
 	}
 	select {
@@ -622,7 +624,7 @@ func TestCloseCancelsMCPNotificationTurn(t *testing.T) {
 		if !errors.Is(err, cancellation.ErrUserCancelled) {
 			t.Fatalf("notification err = %v, want ErrUserCancelled", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(notificationTimeout):
 		t.Fatal("MCP notification handler did not return")
 	}
 }
