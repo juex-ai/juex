@@ -78,6 +78,10 @@ persisted IDs. Tool replay uses the same rule with its globally unique tool-use
 ID. The replay cursor is captured once per Session route; later transcript
 refreshes may advance their response cursor without restarting the existing
 EventSource or clearing its latest status.
+If application lifecycle state replaces that EventSource, the Session read
+controller resumes from the latest durable status cursor carried by an event it
+actually applied, rather than reusing the route's original replay cursor.
+Independent status calibration never advances this transcript resume point.
 Because the server subscribes before replay, it suppresses durable live frames
 already present in the replay tail before completing the ordered live handoff.
 An open journal descriptor and its byte boundary are captured behind the
@@ -201,8 +205,11 @@ Native `EventSource` reconnects automatically. Each successful stream open
 also refreshes the status snapshot so an out-of-band restart recovery is
 visible even when no new transcript event exists. If a `BrowserEvent` arrives
 while that refresh is in flight, the event wins and the older refresh result is
-discarded. A transient stream error retains the last usable snapshot until the
-connection recovers or Agent health marks the runtime unavailable.
+discarded. Native reconnects use `Last-Event-ID`; a replacement EventSource
+created after Agent health or other application state changes uses the
+controller's last applied durable cursor. A transient stream error retains the
+last usable snapshot until the connection recovers or Agent health marks the
+runtime unavailable.
 
 The composer derives send, queue, stop, and queue-full behavior only from the
 canonical snapshot. The transcript projection may optimistically render

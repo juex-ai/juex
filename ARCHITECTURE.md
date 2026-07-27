@@ -1451,7 +1451,11 @@ without relying on text equality. Live user, assistant, hook, and queued-input
 projections retain those persisted IDs; tool replay uses the globally unique
 tool-use ID for the same overlap check. The initial replay cursor is stable for
 the lifetime of the Session route, so a cursor-only transcript refresh does not
-tear down the live stream or clear canonical status.
+tear down the live stream or clear canonical status. If Agent health or other
+application lifecycle state replaces the EventSource, the session read
+controller resumes from the latest durable status cursor carried by an event it
+has applied. Status calibration remains independent and cannot advance this
+transcript resume point.
 
 Agent API routes are available directly as `/api/...` and through the fleet
 proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
