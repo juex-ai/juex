@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,6 +184,69 @@ func TestSessionsActivate_PrimaryOnly(t *testing.T) {
 	}
 	if _, ok := err.(*usageError); !ok {
 		t.Fatalf("got %T: %v", err, err)
+	}
+}
+
+func TestSessionsContinue_ResumesSideWithoutChangingActive(t *testing.T) {
+	work := t.TempDir()
+	ensureTestWorkspaceAgent(t, work)
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(configPath, "openai", "https://example.invalid", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+
+	runStatus := func(t *testing.T, args ...string) runResult {
+		t.Helper()
+		root := newRootCmd()
+		var out bytes.Buffer
+		var stderr bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&stderr)
+		root.SetArgs(append([]string{"-C", work}, args...))
+		if err := root.Execute(); err != nil {
+			t.Fatalf("juex %s: %v\nstderr:\n%s", strings.Join(args, " "), err, stderr.String())
+		}
+		var result runResult
+		if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+			t.Fatalf("decode output %q: %v", out.String(), err)
+		}
+		return result
+	}
+
+	primary := runStatus(t, "run", "--json", "/status")
+	side := runStatus(t, "run", "--json", "--side", "/status")
+	if side.SessionKind != session.KindSide || side.Active {
+		t.Fatalf("created side = %+v, want inactive side", side)
+	}
+
+	continued := runStatus(t, "sessions", "continue", side.SessionID, "--json", "/status")
+	if continued.SessionID != side.SessionID {
+		t.Fatalf("continued session = %s, want %s", continued.SessionID, side.SessionID)
+	}
+	if continued.SessionKind != session.KindSide || continued.Active {
+		t.Fatalf("continued side = %+v, want inactive side", continued)
+	}
+
+	active := runStatus(t, "run", "--json", "/status")
+	if active.SessionID != primary.SessionID || !active.Active {
+		t.Fatalf("default continuation = %+v, want active primary %s", active, primary.SessionID)
+	}
+}
+
+func TestSessionsContinue_MissingSessionReturnsNotFound(t *testing.T) {
+	work := t.TempDir()
+	ensureTestWorkspaceAgent(t, work)
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(configPath, "openai", "https://example.invalid", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	root.SetArgs([]string{"-C", work, "sessions", "continue", "missing", "/status"})
+	err := root.Execute()
+	var notFound *notFoundError
+	if !errors.As(err, &notFound) {
+		t.Fatalf("err = %T %v, want notFoundError", err, err)
 	}
 }
 

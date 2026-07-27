@@ -22,6 +22,7 @@ func TestCommandAgentStatePolicyCoversExecutableTree(t *testing.T) {
 		"juex schema":            agentStateNone,
 		"juex sessions list":     agentStateExisting,
 		"juex sessions show":     agentStateExisting,
+		"juex sessions continue": agentStateExisting,
 		"juex sessions context":  agentStateExisting,
 		"juex sessions compact":  agentStateExisting,
 		"juex sessions activate": agentStateExisting,

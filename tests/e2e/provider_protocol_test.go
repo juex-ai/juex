@@ -339,6 +339,116 @@ providers:
 	}
 }
 
+func TestLiveBinary_SessionsContinueResumesSideWithoutActivatingIt(t *testing.T) {
+	bin := buildJuex(t)
+	var requestCount atomic.Int32
+	var mu sync.Mutex
+	var requests []map[string]any
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		mu.Lock()
+		requests = append(requests, body)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch requestCount.Add(1) {
+		case 1:
+			_, _ = w.Write([]byte(chatCompletionResponse("side-first-ok")))
+		case 2:
+			_, _ = w.Write([]byte(chatCompletionResponse("side-continued-ok")))
+		default:
+			t.Errorf("unexpected provider request %d", requestCount.Load())
+			_, _ = w.Write([]byte(chatCompletionResponse("unexpected")))
+		}
+	}))
+	defer provider.Close()
+
+	work := t.TempDir()
+	configBody := fmt.Sprintf(`model: local-chat:chat-test
+providers:
+  - id: local-chat
+    protocol: openai/chat
+    base_url: %s
+    api_key: k
+    capabilities:
+      streaming: false
+    models:
+      - id: chat-test
+`, provider.URL)
+	if err := writeText(filepath.Join(work, ".juex", "juex.yaml"), configBody); err != nil {
+		t.Fatal(err)
+	}
+	env := isolatedJuexBinaryEnv(t.TempDir())
+
+	runJSON := func(args ...string) struct {
+		Text        string `json:"text"`
+		SessionID   string `json:"session_id"`
+		SessionDir  string `json:"session_dir"`
+		SessionKind string `json:"session_kind"`
+		Active      bool   `json:"active"`
+	} {
+		t.Helper()
+		cmd := exec.Command(bin, append([]string{"-C", work}, args...)...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("juex %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		var result struct {
+			Text        string `json:"text"`
+			SessionID   string `json:"session_id"`
+			SessionDir  string `json:"session_dir"`
+			SessionKind string `json:"session_kind"`
+			Active      bool   `json:"active"`
+		}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatalf("decode juex %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return result
+	}
+
+	primary := runJSON("run", "--json", "/status")
+	side := runJSON("run", "--side", "--json", "first side turn")
+	if side.Text != "side-first-ok" || side.SessionKind != "side" || side.Active {
+		t.Fatalf("side run = %+v", side)
+	}
+	continued := runJSON("sessions", "continue", side.SessionID, "--json", "second side turn")
+	if continued.Text != "side-continued-ok" || continued.SessionID != side.SessionID ||
+		continued.SessionDir != side.SessionDir || continued.SessionKind != "side" || continued.Active {
+		t.Fatalf("continued side = %+v, original = %+v", continued, side)
+	}
+	active := runJSON("run", "--json", "/status")
+	if active.SessionID != primary.SessionID || !active.Active {
+		t.Fatalf("default run = %+v, want active primary %s", active, primary.SessionID)
+	}
+
+	if got := requestCount.Load(); got != 2 {
+		t.Fatalf("provider requests = %d, want 2", got)
+	}
+	mu.Lock()
+	secondRequest, err := json.Marshal(requests[1])
+	mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"first side turn", "side-first-ok", "second side turn"} {
+		if !bytes.Contains(secondRequest, []byte(want)) {
+			t.Fatalf("continued provider request missing %q: %s", want, secondRequest)
+		}
+	}
+	conversation, err := os.ReadFile(filepath.Join(side.SessionDir, "conversation.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"first side turn", "side-first-ok", "second side turn", "side-continued-ok"} {
+		if !bytes.Contains(conversation, []byte(want)) {
+			t.Fatalf("continued transcript missing %q:\n%s", want, conversation)
+		}
+	}
+}
+
 type capturedProviderRequest struct {
 	path string
 	body map[string]any

@@ -177,6 +177,7 @@ operate on an agent. `juex init` sets up either the shared user config
 | `/new`, `/status`, `/compact [instructions]` | Local slash commands accepted by `run`, `repl`, and the web composer. |
 | `juex sessions list` | List recorded sessions. |
 | `juex sessions show <id>` | Print session metadata and transcript. |
+| `juex sessions continue <id> "<prompt>"` | Run another turn in a recorded session; side sessions remain inactive. |
 | `juex sessions activate <id>` | Make a primary session the active workspace session. |
 | `juex sessions context <id>` | Print the active provider context for a session. |
 | `juex sessions compact <id> --instructions "<focus>"` | Append a manual compact summary marker to a session. |

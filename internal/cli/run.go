@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -106,6 +107,18 @@ func (noopProvider) Complete(ctx context.Context, sys string, h []llm.Message, t
 	return llm.Response{}, errors.New("noopProvider: dry run should not call the LLM")
 }
 
+type runCommandOptions struct {
+	jsonOut         bool
+	dryRun          bool
+	newSession      bool
+	sideSession     bool
+	ephemeral       bool
+	keep            bool
+	attachPaths     []string
+	alias           string
+	continueSession string
+}
+
 func newRunCmd(flags *persistentFlags) *cobra.Command {
 	var (
 		jsonOut     bool
@@ -137,134 +150,17 @@ execution is printed and the process exits with code 10.`,
 			}
 			return nil
 		},
-		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
-			if err := validateEphemeralFlags(ephemeral, keep, dryRun); err != nil {
-				return err
-			}
-			// Validate paths BEFORE calling loadConfig so we surface the
-			// right exit code (3 not found) instead of a generic error.
-			configPath := explicitConfigPath(flags)
-			if configPath != "" {
-				if _, err := os.Stat(configPath); err != nil {
-					return emit(jsonOut, cmd.ErrOrStderr(), &notFoundError{
-						msg: "config file not found: " + configPath,
-					}, "verify the path exists; default search is ./.juex/juex.yaml", false)
-				}
-			}
-			if flags.cwd != "" {
-				if st, err := os.Stat(flags.cwd); err != nil || !st.IsDir() {
-					return emit(jsonOut, cmd.ErrOrStderr(), &notFoundError{
-						msg: "--cwd is not a valid directory: " + flags.cwd,
-					}, "pass an existing directory path", false)
-				}
-			}
-			cfg, lifecycle, err := loadRuntimeConfigForCommand(cmd, flags, keep)
-			if err != nil {
-				return emit(jsonOut, cmd.ErrOrStderr(), err,
-					"set top-level model and providers[] entries in .juex/juex.yaml or "+initNoConfigSuggestion, false)
-			}
-			if lifecycle != nil {
-				defer func() {
-					runErr = lifecycle.finish(cmd, runErr)
-				}()
-			}
-			if err := ensureSelectedRuntimeConfig(cfg); err != nil {
-				return emit(jsonOut, cmd.ErrOrStderr(), err,
-					initNoConfigSuggestion, false)
-			}
-
-			prompt := strings.Join(args, " ")
-			if newSession && sideSession {
-				return emit(jsonOut, cmd.ErrOrStderr(), &usageError{msg: "pass --new or --side, not both"},
-					"use --new for a new primary session or --side for a side session", false)
-			}
-			if len(attachPaths) > 0 {
-				if _, handled, parseErr := app.ParseSlashCommand(prompt); handled || parseErr != nil {
-					message := "slash commands cannot include attachments"
-					if parseErr != nil {
-						message = parseErr.Error()
-					}
-					return emit(jsonOut, cmd.ErrOrStderr(), &usageError{msg: message},
-						"run the slash command and attachment turn separately", false)
-				}
-			}
-			preparedAttachments, err := usermedia.PrepareFiles(cfg.WorkDir, attachPaths, usermedia.Limits{})
-			if err != nil {
-				return emitAttachmentError(jsonOut, cmd.ErrOrStderr(), err)
-			}
-
-			if dryRun {
-				return runDryRun(cmd, flags, cfg, prompt, preparedAttachments.Infos(), jsonOut)
-			}
-
-			mode := app.SessionModeAttachActive
-			if newSession {
-				mode = app.SessionModeNewPrimary
-			}
-			if sideSession {
-				mode = app.SessionModeNewSide
-			}
-			a, err := app.New(app.Options{
-				Config:      cfg,
-				Verbose:     flags.verbose,
-				Debug:       flags.debug,
-				LogLevel:    flags.logLevel,
-				WorkDir:     cfg.WorkDir,
-				Stderr:      cmd.ErrOrStderr(),
-				Alias:       alias,
-				SessionMode: mode,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return executeRunCommand(cmd, flags, args, runCommandOptions{
+				jsonOut:     jsonOut,
+				dryRun:      dryRun,
+				newSession:  newSession,
+				sideSession: sideSession,
+				ephemeral:   ephemeral,
+				keep:        keep,
+				attachPaths: attachPaths,
+				alias:       alias,
 			})
-			if err != nil {
-				return emit(jsonOut, cmd.ErrOrStderr(), err,
-					"check top-level model plus providers[].id/providers[].protocol/providers[].api_key in .juex/juex.yaml", false)
-			}
-			defer func() { _ = a.CloseAndWait() }()
-			if flags.verbose {
-				fmt.Fprintln(cmd.ErrOrStderr(), app.FormatResourceSummary(a.ResourceSummary()))
-			}
-			identity, ok := a.SessionIdentity()
-			if !ok {
-				return emit(jsonOut, cmd.ErrOrStderr(), app.ErrSessionUnavailable, "", false)
-			}
-			attachments, err := preparedAttachments.Store(cfg.WorkDir, identity.ID)
-			if err != nil {
-				return emitAttachmentError(jsonOut, cmd.ErrOrStderr(), err)
-			}
-			warnings := a.AttachmentWarnings(len(attachments))
-			if !jsonOut {
-				writeTurnWarnings(cmd.ErrOrStderr(), warnings)
-			}
-
-			start := time.Now()
-			out, err := a.RunWithAttachments(cmd.Context(), prompt, attachments)
-			if err != nil {
-				var slashErr *app.UnknownSlashCommandError
-				if errors.As(err, &slashErr) {
-					return emit(jsonOut, cmd.ErrOrStderr(), err,
-						"available slash commands: "+app.AvailableSlashCommandsText(), false)
-				}
-				return emitRunError(jsonOut, cmd.ErrOrStderr(), err, a, cfg.WorkDir)
-			}
-			usage := a.TokenUsage()
-
-			if jsonOut {
-				info, _ := a.SessionInfo(time.Now().UTC())
-				cmdPrintln(cmd, mustJSON(runResult{
-					Text:        out,
-					SessionID:   info.ID,
-					SessionDir:  info.Dir,
-					SessionKind: info.Kind,
-					Active:      info.Active,
-					DurationMs:  time.Since(start).Milliseconds(),
-					TokenUsage:  usage,
-					TokenTotal:  usage.TotalTokens(),
-					Warnings:    warnings,
-				}))
-			} else {
-				cmdPrintln(cmd, out)
-				cmdPrintln(cmd, app.FormatTokenUsage(usage))
-			}
-			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit a JSON result on stdout (and JSON errors on stderr)")
@@ -277,6 +173,157 @@ execution is printed and the process exits with code 10.`,
 	cmd.Flags().StringVar(&alias, "alias", "", "set or update the session alias")
 	declareAgentStatePolicy(cmd, agentStateMint)
 	return cmd
+}
+
+func executeRunCommand(cmd *cobra.Command, flags *persistentFlags, args []string, opts runCommandOptions) (runErr error) {
+	if err := validateEphemeralFlags(opts.ephemeral, opts.keep, opts.dryRun); err != nil {
+		return err
+	}
+	// Validate paths before loading config so missing inputs keep their
+	// specific not-found exit classification.
+	configPath := explicitConfigPath(flags)
+	if configPath != "" {
+		if _, err := os.Stat(configPath); err != nil {
+			return emit(opts.jsonOut, cmd.ErrOrStderr(), &notFoundError{
+				msg: "config file not found: " + configPath,
+			}, "verify the path exists; default search is ./.juex/juex.yaml", false)
+		}
+	}
+	if flags.cwd != "" {
+		if st, err := os.Stat(flags.cwd); err != nil || !st.IsDir() {
+			return emit(opts.jsonOut, cmd.ErrOrStderr(), &notFoundError{
+				msg: "--cwd is not a valid directory: " + flags.cwd,
+			}, "pass an existing directory path", false)
+		}
+	}
+	cfg, lifecycle, err := loadRuntimeConfigForCommand(cmd, flags, opts.keep)
+	if err != nil {
+		return emit(opts.jsonOut, cmd.ErrOrStderr(), err,
+			"set top-level model and providers[] entries in .juex/juex.yaml or "+initNoConfigSuggestion, false)
+	}
+	if lifecycle != nil {
+		defer func() {
+			runErr = lifecycle.finish(cmd, runErr)
+		}()
+	}
+	if err := ensureSelectedRuntimeConfig(cfg); err != nil {
+		return emit(opts.jsonOut, cmd.ErrOrStderr(), err,
+			initNoConfigSuggestion, false)
+	}
+
+	prompt := strings.Join(args, " ")
+	if opts.newSession && opts.sideSession {
+		return emit(opts.jsonOut, cmd.ErrOrStderr(), &usageError{msg: "pass --new or --side, not both"},
+			"use --new for a new primary session or --side for a side session", false)
+	}
+	if len(opts.attachPaths) > 0 {
+		if _, handled, parseErr := app.ParseSlashCommand(prompt); handled || parseErr != nil {
+			message := "slash commands cannot include attachments"
+			if parseErr != nil {
+				message = parseErr.Error()
+			}
+			return emit(opts.jsonOut, cmd.ErrOrStderr(), &usageError{msg: message},
+				"run the slash command and attachment turn separately", false)
+		}
+	}
+	preparedAttachments, err := usermedia.PrepareFiles(cfg.WorkDir, opts.attachPaths, usermedia.Limits{})
+	if err != nil {
+		return emitAttachmentError(opts.jsonOut, cmd.ErrOrStderr(), err)
+	}
+
+	if opts.dryRun {
+		return runDryRun(cmd, flags, cfg, prompt, preparedAttachments.Infos(), opts.jsonOut)
+	}
+
+	var continueDir string
+	if opts.continueSession != "" {
+		continueDir, err = exactSessionDir(cfg.SessionsDir(), opts.continueSession)
+		if err != nil {
+			return emit(opts.jsonOut, cmd.ErrOrStderr(), err,
+				"see 'juex sessions list' for valid ids", false)
+		}
+	}
+	mode := app.SessionModeAttachActive
+	if opts.newSession {
+		mode = app.SessionModeNewPrimary
+	}
+	if opts.sideSession {
+		mode = app.SessionModeNewSide
+	}
+	a, err := app.New(app.Options{
+		Config:      cfg,
+		Verbose:     flags.verbose,
+		Debug:       flags.debug,
+		LogLevel:    flags.logLevel,
+		WorkDir:     cfg.WorkDir,
+		Stderr:      cmd.ErrOrStderr(),
+		ResumeDir:   continueDir,
+		Alias:       opts.alias,
+		SessionMode: mode,
+	})
+	if err != nil {
+		return emit(opts.jsonOut, cmd.ErrOrStderr(), err,
+			"check top-level model plus providers[].id/providers[].protocol/providers[].api_key in .juex/juex.yaml", false)
+	}
+	defer func() { _ = a.CloseAndWait() }()
+	if flags.verbose {
+		fmt.Fprintln(cmd.ErrOrStderr(), app.FormatResourceSummary(a.ResourceSummary()))
+	}
+	identity, ok := a.SessionIdentity()
+	if !ok {
+		return emit(opts.jsonOut, cmd.ErrOrStderr(), app.ErrSessionUnavailable, "", false)
+	}
+	attachments, err := preparedAttachments.Store(cfg.WorkDir, identity.ID)
+	if err != nil {
+		return emitAttachmentError(opts.jsonOut, cmd.ErrOrStderr(), err)
+	}
+	warnings := a.AttachmentWarnings(len(attachments))
+	if !opts.jsonOut {
+		writeTurnWarnings(cmd.ErrOrStderr(), warnings)
+	}
+
+	start := time.Now()
+	out, err := a.RunWithAttachments(cmd.Context(), prompt, attachments)
+	if err != nil {
+		var slashErr *app.UnknownSlashCommandError
+		if errors.As(err, &slashErr) {
+			return emit(opts.jsonOut, cmd.ErrOrStderr(), err,
+				"available slash commands: "+app.AvailableSlashCommandsText(), false)
+		}
+		return emitRunError(opts.jsonOut, cmd.ErrOrStderr(), err, a, cfg.WorkDir)
+	}
+	usage := a.TokenUsage()
+
+	if opts.jsonOut {
+		info, _ := a.SessionInfo(time.Now().UTC())
+		cmdPrintln(cmd, mustJSON(runResult{
+			Text:        out,
+			SessionID:   info.ID,
+			SessionDir:  info.Dir,
+			SessionKind: info.Kind,
+			Active:      info.Active,
+			DurationMs:  time.Since(start).Milliseconds(),
+			TokenUsage:  usage,
+			TokenTotal:  usage.TotalTokens(),
+			Warnings:    warnings,
+		}))
+	} else {
+		cmdPrintln(cmd, out)
+		cmdPrintln(cmd, app.FormatTokenUsage(usage))
+	}
+	return nil
+}
+
+func exactSessionDir(root, id string) (string, error) {
+	if root == "" || id == "" || id == "." || id == ".." ||
+		filepath.Clean(id) != id || filepath.Base(id) != id {
+		return "", &notFoundError{msg: "session not found: " + id}
+	}
+	dir := filepath.Join(root, id)
+	if !session.HasConversation(dir) {
+		return "", &notFoundError{msg: "session not found: " + id}
+	}
+	return dir, nil
 }
 
 // runDryRun wires everything but the LLM call so we can introspect the

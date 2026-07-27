@@ -1079,6 +1079,7 @@ juex [--version | -v]
 ├── sessions
 │   ├── list   [--limit N] [--format json|table]
 │   ├── show <id> [--format json|text]
+│   ├── continue <id> ["<prompt>"] [--attach <path>]... [--json]
 │   ├── activate <id> [--format json|text]
 │   ├── context <id> [--format json|text]
 │   ├── compact <id> [--reason <reason>] [--format json|text]
@@ -1378,6 +1379,8 @@ derived by `internal/session` from canonical message IDs. This timestamp is not
 added to `llm.Message` or persisted JSONL; legacy IDs simply omit it.
 Only the active primary session accepts `POST /turns`; inactive primary
 sessions must be activated first, and side sessions are read-only in the Web UI.
+The CLI continues a recorded side session through `juex sessions continue`
+without making it active.
 The web handler is a transport adapter over app-level turn admission: it
 validates HTTP/session access, decodes request JSON, renders admission results,
 updates its in-memory session cache when `/new` switches sessions, and owns
