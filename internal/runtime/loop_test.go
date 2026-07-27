@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -802,6 +803,83 @@ func TestCancelActiveTurnCancelsCompactionWithoutAppendingMarker(t *testing.T) {
 		if msg.Kind == llm.MessageKindCompact {
 			t.Fatalf("unexpected compact marker after cancellation: %+v", msg)
 		}
+	}
+}
+
+func TestCancelActiveTurnRejectsCancellationAfterCompactionCommit(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "committed summary"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	eng.ContextWindow = 100
+	eng.Compaction = DefaultCompactionPolicy()
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	postStarted := make(chan struct{}, 1)
+	releasePost := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseHook := func() { releaseOnce.Do(func() { close(releasePost) }) }
+	defer releaseHook()
+	eng.Hooks = hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
+		if req.EventName != hooks.EventPostCompact {
+			return nil, nil
+		}
+		signal(postStarted)
+		select {
+		case <-releasePost:
+			return nil, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	completed := make(chan struct{}, 1)
+	bus.Subscribe("context.compact.completed", func(events.Event) {
+		signal(completed)
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.CompactWithInstructions(
+			context.Background(),
+			"compact-commit",
+			"system",
+			"manual",
+			false,
+			"",
+		)
+		done <- err
+	}()
+	waitSignal(t, postStarted, "post-compact hook start")
+	select {
+	case <-completed:
+	default:
+		t.Fatal("compaction completion was not published before post-commit hook")
+	}
+
+	if eng.CancelActiveTurn(cancellation.ErrUserCancelled) {
+		t.Fatal("CancelActiveTurn accepted cancellation after compact marker commit")
+	}
+	foundMarker := false
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindCompact {
+			foundMarker = true
+		}
+	}
+	if !foundMarker {
+		t.Fatal("compaction marker was not committed before post-compact hook")
+	}
+
+	releaseHook()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("compaction did not finish after post-compact hook release")
 	}
 }
 

@@ -329,7 +329,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	if turnID == "" {
 		turnID = newID()
 	}
-	ctx, finishOperation := e.beginActiveOperation(ctx)
+	ctx, _, finishOperation := e.beginActiveOperation(ctx)
 	turnID = e.beginActiveTurn(turnID)
 	previousFailures := e.toolFailures
 	e.toolFailures = newToolFailureLedger(e.WorkDir)
@@ -368,18 +368,17 @@ func (e *Engine) CancelActiveTurn(cause error) bool {
 	}
 	e.activeOperationMu.Lock()
 	cancel := e.activeOperationCancel
-	if cancel != nil {
-		e.activeOperationCancel = nil
-	}
-	e.activeOperationMu.Unlock()
 	if cancel == nil {
+		e.activeOperationMu.Unlock()
 		return false
 	}
+	e.activeOperationCancel = nil
 	cancel(cause)
+	e.activeOperationMu.Unlock()
 	return true
 }
 
-func (e *Engine) beginActiveOperation(parent context.Context) (context.Context, func()) {
+func (e *Engine) beginActiveOperation(parent context.Context) (context.Context, uint64, func()) {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -389,7 +388,7 @@ func (e *Engine) beginActiveOperation(parent context.Context) (context.Context, 
 	generation := e.activeOperationGeneration
 	e.activeOperationCancel = cancel
 	e.activeOperationMu.Unlock()
-	return ctx, func() {
+	finish := func() {
 		e.activeOperationMu.Lock()
 		if e.activeOperationGeneration == generation {
 			e.activeOperationCancel = nil
@@ -397,6 +396,7 @@ func (e *Engine) beginActiveOperation(parent context.Context) (context.Context, 
 		e.activeOperationMu.Unlock()
 		cancel(nil)
 	}
+	return ctx, generation, finish
 }
 
 type preparedTurnContext struct {

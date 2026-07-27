@@ -1918,8 +1918,11 @@ treated as empty-summary retries. A canceled or expired parent context stops
 before fallback and does not emit a misleading fallback event. Manual and
 automatic compaction share the active Turn cancellation boundary. Cancellation
 reports `Compaction canceled` and returns before the compact marker append, so
-future active context is unchanged. Successful response attempts remain
-included in session token usage.
+future active context is unchanged. The active-operation lock linearizes Web
+cancellation against marker commit; a standalone compaction retires its cancel
+function at a successful commit and publishes completion before observational
+post-compact hooks. Successful response attempts remain included in session
+token usage.
 The runtime also maintains model-owned Markdown in the session-local
 `notes.md`. The model rewrites the entire document through the `update_notes`
 tool; there is deliberately no `get_notes` tool. The store validates UTF-8 and

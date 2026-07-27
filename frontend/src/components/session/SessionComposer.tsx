@@ -189,7 +189,10 @@ export function SessionComposer({
                   files,
                   onUploadAttachment,
                 );
-                if (isCompactCommandInput(text)) {
+                if (
+                  isCompactCommandInput(text) &&
+                  runtimeStatus?.turn?.phase !== "compacting"
+                ) {
                   setPendingCompactText(submittedText);
                 }
                 let sent: boolean;

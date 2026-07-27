@@ -174,7 +174,7 @@ test("deferred submit keeps follow-up text and attachment counts authoritative",
 test("manual compaction clears only its submitted draft when compaction starts", () => {
   assert.match(
     composerSource,
-    /isCompactCommandInput\(text\)[\s\S]*setPendingCompactText\(submittedText\)/,
+    /isCompactCommandInput\(text\)[\s\S]*runtimeStatus\?\.turn\?\.phase !== "compacting"[\s\S]*setPendingCompactText\(submittedText\)/,
   );
   assert.match(
     composerSource,
