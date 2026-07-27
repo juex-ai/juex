@@ -615,7 +615,7 @@ func TestGetSessionShowAndContextReturnDuringRunningTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(parsed.Turn) != 0 {
-		t.Fatalf("session transcript contains legacy turn status: %s", parsed.Turn)
+		t.Fatalf("session detail unexpectedly contains turn status: %s", parsed.Turn)
 	}
 	if parsed.Notes == nil || parsed.Notes.Content != "- [ ] visible while running" {
 		t.Fatalf("notes = %+v", parsed.Notes)
@@ -676,20 +676,20 @@ func TestGetSessionShow_LimitsRecentTranscript(t *testing.T) {
 func TestMessagesForSessionResponseProjectsCanonicalCreatedAt(t *testing.T) {
 	messages := messagesForSessionResponse([]llm.Message{
 		{ID: "msg-20260718T065604-8f0582f4", Role: llm.RoleAssistant},
-		{ID: "legacy-message", Role: llm.RoleAssistant},
+		{ID: "custom-message", Role: llm.RoleAssistant},
 	})
 	if got, want := messages[0].CreatedAt, "2026-07-18T06:56:04Z"; got != want {
 		t.Fatalf("created_at = %q, want %q", got, want)
 	}
 	if messages[1].CreatedAt != "" {
-		t.Fatalf("legacy created_at = %q, want empty", messages[1].CreatedAt)
+		t.Fatalf("custom-ID created_at = %q, want empty", messages[1].CreatedAt)
 	}
 	data, err := json.Marshal(messages)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(data), `"created_at":""`) {
-		t.Fatalf("legacy response should omit empty created_at: %s", data)
+		t.Fatalf("response should omit empty created_at: %s", data)
 	}
 }
 
@@ -2551,52 +2551,6 @@ func TestPostTurn_RequiresActivePrimary(t *testing.T) {
 		if resp.StatusCode != http.StatusConflict {
 			t.Fatalf("%s status = %d body = %s", id, resp.StatusCode, body)
 		}
-	}
-}
-
-func TestLegacyTurnStatusRouteReturnsNotFound(t *testing.T) {
-	provider := newPendingProvider(
-		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
-	)
-	srv := NewServer(Options{
-		Cfg: config.Config{
-			ProviderID: "openai",
-			APIKey:     "x",
-			Model:      "m",
-			WorkDir:    t.TempDir(),
-			Compaction: config.DefaultCompactionConfig(),
-		},
-		Provider: provider,
-	})
-	t.Cleanup(srv.Close)
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
-
-	sessionID := createTestSession(t, ts.URL)
-	turnResp, err := http.Post(
-		ts.URL+"/api/sessions/"+sessionID+"/turns",
-		"application/json",
-		strings.NewReader(`{"prompt":"hi"}`),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var turn startTurnResponse
-	if err := json.NewDecoder(turnResp.Body).Decode(&turn); err != nil {
-		t.Fatal(err)
-	}
-	turnResp.Body.Close()
-	waitPendingProviderStarted(t, provider, "provider did not start")
-	defer close(provider.release)
-
-	resp, err := http.Get(ts.URL + "/api/sessions/" + sessionID + "/turns/" + turn.TurnID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want %d; body=%s", resp.StatusCode, http.StatusNotFound, body)
 	}
 }
 
