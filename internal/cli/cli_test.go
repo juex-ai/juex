@@ -1623,6 +1623,61 @@ func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
 	}
 }
 
+func TestDoctorConnectivityCheckActivatesRuntimeEnvironmentForProbe(t *testing.T) {
+	const proxy = "http://127.0.0.1:18765"
+	setHomeForCLITest(t)
+	previous, existed := os.LookupEnv("HTTP_PROXY")
+	if err := os.Unsetenv("HTTP_PROXY"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv("HTTP_PROXY", previous)
+		} else {
+			_ = os.Unsetenv("HTTP_PROXY")
+		}
+	})
+
+	work := t.TempDir()
+	if err := writeJuexConfigFile(
+		filepath.Join(work, ".juex", "juex.yaml"),
+		"openai",
+		"https://example.invalid",
+		"sk-test",
+		"gpt-4.1",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextFile(filepath.Join(work, ".env"), "HTTP_PROXY="+proxy+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadWithOptions(config.LoadOptions{
+		WorkDir:    work,
+		AgentState: config.AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := doctorConnectivityCheckWithOptions(
+		context.Background(),
+		cfg,
+		providerreadiness.ConnectivityOptions{Probe: providerreadiness.ProbeFunc(
+			func(_ context.Context, _ llm.ProviderProfile) error {
+				if got := os.Getenv("HTTP_PROXY"); got != proxy {
+					return errors.New("probe did not receive resolved HTTP_PROXY")
+				}
+				return nil
+			},
+		)},
+	)
+	if check.Status != doctorStatusOK {
+		t.Fatalf("connectivity check = %+v, want ok", check)
+	}
+	if _, ok := os.LookupEnv("HTTP_PROXY"); ok {
+		t.Fatal("doctor connectivity check did not restore HTTP_PROXY")
+	}
+}
+
 func TestDoctorCmdReportsMalformedDotenvWithoutPartialValues(t *testing.T) {
 	setHomeForCLITest(t)
 	root := newRootCmd()

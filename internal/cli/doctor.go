@@ -249,7 +249,46 @@ func doctorEnvironmentCheck(cfg config.Config) doctorCheck {
 }
 
 func doctorConnectivityCheck(ctx context.Context, cfg config.Config, offline bool) doctorCheck {
-	return doctorCheckFromReadiness("connectivity", providerreadiness.CheckConnectivity(ctx, cfg, providerreadiness.ConnectivityOptions{Offline: offline}))
+	return doctorConnectivityCheckWithOptions(
+		ctx,
+		cfg,
+		providerreadiness.ConnectivityOptions{Offline: offline},
+	)
+}
+
+func doctorConnectivityCheckWithOptions(
+	ctx context.Context,
+	cfg config.Config,
+	opts providerreadiness.ConnectivityOptions,
+) doctorCheck {
+	if opts.Offline {
+		return doctorCheckFromReadiness(
+			"connectivity",
+			providerreadiness.CheckConnectivity(ctx, cfg, opts),
+		)
+	}
+	// Official provider SDKs read standard proxy and transport settings from
+	// the process environment. Scope the same snapshot activation used by
+	// runtime-bearing commands to the probe, then restore it immediately.
+	restore, err := cfg.EnvironmentSnapshot().Activate()
+	if err != nil {
+		return doctorCheck{
+			Name:       "connectivity",
+			Status:     doctorStatusFail,
+			Message:    "activate runtime environment: " + err.Error(),
+			Suggestion: "fix the configured runtime environment and retry",
+		}
+	}
+	check := doctorCheckFromReadiness(
+		"connectivity",
+		providerreadiness.CheckConnectivity(ctx, cfg, opts),
+	)
+	if err := restore(); err != nil {
+		check.Status = doctorStatusFail
+		check.Message += "; restore runtime environment: " + err.Error()
+		check.Suggestion = "check process environment permissions and retry"
+	}
+	return check
 }
 
 func doctorShellCheck(cfg config.Config) doctorCheck {

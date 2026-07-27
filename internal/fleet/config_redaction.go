@@ -25,12 +25,19 @@ func RedactAgentConfig(state AgentConfig) (AgentConfig, error) {
 	if variables == nil {
 		return state, nil
 	}
-	for i := 1; i < len(variables.Content); i += 2 {
-		value := variables.Content[i]
-		value.Kind = yaml.ScalarNode
-		value.Tag = "!!str"
-		value.Value = redactedEnvironmentValue
-		value.Style = yaml.DoubleQuotedStyle
+	err = walkEnvironmentVariableValues(variables, func(_ string, value *yaml.Node) error {
+		scalar, scalarErr := scalarEnvironmentValue(value)
+		if scalarErr != nil {
+			return scalarErr
+		}
+		scalar.Kind = yaml.ScalarNode
+		scalar.Tag = "!!str"
+		scalar.Value = redactedEnvironmentValue
+		scalar.Style = yaml.DoubleQuotedStyle
+		return nil
+	})
+	if err != nil {
+		return AgentConfig{}, fmt.Errorf("fleet: redact workspace config: %w", err)
 	}
 	data, err := marshalYAMLDocument(doc)
 	if err != nil {
@@ -48,24 +55,34 @@ func mergeRedactedEnvironmentValues(content []byte, current AgentConfig) ([]byte
 	needsMerge := false
 	escapedLiteral := false
 	literalNodes := map[*yaml.Node]struct{}{}
-	for i := 1; i < len(variables.Content); i += 2 {
-		value := variables.Content[i]
-		if value.Tag == literalEnvironmentValueYAMLTag {
-			if value.Value != redactedEnvironmentValue {
-				return nil, fmt.Errorf(
+	err = walkEnvironmentVariableValues(variables, func(_ string, value *yaml.Node) error {
+		scalar, scalarErr := scalarEnvironmentValue(value)
+		if scalarErr != nil {
+			return scalarErr
+		}
+		if _, literal := literalNodes[scalar]; literal {
+			return nil
+		}
+		if scalar.Tag == literalEnvironmentValueYAMLTag {
+			if scalar.Value != redactedEnvironmentValue {
+				return fmt.Errorf(
 					"fleet: %s is only valid for the redacted environment placeholder",
 					literalEnvironmentValueYAMLTag,
 				)
 			}
-			value.Tag = "!!str"
-			value.Style = yaml.DoubleQuotedStyle
-			literalNodes[value] = struct{}{}
+			scalar.Tag = "!!str"
+			scalar.Style = yaml.DoubleQuotedStyle
+			literalNodes[scalar] = struct{}{}
 			escapedLiteral = true
-			continue
+			return nil
 		}
-		if value.Value == redactedEnvironmentValue {
+		if scalar.Value == redactedEnvironmentValue {
 			needsMerge = true
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	if !needsMerge {
 		if escapedLiteral {
@@ -80,28 +97,113 @@ func mergeRedactedEnvironmentValues(content []byte, current AgentConfig) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	existing := map[string]*yaml.Node{}
+	existing := map[string][]*yaml.Node{}
 	if existingVariables != nil {
-		for i := 0; i+1 < len(existingVariables.Content); i += 2 {
-			existing[existingVariables.Content[i].Value] = existingVariables.Content[i+1]
+		err = walkEnvironmentVariableValues(existingVariables, func(key string, value *yaml.Node) error {
+			scalar, scalarErr := scalarEnvironmentValue(value)
+			if scalarErr != nil {
+				return scalarErr
+			}
+			existing[key] = append(existing[key], scalar)
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
 	}
-	for i := 0; i+1 < len(variables.Content); i += 2 {
-		key := variables.Content[i].Value
-		value := variables.Content[i+1]
-		if _, literal := literalNodes[value]; literal {
-			continue
+	occurrences := map[string]int{}
+	err = walkEnvironmentVariableValues(variables, func(key string, value *yaml.Node) error {
+		scalar, scalarErr := scalarEnvironmentValue(value)
+		if scalarErr != nil {
+			return scalarErr
 		}
-		if value.Value != redactedEnvironmentValue {
-			continue
+		index := occurrences[key]
+		occurrences[key] = index + 1
+		if _, literal := literalNodes[scalar]; literal {
+			return nil
 		}
-		previous, ok := existing[key]
-		if !ok {
-			return nil, fmt.Errorf("fleet: redacted environment placeholder for %q has no existing value", key)
+		if scalar.Value != redactedEnvironmentValue {
+			return nil
 		}
-		*value = *previous
+		values := existing[key]
+		if index >= len(values) {
+			return fmt.Errorf("fleet: redacted environment placeholder for %q has no existing value", key)
+		}
+		*scalar = *values[index]
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return marshalYAMLDocument(doc)
+}
+
+func walkEnvironmentVariableValues(
+	variables *yaml.Node,
+	visit func(key string, value *yaml.Node) error,
+) error {
+	return walkEnvironmentVariableNode(variables, visit, map[*yaml.Node]struct{}{})
+}
+
+func walkEnvironmentVariableNode(
+	node *yaml.Node,
+	visit func(key string, value *yaml.Node) error,
+	visited map[*yaml.Node]struct{},
+) error {
+	if node == nil {
+		return fmt.Errorf("environment.variables merge source is empty")
+	}
+	if node.Kind == yaml.AliasNode {
+		if node.Alias == nil {
+			return fmt.Errorf("environment.variables merge alias has no target")
+		}
+		return walkEnvironmentVariableNode(node.Alias, visit, visited)
+	}
+	if _, ok := visited[node]; ok {
+		return nil
+	}
+	visited[node] = struct{}{}
+	switch node.Kind {
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key := node.Content[i]
+			value := node.Content[i+1]
+			if key.Tag == "!!merge" || key.Value == "<<" {
+				if err := walkEnvironmentVariableNode(value, visit, visited); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := visit(key.Value, value); err != nil {
+				return err
+			}
+		}
+		return nil
+	case yaml.SequenceNode:
+		for _, item := range node.Content {
+			if err := walkEnvironmentVariableNode(item, visit, visited); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("environment.variables merge source must be a mapping or sequence")
+	}
+}
+
+func scalarEnvironmentValue(node *yaml.Node) (*yaml.Node, error) {
+	visited := map[*yaml.Node]struct{}{}
+	for node != nil && node.Kind == yaml.AliasNode {
+		if _, ok := visited[node]; ok {
+			return nil, fmt.Errorf("environment variable alias cycle")
+		}
+		visited[node] = struct{}{}
+		node = node.Alias
+	}
+	if node == nil || node.Kind != yaml.ScalarNode {
+		return nil, fmt.Errorf("environment variable value must be a scalar")
+	}
+	return node, nil
 }
 
 func parseEnvironmentVariables(data []byte) (*yaml.Node, *yaml.Node, error) {

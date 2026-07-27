@@ -3,6 +3,8 @@ package fleet
 import (
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestAgentConfigEnvironmentRedactionAndPlaceholderMerge(t *testing.T) {
@@ -140,5 +142,97 @@ func TestAgentConfigRedactionAcceptsNullEnvironmentVariables(t *testing.T) {
 				t.Fatalf("merged content = %q, want unchanged %q", merged, content)
 			}
 		})
+	}
+}
+
+func TestAgentConfigEnvironmentMergeRoundTrip(t *testing.T) {
+	current := AgentConfig{
+		Exists: true,
+		Content: `environment:
+  variables:
+    <<:
+      SHARED_TOKEN: shared-secret
+      EMPTY: ""
+    DIRECT_TOKEN: direct-secret
+`,
+	}
+	redacted, err := RedactAgentConfig(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"shared-secret", "direct-secret"} {
+		if strings.Contains(redacted.Content, secret) {
+			t.Fatalf("redacted merge config leaked %q:\n%s", secret, redacted.Content)
+		}
+	}
+	if !strings.Contains(redacted.Content, "<<:") {
+		t.Fatalf("redacted config lost YAML merge mapping:\n%s", redacted.Content)
+	}
+
+	merged, err := mergeRedactedEnvironmentValues([]byte(redacted.Content), current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Environment struct {
+			Variables map[string]string `yaml:"variables"`
+		} `yaml:"environment"`
+	}
+	if err := yaml.Unmarshal(merged, &decoded); err != nil {
+		t.Fatalf("merged config is invalid YAML: %v\n%s", err, merged)
+	}
+	want := map[string]string{
+		"SHARED_TOKEN": "shared-secret",
+		"EMPTY":        "",
+		"DIRECT_TOKEN": "direct-secret",
+	}
+	for key, value := range want {
+		if decoded.Environment.Variables[key] != value {
+			t.Fatalf("merged variable %s = %q, want %q\n%s", key, decoded.Environment.Variables[key], value, merged)
+		}
+	}
+}
+
+func TestAgentConfigEnvironmentMergeSequenceRoundTrip(t *testing.T) {
+	current := AgentConfig{
+		Exists: true,
+		Content: `environment:
+  variables:
+    <<:
+      - FIRST_TOKEN: first-secret
+      - SECOND_TOKEN: second-secret
+    DIRECT_TOKEN: direct-secret
+`,
+	}
+	redacted, err := RedactAgentConfig(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"first-secret", "second-secret", "direct-secret"} {
+		if strings.Contains(redacted.Content, secret) {
+			t.Fatalf("redacted merge sequence leaked %q:\n%s", secret, redacted.Content)
+		}
+	}
+	merged, err := mergeRedactedEnvironmentValues([]byte(redacted.Content), current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Environment struct {
+			Variables map[string]string `yaml:"variables"`
+		} `yaml:"environment"`
+	}
+	if err := yaml.Unmarshal(merged, &decoded); err != nil {
+		t.Fatalf("merged config is invalid YAML: %v\n%s", err, merged)
+	}
+	want := map[string]string{
+		"FIRST_TOKEN":  "first-secret",
+		"SECOND_TOKEN": "second-secret",
+		"DIRECT_TOKEN": "direct-secret",
+	}
+	for key, value := range want {
+		if decoded.Environment.Variables[key] != value {
+			t.Fatalf("merged variable %s = %q, want %q\n%s", key, decoded.Environment.Variables[key], value, merged)
+		}
 	}
 }
