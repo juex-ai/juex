@@ -981,7 +981,10 @@ entrypoint, while the unexported `turn_admission_queue.go` domain service owns
 admission phase transitions, runtime pending-input coordination, turn id
 reservation, and compact-command promotion. Transports render that result and
 start any returned turn message; they should not duplicate busy, compact,
-pending-input, or slash-command policy.
+pending-input, or slash-command policy. Manual compact reservation marks its
+`turn.admitted` event with `operation: "compact"` so transcript projection can
+preserve queued input even when a pre-compact hook fails before compaction
+starts.
 
 ```go
 // internal/runtime/loop.go
@@ -1038,11 +1041,15 @@ the assistant finishes without queued input, the parent context/user stop
 cancels it, provider/tool/context work fails according to its existing
 contract, or context projection/compaction cannot recover. `llm.requested`
 keeps an `iter` counter for observability only; the counter does not stop the
-turn. Plain user-initiated cancellation is normalized to `cancelled by user`
-before runtime error events or tool-result blocks are persisted. Contexts
-cancelled by an external process signal preserve the signal cause, so runtime
-events and tool-result blocks distinguish SIGINT/SIGTERM/SIGHUP from ordinary
-UI or API cancellation.
+turn. The Engine registers one cancel-cause function for the active provider,
+tool, or standalone compaction operation. `App.CancelActiveTurn` exposes that
+runtime-owned boundary to transports, so Web Stop can cancel work regardless
+of whether Web input, an MCP notification, or an Observation started it. Plain
+user-initiated cancellation is normalized to `cancelled by user` before
+runtime error events or tool-result blocks are persisted. Contexts cancelled
+by an external process signal preserve the signal cause, so runtime events and
+tool-result blocks distinguish SIGINT/SIGTERM/SIGHUP from ordinary UI or API
+cancellation.
 
 Compaction policy defaults and the default context-window token count live on
 the runtime side. `config.CompactionConfig` is an alias used while parsing YAML
@@ -1424,8 +1431,11 @@ Within an active web session, the unexported `webTurnTransport` module owns
 browser-session turn mechanics: running/done/errored status projection,
 pending-count forwarding while a turn is running, idempotent interrupt
 handling, turn goroutine cleanup, and reset after `/new` changes the in-memory
-session id. This keeps HTTP handlers focused on parse/render work while app
-turn admission and runtime turn execution remain outside the web layer.
+session id. Interrupt delegates to the App/runtime active-operation
+cancellation boundary and keeps a local fallback only for a Web-started
+goroutine that has not reached the Engine yet. This keeps HTTP handlers focused
+on parse/render work while app turn admission and runtime turn execution remain
+outside the web layer.
 
 `internal/runtime.StatusStore` projects committed runtime facts into the
 layered tool, turn, and session state machines documented in
@@ -1913,8 +1923,14 @@ still has no summary, or the retry fails, an independently configured summary
 provider falls back once to the active provider. Compaction fails only after
 those bounded recovery steps are exhausted; generic provider failures are not
 treated as empty-summary retries. A canceled or expired parent context stops
-before fallback and does not emit a misleading fallback event. Successful
-response attempts remain included in session token usage.
+before fallback and does not emit a misleading fallback event. Manual and
+automatic compaction share the active Turn cancellation boundary. Cancellation
+reports `Compaction canceled` and returns before the compact marker append, so
+future active context is unchanged. The active-operation lock linearizes Web
+cancellation against marker commit; a standalone compaction retires its cancel
+function at a successful commit and publishes completion before observational
+post-compact hooks. Successful response attempts remain included in session
+token usage.
 The runtime also maintains model-owned Markdown in the session-local
 `notes.md`. The model rewrites the entire document through the `update_notes`
 tool; there is deliberately no `get_notes` tool. The store validates UTF-8 and

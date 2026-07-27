@@ -72,6 +72,7 @@ func (t *webTurnTransport) interruptWithCause(cause error) bool {
 	if t == nil {
 		return false
 	}
+	runtimeCancelled := t.app != nil && t.app.CancelActiveTurn(cause)
 	t.cancelMu.Lock()
 	cancel := t.cancel
 	turnID := t.activeTurn
@@ -80,11 +81,13 @@ func (t *webTurnTransport) interruptWithCause(cause error) bool {
 		t.activeTurn = ""
 	}
 	t.cancelMu.Unlock()
-	if cancel == nil {
+	if cancel == nil && !runtimeCancelled {
 		return false
 	}
-	cancel(cause)
-	t.completeAdmission(turnID)
+	if cancel != nil {
+		cancel(cause)
+		t.completeAdmission(turnID)
+	}
 	return true
 }
 

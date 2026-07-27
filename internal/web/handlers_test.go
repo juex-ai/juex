@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
@@ -1616,7 +1617,6 @@ func TestPostTurn_QueuesDuringCompactAndRunsAfterCompact(t *testing.T) {
 	)
 	var releaseOnce sync.Once
 	releaseProvider := func() { releaseOnce.Do(func() { close(prov.release) }) }
-	defer releaseProvider()
 	work := t.TempDir()
 	srv := NewServer(Options{
 		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, Compaction: config.DefaultCompactionConfig()},
@@ -1625,6 +1625,7 @@ func TestPostTurn_QueuesDuringCompactAndRunsAfterCompact(t *testing.T) {
 	t.Cleanup(srv.Close)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
+	defer releaseProvider()
 
 	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
 	if err != nil {
@@ -1723,6 +1724,132 @@ func TestPostTurn_QueuesDuringCompactAndRunsAfterCompact(t *testing.T) {
 			status.Turn != nil &&
 			status.Turn.State == juexruntime.TurnLifecycleCompleted
 	})
+}
+
+func TestPostInterrupt_CancelsManualCompaction(t *testing.T) {
+	prov := newPendingProvider(
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "must not persist"), StopReason: llm.StopEndTurn},
+	)
+	var releaseOnce sync.Once
+	releaseProvider := func() { releaseOnce.Do(func() { close(prov.release) }) }
+	defer releaseProvider()
+	work := t.TempDir()
+	srv := NewServer(Options{
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, Compaction: config.DefaultCompactionConfig()},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		created.Body.Close()
+		t.Fatal(err)
+	}
+	created.Body.Close()
+	value, ok := srv.sessions.Load(c.ID)
+	if !ok {
+		t.Fatal("created session not active")
+	}
+	as := value.(*activeSession)
+	if err := as.app.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old context ", 200))); err != nil {
+		t.Fatal(err)
+	}
+
+	type compactHTTPResult struct {
+		response *http.Response
+		err      error
+	}
+	compactDone := make(chan compactHTTPResult, 1)
+	go func() {
+		response, requestErr := http.Post(
+			ts.URL+"/api/sessions/"+c.ID+"/turns",
+			"application/json",
+			strings.NewReader(`{"prompt":"/compact"}`),
+		)
+		compactDone <- compactHTTPResult{response: response, err: requestErr}
+	}()
+	waitPendingProviderStarted(t, prov, "provider did not start compaction")
+
+	statusResponse, err := http.Get(ts.URL + "/api/sessions/" + c.ID + "/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compactStatus juexruntime.StatusSnapshot
+	if err := json.NewDecoder(statusResponse.Body).Decode(&compactStatus); err != nil {
+		statusResponse.Body.Close()
+		t.Fatal(err)
+	}
+	statusResponse.Body.Close()
+	if compactStatus.Turn == nil ||
+		compactStatus.Turn.Phase != juexruntime.TurnPhaseCompacting ||
+		!compactStatus.Turn.CanInterrupt {
+		t.Fatalf("compacting status = %+v, want interruptible", compactStatus)
+	}
+
+	interrupt, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/interrupt", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var interrupted struct {
+		Cancelled bool `json:"cancelled"`
+	}
+	if err := json.NewDecoder(interrupt.Body).Decode(&interrupted); err != nil {
+		interrupt.Body.Close()
+		t.Fatal(err)
+	}
+	interrupt.Body.Close()
+	if !interrupted.Cancelled {
+		t.Fatal("manual compaction interrupt returned cancelled=false")
+	}
+
+	select {
+	case result := <-compactDone:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		defer result.response.Body.Close()
+		var body errorJSON
+		if err := json.NewDecoder(result.response.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if result.response.StatusCode != http.StatusInternalServerError ||
+			body.Message != "Compaction canceled" {
+			t.Fatalf("compact response status=%d body=%+v", result.response.StatusCode, body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("compact request did not stop after interrupt")
+	}
+
+	waitForHTTPRuntimeStatus(t, ts.URL, c.ID, 5*time.Second, "compaction cancellation", func(status juexruntime.StatusSnapshot) bool {
+		return status.Turn != nil &&
+			status.Turn.State == juexruntime.TurnLifecycleCancelled &&
+			status.LastError != nil &&
+			status.LastError.Message == "Compaction canceled"
+	})
+	for _, message := range as.app.Session.History {
+		if message.Kind == llm.MessageKindCompact {
+			t.Fatalf("unexpected compact marker after cancellation: %+v", message)
+		}
+	}
+
+	second, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/interrupt", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewDecoder(second.Body).Decode(&interrupted); err != nil {
+		second.Body.Close()
+		t.Fatal(err)
+	}
+	second.Body.Close()
+	if interrupted.Cancelled {
+		t.Fatal("second compaction interrupt returned cancelled=true")
+	}
 }
 
 func TestCompactWithoutEligibleContextLeavesSessionIdle(t *testing.T) {
@@ -2045,6 +2172,94 @@ func TestPostTurn_QueuesWhileMCPNotificationTurnRuns(t *testing.T) {
 		}
 		return count == 1 && transcriptContains(messages, "follow-up handled")
 	})
+}
+
+func TestPostInterrupt_CancelsMCPNotificationTurn(t *testing.T) {
+	prov := newPendingProvider(
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "must not finish"), StopReason: llm.StopEndTurn},
+	)
+	var releaseOnce sync.Once
+	releaseProvider := func() { releaseOnce.Do(func() { close(prov.release) }) }
+	srv := NewServer(Options{
+		Cfg: config.Config{
+			ProviderID: "openai",
+			APIKey:     "x",
+			Model:      "m",
+			WorkDir:    t.TempDir(),
+			Compaction: config.DefaultCompactionConfig(),
+		},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	defer releaseProvider()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		created.Body.Close()
+		t.Fatal(err)
+	}
+	created.Body.Close()
+
+	notificationDone := make(chan error, 1)
+	go func() {
+		notificationDone <- srv.handleMCPNotification(context.Background(), mcp.Notification{
+			ServerName: "test",
+			Method:     "notifications/message",
+			EventType:  "demo",
+			Content:    "external work",
+		})
+	}()
+	waitPendingProviderStarted(t, prov, "MCP notification turn did not start")
+
+	interrupt, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/interrupt", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Cancelled bool `json:"cancelled"`
+	}
+	if err := json.NewDecoder(interrupt.Body).Decode(&response); err != nil {
+		interrupt.Body.Close()
+		t.Fatal(err)
+	}
+	interrupt.Body.Close()
+	if !response.Cancelled {
+		t.Fatal("MCP notification interrupt returned cancelled=false")
+	}
+
+	select {
+	case err := <-notificationDone:
+		if !errors.Is(err, cancellation.ErrUserCancelled) {
+			t.Fatalf("notification err = %v, want ErrUserCancelled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("MCP notification did not stop after interrupt")
+	}
+	waitForHTTPRuntimeStatus(t, ts.URL, c.ID, 5*time.Second, "MCP notification cancellation", func(status juexruntime.StatusSnapshot) bool {
+		return status.Turn != nil &&
+			status.Turn.State == juexruntime.TurnLifecycleCancelled &&
+			status.LastError != nil &&
+			status.LastError.Message == cancellation.ErrUserCancelled.Error()
+	})
+
+	second, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/interrupt", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewDecoder(second.Body).Decode(&response); err != nil {
+		second.Body.Close()
+		t.Fatal(err)
+	}
+	second.Body.Close()
+	if response.Cancelled {
+		t.Fatal("second MCP notification interrupt returned cancelled=true")
+	}
 }
 
 func TestPostTurn_QueuesBeforeEngineGoroutineStarts(t *testing.T) {

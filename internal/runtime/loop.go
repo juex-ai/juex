@@ -115,6 +115,10 @@ type Engine struct {
 	pendingEventAnnouncing bool
 	pendingDeferredEvents  []events.Event
 
+	activeOperationMu         sync.Mutex
+	activeOperationCancel     context.CancelCauseFunc
+	activeOperationGeneration uint64
+
 	hookRuntimeContextMu      sync.Mutex
 	pendingHookRuntimeContext []llm.Message
 
@@ -149,10 +153,6 @@ type queuedPendingInput struct {
 	Message  llm.Message
 }
 
-type TurnReservationOptions struct {
-	NonInterruptible bool
-}
-
 // Turn drives one user input to completion. The returned string is the final
 // assistant text response (concatenated text blocks). Returns an error when
 // cancellation or provider/tool/context failure stops the turn.
@@ -161,10 +161,16 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 }
 
 func (e *Engine) ReserveTurnID(turnID string) error {
-	return e.ReserveTurnIDWithOptions(turnID, TurnReservationOptions{})
+	return e.reserveTurnID(turnID, TurnAdmittedPayload{})
 }
 
-func (e *Engine) ReserveTurnIDWithOptions(turnID string, opts TurnReservationOptions) error {
+func (e *Engine) ReserveCompactionTurnID(turnID string) error {
+	return e.reserveTurnID(turnID, TurnAdmittedPayload{
+		Operation: TurnAdmissionOperationCompact,
+	})
+}
+
+func (e *Engine) reserveTurnID(turnID string, payload TurnAdmittedPayload) error {
 	if e == nil {
 		return ErrNoActiveTurn
 	}
@@ -180,7 +186,7 @@ func (e *Engine) ReserveTurnIDWithOptions(turnID string, opts TurnReservationOpt
 	e.activeTurnID = turnID
 	e.pendingMu.Unlock()
 	if admitted {
-		e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload(opts)})
+		e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: payload})
 	}
 	return nil
 }
@@ -333,6 +339,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	if turnID == "" {
 		turnID = newID()
 	}
+	ctx, _, finishOperation := e.beginActiveOperation(ctx)
 	turnID = e.beginActiveTurn(turnID)
 	previousFailures := e.toolFailures
 	e.toolFailures = newToolFailureLedger(e.WorkDir)
@@ -348,6 +355,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			e.finishActiveTurn(turnID)
 		}
 	}()
+	defer finishOperation()
 	var result turnLifecycleResult
 	result, err = lifecycle.runLocked(ctx)
 	if err != nil {
@@ -358,6 +366,47 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		return "", e.failTurn(turnID, err)
 	}
 	return result.output, nil
+}
+
+// CancelActiveTurn cancels the currently executing turn or compaction once.
+func (e *Engine) CancelActiveTurn(cause error) bool {
+	if e == nil {
+		return false
+	}
+	if cause == nil {
+		cause = cancellation.ErrUserCancelled
+	}
+	e.activeOperationMu.Lock()
+	cancel := e.activeOperationCancel
+	if cancel == nil {
+		e.activeOperationMu.Unlock()
+		return false
+	}
+	e.activeOperationCancel = nil
+	cancel(cause)
+	e.activeOperationMu.Unlock()
+	return true
+}
+
+func (e *Engine) beginActiveOperation(parent context.Context) (context.Context, uint64, func()) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancelCause(parent)
+	e.activeOperationMu.Lock()
+	e.activeOperationGeneration++
+	generation := e.activeOperationGeneration
+	e.activeOperationCancel = cancel
+	e.activeOperationMu.Unlock()
+	finish := func() {
+		e.activeOperationMu.Lock()
+		if e.activeOperationGeneration == generation {
+			e.activeOperationCancel = nil
+		}
+		e.activeOperationMu.Unlock()
+		cancel(nil)
+	}
+	return ctx, generation, finish
 }
 
 type preparedTurnContext struct {

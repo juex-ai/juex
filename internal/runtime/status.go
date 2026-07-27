@@ -421,7 +421,6 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		setPendingStatus(&next, payload.PendingCount, payload.MaxPendingInputs)
 		next.LastError = &StatusError{Message: payload.Reason, Kind: StatusErrorPendingInputFull}
 	case "context.compact.started":
-		payload := payloadAs[ContextCompactStartedPayload](event.Payload)
 		resumable := next.Turn != nil &&
 			next.Turn.ID == event.TurnID &&
 			(next.Turn.State == TurnLifecycleAdmitted ||
@@ -437,9 +436,6 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		turn.State = TurnLifecycleActive
 		turn.Phase = TurnPhaseCompacting
 		turn.Streaming = false
-		if !payload.Auto {
-			turn.CanInterrupt = false
-		}
 		next.Session.State = SessionRuntimeTurnActive
 	case "context.compact.completed":
 		payload := payloadAs[ContextCompactCompletedPayload](event.Payload)

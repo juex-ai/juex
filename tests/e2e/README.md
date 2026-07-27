@@ -38,6 +38,7 @@ go test ./tests/e2e -count=1
 | Lifecycle hooks | `TestEndToEnd_CommandLifecycleHooks` | Command hooks compose across app, config, runtime, sessions, tools, and event JSONL for prompt context injection, pre-tool denial, and stop continuation. |
 | CLI schema | `TestLiveBinary_SchemaIncludesAllSubcommands` | The compiled binary exposes the documented command tree. |
 | Web turn API | `TestWeb_TurnRoundTripPersists` | Web session creation, turn submission, async completion, and persisted transcript reads. |
+| Web compaction cancellation | `TestWeb_InterruptCancelsCompactionWithoutPersistingMarker` | A manual compact advertises interruptibility, Web Stop cancels its provider request, reports `Compaction canceled`, and leaves no compact marker in the transcript. |
 | Web pending input | `TestWeb_PendingInputQueuesDuringActiveTurn` | A second web turn queues while a provider call is active, then drains into the next provider request. |
 | Web observables | `TestWeb_ObservablesStartAndSurfaceObservation` | Workspace observable config starts a real child process, records an Observation, delivers it to the active session, and exposes status through the Web API. |
 | Fleet workspace environment | `TestFleetChildrenLoadIndependentWorkspaceDotenvOnRestart` | Two compiled Fleet children load distinct workspace `.env` values into MCP, retain isolation, and apply a changed value only after that child restarts. |

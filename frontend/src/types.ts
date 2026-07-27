@@ -370,6 +370,7 @@ export interface TurnStartedPayload {
 
 export interface TurnAdmittedPayload {
   non_interruptible?: boolean;
+  operation?: "compact";
 }
 
 export interface TurnPhasePayload {

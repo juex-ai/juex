@@ -2,9 +2,11 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
@@ -13,6 +15,45 @@ import (
 )
 
 const DefaultContextWindowTokens = runtimepolicy.DefaultContextWindowTokens
+
+const compactionCanceledMessage = "Compaction canceled"
+
+type compactionError struct {
+	Err error
+}
+
+func (e *compactionError) Error() string {
+	if e == nil || e.Err == nil {
+		return "compact context failed"
+	}
+	if cancellation.IsUserCancelled(e.Err) {
+		return compactionCanceledMessage
+	}
+	return "compact context: " + e.Err.Error()
+}
+
+func (e *compactionError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func newCompactionError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	var compactErr *compactionError
+	if errors.As(err, &compactErr) {
+		return err
+	}
+	return &compactionError{Err: cancellation.NormalizeErrorWithContext(ctx, err)}
+}
+
+func isCompactionCancellation(err error) bool {
+	var compactErr *compactionError
+	return errors.As(err, &compactErr) && cancellation.IsUserCancelled(compactErr)
+}
 
 type CompactionResult struct {
 	MessageID          string `json:"message_id,omitempty"`
@@ -49,7 +90,7 @@ func (e *Engine) maybeCompact(ctx context.Context, turnID, systemPrompt string, 
 		return err
 	}
 
-	_, err := e.compactLocked(ctx, turnID, systemPrompt, tools, "auto", true, "")
+	_, err := e.compactLocked(ctx, turnID, systemPrompt, tools, "auto", true, "", 0)
 	if err != nil {
 		e.autoCompactFailures++
 		return err
@@ -65,14 +106,16 @@ func (e *Engine) Compact(ctx context.Context, turnID, systemPrompt, reason strin
 func (e *Engine) CompactWithInstructions(ctx context.Context, turnID, systemPrompt, reason string, auto bool, instructions string) (CompactionResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.compactLocked(ctx, turnID, systemPrompt, e.compactionToolsLocked(), reason, auto, instructions)
+	ctx, operationGeneration, finishOperation := e.beginActiveOperation(ctx)
+	defer finishOperation()
+	return e.compactLocked(ctx, turnID, systemPrompt, e.compactionToolsLocked(), reason, auto, instructions, operationGeneration)
 }
 
-func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string) (CompactionResult, error) {
-	return e.compactLockedForContextWindow(ctx, turnID, systemPrompt, tools, reason, auto, instructions, e.ContextWindow)
+func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string, operationGeneration uint64) (CompactionResult, error) {
+	return e.compactLockedForContextWindow(ctx, turnID, systemPrompt, tools, reason, auto, instructions, e.ContextWindow, operationGeneration)
 }
 
-func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string, contextWindow int) (CompactionResult, error) {
+func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string, contextWindow int, operationGeneration uint64) (CompactionResult, error) {
 	policy := effectiveCompactionPolicy(e.Compaction, contextWindow)
 	if !policy.Enabled {
 		return CompactionResult{}, nil
@@ -87,7 +130,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	}
 	summaryState, err := e.compactionSummaryStateLocked()
 	if err != nil {
-		compactErr := fmt.Errorf("compact context: %w", err)
+		compactErr := newCompactionError(ctx, err)
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
 			Reason: reason,
 			Auto:   auto,
@@ -100,7 +143,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	preReq.CompactAuto = auto
 	preResults, err := e.runHooks(ctx, preReq)
 	if err != nil {
-		compactErr := fmt.Errorf("compact context: %w", err)
+		compactErr := newCompactionError(ctx, err)
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
 			Reason: reason,
 			Auto:   auto,
@@ -129,7 +172,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, selection.PreviousSummary, selection.SummaryInput, summaryState, policy, instructions)
 	if err != nil {
 		sess.RecordResponseUsage(generation.Usage, nil)
-		compactErr := fmt.Errorf("compact context: %w", err)
+		compactErr := newCompactionError(ctx, err)
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
 			Reason: reason,
 			Auto:   auto,
@@ -140,6 +183,15 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	resp := generation.Response
 	summaryProvider := generation.Provider
 	summary := generation.Summary
+	if contextErr := cancellation.ContextError(ctx); contextErr != nil {
+		compactErr := newCompactionError(ctx, contextErr)
+		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+			Reason: reason,
+			Auto:   auto,
+			Error:  compactErr.Error(),
+		}})
+		return CompactionResult{}, compactErr
+	}
 
 	model := resp.Message.Model
 	if model == "" && summaryProvider != nil {
@@ -164,8 +216,12 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	simulated = append(simulated, msg)
 	tokensAfter := e.estimateContextTokens(systemPrompt, tools, assembleActiveContext(simulated, nil).Messages)
 	msg.Compaction.TokensAfter = tokensAfter
-	if err := sess.Append(msg); err != nil {
-		err := fmt.Errorf("session append compact: %w", err)
+	if err := e.commitCompactionMarker(ctx, operationGeneration, func() error {
+		if err := sess.Append(msg); err != nil {
+			return fmt.Errorf("session append compact: %w", err)
+		}
+		return nil
+	}); err != nil {
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
 			Reason: reason,
 			Auto:   auto,
@@ -198,13 +254,6 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		},
 	}
 	sess.RecordResponseUsage(generation.Usage, &contextUsage)
-	postReq := e.newHookRequest(hooks.EventPostCompact, turnID)
-	postReq.CompactReason = reason
-	postReq.CompactAuto = auto
-	postResults, _ := e.runHooks(ctx, postReq)
-	// Hook failures are observational after commit; keep context produced by
-	// earlier successful hooks when a later hook fails.
-	e.queueHookRuntimeContext(postResults)
 	e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: ContextCompactCompletedPayload{
 		MessageID:          result.MessageID,
 		Reason:             result.Reason,
@@ -220,7 +269,29 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		KeepRecentTokens:   policy.KeepRecentTokens,
 		ContextUsage:       &contextUsage,
 	}})
+	postReq := e.newHookRequest(hooks.EventPostCompact, turnID)
+	postReq.CompactReason = reason
+	postReq.CompactAuto = auto
+	postResults, _ := e.runHooks(ctx, postReq)
+	// Hook failures are observational after commit; keep context produced by
+	// earlier successful hooks when a later hook fails.
+	e.queueHookRuntimeContext(postResults)
 	return result, nil
+}
+
+func (e *Engine) commitCompactionMarker(ctx context.Context, operationGeneration uint64, commit func() error) error {
+	e.activeOperationMu.Lock()
+	defer e.activeOperationMu.Unlock()
+	if contextErr := cancellation.ContextError(ctx); contextErr != nil {
+		return newCompactionError(ctx, contextErr)
+	}
+	if err := commit(); err != nil {
+		return err
+	}
+	if operationGeneration != 0 && e.activeOperationGeneration == operationGeneration {
+		e.activeOperationCancel = nil
+	}
+	return nil
 }
 
 func mergeCompactInstructions(parts ...string) string {

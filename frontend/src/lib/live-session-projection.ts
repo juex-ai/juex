@@ -214,7 +214,11 @@ export function projectLiveSessionEvent(
 
   switch (event.type) {
     case "turn.admitted":
-      if (event.turn_id && event.payload.non_interruptible) {
+      if (
+        event.turn_id &&
+        (event.payload.operation === "compact" ||
+          event.payload.non_interruptible)
+      ) {
         next = { ...next, compactAdmissionTurnID: event.turn_id };
       }
       break;
@@ -352,6 +356,9 @@ export function projectLiveSessionEvent(
       effects.push({ type: "refresh" });
       break;
     case "context.compact.started":
+      if (!event.payload.auto && event.turn_id) {
+        next = { ...next, compactAdmissionTurnID: event.turn_id };
+      }
       next = projectPendingCompact(next);
       break;
     case "context.compact.completed":
