@@ -111,10 +111,9 @@ resolve_version() {
 }
 
 detect_os() {
-  if [[ -n "${ANDROID_ROOT:-}" ]] ||
-    [[ -n "${ANDROID_DATA:-}" ]] ||
-    [[ "${PREFIX:-}" == *com.termux* ]]; then
-    die "Termux/Android is not supported because this release has no compatible bundled ripgrep asset"
+  if is_termux_android; then
+    printf 'linux\n'
+    return
   fi
   local raw="${JUEX_INSTALL_OS:-$(uname -s)}"
   case "$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')" in
@@ -125,12 +124,18 @@ detect_os() {
   esac
 }
 
+is_termux_android() {
+  [[ -n "${ANDROID_ROOT:-}" ]] ||
+    [[ -n "${ANDROID_DATA:-}" ]] ||
+    [[ "${PREFIX:-}" == *com.termux* ]]
+}
+
 detect_arch() {
   local raw="${JUEX_INSTALL_ARCH:-$(uname -m)}"
   case "$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')" in
     x86_64|amd64) printf 'amd64\n' ;;
     arm64|aarch64) printf 'arm64\n' ;;
-    armv7|armv7l|armhf) printf 'armv7\n' ;;
+    armv7|armv7l|armv8l|armhf) printf 'armv7\n' ;;
     *) die "unsupported architecture: ${raw}" ;;
   esac
 }
@@ -194,6 +199,29 @@ require_release_runtime() {
   libc=$(detect_linux_libc)
   if [[ "$libc" != "glibc" ]]; then
     die "Linux arm64 release requires glibc because upstream ripgrep 15.1.0 publishes only a glibc asset; detected ${libc}. Use a source build with a compatible rg on PATH."
+  fi
+}
+
+require_termux_runtime() {
+  local arch="$1"
+  case "$arch" in
+    arm64|armv7) ;;
+    *) die "Termux/Android release installation supports only arm64 and armv7; detected ${arch}" ;;
+  esac
+}
+
+ensure_termux_ripgrep() {
+  if command -v rg >/dev/null 2>&1; then
+    return
+  fi
+  if ! command -v pkg >/dev/null 2>&1; then
+    die "ripgrep is required on Termux but rg and pkg are unavailable; run pkg install -y ripgrep, then retry"
+  fi
+  if ! pkg install -y ripgrep; then
+    die "failed to install ripgrep with pkg; run pkg install -y ripgrep, then retry"
+  fi
+  if ! command -v rg >/dev/null 2>&1; then
+    die "pkg install -y ripgrep completed but did not make rg available on PATH"
   fi
 }
 
@@ -346,6 +374,15 @@ find_extracted_binary() {
   printf '%s\n' "$extracted"
 }
 
+find_packaged_binary() {
+  local out_dir="$1"
+  local binary_name="$2"
+  local extracted
+  extracted=$(find "$out_dir" -type f -path "*/bin/$binary_name" -print | sed -n '1p')
+  [[ -n "$extracted" ]] || die "packaged binary bin/${binary_name} not found in archive"
+  printf '%s\n' "$extracted"
+}
+
 find_package_root() {
   local out_dir="$1"
   local manifest
@@ -358,10 +395,21 @@ find_package_root() {
 install_binary() {
   local source="$1"
   local target="$2"
+  local tmp
   mkdir -p "$(dirname "$target")"
-  rm -f "$target"
-  cp "$source" "$target"
-  chmod +x "$target"
+  tmp=$(mktemp "${target}.tmp.XXXXXX")
+  if ! cp "$source" "$tmp"; then
+    rm -f "$tmp"
+    die "could not stage JueX binary for installation: $target"
+  fi
+  if ! chmod 0755 "$tmp"; then
+    rm -f "$tmp"
+    die "could not make staged JueX binary executable: $target"
+  fi
+  if ! mv -f "$tmp" "$target"; then
+    rm -f "$tmp"
+    die "could not atomically install JueX binary: $target"
+  fi
 }
 
 replace_symlink() {
@@ -487,13 +535,21 @@ main() {
     esac
   done
 
-  local resolved_version version_for_asset tag os_name arch archive checksums_url asset_url install_dir binary_name install_target package_home release_key
+  local resolved_version version_for_asset tag os_name arch archive checksums_url asset_url install_dir binary_name install_target package_home release_key termux_mode
   resolved_version=$(resolve_version "$requested_version")
   version_for_asset=$(asset_version "$resolved_version")
   tag=$(release_tag "$resolved_version")
+  termux_mode=0
+  if is_termux_android; then
+    termux_mode=1
+  fi
   os_name=$(detect_os)
   arch=$(detect_arch)
-  require_release_runtime "$os_name" "$arch"
+  if [[ "$termux_mode" -eq 1 ]]; then
+    require_termux_runtime "$arch"
+  else
+    require_release_runtime "$os_name" "$arch"
+  fi
   archive=$(archive_name "$version_for_asset" "$os_name" "$arch")
   asset_url=$(release_asset_url "$tag" "$archive")
   checksums_url=$(release_asset_url "$tag" "checksums.txt")
@@ -515,17 +571,34 @@ archive: ${archive}
 asset url: ${asset_url}
 checksum url: ${checksums_url}
 install target: ${install_target}
+EOF
+  if [[ "$termux_mode" -eq 1 ]]; then
+    cat <<EOF
+install mode: Termux bare binary
+ripgrep: system PATH (installed with pkg if missing)
+uninstall: rm -f ${install_target}
+EOF
+  else
+    cat <<EOF
 package home: ${package_home}
 uninstall: rm -f ${install_target}; rm -rf ${package_home}
 EOF
+  fi
 
   if [[ "$dry_run" -eq 1 ]]; then
     return 0
   fi
 
-  mkdir -p "$install_dir" "$package_home"
+  if [[ "$termux_mode" -eq 1 ]]; then
+    ensure_termux_ripgrep
+    mkdir -p "$install_dir"
+  else
+    mkdir -p "$install_dir" "$package_home"
+  fi
   install_dir=$(cd "$install_dir" && pwd -P)
-  package_home=$(cd "$package_home" && pwd -P)
+  if [[ "$termux_mode" -eq 0 ]]; then
+    package_home=$(cd "$package_home" && pwd -P)
+  fi
   install_target="${install_dir%/}/${binary_name}"
 
   local tmp archive_path checksums_path extract_dir package_root extracted
@@ -541,12 +614,17 @@ EOF
   download_file "$checksums_url" "$checksums_path"
   verify_checksum "$archive_path" "$checksums_path"
   extract_archive "$archive_path" "$extract_dir"
-  package_root=$(find_package_root "$extract_dir")
-  if [[ -n "$package_root" ]]; then
-    install_managed_package "$package_root" "$package_home" "$release_key" "$binary_name" "$install_target"
-  else
-    extracted=$(find_extracted_binary "$extract_dir" "$binary_name")
+  if [[ "$termux_mode" -eq 1 ]]; then
+    extracted=$(find_packaged_binary "$extract_dir" "$binary_name")
     install_binary "$extracted" "$install_target"
+  else
+    package_root=$(find_package_root "$extract_dir")
+    if [[ -n "$package_root" ]]; then
+      install_managed_package "$package_root" "$package_home" "$release_key" "$binary_name" "$install_target"
+    else
+      extracted=$(find_extracted_binary "$extract_dir" "$binary_name")
+      install_binary "$extracted" "$install_target"
+    fi
   fi
 
   printf 'Installed juex to %s\n' "$install_target"

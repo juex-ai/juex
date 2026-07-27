@@ -21,8 +21,10 @@
   `<prefix>/lib/juex`; each install creates a new immutable generation and
   preserves older generations used by running processes. Existing binary-only
   archives remain installable.
-  Termux/Android release installation is rejected until upstream provides a
-  compatible pinned ripgrep asset. The Linux arm64 release requires glibc
+  On Termux/Android arm64 and armv7, the POSIX installer verifies the matching
+  Linux archive, installs only its static Juex binary under `$PREFIX/bin`, and
+  uses native ripgrep from `PATH`, installing it with `pkg` when absent.
+  The Linux arm64 managed release package requires glibc
   because that is the only upstream arm64 asset; release and local
   managed-package installers reject musl or an unverified libc before using
   it. Windows switches `current.txt` only after the new executable copy

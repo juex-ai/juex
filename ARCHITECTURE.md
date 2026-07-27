@@ -2195,8 +2195,11 @@ systems. The pinned amd64 and armv7 ripgrep assets are musl builds; upstream
 only publishes a GNU/glibc ripgrep asset for Linux arm64, so the release
 and local managed-package installers reject arm64 musl or an unverified libc
 before downloading or packaging that asset.
-Termux/Android is rejected because the pinned upstream release has no
-compatible Android asset.
+On Termux/Android arm64 and armv7, `scripts/install.sh` verifies the matching
+Linux archive but installs only its static `bin/juex` as a bare binary under
+`$PREFIX/bin`. The installer uses native ripgrep from `PATH` and provisions it
+with `pkg install -y ripgrep` when absent; it never installs the archive's
+managed ripgrep payload or package manifest on Android.
 Pi 1 / Pi Zero (ARMv6) are not covered; users with that hardware must build
 JueX and ripgrep themselves.
 

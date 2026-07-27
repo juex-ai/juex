@@ -33,6 +33,11 @@ upstream arm64 musl asset. Release and local managed-package installers reject
 musl or an unverified libc before packaging; those systems must use an
 unpackaged source build and provide a compatible `rg` through `PATH` or
 `JUEX_RG`.
+On Termux/Android arm64 and armv7, the POSIX release installer verifies the
+matching Linux archive but installs only its static Juex binary under
+`$PREFIX/bin`. It uses Termux's native `rg` from `PATH`, running
+`pkg install -y ripgrep` when needed, instead of installing the archive's
+glibc-based managed ripgrep payload.
 
 On Windows PowerShell:
 
@@ -99,6 +104,8 @@ If you built from source without installing, use `./dist/juex` instead of
 `juex`. Source builds resolve `rg` from `JUEX_RG` and then `PATH`; `juex doctor`
 reports the active path, source, and bundled version. Published release packages
 do not fall back to `PATH` when their pinned `rg` payload is missing or invalid.
+The Termux bare-binary install is intentionally unpackaged and therefore
+reports native `rg` as the `system` source.
 
 `juex serve` publishes the current agent's JSON/SSE API through its canonical
 local endpoint without opening a separate TCP port. Pass `--addr` explicitly
