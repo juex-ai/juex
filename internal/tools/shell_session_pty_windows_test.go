@@ -77,6 +77,20 @@ func TestWindowsCommandEnvironmentUsesExecNormalization(t *testing.T) {
 	}
 }
 
+func TestNormalizeWindowsPTYInput(t *testing.T) {
+	input := []byte("first\nsecond\r\nthird\rfourth\x03")
+	got := normalizeWindowsPTYInput(input)
+	if want := "first\rsecond\r\nthird\rfourth\x03"; string(got) != want {
+		t.Fatalf("normalized ConPTY input = %q, want %q", got, want)
+	}
+	if string(input) != "first\nsecond\r\nthird\rfourth\x03" {
+		t.Fatalf("normalization mutated caller input: %q", input)
+	}
+	if got := normalizeWindowsPTYInput([]byte("already\r\nnormalized\r")); string(got) != "already\r\nnormalized\r" {
+		t.Fatalf("explicit carriage returns changed: %q", got)
+	}
+}
+
 func TestShellSessionConPTYReceivesExplicitEnvironment(t *testing.T) {
 	const (
 		sentinel = "conpty-explicit-environment"

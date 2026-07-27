@@ -203,7 +203,35 @@ func startPTYSession(cmd *exec.Cmd, session *shellSession) (io.WriteCloser, erro
 		return nil
 	}
 
-	return inputFile, nil
+	return &windowsPTYInput{WriteCloser: inputFile}, nil
+}
+
+type windowsPTYInput struct {
+	io.WriteCloser
+}
+
+func (w *windowsPTYInput) Write(data []byte) (int, error) {
+	return w.WriteCloser.Write(normalizeWindowsPTYInput(data))
+}
+
+func normalizeWindowsPTYInput(data []byte) []byte {
+	var normalized []byte
+	for index, value := range data {
+		if value != '\n' || (index > 0 && data[index-1] == '\r') {
+			continue
+		}
+		if normalized == nil {
+			normalized = append([]byte(nil), data...)
+		}
+		// ConPTY expects the terminal Enter key as carriage return. Keep
+		// callers portable by translating only bare line feeds; explicit CR
+		// and CRLF sequences remain byte-identical.
+		normalized[index] = '\r'
+	}
+	if normalized == nil {
+		return data
+	}
+	return normalized
 }
 
 func createWindowsPipe() (windows.Handle, windows.Handle, error) {
