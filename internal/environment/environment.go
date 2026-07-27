@@ -414,8 +414,16 @@ func (s Snapshot) Activate() (func() error, error) {
 		value, set := os.LookupEnv(item.key)
 		previous = append(previous, previousValue{key: item.key, value: value, set: set})
 		if err := os.Setenv(item.key, item.value); err != nil {
-			restoreEnvironment(previous)
+			restoreErr := restoreEnvironment(previous)
 			activationMu.Unlock()
+			if restoreErr != nil {
+				return nil, fmt.Errorf(
+					"environment: activate %s: %w (restore environment: %v)",
+					item.key,
+					err,
+					restoreErr,
+				)
+			}
 			return nil, fmt.Errorf("environment: activate %s: %w", item.key, err)
 		}
 	}
