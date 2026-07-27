@@ -123,8 +123,8 @@ func Resolve(opts Options) (Snapshot, error) {
 		}
 	}
 	for _, item := range opts.Inherited {
-		key, value, ok := strings.Cut(item, "=")
-		if !ok || key == "" {
+		key, value, ok := splitInheritedEntry(item, caseInsensitive)
+		if !ok {
 			continue
 		}
 		canonical := canonicalKey(key, caseInsensitive)
@@ -135,6 +135,23 @@ func Resolve(opts Options) (Snapshot, error) {
 		}
 	}
 	return snapshot, nil
+}
+
+func splitInheritedEntry(item string, windows bool) (string, string, bool) {
+	separator := strings.IndexByte(item, '=')
+	if separator == 0 && windows {
+		// Windows inherited environments can contain hidden per-drive
+		// current-directory entries such as "=C:=C:\work". Their leading
+		// equals sign is part of the key, matching os/exec's parsing contract.
+		next := strings.IndexByte(item[1:], '=')
+		if next >= 0 {
+			separator = next + 1
+		}
+	}
+	if separator <= 0 {
+		return "", "", false
+	}
+	return item[:separator], item[separator+1:], true
 }
 
 // RedactConfiguredValues removes every non-empty configured value from a byte

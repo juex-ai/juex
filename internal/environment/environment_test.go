@@ -135,6 +135,33 @@ func TestResolveWindowsCaseRulesAndDeterministicOutput(t *testing.T) {
 	}
 }
 
+func TestResolveWindowsPreservesPerDriveEnvironmentEntries(t *testing.T) {
+	snapshot, err := Resolve(Options{
+		GOOS: "windows",
+		Inherited: []string{
+			`=C:=C:\first`,
+			`Path=C:\bin`,
+			`=D:=D:\work`,
+			`=c:=C:\second`,
+			`=malformed`,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := snapshot.Lookup(`=C:`); !ok || got != `C:\second` {
+		t.Fatalf("per-drive lookup = %q, %v, want later C drive value", got, ok)
+	}
+	want := []string{
+		`=D:=D:\work`,
+		`=c:=C:\second`,
+		`Path=C:\bin`,
+	}
+	if got := snapshot.Environ(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("windows environment = %#v, want %#v", got, want)
+	}
+}
+
 func TestMetadataNeverContainsValues(t *testing.T) {
 	const sentinel = "configured-value-must-not-leak"
 	snapshot, err := Resolve(Options{
