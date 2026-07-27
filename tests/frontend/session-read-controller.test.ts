@@ -109,6 +109,102 @@ test("live events replace canonical status from the requested cursor", () => {
   assert.equal(projectedStatus?.session.working, true);
 });
 
+test("recreated live streams resume after the last applied event", () => {
+  const subscribedSince: Array<string | undefined> = [];
+  const eventHandlers: Array<(event: BrowserEvent) => void> = [];
+  const controller = createSessionReadController({
+    ...ports(),
+    subscribeEvents: (_id, opts) => {
+      subscribedSince.push(opts.since);
+      eventHandlers.push(opts.onEvent);
+      return () => {};
+    },
+  });
+
+  controller.setRoute("s1");
+  controller.resetForRoute();
+  const cleanup = controller.subscribeLiveEvents("s1", {
+    since: "bootstrap-s1",
+  });
+  eventHandlers[0](turnStartedEvent("first"));
+  eventHandlers[0](turnStartedEvent("second"));
+  cleanup();
+
+  controller.subscribeLiveEvents("s1", { since: "bootstrap-s1" });
+
+  controller.setRoute("s2");
+  controller.resetForRoute();
+  controller.subscribeLiveEvents("s2", { since: "bootstrap-s2" });
+
+  assert.deepEqual(subscribedSince, [
+    "bootstrap-s1",
+    "event-second",
+    "bootstrap-s2",
+  ]);
+});
+
+test("resume cursor follows applied status and ignores empty transient cursors", () => {
+  const subscribedSince: Array<string | undefined> = [];
+  const eventHandlers: Array<(event: BrowserEvent) => void> = [];
+  const controller = createSessionReadController({
+    ...ports(),
+    subscribeEvents: (_id, opts) => {
+      subscribedSince.push(opts.since);
+      eventHandlers.push(opts.onEvent);
+      return () => {};
+    },
+  });
+
+  controller.setRoute("s1");
+  controller.resetForRoute();
+  const cleanup = controller.subscribeLiveEvents("s1", {
+    since: "bootstrap-s1",
+  });
+  eventHandlers[0]({
+    ...turnStartedEvent("durable"),
+    id: "different-browser-event-id",
+    status: runtimeStatus("status-durable"),
+  });
+  eventHandlers[0]({
+    ...turnStartedEvent("transient"),
+    id: "transient-browser-event-id",
+    status: runtimeStatus(""),
+  });
+  cleanup();
+
+  controller.subscribeLiveEvents("s1", { since: "bootstrap-s1" });
+
+  assert.deepEqual(subscribedSince, ["bootstrap-s1", "status-durable"]);
+});
+
+test("status calibration cannot advance the transcript resume cursor", async () => {
+  const subscribedSince: Array<string | undefined> = [];
+  const controller = createSessionReadController({
+    ...ports(),
+    subscribeEvents: (_id, opts) => {
+      subscribedSince.push(opts.since);
+      return () => {};
+    },
+  });
+
+  controller.setRoute("s1");
+  controller.resetForRoute();
+  controller.configureLiveStatus({
+    load: async () => runtimeStatus("calibration-ahead"),
+    apply: () => {},
+    clear: () => {},
+  });
+  const cleanup = controller.subscribeLiveEvents("s1", {
+    since: "bootstrap-s1",
+  });
+  await Promise.resolve();
+  cleanup();
+
+  controller.subscribeLiveEvents("s1", { since: "bootstrap-s1" });
+
+  assert.deepEqual(subscribedSince, ["bootstrap-s1", "bootstrap-s1"]);
+});
+
 test("subscription and stream reopen refresh status when no event arrives", async () => {
   let onOpen: () => void = () => {};
   let projectedStatus: AgentRuntimeStatusSnapshot | undefined;

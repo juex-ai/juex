@@ -17,6 +17,7 @@ import {
   projectStartTurnSucceeded,
   resetSessionReadState,
   type SessionInitialCommandState,
+  type SessionLiveSubscription,
   type SessionReadEffect,
   type SessionReadResult,
   type SessionReadState,
@@ -122,6 +123,7 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     ...ports.navigation,
   };
   let liveStatus: SessionReadControllerLiveStatus | null = null;
+  let liveResumeCursor: SessionLiveSubscription | null = null;
   let composerHintTimer: TimerHandle | null = null;
   let initialCommandKey: string | null = null;
 
@@ -149,12 +151,16 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
   }
 
   function setRoute(id: string) {
+    if (route.id !== id) {
+      liveResumeCursor = null;
+    }
     route = { id };
   }
 
   function resetForRoute() {
     clearTransientTimers();
     initialCommandKey = null;
+    liveResumeCursor = null;
     setSessionReadState(resetSessionReadState(state));
   }
 
@@ -260,8 +266,12 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
         status.onRefreshError?.(error);
       }
     };
+    const resumeSince =
+      liveResumeCursor?.sessionID === sessionID
+        ? liveResumeCursor.cursor
+        : opts.since;
     const unsubscribe = ports.subscribeEvents(sessionID, {
-      since: opts.since,
+      since: resumeSince,
       onEvent: (event) => {
         if (!subscribed || !isLatestSessionRoute(route, sessionID)) return;
         statusRevision += 1;
@@ -269,6 +279,10 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
           status.apply(sessionID, event.status);
         }
         runSessionReadResult(projectLiveBrowserEvent(state, event));
+        const cursor = event.status.cursor?.trim();
+        if (cursor) {
+          liveResumeCursor = { sessionID, cursor };
+        }
       },
       onOpen: () => {
         void refreshStatus();
