@@ -398,6 +398,62 @@ func TestVersionCmd_JSONForm(t *testing.T) {
 	}
 }
 
+func TestVersionCmd_RedactsConfiguredRuntimeValues(t *testing.T) {
+	const configuredBaseURL = "https://version-configured-secret.example"
+
+	previous, existed := os.LookupEnv("PROVIDER_API_BASE")
+	if err := os.Unsetenv("PROVIDER_API_BASE"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv("PROVIDER_API_BASE", previous)
+		} else {
+			_ = os.Unsetenv("PROVIDER_API_BASE")
+		}
+	})
+
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	if err := writeJuexConfigFile(
+		filepath.Join(work, ".juex", "juex.yaml"),
+		"openai",
+		"https://default.example",
+		"k",
+		"m",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextFile(
+		filepath.Join(work, ".env"),
+		"PROVIDER_API_BASE="+configuredBaseURL+"\n",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{
+		{"-C", work, "version", "--json"},
+		{"-C", work, "version", "--verbose"},
+	} {
+		t.Run(args[len(args)-1], func(t *testing.T) {
+			root := newRootCmd()
+			var out bytes.Buffer
+			root.SetOut(&out)
+			root.SetErr(&out)
+			root.SetArgs(args)
+			if err := root.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(out.String(), configuredBaseURL) {
+				t.Fatalf("version output leaked configured value:\n%s", out.String())
+			}
+			if !strings.Contains(out.String(), "[REDACTED_ENV]") {
+				t.Fatalf("version output missing redaction marker:\n%s", out.String())
+			}
+		})
+	}
+}
+
 func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer

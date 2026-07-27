@@ -89,3 +89,29 @@ func TestAgentConfigLiteralPlaceholderTagRejectsOtherValues(t *testing.T) {
 		t.Fatalf("err = %v, want invalid literal-tag error", err)
 	}
 }
+
+func TestAgentConfigRedactionRejectsDuplicateEnvironmentMappings(t *testing.T) {
+	tests := map[string]string{
+		"environment": `environment:
+  variables:
+    FIRST: first-secret
+environment:
+  variables:
+    SECOND: second-secret
+`,
+		"variables": `environment:
+  variables:
+    FIRST: first-secret
+  variables:
+    SECOND: second-secret
+`,
+	}
+	for name, content := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := RedactAgentConfig(AgentConfig{Exists: true, Content: content})
+			if err == nil || !strings.Contains(err.Error(), `duplicate "`+name+`" mapping key`) {
+				t.Fatalf("err = %v, want duplicate %s error", err, name)
+			}
+		})
+	}
+}

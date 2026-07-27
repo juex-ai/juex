@@ -114,27 +114,37 @@ func parseEnvironmentVariables(data []byte) (*yaml.Node, *yaml.Node, error) {
 		return &doc, nil, nil
 	}
 	root := doc.Content[0]
-	environmentNode := mappingValue(root, "environment")
+	environmentNode, err := uniqueMappingValue(root, "environment")
+	if err != nil {
+		return nil, nil, err
+	}
 	if environmentNode == nil {
 		return &doc, nil, nil
 	}
-	variables := mappingValue(environmentNode, "variables")
+	variables, err := uniqueMappingValue(environmentNode, "variables")
+	if err != nil {
+		return nil, nil, err
+	}
 	if variables != nil && variables.Kind != yaml.MappingNode {
 		return nil, nil, fmt.Errorf("environment.variables must be a mapping")
 	}
 	return &doc, variables, nil
 }
 
-func mappingValue(node *yaml.Node, key string) *yaml.Node {
+func uniqueMappingValue(node *yaml.Node, key string) (*yaml.Node, error) {
 	if node == nil || node.Kind != yaml.MappingNode {
-		return nil
+		return nil, nil
 	}
+	var value *yaml.Node
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		if node.Content[i].Value == key {
-			return node.Content[i+1]
+			if value != nil {
+				return nil, fmt.Errorf("duplicate %q mapping key", key)
+			}
+			value = node.Content[i+1]
 		}
 	}
-	return nil
+	return value, nil
 }
 
 func marshalYAMLDocument(doc *yaml.Node) ([]byte, error) {
