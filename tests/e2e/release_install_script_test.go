@@ -861,9 +861,12 @@ func TestReleaseInstallScriptHonorsRetryAfterHTTPDate(t *testing.T) {
 	}
 	_, script := releaseInstallScript(t)
 	var attempts atomic.Int32
+	var retryAtUnix atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if attempts.Add(1) == 1 {
-			w.Header().Set("Retry-After", time.Now().UTC().Add(time.Minute).Format(http.TimeFormat))
+			retryAt := time.Now().UTC().Add(time.Minute).Truncate(time.Second)
+			retryAtUnix.Store(retryAt.Unix())
+			w.Header().Set("Retry-After", retryAt.Format(http.TimeFormat))
 			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
 			return
 		}
@@ -894,8 +897,12 @@ func TestReleaseInstallScriptHonorsRetryAfterHTTPDate(t *testing.T) {
 	if _, err := fmt.Sscanf(string(delayBody), "%d", &delay); err != nil {
 		t.Fatalf("parse retry delay %q: %v", delayBody, err)
 	}
-	if delay < 58 || delay > 60 {
-		t.Fatalf("Retry-After HTTP-date delay = %d, want 58..60", delay)
+	remaining := retryAtUnix.Load() - time.Now().Unix()
+	if remaining < 0 {
+		remaining = 0
+	}
+	if int64(delay) < remaining || delay > 60 {
+		t.Fatalf("Retry-After HTTP-date delay = %d, want %d..60", delay, remaining)
 	}
 }
 
