@@ -230,8 +230,9 @@ is shown only when the runtime did not publish an error.
 
 ## Restart Recovery
 
-Startup and historical reads use `NewStatusStoreFromJournal` to replay the
-current event contract. Session switches call `Reset` on the existing store so
+Agent startup and historical reads stream `session.ReplayEvents` through
+`NewStatusStoreFromReplay` without materializing the complete journal. Session
+switches call `ResetFromReplayWithRestartRecovery` on the existing store so
 subscribers keep the same store identity.
 
 After replay, a dangling nonterminal turn is presented as cancelled with
