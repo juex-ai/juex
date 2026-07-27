@@ -346,10 +346,12 @@ func TestReleaseInstallScriptTermuxDryRunUsesLinuxArchiveAndSystemRipgrep(t *tes
 
 	for _, tc := range []struct {
 		arch        string
+		wantArch    string
 		wantArchive string
 	}{
-		{arch: "arm64", wantArchive: "juex_0.0.1_linux_arm64.tar.gz"},
-		{arch: "armv7", wantArchive: "juex_0.0.1_linux_armv7.tar.gz"},
+		{arch: "arm64", wantArch: "arm64", wantArchive: "juex_0.0.1_linux_arm64.tar.gz"},
+		{arch: "armv7", wantArch: "armv7", wantArchive: "juex_0.0.1_linux_armv7.tar.gz"},
+		{arch: "armv8l", wantArch: "armv7", wantArchive: "juex_0.0.1_linux_armv7.tar.gz"},
 	} {
 		t.Run(tc.arch, func(t *testing.T) {
 			work := t.TempDir()
@@ -371,7 +373,7 @@ func TestReleaseInstallScriptTermuxDryRunUsesLinuxArchiveAndSystemRipgrep(t *tes
 			}
 			body := string(out)
 			for _, want := range []string{
-				"platform: linux/" + tc.arch,
+				"platform: linux/" + tc.wantArch,
 				"archive: " + tc.wantArchive,
 				"install mode: Termux bare binary",
 				"ripgrep: system PATH",

@@ -135,7 +135,7 @@ detect_arch() {
   case "$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')" in
     x86_64|amd64) printf 'amd64\n' ;;
     arm64|aarch64) printf 'arm64\n' ;;
-    armv7|armv7l|armhf) printf 'armv7\n' ;;
+    armv7|armv7l|armv8l|armhf) printf 'armv7\n' ;;
     *) die "unsupported architecture: ${raw}" ;;
   esac
 }
