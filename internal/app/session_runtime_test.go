@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -8,9 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 func TestSwitchToNewPrimarySessionWaitsForLifecycleReaders(t *testing.T) {
@@ -142,6 +145,77 @@ func TestSwitchToNewPrimarySessionKeepsCleanupBounded(t *testing.T) {
 	}
 	if got := len(a.cleanup); got != initialCleanup {
 		t.Fatalf("cleanup entries after switches = %d, want %d", got, initialCleanup)
+	}
+}
+
+func TestReplaceSessionPublishesOnlyRestartRecoveredStatus(t *testing.T) {
+	a, _ := newStubApp(t)
+	stream := a.Status.OpenStream(runtime.StatusStreamOptions{Follow: true})
+	defer stream.Close()
+	if _, ok := stream.Next(context.Background()); !ok {
+		t.Fatal("stream omitted initial status")
+	}
+	a.Bus.Emit(events.Event{
+		ID:      "old-1",
+		Type:    runtime.TurnAdmittedType,
+		TurnID:  "turn-old",
+		Payload: runtime.TurnAdmittedPayload{},
+	})
+
+	sess, err := session.New(a.cfg.SessionsDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeNewSession := true
+	defer func() {
+		if closeNewSession {
+			_ = sess.Close()
+		}
+	}()
+	for _, event := range []events.Event{
+		{
+			ID:      "new-1",
+			Type:    runtime.TurnAdmittedType,
+			TurnID:  "turn-new",
+			Payload: runtime.TurnAdmittedPayload{},
+		},
+		{
+			ID:     "new-2",
+			Type:   toolevents.RunningType,
+			TurnID: "turn-new",
+			Payload: toolevents.RunningPayload{
+				Name: "exec_command", ToolUseID: "tool-new",
+			},
+		},
+	} {
+		if err := sess.AppendEvent(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lock, err := session.AcquireSessionLock(sess.Dir, "test-replace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.replaceSession(sess, lock); err != nil {
+		_ = lock.Close()
+		t.Fatal(err)
+	}
+	closeNewSession = false
+
+	replaced, ok := stream.Next(context.Background())
+	if !ok ||
+		replaced.Session.ID != sess.ID ||
+		replaced.Cursor != "new-2" ||
+		replaced.Session.State != runtime.SessionRuntimeFailed ||
+		replaced.Turn == nil ||
+		replaced.Turn.State != runtime.TurnLifecycleCancelled ||
+		len(replaced.Tools) != 0 {
+		t.Fatalf("replacement status = %+v, %t", replaced, ok)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if extra, ok := stream.Next(ctx); ok {
+		t.Fatalf("subscriber received intermediate replacement: %+v", extra)
 	}
 }
 

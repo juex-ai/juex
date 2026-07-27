@@ -624,13 +624,12 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 		a.eventSink.SetJournal(sess)
 	}
 	if a.Status != nil {
-		err := a.Status.ResetFromReplay(
+		err := a.Status.ResetFromReplayWithRestartRecovery(
 			runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput),
 			func(visit func(events.Event)) error {
 				return session.ReplayEvents(sess.Dir, visit)
 			},
 		)
-		a.Status.RecoverAfterRestart()
 		if err != nil {
 			fmt.Fprintf(a.stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", err)
 		}

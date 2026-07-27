@@ -241,10 +241,28 @@ func (s *StatusStore) Reset(seed StatusSeed, journal []events.Event) {
 // Existing subscribers receive one recovered snapshot even when replay reports
 // an error after delivering a valid prefix.
 func (s *StatusStore) ResetFromReplay(seed StatusSeed, replay StatusEventReplay) error {
+	return s.resetFromReplay(seed, replay, nil)
+}
+
+// ResetFromReplayWithRestartRecovery applies presentation-only restart
+// recovery to the isolated projection before existing subscribers can observe
+// the replacement.
+func (s *StatusStore) ResetFromReplayWithRestartRecovery(seed StatusSeed, replay StatusEventReplay) error {
+	return s.resetFromReplay(seed, replay, (*StatusStore).RecoverAfterRestart)
+}
+
+func (s *StatusStore) resetFromReplay(
+	seed StatusSeed,
+	replay StatusEventReplay,
+	prepare func(*StatusStore),
+) error {
 	if s == nil {
 		return nil
 	}
 	recovered, err := NewStatusStoreFromReplay(seed, replay)
+	if prepare != nil {
+		prepare(recovered)
+	}
 	current, history := recovered.stream.Values()
 
 	s.projectionMu.Lock()
