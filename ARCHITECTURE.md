@@ -642,7 +642,7 @@ operations return compact acknowledgements and a structured
 active chunks available so a model can continue writing, then folds committed
 or aborted chunked write sessions into compact summaries from those facts.
 Human-readable tool result text is presentation only and is not parsed as a
-machine interface. Legacy transcripts without lifecycle facts remain unfolded
+machine interface. Transcripts without lifecycle facts remain unfolded
 rather than inventing active or committed state. The durable conversation log
 still preserves the original assistant tool-use input for replay and debugging.
 Tool hard timeouts are runtime policy rather than model-visible parameters.
@@ -1233,9 +1233,9 @@ self-shutdown and never sends a process signal. Restart reads the healthy
 agent's `/api/status` before shutdown and remembers only `turn_active` or
 `draining_pending` session work for that invocation. After the replacement
 process is healthy, it submits one continuation through the existing session
-turn endpoint. Status detection failure preserves legacy compatibility by
-continuing an ordinary restart with a diagnostic; continuation admission
-failure is also diagnostic-only. Stop never performs either step. Add resolves
+turn endpoint. Status detection failure continues an ordinary restart with a
+diagnostic; continuation admission failure is also diagnostic-only. Stop never
+performs either step. Add resolves
 an explicitly supplied absolute workspace through the standard marker rules,
 then applies
 optional metadata and start-now under that same lifecycle lock. Disable stops
@@ -1392,7 +1392,8 @@ window. Clients can request older windows with `before=<message_id>` and can
 lower or raise the window with `limit`, capped by the server.
 Each message response may also include an RFC3339 `created_at` read-model field
 derived by `internal/session` from canonical message IDs. This timestamp is not
-added to `llm.Message` or persisted JSONL; legacy IDs simply omit it.
+added to `llm.Message` or persisted JSONL; IDs without the canonical timestamp
+format omit it.
 Only the active primary session accepts `POST /turns`; inactive primary
 sessions must be activated first, and side sessions are read-only in the Web UI.
 The CLI continues a recorded side session through `juex sessions continue`
@@ -1523,10 +1524,9 @@ list/start/stop/delete/history lifecycle.
 
 Persisted entries and `POST /api/observables` use a strict tagged union:
 `type: "command"` requires `command_config`, while `type: "schedule"` requires
-`schedule_config`. The loader reports old top-level command fields and the
-earlier nested `source` shape as per-entry config issues; it does not provide a
-legacy reader or migration. Valid sibling entries still start, but config
-edits remain blocked until all issues are fixed.
+`schedule_config`. The loader reports entries outside this tagged union as
+per-entry config issues and never rewrites them. Valid sibling entries still
+start, but config edits remain blocked until all issues are fixed.
 
 The model-facing creation tools are source-specific: `observable_create`
 creates Command Observables and `schedule_create` creates Schedules. The
@@ -1754,9 +1754,9 @@ at a time.
 Provider definitions merge by `providers[].id` and
 `providers[].models[].id`, so a workspace config can set only `model:
 provider:model` or override a few fields while inheriting missing values
-from `$JUEX_HOME/juex.yaml`. The legacy top-level `provider:` block is not
-supported. `shell` is an object-level override rather than a deep merge:
-workspace `shell: {}` resets any user-global shell config back to auto.
+from `$JUEX_HOME/juex.yaml`. `shell` is an object-level override rather than a
+deep merge: workspace `shell: {}` resets any user-global shell config back to
+auto.
 
 After loading, `internal/config` exposes narrower value objects for composition:
 `ProviderSelection` for profile resolution, `RuntimePaths` for work-local
@@ -1858,9 +1858,7 @@ request continuation. The runtime gate reads only the persisted
 goal status: `success` and `failure` allow finish, while `in_progress` records a
 continuation and asks the model to keep working or call `update_goal` with a
 terminal status. Goal state is exposed through `/status` and
-`/api/sessions/<id>` and rendered as a bounded runtime-context contract. Legacy
-goal fields are not migrated or normalized; unknown fields in an old
-`goal_state.json` are ignored by JSON decoding.
+`/api/sessions/<id>` and rendered as a bounded runtime-context contract.
 
 Only command hooks are supported in the MVP. Hooks cannot mutate tool input,
 and `PermissionRequest` is intentionally deferred until the permission engine
@@ -1901,8 +1899,7 @@ The runtime also maintains model-owned Markdown in the session-local
 tool; there is deliberately no `get_notes` tool. The store validates UTF-8 and
 a 2048-character limit, redacts secret-like values, and atomically replaces the
 file. Rejected writes leave the previous document intact. Juex never infers
-Notes from user input, tool results, hooks, or other runtime facts, and never
-reads or migrates legacy `working_state.json` files.
+Notes from user input, tool results, hooks, or other runtime facts.
 
 Non-empty Notes are appended to every provider request immediately after Goal
 as a `runtime-notes` runtime-context message. This reconstruction happens from
