@@ -46,16 +46,17 @@ func prepareLinux(lookPath func(string) (string, error), req Request) (ExecSpec,
 			args = append(args, "--chdir", abs)
 		}
 	}
-	for _, assignment := range environmentAssignments(req.Spec.Env) {
-		args = append(args, "--setenv", assignment[0], assignment[1])
+	targetBinary, targetArgs, launcherEnv, err := sandboxTargetLaunch(req.Spec)
+	if err != nil {
+		return ExecSpec{}, NewError(ErrorCodePolicyUnavailable, "linux", "bubblewrap", "environment", req.Policy, "Unable to prepare the target environment for sandboxed execution.", err)
 	}
 	args = append(args, "--")
-	args = append(args, req.Spec.Binary)
-	args = append(args, req.Spec.Args...)
+	args = append(args, targetBinary)
+	args = append(args, targetArgs...)
 	wrapped := cloneExecSpec(req.Spec)
 	wrapped.Binary = helper
 	wrapped.Args = args
-	wrapped.Env = launcherEnvironment(req.Spec.Env)
+	wrapped.Env = launcherEnv
 	return wrapped, nil
 }
 

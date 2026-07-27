@@ -50,9 +50,10 @@ func TestLauncherEnvironmentDefersLoaderVariablesUntilSandboxedTarget(t *testing
 		"DYLD_INSERT_LIBRARIES=/tmp/inject.dylib",
 		"GLIBC_TUNABLES=glibc.malloc.check=3",
 		"SAFE=value",
+		sandboxTargetEnvironmentKey + "=user-value",
 	}
 	got := strings.Join(launcherEnvironment(env), "\n")
-	for _, forbidden := range []string{"LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "GLIBC_TUNABLES"} {
+	for _, forbidden := range []string{"LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "GLIBC_TUNABLES", sandboxTargetEnvironmentKey} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("launcher environment contains %s: %q", forbidden, got)
 		}
@@ -62,10 +63,48 @@ func TestLauncherEnvironmentDefersLoaderVariablesUntilSandboxedTarget(t *testing
 			t.Fatalf("launcher environment missing %s: %q", want, got)
 		}
 	}
-	assignments := environmentAssignments(env)
-	if len(assignments) != len(env) {
-		t.Fatalf("target assignments = %#v, want %d entries", assignments, len(env))
+
+	binary, args, launcher, err := sandboxTargetLaunch(ExecSpec{
+		Binary: "/bin/sh",
+		Args:   []string{"-c", "true"},
+		Env:    env,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+	if binary == "/bin/sh" {
+		t.Fatalf("target helper was not selected: binary=%q args=%#v", binary, args)
+	}
+	argv := strings.Join(args, "\x00")
+	for _, secret := range []string{"/tmp/inject.so", "/tmp/lib", "/tmp/inject.dylib", "glibc.malloc.check=3", "user-value"} {
+		if strings.Contains(argv, secret) {
+			t.Fatalf("target environment value leaked into helper argv: %q", argv)
+		}
+	}
+	if !strings.Contains(argv, sandboxTargetHelperArgument) || !strings.Contains(argv, "/bin/sh") {
+		t.Fatalf("target helper argv = %#v", args)
+	}
+	transport := environmentValueForTest(launcher, sandboxTargetEnvironmentKey)
+	deferred, err := decodeSandboxTargetEnvironment(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deferredText := strings.Join(deferred, "\n")
+	for _, want := range []string{"LD_PRELOAD=/tmp/inject.so", "LD_LIBRARY_PATH=/tmp/lib", "DYLD_INSERT_LIBRARIES=/tmp/inject.dylib", "GLIBC_TUNABLES=glibc.malloc.check=3", sandboxTargetEnvironmentKey + "=user-value"} {
+		if !strings.Contains(deferredText, want) {
+			t.Fatalf("deferred target environment missing %q: %#v", want, deferred)
+		}
+	}
+}
+
+func environmentValueForTest(env []string, key string) string {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return strings.TrimPrefix(item, prefix)
+		}
+	}
+	return ""
 }
 
 func TestDefaultRunnerWindowsEnabledFailsClosed(t *testing.T) {

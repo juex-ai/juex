@@ -603,6 +603,11 @@ func TestShellHelperProcess(t *testing.T) {
 		fmt.Fprintln(os.Stdout, os.Getenv("SHELL_RUNTIME_ENV_MARKER"))
 		os.Exit(0)
 	}
+	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "environment-delayed" {
+		time.Sleep(500 * time.Millisecond)
+		fmt.Fprintln(os.Stdout, os.Getenv("SHELL_RUNTIME_ENV_MARKER"))
+		os.Exit(0)
+	}
 	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "tty" {
 		fmt.Fprintf(os.Stdout, "stdin_tty:%t stdout_tty:%t stderr_tty:%t\n", isCharDevice(os.Stdin), isCharDevice(os.Stdout), isCharDevice(os.Stderr))
 		fmt.Fprint(os.Stdout, "enter value: ")

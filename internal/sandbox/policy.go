@@ -4,11 +4,19 @@ package sandbox
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
+)
+
+const (
+	sandboxTargetHelperArgument = "__juex_sandbox_target_v1"
+	sandboxTargetEnvironmentKey = "JUEX_INTERNAL_SANDBOX_TARGET_ENV_V1"
 )
 
 type OutsideWorkspaceAccess string
@@ -111,18 +119,25 @@ func cloneExecSpec(spec ExecSpec) ExecSpec {
 }
 
 // launcherEnvironment removes variables that could inject code into a
-// sandbox wrapper before its policy is active. Backends restore the complete
-// target environment inside the sandbox boundary.
+// sandbox wrapper before its policy is active, together with the internal
+// transport key. Backends restore the deferred entries inside the boundary.
 func launcherEnvironment(env []string) []string {
+	launcher, _ := partitionSandboxEnvironment(env)
+	return launcher
+}
+
+func partitionSandboxEnvironment(env []string) ([]string, []string) {
 	out := make([]string, 0, len(env))
+	deferred := make([]string, 0)
 	for _, item := range env {
 		key, _, ok := strings.Cut(item, "=")
-		if ok && unsafePreSandboxVariable(key) {
+		if ok && (unsafePreSandboxVariable(key) || key == sandboxTargetEnvironmentKey) {
+			deferred = append(deferred, item)
 			continue
 		}
 		out = append(out, item)
 	}
-	return out
+	return out, deferred
 }
 
 func unsafePreSandboxVariable(key string) bool {
@@ -132,16 +147,35 @@ func unsafePreSandboxVariable(key string) bool {
 		upper == "GLIBC_TUNABLES"
 }
 
-func environmentAssignments(env []string) [][2]string {
-	out := make([][2]string, 0, len(env))
-	for _, item := range env {
-		key, value, ok := strings.Cut(item, "=")
-		if !ok || key == "" {
-			continue
-		}
-		out = append(out, [2]string{key, value})
+func sandboxTargetLaunch(spec ExecSpec) (string, []string, []string, error) {
+	launcher, deferred := partitionSandboxEnvironment(spec.Env)
+	if len(deferred) == 0 {
+		return spec.Binary, append([]string(nil), spec.Args...), launcher, nil
 	}
-	return out
+	payload, err := json.Marshal(deferred)
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("sandbox: encode deferred target environment: %w", err)
+	}
+	helper, err := os.Executable()
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("sandbox: resolve target helper: %w", err)
+	}
+	launcher = append(launcher, sandboxTargetEnvironmentKey+"="+base64.RawStdEncoding.EncodeToString(payload))
+	args := []string{sandboxTargetHelperArgument, "--", spec.Binary}
+	args = append(args, spec.Args...)
+	return helper, args, launcher, nil
+}
+
+func decodeSandboxTargetEnvironment(value string) ([]string, error) {
+	payload, err := base64.RawStdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox: decode deferred target environment: %w", err)
+	}
+	var env []string
+	if err := json.Unmarshal(payload, &env); err != nil {
+		return nil, fmt.Errorf("sandbox: parse deferred target environment: %w", err)
+	}
+	return env, nil
 }
 
 func requestedPolicyText(policy Policy) string {

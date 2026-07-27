@@ -698,9 +698,11 @@ that backend fails closed for missing blocked paths instead of creating them.
 Sandbox helper discovery uses the inherited launch snapshot rather than a
 workspace-controlled runtime `PATH`. Dynamic-loader variables such as `LD_*`,
 `DYLD_*`, and `GLIBC_TUNABLES` are removed from the wrapper process and restored
-only inside the enforced boundary for the target command. This keeps the
-effective runtime environment available to the command without allowing it to
-change how `sandbox-exec` or `bwrap` itself starts.
+only inside the enforced boundary for the target command. Deferred loader
+entries travel in an opaque wrapper-environment carrier and are applied by the
+Juex target helper; environment values are never placed in `sandbox-exec` or
+`bwrap` argv. This keeps the effective runtime environment available to the
+command without allowing it to change how the sandbox wrapper itself starts.
 Non-TTY sessions use regular stdout/stderr pipes and close stdin at start,
 matching Codex's unified exec behavior; Ctrl-C (`\x03`) is the supported
 follow-up exception and maps to shell-session interrupt. `tty: true` allocates

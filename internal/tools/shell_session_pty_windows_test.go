@@ -4,6 +4,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -41,7 +42,6 @@ func TestWindowsEnvironmentBlock(t *testing.T) {
 
 func TestShellSessionConPTYReceivesExplicitEnvironment(t *testing.T) {
 	const (
-		key      = "JUEX_CONPTY_ENVIRONMENT_TEST"
 		sentinel = "conpty-explicit-environment"
 	)
 	manager := NewShellSessionManager(context.Background())
@@ -51,11 +51,16 @@ func TestShellSessionConPTYReceivesExplicitEnvironment(t *testing.T) {
 		}
 	})
 
-	env := append(os.Environ(), key+"="+sentinel)
+	env := append(os.Environ(),
+		"JUEX_FAKE_SHELL=1",
+		"JUEX_FAKE_SHELL_MODE=environment-delayed",
+		"SHELL_RUNTIME_ENV_MARKER="+sentinel,
+	)
+	shell := fakeShellProfile()
 	result, err := manager.Start(ShellStartRequest{
-		Binary:          "cmd.exe",
-		Args:            []string{"/d", "/s", "/c"},
-		Command:         "echo %" + key + "%",
+		Binary:          shell.Binary,
+		Args:            shell.Args,
+		Command:         "ignored",
 		Env:             env,
 		TTY:             true,
 		Yield:           10 * time.Second,
@@ -68,11 +73,18 @@ func TestShellSessionConPTYReceivesExplicitEnvironment(t *testing.T) {
 		t.Fatalf("ConPTY command still running: %+v", result)
 	}
 	if result.ExitCode == nil || *result.ExitCode != 0 {
-		t.Fatalf("ConPTY exit code = %v, output = %q", result.ExitCode, result.Output)
+		t.Fatalf("ConPTY exit code = %s, output = %q", formatTestExitCode(result.ExitCode), result.Output)
 	}
 	if !strings.Contains(result.Output, sentinel) {
 		t.Fatalf("ConPTY output = %q, want explicit environment value", result.Output)
 	}
+}
+
+func formatTestExitCode(code *int) string {
+	if code == nil {
+		return "<nil>"
+	}
+	return fmt.Sprint(*code)
 }
 
 func decodeWindowsEnvironmentBlock(block []uint16) []string {

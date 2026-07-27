@@ -58,7 +58,7 @@ func TestDarwinBackendRestoresTargetEnvironmentInsideSandbox(t *testing.T) {
 		Spec: ExecSpec{
 			Binary: "/bin/sh",
 			Args:   []string{"-c", "true"},
-			Env:    []string{"PATH=/usr/bin", "LD_PRELOAD=/tmp/inject.dylib", "EMPTY="},
+			Env:    []string{"PATH=/usr/bin", "LD_PRELOAD=/tmp/inject.dylib", "EMPTY=", "SAFE_SECRET=normal-secret"},
 		},
 	})
 	if err != nil {
@@ -68,10 +68,21 @@ func TestDarwinBackendRestoresTargetEnvironmentInsideSandbox(t *testing.T) {
 		t.Fatalf("wrapper environment leaked loader variable: %#v", got.Env)
 	}
 	args := strings.Join(got.Args, "\x00")
-	for _, want := range []string{"/usr/bin/env", "LD_PRELOAD=/tmp/inject.dylib", "EMPTY=", "/bin/sh"} {
+	for _, leaked := range []string{"/tmp/inject.dylib", "normal-secret"} {
+		if strings.Contains(args, leaked) {
+			t.Fatalf("wrapper argv leaked environment value %q: %#v", leaked, got.Args)
+		}
+	}
+	if strings.Contains(args, "/usr/bin/env") {
+		t.Fatalf("wrapper argv still uses /usr/bin/env assignments: %#v", got.Args)
+	}
+	for _, want := range []string{sandboxTargetHelperArgument, "/bin/sh"} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("args missing %q: %#v", want, got.Args)
 		}
+	}
+	if !strings.Contains(strings.Join(got.Env, "\n"), "SAFE_SECRET=normal-secret") {
+		t.Fatalf("wrapper environment lost safe target value: %#v", got.Env)
 	}
 }
 

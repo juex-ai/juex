@@ -192,7 +192,7 @@ func TestCreateEnvironmentRedactionPreservesJSONLAndManifestIntegrity(t *testing
 	if err := os.MkdirAll(filepath.Join(work, ".juex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(work, ".env"), []byte("SHORT_ENV=a\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(work, ".env"), []byte("SHORT_ENV=a\nNUMBER_ENV=1234\nBOOL_ENV=true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.LoadWithOptions(config.LoadOptions{
@@ -206,7 +206,7 @@ func TestCreateEnvironmentRedactionPreservesJSONLAndManifestIntegrity(t *testing
 	sessionID := "20260727T120000-jsonl"
 	seedBundleSession(t, work, sessionID, map[string]string{
 		"session.json":       `{"kind":"primary"}`,
-		"conversation.jsonl": "{\"value\":\"a\",\"stable\":\"first\"}\n{\"value\":\"second\"}\n",
+		"conversation.jsonl": "{\"value\":\"a\",\"number\":1234,\"flag\":true,\"stable\":\"first\"}\n{\"value\":\"second\"}\n",
 		"events.jsonl":       "{\"type\":\"stable\"}\n",
 	})
 	out := filepath.Join(t.TempDir(), "debug.tar.gz")
@@ -240,6 +240,11 @@ func TestCreateEnvironmentRedactionPreservesJSONLAndManifestIntegrity(t *testing
 	}
 	if first["value"] != "[REDACTED_ENV]" {
 		t.Fatalf("first JSONL record = %#v", first)
+	}
+	for _, key := range []string{"number", "flag"} {
+		if first[key] != "[REDACTED_ENV]" {
+			t.Fatalf("first JSONL scalar %s = %#v", key, first)
+		}
 	}
 
 	manifestBody := files["juex-debug-bundle/manifest.json"]

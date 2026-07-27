@@ -393,6 +393,41 @@ func TestRedactConfiguredJSONPreservesKeysAndSyntaxForShortValues(t *testing.T) 
 	}
 }
 
+func TestRedactConfiguredJSONCoversNonStringScalars(t *testing.T) {
+	snapshot, err := Resolve(Options{Layers: []Layer{{
+		Source: SourceDotenv,
+		Path:   "/work/.env",
+		Values: map[string]string{
+			"NUMBER_SECRET": "1234",
+			"BOOL_SECRET":   "true",
+			"NULL_SECRET":   "null",
+		},
+		Strict: true,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, changed, err := snapshot.RedactConfiguredJSON([]byte(`{"number":1234,"boolean":true,"nothing":null,"safe":99}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("JSON scalar redaction did not report a change")
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(got, &decoded); err != nil {
+		t.Fatalf("redacted JSON invalid: %v\n%s", err, got)
+	}
+	for _, key := range []string{"number", "boolean", "nothing"} {
+		if decoded[key] != "[REDACTED_ENV]" {
+			t.Fatalf("%s scalar = %#v, want redacted marker", key, decoded[key])
+		}
+	}
+	if decoded["safe"] != float64(99) {
+		t.Fatalf("safe scalar = %#v, want 99", decoded["safe"])
+	}
+}
+
 func envMapForTest(env []string, caseInsensitive bool) map[string]string {
 	out := make(map[string]string, len(env))
 	for _, item := range env {
