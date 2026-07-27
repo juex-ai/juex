@@ -19,6 +19,17 @@ const maxEventLineBytes = 4 * 1024 * 1024
 // returned, so later appends remain replayable. Lazy sessions may not have
 // created the journal yet.
 func ReadEvents(dir string) ([]events.Event, error) {
+	var result []events.Event
+	err := ReplayEvents(dir, func(event events.Event) {
+		result = append(result, event)
+	})
+	return result, err
+}
+
+// ReplayEvents visits the durable event journal in order without retaining it
+// in memory. Valid prefix events are delivered before a corrupt suffix is
+// repaired and reported. Lazy sessions may not have created the journal yet.
+func ReplayEvents(dir string, visit func(events.Event)) error {
 	path := filepath.Join(dir, eventsFile)
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	canRepair := true
@@ -28,13 +39,12 @@ func ReadEvents(dir string) ([]events.Event, error) {
 	}
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return nil
 		}
-		return nil, err
+		return err
 	}
 	defer file.Close()
 
-	var result []events.Event
 	reader := bufio.NewReaderSize(file, 64*1024)
 	var validOffset int64
 	for line := 1; ; line++ {
@@ -44,10 +54,10 @@ func ReadEvents(dir string) ([]events.Event, error) {
 			if canRepair && errors.Is(err, errEventLineTooLong) {
 				readErr = repairEventJournalTail(file, validOffset, readErr)
 			}
-			return result, readErr
+			return readErr
 		}
 		if len(raw) == 0 && !complete {
-			return result, nil
+			return nil
 		}
 		encoded := raw
 		if complete {
@@ -62,20 +72,22 @@ func ReadEvents(dir string) ([]events.Event, error) {
 			if canRepair {
 				decodeErr = repairEventJournalTail(file, validOffset, decodeErr)
 			}
-			return result, decodeErr
+			return decodeErr
 		}
-		result = append(result, event)
+		if visit != nil {
+			visit(event)
+		}
 		validOffset += int64(len(raw))
 		if !complete {
 			if canRepair {
 				if _, err := file.WriteAt([]byte{'\n'}, validOffset); err != nil {
-					return result, fmt.Errorf("session: terminate events.jsonl line %d: %w", line, err)
+					return fmt.Errorf("session: terminate events.jsonl line %d: %w", line, err)
 				}
 				if err := file.Sync(); err != nil {
-					return result, fmt.Errorf("session: sync events.jsonl line %d repair: %w", line, err)
+					return fmt.Errorf("session: sync events.jsonl line %d repair: %w", line, err)
 				}
 			}
-			return result, nil
+			return nil
 		}
 	}
 }

@@ -45,6 +45,13 @@ The active session uses its in-memory store. A historical session builds a
 read-only store from its journal, emits its available snapshots through a
 non-following stream, and closes without activating that session.
 
+Agent startup and active-session replacement reconstruct the in-memory store by
+streaming durable events into an isolated projection. Replacement publishes
+only the final recovered snapshot to existing subscribers while retaining the
+same bounded cursor history. If decoding fails after a valid prefix, that
+prefix is installed before the error is reported and restart recovery is
+applied.
+
 The agent-level equivalents are `GET /api/status` and
 `GET /api/status/events`. Fleet consumes these routes and publishes aggregate
 `agent.status` updates on `GET /api/fleet/events`. Agent Activity distribution

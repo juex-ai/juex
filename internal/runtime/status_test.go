@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strconv"
 	"sync"
@@ -650,6 +651,177 @@ func TestStatusStoreResetAndRecoverAfterRestart(t *testing.T) {
 	}
 	if len(snapshot.Tools) != 0 {
 		t.Fatalf("recovered tools = %+v, want none", snapshot.Tools)
+	}
+}
+
+func TestStatusStoreReplayMatchesJournalSnapshotAndHistory(t *testing.T) {
+	seed := StatusSeed{SessionID: "session-1", MaxPendingInputs: 3}
+	journal := []events.Event{
+		statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}),
+		statusEvent("2", "llm.responded", "turn-1", LLMRespondedPayload{
+			TokenUsage: llm.Usage{InputTokens: 10, OutputTokens: 4},
+			ContextUsage: &llm.ContextUsage{
+				Model:       "test-model",
+				InputTokens: 10,
+				TotalTokens: 10,
+			},
+		}),
+		statusEvent("3", "pending_input.queued", "turn-1", PendingInputQueuedPayload{
+			PendingCount: 2, MaxPendingInputs: 3,
+		}),
+		statusEvent("4", toolevents.RequestedType, "turn-1", toolevents.RequestedPayload{
+			Name: "exec_command", ToolUseID: "tool-1",
+		}),
+		statusEvent("5", toolevents.RunningType, "turn-1", toolevents.RunningPayload{
+			Name: "exec_command", ToolUseID: "tool-1",
+		}),
+	}
+	for index := 6; index <= 600; index++ {
+		journal = append(journal, statusEvent(
+			strconv.Itoa(index),
+			"pending_input.queued",
+			"turn-1",
+			PendingInputQueuedPayload{PendingCount: index, MaxPendingInputs: 1000},
+		))
+	}
+	transient := statusEvent("transient", toolevents.OutputDeltaType, "turn-1", toolevents.OutputDeltaPayload{
+		Name: "exec_command", ToolUseID: "tool-1", Text: "partial",
+	})
+	transient.Transient = true
+	journal = append(journal, transient)
+
+	want := NewStatusStoreFromJournal(seed, journal)
+	got, err := NewStatusStoreFromReplay(seed, func(visit func(events.Event)) error {
+		for _, event := range journal {
+			visit(event)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCurrent, wantHistory := want.stream.Values()
+	gotCurrent, gotHistory := got.stream.Values()
+	if len(gotHistory) != statusHistoryLimit {
+		t.Fatalf("streaming history = %d, want bounded limit %d", len(gotHistory), statusHistoryLimit)
+	}
+	if !reflect.DeepEqual(gotCurrent, wantCurrent) ||
+		!reflect.DeepEqual(gotHistory, wantHistory) {
+		t.Fatalf(
+			"streaming replay differs:\ncurrent = %#v\nwant = %#v\nhistory = %#v\nwant = %#v",
+			gotCurrent, wantCurrent, gotHistory, wantHistory,
+		)
+	}
+	got.RecoverAfterRestart()
+	want.RecoverAfterRestart()
+	if !reflect.DeepEqual(got.Snapshot(), want.Snapshot()) {
+		t.Fatalf("recovered streaming snapshot = %#v, want %#v", got.Snapshot(), want.Snapshot())
+	}
+}
+
+func TestStatusStoreReplayReturnsValidPrefixWithError(t *testing.T) {
+	replayErr := errors.New("journal failed")
+	store, err := NewStatusStoreFromReplay(StatusSeed{SessionID: "new"}, func(visit func(events.Event)) error {
+		visit(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
+		return replayErr
+	})
+	if !errors.Is(err, replayErr) {
+		t.Fatalf("NewStatusStoreFromReplay() error = %v, want %v", err, replayErr)
+	}
+	if store == nil || store.Snapshot().Cursor != "1" {
+		t.Fatalf("recovered store = %#v, want valid-prefix cursor 1", store)
+	}
+
+	current := NewStatusStore(StatusSeed{SessionID: "old"})
+	err = current.ResetFromReplay(StatusSeed{SessionID: "new"}, func(visit func(events.Event)) error {
+		visit(statusEvent("2", TurnAdmittedType, "turn-2", TurnAdmittedPayload{}))
+		return replayErr
+	})
+	if !errors.Is(err, replayErr) {
+		t.Fatalf("ResetFromReplay() error = %v, want %v", err, replayErr)
+	}
+	if snapshot := current.Snapshot(); snapshot.Session.ID != "new" || snapshot.Cursor != "2" {
+		t.Fatalf("reset snapshot = %+v, want new session valid-prefix cursor 2", snapshot)
+	}
+}
+
+func TestStatusStoreResetFromReplayPublishesOneReplacement(t *testing.T) {
+	store := NewStatusStore(StatusSeed{SessionID: "old"})
+	stream := store.OpenStream(StatusStreamOptions{Follow: true})
+	defer stream.Close()
+	if _, ok := stream.Next(context.Background()); !ok {
+		t.Fatal("stream omitted initial snapshot")
+	}
+	store.Publish(statusEvent("1", TurnAdmittedType, "turn-old", TurnAdmittedPayload{}))
+	store.Publish(statusEvent("2", "pending_input.queued", "turn-old", PendingInputQueuedPayload{
+		PendingCount: 1, MaxPendingInputs: 2,
+	}))
+
+	err := store.ResetFromReplay(StatusSeed{SessionID: "new"}, func(visit func(events.Event)) error {
+		visit(statusEvent("3", TurnAdmittedType, "turn-new", TurnAdmittedPayload{}))
+		visit(statusEvent("4", "llm.requested", "turn-new", LLMRequestedPayload{}))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaced, ok := stream.Next(context.Background())
+	if !ok || replaced.Session.ID != "new" || replaced.Cursor != "4" {
+		t.Fatalf("replacement snapshot = %+v, %t", replaced, ok)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if extra, ok := stream.Next(ctx); ok {
+		t.Fatalf("stream received replay churn after replacement: %+v", extra)
+	}
+}
+
+func TestStatusStoreRestartReplayPublishesOnlyRecoveredReplacement(t *testing.T) {
+	store := NewStatusStore(StatusSeed{SessionID: "old"})
+	stream := store.OpenStream(StatusStreamOptions{Follow: true})
+	defer stream.Close()
+	if _, ok := stream.Next(context.Background()); !ok {
+		t.Fatal("stream omitted initial snapshot")
+	}
+	store.Publish(statusEvent("1", TurnAdmittedType, "turn-old", TurnAdmittedPayload{}))
+
+	err := store.ResetFromReplayWithRestartRecovery(
+		StatusSeed{SessionID: "new"},
+		func(visit func(events.Event)) error {
+			visit(statusEvent("2", TurnAdmittedType, "turn-new", TurnAdmittedPayload{}))
+			visit(statusEvent("3", toolevents.RunningType, "turn-new", toolevents.RunningPayload{
+				Name: "exec_command", ToolUseID: "tool-new",
+			}))
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaced, ok := stream.Next(context.Background())
+	if !ok ||
+		replaced.Session.ID != "new" ||
+		replaced.Cursor != "3" ||
+		replaced.Session.State != SessionRuntimeFailed ||
+		replaced.Turn == nil ||
+		replaced.Turn.State != TurnLifecycleCancelled ||
+		len(replaced.Tools) != 0 {
+		t.Fatalf("restart replacement snapshot = %+v, %t", replaced, ok)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if extra, ok := stream.Next(ctx); ok {
+		t.Fatalf("stream received unrecovered replay snapshot: %+v", extra)
+	}
+}
+
+func TestStatusStoreNilReplayIsEmptyJournal(t *testing.T) {
+	store, err := NewStatusStoreFromReplay(StatusSeed{SessionID: "empty"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := store.Snapshot(); snapshot.Session.ID != "empty" || snapshot.Cursor != "" {
+		t.Fatalf("empty replay snapshot = %+v", snapshot)
 	}
 }
 

@@ -154,6 +154,9 @@ type StatusStream struct {
 	stream *statusstream.Stream[StatusSnapshot]
 }
 
+// StatusEventReplay delivers ordered durable events to a status projection.
+type StatusEventReplay func(visit func(events.Event)) error
+
 func (s *StatusStream) Next(ctx context.Context) (StatusSnapshot, bool) {
 	if s == nil || s.stream == nil {
 		return StatusSnapshot{}, false
@@ -188,11 +191,24 @@ func NewStatusStore(seed StatusSeed) *StatusStore {
 }
 
 func NewStatusStoreFromJournal(seed StatusSeed, journal []events.Event) *StatusStore {
-	store := NewStatusStore(seed)
-	for _, event := range journal {
-		store.Publish(event)
-	}
+	store, _ := NewStatusStoreFromReplay(seed, func(visit func(events.Event)) error {
+		for _, event := range journal {
+			visit(event)
+		}
+		return nil
+	})
 	return store
+}
+
+// NewStatusStoreFromReplay projects durable events as they are decoded. If the
+// replay fails, the returned store still contains the valid-prefix projection.
+func NewStatusStoreFromReplay(seed StatusSeed, replay StatusEventReplay) (*StatusStore, error) {
+	store := NewStatusStore(seed)
+	if replay == nil {
+		return store, nil
+	}
+	err := replay(store.Publish)
+	return store, err
 }
 
 func newStatusStoreFromSnapshot(snapshot StatusSnapshot) *StatusStore {
@@ -213,15 +229,46 @@ func newStatusStoreFromSnapshot(snapshot StatusSnapshot) *StatusStore {
 // Reset replaces the projection with a new session seed and its durable
 // journal. Existing subscribers receive the recovered snapshot immediately.
 func (s *StatusStore) Reset(seed StatusSeed, journal []events.Event) {
+	_ = s.ResetFromReplay(seed, func(visit func(events.Event)) error {
+		for _, event := range journal {
+			visit(event)
+		}
+		return nil
+	})
+}
+
+// ResetFromReplay replaces the projection with an isolated replay result.
+// Existing subscribers receive one recovered snapshot even when replay reports
+// an error after delivering a valid prefix.
+func (s *StatusStore) ResetFromReplay(seed StatusSeed, replay StatusEventReplay) error {
+	return s.resetFromReplay(seed, replay, nil)
+}
+
+// ResetFromReplayWithRestartRecovery applies presentation-only restart
+// recovery to the isolated projection before existing subscribers can observe
+// the replacement.
+func (s *StatusStore) ResetFromReplayWithRestartRecovery(seed StatusSeed, replay StatusEventReplay) error {
+	return s.resetFromReplay(seed, replay, (*StatusStore).RecoverAfterRestart)
+}
+
+func (s *StatusStore) resetFromReplay(
+	seed StatusSeed,
+	replay StatusEventReplay,
+	prepare func(*StatusStore),
+) error {
 	if s == nil {
-		return
+		return nil
 	}
-	recovered := NewStatusStoreFromJournal(seed, journal)
+	recovered, err := NewStatusStoreFromReplay(seed, replay)
+	if prepare != nil {
+		prepare(recovered)
+	}
 	current, history := recovered.stream.Values()
 
 	s.projectionMu.Lock()
 	s.stream.Replace(current, history)
 	s.projectionMu.Unlock()
+	return err
 }
 
 // RecoverAfterRestart closes an interrupted in-memory turn. The event cursor

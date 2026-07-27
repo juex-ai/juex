@@ -18,6 +18,7 @@ package e2e
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -40,6 +41,7 @@ import (
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
+	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -1366,6 +1368,147 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 		if prov2.history[0][2].FirstText() != "who am I?" {
 			t.Errorf("third (new user) message = %q", prov2.history[0][2].FirstText())
 		}
+	}
+}
+
+func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testing.T) {
+	work := t.TempDir()
+	cfg := config.Config{ProviderProtocol: "openai/chat", WorkDir: work}
+	first, err := app.New(app.Options{
+		Config:     cfg,
+		Provider:   &recordingProvider{},
+		WorkDir:    work,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := first.Session.Dir
+	timestamp := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	first.Bus.Emit(events.Event{
+		ID:        "1",
+		Type:      runtime.TurnAdmittedType,
+		TurnID:    "turn-1",
+		Timestamp: timestamp,
+		Payload:   runtime.TurnAdmittedPayload{},
+	})
+	first.Bus.Emit(events.Event{
+		ID:        "2",
+		Type:      "llm.responded",
+		TurnID:    "turn-1",
+		Timestamp: timestamp.Add(time.Second),
+		Payload: runtime.LLMRespondedPayload{
+			TokenUsage: llm.Usage{InputTokens: 21, OutputTokens: 8},
+			ContextUsage: &llm.ContextUsage{
+				Model:       "resume-model",
+				InputTokens: 21,
+				TotalTokens: 21,
+			},
+		},
+	})
+	first.Bus.Emit(events.Event{
+		ID:        "3",
+		Type:      "pending_input.queued",
+		TurnID:    "turn-1",
+		Timestamp: timestamp.Add(2 * time.Second),
+		Payload: runtime.PendingInputQueuedPayload{
+			PendingCount: 1, MaxPendingInputs: 2,
+		},
+	})
+	first.Bus.Emit(events.Event{
+		ID:        "4",
+		Type:      toolevents.RequestedType,
+		TurnID:    "turn-1",
+		Timestamp: timestamp.Add(3 * time.Second),
+		Payload: toolevents.RequestedPayload{
+			Name: "exec_command", ToolUseID: "tool-1",
+		},
+	})
+	first.Bus.Emit(events.Event{
+		ID:        "5",
+		Type:      toolevents.RunningType,
+		TurnID:    "turn-1",
+		Timestamp: timestamp.Add(4 * time.Second),
+		Payload: toolevents.RunningPayload{
+			Name: "exec_command", ToolUseID: "tool-1",
+		},
+	})
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	eventsPath := filepath.Join(sessionDir, "events.jsonl")
+	appendFile, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := appendFile.WriteString("not-json\n"); err != nil {
+		_ = appendFile.Close()
+		t.Fatal(err)
+	}
+	if err := appendFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	resumed, err := app.New(app.Options{
+		Config:     cfg,
+		Provider:   &recordingProvider{},
+		WorkDir:    work,
+		ResumeDir:  sessionDir,
+		DisableMCP: true,
+		Stderr:     &stderr,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resumed.Close()
+
+	snapshot := resumed.Status.Snapshot()
+	if snapshot.Cursor != "5" ||
+		snapshot.Session.State != runtime.SessionRuntimeFailed ||
+		snapshot.Session.PendingCount != 0 ||
+		snapshot.Turn == nil ||
+		snapshot.Turn.State != runtime.TurnLifecycleCancelled ||
+		len(snapshot.Tools) != 0 {
+		t.Fatalf("recovered status = %+v", snapshot)
+	}
+	if snapshot.TokenUsage.InputTokens != 21 ||
+		snapshot.TokenUsage.OutputTokens != 8 ||
+		snapshot.ContextUsage == nil ||
+		snapshot.ContextUsage.Model != "resume-model" {
+		t.Fatalf("recovered usage = %+v / %+v", snapshot.TokenUsage, snapshot.ContextUsage)
+	}
+	if !strings.Contains(stderr.String(), "warning: restore runtime status:") ||
+		!strings.Contains(stderr.String(), "repaired corrupt tail") {
+		t.Fatalf("stderr missing replay repair warning:\n%s", stderr.String())
+	}
+	repaired, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(repaired, []byte("not-json")) {
+		t.Fatalf("events journal retained malformed tail:\n%s", repaired)
+	}
+
+	stream := resumed.Status.OpenStream(runtime.StatusStreamOptions{After: "1"})
+	defer stream.Close()
+	var replay []runtime.StatusSnapshot
+	for {
+		next, ok := stream.Next(context.Background())
+		if !ok {
+			break
+		}
+		replay = append(replay, next)
+	}
+	if len(replay) != 5 {
+		t.Fatalf("status replay snapshots = %d, want events 2-5 plus restart recovery", len(replay))
+	}
+	if replay[0].Cursor != "2" ||
+		replay[len(replay)-1].Cursor != "5" ||
+		replay[len(replay)-1].Turn == nil ||
+		replay[len(replay)-1].Turn.State != runtime.TurnLifecycleCancelled {
+		t.Fatalf("status replay ordering = %+v", replay)
 	}
 }
 

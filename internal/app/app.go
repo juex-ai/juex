@@ -330,14 +330,15 @@ func New(opts Options) (*App, error) {
 	}
 	eventSink = events.NewDurableSink(sess)
 	eventUnsubscribe = bus.Subscribe("*", eventSink.Handle)
-	journalEvents, statusReplayErr := session.ReadEvents(sess.Dir)
+	status, statusReplayErr := runtime.NewStatusStoreFromReplay(
+		runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput),
+		func(visit func(events.Event)) error {
+			return session.ReplayEvents(sess.Dir, visit)
+		},
+	)
 	if statusReplayErr != nil {
 		fmt.Fprintf(stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", statusReplayErr)
 	}
-	status := runtime.NewStatusStoreFromJournal(
-		runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput),
-		journalEvents,
-	)
 	status.RecoverAfterRestart()
 
 	pb := &prompt.Builder{
@@ -623,9 +624,12 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 		a.eventSink.SetJournal(sess)
 	}
 	if a.Status != nil {
-		journalEvents, err := session.ReadEvents(sess.Dir)
-		a.Status.Reset(runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput), journalEvents)
-		a.Status.RecoverAfterRestart()
+		err := a.Status.ResetFromReplayWithRestartRecovery(
+			runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput),
+			func(visit func(events.Event)) error {
+				return session.ReplayEvents(sess.Dir, visit)
+			},
+		)
 		if err != nil {
 			fmt.Fprintf(a.stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", err)
 		}
