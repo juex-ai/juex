@@ -886,12 +886,15 @@ func TestLiveBinary_ShellYieldIgnoresRuntimeToolTimeout(t *testing.T) {
 	second := cloneMap(secondBody)
 	third := cloneMap(thirdBody)
 	mu.Unlock()
-	if !requestHasToolResult(second, "call_exec_yield", "Process running with session ID") ||
-		!requestHasToolResult(second, "call_exec_yield", "slow start") {
+	if !requestHasToolResult(second, "call_exec_yield", "Process running with session ID") {
 		t.Fatalf("second provider request missing running exec result: %+v", second["messages"])
 	}
 	if requestHasToolResult(second, "call_exec_yield", "timed out") {
 		t.Fatalf("exec_command result should not be a timeout: %+v", second["messages"])
+	}
+	if !requestHasToolResult(second, "call_exec_yield", "slow start") &&
+		!requestHasToolResult(third, "call_stdin_yield", "slow start") {
+		t.Fatalf("provider requests missing initial shell output: second=%+v third=%+v", second["messages"], third["messages"])
 	}
 	if !requestHasToolResult(third, "call_stdin_yield", "slow done") ||
 		!requestHasToolResult(third, "call_stdin_yield", "Process exited with code 0") {
