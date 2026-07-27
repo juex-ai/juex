@@ -195,7 +195,7 @@ func TestEmitRunErrorJSONClassifiesTimeout(t *testing.T) {
 	}
 }
 
-func TestRootHelpListsSubcommands(t *testing.T) {
+func TestRootHelpGroupsSubcommandsByScope(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer
 	root.SetOut(&out)
@@ -205,9 +205,80 @@ func TestRootHelpListsSubcommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := out.String()
-	for _, want := range []string{"run", "repl", "sessions", "bundle", "serve", "version", "Available Commands"} {
+	for _, want := range []string{
+		"Workspace agent (current directory)",
+		"Troubleshooting (current directory)",
+		"Fleet (all agents under $JUEX_HOME)",
+		"About this CLI",
+		"Create a user or workspace juex.yaml config (user by default)",
+		"run",
+		"repl",
+		"sessions",
+		"bundle",
+		"serve",
+		"version",
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("help missing %q in:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "Additional Commands:") {
+		t.Fatalf("help contains ungrouped commands:\n%s", body)
+	}
+
+	wantGroups := []cobra.Group{
+		{ID: "workspace", Title: "Workspace agent (current directory)"},
+		{ID: "debug", Title: "Troubleshooting (current directory)"},
+		{ID: "fleet", Title: "Fleet (all agents under $JUEX_HOME)"},
+		{ID: "cli", Title: "About this CLI"},
+	}
+	groups := root.Groups()
+	if len(groups) != len(wantGroups) {
+		t.Fatalf("root groups = %+v, want %+v", groups, wantGroups)
+	}
+	for i, want := range wantGroups {
+		if *groups[i] != want {
+			t.Errorf("root group[%d] = %+v, want %+v", i, *groups[i], want)
+		}
+	}
+
+	wantCommandGroups := map[string]string{
+		"bundle":     "debug",
+		"completion": "cli",
+		"doctor":     "debug",
+		"fleet":      "fleet",
+		"help":       "cli",
+		"init":       "workspace",
+		"repl":       "workspace",
+		"run":        "workspace",
+		"schema":     "cli",
+		"serve":      "workspace",
+		"sessions":   "workspace",
+		"version":    "cli",
+	}
+	commands := root.Commands()
+	if len(commands) != len(wantCommandGroups) {
+		t.Fatalf("root commands = %d, want %d: %+v", len(commands), len(wantCommandGroups), commands)
+	}
+	for _, command := range commands {
+		if want, ok := wantCommandGroups[command.Name()]; !ok {
+			t.Errorf("unexpected root command %q", command.Name())
+		} else if command.GroupID != want {
+			t.Errorf("%s GroupID = %q, want %q", command.Name(), command.GroupID, want)
+		}
+	}
+}
+
+func TestRootLongNamesWorkspaceFleetAndCLIScopes(t *testing.T) {
+	body := newRootCmd().Long
+	for _, want := range []string{
+		"current directory",
+		"juex fleet",
+		"$JUEX_HOME",
+		"CLI information commands",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("root Long missing %q:\n%s", want, body)
 		}
 	}
 }

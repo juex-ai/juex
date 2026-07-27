@@ -64,8 +64,19 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 	})
 	t.Run("rootHelpFlag", func(t *testing.T) {
 		out, _ := exec.Command(bin, "--help").CombinedOutput()
-		if !strings.Contains(string(out), "Available Commands") {
-			t.Fatalf("--help output: %s", out)
+		body := string(out)
+		for _, want := range []string{
+			"Workspace agent (current directory)",
+			"Troubleshooting (current directory)",
+			"Fleet (all agents under $JUEX_HOME)",
+			"About this CLI",
+		} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("--help missing %q:\n%s", want, out)
+			}
+		}
+		if strings.Contains(body, "Additional Commands:") {
+			t.Fatalf("--help contains ungrouped commands:\n%s", out)
 		}
 	})
 	t.Run("unknownExitsNonZero", func(t *testing.T) {

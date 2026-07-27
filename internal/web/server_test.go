@@ -116,8 +116,10 @@ func TestServerHandlersSeparateAgentEndpointFromTCPPointer(t *testing.T) {
 			t.Fatalf("GET TCP %s content type = %q, want text/plain", path, contentType)
 		}
 		for _, want := range []string{
+			"one agent",
 			"agent JSON/SSE API",
 			"no web UI",
+			"all registered agents",
 			"juex fleet serve",
 			"http://127.0.0.1:5839",
 		} {

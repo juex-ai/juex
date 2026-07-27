@@ -195,13 +195,13 @@ func (s *Server) handleAgentAPIPointer(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	fmt.Fprintln(w, "Juex agent JSON/SSE API (no web UI).")
+	fmt.Fprintln(w, "This endpoint serves one agent through the agent JSON/SSE API (no web UI).")
 	fmt.Fprintln(w, "API routes are available under /api/.")
 	fleetAddr := strings.TrimSpace(s.opts.Cfg.Fleet.Addr)
 	if fleetAddr == "" {
 		fleetAddr = config.DefaultFleetAddr
 	}
-	fmt.Fprintf(w, "For the browser UI, run `juex fleet serve` and open http://%s/.\n", fleetAddr)
+	fmt.Fprintf(w, "For a browser UI covering all registered agents, run `juex fleet serve` and open http://%s/.\n", fleetAddr)
 }
 
 // dispatchSession routes /api/sessions/<id>[/...] to the matching handler.
