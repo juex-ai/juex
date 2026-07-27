@@ -41,7 +41,7 @@ func newInitCmd(flags *persistentFlags) *cobra.Command {
 	opts := &initOptions{}
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Create a first-run juex.yaml runtime config",
+		Short: "Create a user or workspace juex.yaml config (user by default)",
 		Long: `Create or update a Juex runtime config. By default this writes
 ~/.juex/juex.yaml so provider settings can be shared across workspaces.
 Use --scope workspace to write the current workspace .juex/juex.yaml.`,

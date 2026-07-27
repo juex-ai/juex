@@ -210,6 +210,7 @@ func TestRootHelpGroupsSubcommandsByScope(t *testing.T) {
 		"Troubleshooting (current directory)",
 		"Fleet (all agents under $JUEX_HOME)",
 		"About this CLI",
+		"Create a user or workspace juex.yaml config (user by default)",
 		"run",
 		"repl",
 		"sessions",
