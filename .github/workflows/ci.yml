@@ -50,11 +50,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          version="$(awk -F= '/^VERSION=/{sub(/\r$/, "", $2); print $2; exit}' CLI_CONFIG)"
           os_name="$(go env GOOS)"
           arch="$(go env GOARCH)"
           scripts/prepare-ripgrep.sh \
             --target "${os_name}_${arch}" \
-            --juex-version ci \
+            --juex-version "$version" \
             --output .tmp/ci-ripgrep
           rg_dir="$PWD/.tmp/ci-ripgrep/juex-path"
           if [[ "$os_name" == "windows" ]]; then
@@ -79,7 +80,9 @@ jobs:
           mkdir -p "$release_dir" "$package_root/bin"
 
           cp -R .tmp/ci-ripgrep/. "$package_root/"
-          go build -trimpath -o "${package_root}/bin/juex" ./cmd/juex
+          go build -trimpath \
+            -ldflags "-X github.com/juex-ai/juex/internal/version.Version=${version}" \
+            -o "${package_root}/bin/juex" ./cmd/juex
           archive="juex_${version}_${os_name}_${arch}.tar.gz"
           tar -C "$payload_dir" -czf "${release_dir}/${archive}" "$(basename "$package_root")"
           if command -v sha256sum >/dev/null 2>&1; then
@@ -99,6 +102,19 @@ jobs:
             printf '%s\n' "$HOME/.local/bin" >> "$GITHUB_PATH"
           fi
           juex version
+          juex init --provider openai --model ci --api-key sk-ci-placeholder --skip-check --yes
+          set +e
+          juex doctor --format json --offline > "${work}/doctor.json"
+          doctor_status=$?
+          set -e
+          [[ "$doctor_status" -eq 0 || "$doctor_status" -eq 6 ]]
+          grep -B 8 -A 4 '"name": "ripgrep"' "${work}/doctor.json" |
+            grep -q '"status": "ok"'
+          grep -B 8 -A 4 '"name": "ripgrep"' "${work}/doctor.json" |
+            grep -q '"source": "package"'
+          installed_binary="$(readlink "$HOME/.local/bin/juex")"
+          package_root="$(cd "$(dirname "$installed_binary")/.." && pwd -P)"
+          "$package_root/juex-path/rg" --version
       - name: Test PowerShell release installer
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -114,7 +130,9 @@ jobs:
 
           Copy-Item -Path ".tmp/ci-ripgrep/*" -Destination $packageRoot -Recurse -Force
           $binary = Join-Path $packageRoot "bin/juex.exe"
-          go build -trimpath -o $binary ./cmd/juex
+          go build -trimpath `
+            -ldflags "-X github.com/juex-ai/juex/internal/version.Version=$version" `
+            -o $binary ./cmd/juex
           $archive = "juex_${version}_windows_amd64.zip"
           $archivePath = Join-Path $releaseDir $archive
           Compress-Archive -LiteralPath $packageRoot -DestinationPath $archivePath -Force
@@ -133,3 +151,21 @@ jobs:
             Add-Content -Path $env:GITHUB_PATH -Value $binDir
           }
           juex.exe version
+          juex.exe init --provider openai --model ci --api-key sk-ci-placeholder --skip-check --yes
+          $oldNativePreference = $PSNativeCommandUseErrorActionPreference
+          $PSNativeCommandUseErrorActionPreference = $false
+          $doctorText = (juex.exe doctor --format json --offline | Out-String)
+          $doctorStatus = $LASTEXITCODE
+          $PSNativeCommandUseErrorActionPreference = $oldNativePreference
+          if ($doctorStatus -ne 0 -and $doctorStatus -ne 6) {
+            throw "juex doctor failed with exit code $doctorStatus"
+          }
+          $ripgrepCheck = ($doctorText | ConvertFrom-Json).checks |
+            Where-Object { $_.name -eq "ripgrep" }
+          if ($ripgrepCheck.status -ne "ok" -or $ripgrepCheck.details.source -ne "package") {
+            throw "installed JueX did not resolve packaged ripgrep: $doctorText"
+          }
+          & $ripgrepCheck.details.path --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "packaged ripgrep failed with exit code $LASTEXITCODE"
+          }
