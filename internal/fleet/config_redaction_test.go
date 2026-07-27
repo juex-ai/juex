@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"io"
 	"strings"
 	"testing"
 
@@ -234,5 +235,69 @@ func TestAgentConfigEnvironmentMergeSequenceRoundTrip(t *testing.T) {
 		if decoded.Environment.Variables[key] != value {
 			t.Fatalf("merged variable %s = %q, want %q\n%s", key, decoded.Environment.Variables[key], value, merged)
 		}
+	}
+}
+
+func TestAgentConfigMultiDocumentRoundTripPreservesEveryDocument(t *testing.T) {
+	current := AgentConfig{
+		Exists: true,
+		Content: `environment:
+  variables:
+    SECRET_TOKEN: first-document-secret
+---
+observables:
+  second-document-marker: preserved
+---
+third-document-marker:
+  nested: preserved
+`,
+	}
+	redacted, err := RedactAgentConfig(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(redacted.Content, "first-document-secret") {
+		t.Fatalf("redacted multi-document config leaked secret:\n%s", redacted.Content)
+	}
+	for _, marker := range []string{"second-document-marker", "third-document-marker"} {
+		if !strings.Contains(redacted.Content, marker) {
+			t.Fatalf("redacted multi-document config lost %q:\n%s", marker, redacted.Content)
+		}
+	}
+	if got := decodeYAMLDocumentCount(t, []byte(redacted.Content)); got != 3 {
+		t.Fatalf("redacted YAML document count = %d, want 3\n%s", got, redacted.Content)
+	}
+
+	merged, err := mergeRedactedEnvironmentValues([]byte(redacted.Content), current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(merged), "first-document-secret") {
+		t.Fatalf("merged multi-document config did not restore secret:\n%s", merged)
+	}
+	for _, marker := range []string{"second-document-marker", "third-document-marker"} {
+		if !strings.Contains(string(merged), marker) {
+			t.Fatalf("merged multi-document config lost %q:\n%s", marker, merged)
+		}
+	}
+	if got := decodeYAMLDocumentCount(t, merged); got != 3 {
+		t.Fatalf("merged YAML document count = %d, want 3\n%s", got, merged)
+	}
+}
+
+func decodeYAMLDocumentCount(t *testing.T, data []byte) int {
+	t.Helper()
+	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
+	count := 0
+	for {
+		var doc yaml.Node
+		err := decoder.Decode(&doc)
+		if err != nil {
+			if err == io.EOF {
+				return count
+			}
+			t.Fatalf("decode YAML document %d: %v", count+1, err)
+		}
+		count++
 	}
 }

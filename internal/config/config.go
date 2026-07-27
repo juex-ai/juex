@@ -523,10 +523,18 @@ func finalizeConfigLoadForValidation(cfg *Config, modelRef string, resolveAuth b
 	return finalizeConfigLoadWithAgentState(cfg, modelRef, resolveAuth, AgentStateNone)
 }
 
-func finalizeConfigLoadWithAgentState(cfg *Config, modelRef string, resolveAuth bool, agentStateMode AgentStateMode) error {
+func finalizeConfigLoadWithAgentState(
+	cfg *Config,
+	modelRef string,
+	resolveAuth bool,
+	agentStateMode AgentStateMode,
+) (loadErr error) {
 	if err := resolveRuntimeEnvironment(cfg); err != nil {
 		return err
 	}
+	defer func() {
+		loadErr = redactConfiguredEnvironmentError(cfg.EnvironmentSnapshot(), loadErr)
+	}()
 	if err := validateConfiguredFallbackModels(cfg); err != nil {
 		return err
 	}
@@ -550,6 +558,34 @@ func finalizeConfigLoadWithAgentState(cfg *Config, modelRef string, resolveAuth 
 		return err
 	}
 	return finalizeLoadedConfig(cfg, resolveAuth, agentStateMode)
+}
+
+type configuredEnvironmentError struct {
+	message string
+	err     error
+}
+
+func (e *configuredEnvironmentError) Error() string {
+	return e.message
+}
+
+func (e *configuredEnvironmentError) Unwrap() error {
+	return e.err
+}
+
+func redactConfiguredEnvironmentError(snapshot environment.Snapshot, err error) error {
+	if err == nil {
+		return nil
+	}
+	message := err.Error()
+	redacted, changed := snapshot.RedactConfiguredValues([]byte(message))
+	if !changed {
+		return err
+	}
+	return &configuredEnvironmentError{
+		message: string(redacted),
+		err:     err,
+	}
 }
 
 func finalizeLoadedConfig(cfg *Config, resolveAuth bool, agentStateMode AgentStateMode) error {

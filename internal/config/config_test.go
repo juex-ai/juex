@@ -130,6 +130,35 @@ func TestLoadWithOptionsDotenvPolicyAndProviderOverrides(t *testing.T) {
 	})
 }
 
+func TestLoadWithOptionsRedactsConfiguredValuesFromValidationErrors(t *testing.T) {
+	prepareConfigTest(t)
+	workDir := t.TempDir()
+	const configuredValue = "private-thinking-sentinel"
+	writeTextFile(t, filepath.Join(workDir, ".env"), "PROVIDER_THINKING_EFFORT="+configuredValue+"\n")
+	if err := os.Unsetenv("PROVIDER_THINKING_EFFORT"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
+	if err == nil {
+		t.Fatal("expected invalid configured thinking effort")
+	}
+	if strings.Contains(err.Error(), configuredValue) {
+		t.Fatalf("config error leaked configured value: %q", err)
+	}
+	if !strings.Contains(err.Error(), "[REDACTED_ENV]") ||
+		!strings.Contains(err.Error(), "PROVIDER_THINKING_EFFORT") {
+		t.Fatalf("config error = %q, want redacted provider context", err)
+	}
+	if got, ok := cfg.EnvironmentSnapshot().Lookup("PROVIDER_THINKING_EFFORT"); !ok || got != configuredValue {
+		t.Fatalf("partial config snapshot = %q, %v, want configured value retained internally", got, ok)
+	}
+	var redactedErr *configuredEnvironmentError
+	if !errors.As(err, &redactedErr) {
+		t.Fatalf("config error type = %T, want configuredEnvironmentError", err)
+	}
+}
+
 func TestLoadWithOptionsRejectsMalformedOrReservedEnvironment(t *testing.T) {
 	tests := []struct {
 		name       string

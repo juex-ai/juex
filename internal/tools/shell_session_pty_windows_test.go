@@ -117,6 +117,60 @@ func TestShellSessionConPTYReceivesExplicitEnvironment(t *testing.T) {
 	}
 }
 
+func TestShellSessionConPTYCapturesOutputAndAcceptsInput(t *testing.T) {
+	manager := NewShellSessionManager(context.Background())
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close shell session manager: %v", err)
+		}
+	})
+
+	env := append(os.Environ(),
+		"JUEX_FAKE_SHELL=1",
+		"JUEX_FAKE_SHELL_MODE=tty",
+	)
+	shell := fakeShellProfile()
+	started, err := manager.Start(ShellStartRequest{
+		Binary:          shell.Binary,
+		Args:            shell.Args,
+		Command:         "ignored",
+		Env:             env,
+		TTY:             true,
+		Yield:           time.Second,
+		MaxOutputTokens: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !started.Running {
+		t.Fatalf("ConPTY command exited before input: %+v", started)
+	}
+	for _, want := range []string{"stdin_tty:true", "stdout_tty:true", "stderr_tty:true", "enter value:"} {
+		if !strings.Contains(started.Output, want) {
+			t.Fatalf("ConPTY initial output = %q, want %q", started.Output, want)
+		}
+	}
+
+	completed, err := manager.Continue(ShellContinueRequest{
+		SessionID:       started.SessionID,
+		Stdin:           "green\n",
+		Yield:           10 * time.Second,
+		MaxOutputTokens: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Running {
+		t.Fatalf("ConPTY command still running after input: %+v", completed)
+	}
+	if completed.ExitCode == nil || *completed.ExitCode != 0 {
+		t.Fatalf("ConPTY exit code = %s, output = %q", formatTestExitCode(completed.ExitCode), completed.Output)
+	}
+	if !strings.Contains(completed.Output, "tty got:green") {
+		t.Fatalf("ConPTY continued output = %q, want echoed input", completed.Output)
+	}
+}
+
 func formatTestExitCode(code *int) string {
 	if code == nil {
 		return "<nil>"

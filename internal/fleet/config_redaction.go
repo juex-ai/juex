@@ -3,6 +3,7 @@ package fleet
 import (
 	"bytes"
 	"fmt"
+	"io"
 
 	"gopkg.in/yaml.v3"
 )
@@ -18,7 +19,7 @@ func RedactAgentConfig(state AgentConfig) (AgentConfig, error) {
 	if !state.Exists || state.Content == "" {
 		return state, nil
 	}
-	doc, variables, err := parseEnvironmentVariables([]byte(state.Content))
+	docs, variables, err := parseEnvironmentVariables([]byte(state.Content))
 	if err != nil {
 		return AgentConfig{}, fmt.Errorf("fleet: redact workspace config: %w", err)
 	}
@@ -39,7 +40,7 @@ func RedactAgentConfig(state AgentConfig) (AgentConfig, error) {
 	if err != nil {
 		return AgentConfig{}, fmt.Errorf("fleet: redact workspace config: %w", err)
 	}
-	data, err := marshalYAMLDocument(doc)
+	data, err := marshalYAMLDocuments(docs)
 	if err != nil {
 		return AgentConfig{}, fmt.Errorf("fleet: redact workspace config: %w", err)
 	}
@@ -48,7 +49,7 @@ func RedactAgentConfig(state AgentConfig) (AgentConfig, error) {
 }
 
 func mergeRedactedEnvironmentValues(content []byte, current AgentConfig) ([]byte, error) {
-	doc, variables, err := parseEnvironmentVariables(content)
+	docs, variables, err := parseEnvironmentVariables(content)
 	if err != nil || variables == nil {
 		return content, err
 	}
@@ -86,7 +87,7 @@ func mergeRedactedEnvironmentValues(content []byte, current AgentConfig) ([]byte
 	}
 	if !needsMerge {
 		if escapedLiteral {
-			return marshalYAMLDocument(doc)
+			return marshalYAMLDocuments(docs)
 		}
 		return content, nil
 	}
@@ -135,7 +136,7 @@ func mergeRedactedEnvironmentValues(content []byte, current AgentConfig) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	return marshalYAMLDocument(doc)
+	return marshalYAMLDocuments(docs)
 }
 
 func walkEnvironmentVariableValues(
@@ -206,22 +207,29 @@ func scalarEnvironmentValue(node *yaml.Node) (*yaml.Node, error) {
 	return node, nil
 }
 
-func parseEnvironmentVariables(data []byte) (*yaml.Node, *yaml.Node, error) {
-	var doc yaml.Node
+func parseEnvironmentVariables(data []byte) ([]*yaml.Node, *yaml.Node, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	if err := decoder.Decode(&doc); err != nil {
-		return nil, nil, err
+	var docs []*yaml.Node
+	for {
+		var doc yaml.Node
+		if err := decoder.Decode(&doc); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, nil, err
+		}
+		docs = append(docs, &doc)
 	}
-	if len(doc.Content) == 0 {
-		return &doc, nil, nil
+	if len(docs) == 0 || len(docs[0].Content) == 0 {
+		return docs, nil, nil
 	}
-	root := doc.Content[0]
+	root := docs[0].Content[0]
 	environmentNode, err := uniqueMappingValue(root, "environment")
 	if err != nil {
 		return nil, nil, err
 	}
 	if environmentNode == nil {
-		return &doc, nil, nil
+		return docs, nil, nil
 	}
 	variables, err := uniqueMappingValue(environmentNode, "variables")
 	if err != nil {
@@ -233,7 +241,7 @@ func parseEnvironmentVariables(data []byte) (*yaml.Node, *yaml.Node, error) {
 	if variables != nil && variables.Kind != yaml.MappingNode {
 		return nil, nil, fmt.Errorf("environment.variables must be a mapping")
 	}
-	return &doc, variables, nil
+	return docs, variables, nil
 }
 
 func uniqueMappingValue(node *yaml.Node, key string) (*yaml.Node, error) {
@@ -252,12 +260,14 @@ func uniqueMappingValue(node *yaml.Node, key string) (*yaml.Node, error) {
 	return value, nil
 }
 
-func marshalYAMLDocument(doc *yaml.Node) ([]byte, error) {
+func marshalYAMLDocuments(docs []*yaml.Node) ([]byte, error) {
 	var output bytes.Buffer
 	encoder := yaml.NewEncoder(&output)
 	encoder.SetIndent(2)
-	if err := encoder.Encode(doc); err != nil {
-		return nil, err
+	for _, doc := range docs {
+		if err := encoder.Encode(doc); err != nil {
+			return nil, err
+		}
 	}
 	if err := encoder.Close(); err != nil {
 		return nil, err
