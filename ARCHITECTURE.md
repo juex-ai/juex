@@ -925,9 +925,10 @@ summary plus its full message slice. `session.ListWithHistory(root,
 historyPath)` is the Web-oriented form: it reuses transcript-derived summaries
 from the Agent history index only while the canonical transcript modification
 time matches, reloads small session metadata directly, and reads cumulative
-usage backward from the event-journal tail. Missing or stale summaries fall
-back to the same strict disk scan as `List`. All three operations are
-read-only.
+usage backward from at most the latest 4 MiB of the event-journal tail. Usage
+fields that are absent from that bounded tail remain unset instead of forcing a
+full legacy-journal scan. Missing or stale transcript summaries fall back to
+the same strict disk scan as `List`. All three operations are read-only.
 
 ### 3.6 App + Runtime
 

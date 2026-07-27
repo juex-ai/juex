@@ -12,15 +12,26 @@ const reverseLineBlockBytes = 64 * 1024
 type reverseLineReader struct {
 	file   *os.File
 	offset int64
+	floor  int64
 	buf    []byte
 }
 
 func newReverseLineReader(file *os.File) (*reverseLineReader, error) {
+	return newBoundedReverseLineReader(file, 0)
+}
+
+// newBoundedReverseLineReader reads at most maxBytes from the end of file.
+// A non-positive limit keeps the original unbounded behavior.
+func newBoundedReverseLineReader(file *os.File, maxBytes int64) (*reverseLineReader, error) {
 	st, err := file.Stat()
 	if err != nil {
 		return nil, err
 	}
-	return &reverseLineReader{file: file, offset: st.Size()}, nil
+	floor := int64(0)
+	if maxBytes > 0 && st.Size() > maxBytes {
+		floor = st.Size() - maxBytes
+	}
+	return &reverseLineReader{file: file, offset: st.Size(), floor: floor}, nil
 }
 
 func (r *reverseLineReader) next() ([]byte, error) {
@@ -39,7 +50,13 @@ func (r *reverseLineReader) next() ([]byte, error) {
 			}
 			return line, nil
 		}
-		if r.offset == 0 {
+		if r.offset == r.floor {
+			// A bounded scan can begin in the middle of a line. Discard that
+			// partial prefix instead of treating it as an event.
+			if r.floor > 0 {
+				r.buf = nil
+				return nil, io.EOF
+			}
 			if len(r.buf) == 0 {
 				return nil, io.EOF
 			}
@@ -58,8 +75,8 @@ func (r *reverseLineReader) next() ([]byte, error) {
 		}
 
 		size := int64(reverseLineBlockBytes)
-		if r.offset < size {
-			size = r.offset
+		if available := r.offset - r.floor; available < size {
+			size = available
 		}
 		r.offset -= size
 		chunk := make([]byte, int(size))

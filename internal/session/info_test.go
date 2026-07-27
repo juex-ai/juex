@@ -88,6 +88,56 @@ func TestInfoDirFallsBackToDir(t *testing.T) {
 	}
 }
 
+func TestListWithHistoryBoundsLegacyJournalUsageScan(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(t.TempDir(), "history.json")
+	mtime := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	id := "20260727T120000-legacy01"
+	dir := makeSession(t, root, id,
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "legacy")},
+		mtime)
+	if err := RecordSession(historyPath, Info{
+		ID:           id,
+		Dir:          dir,
+		Kind:         KindPrimary,
+		StartedAt:    mtime,
+		LastActiveAt: mtime,
+		Turns:        1,
+		Preview:      "legacy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, eventsFile)
+	legacy := `{"type":"llm.responded","payload":{"context_usage":{"model":"legacy","total_tokens":7}}}` + "\n"
+	paddingLine := `{"type":"tool.output"}` + "\n"
+	padding := strings.Repeat(paddingLine, int(maxSessionUsageScanBytes/int64(len(paddingLine)))+1)
+	latest := `{"type":"llm.responded","payload":{"token_usage":{"input_tokens":10,"output_tokens":2}}}` + "\n"
+	if err := os.WriteFile(path, []byte(legacy+padding+latest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ListWithHistory(root, historyPath)
+	if err != nil {
+		t.Fatalf("ListWithHistory: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("sessions = %+v", got)
+	}
+	if got[0].TokenUsage != (llm.Usage{InputTokens: 10, OutputTokens: 2}) {
+		t.Fatalf("token usage = %+v", got[0].TokenUsage)
+	}
+	if got[0].ContextUsage != nil {
+		t.Fatalf("context usage = %+v, want nil for legacy journal", got[0].ContextUsage)
+	}
+	_, strictContextUsage, err := loadLatestSessionUsage(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strictContextUsage == nil || strictContextUsage.Model != "legacy" {
+		t.Fatalf("strict context usage = %+v, want legacy value", strictContextUsage)
+	}
+}
+
 func TestHasConversation(t *testing.T) {
 	if HasConversation("") {
 		t.Fatal("HasConversation(\"\") = true, want false")

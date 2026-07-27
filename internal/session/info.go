@@ -18,6 +18,11 @@ const idTimeLayout = "20060102T150405"
 
 const previewMaxRunes = 80
 
+// Session lists only need recent cumulative usage. Bounding the event tail
+// prevents legacy journals without context_usage from turning list requests
+// into full-file scans.
+const maxSessionUsageScanBytes = int64(maxEventLineBytes)
+
 // Info is a lightweight, read-only summary of a session on disk. It is
 // produced by List and LoadInfo and is safe to expose through the CLI
 // (no live file handles, no event subscription).
@@ -131,7 +136,7 @@ func cachedOrScannedInfo(dir, id string, recorded map[string]Info) (Info, error)
 		Turns:        cached.Turns,
 		Preview:      cached.Preview,
 	}
-	info.TokenUsage, info.ContextUsage, _ = loadLatestSessionUsage(dir)
+	info.TokenUsage, info.ContextUsage, _ = loadLatestSessionUsageWithin(dir, maxSessionUsageScanBytes)
 	return info, nil
 }
 
@@ -197,12 +202,16 @@ func loadInfoSummary(dir string) (Info, transcriptIndex, error) {
 }
 
 func loadLatestSessionUsage(dir string) (llm.Usage, *llm.ContextUsage, error) {
+	return loadLatestSessionUsageWithin(dir, 0)
+}
+
+func loadLatestSessionUsageWithin(dir string, maxBytes int64) (llm.Usage, *llm.ContextUsage, error) {
 	file, err := os.Open(filepath.Join(dir, eventsFile))
 	if err != nil {
 		return llm.Usage{}, nil, err
 	}
 	defer file.Close()
-	reader, err := newReverseLineReader(file)
+	reader, err := newBoundedReverseLineReader(file, maxBytes)
 	if err != nil {
 		return llm.Usage{}, nil, err
 	}

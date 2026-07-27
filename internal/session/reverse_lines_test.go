@@ -57,3 +57,30 @@ func TestReverseLineReaderRejectsOversizedLine(t *testing.T) {
 		t.Fatalf("error = %v, want errEventLineTooLong", err)
 	}
 }
+
+func TestBoundedReverseLineReaderDiscardsPartialPrefix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, []byte("outside\npartial-prefix\nlast"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	reader, err := newBoundedReverseLineReader(file, int64(len("prefix\nlast")))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	line, err := reader.next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(line) != "last" {
+		t.Fatalf("line = %q, want last", line)
+	}
+	if _, err := reader.next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("final error = %v, want EOF", err)
+	}
+}
