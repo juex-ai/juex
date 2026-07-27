@@ -150,6 +150,59 @@ func TestGetSessionsList_ReturnsSeededSession(t *testing.T) {
 	}
 }
 
+func TestGetSessionsListUsesRecordedTranscriptSummary(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260727T120000-cached01"
+	dir := filepath.Join(srv.opts.Cfg.SessionsDir(), id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mtime := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	convPath := filepath.Join(dir, "conversation.jsonl")
+	if err := os.WriteFile(convPath, []byte("not-json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(convPath, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.RecordSession(srv.opts.Cfg.HistoryPath(), session.Info{
+		ID:           id,
+		Dir:          "/stale/recorded/path",
+		Kind:         session.KindPrimary,
+		StartedAt:    mtime,
+		LastActiveAt: mtime,
+		Turns:        42,
+		Preview:      "cached preview",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d; body = %s", resp.StatusCode, body)
+	}
+	var parsed struct {
+		Sessions []session.Info `json:"sessions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Sessions) != 1 {
+		t.Fatalf("sessions = %+v", parsed.Sessions)
+	}
+	got := parsed.Sessions[0]
+	if got.ID != id || got.Dir != dir || got.Turns != 42 || got.Preview != "cached preview" {
+		t.Fatalf("session = %+v", got)
+	}
+}
+
 func TestGetSessionsList_ReturnsKindAndActive(t *testing.T) {
 	srv := newTestServer(t)
 	primaryID := "20260507T101010-primary1"

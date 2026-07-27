@@ -71,7 +71,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
-	infos, err := session.List(s.opts.Cfg.SessionsDir())
+	infos, err := session.ListWithHistory(s.opts.Cfg.SessionsDir(), s.opts.Cfg.HistoryPath())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
