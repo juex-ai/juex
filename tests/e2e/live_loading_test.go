@@ -21,7 +21,6 @@ import (
 
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/endpoint"
-	"github.com/juex-ai/juex/internal/observable"
 )
 
 // TestLiveBinary_LoadsSkillsAndMCP builds the real `juex` binary, points
@@ -462,53 +461,25 @@ func TestLiveBinary_BundleCreatesRedactedArchive(t *testing.T) {
 	}
 }
 
-func TestLiveBinary_MigratesAndRebindsAgentState(t *testing.T) {
+func TestLiveBinary_IgnoresWorkspaceStateAndRebindsAgent(t *testing.T) {
 	bin := buildJuex(t)
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(chatCompletionResponse("migration-ok")))
+		_, _ = w.Write([]byte(chatCompletionResponse("state-ok")))
 	}))
 	defer provider.Close()
+
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	work := filepath.Join(root, "workspace")
-	sessionID := "20260717T120000-migrate1"
-	legacySession := filepath.Join(work, ".juex", "sessions", sessionID)
-	observationTime := time.Date(2026, 7, 18, 8, 0, 0, 0, time.UTC)
-	legacyObservableRoot := filepath.Join(work, ".juex", "observables")
-	observation := observable.ObservationRecord{
-		ID:            "obs-live-migration",
-		ObservableID:  "daily-brief",
-		SourceEventID: "schedule:daily-brief:2026-07-18T08:00:00Z",
-		Kind:          "reminder",
-		Severity:      "info",
-		WindowStart:   observationTime,
-		WindowEnd:     observationTime,
-		Content:       "migrated daily brief",
-		OriginalChars: 20,
-		State:         observable.ObservationStateDelivered,
-		TargetSession: sessionID,
-		CreatedAt:     observationTime,
-		DeliveredAt:   observationTime.Add(time.Second),
-	}
-	observationData, err := json.Marshal(observation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scheduleStateData, err := json.Marshal(observable.ScheduleStateRecord{
-		ObservableID:           observation.ObservableID,
-		LastEvaluatedAt:        observationTime,
-		LastEmittedScheduledAt: observationTime,
-		UpdatedAt:              observationTime,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for path, body := range map[string]string{
-		filepath.Join(legacySession, "conversation.jsonl"):  `{"role":"user","blocks":[{"type":"text","text":"migrated"}]}` + "\n",
-		filepath.Join(work, ".juex", "memory", "MEMORY.md"): "# migrated memory\n",
-		filepath.Join(work, ".juex", "history.json"):        "{\"sessions\":[]}\n",
-		filepath.Join(work, ".juex", "juex.yaml"): strings.ReplaceAll(`model: local-chat:chat-test
+	staleSessionID := "20260717T120000-stale001"
+	workspaceFiles := map[string]string{
+		filepath.Join("sessions", staleSessionID, "conversation.jsonl"): `{"id":"stale-message","role":"user","blocks":[{"type":"text","text":"workspace state"}]}` + "\n",
+		filepath.Join("memory", "MEMORY.md"):                            "# workspace memory\n",
+		"history.json":                                                  `{"sessions":[{"id":"20260717T120000-stale001"}]}` + "\n",
+		filepath.Join("logs", "listen.log"):                             "workspace log\n",
+		filepath.Join("observables", "observations.jsonl"):              `{"id":"workspace-observation"}` + "\n",
+		"juex.yaml": strings.ReplaceAll(`model: local-chat:chat-test
 providers:
   - id: local-chat
     protocol: openai/chat
@@ -519,10 +490,10 @@ providers:
     models:
       - id: chat-test
 `, "BASE_URL", provider.URL),
-		filepath.Join(work, ".juex", "observables.json"):            "{\"observables\":[]}\n",
-		filepath.Join(legacyObservableRoot, "observations.jsonl"):   string(observationData) + "\n",
-		filepath.Join(legacyObservableRoot, "schedule_state.jsonl"): string(scheduleStateData) + "\n",
-	} {
+		"observables.json": "{\"observables\":[]}\n",
+	}
+	for rel, body := range workspaceFiles {
+		path := filepath.Join(work, ".juex", rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -531,17 +502,24 @@ providers:
 		}
 	}
 
-	stdout, stderr, err := runAgentStateCommand(bin, home, work, "run", "--json", "migrate legacy state")
+	stdout, stderr, err := runAgentStateCommand(bin, home, work, "run", "--json", "create isolated agent state")
 	if err != nil {
-		t.Fatalf("stateful run after migration: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		t.Fatalf("stateful run: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	if !strings.Contains(stderr, "migrated workspace runtime state") {
-		t.Fatalf("migration output missing evidence\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	var runResult struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &runResult); err != nil {
+		t.Fatalf("parse run output: %v\n%s", err, stdout)
+	}
+	if runResult.SessionID == "" || runResult.SessionID == staleSessionID {
+		t.Fatalf("run result = %+v, want a fresh agent-owned session", runResult)
 	}
 	stdout, stderr, err = runAgentStateCommand(bin, home, work, "sessions", "list")
-	if err != nil || !strings.Contains(stdout, sessionID) {
-		t.Fatalf("sessions list after migration: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	if err != nil || !strings.Contains(stdout, runResult.SessionID) || strings.Contains(stdout, staleSessionID) {
+		t.Fatalf("sessions list after run: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
+
 	var marker struct {
 		AgentID string `json:"agent_id"`
 	}
@@ -554,66 +532,24 @@ providers:
 	}
 	agentDir := filepath.Join(home, "agents", marker.AgentID)
 	for _, path := range []string{
-		filepath.Join(agentDir, "sessions", sessionID, "conversation.jsonl"),
-		filepath.Join(agentDir, "memory", "MEMORY.md"),
+		filepath.Join(agentDir, "sessions", runResult.SessionID, "conversation.jsonl"),
 		filepath.Join(agentDir, "history.json"),
-		filepath.Join(agentDir, "observables", "observations.jsonl"),
-		filepath.Join(agentDir, "observables", "schedule_state.jsonl"),
-		filepath.Join(work, ".juex", "juex.yaml"),
-		filepath.Join(work, ".juex", "observables.json"),
 	} {
 		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("expected migrated or retained path %s: %v", path, err)
+			t.Fatalf("expected agent-owned path %s: %v", path, err)
 		}
 	}
-	for _, path := range []string{
-		filepath.Join(work, ".juex", "sessions"),
-		filepath.Join(work, ".juex", "memory"),
-		filepath.Join(work, ".juex", "history.json"),
-		filepath.Join(work, ".juex", "observables"),
+	for _, rel := range []string{
+		filepath.Join("sessions", staleSessionID, "conversation.jsonl"),
+		filepath.Join("memory", "MEMORY.md"),
+		filepath.Join("logs", "listen.log"),
+		filepath.Join("observables", "observations.jsonl"),
 	} {
-		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("legacy state remains at %s: %v", path, err)
+		if _, err := os.Stat(filepath.Join(agentDir, rel)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("workspace state unexpectedly copied to %s: %v", rel, err)
 		}
 	}
-	observationStore := observable.NewStore(filepath.Join(agentDir, "observables"), observable.StoreOptions{})
-	migratedObservation, ok, err := observationStore.Observation(observation.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || migratedObservation.State != observable.ObservationStateDelivered ||
-		migratedObservation.SourceEventID != observation.SourceEventID ||
-		migratedObservation.TargetSession != sessionID {
-		t.Fatalf("migrated observation = %+v ok=%v", migratedObservation, ok)
-	}
-	existing, created, err := observationStore.RecordObservationOnce(observable.ObservationRecord{
-		ID:            "duplicate-live-migration",
-		ObservableID:  observation.ObservableID,
-		SourceEventID: observation.SourceEventID,
-		Content:       "must not be appended",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if created || existing.ID != observation.ID || existing.State != observable.ObservationStateDelivered {
-		t.Fatalf("migrated dedupe = %+v created=%v", existing, created)
-	}
-	observations, err := observationStore.ListObservations(observable.ObservationFilter{ObservableID: observation.ObservableID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(observations) != 1 {
-		t.Fatalf("observations after migrated dedupe = %+v", observations)
-	}
-	scheduleStates, err := observationStore.LatestScheduleStates()
-	if err != nil {
-		t.Fatal(err)
-	}
-	scheduleState, ok := scheduleStates[observation.ObservableID]
-	if !ok || !scheduleState.LastEvaluatedAt.Equal(observationTime) ||
-		!scheduleState.LastEmittedScheduledAt.Equal(observationTime) {
-		t.Fatalf("migrated schedule state = %+v ok=%v", scheduleState, ok)
-	}
+	assertE2EWorkspaceFiles(t, work, workspaceFiles)
 
 	moved := filepath.Join(root, "moved-workspace")
 	if err := os.Rename(work, moved); err != nil {
@@ -628,16 +564,10 @@ providers:
 		t.Fatalf("move output missing evidence\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 	stdout, stderr, err = runAgentStateCommand(bin, home, moved, "sessions", "list")
-	if err != nil || !strings.Contains(stdout, sessionID) {
+	if err != nil || !strings.Contains(stdout, runResult.SessionID) {
 		t.Fatalf("sessions list after stateful rebind: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	if _, err := os.Stat(filepath.Join(moved, ".juex", "observables.json")); err != nil {
-		t.Fatalf("moved workspace observable config: %v", err)
-	}
-	movedObservation, ok, err := observationStore.Observation(observation.ID)
-	if err != nil || !ok || movedObservation.SourceEventID != observation.SourceEventID {
-		t.Fatalf("observation after move = %+v ok=%v err=%v", movedObservation, ok, err)
-	}
+	assertE2EWorkspaceFiles(t, moved, workspaceFiles)
 
 	copied := filepath.Join(root, "copied-workspace")
 	if err := os.MkdirAll(filepath.Join(copied, ".juex"), 0o755); err != nil {
@@ -652,6 +582,19 @@ providers:
 	}
 	if !strings.Contains(stderr, "appears to be a copy") || !strings.Contains(stderr, "remove") {
 		t.Fatalf("copy error is not actionable:\n%s", stderr)
+	}
+}
+
+func assertE2EWorkspaceFiles(t *testing.T, work string, files map[string]string) {
+	t.Helper()
+	for rel, want := range files {
+		data, err := os.ReadFile(filepath.Join(work, ".juex", rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != want {
+			t.Fatalf("workspace state %s = %q, want %q", rel, data, want)
+		}
 	}
 }
 

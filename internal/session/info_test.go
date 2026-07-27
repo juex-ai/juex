@@ -2,8 +2,10 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,7 +27,10 @@ func makeSession(t *testing.T, root, id string, msgs []llm.Message, mtime time.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range msgs {
+	for i, m := range msgs {
+		if m.ID == "" {
+			m.ID = fmt.Sprintf("m%d", i+1)
+		}
 		buf, err := json.Marshal(m)
 		if err != nil {
 			t.Fatal(err)
@@ -69,15 +74,15 @@ func writeEvents(t *testing.T, dir string, evs []events.Event) {
 }
 
 func TestInfoDirPrefersID(t *testing.T) {
-	got := InfoDir("/sessions", Info{ID: "abc", Dir: "/legacy"})
+	got := InfoDir("/sessions", Info{ID: "abc", Dir: "/recorded"})
 	if got != filepath.Join("/sessions", "abc") {
 		t.Fatalf("InfoDir = %q, want canonical ID path", got)
 	}
 }
 
 func TestInfoDirFallsBackToDir(t *testing.T) {
-	got := InfoDir("/sessions", Info{Dir: "/legacy"})
-	if got != "/legacy" {
+	got := InfoDir("/sessions", Info{Dir: "/recorded"})
+	if got != "/recorded" {
 		t.Fatalf("InfoDir = %q, want recorded dir", got)
 	}
 }
@@ -243,6 +248,28 @@ func TestList_SkipsDirsWithoutConversationJSONL(t *testing.T) {
 	}
 }
 
+func TestListRejectsMessageWithoutID(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "20260515T010203-missingid")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, conversationFile)
+	if err := os.WriteFile(path, []byte(`{"role":"user","blocks":[]}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := List(root)
+	if err == nil {
+		t.Fatal("List accepted a message without an id")
+	}
+	for _, want := range []string{path, ":1", "manually add a unique non-empty \"id\"", "internal/session/transcript_repair.go"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("List error = %q, want %q", err, want)
+		}
+	}
+}
+
 func TestList_ReturnsEmptyWhenRootMissing(t *testing.T) {
 	got, err := List(filepath.Join(t.TempDir(), "does-not-exist"))
 	if err != nil {
@@ -282,7 +309,7 @@ func TestLoadInfo_NormalizesNullBlocks(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(`{"role":"assistant","blocks":null}`+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(`{"id":"m1","role":"assistant","blocks":null}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -298,9 +325,12 @@ func TestLoadInfo_NormalizesNullBlocks(t *testing.T) {
 	}
 }
 
-func TestLoadInfo_NormalizesLegacyIDsAndPreservesCompactionMetadata(t *testing.T) {
+func TestLoadInfo_PreservesStoredIDsAndCompactionMetadata(t *testing.T) {
 	root := t.TempDir()
+	user := llm.TextMessage(llm.RoleUser, "recorded")
+	user.ID = "m1"
 	compact := compactTestMessage("old context summary")
+	compact.ID = "m2"
 	compact.Compaction = &llm.CompactionMetadata{
 		Auto:               true,
 		Reason:             "auto",
@@ -311,15 +341,15 @@ func TestLoadInfo_NormalizesLegacyIDsAndPreservesCompactionMetadata(t *testing.T
 		SummaryModel:       "mock",
 	}
 	dir := makeSession(t, root, "20260515T010203-meta0001",
-		[]llm.Message{llm.TextMessage(llm.RoleUser, "legacy"), compact},
+		[]llm.Message{user, compact},
 		time.Now())
 
 	_, msgs, err := LoadInfo(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if msgs[0].ID != "legacy-000001" || msgs[1].ID != "legacy-000002" {
-		t.Fatalf("legacy IDs = %q, %q", msgs[0].ID, msgs[1].ID)
+	if msgs[0].ID != "m1" || msgs[1].ID != "m2" {
+		t.Fatalf("message IDs = %q, %q", msgs[0].ID, msgs[1].ID)
 	}
 	if msgs[1].Compaction == nil || msgs[1].Compaction.TokensBefore != 100 || msgs[1].Compaction.TailStartMessageID != "m2" {
 		t.Fatalf("compaction metadata = %+v", msgs[1].Compaction)

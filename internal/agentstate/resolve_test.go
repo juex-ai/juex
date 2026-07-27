@@ -1,7 +1,6 @@
 package agentstate
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -10,9 +9,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
-
-	"github.com/juex-ai/juex/internal/endpoint"
 )
 
 func TestResolveCreatesAndReusesWorkspaceIdentity(t *testing.T) {
@@ -160,224 +156,65 @@ func TestResolveRejectsCopiedWorkspace(t *testing.T) {
 	}
 }
 
-func TestResolveMigratesLegacyStateAndPreservesWorkspaceConfig(t *testing.T) {
+func TestResolveIgnoresWorkspaceRuntimeState(t *testing.T) {
 	home, workDir := prepareResolveTest(t)
-	legacyDir := filepath.Join(workDir, ".juex")
-	legacyObservation, observationBody, artifactBody := writeLegacyObservationFixture(t, filepath.Join(legacyDir, "observables"))
-	writeText(t, filepath.Join(legacyDir, "sessions", "s1", "conversation.jsonl"), "{\"role\":\"user\"}\n")
-	writeText(t, filepath.Join(legacyDir, "memory", "MEMORY.md"), "# durable\n")
-	writeText(t, filepath.Join(legacyDir, "history.json"), "{\"sessions\":[]}\n")
-	writeText(t, filepath.Join(legacyDir, "logs", "serve.log"), "ready\n")
-	writeText(t, filepath.Join(legacyDir, "juex.yaml"), "model: local:test\n")
-	writeText(t, filepath.Join(legacyDir, "observables.json"), "[]\n")
-	writeText(t, filepath.Join(legacyDir, "artifacts", "keep.txt"), "workspace-local\n")
+	workspaceStateDir := filepath.Join(workDir, ".juex")
+	files := map[string]string{
+		filepath.Join("sessions", "s1", "conversation.jsonl"): "{\"id\":\"m1\",\"role\":\"user\"}\n",
+		filepath.Join("memory", "MEMORY.md"):                  "# workspace state\n",
+		"history.json":                                        "{\"sessions\":[{\"id\":\"s1\"}]}\n",
+		filepath.Join("logs", "listen.log"):                   "ready\n",
+		filepath.Join("observables", "observations.jsonl"):    "{\"id\":\"o1\"}\n",
+		"juex.yaml":                            "model: local:test\n",
+		"observables.json":                     "[]\n",
+		filepath.Join("artifacts", "keep.txt"): "workspace-local\n",
+	}
+	for rel, body := range files {
+		writeText(t, filepath.Join(workspaceStateDir, rel), body)
+	}
 
 	resolved, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for rel, want := range map[string]string{
-		filepath.Join("sessions", "s1", "conversation.jsonl"): "{\"role\":\"user\"}\n",
-		filepath.Join("memory", "MEMORY.md"):                  "# durable\n",
-		"history.json":                                        "{\"sessions\":[]}\n",
-		filepath.Join("logs", "serve.log"):                    "ready\n",
-		filepath.Join("observables", "observations.jsonl"):    observationBody,
-		filepath.Join("observables", "artifacts", legacyObservation.ObservableID, legacyObservation.ID+".txt"): artifactBody,
+	for rel, body := range files {
+		assertText(t, filepath.Join(workspaceStateDir, rel), body)
+	}
+	for _, rel := range []string{
+		filepath.Join("sessions", "s1", "conversation.jsonl"),
+		filepath.Join("memory", "MEMORY.md"),
+		filepath.Join("logs", "listen.log"),
+		filepath.Join("observables", "observations.jsonl"),
 	} {
-		assertText(t, filepath.Join(resolved.Address.StateDir(), rel), want)
-		if _, err := os.Lstat(filepath.Join(legacyDir, rel)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("legacy %s still exists or stat failed: %v", rel, err)
+		if _, err := os.Lstat(filepath.Join(resolved.Address.StateDir(), rel)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("agent state unexpectedly contains %s: %v", rel, err)
 		}
 	}
-	for _, rel := range []string{"juex.yaml", "observables.json", filepath.Join("artifacts", "keep.txt")} {
-		assertFile(t, filepath.Join(legacyDir, rel))
+	assertText(t, filepath.Join(resolved.Address.StateDir(), "history.json"), "{\"sessions\":[]}\n")
+	if len(resolved.Notices) != 0 {
+		t.Fatalf("resolution notices = %v, want none", resolved.Notices)
 	}
-	if len(resolved.Notices) != 1 || !strings.Contains(resolved.Notices[0], "migrated") {
-		t.Fatalf("migration notices = %v", resolved.Notices)
-	}
-
-	wantArtifact := filepath.Join(resolved.Address.StateDir(), "observables", "artifacts", legacyObservation.ObservableID, legacyObservation.ID+".txt")
-	assertText(t, wantArtifact, artifactBody)
 }
 
-func TestResolveMigratesLegacyStateForExistingIdentity(t *testing.T) {
+func TestResolveExistingIdentityIgnoresWorkspaceRuntimeState(t *testing.T) {
 	home, workDir := prepareResolveTest(t)
 	first, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacyRoot := filepath.Join(workDir, ".juex", "observables")
-	record, _, artifactBody := writeLegacyObservationFixture(t, legacyRoot)
-	writeText(t, filepath.Join(workDir, ".juex", "observables.json"), "[]\n")
+	workspacePath := filepath.Join(workDir, ".juex", "observables", "observations.jsonl")
+	writeText(t, workspacePath, "{\"id\":\"o1\"}\n")
 
-	upgraded, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
+	second, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if upgraded.Agent.ID != first.Agent.ID || len(upgraded.Notices) != 1 ||
-		!strings.Contains(upgraded.Notices[0], "migrated") {
-		t.Fatalf("upgrade resolution = %+v", upgraded)
+	if second.Agent.ID != first.Agent.ID || len(second.Notices) != 0 {
+		t.Fatalf("second resolution = %+v, want same identity without notices", second)
 	}
-	if _, err := os.Stat(legacyRoot); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy observable state remains: %v", err)
-	}
-	assertFile(t, filepath.Join(workDir, ".juex", "observables.json"))
-	var got legacyObservationRecord
-	data, err := os.ReadFile(filepath.Join(first.Address.StateDir(), "observables", "observations.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(data[:len(data)-1], &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.ID != record.ID || got.SourceEventID != record.SourceEventID || got.State != "delivered" {
-		t.Fatalf("migrated observation = %+v", got)
-	}
-	assertText(t, filepath.Join(first.Address.StateDir(), "observables", "artifacts", record.ObservableID, record.ID+".txt"), artifactBody)
-
-	repeated, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(repeated.Notices) != 0 {
-		t.Fatalf("idempotent upgrade notices = %v", repeated.Notices)
-	}
-}
-
-func TestResolvePreservesConflictingLegacyStateForExistingIdentity(t *testing.T) {
-	home, workDir := prepareResolveTest(t)
-	first, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyPath := filepath.Join(workDir, ".juex", "observables", "observations.jsonl")
-	agentPath := filepath.Join(first.Address.StateDir(), "observables", "observations.jsonl")
-	writeText(t, legacyPath, "{\"id\":\"legacy\"}\n")
-	writeText(t, agentPath, "{\"id\":\"agent\"}\n")
-
-	_, err = Resolve(Options{HomeDir: home, WorkDir: workDir})
-	if err == nil || !strings.Contains(err.Error(), "differs") {
-		t.Fatalf("Resolve error = %v, want conflicting state error", err)
-	}
-	assertText(t, legacyPath, "{\"id\":\"legacy\"}\n")
-	assertText(t, agentPath, "{\"id\":\"agent\"}\n")
-}
-
-func TestResolveBlocksExistingIdentityMigrationWhileAgentIsRunning(t *testing.T) {
-	home, workDir := prepareResolveTest(t)
-	first, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyPath := filepath.Join(workDir, ".juex", "observables", "observations.jsonl")
-	writeText(t, legacyPath, "{\"id\":\"legacy\"}\n")
-	binding, err := endpoint.Listen(context.Background(), first.Address, "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = binding.Close() }()
-
-	_, err = Resolve(Options{HomeDir: home, WorkDir: workDir})
-	var running *endpoint.AgentAlreadyRunningError
-	if !errors.As(err, &running) {
-		t.Fatalf("Resolve error = %T %v, want AgentAlreadyRunningError", err, err)
-	}
-	assertText(t, legacyPath, "{\"id\":\"legacy\"}\n")
+	assertText(t, workspacePath, "{\"id\":\"o1\"}\n")
 	if _, err := os.Stat(filepath.Join(first.Address.StateDir(), "observables")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("agent observable state exists after blocked migration: %v", err)
-	}
-}
-
-func TestResolveMigratesSymlinkWithoutFollowingIt(t *testing.T) {
-	if os.PathSeparator == '\\' {
-		t.Skip("symlink creation is not generally available to unprivileged Windows tests")
-	}
-	home, workDir := prepareResolveTest(t)
-	target := filepath.Join(workDir, "shared-memory.md")
-	writeText(t, target, "# shared\n")
-	legacyLink := filepath.Join(workDir, ".juex", "memory", "shared.md")
-	if err := os.MkdirAll(filepath.Dir(legacyLink), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	linkTarget := filepath.Join("..", "..", "shared-memory.md")
-	if err := os.Symlink(linkTarget, legacyLink); err != nil {
-		t.Fatal(err)
-	}
-
-	resolved, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	migratedLink := filepath.Join(resolved.Address.StateDir(), "memory", "shared.md")
-	info, err := os.Lstat(migratedLink)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("%s mode = %s, want symlink", migratedLink, info.Mode())
-	}
-	gotTarget, err := os.Readlink(migratedLink)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotTarget != linkTarget {
-		t.Fatalf("symlink target = %q, want %q", gotTarget, linkTarget)
-	}
-}
-
-func TestResolveMigratesReadOnlyDirectoryAndPreservesMode(t *testing.T) {
-	if os.PathSeparator == '\\' {
-		t.Skip("Windows does not enforce Unix directory permission bits")
-	}
-	home, workDir := prepareResolveTest(t)
-	legacyDir := filepath.Join(workDir, ".juex", "memory", "readonly")
-	legacyFile := filepath.Join(legacyDir, "note.md")
-	writeText(t, legacyFile, "# retained\n")
-	if err := os.Chmod(legacyDir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(legacyDir, 0o755) })
-
-	resolved, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	migratedDir := filepath.Join(resolved.Address.StateDir(), "memory", "readonly")
-	t.Cleanup(func() { _ = os.Chmod(migratedDir, 0o755) })
-	assertText(t, filepath.Join(migratedDir, "note.md"), "# retained\n")
-	info, err := os.Stat(migratedDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := info.Mode().Perm(); got != 0o555 {
-		t.Fatalf("migrated directory mode = %o, want 555", got)
-	}
-}
-
-func TestResolvePreservesLegacyStateWhenVerificationFails(t *testing.T) {
-	home, workDir := prepareResolveTest(t)
-	legacyPath := filepath.Join(workDir, ".juex", "memory", "MEMORY.md")
-	writeText(t, legacyPath, "keep me\n")
-	originalVerify := verifyCopiedTree
-	verifyCopiedTree = func(_, _ string) error {
-		return errors.New("injected verification failure")
-	}
-	t.Cleanup(func() { verifyCopiedTree = originalVerify })
-
-	_, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
-	if err == nil || !strings.Contains(err.Error(), "injected verification failure") {
-		t.Fatalf("err = %v, want verification failure", err)
-	}
-	assertFile(t, legacyPath)
-	if _, err := os.Stat(filepath.Join(workDir, ".juex", "juex.local.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("marker exists after failed migration: %v", err)
-	}
-	entries, err := os.ReadDir(filepath.Join(home, "agents"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("agent registry entries after rollback = %v", entries)
+		t.Fatalf("workspace observable state unexpectedly copied: %v", err)
 	}
 }
 
@@ -537,55 +374,6 @@ func readJSONTest(t *testing.T, path string, value any) {
 	if err := json.Unmarshal(data, value); err != nil {
 		t.Fatal(err)
 	}
-}
-
-type legacyObservationRecord struct {
-	ID            string `json:"id"`
-	ObservableID  string `json:"observable_id"`
-	SourceEventID string `json:"source_event_id"`
-	Kind          string `json:"kind"`
-	Severity      string `json:"severity"`
-	WindowStart   int64  `json:"window_start"`
-	WindowEnd     int64  `json:"window_end"`
-	Content       string `json:"content"`
-	OriginalChars int    `json:"original_chars"`
-	Truncated     bool   `json:"truncated"`
-	ArtifactPath  string `json:"artifact_path"`
-	State         string `json:"state"`
-	TargetSession string `json:"target_session"`
-	CreatedAt     int64  `json:"created_at"`
-	DeliveredAt   int64  `json:"delivered_at"`
-}
-
-func writeLegacyObservationFixture(t *testing.T, root string) (legacyObservationRecord, string, string) {
-	t.Helper()
-	createdAt := time.Date(2026, 7, 18, 8, 0, 0, 0, time.UTC)
-	record := legacyObservationRecord{
-		ID:            "obs-migrated",
-		ObservableID:  "schedule-migrated",
-		SourceEventID: "schedule:schedule-migrated:2026-07-18T08:00:00Z",
-		Kind:          "reminder",
-		Severity:      "info",
-		WindowStart:   createdAt.UnixMilli(),
-		WindowEnd:     createdAt.UnixMilli(),
-		Content:       "migrated preview",
-		OriginalChars: 128,
-		Truncated:     true,
-		ArtifactPath:  filepath.Join(root, "artifacts", "schedule-migrated", "obs-migrated.txt"),
-		State:         "delivered",
-		TargetSession: "session-migrated",
-		CreatedAt:     createdAt.UnixMilli(),
-		DeliveredAt:   createdAt.Add(time.Second).UnixMilli(),
-	}
-	data, err := json.Marshal(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(data) + "\n"
-	artifactBody := strings.Repeat("migrated full observation ", 8)
-	writeText(t, filepath.Join(root, "observations.jsonl"), body)
-	writeText(t, record.ArtifactPath, artifactBody)
-	return record, body, artifactBody
 }
 
 func writeText(t *testing.T, path, body string) {

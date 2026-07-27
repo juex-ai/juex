@@ -46,7 +46,7 @@ juex/
 │   │   ├── slash.go
 │   │   ├── turn_admission.go
 │   │   └── turn_admission_queue.go
-│   ├── agentstate/               # resident/ephemeral identity, marker, registry, address, migration
+│   ├── agentstate/               # resident/ephemeral identity, marker, registry, address
 │   ├── artifact/                 # safe workspace artifact storage and integrity verification
 │   ├── usermedia/                # session-scoped image upload and media reference policy
 │   ├── eventmedia/               # external-event attachment validation and artifact admission
@@ -183,7 +183,7 @@ implementation decisions live.
 
 | Module | Owns | Does not own |
 | --- | --- | --- |
-| `internal/agentstate` | Resident and Ephemeral Agent identity, Workspace markers and registry records, Agent Address construction, workspace rebind/copy detection, legacy state migration, registry-boundary deletion | Home-store filesystem mechanics, runtime endpoint behavior, Fleet lifecycle, Session contents |
+| `internal/agentstate` | Resident and Ephemeral Agent identity, Workspace markers and registry records, Agent Address construction, workspace rebind/copy detection, registry-boundary deletion | Home-store filesystem mechanics, runtime endpoint behavior, Fleet lifecycle, Session contents |
 | `internal/homestore` | Portable advisory locks, home lock-path layout, crash-safe atomic file replacement, directory sync | Agent identity, endpoint ownership, Fleet policy, multi-file service transactions |
 | `internal/endpoint` | Local endpoint binding, endpoint URI parsing/dialing, exact runtime identity publication/probing, instance-bound shutdown, endpoint maintenance guard | HTTP routes, Agent Address construction, Fleet registry state, process spawning |
 | `internal/fleet` | Registry-wide binding and health projection, per-Agent lifecycle locking, reconciliation, detached Agent start/stop/restart, logs, config replacement orchestration, intentional removal and GC policy | Browser routes/DTOs, native service registration, endpoint schemes, arbitrary user-authored Workspace content |
@@ -922,9 +922,6 @@ and `repl`.
 `session.List(root)` returns a time-sorted summary of every session
 directory under `root`; `session.LoadInfo(dir)` returns one session's
 summary plus its full message slice. Both are read-only.
-The agent-home `history.json` reads legacy `{sessions, last}` files by
-migrating `last` to `active`; subsequent writes omit `last`.
-
 ### 3.6 App + Runtime
 
 ```go
@@ -2082,19 +2079,8 @@ name is a startup error. Extension-provided MCP server, skill, or hook names
 must not collide with existing resources or another extension. Runtime status
 reports extension resources as `ext:<name>`.
 
-**Migration:** on the first stateful `mint` resolution, legacy workspace-local
-`.juex/sessions`,
-`.juex/memory`, `.juex/history.json`, `.juex/logs`, and `.juex/observables`
-are copied into staged agent state, verified by manifest and SHA-256,
-atomically published, then removed from the workspace. Existing agent
-identities perform the same migration per missing state entry while holding
-the endpoint maintenance guard; a published entry with failed cleanup is
-verified and cleaned on the next resolution. Configuration,
-`.juex/observables.json`, artifacts, and extensions remain workspace-local.
 The workspace marker is globally ignored through Git's user excludes file,
-never by editing project `.gitignore`.
-
-Read-only `existing` resolution never runs this migration. It also never
+never by editing project `.gitignore`. Read-only `existing` resolution never
 performs moved-workspace rebinding; a normal `run`, `repl`, or `listen` owns
 that write before read-only commands retry.
 

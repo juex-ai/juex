@@ -35,7 +35,6 @@ type metadata struct {
 type History struct {
 	Sessions []Info `json:"sessions"`
 	Active   *Info  `json:"active,omitempty"`
-	Last     *Info  `json:"last,omitempty"`
 }
 
 func SetAlias(dir, alias string) error {
@@ -327,7 +326,6 @@ func upsertHistorySession(h *History, info Info) {
 }
 
 func writeHistory(path string, h History) error {
-	h.Last = nil
 	h = normalizeHistory(h)
 	payload := struct {
 		Active   *Info  `json:"active,omitempty"`
@@ -350,11 +348,6 @@ func normalizeHistory(h History) History {
 	}
 	for i := range h.Sessions {
 		h.Sessions[i] = normalizeInfo(h.Sessions[i])
-	}
-	if h.Active == nil && h.Last != nil {
-		active := normalizeInfo(*h.Last)
-		active.Kind = KindPrimary
-		h.Active = &active
 	}
 	if h.Active != nil {
 		active := normalizeInfo(*h.Active)

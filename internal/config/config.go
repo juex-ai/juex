@@ -315,9 +315,7 @@ func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
 			c.ShowBuiltinHookTraces = enabled
 			c.ShowBuiltinHookTracesSet = true
 		default:
-			// Legacy runtime budget keys were accepted before runtime had
-			// configurable policy; keep ignoring unknown runtime keys so old
-			// workspace configs do not fail to load.
+			return fmt.Errorf("field runtime.%s not found", key)
 		}
 	}
 	return nil

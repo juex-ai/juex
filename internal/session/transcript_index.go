@@ -59,7 +59,10 @@ func scanTranscriptIndex(path string) (transcriptIndex, error) {
 				if err := json.Unmarshal(line, &msg); err != nil {
 					return transcriptIndex{}, fmt.Errorf("session: parse %s:%d: %w", path, lineIndex+1, err)
 				}
-				msg = normalizeLoadedMessage(msg, lineIndex)
+				msg, err = normalizeLoadedMessage(path, lineIndex+1, msg)
+				if err != nil {
+					return transcriptIndex{}, err
+				}
 				idx.add(msg, lineIndex, entryOffset, len(line))
 			}
 			lineIndex++
@@ -217,7 +220,11 @@ func readTranscriptMessages(path string, entries []transcriptIndexEntry) ([]llm.
 		if err := json.Unmarshal(buf, &msg); err != nil {
 			return nil, fmt.Errorf("session: parse %s:%d: %w", path, entry.LineIndex+1, err)
 		}
-		out = append(out, normalizeLoadedMessage(msg, entry.LineIndex))
+		msg, err = normalizeLoadedMessage(path, entry.LineIndex+1, msg)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, msg)
 	}
 	return out, nil
 }

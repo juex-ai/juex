@@ -2216,8 +2216,8 @@ func TestNew_ResumeDirReusesExistingSession(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n" +
-		`{"role":"assistant","blocks":[{"type":"text","text":"hello"}]}` + "\n"
+	body := `{"id":"m1","role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n" +
+		`{"id":"m2","role":"assistant","blocks":[{"type":"text","text":"hello"}]}` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -225,23 +225,13 @@ func TestRecordHistoryUpsertsAndSetsActive(t *testing.T) {
 	}
 }
 
-func TestLoadHistoryMigratesLegacyLastToActive(t *testing.T) {
+func TestLoadHistoryIgnoresLastOnlyField(t *testing.T) {
 	root := t.TempDir()
 	historyPath := filepath.Join(root, "history.json")
 	body := `{
-  "sessions": [
-    {
-      "id": "20260506T103500-legacy01",
-      "dir": "/tmp/20260506T103500-legacy01",
-      "started_at": "2026-05-06T10:35:00Z",
-      "last_active_at": "2026-05-06T10:35:00Z",
-      "turns": 1,
-      "preview": "old"
-    }
-  ],
   "last": {
-    "id": "20260506T103500-legacy01",
-    "dir": "/tmp/20260506T103500-legacy01",
+    "id": "20260506T103500-record01",
+    "dir": "/tmp/20260506T103500-record01",
     "started_at": "2026-05-06T10:35:00Z",
     "last_active_at": "2026-05-06T10:35:00Z",
     "turns": 1,
@@ -256,14 +246,11 @@ func TestLoadHistoryMigratesLegacyLastToActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.Active == nil || h.Active.ID != "20260506T103500-legacy01" {
-		t.Fatalf("active = %+v, want migrated legacy last", h.Active)
+	if h.Active != nil {
+		t.Fatalf("active = %+v, want nil", h.Active)
 	}
-	if h.Active.Kind != KindPrimary {
-		t.Fatalf("active kind = %q, want primary", h.Active.Kind)
-	}
-	if len(h.Sessions) != 1 || h.Sessions[0].Kind != KindPrimary {
-		t.Fatalf("sessions = %+v, want default primary kind", h.Sessions)
+	if len(h.Sessions) != 0 {
+		t.Fatalf("sessions = %+v, want empty", h.Sessions)
 	}
 }
 

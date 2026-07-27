@@ -36,7 +36,7 @@ type Info struct {
 }
 
 // InfoDir returns the canonical on-disk directory for info under sessionsRoot.
-// Legacy or synthetic Info values without an ID keep their recorded Dir.
+// Recorded Info values without an ID keep their stored Dir.
 func InfoDir(sessionsRoot string, info Info) string {
 	if info.ID != "" {
 		return filepath.Join(sessionsRoot, info.ID)
@@ -73,7 +73,10 @@ func List(root string) ([]Info, error) {
 		dir := filepath.Join(root, e.Name())
 		info, _, err := loadInfoSummary(dir)
 		if err != nil {
-			continue // skip unreadable sessions
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
 		}
 		out = append(out, info)
 	}
@@ -92,8 +95,7 @@ func LoadInfo(dir string) (Info, []llm.Message, error) {
 	return loadInfo(dir)
 }
 
-// loadInfo is the workhorse for List and LoadInfo. Returns an error for
-// any caller that cannot proceed; List filters those errors out itself.
+// loadInfo is the workhorse for List and LoadInfo.
 func loadInfo(dir string) (Info, []llm.Message, error) {
 	info, idx, err := loadInfoSummary(dir)
 	if err != nil {

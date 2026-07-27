@@ -161,7 +161,7 @@ func Resolve(opts Options) (Resolution, error) {
 }
 
 // ResolveExisting reads an existing workspace identity without performing any
-// registry, marker, lock, excludes, migration, or workspace-rebind writes.
+// registry, marker, lock, excludes, or workspace-rebind writes.
 func ResolveExisting(opts Options) (Resolution, error) {
 	workDir, err := canonicalExistingDir(opts.WorkDir)
 	if err != nil {
@@ -249,8 +249,7 @@ func createIdentity(homeDir, workDir, markerPath string) (Resolution, error) {
 		Autostart: false,
 		CreatedAt: now().UTC(),
 	}
-	migrated, err := publishNewAgent(address, workDir, agent)
-	if err != nil {
+	if err := publishNewAgent(address, agent); err != nil {
 		return Resolution{}, err
 	}
 	if err := atomicWriteJSON(markerPath, Marker{AgentID: agentID}, 0o644); err != nil {
@@ -260,22 +259,12 @@ func createIdentity(homeDir, workDir, markerPath string) (Resolution, error) {
 		}
 		return Resolution{}, fmt.Errorf("agentstate: write marker %s: %w", markerPath, err)
 	}
-	if migrated {
-		if err := removeLegacyState(workDir); err != nil {
-			return Resolution{}, fmt.Errorf("agentstate: agent %q is published but legacy state cleanup failed: %w", agentID, err)
-		}
-	}
-	result := Resolution{
+	return Resolution{
 		Agent:      agent,
 		Address:    address,
 		MarkerPath: markerPath,
 		Created:    true,
-	}
-	if migrated {
-		result.Notices = append(result.Notices,
-			fmt.Sprintf("migrated workspace runtime state from %s to %s", filepath.Join(workDir, ".juex"), address.StateDir()))
-	}
-	return result, nil
+	}, nil
 }
 
 func resolveExistingIdentity(homeDir, workDir, markerPath string, marker Marker) (Resolution, error) {
@@ -307,14 +296,6 @@ func resolveExistingIdentity(homeDir, workDir, markerPath string, marker Marker)
 		}
 		result.Notices = append(result.Notices,
 			fmt.Sprintf("workspace for agent %q moved from %s to %s", result.Agent.ID, old, workDir))
-	}
-	cleaned, err := migratePublishedLegacyState(workDir, result.Address)
-	if err != nil {
-		return Resolution{}, err
-	}
-	if cleaned {
-		result.Notices = append(result.Notices,
-			fmt.Sprintf("migrated remaining workspace runtime state from %s to %s", filepath.Join(workDir, ".juex"), result.Address.StateDir()))
 	}
 	return result, nil
 }
