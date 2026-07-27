@@ -56,7 +56,7 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 		out, _ := exec.Command(bin, "help").CombinedOutput()
 		body := string(out)
 		// cobra renders subcommand list under "Available Commands"
-		for _, want := range []string{"init", "doctor", "run", "repl", "sessions", "serve", "version"} {
+		for _, want := range []string{"init", "doctor", "run", "repl", "sessions", "listen", "version"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("help output missing %q in:\n%s", want, body)
 			}
@@ -83,6 +83,24 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 		err := exec.Command(bin, "totally-bogus").Run()
 		if err == nil {
 			t.Fatal("expected non-zero exit")
+		}
+	})
+	t.Run("removedServeAndLegacyFlagFailNormally", func(t *testing.T) {
+		removedFlag := "--" + "head" + "less"
+		for _, test := range []struct {
+			args []string
+			want string
+		}{
+			{args: []string{"serve"}, want: `unknown command "serve"`},
+			{args: []string{"listen", removedFlag}, want: "unknown flag: " + removedFlag},
+		} {
+			out, err := exec.Command(bin, test.args...).CombinedOutput()
+			if err == nil {
+				t.Fatalf("juex %s unexpectedly succeeded", strings.Join(test.args, " "))
+			}
+			if !strings.Contains(string(out), test.want) {
+				t.Fatalf("juex %s output missing %q:\n%s", strings.Join(test.args, " "), test.want, out)
+			}
 		}
 	})
 	t.Run("runRequiresPromptOrAttachment", func(t *testing.T) {

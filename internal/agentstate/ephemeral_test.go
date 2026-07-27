@@ -92,7 +92,7 @@ func TestResolveExistingRequiresStatefulRebind(t *testing.T) {
 	if !errors.As(err, &rebind) {
 		t.Fatalf("err = %v, want RebindRequiredError", err)
 	}
-	for _, want := range []string{resolved.Agent.ID, workDir, movedDir, "run", "repl", "serve"} {
+	for _, want := range []string{resolved.Agent.ID, workDir, movedDir, "run", "repl", "listen"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("err = %q, want %q", err, want)
 		}

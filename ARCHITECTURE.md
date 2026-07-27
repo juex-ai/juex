@@ -1011,7 +1011,7 @@ cooldown ladder and single-request half-open reservations. `internal/runtime`
 owns request replay, candidate-specific context preflight, `llm.fallback`
 events, and `model_fallback` notices. A successful switch atomically appends
 the notice and assistant response; failed attempts never persist a notice.
-`juex serve` shares one health instance across all session Apps.
+`juex listen` shares one health instance across all session Apps.
 
 Turns are Codex-aligned long-running loops: the runtime does not enforce a
 per-turn provider-request count or wall-clock duration cap. A turn stops when
@@ -1084,7 +1084,7 @@ juex [--version | -v]
 │   ├── context <id> [--format json|text]
 │   ├── compact <id> [--reason <reason>] [--format json|text]
 │   └── delete <id>
-├── serve [--addr <host:port>] [--unsafe-bind-any] [--headless]
+├── listen [--addr <host:port>] [--unsafe-bind-any]
 ├── fleet
 │   ├── serve [--addr <host:port>] [--unsafe-bind-any]
 │   ├── install [--addr <host:port>] [--unsafe-bind-any] [--restart-agents]
@@ -1213,7 +1213,7 @@ or orphaned agents remain visible even when running.
 adopts only exact endpoint identities, removes only confirmed stale runtime
 records, and starts enabled autostart agents. After reconciliation it binds the
 fleet browser listener, then keeps both services resident. Detached children
-execute the current binary as `-C <workspace> serve --headless`, inherit the
+execute the current binary as `-C <workspace> listen`, inherit the
 effective home, and append stdout and stderr to `logs/fleet.log`. Supervisor
 or browser-listener exit never stops them.
 
@@ -1346,12 +1346,10 @@ func (s *Server) APIHandler() http.Handler
 func (s *Server) Run(ctx) error
 ```
 
-`juex serve` always starts the canonical agent endpoint and records it in the
+`juex listen` always starts the canonical agent endpoint and records it in the
 identity-owned `runtime.json`. It opens no additional TCP listener by default.
 Passing `--addr` explicitly adds the loopback JSON/SSE API listener; binding
-beyond loopback also requires `--unsafe-bind-any`. The retained `--headless`
-flag is a compatibility form of the flagless endpoint-only command and cannot
-be combined with TCP listener flags.
+beyond loopback also requires `--unsafe-bind-any`.
 
 The canonical endpoint uses `APIHandler`, where unmatched routes keep ordinary
 404 semantics. The explicit TCP listener uses `Handler`, which serves the same

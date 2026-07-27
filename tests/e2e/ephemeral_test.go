@@ -149,14 +149,14 @@ func TestLiveBinary_EphemeralStateLifecycle(t *testing.T) {
 	})
 }
 
-func TestLiveBinary_EphemeralServeEndpointAndCleanup(t *testing.T) {
+func TestLiveBinary_EphemeralListenEndpointAndCleanup(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("os.Interrupt process signalling is platform-specific in this e2e")
 	}
 	bin := buildJuex(t)
 	home, work, tempParent := prepareEphemeralBinaryTest(t, "https://example.invalid")
 	env := ephemeralBinaryEnv(home, tempParent)
-	command := exec.Command(bin, "-C", work, "serve", "--ephemeral")
+	command := exec.Command(bin, "-C", work, "listen", "--ephemeral")
 	command.Env = env
 	stdout := &lockedBuffer{}
 	stderr := &lockedBuffer{}
@@ -192,7 +192,7 @@ func TestLiveBinary_EphemeralServeEndpointAndCleanup(t *testing.T) {
 	fleetOut, fleetErr, err := runEphemeralBinary(bin, env, "", "fleet", "status", "--format", "json")
 	if err != nil || strings.TrimSpace(fleetOut) != "[]" {
 		_ = command.Process.Kill()
-		t.Fatalf("fleet saw ephemeral serve: %v\nstdout:\n%s\nstderr:\n%s", err, fleetOut, fleetErr)
+		t.Fatalf("fleet saw ephemeral listen: %v\nstdout:\n%s\nstderr:\n%s", err, fleetOut, fleetErr)
 	}
 
 	if err := command.Process.Signal(os.Interrupt); err != nil {
@@ -203,10 +203,10 @@ func TestLiveBinary_EphemeralServeEndpointAndCleanup(t *testing.T) {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		_ = command.Process.Kill()
-		t.Fatal("ephemeral serve did not exit after interrupt")
+		t.Fatal("ephemeral listen did not exit after interrupt")
 	}
 	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("ephemeral serve root remains: %v", err)
+		t.Fatalf("ephemeral listen root remains: %v", err)
 	}
 	assertFreshWorkspaceHasNoIdentityWrites(t, home, work, tempParent)
 }

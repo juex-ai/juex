@@ -323,7 +323,7 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	probeFleetRuntime(t, firstRuntime)
 	probeFleetRuntime(t, waitFleetRuntime(t, secondAgentAddress))
 	if runtime.GOOS != "windows" && !strings.HasPrefix(firstRuntime.Endpoint, "unix://") {
-		t.Fatalf("headless agent endpoint = %q, want Unix socket", firstRuntime.Endpoint)
+		t.Fatalf("agent endpoint = %q, want Unix socket", firstRuntime.Endpoint)
 	}
 
 	supervisor := startFleetSupervisor(t, binary, environment)

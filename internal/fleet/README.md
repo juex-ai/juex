@@ -12,7 +12,7 @@ This package owns registry-wide resident-agent health and lifecycle policy.
   flag, while enable does not implicitly start.
 - `Remove` requires transport confirmation, stops and locks the endpoint, then
   delegates intentional registry and matching-marker deletion to agentstate.
-- `Start` launches a detached `juex -C <workspace> serve --headless` child and
+- `Start` launches a detached `juex -C <workspace> listen` child and
   waits for an exact PID and endpoint identity.
 - `Stop` requests instance-bound self-shutdown; it never signals or force-kills
   a recorded PID.

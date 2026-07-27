@@ -620,7 +620,7 @@ providers:
 		t.Fatal(err)
 	}
 	stdout, stderr, err = runAgentStateCommand(bin, home, moved, "sessions", "list")
-	if err == nil || !strings.Contains(stderr, "run, repl, or serve once to rebind") {
+	if err == nil || !strings.Contains(stderr, "run, repl, or listen once to rebind") {
 		t.Fatalf("read-only command unexpectedly rebound moved workspace: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 	stdout, stderr, err = runAgentStateCommand(bin, home, moved, "run", "--json", "rebind moved workspace")
@@ -655,7 +655,7 @@ providers:
 	}
 }
 
-func TestLiveBinary_EndpointOnlyServeHasNoExtraTCPListener(t *testing.T) {
+func TestLiveBinary_EndpointOnlyListenHasNoExtraTCPListener(t *testing.T) {
 	bin := buildJuex(t)
 	for _, test := range []struct {
 		name               string
@@ -663,11 +663,10 @@ func TestLiveBinary_EndpointOnlyServeHasNoExtraTCPListener(t *testing.T) {
 		scannerUnavailable bool
 	}{
 		{name: "flagless"},
-		{name: "explicit headless", args: []string{"--headless"}},
 		{name: "listener scanner unavailable", scannerUnavailable: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			process := startLiveServe(t, bin, test.args...)
+			process := startLiveListen(t, bin, test.args...)
 			defer process.stop()
 
 			target, err := endpoint.Parse(process.runtime.Endpoint)
@@ -678,9 +677,9 @@ func TestLiveBinary_EndpointOnlyServeHasNoExtraTCPListener(t *testing.T) {
 				t.Setenv("PATH", t.TempDir())
 			}
 			assertProcessTCPListeners(t, process.cmd.Process.Pid, target)
-			waitForServeOutput(t, process.stdout, "juex serve agent endpoint listening on ")
+			waitForListenOutput(t, process.stdout, "juex listen agent endpoint listening on ")
 			if strings.Contains(process.stdout.String(), "agent JSON/SSE API (no web UI)") {
-				t.Fatalf("endpoint-only serve reported a TCP API:\n%s", process.stdout.String())
+				t.Fatalf("endpoint-only listen reported a TCP API:\n%s", process.stdout.String())
 			}
 
 			client := target.NewClient()
@@ -704,16 +703,16 @@ func TestLiveBinary_EndpointOnlyServeHasNoExtraTCPListener(t *testing.T) {
 	}
 }
 
-func TestLiveBinary_ExplicitServeTCPHasFriendlyPointer(t *testing.T) {
+func TestLiveBinary_ExplicitListenTCPHasFriendlyPointer(t *testing.T) {
 	bin := buildJuex(t)
-	process := startLiveServe(t, bin, "--addr", "127.0.0.1:0")
+	process := startLiveListen(t, bin, "--addr", "127.0.0.1:0")
 	defer process.stop()
 
 	target, err := endpoint.Parse(process.runtime.Endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tcpAddress := waitForServeTCPAddress(t, process.stdout)
+	tcpAddress := waitForListenTCPAddress(t, process.stdout)
 	assertProcessTCPListeners(t, process.cmd.Process.Pid, target, tcpAddress)
 
 	for path, want := range map[string]int{
@@ -761,7 +760,7 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-type liveServeProcess struct {
+type liveListenProcess struct {
 	cmd     *exec.Cmd
 	done    chan error
 	stdout  *lockedBuffer
@@ -770,7 +769,7 @@ type liveServeProcess struct {
 	once    sync.Once
 }
 
-func startLiveServe(t *testing.T, bin string, serveArgs ...string) *liveServeProcess {
+func startLiveListen(t *testing.T, bin string, listenArgs ...string) *liveListenProcess {
 	t.Helper()
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
@@ -790,7 +789,7 @@ func startLiveServe(t *testing.T, bin string, serveArgs ...string) *liveServePro
 		t.Fatal(err)
 	}
 
-	commandArgs := append([]string{"-C", work, "--config", configFile, "serve"}, serveArgs...)
+	commandArgs := append([]string{"-C", work, "--config", configFile, "listen"}, listenArgs...)
 	cmd := exec.Command(bin, commandArgs...)
 	cmd.Env = filteredEnv(
 		"HOME", "USERPROFILE", "JUEX_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM",
@@ -818,7 +817,7 @@ func startLiveServe(t *testing.T, bin string, serveArgs ...string) *liveServePro
 		select {
 		case err := <-done:
 			t.Fatalf(
-				"serve exited before readiness: %v\nstdout:\n%s\nstderr:\n%s",
+				"listen exited before readiness: %v\nstdout:\n%s\nstderr:\n%s",
 				err,
 				stdout.String(),
 				stderr.String(),
@@ -848,7 +847,7 @@ func startLiveServe(t *testing.T, bin string, serveArgs ...string) *liveServePro
 		<-done
 		t.Fatalf("runtime endpoint was not published\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
 	}
-	return &liveServeProcess{
+	return &liveListenProcess{
 		cmd:     cmd,
 		done:    done,
 		stdout:  stdout,
@@ -857,14 +856,14 @@ func startLiveServe(t *testing.T, bin string, serveArgs ...string) *liveServePro
 	}
 }
 
-func (p *liveServeProcess) stop() {
+func (p *liveListenProcess) stop() {
 	p.once.Do(func() {
 		_ = p.cmd.Process.Kill()
 		<-p.done
 	})
 }
 
-func waitForServeOutput(t *testing.T, output *lockedBuffer, want string) string {
+func waitForListenOutput(t *testing.T, output *lockedBuffer, want string) string {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -874,20 +873,20 @@ func waitForServeOutput(t *testing.T, output *lockedBuffer, want string) string 
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("serve output missing %q:\n%s", want, output.String())
+	t.Fatalf("listen output missing %q:\n%s", want, output.String())
 	return ""
 }
 
-func waitForServeTCPAddress(t *testing.T, output *lockedBuffer) string {
+func waitForListenTCPAddress(t *testing.T, output *lockedBuffer) string {
 	t.Helper()
-	const prefix = "juex serve agent JSON/SSE API (no web UI) listening on http://"
-	body := waitForServeOutput(t, output, prefix)
+	const prefix = "juex listen agent JSON/SSE API (no web UI) listening on http://"
+	body := waitForListenOutput(t, output, prefix)
 	for _, line := range strings.Split(body, "\n") {
 		if strings.HasPrefix(line, prefix) {
 			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
 		}
 	}
-	t.Fatalf("serve output did not contain a parseable TCP address:\n%s", body)
+	t.Fatalf("listen output did not contain a parseable TCP address:\n%s", body)
 	return ""
 }
 

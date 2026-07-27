@@ -7,7 +7,7 @@
 - Published and local-install packages now bundle a checksum-pinned ripgrep
   executable. The builtin `grep` tool runs it as a cancellable, bounded child
   process, and `juex doctor` reports the selected ripgrep source and path.
-- `juex run`, `juex repl`, and `juex serve` now accept `--ephemeral` for
+- `juex run`, `juex repl`, and `juex listen` accept `--ephemeral` for
   isolated temporary agent state. State is removed on exit; `--keep` retains it
   and prints the path to stderr.
 - Read-only session, bundle, doctor, version, and schema operations no longer
@@ -31,7 +31,3 @@
   succeeds and accepts relative bin-directory overrides. POSIX launchers point
   directly at immutable generations. Unpackaged source builds require `rg` on
   `PATH` or an explicit `JUEX_RG` path.
-- `juex serve` no longer opens `http://127.0.0.1:8080` by default. It
-  publishes only the canonical local agent endpoint unless `--addr` is passed.
-  Scripts that call the agent JSON/SSE API over TCP must now pass an explicit
-  address, for example `juex serve --addr 127.0.0.1:8080`.

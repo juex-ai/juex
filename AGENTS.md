@@ -27,7 +27,7 @@ Juex is a Go agent runtime. Published releases are managed packages containing
 the Juex binary plus a pinned ripgrep executable. It currently includes:
 
 - a CLI (`juex run`, `juex repl`, `juex sessions ...`)
-- a React web UI served by `juex serve`
+- a React web UI served by `juex fleet serve`
 - Anthropic and OpenAI-compatible providers through official SDKs
 - builtin tools: `read`, `write`, `edit`, `apply_patch`, `grep`,
   `exec_command`, `write_stdin`, chunked write tools, and memory tools

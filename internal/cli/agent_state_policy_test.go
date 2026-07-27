@@ -27,7 +27,7 @@ func TestCommandAgentStatePolicyCoversExecutableTree(t *testing.T) {
 		"juex sessions activate": agentStateExisting,
 		"juex sessions delete":   agentStateExisting,
 		"juex bundle":            agentStateExisting,
-		"juex serve":             agentStateMint,
+		"juex listen":            agentStateMint,
 	}
 
 	var visited []string
@@ -75,7 +75,7 @@ func TestCommandAgentStatePolicyCoversExecutableTree(t *testing.T) {
 
 func TestRuntimeCommandsExposeEphemeralFlags(t *testing.T) {
 	root := newRootCmd()
-	for _, path := range [][]string{{"run"}, {"repl"}, {"serve"}} {
+	for _, path := range [][]string{{"run"}, {"repl"}, {"listen"}} {
 		cmd, _, err := root.Find(path)
 		if err != nil {
 			t.Fatal(err)
@@ -95,7 +95,7 @@ func TestInvalidEphemeralFlagCombinationsDoNotMint(t *testing.T) {
 		{"run", "--dry-run", "--keep", "hello"},
 		{"run", "--dry-run", "--ephemeral", "hello"},
 		{"repl", "--keep"},
-		{"serve", "--keep"},
+		{"listen", "--keep"},
 	}
 	for _, args := range cases {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {

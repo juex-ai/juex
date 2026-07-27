@@ -278,7 +278,7 @@ func TestFleetLogsExplainsMissingLogForAdoptedAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	standalone := exec.Command(binary, "-C", workspace, "serve", "--headless")
+	standalone := exec.Command(binary, "-C", workspace, "listen")
 	standalone.Env = environment
 	standalone.Stdout = standaloneOutput
 	standalone.Stderr = standaloneOutput
@@ -318,7 +318,7 @@ func TestFleetLogsExplainsMissingLogForAdoptedAgent(t *testing.T) {
 	waitSupervisorReady(t, supervisor, "adopted")
 	killSupervisor(t, supervisor)
 	if _, err := os.Stat(filepath.Join(agentAddress.StateDir(), "logs", "fleet.log")); !os.IsNotExist(err) {
-		t.Fatalf("standalone serve unexpectedly created fleet.log: %v", err)
+		t.Fatalf("standalone listen unexpectedly created fleet.log: %v", err)
 	}
 
 	stdout, stderr, err := runFleetE2E(binary, environment, "", "logs", agentID)
@@ -384,8 +384,8 @@ func TestFleetLifecycleAndSupervisorAdoption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fleet logs: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "juex serve agent endpoint listening") {
-		t.Fatalf("fleet log missing serve readiness:\n%s", stdout)
+	if !strings.Contains(stdout, "juex listen agent endpoint listening") {
+		t.Fatalf("fleet log missing listen readiness:\n%s", stdout)
 	}
 
 	if stdout, stderr, err := runFleetE2E(binary, environment, "", "restart", agentID); err != nil {
