@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestReleaseInstallScriptDryRunResolvesAssets(t *testing.T) {
@@ -799,6 +800,213 @@ func TestReleaseInstallScriptDownloadDoesNotRetryHTTPError(t *testing.T) {
 	}
 }
 
+func TestReleaseInstallScriptDownloadRetriesTransientHTTPError(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl is required")
+	}
+	_, script := releaseInstallScript(t)
+	payload := []byte("release payload")
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) < 3 {
+			w.Header().Set("Retry-After", "60")
+			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	sleepLog := filepath.Join(t.TempDir(), "sleep.log")
+	outPath := filepath.Join(t.TempDir(), "release.tar.gz")
+	cmd := exec.Command(
+		"bash",
+		"-c",
+		`source "$SCRIPT"; sleep() { printf '%s\n' "$1" >> "$SLEEP_LOG"; }; download_file "$URL" "$OUT"`,
+	)
+	cmd.Env = append(os.Environ(),
+		"SCRIPT="+script,
+		"URL="+server.URL+"/release.tar.gz",
+		"OUT="+outPath,
+		"SLEEP_LOG="+sleepLog,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("download_file did not recover from transient HTTP errors: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("downloaded payload = %q, want %q", got, payload)
+	}
+	if attempts.Load() != 3 {
+		t.Fatalf("HTTP attempts = %d, want 3", attempts.Load())
+	}
+	sleepCalls, err := os.ReadFile(sleepLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(sleepCalls), "60\n60\n"; got != want {
+		t.Fatalf("retry delays = %q, want %q", got, want)
+	}
+}
+
+func TestReleaseInstallScriptHonorsRetryAfterHTTPDate(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl is required")
+	}
+	_, script := releaseInstallScript(t)
+	var attempts atomic.Int32
+	var retryAtUnix atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) == 1 {
+			retryAt := time.Now().UTC().Add(time.Minute).Truncate(time.Second)
+			retryAtUnix.Store(retryAt.Unix())
+			w.Header().Set("Retry-After", retryAt.Format(http.TimeFormat))
+			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("release payload"))
+	}))
+	defer server.Close()
+
+	sleepLog := filepath.Join(t.TempDir(), "sleep.log")
+	cmd := exec.Command(
+		"bash",
+		"-c",
+		`source "$SCRIPT"; sleep() { printf '%s\n' "$1" > "$SLEEP_LOG"; }; download_file "$URL" "$OUT"`,
+	)
+	cmd.Env = append(os.Environ(),
+		"SCRIPT="+script,
+		"URL="+server.URL+"/release.tar.gz",
+		"OUT="+filepath.Join(t.TempDir(), "release.tar.gz"),
+		"SLEEP_LOG="+sleepLog,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("download_file did not recover after Retry-After HTTP date: %v\n%s", err, out)
+	}
+	delayBody, err := os.ReadFile(sleepLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var delay int
+	if _, err := fmt.Sscanf(string(delayBody), "%d", &delay); err != nil {
+		t.Fatalf("parse retry delay %q: %v", delayBody, err)
+	}
+	remaining := retryAtUnix.Load() - time.Now().Unix()
+	if remaining < 0 {
+		remaining = 0
+	}
+	if int64(delay) < remaining || delay > 60 {
+		t.Fatalf("Retry-After HTTP-date delay = %d, want %d..60", delay, remaining)
+	}
+}
+
+func TestReleaseInstallScriptParsesRetryAfterHTTPDateWithBusyBoxDate(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	_, script := releaseInstallScript(t)
+	work := t.TempDir()
+	stubDir := filepath.Join(work, "bin")
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dateStub := `#!/bin/sh
+printf '%s\n' "$*" >> "$DATE_LOG"
+if [ "${1:-}" = "-d" ]; then
+  exit 1
+fi
+if [ "${1:-}" = "-u" ] && [ "${2:-}" = "-D" ]; then
+  printf '200\n'
+  exit 0
+fi
+if [ "${1:-}" = "+%s" ]; then
+  printf '140\n'
+  exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(stubDir, "date"), []byte(dateStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	headers := filepath.Join(work, "headers")
+	if err := os.WriteFile(
+		headers,
+		[]byte("HTTP/1.1 503 Service Unavailable\r\nRetry-After: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	dateLog := filepath.Join(work, "date.log")
+	cmd := exec.Command("bash", "-c", `source "$SCRIPT"; retry_after_delay "$HEADERS"`)
+	cmd.Env = append(os.Environ(),
+		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"SCRIPT="+script,
+		"HEADERS="+headers,
+		"DATE_LOG="+dateLog,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("retry_after_delay failed with BusyBox date: %v\n%s", err, out)
+	}
+	if got, want := strings.TrimSpace(string(out)), "60"; got != want {
+		t.Fatalf("BusyBox Retry-After delay = %q, want %q", got, want)
+	}
+	logged, err := os.ReadFile(dateLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(
+		string(logged),
+		"-u -D %a, %d %b %Y %H:%M:%S GMT -d Sun, 06 Nov 1994 08:49:37 GMT +%s",
+	) {
+		t.Fatalf("BusyBox date parser was not used:\n%s", logged)
+	}
+}
+
+func TestReleaseInstallScriptTransientHTTPRetriesAreBounded(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl is required")
+	}
+	_, script := releaseInstallScript(t)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	sleepLog := filepath.Join(t.TempDir(), "sleep.log")
+	cmd := exec.Command(
+		"bash",
+		"-c",
+		`source "$SCRIPT"; sleep() { printf '%s\n' "$1" >> "$SLEEP_LOG"; }; download_file "$URL" "$OUT"`,
+	)
+	cmd.Env = append(os.Environ(),
+		"SCRIPT="+script,
+		"URL="+server.URL+"/release.tar.gz",
+		"OUT="+filepath.Join(t.TempDir(), "release.tar.gz"),
+		"SLEEP_LOG="+sleepLog,
+	)
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("download_file unexpectedly accepted exhausted transient HTTP retries\n%s", out)
+	}
+	if attempts.Load() != 6 {
+		t.Fatalf("HTTP attempts = %d, want 6", attempts.Load())
+	}
+	sleepCalls, err := os.ReadFile(sleepLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(sleepCalls), strings.Repeat("2\n", 5); got != want {
+		t.Fatalf("fallback retry delays = %q, want %q", got, want)
+	}
+}
+
 func TestReleaseInstallScriptDownloadRestartsWhenResumeIsUnsupported(t *testing.T) {
 	skipReleaseInstallScriptTestIfUnsupported(t)
 	if _, err := exec.LookPath("curl"); err != nil {
@@ -1059,7 +1267,7 @@ exit 7
 		`source "$SCRIPT"; sleep() { :; }; download_file "$URL" "$OUT"`,
 	)
 	cmd.Env = append(os.Environ(),
-		"PATH="+stubDir,
+		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"SCRIPT="+script,
 		"URL=https://example.invalid/release.tar.gz",
 		"OUT="+filepath.Join(work, "release.tar.gz"),
@@ -1089,10 +1297,16 @@ func TestPOSIXReleaseDownloadsShareRetryResumePolicy(t *testing.T) {
 		}
 		text := string(body)
 		for _, want := range []string{
+			"is_transient_http_status()",
+			"retry_after_delay()",
+			"408|429|500|502|503|504|522|524",
 			"download_with_curl()",
-			`curl -fsSL -C - "$url" -o "$out"`,
-			`[[ "$status" -eq 22 || "$attempt" -ge 6 ]]`,
+			`curl -fsSL -C - -D "$headers" -w '%{http_code}' "$url" -o "$out"`,
+			`[[ "$status" -eq 22 ]] && ! is_transient_http_status "$http_status"`,
+			`[[ "$attempt" -ge 6 ]]`,
 			`[[ "$status" -eq 33 ]]`,
+			`date -u -D '%a, %d %b %Y %H:%M:%S GMT' -d "$value" +%s`,
+			`sleep "$retry_delay"`,
 			"download_with_wget()",
 			`[[ "$wget_help" == *"--tries="* ]]`,
 			`wget_args+=(-t 1)`,

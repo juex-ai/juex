@@ -248,24 +248,96 @@ release_asset_url() {
   printf '%s/releases/download/%s/%s\n' "${repo_url%/}" "$tag" "$asset"
 }
 
+is_transient_http_status() {
+  case "$1" in
+    408|429|500|502|503|504|522|524) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+retry_after_delay() {
+  local headers="$1"
+  local value
+  local epoch
+  local now
+  value=$(
+    awk '
+      {
+        line = $0
+        sub(/\r$/, "", line)
+        if (tolower(substr(line, 1, 5)) == "http/") {
+          value = ""
+          next
+        }
+        if (tolower(substr(line, 1, 12)) == "retry-after:") {
+          sub(/^[^:]*:[[:space:]]*/, "", line)
+          sub(/[[:space:]]+$/, "", line)
+          value = line
+        }
+      }
+      END { print value }
+    ' "$headers"
+  )
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$value"
+    return
+  fi
+  if [[ -z "$value" ]]; then
+    printf '2\n'
+    return
+  fi
+  if epoch=$(LC_ALL=C date -d "$value" +%s 2>/dev/null); then
+    :
+  elif epoch=$(TZ=UTC LC_ALL=C date -u -D '%a, %d %b %Y %H:%M:%S GMT' -d "$value" +%s 2>/dev/null); then
+    :
+  elif epoch=$(TZ=UTC LC_ALL=C date -j -f '%a, %d %b %Y %H:%M:%S GMT' "$value" +%s 2>/dev/null); then
+    :
+  else
+    printf '2\n'
+    return
+  fi
+  now=$(date +%s)
+  if [[ "$epoch" -gt "$now" ]]; then
+    printf '%s\n' "$((epoch - now))"
+  else
+    printf '0\n'
+  fi
+}
+
 download_with_curl() {
   local url="$1"
   local out="$2"
   local attempt=1
   local status
+  local http_status
+  local headers="${out}.headers.$$"
+  local retry_delay
   while true; do
-    if curl -fsSL -C - "$url" -o "$out"; then
+    http_status=""
+    : >"$headers"
+    if http_status=$(curl -fsSL -C - -D "$headers" -w '%{http_code}' "$url" -o "$out"); then
+      rm -f "$headers"
       return 0
     else
       status=$?
     fi
-    if [[ "$status" -eq 22 || "$attempt" -ge 6 ]]; then
+    if [[ "$attempt" -ge 6 ]]; then
+      rm -f "$headers"
       return "$status"
     fi
+    if [[ "$status" -eq 22 ]] && ! is_transient_http_status "$http_status"; then
+      rm -f "$headers"
+      return "$status"
+    fi
+    retry_delay=2
+    if [[ "$status" -eq 22 ]]; then
+      retry_delay=$(retry_after_delay "$headers")
+    fi
+    rm -f "$headers"
     if [[ "$status" -eq 33 ]]; then
       rm -f "$out"
     fi
-    sleep 2
+    sleep "$retry_delay"
     attempt=$((attempt + 1))
   done
 }
