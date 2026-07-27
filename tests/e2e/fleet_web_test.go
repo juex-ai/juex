@@ -17,6 +17,7 @@ import (
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/fleetweb"
+	"github.com/juex-ai/juex/internal/processmetrics"
 )
 
 func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
@@ -335,6 +336,31 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	baseURL := "http://" + waitFleetWebReady(t, supervisor)
 	client := &http.Client{Timeout: 30 * time.Second}
 
+	var fleetStatus struct {
+		Process processmetrics.Usage `json:"process"`
+	}
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/api/fleet/status",
+		"",
+		http.StatusOK,
+		&fleetStatus,
+	)
+	assertProcessMetrics(t, "Fleet", &fleetStatus.Process, false)
+	time.Sleep(10 * time.Millisecond)
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/api/fleet/status",
+		"",
+		http.StatusOK,
+		&fleetStatus,
+	)
+	assertProcessMetrics(t, "Fleet", &fleetStatus.Process, true)
+
 	var roster []fleet.AgentStatus
 	fleetWebJSON(t, client, http.MethodGet, baseURL+"/api/agents", "", http.StatusOK, &roster)
 	if len(roster) != 2 {
@@ -348,6 +374,11 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 		if health[id] != fleet.RuntimeHealthy {
 			t.Fatalf("fleet roster health[%s] = %q, roster = %+v", id, health[id], roster)
 		}
+	}
+	time.Sleep(10 * time.Millisecond)
+	fleetWebJSON(t, client, http.MethodGet, baseURL+"/api/agents", "", http.StatusOK, &roster)
+	for _, agent := range roster {
+		assertProcessMetrics(t, "Agent "+agent.ID, agent.Process, true)
 	}
 
 	for _, path := range []string{
@@ -467,6 +498,24 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	)
 	if runtimeStatus.Provider.Model != "new-model" {
 		t.Fatalf("updated proxied model = %q", runtimeStatus.Provider.Model)
+	}
+}
+
+func assertProcessMetrics(
+	t *testing.T,
+	name string,
+	usage *processmetrics.Usage,
+	wantCPU bool,
+) {
+	t.Helper()
+	if usage == nil || usage.RSSBytes == 0 {
+		t.Fatalf("%s process metrics = %+v, want positive RSS", name, usage)
+	}
+	if !wantCPU {
+		return
+	}
+	if usage.CPUPercent == nil || *usage.CPUPercent < 0 {
+		t.Fatalf("%s process metrics = %+v, want non-negative CPU percentage", name, usage)
 	}
 }
 
