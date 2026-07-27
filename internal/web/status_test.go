@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -289,5 +290,92 @@ func TestHistoricalSessionStatusDoesNotActivateIt(t *testing.T) {
 	}
 	if history.Active == nil || history.Active.ID != currentID {
 		t.Fatalf("active history = %+v, want current %q", history.Active, currentID)
+	}
+}
+
+func TestHistoricalSessionStatusRetainsBoundedReplayHistory(t *testing.T) {
+	srv := newTestServer(t)
+	historical, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := historical.app.Session.Append(llm.TextMessage(llm.RoleUser, "historical")); err != nil {
+		t.Fatal(err)
+	}
+	historicalID := historical.app.Session.ID
+	historicalDir := historical.app.Session.Dir
+
+	if _, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary); err != nil {
+		t.Fatal(err)
+	}
+	if _, loaded := srv.sessions.Load(historicalID); loaded {
+		t.Fatal("historical primary remained active in memory")
+	}
+
+	var journal strings.Builder
+	encoder := json.NewEncoder(&journal)
+	for index := 1; index <= 600; index++ {
+		if err := encoder.Encode(events.Event{
+			ID:     fmt.Sprintf("status-%03d", index),
+			Type:   "pending_input.queued",
+			TurnID: "turn-1",
+			Payload: juexruntime.PendingInputQueuedPayload{
+				PendingCount:     index,
+				MaxPendingInputs: 1000,
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(
+		filepath.Join(historicalDir, "events.jsonl"),
+		[]byte(journal.String()),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := srv.historicalStatusStore(historicalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := status.Snapshot()
+	if snapshot.Cursor != "status-600" || snapshot.Session.PendingCount != 600 {
+		t.Fatalf("historical snapshot = %+v", snapshot)
+	}
+
+	retained := status.OpenStream(juexruntime.StatusStreamOptions{After: "status-100"})
+	defer retained.Close()
+	count := 0
+	firstCursor := ""
+	lastCursor := ""
+	for {
+		next, ok := retained.Next(context.Background())
+		if !ok {
+			break
+		}
+		count++
+		if firstCursor == "" {
+			firstCursor = next.Cursor
+		}
+		lastCursor = next.Cursor
+	}
+	if count != 500 || firstCursor != "status-101" || lastCursor != "status-600" {
+		t.Fatalf(
+			"retained replay = count %d, first %q, last %q",
+			count,
+			firstCursor,
+			lastCursor,
+		)
+	}
+
+	expired := status.OpenStream(juexruntime.StatusStreamOptions{After: "status-010"})
+	defer expired.Close()
+	current, ok := expired.Next(context.Background())
+	if !ok || current.Cursor != "status-600" {
+		t.Fatalf("expired replay current = %+v, %t", current, ok)
+	}
+	if extra, ok := expired.Next(context.Background()); ok {
+		t.Fatalf("expired replay returned extra snapshot: %+v", extra)
 	}
 }
