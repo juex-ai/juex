@@ -37,10 +37,10 @@ stable report from `conversation.jsonl` and `events.jsonl`.
 
 `contract_oracle.go` owns deterministic artifact contract checks for the Go
 harness. It parses conversation and event JSONL artifacts and reports stable
-pass/fail issues for required tool use, forbidden legacy shell tool names,
-TTY exec usage, tool output deltas, and structured shell result events. The
-capability harness is an adapter that supplies artifact paths and case-specific
-expectations; the oracle does not change production runtime behavior.
+pass/fail issues for required tool use, TTY exec usage, tool output deltas, and
+structured shell result events. The capability harness is an adapter that
+supplies artifact paths and case-specific expectations; the oracle does not
+change production runtime behavior.
 
 Run it with:
 

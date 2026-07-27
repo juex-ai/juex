@@ -235,8 +235,7 @@ Ordinary Stop never submits continuation.
 - Table-driven runtime tests cover every lifecycle state and phase.
 - JSON snapshot round-trip plus later events must equal uninterrupted
   projection.
-- Web tests cover canonical snapshot/SSE routes and removed-route `404`
-  behavior.
+- Web tests cover canonical snapshot and SSE routes.
 - Fleet tests cover aggregate push and acknowledged restart continuation.
 - Frontend tests cover initial loading, active/admitted turns, pending drains,
   terminal turns, and queue capacity without fallback status sources.
