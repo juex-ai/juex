@@ -216,6 +216,14 @@ func executeRunCommand(cmd *cobra.Command, flags *persistentFlags, args []string
 		return emit(opts.jsonOut, cmd.ErrOrStderr(), &usageError{msg: "pass --new or --side, not both"},
 			"use --new for a new primary session or --side for a side session", false)
 	}
+	if opts.continueSession != "" {
+		slash, handled, parseErr := app.ParseSlashCommand(prompt)
+		if parseErr == nil && handled && slash.Name == app.SlashNew {
+			return emit(opts.jsonOut, cmd.ErrOrStderr(),
+				&usageError{msg: "juex sessions continue: /new cannot change sessions"},
+				"use 'juex run --new' to create a different primary session", false)
+		}
+	}
 	if len(opts.attachPaths) > 0 {
 		if _, handled, parseErr := app.ParseSlashCommand(prompt); handled || parseErr != nil {
 			message := "slash commands cannot include attachments"

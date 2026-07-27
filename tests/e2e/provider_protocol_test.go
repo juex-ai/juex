@@ -419,6 +419,12 @@ providers:
 		continued.SessionDir != side.SessionDir || continued.SessionKind != "side" || continued.Active {
 		t.Fatalf("continued side = %+v, original = %+v", continued, side)
 	}
+	blockedNew := exec.Command(bin, "-C", work, "sessions", "continue", primary.SessionID, "/new")
+	blockedNew.Env = env
+	blockedOut, err := blockedNew.CombinedOutput()
+	if err == nil || !strings.Contains(string(blockedOut), "/new cannot change sessions") {
+		t.Fatalf("continue /new err = %v, output = %s", err, blockedOut)
+	}
 	active := runJSON("run", "--json", "/status")
 	if active.SessionID != primary.SessionID || !active.Active {
 		t.Fatalf("default run = %+v, want active primary %s", active, primary.SessionID)

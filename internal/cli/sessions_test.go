@@ -250,6 +250,45 @@ func TestSessionsContinue_MissingSessionReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestSessionsContinue_RejectsNewSlashAndPreservesRequestedSession(t *testing.T) {
+	work := t.TempDir()
+	ensureTestWorkspaceAgent(t, work)
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(configPath, "openai", "https://example.invalid", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+
+	runStatus := func(t *testing.T) runResult {
+		t.Helper()
+		root := newRootCmd()
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetArgs([]string{"-C", work, "run", "--json", "/status"})
+		if err := root.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		var result runResult
+		if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+			t.Fatalf("decode output %q: %v", out.String(), err)
+		}
+		return result
+	}
+
+	before := runStatus(t)
+	root := newRootCmd()
+	root.SetArgs([]string{"-C", work, "sessions", "continue", before.SessionID, "/new"})
+	err := root.Execute()
+	var usageErr *usageError
+	if !errors.As(err, &usageErr) {
+		t.Fatalf("err = %T %v, want usageError", err, err)
+	}
+	after := runStatus(t)
+	if after.SessionID != before.SessionID {
+		t.Fatalf("active session changed from %s to %s", before.SessionID, after.SessionID)
+	}
+}
+
 func TestSessionsList_TableFormat(t *testing.T) {
 	work := t.TempDir()
 	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n"
