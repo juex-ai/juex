@@ -205,19 +205,13 @@ function Verify-Checksum {
   Write-Host "checksum ok: $archiveBase"
 }
 
-function Expand-JuexBinary {
+function Expand-JuexArchive {
   param(
     [string]$Archive,
-    [string]$OutDir,
-    [string]$BinaryName
+    [string]$OutDir
   )
   New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
   Expand-Archive -LiteralPath $Archive -DestinationPath $OutDir -Force
-  $binary = Get-ChildItem -LiteralPath $OutDir -Recurse -File -Filter $BinaryName | Select-Object -First 1
-  if (-not $binary) {
-    Die "binary $BinaryName not found in archive"
-  }
-  return $binary.FullName
 }
 
 function Install-Binary {
@@ -318,13 +312,12 @@ try {
   Copy-Download -Url $assetUrl -OutFile $archivePath
   Copy-Download -Url $checksumsUrl -OutFile $checksumsPath
   Verify-Checksum -Archive $archivePath -Checksums $checksumsPath
-  $extracted = Expand-JuexBinary -Archive $archivePath -OutDir $extractDir -BinaryName $binaryName
+  Expand-JuexArchive -Archive $archivePath -OutDir $extractDir
   $packageManifest = Get-ChildItem -LiteralPath $extractDir -Recurse -File -Filter "juex-package.json" | Select-Object -First 1
-  if ($packageManifest) {
-    Install-ManagedPackage -SourceRoot $packageManifest.DirectoryName -ManagedHome $PackageHome -ReleaseKey $releaseKey -InstallTarget $installTarget
-  } else {
-    Install-Binary -Source $extracted -Target $installTarget
+  if (-not $packageManifest) {
+    Die "release archive is missing expected juex-package.json package manifest"
   }
+  Install-ManagedPackage -SourceRoot $packageManifest.DirectoryName -ManagedHome $PackageHome -ReleaseKey $releaseKey -InstallTarget $installTarget
   Write-Host "Installed juex to $installTarget"
 } finally {
   if ($tmp) {
