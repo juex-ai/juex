@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
@@ -249,7 +248,7 @@ func seedAttachmentSession(t *testing.T, cfg config.Config, kind, text, history 
 	if err := sess.Append(llm.TextMessage(llm.RoleUser, text)); err != nil {
 		t.Fatal(err)
 	}
-	info := sess.Info(time.Now().UTC())
+	info := sess.Info()
 	if err := sess.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +284,7 @@ func seedDanglingToolUseSession(t *testing.T, cfg config.Config) session.Info {
 	}}}); err != nil {
 		t.Fatal(err)
 	}
-	info := sess.Info(time.Now().UTC())
+	info := sess.Info()
 	if err := sess.Close(); err != nil {
 		t.Fatal(err)
 	}

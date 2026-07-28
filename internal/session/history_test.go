@@ -538,6 +538,75 @@ func TestDeleteActiveFallsBackToNewestPrimary(t *testing.T) {
 	}
 }
 
+func TestDeleteActiveValidatesFallbackBeforeRemoval(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(root, "history.json")
+	sessionsRoot := filepath.Join(root, "sessions")
+	activeDir := makeSession(t, sessionsRoot, "20260506T110000-active01",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "active")},
+		time.Date(2026, 5, 6, 11, 0, 0, 0, time.UTC))
+	malformedDir := makeSession(t, sessionsRoot, "20260506T100000-broken01",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "broken")},
+		time.Date(2026, 5, 6, 10, 0, 0, 0, time.UTC))
+	active, _, err := LoadInfo(activeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SetActive(historyPath, active); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(malformedDir, metadataFile), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Delete(sessionsRoot, historyPath, active.ID); err == nil {
+		t.Fatal("Delete error = nil, want malformed fallback metadata error")
+	}
+	if _, err := os.Stat(activeDir); err != nil {
+		t.Fatalf("active dir was removed before fallback validation: %v", err)
+	}
+	h, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Active == nil || h.Active.ID != active.ID {
+		t.Fatalf("active = %+v, want original active session", h.Active)
+	}
+}
+
+func TestDeleteActivePreservesDiskOnlyFallback(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(root, "history.json")
+	sessionsRoot := filepath.Join(root, "sessions")
+	fallbackDir := makeSession(t, sessionsRoot, "20260506T100000-diskonly",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "disk only")},
+		time.Date(2026, 5, 6, 10, 0, 0, 0, time.UTC))
+	activeDir := makeSession(t, sessionsRoot, "20260506T110000-active01",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "active")},
+		time.Date(2026, 5, 6, 11, 0, 0, 0, time.UTC))
+	active, _, err := LoadInfo(activeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SetActive(historyPath, active); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Delete(sessionsRoot, historyPath, active.ID); err != nil {
+		t.Fatal(err)
+	}
+	h, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Sessions) != 0 {
+		t.Fatalf("cached sessions = %+v, want empty cache", h.Sessions)
+	}
+	if h.Active == nil || h.Active.ID != filepath.Base(fallbackDir) {
+		t.Fatalf("active = %+v, want disk-only fallback %s", h.Active, filepath.Base(fallbackDir))
+	}
+}
+
 func TestDeleteLastHistoryEntryClearsActive(t *testing.T) {
 	root := t.TempDir()
 	historyPath := filepath.Join(root, "history.json")

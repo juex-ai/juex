@@ -110,7 +110,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	info, ok := as.app.SessionInfo(as.StartedAt.UTC())
+	info, ok := as.app.SessionInfo()
 	if !ok {
 		writeErr(w, http.StatusInternalServerError, "general_error", app.ErrSessionUnavailable.Error())
 		return
@@ -192,7 +192,7 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 			if as.app.Status != nil {
 				cursor = as.app.Status.Snapshot().Cursor
 			}
-			info = sess.Info(time.Now().UTC())
+			info = sess.Info()
 			var err error
 			page, err = sess.TranscriptMessagePage(window.Before, window.Limit)
 			if err != nil {
@@ -386,10 +386,9 @@ func (s *Server) mergeActiveSessionInfos(persisted []session.Info) []session.Inf
 	for _, info := range persisted {
 		byID[info.ID] = info
 	}
-	now := time.Now().UTC()
 	s.sessions.Range(func(_, v any) bool {
 		as := v.(*activeSession)
-		if info, ok := as.app.SessionInfo(now); ok {
+		if info, ok := as.app.SessionInfo(); ok {
 			byID[info.ID] = info
 		}
 		return true
@@ -426,7 +425,7 @@ func (s *Server) sessionInfo(id string) (session.Info, error) {
 		as := v.(*activeSession)
 		var info session.Info
 		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
-			info = sess.Info(time.Now().UTC())
+			info = sess.Info()
 			return nil
 		})
 		if err == nil {

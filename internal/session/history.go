@@ -328,23 +328,22 @@ func Delete(root, historyPath, id string) error {
 		return err
 	}
 	removedActive := false
+	fallbackActiveID := ""
 	if historyPath != "" {
 		h, err := LoadHistory(historyPath)
 		if err != nil {
 			return err
 		}
 		removedActive = h.Active != nil && h.Active.ID == id
+		if removedActive {
+			fallbackActiveID, err = newestPrimarySessionID(root, id)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		return err
-	}
-	fallbackActiveID := ""
-	if removedActive {
-		var err error
-		fallbackActiveID, err = newestPrimarySessionID(root)
-		if err != nil {
-			return err
-		}
 	}
 	return removeHistory(historyPath, id, fallbackActiveID)
 }
@@ -388,9 +387,6 @@ func removeHistory(path, id, fallbackActiveID string) error {
 				}
 				h.Active = &active
 			}
-		}
-		if len(h.Sessions) == 0 {
-			h.Active = nil
 		}
 		return writeHistory(path, h)
 	})
@@ -469,7 +465,7 @@ func sessionDir(root, id string) (string, bool) {
 	return filepath.Join(root, id), true
 }
 
-func newestPrimarySessionID(root string) (string, error) {
+func newestPrimarySessionID(root, excludeID string) (string, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -480,7 +476,7 @@ func newestPrimarySessionID(root string) (string, error) {
 	var newestID string
 	var newest metadata
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || entry.Name() == excludeID {
 			continue
 		}
 		dir := filepath.Join(root, entry.Name())

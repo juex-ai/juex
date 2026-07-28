@@ -72,7 +72,7 @@ func TestParseSlashCommandRejectsArgumentsExplicitly(t *testing.T) {
 
 func TestStatusSnapshotNilApp(t *testing.T) {
 	var a *App
-	text := a.StatusSnapshot(time.Time{}).Text()
+	text := a.StatusSnapshot().Text()
 	for _, want := range []string{"model: not configured", "observables: 0/0 running, 0 errors", "skills: 0", "compact: 0, memory: 0 tokens", "success: llm n/a, tools n/a", "turn: idle", "queued input: 0"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status text missing %q:\n%s", want, text)
@@ -263,7 +263,7 @@ func TestStatusSnapshotIncludesSessionCompactionAndSuccessRates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text := a.StatusSnapshot(time.Now().UTC()).Text()
+	text := a.StatusSnapshot().Text()
 	for _, want := range []string{
 		statusLabel(statusIconCompact, "compact: 2, memory: ~120 tokens"),
 		statusLabel(statusIconSuccess, "success: llm 3/4 (75%), tools 4/5 (80%)"),
@@ -410,7 +410,7 @@ func TestAppStatusIncludesGoalState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status := a.StatusSnapshot(time.Now().UTC())
+	status := a.StatusSnapshot()
 	if status.Goal == nil || status.Goal.Description != "finish goal tools" || status.Goal.Status != runtime.GoalStatusInProgress {
 		t.Fatalf("goal status = %+v", status.Goal)
 	}

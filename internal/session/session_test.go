@@ -148,7 +148,7 @@ func TestSessionLazyFirstAppendPersistsOwnedTimes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	created := s.Info(time.Time{})
+	created := s.Info()
 	if _, err := os.Stat(filepath.Join(s.Dir, metadataFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("lazy metadata stat = %v, want not exist before first append", err)
 	}
@@ -888,7 +888,7 @@ func TestLoad_UsesLatestCompactActiveWindow(t *testing.T) {
 	if got := messageIDsForTest(s.History); strings.Join(got, ",") != "m2,m3,m4" {
 		t.Fatalf("active history ids = %v, want m2,m3,m4", got)
 	}
-	info := s.Info(time.Now())
+	info := s.Info()
 	if info.Turns != 2 || info.Preview != "old user" {
 		t.Fatalf("info = turns %d preview %q, want full transcript summary", info.Turns, info.Preview)
 	}

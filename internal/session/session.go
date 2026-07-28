@@ -388,13 +388,11 @@ func (s *Session) SubscribeBus(bus *events.Bus) func() {
 	})
 }
 
-// Info returns a summary of the in-memory session. The now parameter is kept
-// for API compatibility; session-owned timestamps are fixed at creation and
-// successful transcript append boundaries.
-func (s *Session) Info(now time.Time) Info {
+// Info returns a summary of the in-memory session.
+func (s *Session) Info() Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.infoLocked(now)
+	return s.infoLocked()
 }
 
 func (s *Session) RecordResponseUsage(usage llm.Usage, contextUsage *llm.ContextUsage) llm.Usage {
@@ -427,11 +425,11 @@ func (s *Session) ContextUsageSnapshot() *llm.ContextUsage {
 }
 
 // Snapshot returns the current summary and a copy of the in-memory history.
-func (s *Session) Snapshot(now time.Time) (Info, []llm.Message) {
+func (s *Session) Snapshot() (Info, []llm.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	msgs := append([]llm.Message(nil), s.History...)
-	return s.infoLocked(now), msgs
+	return s.infoLocked(), msgs
 }
 
 func (s *Session) ensureFilesLocked() error {
@@ -504,10 +502,10 @@ func (s *Session) historyInfoLocked() (Info, bool) {
 	if s.historyPath == "" {
 		return Info{}, false
 	}
-	return s.infoLocked(time.Now().UTC()), true
+	return s.infoLocked(), true
 }
 
-func (s *Session) infoLocked(_ time.Time) Info {
+func (s *Session) infoLocked() Info {
 	info := Info{
 		ID:           s.ID,
 		Alias:        s.Alias,

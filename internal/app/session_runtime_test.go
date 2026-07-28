@@ -106,7 +106,7 @@ func TestSwitchToNewPrimarySessionIsAtomicForConcurrentReaders(t *testing.T) {
 					errs <- err
 					return
 				}
-				status := a.StatusSnapshot(time.Now().UTC())
+				status := a.StatusSnapshot()
 				if status.SessionID == "" || filepath.Base(status.SessionDir) != status.SessionID {
 					errs <- fmt.Errorf("mixed status snapshot: id=%q dir=%q", status.SessionID, status.SessionDir)
 					return

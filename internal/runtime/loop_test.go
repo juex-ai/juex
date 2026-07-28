@@ -1195,7 +1195,7 @@ func TestCompact_RecordsUsageAndActiveContextStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := eng.Session.Info(time.Now())
+	info := eng.Session.Info()
 	if info.TokenUsage.InputTokens != 11 || info.TokenUsage.OutputTokens != 3 {
 		t.Fatalf("token usage = %+v", info.TokenUsage)
 	}
@@ -1238,7 +1238,7 @@ func TestTurn_PlainResponse(t *testing.T) {
 	if len(eng.Session.History) != 2 {
 		t.Fatalf("history len = %d", len(eng.Session.History))
 	}
-	if got := eng.Session.Info(time.Now()).TokenUsage; got != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
+	if got := eng.Session.Info().TokenUsage; got != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
 		t.Fatalf("session token usage = %+v", got)
 	}
 	if responded.TokenUsage != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
@@ -1318,7 +1318,7 @@ func TestTurn_RecordsContextUsageForAssistantResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	info := eng.Session.Info(time.Now())
+	info := eng.Session.Info()
 	got := info.ContextUsage
 	if got == nil {
 		t.Fatal("session context usage is nil")
@@ -1384,7 +1384,7 @@ func TestTurn_CalibratesFallbackContextUsageFromPreviousProviderUsage(t *testing
 		t.Fatal(err)
 	}
 
-	got := eng.Session.Info(time.Now()).ContextUsage
+	got := eng.Session.Info().ContextUsage
 	if got == nil {
 		t.Fatal("context usage is nil")
 	}

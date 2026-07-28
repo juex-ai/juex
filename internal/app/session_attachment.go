@@ -1,8 +1,6 @@
 package app
 
 import (
-	"time"
-
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/session"
 )
@@ -93,7 +91,7 @@ func resumeWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (Se
 	if err != nil {
 		return SessionAttachment{}, err
 	}
-	info := sess.Info(time.Now().UTC())
+	info := sess.Info()
 	if active {
 		if err := session.SetActive(cfg.HistoryPath(), info); err != nil {
 			sess.Close()
@@ -124,7 +122,7 @@ func attachActiveWorkspaceSession(cfg config.Config, req SessionAttachmentReques
 	if err != nil {
 		return SessionAttachment{}, err
 	}
-	if err := session.SetActive(cfg.HistoryPath(), sess.Info(time.Now().UTC())); err != nil {
+	if err := session.SetActive(cfg.HistoryPath(), sess.Info()); err != nil {
 		sess.Close()
 		return SessionAttachment{}, err
 	}
@@ -143,7 +141,7 @@ func newPrimaryWorkspaceSession(cfg config.Config, req SessionAttachmentRequest,
 	if err != nil {
 		return SessionAttachment{}, err
 	}
-	if err := session.SetActive(cfg.HistoryPath(), sess.Info(time.Now().UTC())); err != nil {
+	if err := session.SetActive(cfg.HistoryPath(), sess.Info()); err != nil {
 		sess.Close()
 		return SessionAttachment{}, err
 	}
@@ -161,7 +159,7 @@ func newSideWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (S
 	if err != nil {
 		return SessionAttachment{}, err
 	}
-	if err := session.RecordSession(cfg.HistoryPath(), sess.Info(time.Now().UTC())); err != nil {
+	if err := session.RecordSession(cfg.HistoryPath(), sess.Info()); err != nil {
 		sess.Close()
 		return SessionAttachment{}, err
 	}

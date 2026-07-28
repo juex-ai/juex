@@ -572,7 +572,7 @@ func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
 func (a *App) SwitchToNewPrimarySession() error {
 	var oldInfo session.Info
 	err := a.ReadSession(func(sess *session.Session) error {
-		oldInfo = sess.Info(time.Now().UTC())
+		oldInfo = sess.Info()
 		return nil
 	})
 	if err != nil {
@@ -1197,7 +1197,7 @@ func mcpNotificationPendingInputID(n mcp.Notification, eventType string) string 
 }
 
 func (a *App) TokenUsage() llm.Usage {
-	info, ok := a.SessionInfo(time.Now().UTC())
+	info, ok := a.SessionInfo()
 	if !ok {
 		return llm.Usage{}
 	}

@@ -368,11 +368,11 @@ func TestLateStaleHistoryRecordCannotCreateFalseCacheHit(t *testing.T) {
 	if err := s.Append(llm.TextMessage(llm.RoleUser, "first")); err != nil {
 		t.Fatal(err)
 	}
-	stale := s.Info(time.Time{})
+	stale := s.Info()
 	if err := s.Append(llm.TextMessage(llm.RoleUser, "second")); err != nil {
 		t.Fatal(err)
 	}
-	latest := s.Info(time.Time{})
+	latest := s.Info()
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
