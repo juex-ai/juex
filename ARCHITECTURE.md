@@ -1209,8 +1209,9 @@ Persistent root flags:
 | `--model` |  | unset (`provider:model` override) |
 | `--verbose` |  | false (stream events to stderr) |
 
-Individual commands may explicitly hide or shadow a root flag; `juex schema`
-is the authoritative effective command/flag matrix.
+`juex schema` is the authoritative declared command/flag inventory. Individual
+command policies may hide, shadow, or reject an inherited root flag even when
+introspection lists it.
 
 Every executable Cobra command declares an agent-state policy through an
 annotation. Normal `run`, `repl`, and `listen` use `mint`; the `sessions` and
