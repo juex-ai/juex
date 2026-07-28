@@ -234,6 +234,7 @@ operate on an agent. `juex init` sets up either the shared user config
 | Command | Purpose |
 | --- | --- |
 | `juex --version` / `juex -v` | Print the short build version; equivalent to `juex version`. |
+| `juex version [--verbose] [--json]` | Print build info; optionally include runtime context or emit machine-readable JSON. |
 | `juex schema` | Emit the command tree as JSON for tools and agents. |
 
 On macOS, `fleet install` writes a LaunchAgent under

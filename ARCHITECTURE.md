@@ -1197,14 +1197,20 @@ non-blocking application warning. Normal CLI output writes it to stderr, JSON
 run/dry-run output carries structured `warnings`, and REPL warnings use the
 REPL stderr writer.
 
-Persistent flags inherited by all subcommands:
+Persistent root flags:
 
 | Flag | Short | Default |
 |---|---|---|
 | `--config` |  | unset (path to `juex.yaml` override) |
 | `--cwd` | `-C` | `$PWD` (mirrors `git -C`) |
+| `--debug` |  | false (write detailed runtime diagnostics) |
 | `--enable-user-agents-resources` |  | config value (true/false or 1/0) |
+| `--log-level` |  | `info` |
+| `--model` |  | unset (`provider:model` override) |
 | `--verbose` |  | false (stream events to stderr) |
+
+Individual commands may explicitly hide or shadow a root flag; `juex schema`
+is the authoritative effective command/flag matrix.
 
 Every executable Cobra command declares an agent-state policy through an
 annotation. Normal `run`, `repl`, and `listen` use `mint`; the `sessions` and
