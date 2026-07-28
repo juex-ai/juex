@@ -425,7 +425,7 @@ func TestFleetAddressPrecedenceUsesFlagThenHomeConfigThenDefault(t *testing.T) {
 	}
 }
 
-func TestFleetServeUsesPersistentUnsafeBindForConfiguredAddress(t *testing.T) {
+func TestFleetServeReadsPersistentUnsafeBindForEachInvocation(t *testing.T) {
 	t.Setenv("JUEX_HOME", t.TempDir())
 	if _, err := config.SetHomeFleetSettings("0.0.0.0:6843", true); err != nil {
 		t.Fatal(err)
@@ -440,6 +440,21 @@ func TestFleetServeUsesPersistentUnsafeBindForConfiguredAddress(t *testing.T) {
 	}
 	if settings.Addr != "0.0.0.0:6843" || !settings.UnsafeBindAny {
 		t.Fatalf("settings = %+v", settings)
+	}
+
+	if _, err := config.SetHomeFleetSettings("0.0.0.0:6843", false); err != nil {
+		t.Fatal(err)
+	}
+	settings, err = resolveFleetServeSettings(
+		newFleetServeCmd(nil),
+		config.DefaultFleetAddr,
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Addr != "0.0.0.0:6843" || settings.UnsafeBindAny {
+		t.Fatalf("revoked settings = %+v", settings)
 	}
 }
 
@@ -532,10 +547,10 @@ func TestFleetInstallUsesPersistentUnsafeBindForNonLoopbackHomeConfig(t *testing
 			DefinitionPath: "/tmp/dev.juex.fleet.plist",
 		},
 	}
-	var managerUnsafeArgs []bool
+	managerCalls := 0
 	cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
-		newServiceManager: func(unsafeBindAny bool) (fleetServiceInstaller, error) {
-			managerUnsafeArgs = append(managerUnsafeArgs, unsafeBindAny)
+		newServiceManager: func() (fleetServiceInstaller, error) {
+			managerCalls++
 			return service, nil
 		},
 		newAgentManager: func() (fleetAgentRestarter, error) {
@@ -549,8 +564,8 @@ func TestFleetInstallUsesPersistentUnsafeBindForNonLoopbackHomeConfig(t *testing
 	if service.installCalls != 1 {
 		t.Fatalf("install calls = %d, want 1", service.installCalls)
 	}
-	if len(managerUnsafeArgs) != 2 || managerUnsafeArgs[0] || !managerUnsafeArgs[1] {
-		t.Fatalf("service manager unsafe args = %v, want [false true]", managerUnsafeArgs)
+	if managerCalls != 1 {
+		t.Fatalf("service manager calls = %d, want 1", managerCalls)
 	}
 }
 
@@ -618,10 +633,10 @@ func TestFleetInstallReinstallsAfterReadingButIgnoringExistingDefinition(t *test
 			DefinitionPath: "/tmp/dev.juex.fleet.plist",
 		},
 	}
-	var managerUnsafeArgs []bool
+	managerCalls := 0
 	cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
-		newServiceManager: func(unsafeBindAny bool) (fleetServiceInstaller, error) {
-			managerUnsafeArgs = append(managerUnsafeArgs, unsafeBindAny)
+		newServiceManager: func() (fleetServiceInstaller, error) {
+			managerCalls++
 			return service, nil
 		},
 		newAgentManager: func() (fleetAgentRestarter, error) {
@@ -639,8 +654,8 @@ func TestFleetInstallReinstallsAfterReadingButIgnoringExistingDefinition(t *test
 			service.installCalls,
 		)
 	}
-	if len(managerUnsafeArgs) != 2 || managerUnsafeArgs[0] || managerUnsafeArgs[1] {
-		t.Fatalf("service manager unsafe args = %v, want [false false]", managerUnsafeArgs)
+	if managerCalls != 1 {
+		t.Fatalf("service manager calls = %d, want 1", managerCalls)
 	}
 }
 
@@ -650,7 +665,7 @@ func TestFleetInstallRejectsUnreadableExistingDefinitionBeforeInstall(t *testing
 		existingErr: errors.New("malformed existing definition"),
 	}
 	cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
-		newServiceManager: func(bool) (fleetServiceInstaller, error) {
+		newServiceManager: func() (fleetServiceInstaller, error) {
 			return service, nil
 		},
 		newAgentManager: func() (fleetAgentRestarter, error) {
@@ -682,7 +697,7 @@ func TestFleetInstallExplicitAddressPersistsThroughCommand(t *testing.T) {
 		},
 	}
 	cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
-		newServiceManager: func(bool) (fleetServiceInstaller, error) {
+		newServiceManager: func() (fleetServiceInstaller, error) {
 			return service, nil
 		},
 		newAgentManager: func() (fleetAgentRestarter, error) {
@@ -736,7 +751,7 @@ func TestFleetInstallRestartAgentsFlagIsOptIn(t *testing.T) {
 				},
 			}
 			cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
-				newServiceManager: func(bool) (fleetServiceInstaller, error) {
+				newServiceManager: func() (fleetServiceInstaller, error) {
 					return service, nil
 				},
 				newAgentManager: func() (fleetAgentRestarter, error) {
@@ -812,7 +827,7 @@ func TestFleetInstallRestartAgentsRendersCompleteBatchBeforeReturningFailure(t *
 		err: &fleet.RestartAgentsError{Failed: 1},
 	}
 	cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
-		newServiceManager: func(bool) (fleetServiceInstaller, error) {
+		newServiceManager: func() (fleetServiceInstaller, error) {
 			return service, nil
 		},
 		newAgentManager: func() (fleetAgentRestarter, error) {

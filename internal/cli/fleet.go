@@ -150,7 +150,7 @@ func isTCPListenAddr(addr string) bool {
 	return err == nil && port >= 0 && port <= 65535
 }
 
-func newFleetServiceManager(unsafeBindAny bool) (*fleetservice.Manager, error) {
+func newFleetServiceManager() (*fleetservice.Manager, error) {
 	homeDir, err := config.EffectiveHomeDir()
 	if err != nil {
 		return nil, err
@@ -160,9 +160,8 @@ func newFleetServiceManager(unsafeBindAny bool) (*fleetservice.Manager, error) {
 		return nil, fmt.Errorf("juex fleet: resolve executable: %w", err)
 	}
 	return fleetservice.New(fleetservice.Options{
-		HomeDir:       homeDir,
-		Executable:    executable,
-		UnsafeBindAny: unsafeBindAny,
+		HomeDir:    homeDir,
+		Executable: executable,
 	})
 }
 
@@ -226,14 +225,14 @@ type fleetAgentRestarter interface {
 }
 
 type fleetInstallCommandDeps struct {
-	newServiceManager func(bool) (fleetServiceInstaller, error)
+	newServiceManager func() (fleetServiceInstaller, error)
 	newAgentManager   func() (fleetAgentRestarter, error)
 }
 
 func defaultFleetInstallCommandDeps() fleetInstallCommandDeps {
 	return fleetInstallCommandDeps{
-		newServiceManager: func(unsafeBindAny bool) (fleetServiceInstaller, error) {
-			return newFleetServiceManager(unsafeBindAny)
+		newServiceManager: func() (fleetServiceInstaller, error) {
+			return newFleetServiceManager()
 		},
 		newAgentManager: func() (fleetAgentRestarter, error) {
 			return newFleetManager()
@@ -319,13 +318,13 @@ func newFleetInstallCmdWithDeps(deps fleetInstallCommandDeps) *cobra.Command {
 					msg: "juex fleet install: --addr must bind to loopback (got " + selectedAddr + "). Pass --unsafe-bind-any if you have your own network protection.",
 				}
 			}
-			probeManager, err := deps.newServiceManager(false)
+			manager, err := deps.newServiceManager()
 			if err != nil {
 				return err
 			}
 			// Parse an existing definition so a malformed or foreign service is
 			// not overwritten. Its baked-in options are not configuration inputs.
-			_, _, err = probeManager.ExistingServeOptions()
+			_, _, err = manager.ExistingServeOptions()
 			if err != nil {
 				return err
 			}
@@ -340,10 +339,6 @@ func newFleetInstallCmdWithDeps(deps fleetInstallCommandDeps) *cobra.Command {
 			}
 			if settings.UnsafeBindAny && !isLoopbackAddr(settings.Addr) {
 				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: non-loopback fleet binding is enabled; juex has no authentication. Anyone who can reach this address can run shell commands.")
-			}
-			manager, err := deps.newServiceManager(settings.UnsafeBindAny)
-			if err != nil {
-				return err
 			}
 			registration, err := manager.Install(cmd.Context())
 			if err != nil {
@@ -414,7 +409,7 @@ func newFleetUninstallCmd(_ *persistentFlags) *cobra.Command {
 		Short: "Stop and remove the fleet per-user system service",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			manager, err := newFleetServiceManager(false)
+			manager, err := newFleetServiceManager()
 			if err != nil {
 				return err
 			}
@@ -434,7 +429,7 @@ func newFleetServiceInstalledCmd() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			manager, err := newFleetServiceManager(false)
+			manager, err := newFleetServiceManager()
 			if err != nil {
 				return err
 			}

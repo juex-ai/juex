@@ -22,9 +22,8 @@ const (
 )
 
 type Options struct {
-	HomeDir       string
-	Executable    string
-	UnsafeBindAny bool
+	HomeDir    string
+	Executable string
 }
 
 type Registration struct {
