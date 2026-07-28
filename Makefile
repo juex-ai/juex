@@ -1,10 +1,17 @@
-.PHONY: test race lint build snapshot release-dry integration provider-smoke development-eval clean help install-local cross web web-dev ripgrep
+.PHONY: test race lint build snapshot release-dry integration provider-smoke development-eval clean help install-local cross web web-check web-dev ripgrep
 
 web:
 	cd frontend && pnpm install && pnpm build
 	rm -rf internal/web/dist
 	mkdir -p internal/web/dist
 	cp -R frontend/dist/. internal/web/dist/
+
+web-check:
+	cd frontend && pnpm install --frozen-lockfile
+	cd frontend && pnpm exec tsc -b
+	cd frontend && pnpm test
+	cd frontend && pnpm lint
+	cd frontend && pnpm build
 
 web-dev:
 	cd frontend && pnpm dev
@@ -37,6 +44,7 @@ help:
 	@echo "  integration   go test -tags=integration ./tests/e2e/..."
 	@echo "  provider-smoke live rotating provider:model smoke from tests/eval/live-models.yaml"
 	@echo "  development-eval standard post-development validation record"
+	@echo "  web-check     install, type-check, test, lint, and build the frontend"
 	@echo "  clean         remove dist/"
 
 test:
