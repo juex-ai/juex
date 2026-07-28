@@ -552,7 +552,10 @@ func (s *Session) metadataLocked() metadata {
 }
 
 func (s *Session) rollbackConversationLocked(offset int64) error {
-	rollbackErr := s.convFD.Truncate(offset)
+	// Windows O_APPEND handles intentionally lack FILE_WRITE_DATA, which
+	// File.Truncate requires. A named truncate obtains a separate write handle
+	// while preserving atomic append semantics for the resident descriptor.
+	rollbackErr := os.Truncate(filepath.Join(s.Dir, conversationFile), offset)
 	if _, err := s.convFD.Seek(offset, io.SeekStart); rollbackErr == nil {
 		rollbackErr = err
 	}

@@ -189,6 +189,9 @@ func TestSessionAppendRollsBackWhenMetadataUpdateFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Append error = nil, want metadata persistence failure")
 	}
+	if strings.Contains(err.Error(), "rollback conversation batch") {
+		t.Fatalf("Append error = %v, transcript rollback also failed", err)
+	}
 	if len(s.History) != 0 || len(s.transcript.entries) != 0 {
 		t.Fatalf("in-memory state changed: history=%d transcript=%d", len(s.History), len(s.transcript.entries))
 	}
