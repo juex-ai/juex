@@ -11,6 +11,7 @@ web-check:
 	cd frontend && pnpm exec tsc -b
 	cd frontend && pnpm test
 	cd frontend && pnpm lint
+	cd frontend && pnpm build
 
 web-dev:
 	cd frontend && pnpm dev
@@ -43,7 +44,7 @@ help:
 	@echo "  integration   go test -tags=integration ./tests/e2e/..."
 	@echo "  provider-smoke live rotating provider:model smoke from tests/eval/live-models.yaml"
 	@echo "  development-eval standard post-development validation record"
-	@echo "  web-check     install, type-check, test, and lint the frontend"
+	@echo "  web-check     install, type-check, test, lint, and build the frontend"
 	@echo "  clean         remove dist/"
 
 test:

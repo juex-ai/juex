@@ -15,9 +15,12 @@ test("the frontend gate has one local entry point for all required checks", () =
   assert.match(makefileSource, /\.PHONY:[^\n]*\bweb-check\b/);
   assert.match(
     makefileSource,
-    /web-check:\n\tcd frontend && pnpm install --frozen-lockfile\n\tcd frontend && pnpm exec tsc -b\n\tcd frontend && pnpm test\n\tcd frontend && pnpm lint/,
+    /web-check:\n\tcd frontend && pnpm install --frozen-lockfile\n\tcd frontend && pnpm exec tsc -b\n\tcd frontend && pnpm test\n\tcd frontend && pnpm lint\n\tcd frontend && pnpm build/,
   );
-  assert.match(makefileSource, /web-check\s+install, type-check, test, and lint the frontend/);
+  assert.match(
+    makefileSource,
+    /web-check\s+install, type-check, test, lint, and build the frontend/,
+  );
 });
 
 test("CI runs the frontend gate separately without slowing Go jobs", () => {
