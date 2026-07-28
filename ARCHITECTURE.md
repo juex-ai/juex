@@ -1279,10 +1279,13 @@ implicitly restarting that detached process.
 `internal/fleetservice` owns user-service definitions and service-manager
 transactions for the resident fleet supervisor. Fleet address precedence is
 explicit `--addr`, then `fleet.addr` in `$JUEX_HOME/juex.yaml`, then
-`127.0.0.1:5839`. Home fleet config is loaded independently of provider and
-workspace config resolution. `juex fleet install --addr ...` validates a
-stable non-zero loopback address and atomically merges it into the home YAML
-before installing. The opt-in `--restart-agents` flag runs a sequential
+`127.0.0.1:5839`. Non-loopback permission comes from an explicit
+`--unsafe-bind-any`, or from `fleet.unsafe_bind_any` when the address also
+comes from home config. An explicit address never inherits the home permission.
+Home fleet config is loaded independently of provider and workspace config
+resolution. `juex fleet install` atomically persists explicitly supplied
+address and unsafe-bind settings before installing. The opt-in
+`--restart-agents` flag runs a sequential
 `internal/fleet` bulk operation after service installation. It selects only
 enabled, bound, healthy agents from one status snapshot, reports every
 restarted, skipped, or failed item, and continues after individual failures.
@@ -1290,8 +1293,8 @@ The service definition runs `juex fleet serve` without an
 address argument, so config edits take effect after a service restart. Before
 replacing an existing launchd, systemd, or Termux definition, install validates
 that it is a recognized Juex fleet service. The address comes only from the
-current flag, home config, or current default; unsafe binding requires the
-current command flag.
+current flag, home config, or current default. Existing definition arguments
+are not configuration inputs.
 
 Installation resolves the current executable and effective `JUEX_HOME`, then
 derives a filesystem-safe service identity from that home. It writes

@@ -73,19 +73,20 @@ func newFleetServeCmd(_ *persistentFlags) *cobra.Command {
 		Short: "Run the resident fleet supervisor and browser API",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			resolvedAddr, _, err := resolveFleetAddr(cmd, addr, false)
+			settings, err := resolveFleetServeSettings(cmd, addr, unsafeBindAny)
 			if err != nil {
 				return err
 			}
-			addr = resolvedAddr
+			addr = settings.Addr
+			unsafeBindAny = settings.UnsafeBindAny
 			if !isTCPListenAddr(addr) {
 				return &usageError{msg: "juex fleet serve: --addr must be a host:port TCP address (got " + addr + ")"}
 			}
 			if !unsafeBindAny && !isLoopbackAddr(addr) {
 				return &usageError{msg: "juex fleet serve: --addr must bind to loopback (got " + addr + "). Pass --unsafe-bind-any if you have your own network protection."}
 			}
-			if unsafeBindAny {
-				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: --unsafe-bind-any in use; juex has no authentication. Anyone who can reach this address can run shell commands.")
+			if unsafeBindAny && !isLoopbackAddr(addr) {
+				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: non-loopback fleet binding is enabled; juex has no authentication. Anyone who can reach this address can run shell commands.")
 			}
 			manager, err := newFleetManager()
 			if err != nil {
@@ -165,24 +166,48 @@ func newFleetServiceManager(unsafeBindAny bool) (*fleetservice.Manager, error) {
 	})
 }
 
-func resolveFleetAddr(cmd *cobra.Command, flagAddr string, stable bool) (string, bool, error) {
-	explicit := cmd.Flags().Changed("addr")
+type fleetServeSettings struct {
+	Addr          string
+	UnsafeBindAny bool
+}
+
+func resolveFleetServeSettings(
+	cmd *cobra.Command,
+	flagAddr string,
+	flagUnsafeBindAny bool,
+) (fleetServeSettings, error) {
+	explicitAddr := cmd.Flags().Changed("addr")
 	addr := strings.TrimSpace(flagAddr)
-	if !explicit {
+	unsafeBindAny := flagUnsafeBindAny
+	if !explicitAddr {
 		fleetCfg, err := config.LoadHomeFleetConfig()
 		if err != nil {
-			return "", false, err
+			return fleetServeSettings{}, err
 		}
 		addr = fleetCfg.Addr
+		unsafeBindAny = effectiveFleetUnsafeBindAny(
+			cmd,
+			flagUnsafeBindAny,
+			explicitAddr,
+			fleetCfg,
+		)
 	}
-	if stable {
-		if err := config.ValidateStableFleetAddr(addr); err != nil {
-			return "", explicit, &usageError{msg: "juex fleet: --addr " + err.Error()}
-		}
-	} else if !isTCPListenAddr(addr) {
-		return "", explicit, &usageError{msg: "juex fleet: --addr must be a host:port TCP address (got " + addr + ")"}
+	if !isTCPListenAddr(addr) {
+		return fleetServeSettings{}, &usageError{msg: "juex fleet: --addr must be a host:port TCP address (got " + addr + ")"}
 	}
-	return addr, explicit, nil
+	return fleetServeSettings{Addr: addr, UnsafeBindAny: unsafeBindAny}, nil
+}
+
+func effectiveFleetUnsafeBindAny(
+	cmd *cobra.Command,
+	flagUnsafeBindAny bool,
+	explicitAddr bool,
+	fleetCfg config.FleetConfig,
+) bool {
+	if !explicitAddr && !cmd.Flags().Changed("unsafe-bind-any") {
+		return fleetCfg.UnsafeBindAny
+	}
+	return flagUnsafeBindAny
 }
 
 type fleetInstallSettings struct {
@@ -227,7 +252,14 @@ func resolveFleetInstallSettings(
 	if !explicitAddr {
 		addr = fleetCfg.Addr
 	}
-	settings := fleetInstallSettings{Addr: addr, UnsafeBindAny: unsafeBindAny}
+	explicitUnsafeBindAny := cmd.Flags().Changed("unsafe-bind-any")
+	effectiveUnsafeBindAny := effectiveFleetUnsafeBindAny(
+		cmd,
+		unsafeBindAny,
+		explicitAddr,
+		fleetCfg,
+	)
+	settings := fleetInstallSettings{Addr: addr, UnsafeBindAny: effectiveUnsafeBindAny}
 	if err := config.ValidateStableFleetAddr(settings.Addr); err != nil {
 		return fleetInstallSettings{}, &usageError{msg: "juex fleet: --addr " + err.Error()}
 	}
@@ -236,8 +268,11 @@ func resolveFleetInstallSettings(
 			msg: "juex fleet install: --addr must bind to loopback (got " + settings.Addr + "). Pass --unsafe-bind-any if you have your own network protection.",
 		}
 	}
-	if explicitAddr {
-		configPath, err := config.SetHomeFleetAddr(settings.Addr)
+	if explicitAddr || explicitUnsafeBindAny {
+		configPath, err := config.SetHomeFleetSettings(
+			settings.Addr,
+			settings.UnsafeBindAny,
+		)
 		if err != nil {
 			return fleetInstallSettings{}, err
 		}
@@ -273,7 +308,13 @@ func newFleetInstallCmdWithDeps(deps fleetInstallCommandDeps) *cobra.Command {
 			if err := config.ValidateStableFleetAddr(selectedAddr); err != nil {
 				return &usageError{msg: "juex fleet: --addr " + err.Error()}
 			}
-			if explicitAddr && !unsafeBindAny && !isLoopbackAddr(selectedAddr) {
+			selectedUnsafeBindAny := effectiveFleetUnsafeBindAny(
+				cmd,
+				unsafeBindAny,
+				explicitAddr,
+				fleetCfg,
+			)
+			if !selectedUnsafeBindAny && !isLoopbackAddr(selectedAddr) {
 				return &usageError{
 					msg: "juex fleet install: --addr must bind to loopback (got " + selectedAddr + "). Pass --unsafe-bind-any if you have your own network protection.",
 				}
@@ -297,8 +338,8 @@ func newFleetInstallCmdWithDeps(deps fleetInstallCommandDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if settings.UnsafeBindAny {
-				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: --unsafe-bind-any in use; juex has no authentication. Anyone who can reach this address can run shell commands.")
+			if settings.UnsafeBindAny && !isLoopbackAddr(settings.Addr) {
+				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: non-loopback fleet binding is enabled; juex has no authentication. Anyone who can reach this address can run shell commands.")
 			}
 			manager, err := deps.newServiceManager(settings.UnsafeBindAny)
 			if err != nil {

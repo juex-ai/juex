@@ -22,10 +22,13 @@ func TestLoadHomeFleetConfigDefaultsAndLoadsAddress(t *testing.T) {
 	if got.AddrConfigured {
 		t.Fatal("default fleet address reported as explicitly configured")
 	}
+	if got.UnsafeBindAny {
+		t.Fatalf("default unsafe bind settings = %+v", got)
+	}
 
 	if err := os.WriteFile(
 		filepath.Join(home, "juex.yaml"),
-		[]byte("providers: definitely-not-parsed\nfleet:\n  addr: 127.0.0.1:6840\n"),
+		[]byte("providers: definitely-not-parsed\nfleet:\n  addr: 0.0.0.0:6840\n  unsafe_bind_any: true\n"),
 		0o600,
 	); err != nil {
 		t.Fatal(err)
@@ -34,15 +37,18 @@ func TestLoadHomeFleetConfigDefaultsAndLoadsAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Addr != "127.0.0.1:6840" {
+	if got.Addr != "0.0.0.0:6840" {
 		t.Fatalf("configured addr = %q", got.Addr)
 	}
 	if !got.AddrConfigured {
 		t.Fatal("configured fleet address was not marked explicit")
 	}
+	if !got.UnsafeBindAny {
+		t.Fatalf("configured unsafe bind settings = %+v", got)
+	}
 }
 
-func TestSetHomeFleetAddrMergesYAMLAtomically(t *testing.T) {
+func TestSetHomeFleetSettingsMergesYAMLAtomically(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("JUEX_HOME", home)
 	path := filepath.Join(home, "juex.yaml")
@@ -51,7 +57,7 @@ func TestSetHomeFleetAddrMergesYAMLAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gotPath, err := SetHomeFleetAddr("127.0.0.1:6841")
+	gotPath, err := SetHomeFleetSettings("0.0.0.0:6841", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +78,8 @@ func TestSetHomeFleetAddrMergesYAMLAtomically(t *testing.T) {
 		"model: openai:test",
 		"id: openai",
 		"fleet:",
-		"addr: 127.0.0.1:6841",
+		"addr: 0.0.0.0:6841",
+		"unsafe_bind_any: true",
 		"# keep addr comment",
 	} {
 		if !strings.Contains(string(body), want) {
@@ -85,6 +92,26 @@ func TestSetHomeFleetAddrMergesYAMLAtomically(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestRuntimeConfigLoadsFleetUnsafeBindSetting(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("JUEX_HOME", home)
+	if err := os.WriteFile(
+		filepath.Join(home, "juex.yaml"),
+		[]byte("fleet:\n  addr: 0.0.0.0:6842\n  unsafe_bind_any: true\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForWorkDirForValidation(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Fleet.Addr != "0.0.0.0:6842" || !cfg.Fleet.UnsafeBindAny {
+		t.Fatalf("fleet config = %+v", cfg.Fleet)
 	}
 }
 

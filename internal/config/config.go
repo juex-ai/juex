@@ -802,6 +802,7 @@ func applyYAMLData(cfg *Config, data []byte, source, hookSource string, requireH
 			cfg.Fleet.Addr = addr
 			cfg.Fleet.AddrConfigured = true
 		}
+		cfg.Fleet.UnsafeBindAny = fc.Fleet.UnsafeBindAny
 	}
 	return nil
 }
