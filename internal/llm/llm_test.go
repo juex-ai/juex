@@ -2535,6 +2535,71 @@ func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestOpenAICodexResponses_BoundsReplayedToolCallIDs(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`+"\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:       "openai-codex",
+		Protocol: "openai-codex/responses",
+		BaseURL:  srv.URL,
+		APIKey:   "codex-token",
+		Model:    "gpt-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	longIDs := []string{
+		"mcp__wechat-wire__wechat_wire_send_message-1785160851254640548-253",
+		"mcp__wechat-wire__wechat_wire_send_attachment-1785161749082587296-275",
+	}
+	history := []Message{
+		TextMessage(RoleUser, "send"),
+		{Role: RoleAssistant, Blocks: []Block{
+			{Type: BlockToolUse, ToolUseID: longIDs[0], ToolName: "send_message", Input: map[string]any{"text": "hello"}},
+			{Type: BlockToolUse, ToolUseID: longIDs[1], ToolName: "send_attachment", Input: map[string]any{"path": "report.txt"}},
+		}},
+		{Role: RoleUser, Blocks: []Block{
+			{Type: BlockToolResult, ToolUseID: longIDs[0], Content: "sent"},
+			{Type: BlockToolResult, ToolUseID: longIDs[1], Content: "uploaded"},
+		}},
+	}
+	if _, err := p.Complete(context.Background(), "", history, nil); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	input, _ := capturedBody["input"].([]any)
+	callIDs := map[string]int{}
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		switch item["type"] {
+		case "function_call", "function_call_output":
+			callID, _ := item["call_id"].(string)
+			if len(callID) > 64 {
+				t.Fatalf("Codex call_id length = %d, want <= 64: %q", len(callID), callID)
+			}
+			callIDs[callID]++
+		}
+	}
+	if len(callIDs) != 2 {
+		t.Fatalf("bounded call IDs = %+v, want two distinct IDs", callIDs)
+	}
+	for callID, count := range callIDs {
+		if count != 2 {
+			t.Fatalf("call_id %q appears %d times, want matching call and output", callID, count)
+		}
+	}
+	if history[1].Blocks[0].ToolUseID != longIDs[0] || history[1].Blocks[1].ToolUseID != longIDs[1] {
+		t.Fatalf("canonical history was mutated: %+v", history[1].Blocks)
+	}
+}
+
 func TestOpenAICodexResponses_DoesNotReplayReasoningItemsWithStoreFalse(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
