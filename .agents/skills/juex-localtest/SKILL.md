@@ -48,10 +48,16 @@ Run commands directly from the repository root.
 3. **Frontend and embedded binary build** - `make build` runs the
    frontend build, copies it into `internal/web/dist`, and builds `dist/juex`.
 4. **Live integration entrypoint** - `make integration` runs
-   `go test -tags=integration ./tests/e2e/... -count=1`. It reads selected
-   repo-local configs from `.juex/qwen.juex.yaml` and
-   `.juex/minimax.juex.yaml`; missing or incomplete configs should skip the
-   affected live cases, not be replaced with fake credentials.
+   verbose `go test -tags=integration ./tests/e2e/... -count=1`. It reads the
+   top-level model from `JUEX_PROVIDER_CONFIG` or `~/.juex/juex.yaml`.
+   `JUEX_PROVIDER_SMOKE_ONLY=provider:model` reuses provider smoke's explicit
+   model-ref override; integration requires the complete ref, not only a
+   provider id. The harness uses the uv-managed eval helper to extract that
+   selection into an isolated minimal config. It keeps non-selector
+   `PROVIDER_API_*` credentials and tuning overrides from the inherited
+   environment and source YAML `environment.variables`. A missing default
+   config skips with its expected path, while an explicit missing path or
+   unusable existing config fails.
 5. **Race parity when risky** - run `make race` after changes to concurrency,
    server shutdown, runtime turn loops, MCP, tools, events, sessions, web
    request handling, or shared mutable state.
@@ -153,9 +159,10 @@ bash tests/eval/compaction_eval.sh --all-models
 - If unit tests fail: fix before running integration tests.
 - If integration tests fail: report failures with error details; do not
   suppress or work around them.
-- If `make integration` skips live cases because the expected `.juex/*.yaml`
-  files, keys, or required provider fields are absent, report the skip clearly;
-  do not invent credentials or replace it with a fake live test.
+- If `make integration` skips live cases because the default
+  `~/.juex/juex.yaml` is absent, report the named path clearly; an explicit
+  `JUEX_PROVIDER_CONFIG` path or existing unusable config must fail. Do not
+  invent credentials or replace it with a fake live test.
 - If live provider or compaction eval fails, keep the `.tmp/reports` output and
   explain whether the failure is config, provider capability, prompt-following,
   or a Juex regression before merging.

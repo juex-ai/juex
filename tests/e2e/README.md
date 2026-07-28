@@ -54,10 +54,17 @@ Build-tagged live integration tests are opt-in because they use credentials
 and real providers:
 
 ```bash
-go test -tags=integration ./tests/e2e/... -run Live -count=1
+go test -tags=integration ./tests/e2e/... -run Live -count=1 -v
 ```
 
-They read selected local configs from `.juex/*.yaml` and currently exercise:
+They read the top-level model from `JUEX_PROVIDER_CONFIG` or
+`~/.juex/juex.yaml`. Set
+`JUEX_PROVIDER_SMOKE_ONLY=provider:model` to select one configured override;
+integration requires the complete model ref. The uv-managed eval helper writes
+the same isolated minimal provider/model config used by provider smoke.
+Non-selector `PROVIDER_API_*` credentials and tuning overrides from the process
+environment or source YAML `environment.variables` retain normal precedence.
+The live cases exercise:
 
 - plain completion;
 - read-tool use;
@@ -86,7 +93,7 @@ Use the smallest run set that still covers the changed behavior:
 | Go unit/package tests | `make test` | Every production code change. |
 | Race suite | `make race` | Concurrency, shutdown, runtime, MCP, tool, event, session, or web changes. |
 | Non-live e2e | `go test ./tests/e2e -count=1` | CLI/runtime/session/provider/web behavior that crosses package boundaries. |
-| Live integration build tag | `make integration` | Manual credential-backed checks against the repo-local `.juex/*.yaml` fixtures. |
+| Live integration build tag | `make integration` | Verbose credential-backed checks using `JUEX_PROVIDER_CONFIG` or `~/.juex/juex.yaml`. |
 
 Run evaluation-layer checks from `tests/eval` when the change affects the eval
 harness, provider smoke, compaction quality, or development validation records.

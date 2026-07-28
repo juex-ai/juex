@@ -1,15 +1,17 @@
 //go:build integration
 
 // Live integration smoke tests. Build-tag gated so they only run when
-// explicitly opted in (no API key in normal CI). Reads provider configs from
-// .juex/*.yaml in the repository root.
+// explicitly opted in (no API key in normal CI). Reads provider configuration
+// from JUEX_PROVIDER_CONFIG or ~/.juex/juex.yaml.
 //
-//	go test -tags=integration ./tests/e2e/... -run Live
+//	go test -tags=integration ./tests/e2e/... -count=1 -v -run Live
 package e2e
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,20 +26,16 @@ import (
 	"github.com/juex-ai/juex/internal/tools"
 )
 
-var liveConfigEnvKeys = []string{
+var liveConfigSelectorEnvKeys = []string{
 	"PROVIDER_API_ID",
 	"PROVIDER_API_PROTOCOL",
-	"PROVIDER_API_BASE",
-	"PROVIDER_API_KEY",
 	"PROVIDER_API_MODEL",
-	"PROVIDER_THINKING_EFFORT",
-	"PROVIDER_CONTEXT_WINDOW",
 }
 
-var defaultLiveConfigNames = []string{
-	"qwen.juex.yaml",
-	"minimax.juex.yaml",
-}
+const (
+	liveProviderConfigEnv = "JUEX_PROVIDER_CONFIG"
+	liveProviderModelEnv  = "JUEX_PROVIDER_SMOKE_ONLY"
+)
 
 type liveConfig struct {
 	name string
@@ -67,52 +65,118 @@ func repoRoot(t *testing.T) string {
 func loadLiveConfigs(t *testing.T) []liveConfig {
 	t.Helper()
 	root := repoRoot(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("resolve user home for live provider config: %v", err)
+	}
+	configuredPath := strings.TrimSpace(os.Getenv(liveProviderConfigEnv))
+	path := resolveLiveProviderConfigPath(root, home, configuredPath)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			if configuredPath != "" {
+				t.Fatalf("%s points to missing live provider config %s", liveProviderConfigEnv, path)
+			}
+			t.Skipf(
+				"live provider config %s not found; create ~/.juex/juex.yaml or set %s",
+				path,
+				liveProviderConfigEnv,
+			)
+		}
+		t.Fatalf("check live provider config %s: %v", path, err)
+	}
+
 	juexHome := t.TempDir()
 	t.Setenv("JUEX_HOME", juexHome)
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(juexHome, "gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	var matches []string
-	for _, name := range defaultLiveConfigNames {
-		path := filepath.Join(root, ".juex", name)
-		_, err := os.Stat(path)
-		if err == nil {
-			matches = append(matches, path)
-		} else if !os.IsNotExist(err) {
-			t.Fatalf("error checking for live config %s: %v", path, err)
-		}
-	}
-	if len(matches) == 0 {
-		t.Skip("none of .juex/qwen.juex.yaml or .juex/minimax.juex.yaml are present; skipping live tests")
-	}
-	// Clear OS env vars so the explicit .juex/*.yaml file wins.
-	for _, k := range liveConfigEnvKeys {
+	// Preserve credentials and tuning overrides, but keep the extracted
+	// provider:model selection stable.
+	for _, k := range liveConfigSelectorEnvKeys {
 		t.Setenv(k, "")
 	}
 
-	var out []liveConfig
-	for _, path := range matches {
-		cfg, err := config.LoadFromFileForWorkDir(path, t.TempDir())
-		if err != nil {
-			t.Fatalf("load live config %s: %v", path, err)
-		}
-		if cfg.APIKey == "" {
-			t.Logf("%s has no API key set; skipping it", path)
-			continue
-		}
-		if (cfg.ProviderID == "" && cfg.ProviderProtocol == "") || cfg.Model == "" {
-			t.Logf("%s has incomplete provider config; skipping it", path)
-			continue
-		}
-		out = append(out, liveConfig{
-			name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
-			path: path,
-			cfg:  cfg,
-		})
+	selected, err := loadLiveConfig(root, path, t.TempDir(), os.Getenv(liveProviderModelEnv))
+	if err != nil {
+		t.Fatalf("load live provider config: %v", err)
 	}
-	if len(out) == 0 {
-		t.Skip("no usable .juex/*.yaml live configs found; skipping live tests")
+	return []liveConfig{selected}
+}
+
+func resolveLiveProviderConfigPath(root, home, configured string) string {
+	path := strings.TrimSpace(configured)
+	if path == "" {
+		return filepath.Join(home, ".juex", "juex.yaml")
 	}
-	return out
+	if path == "~" {
+		return home
+	}
+	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) {
+		path = filepath.Join(home, path[2:])
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(root, path)
+}
+
+func loadLiveConfig(root, path, workDir, modelOverride string) (liveConfig, error) {
+	modelRef := strings.TrimSpace(modelOverride)
+	if modelRef != "" {
+		if _, err := config.ParseModelRef(modelRef); err != nil {
+			return liveConfig{}, fmt.Errorf("%s must be a complete provider:model for integration: %w", liveProviderModelEnv, err)
+		}
+	}
+	selectedPath := filepath.Join(workDir, "selected-provider.juex.yaml")
+	if err := writeLiveProviderConfig(root, path, selectedPath, modelRef); err != nil {
+		return liveConfig{}, err
+	}
+	cfg, err := config.LoadWithOptions(config.LoadOptions{
+		WorkDir:    workDir,
+		ConfigPath: selectedPath,
+		AgentState: config.AgentStateNone,
+	})
+	if err != nil {
+		return liveConfig{}, fmt.Errorf("%s: %w", path, err)
+	}
+	profile, err := cfg.ProviderProfile()
+	if err != nil {
+		return liveConfig{}, fmt.Errorf("%s: unusable provider %s:%s: %w", path, cfg.ProviderID, cfg.Model, err)
+	}
+	if strings.TrimSpace(profile.APIKey) == "" {
+		return liveConfig{}, fmt.Errorf("%s: provider %s:%s has no usable credentials", path, cfg.ProviderID, cfg.Model)
+	}
+	return liveConfig{
+		name: cfg.ProviderID + ":" + cfg.Model,
+		path: path,
+		cfg:  cfg,
+	}, nil
+}
+
+func writeLiveProviderConfig(root, source, output, modelRef string) error {
+	uv, err := exec.LookPath("uv")
+	if err != nil {
+		return fmt.Errorf("select live provider config: uv is required: %w", err)
+	}
+	args := []string{
+		"run", "--quiet", "--project", root,
+		"python", "-m", "tests.eval.juex_eval", "write-model-config",
+		"--source", source,
+		"--output", output,
+	}
+	if modelRef != "" {
+		args = append(args, "--ref", modelRef)
+	}
+	cmd := exec.Command(uv, args...)
+	cmd.Dir = root
+	combined, err := cmd.CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(combined))
+		if detail == "" {
+			detail = "no diagnostic output"
+		}
+		return fmt.Errorf("select live provider config from %s: %w: %s", source, err, detail)
+	}
+	return nil
 }
 
 // runLiveTurn drives one real LLM turn with the supplied prompt against the

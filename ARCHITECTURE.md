@@ -2258,7 +2258,7 @@ automatic activation; the model loads a selected guide explicitly.
 | `make cross` | build the frontend, then produce all 7 managed archives without GoReleaser |
 | `make snapshot` | build the frontend through the GoReleaser before hook, then produce 7 snapshot archives in `dist/` |
 | `make release-dry` | build the frontend through the GoReleaser before hook, then run a non-publishing release |
-| `make integration` | provision ripgrep on `PATH`, then run `go test -tags=integration ./tests/e2e/...` |
+| `make integration` | provision ripgrep on `PATH`, then run verbose credential-backed `go test -tags=integration ./tests/e2e/...` using `JUEX_PROVIDER_CONFIG` or `~/.juex/juex.yaml` |
 | `make provider-smoke` | build-dependent rotating live capability and Schedule-routing smoke for model refs in `tests/eval/live-models.yaml` using `~/.juex/juex.yaml` credentials |
 | `make development-eval` | deterministic tests, build, rotating live provider:model smoke, and a redacted validation record |
 | `make clean` | `rm -rf dist` |
@@ -2329,9 +2329,10 @@ doctor` exposes the selected source, version, and path.
   - `test`: matrix on `ubuntu-latest`, `macos-latest`, `windows-latest`;
     runs `go test ./... -race -count=1`. Generic command execution behavior runs on
     Windows; Unix process-group timeout coverage lives in `!windows` test files.
-- `integration.yml` — `workflow_dispatch` only. Hydrates `.juex/qwen.juex.yaml`
-  and `.juex/minimax.juex.yaml` provider configs from repo secrets, then
-  runs `-tags=integration ./tests/e2e/...`. Required secrets:
+- `integration.yml` — `workflow_dispatch` only. Runs an Anthropic/OpenAI
+  matrix, hydrates one `$JUEX_HOME/juex.yaml` from repo secrets, exports that
+  path through `JUEX_PROVIDER_CONFIG`, then runs `make integration`. Required
+  secrets:
 
   ```
   PROVIDER_API_PROTOCOL_ANTHROPIC
@@ -2376,8 +2377,17 @@ Run the deterministic suite with `make test`.
 Provider-quality smoke tests remain explicit because they use credentials.
 There are two live layers:
 
-- `go test -tags=integration ./tests/e2e/... -run Live -count=1`
-  uses selected repo-local configs for CI/manual integration.
+- `go test -tags=integration ./tests/e2e/... -run Live -count=1 -v`
+  uses the top-level model from `JUEX_PROVIDER_CONFIG` or
+  `~/.juex/juex.yaml`; `JUEX_PROVIDER_SMOKE_ONLY=provider:model` selects one
+  configured override. The harness calls the eval layer's
+  `write-model-config` command, so integration and provider smoke share the
+  same provider/model extraction and isolated minimal-config writer. It clears
+  the `PROVIDER_API_ID`, `PROVIDER_API_PROTOCOL`, and `PROVIDER_API_MODEL`
+  selectors to keep that selection stable. Endpoint, credential,
+  thinking-effort, and context-window overrides from the process environment
+  or source YAML `environment.variables` retain normal configuration
+  precedence.
 - `make provider-smoke` reads the provider:model refs from
   `tests/eval/live-models.yaml`, verifies the selected ref exists in
   `~/.juex/juex.yaml`, then runs isolated real-binary capability and Schedule
