@@ -7,11 +7,25 @@ const MESSAGE_CONTENT_BASE_CLASS_NAME =
 const MESSAGE_CONTENT_USER_CLASS_NAME =
   "group-[.is-user]:ml-auto group-[.is-user]:max-w-[92%] group-[.is-user]:rounded-[16px] group-[.is-user]:rounded-tr-md sm:group-[.is-user]:max-w-[78%]";
 
-const EXTERNAL_EVENT_ROW_CLASS_NAME =
-  "flex min-w-0 cursor-pointer list-none items-center gap-2 px-1 py-1.5 text-xs text-juex-gold-900 outline-none transition hover:text-juex-ink-900 focus-visible:ring-2 focus-visible:ring-ring/40 dark:text-juex-gold-400 dark:hover:text-juex-gold-200 [&::-webkit-details-marker]:hidden";
+const TRANSCRIPT_DISCLOSURE_ROW_BASE_CLASS_NAME =
+  "flex min-w-0 cursor-pointer list-none items-center gap-2 px-1 py-1.5 text-xs outline-none transition focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden";
 
-const EXTERNAL_EVENT_BODY_CLASS_NAME =
-  "group relative mt-1.5 max-h-[15rem] overflow-auto rounded-md border border-juex-gold-300/70 bg-juex-gold-50/45 px-3 py-2.5 pr-11 text-[13px] leading-6 text-juex-ink-900 dark:border-juex-gold-400/25 dark:bg-juex-gold-400/5 dark:text-juex-cream-50";
+const TRANSCRIPT_DISCLOSURE_ROW_TONE_CLASS_NAMES = {
+  external:
+    "text-juex-gold-900 hover:text-juex-ink-900 dark:text-juex-gold-400 dark:hover:text-juex-gold-200",
+  system:
+    "text-juex-info hover:text-foreground dark:text-juex-info dark:hover:text-foreground",
+} as const;
+
+const TRANSCRIPT_DISCLOSURE_BODY_BASE_CLASS_NAME =
+  "group relative mt-1.5 max-h-[15rem] overflow-auto rounded-md border px-3 py-2.5 text-[13px] leading-6";
+
+const TRANSCRIPT_DISCLOSURE_BODY_TONE_CLASS_NAMES = {
+  external:
+    "border-juex-gold-300/70 bg-juex-gold-50/45 pr-11 text-juex-ink-900 dark:border-juex-gold-400/25 dark:bg-juex-gold-400/5 dark:text-juex-cream-50",
+  system:
+    "border-juex-info-border bg-juex-info-bg text-foreground",
+} as const;
 
 const EXTERNAL_EVENT_COPY_CLASS_NAME =
   "absolute right-2 top-2 size-7 border border-transparent text-current opacity-0 transition-opacity hover:border-juex-gold-300 hover:bg-juex-gold-100 hover:text-current hover:opacity-100 focus-visible:ring-ring group-hover:opacity-100 group-focus-within:opacity-100 dark:hover:border-juex-gold-400/30 dark:hover:bg-juex-gold-400/10";
@@ -56,12 +70,18 @@ export function messageContentUserClassName() {
   return MESSAGE_CONTENT_USER_CLASS_NAME;
 }
 
-export function externalEventRowClassName() {
-  return EXTERNAL_EVENT_ROW_CLASS_NAME;
+export type TranscriptDisclosureTone = "external" | "system";
+
+export function transcriptDisclosureRowClassName(
+  tone: TranscriptDisclosureTone,
+) {
+  return `${TRANSCRIPT_DISCLOSURE_ROW_BASE_CLASS_NAME} ${TRANSCRIPT_DISCLOSURE_ROW_TONE_CLASS_NAMES[tone]}`;
 }
 
-export function externalEventBodyClassName() {
-  return EXTERNAL_EVENT_BODY_CLASS_NAME;
+export function transcriptDisclosureBodyClassName(
+  tone: TranscriptDisclosureTone,
+) {
+  return `${TRANSCRIPT_DISCLOSURE_BODY_BASE_CLASS_NAME} ${TRANSCRIPT_DISCLOSURE_BODY_TONE_CLASS_NAMES[tone]}`;
 }
 
 export function externalEventCopyClassName() {

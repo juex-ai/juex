@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import {
+  BellIcon,
   CheckIcon,
   ChevronRightIcon,
   CircleAlertIcon,
@@ -55,20 +56,21 @@ import {
 } from "@/lib/message-copy";
 import { formatModelFallbackNotice } from "@/lib/model-fallback";
 import {
-  externalEventBodyClassName,
   externalEventCopyClassName,
-  externalEventRowClassName,
   processDisclosureBodyClassName,
   processDisclosureChevronClassName,
   processDisclosureClassName,
   processDisclosureSummaryClassName,
   thinkingDisclosureBodyClassName,
   thinkingDisclosureSummaryClassName,
+  transcriptDisclosureBodyClassName,
+  transcriptDisclosureRowClassName,
 } from "@/lib/message-rendering";
 import {
   messageGroupRendererKey,
   type MessageGroupRendererKey,
 } from "@/lib/session-transcript-renderers";
+import { formatSystemNotice } from "@/lib/system-notice";
 import {
   aggregateToolProcessStatus,
   formatToolBatchTitle,
@@ -667,19 +669,13 @@ function HookEventGroup({ group }: MessageGroupRendererProps) {
 function SystemNoticeGroup({ group }: MessageGroupRendererProps) {
   const text = groupText(group);
   if (!text && !group.pending) return null;
+  const display = formatSystemNotice(text);
   return (
-    <div
-      className="flex w-full justify-center px-2 py-0.5"
-      data-system-notice-message
-    >
-      <div className="w-full max-w-[min(42rem,100%)]">
-        <ProcessDisclosure status="done" title="Automated notice">
-          <MessageResponse className="break-words text-[13px] leading-6 text-muted-foreground">
-            {text || "..."}
-          </MessageResponse>
-        </ProcessDisclosure>
-      </div>
-    </div>
+    <SystemNotificationMessage
+      content={display.content}
+      kind="system_notice"
+      title={display.title}
+    />
   );
 }
 
@@ -688,16 +684,70 @@ function ModelFallbackGroup({ group }: MessageGroupRendererProps) {
   if (!text && !group.pending) return null;
   const display = formatModelFallbackNotice(text);
   return (
+    <SystemNotificationMessage
+      content={display.content}
+      kind="model_fallback"
+      title={display.title}
+    />
+  );
+}
+
+function SystemNotificationMessage({
+  content,
+  kind,
+  title,
+}: {
+  content: string;
+  kind: "model_fallback" | "system_notice";
+  title: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const visibleContent = content || "...";
+  const toggleLabel = expanded ? `Collapse ${title}` : `Expand ${title}`;
+  return (
     <div
       className="flex w-full justify-center px-2 py-0.5"
-      data-model-fallback-message
+      data-model-fallback-message={
+        kind === "model_fallback" ? "" : undefined
+      }
+      data-system-notice-message={kind === "system_notice" ? "" : undefined}
     >
-      <div className="w-full max-w-[min(42rem,100%)]">
-        <ProcessDisclosure status="done" title={display.title}>
-          <MessageResponse className="break-words text-[13px] leading-6 text-muted-foreground">
-            {display.content || "..."}
-          </MessageResponse>
-        </ProcessDisclosure>
+      <div className="w-full max-w-[min(34rem,100%)]">
+        <details
+          open={expanded}
+          onToggle={(event) => setExpanded(event.currentTarget.open)}
+          className="group/system-notification w-full"
+          data-system-notification-message
+          data-system-notification-kind={kind}
+        >
+          <summary
+            className={transcriptDisclosureRowClassName("system")}
+            title={toggleLabel}
+          >
+            <BellIcon className="size-3.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 max-w-[48%] shrink-0 truncate font-mono font-semibold sm:max-w-[18rem]">
+              {title}
+            </span>
+            <span
+              className="size-1 shrink-0 rounded-full bg-current opacity-45"
+              aria-hidden="true"
+            />
+            <span className="min-w-0 flex-1 truncate text-[12px] text-current opacity-75">
+              {visibleContent}
+            </span>
+            <ChevronRightIcon
+              className="size-3.5 shrink-0 transition-transform group-open/system-notification:rotate-90"
+              aria-hidden="true"
+            />
+          </summary>
+          {expanded ? (
+            <div className={transcriptDisclosureBodyClassName("system")}>
+              <MessageResponse className="break-words">
+                {visibleContent}
+              </MessageResponse>
+            </div>
+          ) : null}
+        </details>
       </div>
     </div>
   );
@@ -882,7 +932,7 @@ function ExternalEventMessage({
       data-mcp-event-message={eventKind === "mcp" ? "" : undefined}
     >
       <summary
-        className={externalEventRowClassName()}
+        className={transcriptDisclosureRowClassName("external")}
         title={toggleLabel}
         data-external-event-toggle
         data-mcp-event-toggle={eventKind === "mcp" ? "" : undefined}
@@ -913,7 +963,7 @@ function ExternalEventMessage({
       </summary>
       {expanded ? (
         <div
-          className={externalEventBodyClassName()}
+          className={transcriptDisclosureBodyClassName("external")}
           data-external-event-body
           data-mcp-event-body={eventKind === "mcp" ? "" : undefined}
         >

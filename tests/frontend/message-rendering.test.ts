@@ -2,9 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
-  externalEventBodyClassName,
   externalEventCopyClassName,
-  externalEventRowClassName,
   messageContentBaseClassName,
   messageContentUserClassName,
   messageResponseClassName,
@@ -14,6 +12,8 @@ import {
   processStatusDotClassName,
   thinkingDisclosureBodyClassName,
   thinkingDisclosureSummaryClassName,
+  transcriptDisclosureBodyClassName,
+  transcriptDisclosureRowClassName,
 } from "../../frontend/src/lib/message-rendering.ts";
 
 const transcriptSource = readFileSync(
@@ -44,7 +44,7 @@ test("user message chrome uses a weak card treatment", () => {
 });
 
 test("external event row renders as inline text instead of a bubble", () => {
-  const row = externalEventRowClassName();
+  const row = transcriptDisclosureRowClassName("external");
 
   assert.match(row, /flex/);
   assert.match(row, /items-center/);
@@ -60,7 +60,7 @@ test("external event row renders as inline text instead of a bubble", () => {
 });
 
 test("external event expanded body scrolls inside a bordered area", () => {
-  const body = externalEventBodyClassName();
+  const body = transcriptDisclosureBodyClassName("external");
   const copy = externalEventCopyClassName();
 
   assert.match(body, /relative/);
@@ -76,6 +76,20 @@ test("external event expanded body scrolls inside a bordered area", () => {
   assert.match(copy, /opacity-0/);
   assert.match(copy, /group-hover:opacity-100/);
   assert.match(copy, /group-focus-within:opacity-100/);
+});
+
+test("system notification disclosure uses the blue information ramp", () => {
+  const row = transcriptDisclosureRowClassName("system");
+  const body = transcriptDisclosureBodyClassName("system");
+
+  assert.match(row, /text-juex-info/);
+  assert.match(row, /dark:text-juex-info/);
+  assert.doesNotMatch(row, /text-juex-error/);
+  assert.doesNotMatch(row, /text-juex-gold/);
+  assert.match(body, /border-juex-info/);
+  assert.match(body, /bg-juex-info-bg/);
+  assert.match(body, /max-h-\[15rem\]/);
+  assert.match(body, /overflow-auto/);
 });
 
 test("process disclosure chrome does not look like a bracketed bubble", () => {
@@ -123,19 +137,47 @@ test("all process disclosures start closed and only follow user toggles", () => 
   assert.doesNotMatch(disclosure, /setIsOpen\([^)]*status/);
 });
 
-test("system notices render as automated notices instead of user messages", () => {
+test("system and model notices share a blue notification disclosure", () => {
   assert.match(
     transcriptSource,
     /system_notice: SystemNoticeGroup/,
   );
 
-  const start = transcriptSource.indexOf("function SystemNoticeGroup(");
-  const end = transcriptSource.indexOf("\nfunction ", start + 1);
-  assert.notEqual(start, -1);
-  assert.notEqual(end, -1);
-  const notice = transcriptSource.slice(start, end);
-  assert.match(notice, /Automated notice/);
-  assert.doesNotMatch(notice, /<Message from="user">/);
+  const systemStart = transcriptSource.indexOf("function SystemNoticeGroup(");
+  const modelStart = transcriptSource.indexOf("function ModelFallbackGroup(");
+  const notificationStart = transcriptSource.indexOf(
+    "function SystemNotificationMessage(",
+  );
+  const notificationEnd = transcriptSource.indexOf(
+    "\nfunction ",
+    notificationStart + 1,
+  );
+  assert.notEqual(systemStart, -1);
+  assert.notEqual(modelStart, -1);
+  assert.notEqual(notificationStart, -1);
+  assert.notEqual(notificationEnd, -1);
+
+  const system = transcriptSource.slice(systemStart, modelStart);
+  const model = transcriptSource.slice(modelStart, notificationStart);
+  const notification = transcriptSource.slice(
+    notificationStart,
+    notificationEnd,
+  );
+
+  assert.match(system, /formatSystemNotice\(text\)/);
+  assert.match(system, /kind="system_notice"/);
+  assert.match(model, /formatModelFallbackNotice\(text\)/);
+  assert.match(model, /kind="model_fallback"/);
+  assert.match(notification, /<details/);
+  assert.match(notification, /<BellIcon/);
+  assert.match(notification, /transcriptDisclosureRowClassName\("system"\)/);
+  assert.match(notification, /transcriptDisclosureBodyClassName\("system"\)/);
+  assert.match(notification, /max-w-\[min\(34rem,100%\)\]/);
+  assert.match(notification, /aria-hidden="true"/);
+  assert.match(notification, /data-system-notification-message/);
+  assert.doesNotMatch(system, /<ProcessDisclosure/);
+  assert.doesNotMatch(model, /<ProcessDisclosure/);
+  assert.doesNotMatch(notification, /<Message from="user">/);
 });
 
 test("assistant work disclosure owns process rows and leaves content outside", () => {
