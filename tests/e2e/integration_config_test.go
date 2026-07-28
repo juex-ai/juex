@@ -94,6 +94,7 @@ providers:
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	isolateLiveConfigTest(t)
 	t.Setenv(liveProviderConfigEnv, configPath)
 	t.Setenv("PROVIDER_API_ID", "must-not-replace-alpha")
 	t.Setenv("PROVIDER_API_PROTOCOL", "anthropic/messages")
@@ -144,6 +145,9 @@ providers:
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv(liveProviderModelEnv, "ambient:missing")
+	t.Setenv("PROVIDER_API_KEY", "ambient-key")
+	isolateLiveConfigTest(t)
 	t.Setenv(liveProviderConfigEnv, configPath)
 
 	got := loadLiveConfigs(t)
@@ -264,6 +268,8 @@ func isolateLiveConfigTest(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	for _, key := range []string{
+		liveProviderConfigEnv,
+		liveProviderModelEnv,
 		"PROVIDER_API_ID",
 		"PROVIDER_API_PROTOCOL",
 		"PROVIDER_API_BASE",
@@ -272,6 +278,25 @@ func isolateLiveConfigTest(t *testing.T) {
 		"PROVIDER_THINKING_EFFORT",
 		"PROVIDER_CONTEXT_WINDOW",
 	} {
-		t.Setenv(key, "")
+		unsetLiveConfigTestEnv(t, key)
 	}
+}
+
+func unsetLiveConfigTestEnv(t *testing.T, key string) {
+	t.Helper()
+	value, exists := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if exists {
+			if err := os.Setenv(key, value); err != nil {
+				t.Errorf("restore %s: %v", key, err)
+			}
+			return
+		}
+		if err := os.Unsetenv(key); err != nil {
+			t.Errorf("clear restored %s: %v", key, err)
+		}
+	})
 }
