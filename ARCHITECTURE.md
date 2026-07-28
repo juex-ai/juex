@@ -932,9 +932,12 @@ then other disk-listed primary sessions before creating a new active primary.
 Web startup and MCP
 notification routing use exported app helpers for active-primary records and
 ids instead of duplicating those rules.
-App lifetimes acquire `sessions/<id>/session.lock` inside the agent home so two
-processes do not append to the same session concurrently. Startup serializes
-lock cleanup with a short-lived guard file. If a leftover lock names a PID that
+App lifetimes acquire `sessions/<id>/session.lock` inside the agent home so
+processes do not append to the same session concurrently. Metadata overrides
+for an existing session are applied only after that lock is acquired and
+reload the canonical metadata before writing, so they cannot replace newer
+session-owned timestamps. Startup serializes lock cleanup with a short-lived
+guard file. If a leftover lock names a PID that
 is no longer running, names a PID reused by a process that started after the
 lock, or is unreadable and old enough to rule out an in-progress write, startup
 removes that stale lock and retries the atomic acquire. Platforms that cannot

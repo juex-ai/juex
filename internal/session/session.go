@@ -280,20 +280,7 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 	}
 	alias := meta.Alias
 	kind := meta.Kind
-	if opts.Alias != "" {
-		alias = opts.Alias
-		meta.Alias = alias
-	}
-	if opts.Kind != "" {
-		kind = NormalizeKind(opts.Kind)
-		meta.Kind = kind
-	}
 	recordActive := shouldRecordActive(opts, kind)
-	if opts.Alias != "" || opts.Kind != "" {
-		if err := saveMetadata(dir, meta); err != nil {
-			return nil, err
-		}
-	}
 	convPath := filepath.Join(dir, conversationFile)
 	idx, err := scanTranscriptIndex(convPath)
 	if err != nil {
@@ -393,6 +380,33 @@ func (s *Session) Info() Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.infoLocked()
+}
+
+// ApplyAlias updates an owned Session after its process-level session lock has
+// been acquired. Persisted sessions reload metadata first so concurrent work
+// completed before lock acquisition cannot be overwritten by stale times.
+func (s *Session) ApplyAlias(alias string) error {
+	if alias == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.convFD == nil {
+		s.Alias = alias
+		return nil
+	}
+	meta, err := loadMetadata(s.Dir)
+	if err != nil {
+		return err
+	}
+	meta.Alias = alias
+	if err := saveMetadata(s.Dir, meta); err != nil {
+		return err
+	}
+	s.Alias = alias
+	s.startedAtMS = meta.StartedAtMS
+	s.lastActiveMS = meta.LastActiveAtMS
+	return nil
 }
 
 func (s *Session) RecordResponseUsage(usage llm.Usage, contextUsage *llm.ContextUsage) llm.Usage {

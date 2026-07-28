@@ -2172,6 +2172,52 @@ func TestApp_WritesSessionHistoryWithAlias(t *testing.T) {
 	}
 }
 
+func TestApp_LockConflictDoesNotMutateSessionMetadata(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir}
+	first, err := New(Options{
+		Config: cfg,
+		Provider: &stubProvider{replies: []llm.Response{{
+			Message:    llm.TextMessage(llm.RoleAssistant, "owner"),
+			StopReason: llm.StopEndTurn,
+		}}},
+		WorkDir: dir,
+		Alias:   "owner",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if _, err := first.Run(context.Background(), "persist owner turn"); err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := session.LoadInfo(first.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = New(Options{
+		Config:     cfg,
+		Provider:   &stubProvider{},
+		WorkDir:    dir,
+		Alias:      "contender",
+		DisableMCP: true,
+	})
+	var lockErr *session.LockError
+	if !errors.As(err, &lockErr) {
+		t.Fatalf("contender error = %v, want session lock conflict", err)
+	}
+	after, _, err := session.LoadInfo(first.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Alias != before.Alias ||
+		!after.StartedAt.Equal(before.StartedAt) ||
+		!after.LastActiveAt.Equal(before.LastActiveAt) {
+		t.Fatalf("metadata changed across lock conflict: before=%+v after=%+v", before, after)
+	}
+}
+
 func TestApp_NewWithoutKeyFails(t *testing.T) {
 	_, err := New(Options{
 		Config:  config.Config{ProviderID: "openai" /* no key */, Model: "m", WorkDir: t.TempDir()},

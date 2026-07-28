@@ -308,6 +308,11 @@ func New(opts Options) (*App, error) {
 		sess.Close()
 		return nil, err
 	}
+	if err := sess.ApplyAlias(opts.Alias); err != nil {
+		_ = sessLock.Close()
+		_ = sess.Close()
+		return nil, err
+	}
 	chunkedWrites.RestoreActiveFromHistory(sess.History)
 	var eventSink *events.DurableSink
 	var eventUnsubscribe func()
