@@ -53,9 +53,10 @@ Run commands directly from the repository root.
    `JUEX_PROVIDER_SMOKE_ONLY=provider:model` reuses provider smoke's explicit
    model-ref override; integration requires the complete ref, not only a
    provider id. The harness uses the uv-managed eval helper to extract that
-   selection into an isolated minimal config. A missing default config skips
-   with its expected path, while an explicit missing path or unusable existing
-   config fails.
+   selection into an isolated minimal config. It keeps non-selector
+   `PROVIDER_API_*` credentials and tuning overrides. A missing default config
+   skips with its expected path, while an explicit missing path or unusable
+   existing config fails.
 5. **Race parity when risky** - run `make race` after changes to concurrency,
    server shutdown, runtime turn loops, MCP, tools, events, sessions, web
    request handling, or shared mutable state.

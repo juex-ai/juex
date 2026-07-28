@@ -26,14 +26,9 @@ import (
 	"github.com/juex-ai/juex/internal/tools"
 )
 
-var liveConfigEnvKeys = []string{
+var liveConfigSelectorEnvKeys = []string{
 	"PROVIDER_API_ID",
-	"PROVIDER_API_PROTOCOL",
-	"PROVIDER_API_BASE",
-	"PROVIDER_API_KEY",
 	"PROVIDER_API_MODEL",
-	"PROVIDER_THINKING_EFFORT",
-	"PROVIDER_CONTEXT_WINDOW",
 }
 
 const (
@@ -93,8 +88,9 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 	t.Setenv("JUEX_HOME", juexHome)
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(juexHome, "gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	// Clear legacy provider overrides so the canonical config file wins.
-	for _, k := range liveConfigEnvKeys {
+	// Preserve credentials and tuning overrides, but keep the extracted
+	// provider:model selection stable.
+	for _, k := range liveConfigSelectorEnvKeys {
 		t.Setenv(k, "")
 	}
 
