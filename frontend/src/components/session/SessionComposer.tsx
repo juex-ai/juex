@@ -156,11 +156,16 @@ export function SessionComposer({
         >
           <div
             data-testid="session-composer-fade"
-            className="pointer-events-none absolute inset-x-0 -top-12 h-12 bg-linear-to-b from-transparent to-background/95"
+            className="pointer-events-none absolute inset-x-0 -top-12 z-0 h-16 bg-linear-to-b from-transparent to-background/95"
             aria-hidden="true"
           />
           <div
-            className="pointer-events-auto flex min-h-0 flex-col overflow-visible"
+            data-testid="session-composer-content-occluder"
+            className="pointer-events-none absolute inset-x-0 top-4 bottom-0 z-0 bg-background"
+            aria-hidden="true"
+          />
+          <div
+            className="pointer-events-auto relative z-10 flex min-h-0 flex-col overflow-visible"
             data-testid="session-composer-stack"
           >
             <QueuedInputStack items={queuedInputs} />

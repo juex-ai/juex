@@ -230,8 +230,28 @@ test("active session composer floats without consuming conversation layout", () 
   assert.match(composerSource, /data-testid="session-composer-obstruction"/);
   assert.match(
     composerSource,
-    /data-testid="session-composer-fade"[\s\S]*absolute[\s\S]*inset-x-0[\s\S]*-top-12[\s\S]*h-12[\s\S]*bg-linear-to-b/,
-    "the fade should be local to the composer width and live only above it",
+    /data-testid="session-composer-fade"[\s\S]*absolute[\s\S]*inset-x-0[\s\S]*-top-12[\s\S]*h-16[\s\S]*bg-linear-to-b/,
+    "the fade should continue through the prompt's 16px rounded top edge",
+  );
+  assert.match(
+    composerSource,
+    /data-testid="session-composer-content-occluder"[\s\S]*absolute[\s\S]*inset-x-0[\s\S]*top-4[\s\S]*bottom-0[\s\S]*bg-background/,
+    "a composer-width surface must hide transcript content below the rounded top without covering the scrollbar",
+  );
+  assert.doesNotMatch(
+    sessionSource,
+    /<Conversation[\s\S]*marginBottom:/,
+    "the conversation scrollport must keep its full height so its scrollbar reaches the bottom",
+  );
+  assert.match(
+    sessionSource,
+    /<ConversationContent[\s\S]*paddingBottom: effectiveClearance/,
+    "the full composer clearance must keep the latest content above the obstruction",
+  );
+  assert.match(
+    sessionSource,
+    /<ConversationScrollButton[\s\S]*bottom: effectiveClearance \? effectiveClearance \+ 16 : 16/,
+    "the scroll-to-bottom control must preserve its original gap above the composer",
   );
   const overlay = composerSource.match(
     /data-testid="session-composer-overlay"[\s\S]*?data-testid="session-composer-obstruction"/,
@@ -249,7 +269,7 @@ test("active session composer floats without consuming conversation layout", () 
   assert.match(composerSource, /data-testid="session-composer-stack"/);
   assert.match(
     composerSource,
-    /className="pointer-events-auto flex min-h-0 flex-col overflow-visible"[\s\S]*data-testid="session-composer-stack"/,
+    /className="pointer-events-auto relative z-10 flex min-h-0 flex-col overflow-visible"[\s\S]*data-testid="session-composer-stack"/,
     "the stack must not rectangularly clip the prompt surface shadow",
   );
   assert.match(

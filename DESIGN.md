@@ -262,11 +262,14 @@ narrower screens. Session history is opened from the stage header as
   bounded by the actual Session container height. Its full obstruction,
   including the bottom safe area and the 48px top fade, reserves at least 150px
   of scroll clearance for the transcript and latest-message control without
-  consuming conversation layout. The fade is confined to the composer width
-  and appears only above the input, never across the transcript scrollbar or
-  below the floating surface. Clearance growth follows the bottom only when the
-  reader is already there; it does not steal a manually scrolled reading
-  position.
+  shortening the full-height transcript scrollport. A composer-width content
+  occluder begins 16px inside the floating stack's rounded top edge, so
+  scrolled text cannot reappear in the transparent safe area below it while the
+  native scrollbar still reaches the viewport bottom. The matching fade crosses
+  that same 16px edge instead of stopping abruptly at the corner boundary.
+  Neither layer covers the transcript scrollbar or paints a viewport-wide
+  bottom background. Clearance growth follows the bottom only when the reader
+  is already there; it does not steal a manually scrolled reading position.
 - Stopped and failed agents keep persisted conversations readable. Their
   composer is replaced by a runtime state bar with a Start agent action;
   failures also show the reason and a Logs shortcut. The stage does not poll
@@ -628,8 +631,11 @@ strip does not adopt the deferred general-purpose AI Elements `Attachments`
 primitive. The composer is a floating warm paper well with a `16px` radius,
 prominent forest shadow, and a high-contrast forest focus border without an
 outer ring. A 48px top-only background fade, constrained to the 760px composer
-width, separates it from messages without covering the transcript scrollbar or
-adding a bottom background block. The submit button is the state control:
+width, extends 16px behind the rounded top edge so its corner treatment remains
+continuous. A same-width background occluder continues from that opaque
+boundary beneath the prompt stack, preventing text from reappearing below the
+prompt without shortening or covering the full-height transcript scrollbar.
+The submit button is the state control:
 empty + idle appears disabled and clicks show a short input hint; empty +
 running switches to a square stop icon; text + idle submits and clears the
 input; text + running submits to the pending-input queue for the next provider
