@@ -168,7 +168,7 @@ intentional — building `juex` from source means running the full toolchain
 make web-dev      # cd frontend && pnpm dev (Vite on :5173)
 ```
 
-In another shell run `juex fleet serve` on its default `:8080`. Vite's
+In another shell run `juex fleet serve` on its default `127.0.0.1:5839`. Vite's
 `server.proxy` config forwards fleet `/api` requests and selected-agent
 `/agents/:id/api` requests to the fleet server. Selected-agent page routes stay
 inside Vite so direct navigation and refresh continue to use the HMR bundle.
