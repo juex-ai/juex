@@ -288,13 +288,13 @@ $JUEX_HOME/
     ├── agent.json
     ├── runtime.json             # agent/instance ids, pid, endpoint, start time, and binary version
     ├── api.sock                 # preferred local API endpoint while serving
-    ├── history.json
+    ├── history.json             # cached transcript summaries + active primary id
     ├── logs/fleet.log           # detached child stdout and stderr
     ├── memory/
     ├── observables/             # generated runs, observations, and schedule state
     └── sessions/<id>/
         ├── logs/
-        ├── session.json
+        ├── session.json         # alias, kind, and owned epoch-ms timestamps
         ├── conversation.jsonl
         ├── events.jsonl
         ├── pending_input.jsonl

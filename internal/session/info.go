@@ -12,8 +12,8 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 )
 
-// idTimeLayout is the timestamp prefix encoded into every session id.
-// See newID() in session.go.
+// idTimeLayout is the cosmetic timestamp prefix encoded into every session id.
+// It keeps directory names readable and sortable but is not session metadata.
 const idTimeLayout = "20060102T150405"
 
 const previewMaxRunes = 80
@@ -22,6 +22,11 @@ const previewMaxRunes = 80
 // prevents legacy journals without context_usage from turning list requests
 // into full-file scans.
 const maxSessionUsageScanBytes = int64(maxEventLineBytes)
+
+type transcriptFingerprint struct {
+	Size    int64 `json:"size"`
+	MtimeMS int64 `json:"mtime_ms"`
+}
 
 // Info is a lightweight, read-only summary of a session on disk. It is
 // produced by List and LoadInfo and is safe to expose through the CLI
@@ -38,6 +43,8 @@ type Info struct {
 	Preview      string            `json:"preview"`
 	TokenUsage   llm.Usage         `json:"token_usage"`
 	ContextUsage *llm.ContextUsage `json:"context_usage,omitempty"`
+
+	transcript transcriptFingerprint
 }
 
 // InfoDir returns the canonical on-disk directory for info under sessionsRoot.
@@ -71,6 +78,10 @@ func List(root string) ([]Info, error) {
 // modification time still matches. Current metadata and event usage are always
 // read from their canonical session files.
 func ListWithHistory(root, historyPath string) ([]Info, error) {
+	return listWithHistoryLoader(root, historyPath, loadInfoSummary)
+}
+
+func listWithHistoryLoader(root, historyPath string, loadSummary summaryLoader) ([]Info, error) {
 	history, err := LoadHistory(historyPath)
 	if err != nil {
 		return nil, err
@@ -81,10 +92,16 @@ func ListWithHistory(root, historyPath string) ([]Info, error) {
 			recorded[info.ID] = info
 		}
 	}
-	return list(root, recorded)
+	return listWithSummaryLoader(root, recorded, loadSummary)
 }
 
 func list(root string, recorded map[string]Info) ([]Info, error) {
+	return listWithSummaryLoader(root, recorded, loadInfoSummary)
+}
+
+type summaryLoader func(string) (Info, transcriptIndex, error)
+
+func listWithSummaryLoader(root string, recorded map[string]Info, loadSummary summaryLoader) ([]Info, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -98,9 +115,9 @@ func list(root string, recorded map[string]Info) ([]Info, error) {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
-		info, err := cachedOrScannedInfo(dir, e.Name(), recorded)
+		info, err := cachedOrScannedInfo(dir, e.Name(), recorded, loadSummary)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrSessionTimeUnavailable) {
 				continue
 			}
 			return nil, err
@@ -111,15 +128,20 @@ func list(root string, recorded map[string]Info) ([]Info, error) {
 	return out, nil
 }
 
-func cachedOrScannedInfo(dir, id string, recorded map[string]Info) (Info, error) {
+func cachedOrScannedInfo(
+	dir, id string,
+	recorded map[string]Info,
+	loadSummary summaryLoader,
+) (Info, error) {
 	convPath := filepath.Join(dir, conversationFile)
 	st, err := os.Stat(convPath)
 	if err != nil {
 		return Info{}, err
 	}
 	cached, ok := recorded[id]
-	if !ok || !cached.LastActiveAt.Equal(st.ModTime()) {
-		info, _, err := loadInfoSummary(dir)
+	fingerprint := fingerprintFromFileInfo(st)
+	if !ok || cached.transcript != fingerprint {
+		info, _, err := loadSummary(dir)
 		return info, err
 	}
 	meta, err := loadMetadata(dir)
@@ -131,10 +153,11 @@ func cachedOrScannedInfo(dir, id string, recorded map[string]Info) (Info, error)
 		Alias:        meta.Alias,
 		Dir:          dir,
 		Kind:         meta.Kind,
-		StartedAt:    parseStartedAt(id, st.ModTime()),
-		LastActiveAt: st.ModTime(),
+		StartedAt:    time.UnixMilli(meta.StartedAtMS).UTC(),
+		LastActiveAt: time.UnixMilli(meta.LastActiveAtMS).UTC(),
 		Turns:        cached.Turns,
 		Preview:      cached.Preview,
+		transcript:   fingerprint,
 	}
 	info.TokenUsage, info.ContextUsage, _ = loadLatestSessionUsageWithin(dir, maxSessionUsageScanBytes)
 	return info, nil
@@ -175,21 +198,18 @@ func loadInfoSummary(dir string) (Info, transcriptIndex, error) {
 		return Info{}, transcriptIndex{}, err
 	}
 	id := filepath.Base(dir)
-	alias, err := LoadAlias(dir)
-	if err != nil {
-		return Info{}, transcriptIndex{}, err
-	}
-	kind, err := LoadKind(dir)
+	meta, err := loadMetadata(dir)
 	if err != nil {
 		return Info{}, transcriptIndex{}, err
 	}
 	info := Info{
 		ID:           id,
-		Alias:        alias,
+		Alias:        meta.Alias,
 		Dir:          dir,
-		Kind:         kind,
-		LastActiveAt: st.ModTime(),
-		StartedAt:    parseStartedAt(id, st.ModTime()),
+		Kind:         meta.Kind,
+		LastActiveAt: time.UnixMilli(meta.LastActiveAtMS).UTC(),
+		StartedAt:    time.UnixMilli(meta.StartedAtMS).UTC(),
+		transcript:   fingerprintFromFileInfo(st),
 	}
 	idx, err := scanTranscriptIndex(convPath)
 	if err != nil {
@@ -260,17 +280,11 @@ func loadLatestSessionUsageWithin(dir string, maxBytes int64) (llm.Usage, *llm.C
 	return tokenUsage, contextUsage, nil
 }
 
-// parseStartedAt extracts the timestamp prefix from a session id
-// (YYYYMMDDTHHMMSS-...). Falls back to fallback if the id is malformed.
-func parseStartedAt(id string, fallback time.Time) time.Time {
-	if len(id) < len(idTimeLayout) {
-		return fallback
+func fingerprintFromFileInfo(info os.FileInfo) transcriptFingerprint {
+	return transcriptFingerprint{
+		Size:    info.Size(),
+		MtimeMS: info.ModTime().UnixMilli(),
 	}
-	t, err := time.ParseInLocation(idTimeLayout, id[:len(idTimeLayout)], time.UTC)
-	if err != nil {
-		return fallback
-	}
-	return t
 }
 
 func truncateRunes(s string, n int) string {

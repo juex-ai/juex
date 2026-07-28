@@ -85,7 +85,7 @@ func newSessionsListCmd(flags *persistentFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			infos, err := session.List(cfg.SessionsDir())
+			infos, err := session.ListWithHistory(cfg.SessionsDir(), cfg.HistoryPath())
 			if err != nil {
 				return err
 			}

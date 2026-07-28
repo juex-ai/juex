@@ -54,14 +54,15 @@ func EnsureActivePrimarySessionRecord(cfg config.Config) error {
 	return attachment.Session.Close()
 }
 
-// ActivePrimarySessionID returns the history.active primary session id, if one
-// is recorded. It does not validate the transcript files on disk.
+// ActivePrimarySessionID returns the recorded active primary session id.
+// SetActive is the write boundary that guarantees only primary sessions can
+// occupy this slot; the session may still be lazy and have no files on disk.
 func ActivePrimarySessionID(cfg config.Config) (string, bool, error) {
 	h, err := session.LoadHistory(cfg.HistoryPath())
 	if err != nil {
 		return "", false, err
 	}
-	if h.Active == nil || h.Active.ID == "" || session.NormalizeKind(h.Active.Kind) != session.KindPrimary {
+	if h.Active == nil || h.Active.ID == "" {
 		return "", false, nil
 	}
 	return h.Active.ID, true, nil
@@ -172,17 +173,16 @@ func findAttachablePrimarySession(cfg config.Config) (session.Info, bool, error)
 	if err != nil {
 		return session.Info{}, false, err
 	}
-	if h.Active != nil && attachablePrimaryInfo(cfg, *h.Active) {
-		return *h.Active, true, nil
-	}
-	for _, info := range h.Sessions {
-		if attachablePrimaryInfo(cfg, info) {
-			return info, true, nil
-		}
-	}
-	infos, err := session.List(cfg.SessionsDir())
+	infos, err := session.ListWithHistory(cfg.SessionsDir(), cfg.HistoryPath())
 	if err != nil {
 		return session.Info{}, false, err
+	}
+	if h.Active != nil {
+		for _, info := range infos {
+			if info.ID == h.Active.ID && attachablePrimaryInfo(cfg, info) {
+				return info, true, nil
+			}
+		}
 	}
 	for _, info := range infos {
 		if attachablePrimaryInfo(cfg, info) {

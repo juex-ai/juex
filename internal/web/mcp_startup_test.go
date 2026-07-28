@@ -369,7 +369,12 @@ func waitForActivePrimary(t *testing.T, srv *Server) session.Info {
 			if err != nil || h.Active == nil || h.Active.Kind != session.KindPrimary {
 				continue
 			}
-			return *h.Active
+			return session.Info{
+				ID:     h.Active.ID,
+				Dir:    filepath.Join(srv.opts.Cfg.SessionsDir(), h.Active.ID),
+				Kind:   session.KindPrimary,
+				Active: true,
+			}
 		}
 	}
 }

@@ -856,6 +856,8 @@ type Session struct {
 }
 
 type Info struct {
+    StartedAt    time.Time         // RFC3339 UTC on JSON surfaces
+    LastActiveAt time.Time         // RFC3339 UTC on JSON surfaces
     TokenUsage   llm.Usage
     ContextUsage *llm.ContextUsage // latest request context footprint for the session
 }
@@ -882,6 +884,18 @@ its valid prefix before the existing repair warning is returned. `ReadEvents`
 remains the slice-based compatibility adapter for callers that explicitly need
 all events.
 
+`session.json` owns the session's creation and activity timestamps as positive
+epoch-millisecond integers (`started_at_ms` and `last_active_at_ms`). Creation
+sets both values; each successful transcript append advances
+`last_active_at_ms`. The transcript write and metadata replacement occur under
+the Session lock, and a metadata failure rolls the transcript append back
+before in-memory indexes change. Session IDs retain a timestamp-like prefix
+only for readable, naturally sorted paths; no session time is parsed from the
+ID or inferred from a file mtime. Read surfaces convert the stored epochs with
+`time.UnixMilli(...).UTC()` while keeping their existing RFC3339 contract.
+Pre-release session directories without owned timestamps are omitted from
+lists and return `ErrSessionTimeUnavailable` when loaded directly.
+
 Every persisted session also owns a `scratchpad/` directory. Eager sessions
 create it with the transcript files; lazy sessions create it on the first
 persistent append; loading a persisted session ensures it exists. The session
@@ -900,17 +914,22 @@ Timeout traces prefer structured event fields such as `error_kind`,
 fallback for older events that predate those fields.
 
 Each resident agent has one active primary session recorded in
-`$JUEX_HOME/agents/<id>/history.json` as `{active, sessions}`. `run`, `repl`, and
-`listen` attach to that active primary by default; `--new` and `/new` create a
-new primary and switch active. Side sessions are durable and listed, but never
-become active and are not valid Web turn targets.
+`$JUEX_HOME/agents/<id>/history.json` as `{active_id, sessions}`. History
+session entries are a cache, not canonical metadata: they contain only the
+session ID, transcript-derived turn count and preview, and a transcript
+fingerprint `{size, mtime_ms}`. Alias, kind, timestamps, and usage remain owned
+by session metadata and event files. `run`, `repl`, and `listen` attach to the
+active primary by default; `--new` and `/new` create a new primary and switch
+active. Side sessions are durable and listed, but never become active and are
+not valid Web turn targets.
 Workspace session attachment is an app-level policy. `internal/app` chooses
 the attachment target, records active/session history, preserves side-session
 non-activation, applies lazy fresh-session creation for web callers, and
 returns the lock mode (`attach_active`, `new_primary`, `new_side`, or
 `resume`) that the app lifetime must acquire. The policy prefers a valid
-`history.active` primary, then recorded primary sessions, then disk-listed
-primary sessions before creating a new active primary. Web startup and MCP
+`history.active_id` primary when it still appears in the canonical disk list,
+then other disk-listed primary sessions before creating a new active primary.
+Web startup and MCP
 notification routing use exported app helpers for active-primary records and
 ids instead of duplicating those rules.
 App lifetimes acquire `sessions/<id>/session.lock` inside the agent home so two
@@ -932,13 +951,15 @@ and `repl`.
 `session.List(root)` returns a time-sorted summary of every session
 directory under `root`; `session.LoadInfo(dir)` returns one session's
 summary plus its full message slice. `session.ListWithHistory(root,
-historyPath)` is the Web-oriented form: it reuses transcript-derived summaries
-from the Agent history index only while the canonical transcript modification
-time matches, reloads small session metadata directly, and reads cumulative
-usage backward from at most the latest 4 MiB of the event-journal tail. Usage
-fields that are absent from that bounded tail remain unset instead of forcing a
-full legacy-journal scan. Missing or stale transcript summaries fall back to
-the same strict disk scan as `List`. All three operations are read-only.
+historyPath)` is the cached form used by Web and `juex sessions list`: it reuses
+transcript-derived summaries from the Agent history index only while both the
+canonical transcript size and millisecond-truncated modification time match
+its recorded fingerprint, reloads small session metadata directly, and reads
+cumulative usage backward from at most the latest 4 MiB of the event-journal
+tail. Usage fields that are absent from that bounded tail remain unset instead
+of forcing a full legacy-journal scan. Missing or stale transcript summaries
+fall back to the same strict disk scan as `List`. All three operations are
+read-only.
 
 ### 3.6 App + Runtime
 
@@ -2039,7 +2060,7 @@ $JUEX_HOME/
     ├── agent.json                # identity + workspace reverse pointer
     ├── runtime.json              # exact serving-process identity
     ├── api.sock                  # preferred local endpoint while serving
-    ├── history.json              # session index + active primary object
+    ├── history.json              # cached session summaries + active primary id
     ├── logs/fleet.log            # detached child stdout + stderr
     ├── memory/
     ├── observables/              # generated runs, observations, oversized payload files, and schedule state
