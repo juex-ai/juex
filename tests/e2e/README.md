@@ -62,8 +62,9 @@ They read the top-level model from `JUEX_PROVIDER_CONFIG` or
 `JUEX_PROVIDER_SMOKE_ONLY=provider:model` to select one configured override;
 integration requires the complete model ref. The uv-managed eval helper writes
 the same isolated minimal provider/model config used by provider smoke.
-Non-selector `PROVIDER_API_*` credentials and tuning overrides retain normal
-precedence. The live cases exercise:
+Non-selector `PROVIDER_API_*` credentials and tuning overrides from the process
+environment or source YAML `environment.variables` retain normal precedence.
+The live cases exercise:
 
 - plain completion;
 - read-tool use;

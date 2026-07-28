@@ -96,6 +96,7 @@ providers:
 	}
 	t.Setenv(liveProviderConfigEnv, configPath)
 	t.Setenv("PROVIDER_API_ID", "must-not-replace-alpha")
+	t.Setenv("PROVIDER_API_PROTOCOL", "anthropic/messages")
 	t.Setenv("PROVIDER_API_MODEL", "must-not-replace-model-a")
 	t.Setenv("PROVIDER_API_BASE", "https://env.example.invalid/v1")
 	t.Setenv("PROVIDER_API_KEY", "env-key")
@@ -110,11 +111,60 @@ providers:
 	if cfg.ProviderID != "alpha" || cfg.Model != "model-a" {
 		t.Fatalf("selection = %s:%s, want alpha:model-a", cfg.ProviderID, cfg.Model)
 	}
+	if cfg.ProviderProtocol != "openai/chat" {
+		t.Fatalf("protocol = %q, want selected provider protocol openai/chat", cfg.ProviderProtocol)
+	}
 	if cfg.BaseURL != "https://env.example.invalid/v1" || cfg.APIKey != "env-key" {
 		t.Fatalf("environment credentials = base:%q key-set:%t", cfg.BaseURL, cfg.APIKey != "")
 	}
 	if cfg.ThinkingEffort != "high" || cfg.ContextWindow != 12345 {
 		t.Fatalf("environment tuning = effort:%q context:%d", cfg.ThinkingEffort, cfg.ContextWindow)
+	}
+}
+
+func TestLoadLiveConfigsPreservesYAMLProviderEnvironmentOverrides(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "juex.yaml")
+	body := `model: alpha:model-a
+environment:
+  variables:
+    PROVIDER_API_ID: must-not-replace-alpha
+    PROVIDER_API_MODEL: must-not-replace-model-a
+    PROVIDER_API_PROTOCOL: anthropic/messages
+    PROVIDER_API_BASE: https://yaml.example.invalid/v1
+    PROVIDER_API_KEY: yaml-key
+    PROVIDER_THINKING_EFFORT: medium
+    PROVIDER_CONTEXT_WINDOW: "23456"
+    UNRELATED_SECRET: must-not-be-copied
+providers:
+  - id: alpha
+    protocol: openai/chat
+    models:
+      - id: model-a
+`
+	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(liveProviderConfigEnv, configPath)
+
+	got := loadLiveConfigs(t)
+	if len(got) != 1 {
+		t.Fatalf("live configs = %d, want 1", len(got))
+	}
+	cfg := got[0].cfg
+	if cfg.ProviderID != "alpha" || cfg.Model != "model-a" {
+		t.Fatalf("selection = %s:%s, want alpha:model-a", cfg.ProviderID, cfg.Model)
+	}
+	if cfg.ProviderProtocol != "openai/chat" {
+		t.Fatalf("protocol = %q, want selected provider protocol openai/chat", cfg.ProviderProtocol)
+	}
+	if cfg.BaseURL != "https://yaml.example.invalid/v1" || cfg.APIKey != "yaml-key" {
+		t.Fatalf("YAML environment credentials = base:%q key-set:%t", cfg.BaseURL, cfg.APIKey != "")
+	}
+	if cfg.ThinkingEffort != "medium" || cfg.ContextWindow != 23456 {
+		t.Fatalf("YAML environment tuning = effort:%q context:%d", cfg.ThinkingEffort, cfg.ContextWindow)
+	}
+	if _, ok := cfg.EnvironmentSnapshot().Lookup("UNRELATED_SECRET"); ok {
+		t.Fatal("selected config retained unrelated YAML environment variable")
 	}
 }
 

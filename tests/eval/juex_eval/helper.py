@@ -40,6 +40,12 @@ REPORT_ROOT = REPO_ROOT / ".tmp" / "reports"
 SCENARIO_PASSED = "passed"
 SCENARIO_CAPABILITY_FAILED = "capability_failed"
 SCENARIO_HARD_FAILED = "hard_failed"
+SELECTED_PROVIDER_ENVIRONMENT_KEYS = (
+    "PROVIDER_API_BASE",
+    "PROVIDER_API_KEY",
+    "PROVIDER_THINKING_EFFORT",
+    "PROVIDER_CONTEXT_WINDOW",
+)
 
 
 def main() -> int:
@@ -1015,6 +1021,16 @@ def write_selected_config(
         "enable_user_agents_resources": False,
         "providers": [provider],
     }
+    environment = cfg.get("environment")
+    variables = environment.get("variables") if isinstance(environment, dict) else None
+    if isinstance(variables, dict):
+        selected_variables = {
+            key: copy.deepcopy(variables[key])
+            for key in SELECTED_PROVIDER_ENVIRONMENT_KEYS
+            if key in variables
+        }
+        if selected_variables:
+            out["environment"] = {"variables": selected_variables}
     if compaction:
         out["compaction"] = compaction
     output_path.parent.mkdir(parents=True, exist_ok=True)

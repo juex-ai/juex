@@ -2380,9 +2380,11 @@ There are two live layers:
   configured override. The harness calls the eval layer's
   `write-model-config` command, so integration and provider smoke share the
   same provider/model extraction and isolated minimal-config writer. It clears
-  only `PROVIDER_API_ID` and `PROVIDER_API_MODEL` to keep that selection stable;
-  credential, endpoint, protocol, thinking-effort, and context-window
-  environment overrides retain normal configuration precedence.
+  the `PROVIDER_API_ID`, `PROVIDER_API_PROTOCOL`, and `PROVIDER_API_MODEL`
+  selectors to keep that selection stable. Endpoint, credential,
+  thinking-effort, and context-window overrides from the process environment
+  or source YAML `environment.variables` retain normal configuration
+  precedence.
 - `make provider-smoke` reads the provider:model refs from
   `tests/eval/live-models.yaml`, verifies the selected ref exists in
   `~/.juex/juex.yaml`, then runs isolated real-binary capability and Schedule

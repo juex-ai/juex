@@ -22,6 +22,14 @@ func TestWriteModelConfigSelectsTopLevelAndExplicitRef(t *testing.T) {
 
 	source := filepath.Join(t.TempDir(), "juex.yaml")
 	body := `model: alpha:model-a
+environment:
+  variables:
+    PROVIDER_API_ID: must-not-replace-alpha
+    PROVIDER_API_MODEL: must-not-replace-model-a
+    PROVIDER_API_PROTOCOL: anthropic/messages
+    PROVIDER_API_KEY: environment-key
+    PROVIDER_CONTEXT_WINDOW: "12345"
+    UNRELATED_SECRET: must-not-be-copied
 providers:
   - id: alpha
     protocol: openai/chat
@@ -65,7 +73,10 @@ fleet:
 				t.Fatal(err)
 			}
 			var selected struct {
-				Model     string `yaml:"model"`
+				Model       string `yaml:"model"`
+				Environment struct {
+					Variables map[string]string `yaml:"variables"`
+				} `yaml:"environment"`
 				Providers []struct {
 					ID     string `yaml:"id"`
 					Models []struct {
@@ -90,6 +101,20 @@ fleet:
 					selected.Providers[0].Models[0].ID,
 					tt.want,
 				)
+			}
+			if selected.Environment.Variables["PROVIDER_API_KEY"] != "environment-key" ||
+				selected.Environment.Variables["PROVIDER_CONTEXT_WINDOW"] != "12345" {
+				t.Fatalf("selected provider environment = %#v", selected.Environment.Variables)
+			}
+			for _, key := range []string{
+				"PROVIDER_API_ID",
+				"PROVIDER_API_PROTOCOL",
+				"PROVIDER_API_MODEL",
+				"UNRELATED_SECRET",
+			} {
+				if _, ok := selected.Environment.Variables[key]; ok {
+					t.Fatalf("selected config retained %s in environment.variables", key)
+				}
 			}
 			if strings.Contains(string(data), "unsafe_bind_any") {
 				t.Fatalf("selected config retained unrelated fleet settings:\n%s", data)

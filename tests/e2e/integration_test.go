@@ -28,6 +28,7 @@ import (
 
 var liveConfigSelectorEnvKeys = []string{
 	"PROVIDER_API_ID",
+	"PROVIDER_API_PROTOCOL",
 	"PROVIDER_API_MODEL",
 }
 
