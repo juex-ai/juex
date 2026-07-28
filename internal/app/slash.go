@@ -121,13 +121,13 @@ func (a *App) ExecuteParsedSlashCommand(ctx context.Context, cmd SlashCommand) (
 	case SlashCompact:
 		return a.executeCompactSlashCommand(ctx, cmd, "")
 	case SlashStatus:
-		status := a.StatusSnapshot(time.Now().UTC())
+		status := a.StatusSnapshot()
 		return SlashCommandResult{Name: cmd.Name, Text: status.Text(), Status: &status}, nil
 	case SlashNew:
 		if err := a.SwitchToNewPrimarySession(); err != nil {
 			return SlashCommandResult{}, err
 		}
-		status := a.StatusSnapshot(time.Now().UTC())
+		status := a.StatusSnapshot()
 		text := fmt.Sprintf("New primary session: %s", status.SessionID)
 		return SlashCommandResult{Name: cmd.Name, Text: text, Status: &status}, nil
 	default:
@@ -220,15 +220,12 @@ const (
 	statusIconGoal        = "\U0001F3AF"
 )
 
-func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
+func (a *App) StatusSnapshot() StatusSnapshot {
 	if a == nil {
 		return StatusSnapshot{}
 	}
 	a.sessionMu.RLock()
 	defer a.sessionMu.RUnlock()
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
 	var (
 		sessionID    string
 		sessionDir   string
@@ -243,7 +240,7 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		successRates StatusSuccessRatesSnapshot
 	)
 	if a.Session != nil {
-		info, history := a.Session.Snapshot(now)
+		info, history := a.Session.Snapshot()
 		sessionID = info.ID
 		sessionDir = info.Dir
 		sessionKind = info.Kind

@@ -2157,11 +2157,64 @@ func TestApp_WritesSessionHistoryWithAlias(t *testing.T) {
 	if h.Active == nil {
 		t.Fatal("history active is nil")
 	}
-	if h.Active.ID != a.Session.ID || h.Active.Alias != "daily" {
-		t.Fatalf("active = %+v, want id %s alias daily", h.Active, a.Session.ID)
+	if h.Active.ID != a.Session.ID {
+		t.Fatalf("active = %+v, want id %s", h.Active, a.Session.ID)
 	}
 	if len(h.Sessions) != 1 || h.Sessions[0].ID != a.Session.ID {
 		t.Fatalf("sessions = %+v", h.Sessions)
+	}
+	info, _, err := session.LoadInfo(a.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Alias != "daily" {
+		t.Fatalf("canonical alias = %q, want daily", info.Alias)
+	}
+}
+
+func TestApp_LockConflictDoesNotMutateSessionMetadata(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir}
+	first, err := New(Options{
+		Config: cfg,
+		Provider: &stubProvider{replies: []llm.Response{{
+			Message:    llm.TextMessage(llm.RoleAssistant, "owner"),
+			StopReason: llm.StopEndTurn,
+		}}},
+		WorkDir: dir,
+		Alias:   "owner",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if _, err := first.Run(context.Background(), "persist owner turn"); err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := session.LoadInfo(first.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = New(Options{
+		Config:     cfg,
+		Provider:   &stubProvider{},
+		WorkDir:    dir,
+		Alias:      "contender",
+		DisableMCP: true,
+	})
+	var lockErr *session.LockError
+	if !errors.As(err, &lockErr) {
+		t.Fatalf("contender error = %v, want session lock conflict", err)
+	}
+	after, _, err := session.LoadInfo(first.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Alias != before.Alias ||
+		!after.StartedAt.Equal(before.StartedAt) ||
+		!after.LastActiveAt.Equal(before.LastActiveAt) {
+		t.Fatalf("metadata changed across lock conflict: before=%+v after=%+v", before, after)
 	}
 }
 
@@ -2214,6 +2267,18 @@ func TestNew_ResumeDirReusesExistingSession(t *testing.T) {
 	id := "20260506T103500-resume001"
 	dir := filepath.Join(sessionsRoot, id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	startedAtMS := time.Date(2026, 5, 6, 10, 35, 0, 0, time.UTC).UnixMilli()
+	meta, err := json.Marshal(map[string]any{
+		"kind":              session.KindPrimary,
+		"started_at_ms":     startedAtMS,
+		"last_active_at_ms": startedAtMS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "session.json"), append(meta, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	body := `{"id":"m1","role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n" +

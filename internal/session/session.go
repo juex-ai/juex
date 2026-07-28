@@ -46,6 +46,8 @@ type Session struct {
 	transcript   transcriptIndex
 	historyPath  string
 	recordActive bool
+	startedAtMS  int64
+	lastActiveMS int64
 }
 
 type Options struct {
@@ -84,6 +86,7 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 	dir := filepath.Join(rootDir, id)
 	kind := NormalizeKind(opts.Kind)
 	recordActive := shouldRecordActive(opts, kind)
+	nowMS := time.Now().UTC().UnixMilli()
 	if opts.Lazy {
 		return &Session{
 			ID:           id,
@@ -93,6 +96,8 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 			Active:       opts.Active,
 			historyPath:  opts.HistoryPath,
 			recordActive: recordActive,
+			startedAtMS:  nowMS,
+			lastActiveMS: nowMS,
 		}, nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -101,7 +106,12 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 	if err := ensureScratchpadDir(dir); err != nil {
 		return nil, err
 	}
-	if err := saveMetadata(dir, metadata{Alias: opts.Alias, Kind: kind}); err != nil {
+	if err := saveMetadata(dir, metadata{
+		Alias:          opts.Alias,
+		Kind:           kind,
+		StartedAtMS:    nowMS,
+		LastActiveAtMS: nowMS,
+	}); err != nil {
 		return nil, err
 	}
 	convFD, err := os.OpenFile(filepath.Join(dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -123,6 +133,8 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 		eventFD:      eventFD,
 		historyPath:  opts.HistoryPath,
 		recordActive: recordActive,
+		startedAtMS:  nowMS,
+		lastActiveMS: nowMS,
 	}, nil
 }
 
@@ -182,16 +194,28 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		writeErr = io.ErrShortWrite
 	}
 	if writeErr != nil {
-		rollbackErr := s.convFD.Truncate(offset)
-		if _, err := s.convFD.Seek(offset, io.SeekStart); rollbackErr == nil {
-			rollbackErr = err
-		}
+		rollbackErr := s.rollbackConversationLocked(offset)
 		s.mu.Unlock()
 		if rollbackErr != nil {
 			return nil, errors.Join(writeErr, fmt.Errorf("session: rollback conversation batch: %w", rollbackErr))
 		}
 		return nil, writeErr
 	}
+	lastActiveMS := time.Now().UTC().UnixMilli()
+	if lastActiveMS < s.lastActiveMS {
+		lastActiveMS = s.lastActiveMS
+	}
+	meta := s.metadataLocked()
+	meta.LastActiveAtMS = lastActiveMS
+	if err := saveMetadata(s.Dir, meta); err != nil {
+		rollbackErr := s.rollbackConversationLocked(offset)
+		s.mu.Unlock()
+		if rollbackErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("session: rollback conversation batch: %w", rollbackErr))
+		}
+		return nil, err
+	}
+	s.lastActiveMS = lastActiveMS
 	entryOffset := offset
 	for i, message := range prepared {
 		s.History = append(s.History, message)
@@ -256,18 +280,7 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 	}
 	alias := meta.Alias
 	kind := meta.Kind
-	if opts.Alias != "" {
-		alias = opts.Alias
-	}
-	if opts.Kind != "" {
-		kind = NormalizeKind(opts.Kind)
-	}
 	recordActive := shouldRecordActive(opts, kind)
-	if opts.Alias != "" || opts.Kind != "" {
-		if err := saveMetadata(dir, metadata{Alias: alias, Kind: kind}); err != nil {
-			return nil, err
-		}
-	}
 	convPath := filepath.Join(dir, conversationFile)
 	idx, err := scanTranscriptIndex(convPath)
 	if err != nil {
@@ -331,6 +344,8 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		transcript:   idx,
 		historyPath:  opts.HistoryPath,
 		recordActive: recordActive,
+		startedAtMS:  meta.StartedAtMS,
+		lastActiveMS: meta.LastActiveAtMS,
 	}, nil
 }
 
@@ -360,12 +375,38 @@ func (s *Session) SubscribeBus(bus *events.Bus) func() {
 	})
 }
 
-// Info returns a summary of the in-memory session. For lazy sessions that have
-// not yet been persisted, now is used as the LastActiveAt fallback.
-func (s *Session) Info(now time.Time) Info {
+// Info returns a summary of the in-memory session.
+func (s *Session) Info() Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.infoLocked(now)
+	return s.infoLocked()
+}
+
+// ApplyAlias updates an owned Session after its process-level session lock has
+// been acquired. Persisted sessions reload metadata first so concurrent work
+// completed before lock acquisition cannot be overwritten by stale times.
+func (s *Session) ApplyAlias(alias string) error {
+	if alias == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.convFD == nil {
+		s.Alias = alias
+		return nil
+	}
+	meta, err := loadMetadata(s.Dir)
+	if err != nil {
+		return err
+	}
+	meta.Alias = alias
+	if err := saveMetadata(s.Dir, meta); err != nil {
+		return err
+	}
+	s.Alias = alias
+	s.startedAtMS = meta.StartedAtMS
+	s.lastActiveMS = meta.LastActiveAtMS
+	return nil
 }
 
 func (s *Session) RecordResponseUsage(usage llm.Usage, contextUsage *llm.ContextUsage) llm.Usage {
@@ -398,11 +439,11 @@ func (s *Session) ContextUsageSnapshot() *llm.ContextUsage {
 }
 
 // Snapshot returns the current summary and a copy of the in-memory history.
-func (s *Session) Snapshot(now time.Time) (Info, []llm.Message) {
+func (s *Session) Snapshot() (Info, []llm.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	msgs := append([]llm.Message(nil), s.History...)
-	return s.infoLocked(now), msgs
+	return s.infoLocked(), msgs
 }
 
 func (s *Session) ensureFilesLocked() error {
@@ -415,7 +456,7 @@ func (s *Session) ensureFilesLocked() error {
 	if err := ensureScratchpadDir(s.Dir); err != nil {
 		return err
 	}
-	if err := saveMetadata(s.Dir, metadata{Alias: s.Alias, Kind: s.Kind}); err != nil {
+	if err := saveMetadata(s.Dir, s.metadataLocked()); err != nil {
 		return err
 	}
 	if s.convFD == nil {
@@ -475,22 +516,25 @@ func (s *Session) historyInfoLocked() (Info, bool) {
 	if s.historyPath == "" {
 		return Info{}, false
 	}
-	return s.infoLocked(time.Now().UTC()), true
+	return s.infoLocked(), true
 }
 
-func (s *Session) infoLocked(now time.Time) Info {
+func (s *Session) infoLocked() Info {
 	info := Info{
-		ID:        s.ID,
-		Alias:     s.Alias,
-		Dir:       s.Dir,
-		Kind:      s.Kind,
-		Active:    s.Active,
-		StartedAt: parseStartedAt(s.ID, now),
+		ID:           s.ID,
+		Alias:        s.Alias,
+		Dir:          s.Dir,
+		Kind:         s.Kind,
+		Active:       s.Active,
+		StartedAt:    time.UnixMilli(s.startedAtMS).UTC(),
+		LastActiveAt: time.UnixMilli(s.lastActiveMS).UTC(),
 	}
-	if st, err := os.Stat(filepath.Join(s.Dir, conversationFile)); err == nil {
-		info.LastActiveAt = st.ModTime()
-	} else {
-		info.LastActiveAt = now
+	if s.convFD != nil {
+		if st, err := s.convFD.Stat(); err == nil {
+			info.transcript = fingerprintFromFileInfo(st)
+		}
+	} else if st, err := os.Stat(filepath.Join(s.Dir, conversationFile)); err == nil {
+		info.transcript = fingerprintFromFileInfo(st)
 	}
 	if len(s.transcript.entries) > 0 || len(s.History) == 0 {
 		info.Turns = s.transcript.turns
@@ -510,6 +554,26 @@ func (s *Session) infoLocked(now time.Time) Info {
 	return info
 }
 
+func (s *Session) metadataLocked() metadata {
+	return metadata{
+		Alias:          s.Alias,
+		Kind:           s.Kind,
+		StartedAtMS:    s.startedAtMS,
+		LastActiveAtMS: s.lastActiveMS,
+	}
+}
+
+func (s *Session) rollbackConversationLocked(offset int64) error {
+	// Windows O_APPEND handles intentionally lack FILE_WRITE_DATA, which
+	// File.Truncate requires. A named truncate obtains a separate write handle
+	// while preserving atomic append semantics for the resident descriptor.
+	rollbackErr := os.Truncate(filepath.Join(s.Dir, conversationFile), offset)
+	if _, err := s.convFD.Seek(offset, io.SeekStart); rollbackErr == nil {
+		rollbackErr = err
+	}
+	return rollbackErr
+}
+
 func newID() string {
 	var b [4]byte
 	if _, err := cryptorand.Read(b[:]); err != nil {
@@ -518,10 +582,29 @@ func newID() string {
 	return time.Now().UTC().Format(idTimeLayout) + "-" + hex.EncodeToString(b[:])
 }
 
-// ValidID reports whether id has the canonical shape produced by newID.
+// ValidID reports whether id has the path-safe shape produced by newID. The
+// timestamp-like prefix is cosmetic and does not need to represent a real date.
 func ValidID(id string) bool {
-	_, ok := idCreatedAt(id)
-	return ok
+	const suffixBytes = 4
+	timestampLength := len(idTimeLayout)
+	if len(id) != timestampLength+1+hex.EncodedLen(suffixBytes) ||
+		id[timestampLength] != '-' {
+		return false
+	}
+	for i, c := range id[:timestampLength] {
+		if i == 8 {
+			if c != 'T' {
+				return false
+			}
+			continue
+		}
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	suffix := id[timestampLength+1:]
+	decoded, err := hex.DecodeString(suffix)
+	return err == nil && hex.EncodeToString(decoded) == suffix
 }
 
 func idCreatedAt(id string) (time.Time, bool) {

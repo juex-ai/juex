@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -220,8 +221,62 @@ func TestRecordHistoryUpsertsAndSetsActive(t *testing.T) {
 	if len(h.Sessions) != 2 {
 		t.Fatalf("sessions len = %d, want 2: %+v", len(h.Sessions), h.Sessions)
 	}
-	if h.Active == nil || h.Active.ID != first.ID || h.Active.Alias != "daily" {
-		t.Fatalf("active = %+v, want first with alias", h.Active)
+	if h.Active == nil || h.Active.ID != first.ID {
+		t.Fatalf("active = %+v, want first id", h.Active)
+	}
+	if h.Active.Alias != "" {
+		t.Fatalf("active alias = %q, want history to omit canonical metadata", h.Active.Alias)
+	}
+}
+
+func TestHistoryFileStoresOnlyCompactSummaryAndTranscriptFingerprint(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(root, "history.json")
+	dir := makeSession(t, root, "20260729T120000-compact1",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "compact")},
+		time.Date(2026, 7, 29, 12, 0, 0, 123000000, time.UTC))
+	info, _, err := LoadInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.TokenUsage = llm.Usage{InputTokens: 7, OutputTokens: 3}
+	info.ContextUsage = &llm.ContextUsage{Model: "mock", TotalTokens: 10}
+	if err := RecordHistory(historyPath, info); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Sessions []map[string]json.RawMessage `json:"sessions"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if len(raw.Sessions) != 1 {
+		t.Fatalf("history = %s", data)
+	}
+	entry := raw.Sessions[0]
+	for _, key := range []string{"started_at", "last_active_at", "token_usage", "context_usage"} {
+		if _, ok := entry[key]; ok {
+			t.Fatalf("history entry persisted %q: %s", key, data)
+		}
+	}
+	var fingerprint struct {
+		Size    int64 `json:"size"`
+		MtimeMS int64 `json:"mtime_ms"`
+	}
+	if err := json.Unmarshal(entry["transcript"], &fingerprint); err != nil {
+		t.Fatalf("transcript fingerprint: %v; history=%s", err, data)
+	}
+	st, err := os.Stat(filepath.Join(dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fingerprint.Size != st.Size() || fingerprint.MtimeMS != st.ModTime().UnixMilli() {
+		t.Fatalf("fingerprint = %+v, want size=%d mtime_ms=%d", fingerprint, st.Size(), st.ModTime().UnixMilli())
 	}
 }
 
@@ -289,10 +344,12 @@ func TestRecordSessionSideDoesNotUpdateActive(t *testing.T) {
 	if len(h.Sessions) != 2 {
 		t.Fatalf("sessions = %+v, want primary and side", h.Sessions)
 	}
+	foundSide := false
 	for _, info := range h.Sessions {
-		if info.ID == side.ID && info.Kind != KindSide {
-			t.Fatalf("side info = %+v, want side kind", info)
-		}
+		foundSide = foundSide || info.ID == side.ID
+	}
+	if !foundSide {
+		t.Fatalf("history sessions = %+v, want side cache entry", h.Sessions)
 	}
 }
 
@@ -478,6 +535,75 @@ func TestDeleteActiveFallsBackToNewestPrimary(t *testing.T) {
 	}
 	if h.Active == nil || h.Active.ID != oldPrimary.ID {
 		t.Fatalf("active = %+v, want old primary fallback", h.Active)
+	}
+}
+
+func TestDeleteActiveValidatesFallbackBeforeRemoval(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(root, "history.json")
+	sessionsRoot := filepath.Join(root, "sessions")
+	activeDir := makeSession(t, sessionsRoot, "20260506T110000-active01",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "active")},
+		time.Date(2026, 5, 6, 11, 0, 0, 0, time.UTC))
+	malformedDir := makeSession(t, sessionsRoot, "20260506T100000-broken01",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "broken")},
+		time.Date(2026, 5, 6, 10, 0, 0, 0, time.UTC))
+	active, _, err := LoadInfo(activeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SetActive(historyPath, active); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(malformedDir, metadataFile), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Delete(sessionsRoot, historyPath, active.ID); err == nil {
+		t.Fatal("Delete error = nil, want malformed fallback metadata error")
+	}
+	if _, err := os.Stat(activeDir); err != nil {
+		t.Fatalf("active dir was removed before fallback validation: %v", err)
+	}
+	h, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Active == nil || h.Active.ID != active.ID {
+		t.Fatalf("active = %+v, want original active session", h.Active)
+	}
+}
+
+func TestDeleteActivePreservesDiskOnlyFallback(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(root, "history.json")
+	sessionsRoot := filepath.Join(root, "sessions")
+	fallbackDir := makeSession(t, sessionsRoot, "20260506T100000-diskonly",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "disk only")},
+		time.Date(2026, 5, 6, 10, 0, 0, 0, time.UTC))
+	activeDir := makeSession(t, sessionsRoot, "20260506T110000-active01",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "active")},
+		time.Date(2026, 5, 6, 11, 0, 0, 0, time.UTC))
+	active, _, err := LoadInfo(activeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SetActive(historyPath, active); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Delete(sessionsRoot, historyPath, active.ID); err != nil {
+		t.Fatal(err)
+	}
+	h, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Sessions) != 0 {
+		t.Fatalf("cached sessions = %+v, want empty cache", h.Sessions)
+	}
+	if h.Active == nil || h.Active.ID != filepath.Base(fallbackDir) {
+		t.Fatalf("active = %+v, want disk-only fallback %s", h.Active, filepath.Base(fallbackDir))
 	}
 }
 

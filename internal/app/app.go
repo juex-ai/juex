@@ -308,6 +308,11 @@ func New(opts Options) (*App, error) {
 		sess.Close()
 		return nil, err
 	}
+	if err := sess.ApplyAlias(opts.Alias); err != nil {
+		_ = sessLock.Close()
+		_ = sess.Close()
+		return nil, err
+	}
 	chunkedWrites.RestoreActiveFromHistory(sess.History)
 	var eventSink *events.DurableSink
 	var eventUnsubscribe func()
@@ -572,7 +577,7 @@ func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
 func (a *App) SwitchToNewPrimarySession() error {
 	var oldInfo session.Info
 	err := a.ReadSession(func(sess *session.Session) error {
-		oldInfo = sess.Info(time.Now().UTC())
+		oldInfo = sess.Info()
 		return nil
 	})
 	if err != nil {
@@ -1197,7 +1202,7 @@ func mcpNotificationPendingInputID(n mcp.Notification, eventType string) string 
 }
 
 func (a *App) TokenUsage() llm.Usage {
-	info, ok := a.SessionInfo(time.Now().UTC())
+	info, ok := a.SessionInfo()
 	if !ok {
 		return llm.Usage{}
 	}

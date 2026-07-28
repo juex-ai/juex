@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,18 @@ func makeSession(t *testing.T, root, id string, msgs []llm.Message, mtime time.T
 	t.Helper()
 	dir := filepath.Join(root, id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionTime := mtime
+	if sessionTime.IsZero() {
+		sessionTime = time.Now().UTC()
+	}
+	sessionTimeMS := sessionTime.UnixMilli()
+	if err := saveMetadata(dir, metadata{
+		Kind:           KindPrimary,
+		StartedAtMS:    sessionTimeMS,
+		LastActiveAtMS: sessionTimeMS,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	convPath := filepath.Join(dir, "conversation.jsonl")
@@ -74,6 +87,16 @@ func writeEvents(t *testing.T, dir string, evs []events.Event) {
 	}
 }
 
+func withTranscriptFingerprint(t *testing.T, info Info, dir string) Info {
+	t.Helper()
+	st, err := os.Stat(filepath.Join(dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.transcript = fingerprintFromFileInfo(st)
+	return info
+}
+
 func TestInfoDirPrefersID(t *testing.T) {
 	got := InfoDir("/sessions", Info{ID: "abc", Dir: "/recorded"})
 	if got != filepath.Join("/sessions", "abc") {
@@ -96,7 +119,7 @@ func TestListWithHistoryBoundsLegacyJournalUsageScan(t *testing.T) {
 	dir := makeSession(t, root, id,
 		[]llm.Message{llm.TextMessage(llm.RoleUser, "legacy")},
 		mtime)
-	if err := RecordSession(historyPath, Info{
+	if err := RecordSession(historyPath, withTranscriptFingerprint(t, Info{
 		ID:           id,
 		Dir:          dir,
 		Kind:         KindPrimary,
@@ -104,7 +127,7 @@ func TestListWithHistoryBoundsLegacyJournalUsageScan(t *testing.T) {
 		LastActiveAt: mtime,
 		Turns:        1,
 		Preview:      "legacy",
-	}); err != nil {
+	}, dir)); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, eventsFile)
@@ -211,7 +234,7 @@ func TestList_SortsByLastActiveDesc(t *testing.T) {
 	}
 }
 
-func TestListWithHistoryUsesRecordedTranscriptSummaryAndFreshUsage(t *testing.T) {
+func TestListWithHistoryDoesNotRescanMatchingTranscriptFingerprint(t *testing.T) {
 	root := t.TempDir()
 	historyPath := filepath.Join(t.TempDir(), "history.json")
 	mtime := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
@@ -224,7 +247,7 @@ func TestListWithHistoryUsesRecordedTranscriptSummaryAndFreshUsage(t *testing.T)
 	if err := os.Chtimes(convPath, mtime, mtime); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordSession(historyPath, Info{
+	if err := RecordSession(historyPath, withTranscriptFingerprint(t, Info{
 		ID:           id,
 		Dir:          "/stale/recorded/path",
 		Kind:         KindPrimary,
@@ -234,7 +257,7 @@ func TestListWithHistoryUsesRecordedTranscriptSummaryAndFreshUsage(t *testing.T)
 		Turns:        99,
 		Preview:      "cached transcript summary",
 		TokenUsage:   llm.Usage{InputTokens: 1},
-	}); err != nil {
+	}, dir)); err != nil {
 		t.Fatal(err)
 	}
 	if err := SetKind(dir, KindSide); err != nil {
@@ -271,9 +294,16 @@ func TestListWithHistoryUsesRecordedTranscriptSummaryAndFreshUsage(t *testing.T)
 		t.Fatal(err)
 	}
 
-	got, err := ListWithHistory(root, historyPath)
+	scans := 0
+	got, err := listWithHistoryLoader(root, historyPath, func(dir string) (Info, transcriptIndex, error) {
+		scans++
+		return loadInfoSummary(dir)
+	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if scans != 0 {
+		t.Fatalf("journal scans = %d, want 0 for matching transcript fingerprint", scans)
 	}
 	if len(got) != 1 {
 		t.Fatalf("len = %d, want 1; got %+v", len(got), got)
@@ -304,7 +334,7 @@ func TestListWithHistoryInvalidatesChangedTranscript(t *testing.T) {
 	dir := makeSession(t, root, id,
 		[]llm.Message{llm.TextMessage(llm.RoleUser, "before")},
 		mtime)
-	if err := RecordSession(historyPath, Info{
+	if err := RecordSession(historyPath, withTranscriptFingerprint(t, Info{
 		ID:           id,
 		Dir:          dir,
 		Kind:         KindPrimary,
@@ -312,20 +342,105 @@ func TestListWithHistoryInvalidatesChangedTranscript(t *testing.T) {
 		LastActiveAt: mtime,
 		Turns:        1,
 		Preview:      "before",
-	}); err != nil {
+	}, dir)); err != nil {
 		t.Fatal(err)
 	}
 	convPath := filepath.Join(dir, conversationFile)
 	if err := os.WriteFile(convPath, []byte("not-json\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	changed := mtime.Add(time.Second)
-	if err := os.Chtimes(convPath, changed, changed); err != nil {
+	if err := os.Chtimes(convPath, mtime, mtime); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := ListWithHistory(root, historyPath); err == nil {
 		t.Fatal("ListWithHistory accepted a changed malformed transcript")
+	}
+}
+
+func TestLateStaleHistoryRecordCannotCreateFalseCacheHit(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(t.TempDir(), "history.json")
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(llm.TextMessage(llm.RoleUser, "first")); err != nil {
+		t.Fatal(err)
+	}
+	stale := s.Info()
+	if err := s.Append(llm.TextMessage(llm.RoleUser, "second")); err != nil {
+		t.Fatal(err)
+	}
+	latest := s.Info()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RecordSession(historyPath, latest); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordSession(historyPath, stale); err != nil {
+		t.Fatal(err)
+	}
+	scans := 0
+	infos, err := listWithHistoryLoader(root, historyPath, func(dir string) (Info, transcriptIndex, error) {
+		scans++
+		return loadInfoSummary(dir)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scans != 1 {
+		t.Fatalf("journal scans = %d, want 1 after stale fingerprint arrives late", scans)
+	}
+	if len(infos) != 1 || infos[0].Turns != 2 || infos[0].Preview != "first" {
+		t.Fatalf("sessions = %+v, want freshly scanned two-turn summary", infos)
+	}
+}
+
+func TestLoadInfoUsesStoredUTCSessionTimesForCosmeticID(t *testing.T) {
+	root := t.TempDir()
+	stored := time.Date(2026, 7, 29, 18, 45, 12, 345000000, time.FixedZone("CST", 8*60*60))
+	dir := makeSession(t, root, "20261318T065604-8f0582f4",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "hello")},
+		stored)
+
+	info, _, err := LoadInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := stored.UTC().Truncate(time.Millisecond)
+	if !info.StartedAt.Equal(want) || info.StartedAt.Location() != time.UTC {
+		t.Fatalf("started_at = %v (%v), want %v UTC", info.StartedAt, info.StartedAt.Location(), want)
+	}
+	if !info.LastActiveAt.Equal(want) || info.LastActiveAt.Location() != time.UTC {
+		t.Fatalf("last_active_at = %v (%v), want %v UTC", info.LastActiveAt, info.LastActiveAt.Location(), want)
+	}
+}
+
+func TestLegacySessionMetadataIsUnlistedButDirectLoadFails(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "20260729T120000-legacy01")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, conversationFile), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, metadataFile), []byte(`{"kind":"primary"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := LoadInfo(dir); !errors.Is(err, ErrSessionTimeUnavailable) {
+		t.Fatalf("LoadInfo error = %v, want ErrSessionTimeUnavailable", err)
+	}
+	infos, err := List(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 0 {
+		t.Fatalf("List = %+v, want legacy session omitted", infos)
 	}
 }
 
@@ -415,13 +530,13 @@ func TestListWithHistoryReturnsMetadataErrorOnCacheHit(t *testing.T) {
 	dir := makeSession(t, root, id,
 		[]llm.Message{llm.TextMessage(llm.RoleUser, "hello")},
 		mtime)
-	if err := RecordSession(historyPath, Info{
+	if err := RecordSession(historyPath, withTranscriptFingerprint(t, Info{
 		ID:           id,
 		Dir:          dir,
 		LastActiveAt: mtime,
 		Turns:        1,
 		Preview:      "hello",
-	}); err != nil {
+	}, dir)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, metadataFile), []byte("not-json\n"), 0o644); err != nil {
@@ -527,6 +642,14 @@ func TestListRejectsMessageWithoutID(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	sessionTime := time.Date(2026, 5, 15, 1, 2, 3, 0, time.UTC).UnixMilli()
+	if err := saveMetadata(dir, metadata{
+		Kind:           KindPrimary,
+		StartedAtMS:    sessionTime,
+		LastActiveAtMS: sessionTime,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(dir, conversationFile)
 	if err := os.WriteFile(path, []byte(`{"role":"user","blocks":[]}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -580,6 +703,14 @@ func TestLoadInfo_NormalizesNullBlocks(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "20260509T074114-a20bf346")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionTime := time.Date(2026, 5, 9, 7, 41, 14, 0, time.UTC).UnixMilli()
+	if err := saveMetadata(dir, metadata{
+		Kind:           KindPrimary,
+		StartedAtMS:    sessionTime,
+		LastActiveAtMS: sessionTime,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(`{"id":"m1","role":"assistant","blocks":null}`+"\n"), 0o644); err != nil {

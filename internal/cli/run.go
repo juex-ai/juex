@@ -303,7 +303,7 @@ func executeRunCommand(cmd *cobra.Command, flags *persistentFlags, args []string
 	usage := a.TokenUsage()
 
 	if opts.jsonOut {
-		info, _ := a.SessionInfo(time.Now().UTC())
+		info, _ := a.SessionInfo()
 		cmdPrintln(cmd, mustJSON(runResult{
 			Text:        out,
 			SessionID:   info.ID,

@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
@@ -67,22 +66,22 @@ func (a *App) SessionIdentity() (SessionIdentitySnapshot, bool) {
 	return snapshot, err == nil
 }
 
-func (a *App) SessionInfo(now time.Time) (session.Info, bool) {
+func (a *App) SessionInfo() (session.Info, bool) {
 	var info session.Info
 	err := a.ReadSession(func(sess *session.Session) error {
-		info = sess.Info(now)
+		info = sess.Info()
 		return nil
 	})
 	return info, err == nil
 }
 
-func (a *App) SessionSnapshot(now time.Time) (session.Info, []llm.Message, bool) {
+func (a *App) SessionSnapshot() (session.Info, []llm.Message, bool) {
 	var (
 		info    session.Info
 		history []llm.Message
 	)
 	err := a.ReadSession(func(sess *session.Session) error {
-		info, history = sess.Snapshot(now)
+		info, history = sess.Snapshot()
 		return nil
 	})
 	return info, history, err == nil

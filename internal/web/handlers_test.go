@@ -94,6 +94,7 @@ func seedSession(t *testing.T, work, id, body string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeSeedSessionMetadata(t, dir, id, session.KindPrimary)
 	var normalized strings.Builder
 	for i, line := range strings.Split(body, "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -114,6 +115,28 @@ func seedSession(t *testing.T, work, id, body string) {
 		normalized.WriteByte('\n')
 	}
 	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(normalized.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeSeedSessionMetadata(t *testing.T, dir, id, kind string) {
+	t.Helper()
+	startedAt := time.Now().UTC()
+	if len(id) >= len("20060102T150405") {
+		if parsed, err := time.Parse("20060102T150405", id[:len("20060102T150405")]); err == nil {
+			startedAt = parsed
+		}
+	}
+	startedAtMS := startedAt.UnixMilli()
+	data, err := json.Marshal(map[string]any{
+		"kind":              kind,
+		"started_at_ms":     startedAtMS,
+		"last_active_at_ms": startedAtMS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "session.json"), append(data, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -151,6 +174,39 @@ func TestGetSessionsList_ReturnsSeededSession(t *testing.T) {
 	}
 }
 
+func TestGetSessionsListReturnsUTCTimestampsForCosmeticIDs(t *testing.T) {
+	srv := newTestServer(t)
+	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n"
+	seedSession(t, srv.opts.Cfg.WorkDir, "20260507T101010-aaaa11", body)
+	seedSession(t, srv.opts.Cfg.WorkDir, "20261318T065604-8f0582f4", body)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		Sessions []struct {
+			ID           string `json:"id"`
+			StartedAt    string `json:"started_at"`
+			LastActiveAt string `json:"last_active_at"`
+		} `json:"sessions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Sessions) != 2 {
+		t.Fatalf("sessions = %+v", parsed.Sessions)
+	}
+	for _, info := range parsed.Sessions {
+		if !strings.HasSuffix(info.StartedAt, "Z") || !strings.HasSuffix(info.LastActiveAt, "Z") {
+			t.Fatalf("session %s timestamps are not UTC: started=%q last=%q", info.ID, info.StartedAt, info.LastActiveAt)
+		}
+	}
+}
+
 func TestGetSessionsListUsesRecordedTranscriptSummary(t *testing.T) {
 	srv := newTestServer(t)
 	id := "20260727T120000-cached01"
@@ -159,22 +215,30 @@ func TestGetSessionsListUsesRecordedTranscriptSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	mtime := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	writeSeedSessionMetadata(t, dir, id, session.KindPrimary)
 	convPath := filepath.Join(dir, "conversation.jsonl")
-	if err := os.WriteFile(convPath, []byte("not-json\n"), 0o644); err != nil {
+	valid := []byte(`{"id":"m1","role":"user","blocks":[]}` + "\n")
+	if err := os.WriteFile(convPath, valid, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chtimes(convPath, mtime, mtime); err != nil {
 		t.Fatal(err)
 	}
-	if err := session.RecordSession(srv.opts.Cfg.HistoryPath(), session.Info{
-		ID:           id,
-		Dir:          "/stale/recorded/path",
-		Kind:         session.KindPrimary,
-		StartedAt:    mtime,
-		LastActiveAt: mtime,
-		Turns:        42,
-		Preview:      "cached preview",
-	}); err != nil {
+	info, _, err := session.LoadInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.Turns = 42
+	info.Preview = "cached preview"
+	if err := session.RecordSession(srv.opts.Cfg.HistoryPath(), info); err != nil {
+		t.Fatal(err)
+	}
+	malformed := bytes.Repeat([]byte{'x'}, len(valid))
+	malformed[len(malformed)-1] = '\n'
+	if err := os.WriteFile(convPath, malformed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(convPath, mtime, mtime); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3012,6 +3076,62 @@ func TestDeleteSession_NotFound(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestDeleteSession_FailedPreflightKeepsActiveRuntimeOpen(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	id := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(id)
+	if !ok {
+		t.Fatalf("active session %s is not registered", id)
+	}
+	active := value.(*activeSession)
+	if err := active.app.ReadSession(func(sess *session.Session) error {
+		return sess.Append(llm.TextMessage(llm.RoleUser, "keep running"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	malformedID := "20260507T101010-malformed"
+	seedSession(t, srv.opts.Cfg.WorkDir, malformedID,
+		`{"role":"user","blocks":[{"type":"text","text":"broken"}]}`+"\n")
+	malformedMetadata := filepath.Join(srv.opts.Cfg.SessionsDir(), malformedID, "session.json")
+	if err := os.WriteFile(malformedMetadata, []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/sessions/"+id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 500; body = %s", resp.StatusCode, body)
+	}
+	got, ok := srv.sessions.Load(id)
+	if !ok || got != active {
+		t.Fatalf("active runtime changed after failed delete: got=%v ok=%v", got, ok)
+	}
+	if _, ok := active.app.SessionInfo(); !ok {
+		t.Fatal("active runtime was closed after failed delete")
+	}
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), id)); err != nil {
+		t.Fatalf("active session directory changed after failed delete: %v", err)
+	}
+	history, err := session.LoadHistory(srv.opts.Cfg.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history.Active == nil || history.Active.ID != id {
+		t.Fatalf("active history = %+v, want %s", history.Active, id)
 	}
 }
 

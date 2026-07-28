@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"time"
 )
 
@@ -25,16 +24,42 @@ var (
 	// ErrCannotActivateSide is returned when a caller tries to make a side
 	// session the workspace active session.
 	ErrCannotActivateSide = errors.New("session: side sessions cannot become active")
+
+	// ErrSessionTimeUnavailable identifies pre-release session metadata that
+	// does not contain the session-owned timestamps required by this version.
+	ErrSessionTimeUnavailable = errors.New("session: owned time is unavailable")
 )
 
 type metadata struct {
-	Alias string `json:"alias,omitempty"`
-	Kind  string `json:"kind,omitempty"`
+	Alias          string `json:"alias,omitempty"`
+	Kind           string `json:"kind,omitempty"`
+	StartedAtMS    int64  `json:"started_at_ms"`
+	LastActiveAtMS int64  `json:"last_active_at_ms"`
 }
 
 type History struct {
-	Sessions []Info `json:"sessions"`
-	Active   *Info  `json:"active,omitempty"`
+	Sessions []Info
+	Active   *Info
+}
+
+type historyFile struct {
+	ActiveID string         `json:"active_id,omitempty"`
+	Sessions []historyEntry `json:"sessions"`
+}
+
+type historyEntry struct {
+	ID         string                `json:"id"`
+	Turns      int                   `json:"turns"`
+	Preview    string                `json:"preview"`
+	Transcript transcriptFingerprint `json:"transcript"`
+}
+
+// DeletePlan captures the validated inputs needed to remove one session.
+type DeletePlan struct {
+	dir              string
+	historyPath      string
+	id               string
+	fallbackActiveID string
 }
 
 func SetAlias(dir, alias string) error {
@@ -78,10 +103,11 @@ func LoadKind(dir string) (string, error) {
 }
 
 func loadMetadata(dir string) (metadata, error) {
-	data, err := os.ReadFile(filepath.Join(dir, metadataFile))
+	path := filepath.Join(dir, metadataFile)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return metadata{Kind: KindPrimary}, nil
+			return metadata{}, fmt.Errorf("%w: %s is missing", ErrSessionTimeUnavailable, path)
 		}
 		return metadata{}, err
 	}
@@ -90,17 +116,39 @@ func loadMetadata(dir string) (metadata, error) {
 		return metadata{}, err
 	}
 	m.Kind = NormalizeKind(m.Kind)
+	if err := validateMetadata(m); err != nil {
+		return metadata{}, fmt.Errorf("%s: %w", path, err)
+	}
 	return m, nil
 }
 
 func saveMetadata(dir string, m metadata) error {
 	m.Kind = NormalizeKind(m.Kind)
+	if err := validateMetadata(m); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
 	return atomicWriteFile(filepath.Join(dir, metadataFile), data, 0o644)
+}
+
+func validateMetadata(m metadata) error {
+	if m.StartedAtMS <= 0 || m.LastActiveAtMS <= 0 {
+		return fmt.Errorf(
+			"%w: started_at_ms and last_active_at_ms must be positive",
+			ErrSessionTimeUnavailable,
+		)
+	}
+	if m.LastActiveAtMS < m.StartedAtMS {
+		return fmt.Errorf(
+			"%w: last_active_at_ms must not precede started_at_ms",
+			ErrSessionTimeUnavailable,
+		)
+	}
+	return nil
 }
 
 func NormalizeKind(kind string) string {
@@ -138,12 +186,29 @@ func loadHistoryFile(path string) (History, error) {
 		}
 		return History{}, err
 	}
-	var h History
-	if err := json.Unmarshal(data, &h); err != nil {
+	var stored historyFile
+	if err := json.Unmarshal(data, &stored); err != nil {
 		return History{}, err
 	}
-	if h.Sessions == nil {
-		h.Sessions = []Info{}
+	h := History{Sessions: make([]Info, 0, len(stored.Sessions))}
+	for _, entry := range stored.Sessions {
+		if entry.ID == "" {
+			continue
+		}
+		h.Sessions = append(h.Sessions, Info{
+			ID:         entry.ID,
+			Turns:      entry.Turns,
+			Preview:    entry.Preview,
+			transcript: entry.Transcript,
+		})
+	}
+	if stored.ActiveID != "" {
+		active := Info{
+			ID:     stored.ActiveID,
+			Kind:   KindPrimary,
+			Active: true,
+		}
+		h.Active = &active
 	}
 	return normalizeHistory(h), nil
 }
@@ -261,23 +326,65 @@ func markActiveWithHistory(h History, infos []Info) []Info {
 	return out
 }
 
-// Delete removes one on-disk session and drops its entry from history.
-func Delete(root, historyPath, id string) error {
+// PrepareDelete validates one on-disk session and any active-session fallback
+// before callers stop a live runtime or remove persistent data.
+func PrepareDelete(root, historyPath, id string) (*DeletePlan, error) {
 	dir, ok := sessionDir(root, id)
 	if !ok {
-		return os.ErrNotExist
+		return nil, os.ErrNotExist
 	}
 	if _, err := os.Stat(filepath.Join(dir, conversationFile)); err != nil {
+		return nil, err
+	}
+	removedActive := false
+	fallbackActiveID := ""
+	if historyPath != "" {
+		h, err := LoadHistory(historyPath)
+		if err != nil {
+			return nil, err
+		}
+		removedActive = h.Active != nil && h.Active.ID == id
+		if removedActive {
+			fallbackActiveID, err = newestPrimarySessionID(root, id)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return &DeletePlan{
+		dir:              dir,
+		historyPath:      historyPath,
+		id:               id,
+		fallbackActiveID: fallbackActiveID,
+	}, nil
+}
+
+// Commit removes the session represented by a validated delete plan.
+func (p *DeletePlan) Commit() error {
+	if p == nil {
+		return os.ErrInvalid
+	}
+	if err := os.RemoveAll(p.dir); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(dir); err != nil {
+	return removeHistory(p.historyPath, p.id, p.fallbackActiveID)
+}
+
+// Delete removes one on-disk session and drops its entry from history.
+func Delete(root, historyPath, id string) error {
+	plan, err := PrepareDelete(root, historyPath, id)
+	if err != nil {
 		return err
 	}
-	return RemoveHistory(historyPath, id)
+	return plan.Commit()
 }
 
 // RemoveHistory drops id from history.json. Missing history is a no-op.
 func RemoveHistory(path, id string) error {
+	return removeHistory(path, id, "")
+}
+
+func removeHistory(path, id, fallbackActiveID string) error {
 	if path == "" {
 		return nil
 	}
@@ -302,37 +409,46 @@ func RemoveHistory(path, id string) error {
 		}
 		h.Sessions = kept
 		if removedActive {
-			h.Active = newestHistoryPrimary(h.Sessions)
-		}
-		if len(h.Sessions) == 0 {
 			h.Active = nil
+			if fallbackActiveID != "" {
+				active := Info{
+					ID:     fallbackActiveID,
+					Kind:   KindPrimary,
+					Active: true,
+				}
+				h.Active = &active
+			}
 		}
 		return writeHistory(path, h)
 	})
 }
 
 func upsertHistorySession(h *History, info Info) {
-	replaced := false
-	for i := range h.Sessions {
-		if h.Sessions[i].ID == info.ID {
-			h.Sessions[i] = info
-			replaced = true
-			break
+	sessions := make([]Info, 0, len(h.Sessions)+1)
+	sessions = append(sessions, info)
+	for _, recorded := range h.Sessions {
+		if recorded.ID != info.ID {
+			sessions = append(sessions, recorded)
 		}
 	}
-	if !replaced {
-		h.Sessions = append(h.Sessions, info)
-	}
+	h.Sessions = sessions
 }
 
 func writeHistory(path string, h History) error {
 	h = normalizeHistory(h)
-	payload := struct {
-		Active   *Info  `json:"active,omitempty"`
-		Sessions []Info `json:"sessions"`
-	}{
-		Active:   h.Active,
-		Sessions: h.Sessions,
+	payload := historyFile{
+		Sessions: make([]historyEntry, 0, len(h.Sessions)),
+	}
+	if h.Active != nil {
+		payload.ActiveID = h.Active.ID
+	}
+	for _, info := range h.Sessions {
+		payload.Sessions = append(payload.Sessions, historyEntry{
+			ID:         info.ID,
+			Turns:      info.Turns,
+			Preview:    info.Preview,
+			Transcript: info.transcript,
+		})
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
@@ -370,35 +486,6 @@ func normalizeInfo(info Info) Info {
 	return info
 }
 
-func newestHistorySession(infos []Info) *Info {
-	if len(infos) == 0 {
-		return nil
-	}
-	candidates := append([]Info(nil), infos...)
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if !candidates[i].LastActiveAt.Equal(candidates[j].LastActiveAt) {
-			return candidates[i].LastActiveAt.After(candidates[j].LastActiveAt)
-		}
-		return candidates[i].StartedAt.After(candidates[j].StartedAt)
-	})
-	return &candidates[0]
-}
-
-func newestHistoryPrimary(infos []Info) *Info {
-	var primary []Info
-	for _, info := range infos {
-		info = normalizeInfo(info)
-		if info.Kind == KindPrimary {
-			primary = append(primary, info)
-		}
-	}
-	active := newestHistorySession(primary)
-	if active != nil {
-		active.Active = true
-	}
-	return active
-}
-
 func sessionDir(root, id string) (string, bool) {
 	if root == "" || id == "" || id == "." || id == ".." {
 		return "", false
@@ -407,6 +494,44 @@ func sessionDir(root, id string) (string, bool) {
 		return "", false
 	}
 	return filepath.Join(root, id), true
+}
+
+func newestPrimarySessionID(root, excludeID string) (string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	var newestID string
+	var newest metadata
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == excludeID {
+			continue
+		}
+		dir := filepath.Join(root, entry.Name())
+		if !HasConversation(dir) {
+			continue
+		}
+		meta, err := loadMetadata(dir)
+		if err != nil {
+			if errors.Is(err, ErrSessionTimeUnavailable) {
+				continue
+			}
+			return "", err
+		}
+		if meta.Kind != KindPrimary {
+			continue
+		}
+		if newestID == "" ||
+			meta.LastActiveAtMS > newest.LastActiveAtMS ||
+			(meta.LastActiveAtMS == newest.LastActiveAtMS && meta.StartedAtMS > newest.StartedAtMS) {
+			newestID = entry.Name()
+			newest = meta
+		}
+	}
+	return newestID, nil
 }
 
 func withHistoryLock(path string, fn func() error) error {

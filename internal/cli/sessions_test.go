@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
@@ -40,6 +41,7 @@ func seedSession(t *testing.T, work, id string, jsonlBody string) string {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeSessionMetadata(t, dir, id, session.KindPrimary)
 	var normalized strings.Builder
 	for i, line := range strings.Split(jsonlBody, "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -63,6 +65,28 @@ func seedSession(t *testing.T, work, id string, jsonlBody string) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+func writeSessionMetadata(t *testing.T, dir, id, kind string) {
+	t.Helper()
+	startedAt := time.Now().UTC()
+	if len(id) >= len("20060102T150405") {
+		if parsed, err := time.Parse("20060102T150405", id[:len("20060102T150405")]); err == nil {
+			startedAt = parsed
+		}
+	}
+	startedAtMS := startedAt.UnixMilli()
+	data, err := json.Marshal(map[string]any{
+		"kind":              kind,
+		"started_at_ms":     startedAtMS,
+		"last_active_at_ms": startedAtMS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "session.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSessionsList_JSONShape(t *testing.T) {
@@ -101,6 +125,82 @@ func TestSessionsList_JSONShape(t *testing.T) {
 	}
 	if parsed.Sessions[0].Preview != "hi" {
 		t.Errorf("preview = %q", parsed.Sessions[0].Preview)
+	}
+}
+
+func TestSessionsList_JSONTimestampsAreUTCForCosmeticIDs(t *testing.T) {
+	work := t.TempDir()
+	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n"
+	seedSession(t, work, "20260506T103500-aaaa1111", body)
+	seedSession(t, work, "20261318T065604-8f0582f4", body)
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "sessions", "list"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Sessions []struct {
+			ID           string `json:"id"`
+			StartedAt    string `json:"started_at"`
+			LastActiveAt string `json:"last_active_at"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Sessions) != 2 {
+		t.Fatalf("sessions = %+v", parsed.Sessions)
+	}
+	for _, info := range parsed.Sessions {
+		if !strings.HasSuffix(info.StartedAt, "Z") || !strings.HasSuffix(info.LastActiveAt, "Z") {
+			t.Fatalf("session %s timestamps are not UTC: started=%q last=%q", info.ID, info.StartedAt, info.LastActiveAt)
+		}
+	}
+}
+
+func TestSessionsListUsesMatchingHistoryFingerprint(t *testing.T) {
+	work := t.TempDir()
+	id := "20260729T120000-cached01"
+	valid := `{"id":"m1","role":"user","blocks":[]}` + "\n"
+	dir := seedSession(t, work, id, valid)
+	mtime := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	convPath := filepath.Join(dir, "conversation.jsonl")
+	if err := os.Chtimes(convPath, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	info, _, err := session.LoadInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.Turns = 42
+	info.Preview = "cached preview"
+	historyPath := ensureTestWorkspaceAgent(t, work).HistoryPath()
+	if err := session.RecordSession(historyPath, info); err != nil {
+		t.Fatal(err)
+	}
+	malformed := bytes.Repeat([]byte{'x'}, len(valid))
+	malformed[len(malformed)-1] = '\n'
+	if err := os.WriteFile(convPath, malformed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(convPath, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "sessions", "list"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"turns": 42`) || !strings.Contains(out.String(), `"preview": "cached preview"`) {
+		t.Fatalf("sessions list did not use cached summary:\n%s", out.String())
 	}
 }
 

@@ -1,8 +1,6 @@
 package runtime
 
 import (
-	"time"
-
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime/contextbudget"
 )
@@ -29,7 +27,7 @@ func (e *Engine) ActiveContext(incoming ...llm.Message) ActiveContextSnapshot {
 	if runtime.Session == nil {
 		return ActiveContextSnapshot{}
 	}
-	_, history := runtime.Session.Snapshot(time.Now().UTC())
+	_, history := runtime.Session.Snapshot()
 	snap := assembleActiveContext(history, incoming)
 	var contextMessages []llm.Message
 	if text, ok := goalStateContextFromStore(runtime.GoalState); ok {

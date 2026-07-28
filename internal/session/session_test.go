@@ -37,9 +37,13 @@ func TestSession_AppendsToConversationJSONL(t *testing.T) {
 }
 
 func TestValidIDRequiresCanonicalGeneratedShape(t *testing.T) {
-	valid := "20260718T065604-8f0582f4"
-	if !ValidID(valid) {
-		t.Fatalf("ValidID(%q) = false", valid)
+	for _, valid := range []string{
+		"20260718T065604-8f0582f4",
+		"20261318T065604-8f0582f4",
+	} {
+		if !ValidID(valid) {
+			t.Fatalf("ValidID(%q) = false", valid)
+		}
 	}
 	for _, id := range []string{
 		"",
@@ -50,13 +54,153 @@ func TestValidIDRequiresCanonicalGeneratedShape(t *testing.T) {
 		"20260718T065604-8f0582fg",
 		"20260718T065604-8f0582f4\\..\\other",
 		"20260718T065604-8f0582f4/other",
-		"20261318T065604-8f0582f4",
+		"20260718x065604-8f0582f4",
+		"20260718T06a604-8f0582f4",
+		"20260718T065604-8F0582F4",
 	} {
 		t.Run(id, func(t *testing.T) {
 			if ValidID(id) {
 				t.Fatalf("ValidID(%q) = true", id)
 			}
 		})
+	}
+}
+
+func TestSessionNewPersistsOwnedEpochMillisecondTimes(t *testing.T) {
+	beforeMS := time.Now().UTC().UnixMilli()
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	afterMS := time.Now().UTC().UnixMilli()
+
+	meta, err := loadMetadata(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.StartedAtMS < beforeMS || meta.StartedAtMS > afterMS {
+		t.Fatalf("started_at_ms = %d, want [%d, %d]", meta.StartedAtMS, beforeMS, afterMS)
+	}
+	if meta.LastActiveAtMS != meta.StartedAtMS {
+		t.Fatalf("last_active_at_ms = %d, want creation time %d", meta.LastActiveAtMS, meta.StartedAtMS)
+	}
+
+	var raw map[string]any
+	data, err := os.ReadFile(filepath.Join(s.Dir, metadataFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"started_at_ms", "last_active_at_ms"} {
+		if _, ok := raw[key].(float64); !ok {
+			t.Fatalf("%s = %#v, want JSON integer", key, raw[key])
+		}
+	}
+}
+
+func TestSessionAppendUpdatesOwnedLastActiveTime(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stored := time.Date(2025, 1, 2, 3, 4, 5, 678000000, time.UTC).UnixMilli()
+	meta, err := loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.StartedAtMS = stored
+	meta.LastActiveAtMS = stored
+	if err := saveMetadata(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loaded.Close()
+	if err := loaded.Append(llm.TextMessage(llm.RoleUser, "touch")); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.StartedAtMS != stored {
+		t.Fatalf("started_at_ms = %d, want preserved %d", updated.StartedAtMS, stored)
+	}
+	if updated.LastActiveAtMS <= stored {
+		t.Fatalf("last_active_at_ms = %d, want greater than %d", updated.LastActiveAtMS, stored)
+	}
+}
+
+func TestSessionLazyFirstAppendPersistsOwnedTimes(t *testing.T) {
+	s, err := NewWithOptions(t.TempDir(), Options{Lazy: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	created := s.Info()
+	if _, err := os.Stat(filepath.Join(s.Dir, metadataFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lazy metadata stat = %v, want not exist before first append", err)
+	}
+
+	if err := s.Append(llm.TextMessage(llm.RoleUser, "persist lazy session")); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := loadMetadata(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.StartedAtMS != created.StartedAt.UnixMilli() {
+		t.Fatalf("started_at_ms = %d, want lazy creation %d", meta.StartedAtMS, created.StartedAt.UnixMilli())
+	}
+	if meta.LastActiveAtMS < meta.StartedAtMS {
+		t.Fatalf("last_active_at_ms = %d, want >= started_at_ms %d", meta.LastActiveAtMS, meta.StartedAtMS)
+	}
+}
+
+func TestSessionAppendRollsBackWhenMetadataUpdateFails(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	metadataPath := filepath.Join(s.Dir, metadataFile)
+	if err := os.Remove(metadataPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(metadataPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metadataPath, "block-replacement"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.Append(llm.TextMessage(llm.RoleUser, "must roll back"))
+	if err == nil {
+		t.Fatal("Append error = nil, want metadata persistence failure")
+	}
+	if strings.Contains(err.Error(), "rollback conversation batch") {
+		t.Fatalf("Append error = %v, transcript rollback also failed", err)
+	}
+	if len(s.History) != 0 || len(s.transcript.entries) != 0 {
+		t.Fatalf("in-memory state changed: history=%d transcript=%d", len(s.History), len(s.transcript.entries))
+	}
+	data, readErr := os.ReadFile(filepath.Join(s.Dir, conversationFile))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(data) != 0 {
+		t.Fatalf("conversation = %q, want rolled back empty file", data)
 	}
 }
 
@@ -561,6 +705,14 @@ func TestLoadRejectsMessageWithoutID(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	sessionTime := time.Date(2026, 5, 15, 1, 2, 3, 0, time.UTC).UnixMilli()
+	if err := saveMetadata(dir, metadata{
+		Kind:           KindPrimary,
+		StartedAtMS:    sessionTime,
+		LastActiveAtMS: sessionTime,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	body := `{"id":"m1","role":"user","blocks":[{"type":"text","text":"old"}]}` + "\n" +
 		`{"role":"assistant","blocks":[{"type":"text","text":"reply"}]}` + "\n"
 	path := filepath.Join(dir, conversationFile)
@@ -736,7 +888,7 @@ func TestLoad_UsesLatestCompactActiveWindow(t *testing.T) {
 	if got := messageIDsForTest(s.History); strings.Join(got, ",") != "m2,m3,m4" {
 		t.Fatalf("active history ids = %v, want m2,m3,m4", got)
 	}
-	info := s.Info(time.Now())
+	info := s.Info()
 	if info.Turns != 2 || info.Preview != "old user" {
 		t.Fatalf("info = turns %d preview %q, want full transcript summary", info.Turns, info.Preview)
 	}
@@ -806,6 +958,14 @@ func TestSession_LoadNormalizesNullBlocks(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "20260509T074114-a20bf346")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionTime := time.Date(2026, 5, 9, 7, 41, 14, 0, time.UTC).UnixMilli()
+	if err := saveMetadata(dir, metadata{
+		Kind:           KindPrimary,
+		StartedAtMS:    sessionTime,
+		LastActiveAtMS: sessionTime,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, conversationFile), []byte(`{"id":"m1","role":"assistant","blocks":null}`+"\n"), 0o644); err != nil {

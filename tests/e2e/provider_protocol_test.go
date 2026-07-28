@@ -234,6 +234,168 @@ func TestLiveBinary_OpenAIChatStreamsByDefault(t *testing.T) {
 	}
 }
 
+func TestLiveBinary_SessionOwnedTimeCacheAndActiveSelection(t *testing.T) {
+	bin := buildJuex(t)
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(chatCompletionResponse("session-ok")))
+	}))
+	defer provider.Close()
+
+	work := t.TempDir()
+	configBody := fmt.Sprintf(`model: local:test-model
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: %s
+    api_key: test-key
+    capabilities:
+      streaming: false
+    models:
+      - id: test-model
+`, provider.URL)
+	if err := writeText(filepath.Join(work, ".juex", "juex.yaml"), configBody); err != nil {
+		t.Fatal(err)
+	}
+	env := isolatedJuexBinaryEnv(t.TempDir())
+
+	firstCmd := exec.Command(bin, "-C", work, "run", "--new", "--json", "first turn")
+	firstCmd.Env = env
+	firstOut, err := firstCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("first run: %v\n%s", err, firstOut)
+	}
+	var first struct {
+		Text       string `json:"text"`
+		SessionID  string `json:"session_id"`
+		SessionDir string `json:"session_dir"`
+	}
+	if err := json.Unmarshal(firstOut, &first); err != nil {
+		t.Fatalf("decode first run: %v\n%s", err, firstOut)
+	}
+	if first.Text != "session-ok" || first.SessionID == "" || first.SessionDir == "" {
+		t.Fatalf("first run = %+v", first)
+	}
+
+	var metadata struct {
+		StartedAtMS    int64 `json:"started_at_ms"`
+		LastActiveAtMS int64 `json:"last_active_at_ms"`
+	}
+	metadataBytes, err := os.ReadFile(filepath.Join(first.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata.StartedAtMS <= 0 || metadata.LastActiveAtMS < metadata.StartedAtMS {
+		t.Fatalf("session metadata = %+v", metadata)
+	}
+
+	agentHome := filepath.Dir(filepath.Dir(first.SessionDir))
+	historyBytes, err := os.ReadFile(filepath.Join(agentHome, "history.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var history struct {
+		ActiveID string `json:"active_id"`
+		Sessions []struct {
+			ID         string `json:"id"`
+			Turns      int    `json:"turns"`
+			Transcript struct {
+				Size    int64 `json:"size"`
+				MtimeMS int64 `json:"mtime_ms"`
+			} `json:"transcript"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(historyBytes, &history); err != nil {
+		t.Fatal(err)
+	}
+	if history.ActiveID != first.SessionID ||
+		len(history.Sessions) != 1 ||
+		history.Sessions[0].ID != first.SessionID ||
+		history.Sessions[0].Turns == 0 ||
+		history.Sessions[0].Transcript.Size == 0 ||
+		history.Sessions[0].Transcript.MtimeMS == 0 {
+		t.Fatalf("history = %+v", history)
+	}
+	for _, forbidden := range [][]byte{
+		[]byte(`"started_at"`),
+		[]byte(`"last_active_at"`),
+		[]byte(`"token_usage"`),
+		[]byte(`"context_usage"`),
+	} {
+		if bytes.Contains(historyBytes, forbidden) {
+			t.Fatalf("history contains canonical field %s: %s", forbidden, historyBytes)
+		}
+	}
+
+	conversationPath := filepath.Join(first.SessionDir, "conversation.jsonl")
+	conversation, err := os.ReadFile(conversationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversationInfo, err := os.Stat(conversationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(conversationPath, bytes.Repeat([]byte("!"), len(conversation)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(conversationPath, conversationInfo.ModTime(), conversationInfo.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	listCmd := exec.Command(bin, "-C", work, "sessions", "list", "--format", "json")
+	listCmd.Env = env
+	listOut, err := listCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("cached sessions list: %v\n%s", err, listOut)
+	}
+	var listed struct {
+		Sessions []struct {
+			ID           string `json:"id"`
+			Active       bool   `json:"active"`
+			Turns        int    `json:"turns"`
+			StartedAt    string `json:"started_at"`
+			LastActiveAt string `json:"last_active_at"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(listOut, &listed); err != nil {
+		t.Fatalf("decode sessions list: %v\n%s", err, listOut)
+	}
+	if len(listed.Sessions) != 1 ||
+		listed.Sessions[0].ID != first.SessionID ||
+		!listed.Sessions[0].Active ||
+		listed.Sessions[0].Turns == 0 ||
+		!strings.HasSuffix(listed.Sessions[0].StartedAt, "Z") ||
+		!strings.HasSuffix(listed.Sessions[0].LastActiveAt, "Z") {
+		t.Fatalf("cached sessions list = %+v", listed.Sessions)
+	}
+
+	if err := os.WriteFile(conversationPath, conversation, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(conversationPath, conversationInfo.ModTime(), conversationInfo.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	secondCmd := exec.Command(bin, "-C", work, "run", "--json", "second turn")
+	secondCmd.Env = env
+	secondOut, err := secondCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("second run: %v\n%s", err, secondOut)
+	}
+	var second struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(secondOut, &second); err != nil {
+		t.Fatalf("decode second run: %v\n%s", err, secondOut)
+	}
+	if second.SessionID != first.SessionID {
+		t.Fatalf("second session = %q, want active %q", second.SessionID, first.SessionID)
+	}
+}
+
 func TestLiveBinary_ModelFallbackPersistsNoticeAndServingModel(t *testing.T) {
 	bin := buildJuex(t)
 	var primaryCalls atomic.Int32
