@@ -34,7 +34,7 @@ help:
 	@echo "  cross         build all 7 platform archives in dist/ (no goreleaser)"
 	@echo "  snapshot      goreleaser cross-platform snapshot (dist/)"
 	@echo "  release-dry   goreleaser release without publishing"
-	@echo "  integration   go test -tags=integration ./tests/e2e/..."
+	@echo "  integration   verbose live tests using JUEX_PROVIDER_CONFIG or ~/.juex/juex.yaml"
 	@echo "  provider-smoke live rotating provider:model smoke from tests/eval/live-models.yaml"
 	@echo "  development-eval standard post-development validation record"
 	@echo "  clean         remove dist/"
@@ -68,7 +68,7 @@ release-dry:
 	goreleaser release --skip=publish --clean
 
 integration:
-	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" go test -tags=integration ./tests/e2e/... -count=1
+	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" go test -tags=integration ./tests/e2e/... -count=1 -v
 
 provider-smoke: build
 	bash tests/eval/provider_model_smoke.sh --juex $(DIST_BIN)

@@ -4,15 +4,26 @@ on:
 
 jobs:
   live:
+    name: live (${{ matrix.provider }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider:
+          - anthropic
+          - openai
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: stable
           cache: true
-      - name: write live config files
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: latest
+      - name: Write live provider config
         env:
+          LIVE_PROVIDER: ${{ matrix.provider }}
           ANTHROPIC_PROTOCOL: ${{ secrets.PROVIDER_API_PROTOCOL_ANTHROPIC }}
           ANTHROPIC_BASE:  ${{ secrets.PROVIDER_API_BASE_ANTHROPIC }}
           ANTHROPIC_KEY:   ${{ secrets.PROVIDER_API_KEY_ANTHROPIC }}
@@ -22,19 +33,46 @@ jobs:
           OPENAI_KEY:      ${{ secrets.PROVIDER_API_KEY_OPENAI }}
           OPENAI_MODEL:    ${{ secrets.PROVIDER_API_MODEL_OPENAI }}
         run: |
-          mkdir -p .juex
-          cat > .juex/minimax.juex.yaml <<EOF
-          provider:
-            protocol: "$ANTHROPIC_PROTOCOL"
-            base_url: "$ANTHROPIC_BASE"
-            api_key: "$ANTHROPIC_KEY"
-            model: "$ANTHROPIC_MODEL"
-          EOF
-          cat > .juex/qwen.juex.yaml <<EOF
-          provider:
-            protocol: "$OPENAI_PROTOCOL"
-            base_url: "$OPENAI_BASE"
-            api_key: "$OPENAI_KEY"
-            model: "$OPENAI_MODEL"
-          EOF
-      - run: go test -tags=integration ./tests/e2e/... -v -count=1
+          set -euo pipefail
+          required=(
+            ANTHROPIC_PROTOCOL ANTHROPIC_BASE ANTHROPIC_KEY ANTHROPIC_MODEL
+            OPENAI_PROTOCOL OPENAI_BASE OPENAI_KEY OPENAI_MODEL
+          )
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "required integration secret is empty: $name" >&2
+              exit 1
+            fi
+          done
+          umask 077
+          export JUEX_HOME="$RUNNER_TEMP/juex-integration-home"
+          mkdir -p "$JUEX_HOME"
+          python3 <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          providers = [
+              {
+                  "id": "ci-anthropic",
+                  "protocol": os.environ["ANTHROPIC_PROTOCOL"],
+                  "base_url": os.environ["ANTHROPIC_BASE"],
+                  "api_key": os.environ["ANTHROPIC_KEY"],
+                  "models": [{"id": os.environ["ANTHROPIC_MODEL"]}],
+              },
+              {
+                  "id": "ci-openai",
+                  "protocol": os.environ["OPENAI_PROTOCOL"],
+                  "base_url": os.environ["OPENAI_BASE"],
+                  "api_key": os.environ["OPENAI_KEY"],
+                  "models": [{"id": os.environ["OPENAI_MODEL"]}],
+              },
+          ]
+          selected = os.environ["LIVE_PROVIDER"]
+          model = os.environ[f"{selected.upper()}_MODEL"]
+          config = {"model": f"ci-{selected}:{model}", "providers": providers}
+          path = Path(os.environ["JUEX_HOME"]) / "juex.yaml"
+          path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+          PY
+          printf 'JUEX_PROVIDER_CONFIG=%s\n' "$JUEX_HOME/juex.yaml" >> "$GITHUB_ENV"
+      - run: make integration

@@ -7,7 +7,96 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
+
+func TestWriteModelConfigSelectsTopLevelAndExplicitRef(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	source := filepath.Join(t.TempDir(), "juex.yaml")
+	body := `model: alpha:model-a
+providers:
+  - id: alpha
+    protocol: openai/chat
+    api_key: alpha-key
+    models:
+      - id: model-a
+  - id: beta
+    protocol: anthropic/messages
+    api_key: beta-key
+    models:
+      - id: model-b
+fleet:
+  unsafe_bind_any: true
+`
+	if err := os.WriteFile(source, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name string
+		ref  string
+		want string
+	}{
+		{name: "top level", want: "alpha:model-a"},
+		{name: "explicit ref", ref: "beta:model-b", want: "beta:model-b"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			output := filepath.Join(t.TempDir(), "selected.yaml")
+			args := []string{
+				"python", "-m", "tests.eval.juex_eval", "write-model-config",
+				"--source", source,
+				"--output", output,
+			}
+			if tt.ref != "" {
+				args = append(args, "--ref", tt.ref)
+			}
+			runUV(t, root, args...)
+
+			data, err := os.ReadFile(output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var selected struct {
+				Model     string `yaml:"model"`
+				Providers []struct {
+					ID     string `yaml:"id"`
+					Models []struct {
+						ID string `yaml:"id"`
+					} `yaml:"models"`
+				} `yaml:"providers"`
+			}
+			if err := yaml.Unmarshal(data, &selected); err != nil {
+				t.Fatalf("parse selected config: %v\n%s", err, data)
+			}
+			if selected.Model != tt.want {
+				t.Fatalf("model = %q, want %q", selected.Model, tt.want)
+			}
+			if len(selected.Providers) != 1 || len(selected.Providers[0].Models) != 1 {
+				t.Fatalf("selected provider shape = %#v", selected.Providers)
+			}
+			wantProvider, wantModel, _ := strings.Cut(tt.want, ":")
+			if selected.Providers[0].ID != wantProvider || selected.Providers[0].Models[0].ID != wantModel {
+				t.Fatalf(
+					"selected provider/model = %s:%s, want %s",
+					selected.Providers[0].ID,
+					selected.Providers[0].Models[0].ID,
+					tt.want,
+				)
+			}
+			if strings.Contains(string(data), "unsafe_bind_any") {
+				t.Fatalf("selected config retained unrelated fleet settings:\n%s", data)
+			}
+		})
+	}
+}
 
 func TestLiveModelRotationScript(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {

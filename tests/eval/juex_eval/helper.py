@@ -1049,12 +1049,17 @@ def list_models(argv: list[str]) -> int:
 def write_model_config_command(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True)
-    parser.add_argument("--provider", required=True)
-    parser.add_argument("--model", required=True)
+    parser.add_argument("--ref", default="")
+    parser.add_argument("--provider", default="")
+    parser.add_argument("--model", default="")
     parser.add_argument("--output", required=True)
     parser.add_argument("--disable-tools", action="store_true")
     parser.add_argument("--compaction-eval", action="store_true")
     parsed = parser.parse_args(argv)
+    if parsed.ref and (parsed.provider or parsed.model):
+        raise ValueError("--ref is mutually exclusive with --provider/--model")
+    if bool(parsed.provider) != bool(parsed.model):
+        raise ValueError("--provider and --model must be provided together")
     compaction = None
     if parsed.compaction_eval:
         compaction = {
@@ -1067,15 +1072,29 @@ def write_model_config_command(argv: list[str]) -> int:
             "user_input_inline_max_bytes": 524288,
         }
     cfg = load_yaml_file(pathlib.Path(parsed.source).expanduser())
+    if parsed.ref:
+        provider_id, model_id = split_provider_model_ref(parsed.ref)
+    elif parsed.provider:
+        provider_id = parsed.provider
+        model_id = parsed.model
+    else:
+        provider_id, model_id = split_provider_model_ref(str(cfg.get("model") or ""))
     write_selected_config(
         cfg,
-        parsed.provider,
-        parsed.model,
+        provider_id,
+        model_id,
         pathlib.Path(parsed.output),
         disable_tools=parsed.disable_tools,
         compaction=compaction,
     )
     return 0
+
+
+def split_provider_model_ref(raw: str) -> tuple[str, str]:
+    provider_id, separator, model_id = raw.strip().partition(":")
+    if not separator or not provider_id.strip() or not model_id.strip():
+        raise ValueError(f"model ref must be provider:model, got {raw!r}")
+    return provider_id.strip(), model_id.strip()
 
 
 def run_timeout_command(argv: list[str]) -> int:
