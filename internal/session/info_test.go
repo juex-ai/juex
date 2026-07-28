@@ -111,13 +111,13 @@ func TestInfoDirFallsBackToDir(t *testing.T) {
 	}
 }
 
-func TestListWithHistoryBoundsLegacyJournalUsageScan(t *testing.T) {
+func TestListWithHistoryBoundsUsageEventTailScan(t *testing.T) {
 	root := t.TempDir()
 	historyPath := filepath.Join(t.TempDir(), "history.json")
 	mtime := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
-	id := "20260727T120000-legacy01"
+	id := "20260727T120000-b0a0ded1"
 	dir := makeSession(t, root, id,
-		[]llm.Message{llm.TextMessage(llm.RoleUser, "legacy")},
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "bounded")},
 		mtime)
 	if err := RecordSession(historyPath, withTranscriptFingerprint(t, Info{
 		ID:           id,
@@ -126,16 +126,16 @@ func TestListWithHistoryBoundsLegacyJournalUsageScan(t *testing.T) {
 		StartedAt:    mtime,
 		LastActiveAt: mtime,
 		Turns:        1,
-		Preview:      "legacy",
+		Preview:      "bounded",
 	}, dir)); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, eventsFile)
-	legacy := `{"type":"llm.responded","payload":{"context_usage":{"model":"legacy","total_tokens":7}}}` + "\n"
+	outsideTail := `{"type":"llm.responded","payload":{"context_usage":{"model":"outside-tail","total_tokens":7}}}` + "\n"
 	paddingLine := `{"type":"tool.output"}` + "\n"
 	padding := strings.Repeat(paddingLine, int(maxSessionUsageScanBytes/int64(len(paddingLine)))+1)
 	latest := `{"type":"llm.responded","payload":{"token_usage":{"input_tokens":10,"output_tokens":2}}}` + "\n"
-	if err := os.WriteFile(path, []byte(legacy+padding+latest), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(outsideTail+padding+latest), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -150,14 +150,14 @@ func TestListWithHistoryBoundsLegacyJournalUsageScan(t *testing.T) {
 		t.Fatalf("token usage = %+v", got[0].TokenUsage)
 	}
 	if got[0].ContextUsage != nil {
-		t.Fatalf("context usage = %+v, want nil for legacy journal", got[0].ContextUsage)
+		t.Fatalf("context usage = %+v, want nil for event outside bounded tail", got[0].ContextUsage)
 	}
 	_, strictContextUsage, err := loadLatestSessionUsage(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strictContextUsage == nil || strictContextUsage.Model != "legacy" {
-		t.Fatalf("strict context usage = %+v, want legacy value", strictContextUsage)
+	if strictContextUsage == nil || strictContextUsage.Model != "outside-tail" {
+		t.Fatalf("strict context usage = %+v, want value outside bounded tail", strictContextUsage)
 	}
 }
 
@@ -419,9 +419,9 @@ func TestLoadInfoUsesStoredUTCSessionTimesForCosmeticID(t *testing.T) {
 	}
 }
 
-func TestLegacySessionMetadataIsUnlistedButDirectLoadFails(t *testing.T) {
+func TestSessionMetadataWithoutOwnedTimeIsUnlistedButDirectLoadFails(t *testing.T) {
 	root := t.TempDir()
-	dir := filepath.Join(root, "20260729T120000-legacy01")
+	dir := filepath.Join(root, "20260729T120000-00000001")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +440,7 @@ func TestLegacySessionMetadataIsUnlistedButDirectLoadFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(infos) != 0 {
-		t.Fatalf("List = %+v, want legacy session omitted", infos)
+		t.Fatalf("List = %+v, want session without owned time omitted", infos)
 	}
 }
 

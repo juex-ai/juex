@@ -18,9 +18,8 @@ const idTimeLayout = "20060102T150405"
 
 const previewMaxRunes = 80
 
-// Session lists only need recent cumulative usage. Bounding the event tail
-// prevents legacy journals without context_usage from turning list requests
-// into full-file scans.
+// Session lists need only recent cumulative usage. Bounding the event tail
+// keeps list request work independent of the full event journal size.
 const maxSessionUsageScanBytes = int64(maxEventLineBytes)
 
 type transcriptFingerprint struct {
