@@ -181,6 +181,9 @@ func TestSessionAppendRollsBackWhenMetadataUpdateFails(t *testing.T) {
 	if err := os.Mkdir(metadataPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(metadataPath, "block-replacement"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	err = s.Append(llm.TextMessage(llm.RoleUser, "must roll back"))
 	if err == nil {
