@@ -26,9 +26,6 @@ func buildPlan(opts Options, host hostInfo) (registrationPlan, error) {
 	}
 	identity := serviceIdentity(home)
 	args := []string{"fleet", "serve"}
-	if opts.UnsafeBindAny {
-		args = append(args, "--unsafe-bind-any")
-	}
 	searchPath := serviceSearchPath(executable, host)
 
 	switch host.goos {

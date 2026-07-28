@@ -17,10 +17,12 @@ const DefaultFleetAddr = "127.0.0.1:5839"
 type FleetConfig struct {
 	Addr           string
 	AddrConfigured bool
+	UnsafeBindAny  bool
 }
 
 type fleetFileConfig struct {
-	Addr string `yaml:"addr"`
+	Addr          string `yaml:"addr"`
+	UnsafeBindAny bool   `yaml:"unsafe_bind_any"`
 }
 
 func LoadHomeFleetConfig() (FleetConfig, error) {
@@ -49,15 +51,24 @@ func LoadHomeFleetConfig() (FleetConfig, error) {
 			return cfg, fmt.Errorf("config: parse %s: duplicate fleet.%s", path, key)
 		}
 		seen[key] = struct{}{}
-		if key != "addr" {
+		value := fleetNode.Content[i+1]
+		switch key {
+		case "addr":
+			if value.Kind != yaml.ScalarNode || value.Tag == "!!null" {
+				return cfg, fmt.Errorf("config: parse %s: fleet.addr must be a host:port string", path)
+			}
+			cfg.Addr = strings.TrimSpace(value.Value)
+			cfg.AddrConfigured = cfg.Addr != ""
+		case "unsafe_bind_any":
+			if value.Kind != yaml.ScalarNode || value.Tag == "!!null" {
+				return cfg, fmt.Errorf("config: parse %s: fleet.unsafe_bind_any must be a boolean", path)
+			}
+			if err := value.Decode(&cfg.UnsafeBindAny); err != nil {
+				return cfg, fmt.Errorf("config: parse %s: fleet.unsafe_bind_any must be a boolean", path)
+			}
+		default:
 			return cfg, fmt.Errorf("config: parse %s: field fleet.%s not found", path, key)
 		}
-		value := fleetNode.Content[i+1]
-		if value.Kind != yaml.ScalarNode || value.Tag == "!!null" {
-			return cfg, fmt.Errorf("config: parse %s: fleet.addr must be a host:port string", path)
-		}
-		cfg.Addr = strings.TrimSpace(value.Value)
-		cfg.AddrConfigured = cfg.Addr != ""
 	}
 	if cfg.Addr == "" {
 		cfg.Addr = DefaultFleetAddr
@@ -83,7 +94,7 @@ func ValidateStableFleetAddr(addr string) error {
 	return nil
 }
 
-func SetHomeFleetAddr(addr string) (string, error) {
+func SetHomeFleetSettings(addr string, unsafeBindAny bool) (string, error) {
 	addr = strings.TrimSpace(addr)
 	if err := ValidateStableFleetAddr(addr); err != nil {
 		return "", fmt.Errorf("config: fleet.addr: %w", err)
@@ -108,6 +119,7 @@ func SetHomeFleetAddr(addr string) (string, error) {
 		return "", fmt.Errorf("config: parse %s: fleet must be a mapping", path)
 	}
 	setYAMLMappingScalar(fleetNode, "addr", addr)
+	setYAMLMappingBool(fleetNode, "unsafe_bind_any", unsafeBindAny)
 	if err := writeFleetConfigDocument(path, doc); err != nil {
 		return "", err
 	}
@@ -167,6 +179,25 @@ func setYAMLMappingScalar(node *yaml.Node, key, value string) {
 	node.Content = append(node.Content,
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
+	)
+}
+
+func setYAMLMappingBool(node *yaml.Node, key string, value bool) {
+	text := strconv.FormatBool(value)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			valueNode := node.Content[i+1]
+			valueNode.Kind = yaml.ScalarNode
+			valueNode.Tag = "!!bool"
+			valueNode.Value = text
+			valueNode.Content = nil
+			valueNode.Alias = nil
+			return
+		}
+	}
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: text},
 	)
 }
 

@@ -127,8 +127,10 @@ func TestLaunchdDefinitionPreservesDetachedAgents(t *testing.T) {
 			t.Fatalf("plist missing %q:\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, "--addr") || strings.Contains(body, "127.0.0.1:8181") {
-		t.Fatalf("plist bakes fleet address:\n%s", body)
+	if strings.Contains(body, "--addr") ||
+		strings.Contains(body, "--unsafe-bind-any") ||
+		strings.Contains(body, "127.0.0.1:8181") {
+		t.Fatalf("plist bakes fleet settings:\n%s", body)
 	}
 	if !strings.Contains(plan.registration.DefinitionPath, filepath.Join("Library", "LaunchAgents")) {
 		t.Fatalf("definition path = %q", plan.registration.DefinitionPath)
@@ -168,8 +170,10 @@ func TestSystemdDefinitionEscapesPathsAndUsesProcessKillMode(t *testing.T) {
 			t.Fatalf("unit missing %q:\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, "--addr") || strings.Contains(body, "127.0.0.1:8181") {
-		t.Fatalf("unit bakes fleet address:\n%s", body)
+	if strings.Contains(body, "--addr") ||
+		strings.Contains(body, "--unsafe-bind-any") ||
+		strings.Contains(body, "127.0.0.1:8181") {
+		t.Fatalf("unit bakes fleet settings:\n%s", body)
 	}
 	if strings.Contains(body, `$$bin`) {
 		t.Fatalf("systemd executable path must preserve literal dollars:\n%s", body)
@@ -186,7 +190,6 @@ func TestTermuxDefinitionUsesDirectExecAndStandardLogging(t *testing.T) {
 	prefix := filepath.Join(t.TempDir(), "usr")
 	home := filepath.Join(t.TempDir(), "fleet home")
 	opts := testOptions(home)
-	opts.UnsafeBindAny = true
 	userHome := t.TempDir()
 	plan, err := buildPlan(opts, hostInfo{
 		goos:         "linux",
@@ -220,14 +223,16 @@ func TestTermuxDefinitionUsesDirectExecAndStandardLogging(t *testing.T) {
 		filepath.Join(userHome, ".local", "bin"),
 		"/custom/bin",
 		"exec ",
-		" 'fleet' 'serve' '--unsafe-bind-any'",
+		" 'fleet' 'serve'",
 	} {
 		if !strings.Contains(run, want) {
 			t.Fatalf("run script missing %q:\n%s", want, run)
 		}
 	}
-	if strings.Contains(run, "--addr") || strings.Contains(run, "0.0.0.0:8182") {
-		t.Fatalf("Termux run script bakes fleet address:\n%s", run)
+	if strings.Contains(run, "--addr") ||
+		strings.Contains(run, "--unsafe-bind-any") ||
+		strings.Contains(run, "0.0.0.0:8182") {
+		t.Fatalf("Termux run script bakes fleet settings:\n%s", run)
 	}
 	if strings.Contains(run, "kill") || strings.Contains(run, "pkill") {
 		t.Fatalf("run script group-kills descendants:\n%s", run)

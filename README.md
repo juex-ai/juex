@@ -147,12 +147,12 @@ agents, and then serves the fleet browser API on loopback
 `127.0.0.1:5839`. Agent API requests under `/agents/<id>/api/...` are forwarded
 only to a freshly verified runtime endpoint. The supervisor remains resident
 without stopping detached agents when it exits. Use `--addr` to choose another
-loopback address; binding beyond loopback requires `--unsafe-bind-any`. A
-`fleet.addr` entry in `$JUEX_HOME/juex.yaml` overrides the default, while an
-explicit `--addr` overrides the home config. `fleet install --addr ...`
-persists that address in the home config. Installed service definitions read
-the address at startup, so editing the config and restarting the service is
-enough to move it.
+loopback address. Binding beyond loopback requires `--unsafe-bind-any` for an
+explicit `--addr`, or `fleet.unsafe_bind_any: true` beside a home-configured
+`fleet.addr`. An explicit `--addr` never inherits that home permission.
+`fleet install --addr ... --unsafe-bind-any` persists both settings in
+`$JUEX_HOME/juex.yaml`. Installed service definitions read the home settings at
+startup, so editing the config and restarting the service is enough to move it.
 `fleet install` registers that supervisor with the current user's launchd,
 systemd, or termux-services manager. Registration names are derived from the
 effective `JUEX_HOME`, so independent homes can coexist. `fleet uninstall`
