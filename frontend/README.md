@@ -86,6 +86,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/session-read-state.ts` | pure session read-model transitions, effect descriptors, route-stable live-subscription cursor capture, and replay overlap suppression |
 | `src/lib/session-transcript-renderers.ts` | pure message-group renderer-key contract used by the typed transcript registry |
 | `src/lib/session-title.ts` | pure session preview display-title fallback helper |
+| `src/lib/system-notice.ts` | pure automated notice normalization and restart-title formatting |
 | `src/lib/shell-header.ts` | pure shell header helpers for runtime badges and session timestamps |
 | `src/lib/tool-display.ts` | pure tool title, lifecycle label, and timeout display helpers |
 | `src/lib/tool-payload.ts` | defensive formatting for structured tool input and output payloads |

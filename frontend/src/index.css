@@ -45,6 +45,9 @@
   --color-juex-tool-border: var(--juex-tool-border);
   --color-juex-tool-header: var(--juex-tool-header);
   --color-juex-tool-surface: var(--juex-tool-surface);
+  --color-juex-info: var(--juex-info);
+  --color-juex-info-bg: var(--juex-info-bg);
+  --color-juex-info-border: var(--juex-info-border);
   --color-juex-error: var(--juex-error);
   --color-juex-error-bg: var(--juex-error-bg);
   --color-juex-done: var(--juex-done);
@@ -148,6 +151,7 @@
 
     --juex-info: #2b6b8a;
     --juex-info-bg: #e7f0f4;
+    --juex-info-border: #b8d2de;
     --status-success: #176650;
     --status-success-bg: #e7f2ed;
     --status-success-border: #b8d7c9;
@@ -251,7 +255,9 @@
       --sidebar-accent-foreground: var(--juex-gold-400);
       --sidebar-border: rgba(246, 215, 142, 0.12);
       --sidebar-ring: var(--juex-gold-400);
+      --juex-info: #9bcce1;
       --juex-info-bg: rgba(67, 142, 178, 0.18);
+      --juex-info-border: rgba(155, 204, 225, 0.3);
       --status-success: #9bc6b3;
       --status-success-bg: rgba(43, 132, 103, 0.2);
       --status-success-border: rgba(155, 198, 179, 0.32);
@@ -307,7 +313,9 @@
     --sidebar-accent-foreground: var(--juex-gold-400);
     --sidebar-border: rgba(246, 215, 142, 0.12);
     --sidebar-ring: var(--juex-gold-400);
+    --juex-info: #9bcce1;
     --juex-info-bg: rgba(67, 142, 178, 0.18);
+    --juex-info-border: rgba(155, 204, 225, 0.3);
     --status-success: #9bc6b3;
     --status-success-bg: rgba(43, 132, 103, 0.2);
     --status-success-border: rgba(155, 198, 179, 0.32);
