@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -22,7 +23,11 @@ const defaultOpenAICodexBaseURL = "https://chatgpt.com/backend-api/codex"
 
 var codexSSERetryBaseDelay = 100 * time.Millisecond
 
-const codexSSEIdleMaxAttempts = 2
+const (
+	codexSSEIdleMaxAttempts   = 2
+	codexToolCallIDMaxLength  = 64
+	codexToolCallIDHashPrefix = "juex_"
+)
 
 type openAICodexResponsesProvider struct {
 	profile   ProviderProfile
@@ -174,7 +179,7 @@ func (p *openAICodexResponsesProvider) codexRequestParams(sys string, history []
 		Model: shared.ResponsesModel(p.profile.Model),
 		Store: param.NewOpt(false),
 		Input: responses.ResponseNewParamsInputUnion{
-			OfInputItemList: encodeOpenAIResponseInput(history, p.profile),
+			OfInputItemList: encodeOpenAIResponseInput(normalizeCodexToolCallIDs(history), p.profile),
 		},
 		Include:           []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent},
 		ParallelToolCalls: param.NewOpt(true),
@@ -205,6 +210,29 @@ func (p *openAICodexResponsesProvider) codexRequestParams(sys string, history []
 		}
 	}
 	return params
+}
+
+func normalizeCodexToolCallIDs(history []Message) []Message {
+	out := append([]Message(nil), history...)
+	for i := range out {
+		out[i].Blocks = append([]Block(nil), history[i].Blocks...)
+		for j := range out[i].Blocks {
+			block := &out[i].Blocks[j]
+			if block.Type != BlockToolUse && block.Type != BlockToolResult {
+				continue
+			}
+			block.ToolUseID = boundedCodexToolCallID(block.ToolUseID)
+		}
+	}
+	return out
+}
+
+func boundedCodexToolCallID(id string) string {
+	if len(id) <= codexToolCallIDMaxLength {
+		return id
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(id)))
+	return codexToolCallIDHashPrefix + digest[:codexToolCallIDMaxLength-len(codexToolCallIDHashPrefix)]
 }
 
 type codexResponsesStream interface {
