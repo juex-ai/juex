@@ -900,7 +900,8 @@ Every persisted session also owns a `scratchpad/` directory. Eager sessions
 create it with the transcript files; lazy sessions create it on the first
 persistent append; loading a persisted session ensures it exists. The session
 package owns the canonical path and deletion remains atomic at the session
-directory boundary.
+directory boundary. Active-session deletion validates the canonical fallback
+before callers stop a live runtime or remove the directory.
 
 `internal/observability` subscribes to the in-process event bus and writes
 derived session-local artifacts: `logs/juex.log`, `logs/debug.log`,

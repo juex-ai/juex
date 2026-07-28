@@ -54,6 +54,14 @@ type historyEntry struct {
 	Transcript transcriptFingerprint `json:"transcript"`
 }
 
+// DeletePlan captures the validated inputs needed to remove one session.
+type DeletePlan struct {
+	dir              string
+	historyPath      string
+	id               string
+	fallbackActiveID string
+}
+
 func SetAlias(dir, alias string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -318,34 +326,57 @@ func markActiveWithHistory(h History, infos []Info) []Info {
 	return out
 }
 
-// Delete removes one on-disk session and drops its entry from history.
-func Delete(root, historyPath, id string) error {
+// PrepareDelete validates one on-disk session and any active-session fallback
+// before callers stop a live runtime or remove persistent data.
+func PrepareDelete(root, historyPath, id string) (*DeletePlan, error) {
 	dir, ok := sessionDir(root, id)
 	if !ok {
-		return os.ErrNotExist
+		return nil, os.ErrNotExist
 	}
 	if _, err := os.Stat(filepath.Join(dir, conversationFile)); err != nil {
-		return err
+		return nil, err
 	}
 	removedActive := false
 	fallbackActiveID := ""
 	if historyPath != "" {
 		h, err := LoadHistory(historyPath)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		removedActive = h.Active != nil && h.Active.ID == id
 		if removedActive {
 			fallbackActiveID, err = newestPrimarySessionID(root, id)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
-	if err := os.RemoveAll(dir); err != nil {
+	return &DeletePlan{
+		dir:              dir,
+		historyPath:      historyPath,
+		id:               id,
+		fallbackActiveID: fallbackActiveID,
+	}, nil
+}
+
+// Commit removes the session represented by a validated delete plan.
+func (p *DeletePlan) Commit() error {
+	if p == nil {
+		return os.ErrInvalid
+	}
+	if err := os.RemoveAll(p.dir); err != nil {
 		return err
 	}
-	return removeHistory(historyPath, id, fallbackActiveID)
+	return removeHistory(p.historyPath, p.id, p.fallbackActiveID)
+}
+
+// Delete removes one on-disk session and drops its entry from history.
+func Delete(root, historyPath, id string) error {
+	plan, err := PrepareDelete(root, historyPath, id)
+	if err != nil {
+		return err
+	}
+	return plan.Commit()
 }
 
 // RemoveHistory drops id from history.json. Missing history is a no-op.

@@ -289,16 +289,23 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id 
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
 
-	closedActive := s.closeActiveSession(id)
-	if err := session.Delete(s.opts.Cfg.SessionsDir(), s.opts.Cfg.HistoryPath(), id); err != nil {
+	_, runtimeActive := s.sessions.Load(id)
+	plan, err := session.PrepareDelete(s.opts.Cfg.SessionsDir(), s.opts.Cfg.HistoryPath(), id)
+	if err != nil {
 		if os.IsNotExist(err) {
-			if !closedActive {
+			if !runtimeActive {
 				writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
 				return
 			}
+			s.closeActiveSession(id)
 			writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": id})
 			return
 		}
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	s.closeActiveSession(id)
+	if err := plan.Commit(); err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}

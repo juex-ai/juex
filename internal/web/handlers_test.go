@@ -3079,6 +3079,62 @@ func TestDeleteSession_NotFound(t *testing.T) {
 	}
 }
 
+func TestDeleteSession_FailedPreflightKeepsActiveRuntimeOpen(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	id := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(id)
+	if !ok {
+		t.Fatalf("active session %s is not registered", id)
+	}
+	active := value.(*activeSession)
+	if err := active.app.ReadSession(func(sess *session.Session) error {
+		return sess.Append(llm.TextMessage(llm.RoleUser, "keep running"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	malformedID := "20260507T101010-malformed"
+	seedSession(t, srv.opts.Cfg.WorkDir, malformedID,
+		`{"role":"user","blocks":[{"type":"text","text":"broken"}]}`+"\n")
+	malformedMetadata := filepath.Join(srv.opts.Cfg.SessionsDir(), malformedID, "session.json")
+	if err := os.WriteFile(malformedMetadata, []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/sessions/"+id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 500; body = %s", resp.StatusCode, body)
+	}
+	got, ok := srv.sessions.Load(id)
+	if !ok || got != active {
+		t.Fatalf("active runtime changed after failed delete: got=%v ok=%v", got, ok)
+	}
+	if _, ok := active.app.SessionInfo(); !ok {
+		t.Fatal("active runtime was closed after failed delete")
+	}
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), id)); err != nil {
+		t.Fatalf("active session directory changed after failed delete: %v", err)
+	}
+	history, err := session.LoadHistory(srv.opts.Cfg.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history.Active == nil || history.Active.ID != id {
+		t.Fatalf("active history = %+v, want %s", history.Active, id)
+	}
+}
+
 func TestDeleteSession_RemovesEmptyActiveSession(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
