@@ -79,7 +79,7 @@ cannot be explained by updating the canonical docs alone. Put new ADRs under
 - Every new behavior ships with a unit test.
 - Cross-cutting runtime, session, CLI, or web changes also update `tests/e2e` when the behavior crosses package boundaries.
 - Backend/API work: add or update handler or CLI tests and run the affected Go packages.
-- Web work: build the frontend and verify the UI in a browser when behavior is visible.
+- Web work: run `make web-check`; build the frontend and verify the UI in a browser when behavior is visible.
 - Documentation-only work: check filenames, headings, links, and stale references.
 - Live integration tests are behind the `integration` build tag and read selected local provider configs from `.juex/*.yaml`; never commit real credentials.
 
