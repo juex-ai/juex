@@ -362,30 +362,6 @@ providers:
 	}
 }
 
-// TestLiveBinary_SchemaIncludesAllSubcommands runs `juex schema` and
-// verifies every documented subcommand shows up. Cheap — proves the
-// binary wires cobra correctly.
-func TestLiveBinary_SchemaIncludesAllSubcommands(t *testing.T) {
-	bin := buildJuex(t)
-	out, err := exec.Command(bin, "schema").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(out)
-	for _, want := range []string{
-		`"name": "juex"`,
-		`"name": "run"`,
-		`"name": "repl"`,
-		`"name": "version"`,
-		`"name": "schema"`,
-		`"name": "bundle"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("schema missing %q. full output:\n%s", want, body)
-		}
-	}
-}
-
 func TestLiveBinary_BundleCreatesRedactedArchive(t *testing.T) {
 	bin := buildJuex(t)
 	work := t.TempDir()

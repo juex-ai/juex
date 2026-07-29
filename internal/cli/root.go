@@ -301,7 +301,6 @@ operate on an agent.`,
 	addGrouped(
 		cliCommandGroupID,
 		newVersionCmd(flags),
-		newSchemaCmd(flags),
 	)
 	return cmd
 }

@@ -36,7 +36,6 @@ go test ./tests/e2e -count=1
 | Ephemeral identity isolation | `TestLiveBinary_EphemeralStateLifecycle` | Compiled `run` and `repl` use temporary state, support retained inspection, leave marked durable state byte-identical, and keep read-only commands from minting. |
 | Ephemeral listening | `TestLiveBinary_EphemeralListenEndpointAndCleanup` | Compiled `listen --ephemeral` publishes a reachable canonical endpoint outside the durable registry, remains invisible to fleet, and removes temporary state after shutdown. |
 | Lifecycle hooks | `TestEndToEnd_CommandLifecycleHooks` | Command hooks compose across app, config, runtime, sessions, tools, and event JSONL for prompt context injection, pre-tool denial, and stop continuation. |
-| CLI schema | `TestLiveBinary_SchemaIncludesAllSubcommands` | The compiled binary exposes the documented command tree. |
 | Web turn API | `TestWeb_TurnRoundTripPersists` | Web session creation, turn submission, async completion, and persisted transcript reads. |
 | Web compaction cancellation | `TestWeb_InterruptCancelsCompactionWithoutPersistingMarker` | A manual compact advertises interruptibility, Web Stop cancels its provider request, reports `Compaction canceled`, and leaves no compact marker in the transcript. |
 | Web pending input | `TestWeb_PendingInputQueuesDuringActiveTurn` | A second web turn queues while a provider call is active, then drains into the next provider request. |

@@ -94,21 +94,6 @@ func TestRootVersionFlagIsLocalAndDiscoverable(t *testing.T) {
 	if !strings.Contains(out.String(), "-v, --version") {
 		t.Fatalf("root help missing version aliases:\n%s", out.String())
 	}
-
-	tree := dumpCommand(newRootCmd())
-	var schemaFlag *schemaFlag
-	for i := range tree.Flags {
-		if tree.Flags[i].Name == "version" {
-			schemaFlag = &tree.Flags[i]
-			break
-		}
-	}
-	if schemaFlag == nil {
-		t.Fatal("root schema missing version flag")
-	}
-	if schemaFlag.Shorthand != "v" || schemaFlag.Persistent {
-		t.Fatalf("root schema version flag = %+v, want local shorthand v", *schemaFlag)
-	}
 }
 
 func TestVersionCmd_VerboseForm(t *testing.T) {
@@ -252,7 +237,6 @@ func TestRootHelpGroupsSubcommandsByScope(t *testing.T) {
 		"listen":     "workspace",
 		"repl":       "workspace",
 		"run":        "workspace",
-		"schema":     "cli",
 		"sessions":   "workspace",
 		"version":    "cli",
 	}
@@ -424,50 +408,6 @@ func TestVersionCmd_RedactsConfiguredRuntimeValues(t *testing.T) {
 				t.Fatalf("version output missing redaction marker:\n%s", out.String())
 			}
 		})
-	}
-}
-
-func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
-	root := newRootCmd()
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetArgs([]string{"schema"})
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	body := out.String()
-	for _, want := range []string{
-		`"name": "juex"`,
-		`"name": "run"`,
-		`"name": "repl"`,
-		`"name": "version"`,
-		`"name": "schema"`,
-		`"name": "sessions"`,
-		`"name": "list"`,
-		`"name": "show"`,
-		`"name": "listen"`,
-		`"name": "bundle"`,
-		`"name": "include-artifacts"`,
-		`"name": "include-worktree-summary"`,
-		`"name": "addr"`,
-		`"name": "unsafe-bind-any"`,
-		`"name": "session"`, // bundle flag
-		`"name": "config"`,  // persistent flag
-		`"name": "cwd"`,     // persistent flag dumped on subcommands
-		`"name": "model"`,
-		`"name": "enable-user-agents-resources"`,
-		`"name": "debug"`,
-		`"name": "log-level"`,
-		`"shorthand": "C"`,
-		`"persistent": true`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("schema missing %q in:\n%s", want, body)
-		}
-	}
-	removedFlagName := "head" + "less"
-	if strings.Contains(body, `"name": "`+removedFlagName+`"`) {
-		t.Errorf("schema still exposes removed flag %q:\n%s", removedFlagName, body)
 	}
 }
 
