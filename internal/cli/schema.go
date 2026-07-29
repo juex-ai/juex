@@ -71,9 +71,15 @@ func dumpCommand(c *cobra.Command) schemaCommand {
 		Example: c.Example,
 	}
 	c.LocalFlags().VisitAll(func(f *pflag.Flag) {
+		if f.Hidden {
+			return
+		}
 		out.Flags = append(out.Flags, dumpFlag(f, false))
 	})
 	c.InheritedFlags().VisitAll(func(f *pflag.Flag) {
+		if f.Hidden || !inheritedFlagAvailable(c, f.Name) {
+			return
+		}
 		out.Flags = append(out.Flags, dumpFlag(f, true))
 	})
 	sort.Slice(out.Flags, func(i, j int) bool { return out.Flags[i].Name < out.Flags[j].Name })
