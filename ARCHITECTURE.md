@@ -55,7 +55,6 @@ juex/
 │   │   ├── root.go
 │   │   ├── run.go
 │   │   ├── repl.go
-│   │   ├── schema.go
 │   │   ├── listen.go
 │   │   ├── sessions.go
 │   │   └── version.go
@@ -1151,7 +1150,6 @@ juex [--version | -v]
 │   ├── logs <agent> [--lines N]
 │   └── gc [--yes]
 ├── bundle --session <id> --out <file.tar.gz> [--redact=true] [--force]
-├── schema
 └── version [-v]
 ```
 
@@ -1197,10 +1195,10 @@ non-blocking application warning. Normal CLI output writes it to stderr, JSON
 run/dry-run output carries structured `warnings`, and REPL warnings use the
 REPL stderr writer.
 
-Root persistent flags are published on non-Fleet subcommands. Fleet help and
-schema omit workspace-scoped `--config`, `--cwd`, and `--model`; the runtime
-guard still rejects those flags if they are supplied before the Fleet command.
-Fleet continues to publish the operational flags that it accepts:
+Root persistent flags are published on non-Fleet subcommands. Fleet help omits
+workspace-scoped `--config`, `--cwd`, and `--model`; the runtime guard still
+rejects those flags if they are supplied before the Fleet command. Fleet
+continues to publish the operational flags that it accepts:
 
 | Flag | Short | Default | Fleet subtree |
 |---|---|---|---|
@@ -1212,9 +1210,10 @@ Fleet continues to publish the operational flags that it accepts:
 | `--log-level` |  | `info` | available |
 | `--verbose` |  | false (stream events to stderr) | available |
 
-`juex schema` is the authoritative declared command/flag inventory. Individual
-command policies may hide or shadow an inherited root flag. A flag rejected
-throughout a subtree must be omitted from both help and schema for that subtree.
+The constructed Cobra command tree is the source of truth for the declared
+command and flag inventory; `--help` is its public discovery surface.
+Individual command policies may hide or shadow an inherited root flag. A flag
+rejected throughout a subtree must be omitted from help for that subtree.
 
 Every executable Cobra command declares an agent-state policy through an
 annotation. Normal `run`, `repl`, and `listen` use `mint`; the `sessions` and

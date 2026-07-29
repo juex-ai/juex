@@ -281,7 +281,7 @@ func TestFleetAddValidationMapsToUsageError(t *testing.T) {
 	}
 }
 
-func TestFleetHelpAndSchemaExposeCommandsAndFlags(t *testing.T) {
+func TestFleetHelpExposesCommandsAndFlags(t *testing.T) {
 	root := newRootCmd()
 	var output bytes.Buffer
 	root.SetOut(&output)
@@ -323,45 +323,32 @@ func TestFleetHelpAndSchemaExposeCommandsAndFlags(t *testing.T) {
 		}
 	}
 
-	root = newRootCmd()
-	output.Reset()
-	root.SetOut(&output)
-	root.SetArgs([]string{"schema"})
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{
-		`"name": "fleet"`,
-		`"name": "addr"`,
-		`"name": "unsafe-bind-any"`,
-		`"name": "lines"`,
-		`"name": "yes"`,
+	for _, test := range []struct {
+		command string
+		flag    string
+	}{
+		{command: "logs", flag: "--lines"},
+		{command: "gc", flag: "--yes"},
 	} {
-		if !strings.Contains(output.String(), want) {
-			t.Fatalf("schema missing %q", want)
+		root = newRootCmd()
+		output.Reset()
+		root.SetOut(&output)
+		root.SetArgs([]string{"fleet", test.command, "--help"})
+		if err := root.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output.String(), test.flag) {
+			t.Fatalf("fleet %s help missing %q:\n%s", test.command, test.flag, output.String())
 		}
 	}
+
 }
 
-func TestFleetHelpAndSchemaAgreeOnInheritedFlagAvailability(t *testing.T) {
+func TestFleetHelpAdvertisesOnlyAcceptedInheritedFlags(t *testing.T) {
 	root := newRootCmd()
-	tree := dumpCommand(root)
 	fleetCommand, _, err := root.Find([]string{"fleet"})
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	findSchemaCommand := func(parent schemaCommand, name string) (schemaCommand, bool) {
-		for _, child := range parent.Subcommands {
-			if child.Name == name {
-				return child, true
-			}
-		}
-		return schemaCommand{}, false
-	}
-	fleetSchema, ok := findSchemaCommand(tree, "fleet")
-	if !ok {
-		t.Fatal("schema missing fleet command")
 	}
 
 	allRootFlags := []string{
@@ -375,8 +362,8 @@ func TestFleetHelpAndSchemaAgreeOnInheritedFlagAvailability(t *testing.T) {
 	}
 	forbidden := map[string]bool{"config": true, "cwd": true, "model": true}
 
-	var visit func(*cobra.Command, schemaCommand)
-	visit = func(command *cobra.Command, schema schemaCommand) {
+	var visit func(*cobra.Command)
+	visit = func(command *cobra.Command) {
 		t.Helper()
 		var help bytes.Buffer
 		root.SetOut(&help)
@@ -385,24 +372,8 @@ func TestFleetHelpAndSchemaAgreeOnInheritedFlagAvailability(t *testing.T) {
 			t.Fatalf("%s help: %v", command.CommandPath(), err)
 		}
 
-		schemaFlags := make(map[string]bool, len(schema.Flags))
-		for _, flag := range schema.Flags {
-			if flag.Persistent {
-				schemaFlags[flag.Name] = true
-			}
-		}
 		for _, name := range allRootFlags {
 			inHelp := strings.Contains(help.String(), "--"+name)
-			if inHelp != schemaFlags[name] {
-				t.Errorf(
-					"%s flag --%s help=%t schema=%t\nhelp:\n%s",
-					command.CommandPath(),
-					name,
-					inHelp,
-					schemaFlags[name],
-					help.String(),
-				)
-			}
 			if forbidden[name] && inHelp {
 				t.Errorf("%s advertises rejected flag --%s", command.CommandPath(), name)
 			}
@@ -415,17 +386,11 @@ func TestFleetHelpAndSchemaAgreeOnInheritedFlagAvailability(t *testing.T) {
 			if child.Hidden || child.Name() == "help" || child.Name() == "completion" {
 				continue
 			}
-			childSchema, ok := findSchemaCommand(schema, child.Name())
-			if !ok {
-				t.Errorf("schema missing %s", child.CommandPath())
-				continue
-			}
-			visit(child, childSchema)
+			visit(child)
 		}
 	}
-	visit(fleetCommand, fleetSchema)
+	visit(fleetCommand)
 
-	treeAfterFleetHelp := dumpCommand(root)
 	for _, commandName := range []string{
 		"run",
 		"repl",
@@ -435,18 +400,21 @@ func TestFleetHelpAndSchemaAgreeOnInheritedFlagAvailability(t *testing.T) {
 		"bundle",
 		"doctor",
 	} {
-		command, ok := findSchemaCommand(treeAfterFleetHelp, commandName)
-		if !ok {
-			t.Errorf("schema missing %s", commandName)
+		command, _, err := root.Find([]string{commandName})
+		if err != nil {
+			t.Errorf("find %s: %v", commandName, err)
 			continue
 		}
-		flagNames := make(map[string]bool, len(command.Flags))
-		for _, flag := range command.Flags {
-			flagNames[flag.Name] = true
+		var help bytes.Buffer
+		root.SetOut(&help)
+		root.SetErr(&help)
+		if err := command.Help(); err != nil {
+			t.Errorf("%s help: %v", command.CommandPath(), err)
+			continue
 		}
 		for name := range forbidden {
-			if !flagNames[name] {
-				t.Errorf("schema command %s missing supported flag --%s", commandName, name)
+			if !strings.Contains(help.String(), "--"+name) {
+				t.Errorf("%s help missing supported flag --%s after Fleet help rendering", commandName, name)
 			}
 		}
 	}

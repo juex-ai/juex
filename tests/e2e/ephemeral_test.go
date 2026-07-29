@@ -124,7 +124,7 @@ func TestLiveBinary_EphemeralStateLifecycle(t *testing.T) {
 		if exitCode(err) != 6 || !strings.Contains(stdout, `"name": "agent"`) || !strings.Contains(stdout, "no agent exists") {
 			t.Fatalf("doctor: exit=%d\nstdout:\n%s\nstderr:\n%s", exitCode(err), stdout, stderr)
 		}
-		for _, args := range [][]string{{"version", "--json"}, {"schema"}} {
+		for _, args := range [][]string{{"version", "--json"}} {
 			stdout, stderr, err = runEphemeralBinary(bin, env, work, args...)
 			if err != nil {
 				t.Fatalf("%v: %v\nstdout:\n%s\nstderr:\n%s", args, err, stdout, stderr)

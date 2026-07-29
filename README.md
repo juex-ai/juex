@@ -235,7 +235,6 @@ operate on an agent. `juex init` sets up either the shared user config
 | --- | --- |
 | `juex --version` / `juex -v` | Print the short build version; equivalent to `juex version`. |
 | `juex version [--verbose] [--json]` | Print build info; optionally include runtime context or emit machine-readable JSON. |
-| `juex schema` | Emit the command tree as JSON for tools and agents. |
 
 On macOS, `fleet install` writes a LaunchAgent under
 `~/Library/LaunchAgents`. On desktop Linux it writes a user unit under
@@ -259,7 +258,7 @@ binds it to state under `JUEX_HOME`, which defaults to `~/.juex`:
 Only a normal `run`, `repl`, or `listen` may create this durable identity.
 Session and bundle commands require an existing marker and never create,
 migrate, or rebind one. `doctor` reports a missing marker as a warning, while
-`version`, `schema`, `init`, and fleet registry commands do not require a
+`version`, `init`, and fleet registry commands do not require a
 workspace identity.
 
 `run`, `repl`, and `listen` accept `--ephemeral` for one-off work. Ephemeral
