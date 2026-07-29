@@ -1197,21 +1197,24 @@ non-blocking application warning. Normal CLI output writes it to stderr, JSON
 run/dry-run output carries structured `warnings`, and REPL warnings use the
 REPL stderr writer.
 
-Persistent root flags:
+Root persistent flags are published on non-Fleet subcommands. Fleet help and
+schema omit workspace-scoped `--config`, `--cwd`, and `--model`; the runtime
+guard still rejects those flags if they are supplied before the Fleet command.
+Fleet continues to publish the operational flags that it accepts:
 
-| Flag | Short | Default |
-|---|---|---|
-| `--config` |  | unset (path to `juex.yaml` override) |
-| `--cwd` | `-C` | `$PWD` (mirrors `git -C`) |
-| `--debug` |  | false (write detailed runtime diagnostics) |
-| `--enable-user-agents-resources` |  | config value (true/false or 1/0) |
-| `--log-level` |  | `info` |
-| `--model` |  | unset (`provider:model` override) |
-| `--verbose` |  | false (stream events to stderr) |
+| Flag | Short | Default | Fleet subtree |
+|---|---|---|---|
+| `--config` |  | unset (path to `juex.yaml` override) | unavailable |
+| `--cwd` | `-C` | `$PWD` (mirrors `git -C`) | unavailable |
+| `--model` |  | unset (`provider:model` override) | unavailable |
+| `--enable-user-agents-resources` |  | config value (true/false or 1/0) | available |
+| `--debug` |  | false (write detailed runtime diagnostics) | available |
+| `--log-level` |  | `info` | available |
+| `--verbose` |  | false (stream events to stderr) | available |
 
 `juex schema` is the authoritative declared command/flag inventory. Individual
-command policies may hide, shadow, or reject an inherited root flag even when
-introspection lists it.
+command policies may hide or shadow an inherited root flag. A flag rejected
+throughout a subtree must be omitted from both help and schema for that subtree.
 
 Every executable Cobra command declares an agent-state policy through an
 annotation. Normal `run`, `repl`, and `listen` use `mint`; the `sessions` and

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/fleet"
@@ -337,6 +339,115 @@ func TestFleetHelpAndSchemaExposeCommandsAndFlags(t *testing.T) {
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("schema missing %q", want)
+		}
+	}
+}
+
+func TestFleetHelpAndSchemaAgreeOnInheritedFlagAvailability(t *testing.T) {
+	root := newRootCmd()
+	tree := dumpCommand(root)
+	fleetCommand, _, err := root.Find([]string{"fleet"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	findSchemaCommand := func(parent schemaCommand, name string) (schemaCommand, bool) {
+		for _, child := range parent.Subcommands {
+			if child.Name == name {
+				return child, true
+			}
+		}
+		return schemaCommand{}, false
+	}
+	fleetSchema, ok := findSchemaCommand(tree, "fleet")
+	if !ok {
+		t.Fatal("schema missing fleet command")
+	}
+
+	allRootFlags := []string{
+		"config",
+		"cwd",
+		"model",
+		"debug",
+		"enable-user-agents-resources",
+		"log-level",
+		"verbose",
+	}
+	forbidden := map[string]bool{"config": true, "cwd": true, "model": true}
+
+	var visit func(*cobra.Command, schemaCommand)
+	visit = func(command *cobra.Command, schema schemaCommand) {
+		t.Helper()
+		var help bytes.Buffer
+		root.SetOut(&help)
+		root.SetErr(&help)
+		if err := command.Help(); err != nil {
+			t.Fatalf("%s help: %v", command.CommandPath(), err)
+		}
+
+		schemaFlags := make(map[string]bool, len(schema.Flags))
+		for _, flag := range schema.Flags {
+			if flag.Persistent {
+				schemaFlags[flag.Name] = true
+			}
+		}
+		for _, name := range allRootFlags {
+			inHelp := strings.Contains(help.String(), "--"+name)
+			if inHelp != schemaFlags[name] {
+				t.Errorf(
+					"%s flag --%s help=%t schema=%t\nhelp:\n%s",
+					command.CommandPath(),
+					name,
+					inHelp,
+					schemaFlags[name],
+					help.String(),
+				)
+			}
+			if forbidden[name] && inHelp {
+				t.Errorf("%s advertises rejected flag --%s", command.CommandPath(), name)
+			}
+			if !forbidden[name] && !inHelp {
+				t.Errorf("%s omits accepted flag --%s", command.CommandPath(), name)
+			}
+		}
+
+		for _, child := range command.Commands() {
+			if child.Hidden || child.Name() == "help" || child.Name() == "completion" {
+				continue
+			}
+			childSchema, ok := findSchemaCommand(schema, child.Name())
+			if !ok {
+				t.Errorf("schema missing %s", child.CommandPath())
+				continue
+			}
+			visit(child, childSchema)
+		}
+	}
+	visit(fleetCommand, fleetSchema)
+
+	treeAfterFleetHelp := dumpCommand(root)
+	for _, commandName := range []string{
+		"run",
+		"repl",
+		"listen",
+		"sessions",
+		"init",
+		"bundle",
+		"doctor",
+	} {
+		command, ok := findSchemaCommand(treeAfterFleetHelp, commandName)
+		if !ok {
+			t.Errorf("schema missing %s", commandName)
+			continue
+		}
+		flagNames := make(map[string]bool, len(command.Flags))
+		for _, flag := range command.Flags {
+			flagNames[flag.Name] = true
+		}
+		for name := range forbidden {
+			if !flagNames[name] {
+				t.Errorf("schema command %s missing supported flag --%s", commandName, name)
+			}
 		}
 	}
 }
