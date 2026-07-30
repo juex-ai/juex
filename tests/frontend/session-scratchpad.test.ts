@@ -61,3 +61,10 @@ test("file tree panel supports a scoped loader, empty state, and header action",
   assert.match(fileTreeSource, /rootKey\?: string/);
   assert.match(fileTreeSource, /useLayoutEffect\(\(\) => \{/);
 });
+
+test("file tree keeps its scroll viewport inside the remaining panel height", () => {
+  assert.match(
+    fileTreeSource,
+    /<ScrollArea className="min-h-0 flex-1 overflow-hidden p-3">/,
+  );
+});

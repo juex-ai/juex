@@ -193,7 +193,7 @@ export function FileTreePanel({
           {tree ? " Showing the last loaded snapshot." : ""}
         </div>
       ) : null}
-      <ScrollArea className="flex-1 p-3">
+      <ScrollArea className="min-h-0 flex-1 overflow-hidden p-3">
         {loading ? (
           <div className="p-2 text-sm text-muted-foreground motion-safe:animate-pulse">
             Loading...
