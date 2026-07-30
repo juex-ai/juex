@@ -43,6 +43,28 @@ func TestRedactingTokenSourceTracksRotatedRefreshToken(t *testing.T) {
 	}
 }
 
+func TestRedactingTokenSourceRedactsOverlappingSecrets(t *testing.T) {
+	const (
+		shortSecret = "token-prefix"
+		longSecret  = shortSecret + "-sensitive-suffix"
+	)
+	source := &redactingTokenSource{
+		source: tokenSourceFunc(func() (*oauth2.Token, error) {
+			return nil, errors.New("refresh rejected " + longSecret + " and " + shortSecret)
+		}),
+		secrets: []string{shortSecret, longSecret},
+	}
+	_, err := source.Token()
+	if err == nil {
+		t.Fatal("expected refresh error")
+	}
+	for _, leaked := range []string{shortSecret, "sensitive-suffix"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Fatalf("credential fragment %q leaked in error: %v", leaked, err)
+		}
+	}
+}
+
 func TestRedactingTokenSourceClassifiesTypedFailures(t *testing.T) {
 	const secret = "token-secret"
 	tests := []struct {

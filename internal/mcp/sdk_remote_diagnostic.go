@@ -160,12 +160,7 @@ func (t *remoteDiagnosticRoundTripper) RoundTrip(request *http.Request) (*http.R
 	readLimit := remoteDiagnosticBodyBytes + longestString(redactions)
 	data, readErr := io.ReadAll(io.LimitReader(response.Body, int64(readLimit+1)))
 	_ = response.Body.Close()
-	bodyExcerpt := string(data)
-	for _, secret := range redactions {
-		if secret != "" {
-			bodyExcerpt = strings.ReplaceAll(bodyExcerpt, secret, "[REDACTED]")
-		}
-	}
+	bodyExcerpt := redactSecrets(string(data), redactions)
 	bodyExcerpt = truncateDiagnosticExcerpt(bodyExcerpt, remoteDiagnosticBodyBytes)
 	response.Body = io.NopCloser(bytes.NewReader([]byte(bodyExcerpt)))
 	diagnostic.record(response.StatusCode, bodyExcerpt)

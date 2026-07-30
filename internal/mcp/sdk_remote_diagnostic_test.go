@@ -97,6 +97,51 @@ func TestRemoteDiagnosticRoundTripperRedactsAcrossExcerptBoundary(t *testing.T) 
 	}
 }
 
+func TestRemoteDiagnosticRoundTripperRedactsOverlappingSecrets(t *testing.T) {
+	const (
+		shortSecret = "access-prefix"
+		longSecret  = shortSecret + "-sensitive-suffix"
+	)
+	transport := &remoteDiagnosticRoundTripper{
+		base: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusUnauthorized,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("rejected " + longSecret)),
+			}, nil
+		}),
+		redactions: []string{shortSecret},
+	}
+	diagnostic := newRemoteDiagnostic()
+	request, err := http.NewRequestWithContext(
+		withRemoteDiagnostic(t.Context(), diagnostic),
+		http.MethodPost,
+		"https://example.test/mcp",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+longSecret)
+	response, err := transport.RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredBody, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enriched := diagnostic.enrich(errors.New("unauthorized"))
+	for _, text := range []string{string(restoredBody), enriched.Error()} {
+		for _, leaked := range []string{shortSecret, "sensitive-suffix"} {
+			if strings.Contains(text, leaked) {
+				t.Fatalf("credential fragment %q leaked in %q", leaked, text)
+			}
+		}
+	}
+}
+
 func TestRemoteDiagnosticRoundTripperDoesNotDispatchRejectedSSE(t *testing.T) {
 	callback := make(chan Notification, 1)
 	transport := &remoteDiagnosticRoundTripper{

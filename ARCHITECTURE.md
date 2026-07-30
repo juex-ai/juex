@@ -209,7 +209,7 @@ implementation decisions live.
 | `internal/sandbox` | Command sandbox policy, platform backend selection, execution wrapping, structured availability errors | Shell Tool lifecycle, config parsing, runtime permission policy outside commands |
 | `internal/observable` | Tagged Command Observable/Schedule specs, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
 | `internal/eventmedia` | Workdir-confined external-event attachment validation, size gates, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
-| `internal/mcp` | MCP config normalization, handwritten stdio process/client lifecycle, Tool discovery, and the official SDK notification transport adapter | Turn policy, active Session selection, Web ownership |
+| `internal/mcp` | MCP config normalization, official SDK command and Streamable HTTP sessions, OAuth token handling, Tool discovery, custom notification preservation, and transport-specific diagnostics | Turn policy, active Session selection, Web ownership |
 | `internal/memory` | `AGENTS.md` hierarchy loading, Agent-owned Memory Entry storage, memory Tool registration | Final prompt-section ordering, Session history, Skill loading |
 | `internal/skills` | `SKILL.md` frontmatter loading, Skill metadata, catalog prompt rendering, compression, and budget selection | Final system-prompt section assembly, task execution policy, Tool dispatch |
 | `internal/prompt` | System-prompt section assembly from guidance, Skills, Memory, runtime metadata, and shell profile | Provider wire formatting, Session persistence, resource discovery policy |
@@ -2169,31 +2169,28 @@ that write before read-only commands retry.
 
 ## 7. MCP
 
-The production client remains handwritten stdio. It supports:
+The production client is a thin adapter over the official Go SDK. Local
+servers use `CommandTransport`; remote servers use
+`StreamableClientTransport`. The SDK owns JSON-RPC framing, initialization,
+protocol negotiation, Streamable HTTP reconnect, and OAuth request
+authorization. Juex owns configuration, transport-neutral Tool projection,
+process-scoped connection lifecycle, custom notification delivery, and
+transport-specific diagnostics.
 
-- `initialize` handshake
-- `tools/list`
-- `tools/call`
-- `notifications/initialized`
-- `notifications/claude/channel`
-
-The module also contains an official Go SDK `Transport` decorator that
-intercepts `notifications/claude/channel` before the SDK rejects the custom
-method. It wraps `Connection.Read`, dispatches the existing Juex notification
-shape asynchronously, and passes every other message through unchanged. This
-adapter is a migration prerequisite and is not yet wired into the production
-client.
-
-With go-sdk v1.7.0, wrapping a connection hides the SDK's package-private
-client session update callback. Command transport is unaffected, but a future
-Streamable HTTP migration must resolve that SDK boundary or require the
-2026-07-28 protocol before claiming compatibility with legacy standalone SSE
-notifications.
+`notifications/claude/channel` is preserved before the SDK rejects the custom
+method. Command connections use a `Connection.Read` decorator. Streamable HTTP
+keeps the SDK's concrete connection intact because its package-private session
+update callback installs negotiated protocol and session state and starts
+legacy standalone SSE. Juex instead filters successful SSE response bodies,
+dispatching custom notifications while forwarding event ID and retry metadata
+as priming events so reconnect state is preserved. Every other valid event is
+passed through with the SDK's framing semantics unchanged.
 
 Each MCP tool is registered as `mcp__<server>__<tool>` to avoid name clashes.
-`mcp.Manager` owns the stdio clients for one process and can register those
-tools into multiple per-session registries. In `listen`, session tool handlers
-forward calls into the shared manager; closing a session does not close MCP.
+`mcp.Manager` owns local and remote clients for one process and can register
+those tools into multiple per-session registries. In `listen`, session tool
+handlers forward calls into the shared manager; closing a session does not
+close MCP.
 `Manager.ToolDescriptors` returns a defensive deep copy of the per-server
 descriptors cached during startup, sorted by tool name within each server. Map
 membership is preserved for a connected server that advertised zero tools, so
@@ -2474,7 +2471,7 @@ provider replay, or long-session behavior changes.
 | Decision | Early preference | Current implementation | Why |
 |---|---|---|---|
 | LLM client | official SDKs | **official SDKs** | matches design |
-| MCP client | mark3labs/mcp-go | **handwritten stdio; official SDK notification adapter staged** | stdio remains live while remote transport migration is prepared |
+| MCP client | mark3labs/mcp-go | **official Go SDK behind a Juex adapter** | SDK owns protocol and transport mechanics; Juex retains product policy and diagnostics |
 | Event dispatch | channel + goroutine pool | **synchronous map** | no async listener required yet |
 | Frontmatter | `gopkg.in/yaml.v3` | **handwritten** | top-level string fields only |
 | Config | viper / koanf | **small YAML loader** | few runtime fields, predictable precedence |

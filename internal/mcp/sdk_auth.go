@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -79,6 +80,20 @@ func appendSecret(values []string, value string) []string {
 		}
 	}
 	return append(values, value)
+}
+
+func redactSecrets(text string, values []string) string {
+	secrets := make([]string, 0, len(values))
+	for _, value := range values {
+		secrets = appendSecret(secrets, value)
+	}
+	sort.Slice(secrets, func(i, j int) bool {
+		return len(secrets[i]) > len(secrets[j])
+	})
+	for _, secret := range secrets {
+		text = strings.ReplaceAll(text, secret, "[REDACTED]")
+	}
+	return text
 }
 
 type staticOAuthHandler struct {
@@ -164,11 +179,7 @@ func (s *redactingTokenSource) Token() (*oauth2.Token, error) {
 	s.secretsMu.RLock()
 	secrets := append([]string(nil), s.secrets...)
 	s.secretsMu.RUnlock()
-	for _, secret := range secrets {
-		if secret != "" {
-			message = strings.ReplaceAll(message, secret, "[REDACTED]")
-		}
-	}
+	message = redactSecrets(message, secrets)
 	redacted := &redactedCauseError{message: message, cause: err}
 	return nil, errorclass.WithKind(tokenSourceErrorKind(err), redacted)
 }
