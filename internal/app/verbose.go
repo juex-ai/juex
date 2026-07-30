@@ -85,6 +85,8 @@ func (vp *verbosePrinter) handle(e events.Event) {
 				vp.spin.start("thinking")
 			}
 		}
+	case "llm.fallback":
+		vp.finishLLMOutputDeltaLine()
 	case "llm.responded":
 		vp.spin.halt()
 		payload, _ := payloadAs[runtimeevents.LLMRespondedPayload](e.Payload)

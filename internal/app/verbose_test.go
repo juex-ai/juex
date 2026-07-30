@@ -276,8 +276,11 @@ func TestVerbose_LLMFallbackPrintsUnstreamedRecoveredResponse(t *testing.T) {
 		}},
 	})
 
-	if !strings.Contains(out, "assistant: partial") || !strings.Contains(out, "assistant: recovered final") {
-		t.Fatalf("fallback output omitted abandoned or recovered response:\n%s", out)
+	if !strings.Contains(out, "assistant: partial\n[turn 2]") {
+		t.Fatalf("fallback request marker was not placed on a fresh line:\n%s", out)
+	}
+	if !strings.Contains(out, "assistant: recovered final") {
+		t.Fatalf("fallback output omitted recovered response:\n%s", out)
 	}
 }
 
