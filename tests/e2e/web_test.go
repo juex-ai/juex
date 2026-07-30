@@ -27,6 +27,7 @@ import (
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/web"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type webProvider struct {
@@ -175,6 +176,116 @@ func TestWeb_RuntimeToolCatalogIncludesMCPDescriptorsWithoutSession(t *testing.T
 	if echo.Name != "echo" || echo.Description != "Echo input" || textSchema["type"] != "string" || echo.Timeout.Mode != "bounded" || echo.Timeout.Seconds != 60 {
 		t.Fatalf("echo descriptor = %+v", echo)
 	}
+}
+
+func TestWeb_RemoteMCPToolRoundTrip(t *testing.T) {
+	remote := newWebRemoteMCPServer(t)
+	work := t.TempDir()
+	projectAgents := filepath.Join(work, ".agents")
+	if err := os.MkdirAll(projectAgents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mcpJSON := fmt.Sprintf(`{"mcpServers":{"remote":{"url":%q}}}`, remote.URL)
+	if err := os.WriteFile(filepath.Join(projectAgents, "mcp.json"), []byte(mcpJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &webProvider{steps: []llm.Response{
+		{
+			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+				Type:      llm.BlockToolUse,
+				ToolUseID: "remote-call",
+				ToolName:  "mcp__remote__echo",
+				Input:     map[string]any{"text": "ping"},
+			}}},
+			StopReason: llm.StopToolUse,
+		},
+		{
+			Message:    llm.TextMessage(llm.RoleAssistant, "remote tool complete"),
+			StopReason: llm.StopEndTurn,
+		},
+	}}
+	srv := web.NewServer(web.Options{
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider: provider,
+	})
+	t.Cleanup(srv.Close)
+	httpServer := httptest.NewServer(srv.Handler())
+	defer httpServer.Close()
+
+	sessionID := createWebSession(t, httpServer.URL)
+	response, err := http.Post(
+		httpServer.URL+"/api/sessions/"+sessionID+"/turns",
+		"application/json",
+		strings.NewReader(`{"prompt":"use the remote tool"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("turn status = %d body=%s", response.StatusCode, body)
+	}
+	var turn webStartTurnResponse
+	if err := json.NewDecoder(response.Body).Decode(&turn); err != nil {
+		t.Fatal(err)
+	}
+	waitForWebTranscript(t, httpServer.URL, sessionID, turn.TurnID, 30*time.Second, "remote MCP result", func(messages []webTranscriptMessage) bool {
+		for _, message := range messages {
+			for _, block := range message.Blocks {
+				if block.Type == "text" && block.Text == "remote tool complete" {
+					return true
+				}
+			}
+		}
+		return false
+	})
+
+	history := provider.history(1)
+	for _, message := range history {
+		for _, block := range message.Blocks {
+			if block.Type == llm.BlockToolResult &&
+				block.ToolUseID == "remote-call" &&
+				strings.Contains(block.Content, "remote: ping") {
+				return
+			}
+		}
+	}
+	t.Fatalf("provider history does not contain remote tool result: %#v", history)
+}
+
+func newWebRemoteMCPServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	server := sdkmcp.NewServer(
+		&sdkmcp.Implementation{Name: "web-remote-test", Version: "1.0.0"},
+		nil,
+	)
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        "echo",
+		Description: "Echo remote input",
+	}, func(
+		_ context.Context,
+		_ *sdkmcp.CallToolRequest,
+		input remoteWebEchoInput,
+	) (*sdkmcp.CallToolResult, any, error) {
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{
+				&sdkmcp.TextContent{Text: "remote: " + input.Text},
+			},
+		}, nil, nil
+	})
+	handler := sdkmcp.NewStreamableHTTPHandler(
+		func(*http.Request) *sdkmcp.Server { return server },
+		&sdkmcp.StreamableHTTPOptions{Stateless: true},
+	)
+	httpServer := httptest.NewServer(handler)
+	t.Cleanup(httpServer.Close)
+	return httpServer
+}
+
+type remoteWebEchoInput struct {
+	Text string `json:"text"`
 }
 
 func TestWeb_TurnRoundTripPersists(t *testing.T) {

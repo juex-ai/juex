@@ -625,7 +625,7 @@ func TestConnect_InvalidStdoutReturnsProtocolError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected invalid stdout error")
 	}
-	if !strings.Contains(err.Error(), "invalid stdout") || !strings.Contains(err.Error(), "not-json") {
+	if !strings.Contains(err.Error(), "invalid stdout") || !strings.Contains(err.Error(), "invalid character") {
 		t.Fatalf("err = %v", err)
 	}
 }

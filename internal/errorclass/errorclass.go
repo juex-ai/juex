@@ -19,8 +19,26 @@ const (
 	KindTerminated     Kind = "terminated"
 	KindPermission     Kind = "permission"
 	KindAuth           Kind = "auth"
+	KindConnectivity   Kind = "connectivity"
+	KindWrongEndpoint  Kind = "wrong_endpoint"
+	KindRetryable      Kind = "retryable"
 	KindRuntimeRestart Kind = "runtime_restart"
 )
+
+type kindCarrier interface {
+	ErrorKind() Kind
+}
+
+type kindError struct {
+	kind Kind
+	err  error
+}
+
+func (e *kindError) Error() string { return e.err.Error() }
+func (e *kindError) Unwrap() error { return e.err }
+func (e *kindError) ErrorKind() Kind {
+	return e.kind
+}
 
 type Classification struct {
 	Kind     Kind
@@ -50,7 +68,40 @@ func Classify(err error) Classification {
 	if cancellation.IsUserCancelled(err) {
 		return Classification{Kind: KindCancelled, RawCause: raw}
 	}
+	var carrier kindCarrier
+	if errors.As(err, &carrier) && carrier.ErrorKind() != "" {
+		kind := carrier.ErrorKind()
+		return Classification{
+			Kind:     kind,
+			TimedOut: kind == KindTimeout,
+			RawCause: raw,
+		}
+	}
 	return ClassifyText(raw)
+}
+
+// WithKind attaches an explicit category without changing the public error
+// text or breaking errors.Is/errors.As traversal.
+func WithKind(kind Kind, err error) error {
+	if err == nil {
+		return nil
+	}
+	if kind == "" {
+		return err
+	}
+	return &kindError{kind: kind, err: err}
+}
+
+// ExplicitKind returns a category attached with WithKind, if present.
+func ExplicitKind(err error) (Kind, bool) {
+	if err == nil {
+		return "", false
+	}
+	var carrier kindCarrier
+	if !errors.As(err, &carrier) || carrier.ErrorKind() == "" {
+		return "", false
+	}
+	return carrier.ErrorKind(), true
 }
 
 func ClassifyText(raw string) Classification {

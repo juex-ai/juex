@@ -126,3 +126,39 @@ func TestClassifyPermissionAndAuth(t *testing.T) {
 		})
 	}
 }
+
+func TestClassifyExplicitKind(t *testing.T) {
+	cause := errors.New("dial tcp: connection refused")
+	err := fmt.Errorf("mcp[remote]: %w", WithKind(KindConnectivity, cause))
+	got := Classify(err)
+	if got.Kind != KindConnectivity || got.RawCause != err.Error() {
+		t.Fatalf("Classify(explicit kind) = %+v", got)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("explicit kind wrapper must preserve errors.Is traversal")
+	}
+	if kind, ok := ExplicitKind(err); !ok || kind != KindConnectivity {
+		t.Fatalf("ExplicitKind() = %q, %v", kind, ok)
+	}
+	if _, ok := ExplicitKind(cause); ok {
+		t.Fatal("plain error unexpectedly has an explicit kind")
+	}
+}
+
+func TestClassifyCancellationAndTimeoutTakePrecedenceOverExplicitKind(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want Kind
+	}{
+		{name: "cancelled", err: WithKind(KindRetryable, context.Canceled), want: KindCancelled},
+		{name: "timeout", err: WithKind(KindRetryable, context.DeadlineExceeded), want: KindTimeout},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := Classify(test.err); got.Kind != test.want {
+				t.Fatalf("Classify() kind = %q, want %q", got.Kind, test.want)
+			}
+		})
+	}
+}

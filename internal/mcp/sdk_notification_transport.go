@@ -3,6 +3,9 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync"
+	"sync/atomic"
 
 	sdkjsonrpc "github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -10,21 +13,54 @@ import (
 
 const claudeChannelNotificationMethod = "notifications/claude/channel"
 
+type sdkTrackedTransport struct {
+	delegate   sdkmcp.Transport
+	mu         sync.Mutex
+	connection sdkmcp.Connection
+}
+
+func trackSDKTransport(delegate sdkmcp.Transport) *sdkTrackedTransport {
+	return &sdkTrackedTransport{delegate: delegate}
+}
+
+func (t *sdkTrackedTransport) Connect(ctx context.Context) (sdkmcp.Connection, error) {
+	connection, err := t.delegate.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	t.connection = connection
+	t.mu.Unlock()
+	return connection, nil
+}
+
+func (t *sdkTrackedTransport) Close() error {
+	t.mu.Lock()
+	connection := t.connection
+	t.connection = nil
+	t.mu.Unlock()
+	if connection == nil {
+		return nil
+	}
+	return connection.Close()
+}
+
 type sdkNotificationTransport struct {
 	delegate       sdkmcp.Transport
 	serverName     string
 	onNotification func(Notification)
+	mu             sync.Mutex
+	connection     sdkmcp.Connection
 }
 
-// wrapSDKNotificationTransport intercepts Juex's custom channel notification
-// before the SDK rejects the unknown method. A wrapped StreamableClientTransport
-// must use the 2026-07-28 protocol until the SDK exposes client session updates;
-// wrapping currently hides the private callback that starts legacy standalone SSE.
+// wrapSDKNotificationTransport intercepts custom channel notifications from
+// command transports before the SDK rejects the unknown method. Streamable
+// HTTP uses an SSE body filter so the SDK retains its private session updates.
 func wrapSDKNotificationTransport(
 	delegate sdkmcp.Transport,
 	serverName string,
 	onNotification func(Notification),
-) sdkmcp.Transport {
+) *sdkNotificationTransport {
 	return &sdkNotificationTransport{
 		delegate:       delegate,
 		serverName:     serverName,
@@ -37,17 +73,41 @@ func (t *sdkNotificationTransport) Connect(ctx context.Context) (sdkmcp.Connecti
 	if err != nil {
 		return nil, err
 	}
-	return &sdkNotificationConnection{
+	wrapped := &sdkNotificationConnection{
 		Connection:     conn,
 		serverName:     t.serverName,
 		onNotification: t.onNotification,
-	}, nil
+		requestIDs:     map[string]pendingResponseID{},
+	}
+	t.mu.Lock()
+	t.connection = wrapped
+	t.mu.Unlock()
+	return wrapped, nil
+}
+
+func (t *sdkNotificationTransport) Close() error {
+	t.mu.Lock()
+	connection := t.connection
+	t.connection = nil
+	t.mu.Unlock()
+	if connection == nil {
+		return nil
+	}
+	return connection.Close()
+}
+
+type pendingResponseID struct {
+	id   sdkjsonrpc.ID
+	done chan struct{}
 }
 
 type sdkNotificationConnection struct {
 	sdkmcp.Connection
 	serverName     string
 	onNotification func(Notification)
+	mu             sync.Mutex
+	requestIDs     map[string]pendingResponseID
+	closed         atomic.Bool
 }
 
 func (c *sdkNotificationConnection) Read(ctx context.Context) (sdkjsonrpc.Message, error) {
@@ -56,12 +116,74 @@ func (c *sdkNotificationConnection) Read(ctx context.Context) (sdkjsonrpc.Messag
 		if err != nil {
 			return nil, err
 		}
+		if response, ok := msg.(*sdkjsonrpc.Response); ok {
+			key := fmt.Sprint(response.ID.Raw())
+			if pending, ok := c.takeRequestID(key); ok {
+				responseCopy := *response
+				responseCopy.ID = pending.id
+				msg = &responseCopy
+			}
+		}
 		req, ok := msg.(*sdkjsonrpc.Request)
 		if !ok || req.IsCall() || req.Method != claudeChannelNotificationMethod {
 			return msg, nil
 		}
 		dispatchClaudeChannelNotification(c.serverName, req.Method, req.Params, c.onNotification)
 	}
+}
+
+func (c *sdkNotificationConnection) Write(ctx context.Context, msg sdkjsonrpc.Message) error {
+	var requestKey string
+	if request, ok := msg.(*sdkjsonrpc.Request); ok && request.IsCall() {
+		requestKey = fmt.Sprint(request.ID.Raw())
+		pending := pendingResponseID{id: request.ID, done: make(chan struct{})}
+		c.mu.Lock()
+		c.requestIDs[requestKey] = pending
+		c.mu.Unlock()
+		if done := ctx.Done(); done != nil {
+			go func() {
+				select {
+				case <-done:
+					c.takeRequestID(requestKey)
+				case <-pending.done:
+				}
+			}()
+		}
+	}
+	if err := c.Connection.Write(ctx, msg); err != nil {
+		if requestKey != "" {
+			c.takeRequestID(requestKey)
+		}
+		return err
+	}
+	return nil
+}
+
+func (c *sdkNotificationConnection) Close() error {
+	if c.closed.Swap(true) {
+		return nil
+	}
+	c.mu.Lock()
+	pending := c.requestIDs
+	c.requestIDs = map[string]pendingResponseID{}
+	c.mu.Unlock()
+	for _, entry := range pending {
+		close(entry.done)
+	}
+	return c.Connection.Close()
+}
+
+func (c *sdkNotificationConnection) takeRequestID(key string) (pendingResponseID, bool) {
+	c.mu.Lock()
+	pending, ok := c.requestIDs[key]
+	if ok {
+		delete(c.requestIDs, key)
+	}
+	c.mu.Unlock()
+	if ok {
+		close(pending.done)
+	}
+	return pending, ok
 }
 
 func dispatchClaudeChannelNotification(

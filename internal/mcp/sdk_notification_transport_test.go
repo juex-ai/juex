@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -231,6 +232,9 @@ func TestSDKNotificationTransportDelegatesConnection(t *testing.T) {
 	if err := conn.Close(); !errors.Is(err, closeErr) {
 		t.Fatalf("Close error = %v, want %v", err, closeErr)
 	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("second Close error = %v, want nil", err)
+	}
 	if !reflect.DeepEqual(delegate.writes, []sdkjsonrpc.Message{msg}) {
 		t.Fatalf("delegate writes = %#v, want original message", delegate.writes)
 	}
@@ -254,7 +258,7 @@ func TestSDKNotificationTransportSwallowsChannelWithoutCallback(t *testing.T) {
 	}
 }
 
-func TestSDKNotificationTransportOverSDKTransports(t *testing.T) {
+func TestClaudeChannelNotificationOverSDKTransports(t *testing.T) {
 	tests := []struct {
 		name    string
 		connect func(*testing.T, func(Notification)) (sdkmcp.Connection, func())
@@ -310,6 +314,46 @@ func TestSDKNotificationTransportOverSDKTransports(t *testing.T) {
 	}
 }
 
+func TestSSEChannelFilterPreservesEventsSDKWouldNotDecode(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "non-message event",
+			raw:  "event: ping\ndata: " + sdkChannelMessage + "\n\n",
+		},
+		{
+			name: "malformed line",
+			raw:  "data: " + sdkChannelMessage + "\nmalformed\n\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			called := make(chan Notification, 1)
+			filter := newSSEChannelFilter(
+				io.NopCloser(strings.NewReader(test.raw)),
+				"remote",
+				func(notification Notification) {
+					called <- notification
+				},
+			)
+			got, err := io.ReadAll(filter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != test.raw {
+				t.Fatalf("filtered event = %q, want original %q", got, test.raw)
+			}
+			select {
+			case notification := <-called:
+				t.Fatalf("unexpected notification: %+v", notification)
+			default:
+			}
+		})
+	}
+}
+
 func TestSDKNotificationTransportCommandHelperProcess(t *testing.T) {
 	if os.Getenv("JUEX_SDK_NOTIFICATION_HELPER") != "1" {
 		return
@@ -355,11 +399,20 @@ func connectSDKStreamableTransport(t *testing.T, callback func(Notification)) (s
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprintf(w, "data: %s\n\ndata: %s\n\n", sdkChannelMessage, sdkResponseMessage)
 	}))
-	conn := connectSDKNotificationTransport(t, &sdkmcp.StreamableClientTransport{
+	conn, err := (&sdkmcp.StreamableClientTransport{
 		Endpoint:             server.URL,
 		MaxRetries:           -1,
 		DisableStandaloneSSE: true,
-	}, "streamable HTTP", callback)
+		HTTPClient: &http.Client{Transport: &remoteDiagnosticRoundTripper{
+			base:           http.DefaultTransport,
+			serverName:     "streamable HTTP",
+			onNotification: callback,
+		}},
+	}).Connect(context.Background())
+	if err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
 	return conn, func() {
 		_ = conn.Close()
 		server.Close()
