@@ -489,27 +489,10 @@ func truncateProtocolLine(s string, n int) string {
 }
 
 func (c *Client) handleNotification(msg rpcEnvelope) {
-	if c.onNotification == nil || msg.Method != "notifications/claude/channel" {
+	if msg.Method != claudeChannelNotificationMethod {
 		return
 	}
-	var params map[string]any
-	if err := json.Unmarshal(msg.Params, &params); err != nil {
-		return
-	}
-	eventType := "notification"
-	if meta, ok := params["meta"].(map[string]any); ok {
-		if raw, ok := meta["event_type"].(string); ok && raw != "" {
-			eventType = raw
-		}
-	}
-	content, _ := params["content"].(string)
-	go c.onNotification(Notification{
-		ServerName: c.name,
-		Method:     msg.Method,
-		EventType:  eventType,
-		Content:    content,
-		Params:     params,
-	})
+	dispatchClaudeChannelNotification(c.name, msg.Method, msg.Params, c.onNotification)
 }
 
 func rpcIDKey(raw json.RawMessage) string {
