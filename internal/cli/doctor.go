@@ -353,7 +353,7 @@ func doctorWorkdirCheck(workDir string) doctorCheck {
 func doctorMCPCheck(cfg config.Config) doctorCheck {
 	configs, err := app.LoadMCPConfigs(cfg, cfg.WorkDir)
 	if err != nil {
-		return doctorCheck{Name: "mcp", Status: doctorStatusFail, Message: err.Error(), Suggestion: "fix mcp.json syntax or extension MCP conflicts"}
+		return doctorCheck{Name: "mcp", Status: doctorStatusFail, Message: err.Error(), Suggestion: "fix mcp.json, credential environment, or extension MCP conflicts"}
 	}
 	var servers []mcp.ServerSpec
 	for _, c := range configs {
@@ -366,6 +366,9 @@ func doctorMCPCheck(cfg config.Config) doctorCheck {
 	}
 	var failures []string
 	for _, spec := range servers {
+		if spec.Command == "" {
+			continue
+		}
 		if err := commandExecutable(cfg, spec.Command); err != nil {
 			failures = append(failures, spec.Command+": "+err.Error())
 		}
@@ -373,7 +376,7 @@ func doctorMCPCheck(cfg config.Config) doctorCheck {
 	if len(failures) > 0 {
 		return doctorCheck{Name: "mcp", Status: doctorStatusFail, Message: strings.Join(failures, "; "), Suggestion: "install missing MCP commands or update mcp.json"}
 	}
-	return doctorCheck{Name: "mcp", Status: doctorStatusOK, Message: fmt.Sprintf("%d MCP server command(s) executable", len(servers))}
+	return doctorCheck{Name: "mcp", Status: doctorStatusOK, Message: fmt.Sprintf("%d MCP server(s) configured", len(servers))}
 }
 
 func doctorSkillsCheck(cfg config.Config) doctorCheck {

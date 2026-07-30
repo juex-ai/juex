@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/extensions"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/mcp"
@@ -263,32 +264,55 @@ func appendExtensionHooks(base hooks.Config, refs []extensions.ResourceRef) (hoo
 	return out, nil
 }
 
-func loadMCPConfigRefs(refs []mcpConfigRef, workDir string) ([]mcp.Config, mcp.Config, map[string]string, error) {
-	var configs []mcp.Config
-	merged := mcp.Config{MCPServers: map[string]mcp.ServerSpec{}}
+func loadMCPConfigRefs(refs []mcpConfigRef, workDir string, runtimeEnvironment environment.Snapshot) ([]mcp.Config, mcp.Config, map[string]string, error) {
+	type loadedConfig struct {
+		ref mcpConfigRef
+		cfg mcp.Config
+	}
+	loaded := make([]loadedConfig, 0, len(refs))
 	sources := map[string]string{}
 	strict := map[string]bool{}
-	for _, ref := range refs {
+	winnerLayer := map[string]int{}
+	for layer, ref := range refs {
 		cfg, err := mcp.LoadConfig(ref.Path)
 		if err != nil {
 			return nil, mcp.Config{}, nil, err
 		}
-		cfg = mcp.PrepareConfigWithOptions(cfg, mcp.PrepareOptions{
-			WorkDir:      workDir,
-			ExtensionDir: ref.ExtensionDir,
-		})
-		if len(cfg.MCPServers) == 0 {
-			continue
-		}
-		for name, spec := range cfg.MCPServers {
+		for name := range cfg.MCPServers {
 			if prevSource, ok := sources[name]; ok && (strict[name] || ref.StrictConflicts) {
 				return nil, mcp.Config{}, nil, fmt.Errorf("extensions: duplicate MCP server %q from %s and %s", name, prevSource, ref.Source)
 			}
-			merged.MCPServers[name] = spec
 			sources[name] = ref.Source
 			strict[name] = ref.StrictConflicts
+			winnerLayer[name] = layer
 		}
-		configs = append(configs, cfg)
+		loaded = append(loaded, loadedConfig{ref: ref, cfg: cfg})
+	}
+
+	var configs []mcp.Config
+	merged := mcp.Config{MCPServers: map[string]mcp.ServerSpec{}}
+	for layer, item := range loaded {
+		effective := mcp.Config{MCPServers: map[string]mcp.ServerSpec{}}
+		for name, spec := range item.cfg.MCPServers {
+			if winnerLayer[name] == layer {
+				effective.MCPServers[name] = spec
+			}
+		}
+		if len(effective.MCPServers) == 0 {
+			continue
+		}
+		prepared, err := mcp.PrepareConfigWithOptions(effective, mcp.PrepareOptions{
+			WorkDir:      workDir,
+			ExtensionDir: item.ref.ExtensionDir,
+			Environment:  runtimeEnvironment,
+		})
+		if err != nil {
+			return nil, mcp.Config{}, nil, err
+		}
+		for name, spec := range prepared.MCPServers {
+			merged.MCPServers[name] = spec
+		}
+		configs = append(configs, prepared)
 	}
 	return configs, merged, sources, nil
 }
@@ -300,6 +324,6 @@ func LoadMCPConfigs(cfg config.Config, workDir string) ([]mcp.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	configs, _, _, err := loadMCPConfigRefs(graph.MCPConfigs(), workDir)
+	configs, _, _, err := loadMCPConfigRefs(graph.MCPConfigs(), workDir, cfg.EnvironmentSnapshot())
 	return configs, err
 }

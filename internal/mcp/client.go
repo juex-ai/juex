@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -35,34 +34,6 @@ const (
 	clientName      = "juex"
 	clientVersion   = "0.1.0"
 )
-
-// ServerSpec mirrors a single entry in mcp.json's `mcpServers`.
-type ServerSpec struct {
-	Command string            `json:"command"`
-	Args    []string          `json:"args,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-}
-
-// Config mirrors the mcp.json file root.
-type Config struct {
-	MCPServers map[string]ServerSpec `json:"mcpServers"`
-}
-
-// LoadConfig reads mcp.json from path. Missing file -> empty Config, no error.
-func LoadConfig(path string) (Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return Config{}, nil
-		}
-		return Config{}, err
-	}
-	var c Config
-	if err := json.Unmarshal(data, &c); err != nil {
-		return Config{}, fmt.Errorf("mcp: %s: %w", path, err)
-	}
-	return c, nil
-}
 
 // ToolDescriptor is a tool advertised by an MCP server.
 type ToolDescriptor struct {

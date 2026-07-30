@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juex-ai/juex/internal/config"
 )
 
 func TestMain(m *testing.M) {
@@ -218,7 +220,7 @@ func TestRunCmd_DryRunReportsMCPStartupErrors(t *testing.T) {
 	}
 	mustWriteCLITestFile(t, filepath.Join(dir, ".agents", "mcp.json"), `{
   "mcpServers": {
-    "alpha": { "command": "" }
+    "alpha": { "command": "__juex_missing_mcp_command__" }
   }
 }`)
 
@@ -242,8 +244,25 @@ func TestRunCmd_DryRunReportsMCPStartupErrors(t *testing.T) {
 	if plan.MCP.Configured != 1 || plan.MCP.Connected != 0 || plan.MCP.Errors != 1 {
 		t.Fatalf("mcp = %+v", plan.MCP)
 	}
-	if len(plan.MCP.Servers) != 1 || plan.MCP.Servers[0].Status != "error" || !strings.Contains(plan.MCP.Servers[0].Error, "missing command") {
+	if len(plan.MCP.Servers) != 1 || plan.MCP.Servers[0].Status != "error" || !strings.Contains(plan.MCP.Servers[0].Error, "resolve command") {
 		t.Fatalf("servers = %+v", plan.MCP.Servers)
+	}
+}
+
+func TestDoctorMCPAcceptsRemoteServerWithoutCommandLookup(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteCLITestFile(t, filepath.Join(dir, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "remote": {"url": "https://mcp.example.com/mcp"}
+  }
+}`)
+
+	check := doctorMCPCheck(config.Config{WorkDir: dir})
+	if check.Status != doctorStatusOK {
+		t.Fatalf("doctor MCP check = %+v", check)
+	}
+	if check.Message != "1 MCP server(s) configured" {
+		t.Fatalf("message = %q", check.Message)
 	}
 }
 
@@ -255,7 +274,7 @@ func TestREPLCmd_WarnsAndContinuesWhenMCPStartupFails(t *testing.T) {
 	}
 	mustWriteCLITestFile(t, filepath.Join(dir, ".agents", "mcp.json"), `{
   "mcpServers": {
-    "alpha": { "command": "" }
+    "alpha": { "command": "__juex_missing_mcp_command__" }
   }
 }`)
 

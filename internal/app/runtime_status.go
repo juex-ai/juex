@@ -530,7 +530,7 @@ func runtimeMCPToolInfos(descriptors []mcp.ToolDescriptor, defaultTimeoutSeconds
 
 func (s RuntimeCatalogService) configuredMCPServers(refs []mcpConfigRef) ([]runtimeMCPServerConfig, error) {
 	serversByName := map[string]runtimeMCPServerConfig{}
-	_, merged, sources, err := loadMCPConfigRefs(refs, s.absoluteWorkDir())
+	_, merged, sources, err := loadMCPConfigRefs(refs, s.absoluteWorkDir(), s.cfg.EnvironmentSnapshot())
 	if err != nil {
 		return nil, err
 	}
