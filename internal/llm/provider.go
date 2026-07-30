@@ -249,9 +249,6 @@ func IsRetryableProviderError(err error) bool {
 		return false
 	}
 	lower := strings.ToLower(err.Error())
-	if strings.Contains(lower, "retry suppressed") {
-		return false
-	}
 	if status, ok := providerHTTPStatusCode(err); ok {
 		return status == http.StatusRequestTimeout ||
 			status == http.StatusConflict ||
@@ -322,9 +319,6 @@ func ClassifyFallbackError(err error) (FallbackFailureReason, bool) {
 		return "", false
 	}
 	lower := strings.ToLower(err.Error())
-	if strings.Contains(lower, "retry suppressed") {
-		return "", false
-	}
 	if IsRetryableProviderError(err) {
 		return FallbackFailureTransient, true
 	}

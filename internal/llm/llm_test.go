@@ -1313,37 +1313,55 @@ func TestOpenAICodexResponses_RetriesStreamIdleAfterEmittingDelta(t *testing.T) 
 	}
 }
 
-func TestOpenAICodexResponses_DoesNotRetryAfterEmittingDelta(t *testing.T) {
+func TestOpenAICodexResponses_RetriesSSEReadAfterEmittingDelta(t *testing.T) {
+	oldDelay := codexSSERetryBaseDelay
+	codexSSERetryBaseDelay = 0
+	t.Cleanup(func() { codexSSERetryBaseDelay = oldDelay })
+
 	attempts := 0
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		attempts++
-		partial := `data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}` + "\n\n"
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Status:     "200 OK",
-			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-			Body:       io.NopCloser(io.MultiReader(strings.NewReader(partial), errReadCloser{err: io.ErrUnexpectedEOF})),
-			Request:    r,
-		}, nil
+		if attempts == 1 {
+			partial := `data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}` + "\n\n"
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(io.MultiReader(strings.NewReader(partial), errReadCloser{err: errors.New("stream error: stream ID 11; INTERNAL_ERROR; received from peer")})),
+				Request:    r,
+			}, nil
+		}
+		return codexCompletedTextResponse(r, "recovered"), nil
 	})}
 	p := NewOpenAICodexResponses(testProfile(t, Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}), client)
 	withOpts := p.(ProviderWithOptions)
+	var diagnostics []ProviderRetryDiagnostic
 	var deltas []StreamDelta
 
-	_, err := withOpts.CompleteWithOptions(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+	resp, err := withOpts.CompleteWithOptions(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
 		OnDelta: func(delta StreamDelta) {
 			deltas = append(deltas, delta)
 		},
+		RetryObserver: func(d ProviderRetryDiagnostic) {
+			diagnostics = append(diagnostics, d)
+		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "retry suppressed") {
-		t.Fatalf("err = %v, want retry suppressed after output", err)
+	if err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
 	}
-	if attempts != 1 {
-		t.Fatalf("attempts = %d, want 1", attempts)
+	if attempts != 2 || resp.Message.FirstText() != "recovered" {
+		t.Fatalf("attempts = %d, response = %+v", attempts, resp)
 	}
 	want := []StreamDelta{{Kind: "text", Index: 0, Text: "partial"}}
 	if !slices.Equal(deltas, want) {
 		t.Fatalf("deltas = %+v, want %+v", deltas, want)
+	}
+	if len(diagnostics) != 1 {
+		t.Fatalf("diagnostics = %+v, want one retry", diagnostics)
+	}
+	got := diagnostics[0]
+	if !got.WillRetry || got.Exhausted || got.Attempt != 1 || got.MaxAttempts != providerMaxRetries+1 || got.RetryReason != "codex_sse_read" {
+		t.Fatalf("retry diagnostic = %+v", got)
 	}
 }
 
@@ -1410,11 +1428,12 @@ func TestOpenAICodexResponses_DoesNotRetryContextSSEReadErrors(t *testing.T) {
 			attempts := 0
 			client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				attempts++
+				partial := `data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}` + "\n\n"
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Status:     "200 OK",
 					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-					Body:       errReadCloser{err: tc.err},
+					Body:       io.NopCloser(io.MultiReader(strings.NewReader(partial), errReadCloser{err: tc.err})),
 					Request:    r,
 				}, nil
 			})}
@@ -1481,6 +1500,9 @@ func TestOpenAICodexResponses_SSEReadRetryExhaustionReportsAttempts(t *testing.T
 	if final.WillRetry || !final.Exhausted || final.Attempt != providerMaxRetries+1 || final.DelayMS != 0 {
 		t.Fatalf("final diagnostic = %+v", final)
 	}
+	if reason, eligible := ClassifyFallbackError(err); !eligible || reason != FallbackFailureTransient {
+		t.Fatalf("ClassifyFallbackError() = %q, %v, want transient fallback", reason, eligible)
+	}
 }
 
 func TestOpenAICodexResponses_DoesNotRetrySemanticResponseFailure(t *testing.T) {
@@ -1492,7 +1514,8 @@ func TestOpenAICodexResponses_DoesNotRetrySemanticResponseFailure(t *testing.T) 
 			Status:     "200 OK",
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body: io.NopCloser(strings.NewReader(
-				`data: {"type":"response.failed","response":{"id":"resp_1","model":"m","status":"failed","error":{"message":"semantic failure","code":"server_error"}}}` + "\n\n",
+				`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}` + "\n\n" +
+					`data: {"type":"response.failed","response":{"id":"resp_1","model":"m","status":"failed","error":{"message":"semantic failure","code":"server_error"}}}` + "\n\n",
 			)),
 			Request: r,
 		}, nil
@@ -3344,9 +3367,6 @@ func TestIsRetryableProviderError(t *testing.T) {
 		{name: "context overflow", err: errors.New("context_length_exceeded"), want: false},
 		{name: "semantic error", err: errors.New("invalid request: unsupported tool schema"), want: false},
 		{name: "streamed semantic error", err: errors.New("openai responses stream error: invalid_request_error"), want: false},
-		{name: "retry suppressed after delta", err: errors.New("codex SSE read failed after emitting output; retry suppressed: stream error: INTERNAL_ERROR"), want: false},
-		{name: "retry suppressed before status text", err: errors.New("codex SSE read failed after emitting output; retry suppressed: status 503: unavailable"), want: false},
-		{name: "retry suppressed before typed status", err: fmt.Errorf("codex SSE read failed after emitting output; retry suppressed: %w", openAIServerErr), want: false},
 		{name: "exit code", err: errors.New("provider helper exit code 500"), want: false},
 		{name: "port number", err: errors.New("dial localhost port 500"), want: false},
 		{name: "cancelled", err: context.Canceled, want: false},

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -578,27 +579,104 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 	}
 }
 
-func TestTurnDoesNotFallbackAfterStreamedDelta(t *testing.T) {
+func TestTurnFallsBackAfterStreamedDelta(t *testing.T) {
 	primary := &fallbackProvider{
 		name:      "primary:model",
 		emitDelta: true,
 		results:   []fallbackProviderResult{{err: errors.New("status 503: unavailable")}},
 	}
 	backup := &fallbackProvider{name: "backup:model", results: []fallbackProviderResult{{response: llm.Response{
-		Message:    llm.TextMessage(llm.RoleAssistant, "unexpected"),
+		Message:    llm.TextMessage(llm.RoleAssistant, "recovered"),
 		StopReason: llm.StopEndTurn,
 	}}}}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
+	}
+	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	var modelEvents []string
+	for _, eventType := range []string{"llm.requested", "llm.output_delta", "llm.fallback", "llm.responded"} {
+		bus.Subscribe(eventType, func(event events.Event) {
+			modelEvents = append(modelEvents, event.Type)
+		})
+	}
+
+	out, err := eng.Turn(context.Background(), "hello")
+	if err != nil || out != "recovered" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	if primary.calls != 1 || backup.calls != 1 {
+		t.Fatalf("calls primary=%d backup=%d", primary.calls, backup.calls)
+	}
+	wantEvents := []string{"llm.requested", "llm.output_delta", "llm.fallback", "llm.requested", "llm.responded"}
+	if !slices.Equal(modelEvents, wantEvents) {
+		t.Fatalf("model events = %v, want %v", modelEvents, wantEvents)
+	}
+	for _, message := range eng.Session.History {
+		if strings.Contains(message.FirstText(), "partial") {
+			t.Fatalf("abandoned provisional output persisted: %+v", eng.Session.History)
+		}
+	}
+}
+
+func TestTurnFallbackAfterStreamedDeltaExecutesRecoveredToolOnce(t *testing.T) {
+	primary := &fallbackProvider{
+		name:      "primary:model",
+		emitDelta: true,
+		results:   []fallbackProviderResult{{err: errors.New("status 503: unavailable")}},
+	}
+	backup := &fallbackProvider{name: "backup:model", results: []fallbackProviderResult{
+		{response: llm.Response{
+			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+				Type: llm.BlockToolUse, ToolUseID: "recovered-call", ToolName: "once", Input: map[string]any{},
+			}}},
+			StopReason: llm.StopToolUse,
+		}},
+		{response: llm.Response{
+			Message:    llm.TextMessage(llm.RoleAssistant, "finished"),
+			StopReason: llm.StopEndTurn,
+		}},
+	}}
 	eng, _ := newEngine(t, primary, false)
 	eng.ModelCandidates = []ModelCandidate{
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
 	}
 	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
-
-	if _, err := eng.Turn(context.Background(), "hello"); err == nil || !strings.Contains(err.Error(), "503") {
-		t.Fatalf("err = %v", err)
+	toolCalls := 0
+	if err := eng.Tools.Register(tools.Tool{
+		Name: "once",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			toolCalls++
+			return "tool result", nil
+		},
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if backup.calls != 0 {
-		t.Fatalf("backup calls = %d, want 0", backup.calls)
+
+	out, err := eng.Turn(context.Background(), "use the recovered tool")
+	if err != nil || out != "finished" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	if primary.calls != 1 || backup.calls != 2 || toolCalls != 1 {
+		t.Fatalf("calls primary=%d backup=%d tool=%d, want 1, 2, 1", primary.calls, backup.calls, toolCalls)
+	}
+	toolUses, toolResults := 0, 0
+	for _, message := range eng.Session.History {
+		if strings.Contains(message.FirstText(), "partial") {
+			t.Fatalf("abandoned provisional output persisted: %+v", eng.Session.History)
+		}
+		for _, block := range message.Blocks {
+			switch block.Type {
+			case llm.BlockToolUse:
+				toolUses++
+			case llm.BlockToolResult:
+				toolResults++
+			}
+		}
+	}
+	if toolUses != 1 || toolResults != 1 {
+		t.Fatalf("persisted tool uses=%d results=%d, want one matched pair", toolUses, toolResults)
 	}
 }

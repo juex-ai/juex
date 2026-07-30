@@ -3,7 +3,6 @@ package llm
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -34,7 +33,6 @@ func TestClassifyFallbackError(t *testing.T) {
 		{name: "generic route not found", err: errors.New("status 404: route not found"), wantOK: false},
 		{name: "context overflow", err: errors.New("status 400: context_length_exceeded"), wantOK: false},
 		{name: "cancelled", err: context.Canceled, wantOK: false},
-		{name: "retry suppressed", err: fmt.Errorf("retry suppressed after output: %w", errors.New("status 503")), wantOK: false},
 		{name: "semantic", err: errors.New("invalid tool schema"), wantOK: false},
 	}
 	for _, tt := range tests {
