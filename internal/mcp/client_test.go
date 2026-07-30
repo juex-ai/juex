@@ -785,7 +785,10 @@ func TestPrepareConfig_ExpandsWorkDirAndInjectsEnv(t *testing.T) {
 		},
 	}}
 
-	got := PrepareConfig(cfg, "workspace")
+	got, err := PrepareConfig(cfg, "workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
 	alpha := got.MCPServers["alpha"]
 	if alpha.Command != workDir+"/bin/server" {
 		t.Fatalf("command = %q", alpha.Command)
@@ -827,7 +830,10 @@ func TestPrepareConfigWithOptions_InjectsExtensionDir(t *testing.T) {
 		},
 	}}
 
-	got := PrepareConfigWithOptions(cfg, PrepareOptions{WorkDir: workDir, ExtensionDir: extDir})
+	got, err := PrepareConfigWithOptions(cfg, PrepareOptions{WorkDir: workDir, ExtensionDir: extDir})
+	if err != nil {
+		t.Fatal(err)
+	}
 	alpha := got.MCPServers["alpha"]
 	if alpha.Command != extDir+"/bin/server" {
 		t.Fatalf("command = %q", alpha.Command)
@@ -850,7 +856,7 @@ func TestMCPClient_WorkDirExpansionReachesServer(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		t.Cleanup(cancel)
 
-		cfg := PrepareConfig(Config{MCPServers: map[string]ServerSpec{
+		cfg, err := PrepareConfig(Config{MCPServers: map[string]ServerSpec{
 			"fake": {
 				Command: os.Args[0],
 				Args:    []string{"--workdir", "${WORKDIR}", "--juex-workdir", "$JUEX_WORKDIR"},
@@ -862,6 +868,9 @@ func TestMCPClient_WorkDirExpansionReachesServer(t *testing.T) {
 				},
 			},
 		}}, workDir)
+		if err != nil {
+			t.Fatal(err)
+		}
 		client, err := Connect(ctx, "fake", cfg.MCPServers["fake"])
 		if err != nil {
 			t.Fatal(err)

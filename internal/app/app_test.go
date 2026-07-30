@@ -2234,7 +2234,7 @@ func TestApp_NewSoftFailsOptionalMCPStartup(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(mcpPath, []byte(`{"mcpServers":{"alpha":{"command":""}}}`), 0o644); err != nil {
+	if err := os.WriteFile(mcpPath, []byte(`{"mcpServers":{"alpha":{"command":"__juex_missing_mcp_command__"}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var stderr bytes.Buffer
@@ -2253,7 +2253,7 @@ func TestApp_NewSoftFailsOptionalMCPStartup(t *testing.T) {
 	if status.Configured != 1 || status.Connected != 0 || status.Errors != 1 {
 		t.Fatalf("mcp status = %+v", status)
 	}
-	if len(status.Servers) != 1 || status.Servers[0].Status != "error" || !strings.Contains(status.Servers[0].Error, "missing command") {
+	if len(status.Servers) != 1 || status.Servers[0].Status != "error" || !strings.Contains(status.Servers[0].Error, "resolve command") {
 		t.Fatalf("mcp servers = %+v", status.Servers)
 	}
 	if !strings.Contains(stderr.String(), `optional MCP server "alpha" is unavailable`) {

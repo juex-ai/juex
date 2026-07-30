@@ -287,7 +287,7 @@ func New(opts Options) (*App, error) {
 	var mergedMCP mcp.Config
 	if !opts.DisableMCP && opts.MCPManager == nil {
 		var err error
-		mcpConfigs, mergedMCP, _, err = loadMCPConfigRefs(resourceGraph.MCPConfigs(), runtimePaths.WorkDir)
+		mcpConfigs, mergedMCP, _, err = loadMCPConfigRefs(resourceGraph.MCPConfigs(), runtimePaths.WorkDir, runtimeEnvironment)
 		if err != nil {
 			return nil, err
 		}

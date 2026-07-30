@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/skills"
 )
 
@@ -107,6 +108,46 @@ commands:
 	}
 	if !hookNode.RequireTrust || !hookNode.StrictConflicts {
 		t.Fatalf("hook node flags = %+v", hookNode)
+	}
+}
+
+func TestLoadMCPConfigRefsPreparesRemoteExtensionCredentials(t *testing.T) {
+	work := t.TempDir()
+	mustWriteRuntimeStatusFile(t, filepath.Join(work, ".juex", "extensions", "remote", "mcp.json"), `{
+  "mcpServers": {
+    "search": {
+      "url": "https://mcp.example.com/mcp",
+      "auth": {"token": "${REMOTE_MCP_TOKEN}"}
+    }
+  }
+}`)
+	graph, err := ResolveRuntimeResourceGraph(config.Config{WorkDir: work})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := environment.Resolve(environment.Options{
+		Inherited: []string{"REMOTE_MCP_TOKEN=extension-secret"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	configs, merged, sources, err := loadMCPConfigRefs(graph.MCPConfigs(), work, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(configs) != 1 {
+		t.Fatalf("configs = %d, want 1", len(configs))
+	}
+	server := merged.MCPServers["search"]
+	if server.URL != "https://mcp.example.com/mcp" {
+		t.Fatalf("URL = %q", server.URL)
+	}
+	if server.Auth == nil || server.Auth.Token == nil || server.Auth.Token.Value() != "extension-secret" {
+		t.Fatalf("prepared auth = %+v", server.Auth)
+	}
+	if sources["search"] != "ext:remote" {
+		t.Fatalf("source = %q, want ext:remote", sources["search"])
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/extensions"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/mcp"
@@ -263,7 +264,7 @@ func appendExtensionHooks(base hooks.Config, refs []extensions.ResourceRef) (hoo
 	return out, nil
 }
 
-func loadMCPConfigRefs(refs []mcpConfigRef, workDir string) ([]mcp.Config, mcp.Config, map[string]string, error) {
+func loadMCPConfigRefs(refs []mcpConfigRef, workDir string, runtimeEnvironment environment.Snapshot) ([]mcp.Config, mcp.Config, map[string]string, error) {
 	var configs []mcp.Config
 	merged := mcp.Config{MCPServers: map[string]mcp.ServerSpec{}}
 	sources := map[string]string{}
@@ -273,10 +274,14 @@ func loadMCPConfigRefs(refs []mcpConfigRef, workDir string) ([]mcp.Config, mcp.C
 		if err != nil {
 			return nil, mcp.Config{}, nil, err
 		}
-		cfg = mcp.PrepareConfigWithOptions(cfg, mcp.PrepareOptions{
+		cfg, err = mcp.PrepareConfigWithOptions(cfg, mcp.PrepareOptions{
 			WorkDir:      workDir,
 			ExtensionDir: ref.ExtensionDir,
+			Environment:  runtimeEnvironment,
 		})
+		if err != nil {
+			return nil, mcp.Config{}, nil, err
+		}
 		if len(cfg.MCPServers) == 0 {
 			continue
 		}
@@ -300,6 +305,6 @@ func LoadMCPConfigs(cfg config.Config, workDir string) ([]mcp.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	configs, _, _, err := loadMCPConfigRefs(graph.MCPConfigs(), workDir)
+	configs, _, _, err := loadMCPConfigRefs(graph.MCPConfigs(), workDir, cfg.EnvironmentSnapshot())
 	return configs, err
 }
