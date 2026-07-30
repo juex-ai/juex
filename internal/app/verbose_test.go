@@ -258,6 +258,32 @@ func TestVerbose_LLMRetryPrintsRecoveredFinalResponse(t *testing.T) {
 	}
 }
 
+func TestVerbose_LLMFallbackPrintsUnstreamedRecoveredResponse(t *testing.T) {
+	out := emitAll([]events.Event{
+		{Type: "turn.started", Payload: runtimeevents.TurnStartedPayload{Input: "stream"}},
+		{Type: "llm.requested", Payload: runtimeevents.LLMRequestedPayload{Iter: 0}},
+		{Type: "llm.output_delta", Payload: runtimeevents.LLMOutputDeltaPayload{Kind: "text", Index: 0, Text: "partial"}},
+		{Type: "llm.fallback", Payload: runtimeevents.LLMFallbackPayload{
+			From:   "primary:model",
+			To:     "backup:model",
+			Reason: "transient",
+		}},
+		{Type: "llm.requested", Payload: runtimeevents.LLMRequestedPayload{Iter: 0, Model: "backup:model"}},
+		{Type: "llm.responded", Payload: runtimeevents.LLMRespondedPayload{
+			Blocks: []llm.Block{{Type: llm.BlockText, Text: "recovered final"}},
+			Text:   "recovered final",
+			Model:  "backup:model",
+		}},
+	})
+
+	if !strings.Contains(out, "assistant: partial\n[turn 2]") {
+		t.Fatalf("fallback request marker was not placed on a fresh line:\n%s", out)
+	}
+	if !strings.Contains(out, "assistant: recovered final") {
+		t.Fatalf("fallback output omitted recovered response:\n%s", out)
+	}
+}
+
 func TestVerbose_PrintsResponseBlocksInOrder(t *testing.T) {
 	out := emitAll([]events.Event{
 		{Type: "llm.requested", Payload: map[string]any{}},

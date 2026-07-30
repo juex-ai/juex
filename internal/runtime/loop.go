@@ -586,14 +586,12 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			Model:      candidate.Ref,
 		}})
 
-		sawDelta := false
 		resp, err := llm.CompleteWithOptions(ctx, candidate.Provider, prepared.systemPrompt, request.history, prepared.tools, llm.CompleteOptions{
 			Purpose:         "turn",
 			MaxOutputTokens: candidateMaxOutputTokens(candidate, e.MaxOutputTokens),
 			CachePolicy:     e.cachePolicyLocked(),
 			RetryObserver:   e.providerRetryObserverLocked(turnID, "turn", &request.iter),
 			OnDelta: func(delta llm.StreamDelta) {
-				sawDelta = true
 				e.emit(events.Event{Type: "llm.output_delta", TurnID: turnID, Transient: true, Payload: LLMOutputDeltaPayload{
 					Iter:  request.iter,
 					Model: candidate.Ref,
@@ -608,7 +606,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			return providerTurnResult{response: resp, request: request, candidate: candidate, notice: notice}, nil
 		}
 		reason, eligible := llm.ClassifyFallbackError(err)
-		if sawDelta || !eligible {
+		if !eligible {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
 			return providerTurnResult{request: request}, &modelRequestError{err: err, contextWindow: candidateContextWindow(candidate, e.ContextWindow)}
 		}

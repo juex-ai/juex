@@ -501,6 +501,64 @@ providers:
 	}
 }
 
+func TestLiveBinary_CodexSSERetriesAfterProvisionalOutput(t *testing.T) {
+	bin := buildJuex(t)
+	var requests atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if requests.Add(1) == 1 {
+			_, _ = w.Write([]byte(`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}` + "\n\n"))
+			w.(http.Flusher).Flush()
+			return
+		}
+		_, _ = w.Write([]byte(`data: {"type":"response.completed","response":{"id":"resp_recovered","model":"gpt-test","status":"completed","output":[{"type":"message","id":"msg_recovered","role":"assistant","status":"completed","content":[{"type":"output_text","text":"recovered","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}` + "\n\n"))
+	}))
+	defer provider.Close()
+
+	work := t.TempDir()
+	configBody := fmt.Sprintf(`model: openai-codex:gpt-test
+providers:
+  - id: openai-codex
+    base_url: %s
+    api_key: codex-test-key
+    compat:
+      codex_transport: sse
+    models:
+      - id: gpt-test
+`, provider.URL)
+	if err := writeText(filepath.Join(work, ".juex", "juex.yaml"), configBody); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "-C", work, "run", "--new", "--json", "recover the turn")
+	cmd.Env = isolatedJuexBinaryEnv(t.TempDir())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("juex run: %v\n%s", err, out)
+	}
+	var result struct {
+		Text       string `json:"text"`
+		SessionDir string `json:"session_dir"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("decode run: %v\n%s", err, out)
+	}
+	if result.Text != "recovered" || result.SessionDir == "" || requests.Load() != 2 {
+		t.Fatalf("run = %+v, requests=%d", result, requests.Load())
+	}
+
+	conversation := strings.Join(readLines(t, filepath.Join(result.SessionDir, "conversation.jsonl")), "\n")
+	if strings.Contains(conversation, "partial") || !strings.Contains(conversation, "recovered") {
+		t.Fatalf("conversation retained provisional output or lost recovery:\n%s", conversation)
+	}
+	eventLog := strings.Join(readLines(t, filepath.Join(result.SessionDir, "events.jsonl")), "\n")
+	if !strings.Contains(eventLog, `"type":"llm.retry"`) ||
+		!strings.Contains(eventLog, `"type":"llm.responded"`) ||
+		strings.Contains(eventLog, `"type":"turn.errored"`) {
+		t.Fatalf("retry lifecycle events are incomplete:\n%s", eventLog)
+	}
+}
+
 func TestLiveBinary_SessionsContinueResumesSideWithoutActivatingIt(t *testing.T) {
 	bin := buildJuex(t)
 	var requestCount atomic.Int32

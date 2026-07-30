@@ -265,6 +265,9 @@ export function projectLiveSessionEvent(
         );
       }
       break;
+    case "llm.fallback":
+      next = resetPendingAssistantOutput(next, event.turn_id, true);
+      break;
     case "tool.requested": {
       const name = event.payload.name || "?";
       next = {
@@ -645,9 +648,9 @@ function applyAssistantResponse(
 function resetPendingAssistantOutput(
   state: LiveSessionProjection,
   turnID: string | undefined,
-  willRetry: boolean,
+  shouldReset: boolean,
 ): LiveSessionProjection {
-  if (!turnID || !willRetry) return state;
+  if (!turnID || !shouldReset) return state;
   return {
     ...state,
     messages: state.messages.map((message) =>

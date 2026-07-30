@@ -213,6 +213,78 @@ test("projectLiveSessionEvent accumulates LLM deltas and reconciles the final re
   ]);
 });
 
+test("projectLiveSessionEvent clears abandoned deltas when the model falls back", () => {
+  let state = createLiveSessionProjection();
+  state = apply(state, {
+    id: "start-fallback-stream",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "turn-fallback-stream",
+    payload: { input: "continue" },
+  });
+  state = apply(state, {
+    id: "primary-delta",
+    type: "llm.output_delta",
+    ts: "2026-06-15T00:00:01Z",
+    turn_id: "turn-fallback-stream",
+    payload: { iter: 0, model: "primary:model", kind: "text", index: 0, text: "abandoned" },
+  });
+  state = apply(state, {
+    id: "fallback",
+    type: "llm.fallback",
+    ts: "2026-06-15T00:00:02Z",
+    turn_id: "turn-fallback-stream",
+    payload: {
+      from: "primary:model",
+      to: "backup:model",
+      reason: "transient",
+    },
+  });
+  state = apply(state, {
+    id: "backup-delta",
+    type: "llm.output_delta",
+    ts: "2026-06-15T00:00:03Z",
+    turn_id: "turn-fallback-stream",
+    payload: { iter: 0, model: "backup:model", kind: "text", index: 0, text: "recovered" },
+  });
+
+  assert.deepEqual(state.messages[1].blocks, [
+    { type: "text", text: "recovered", stream_index: 0 },
+  ]);
+  assert.equal(state.messages[1].model, "backup:model");
+});
+
+test("projectLiveSessionEvent clears abandoned deltas when the fallback chain is exhausted", () => {
+  let state = createLiveSessionProjection();
+  state = apply(state, {
+    id: "start-exhausted-stream",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "turn-exhausted-stream",
+    payload: { input: "continue" },
+  });
+  state = apply(state, {
+    id: "exhausted-delta",
+    type: "llm.output_delta",
+    ts: "2026-06-15T00:00:01Z",
+    turn_id: "turn-exhausted-stream",
+    payload: { iter: 0, model: "primary:model", kind: "text", index: 0, text: "abandoned" },
+  });
+  state = apply(state, {
+    id: "fallback-exhausted",
+    type: "llm.fallback",
+    ts: "2026-06-15T00:00:02Z",
+    turn_id: "turn-exhausted-stream",
+    payload: {
+      from: "primary:model",
+      to: "",
+      reason: "transient",
+    },
+  });
+
+  assert.deepEqual(state.messages[1].blocks, []);
+});
+
 test("projectLiveSessionEvent inserts a fallback notice before its assistant", () => {
   let state = createLiveSessionProjection();
   state = apply(state, {

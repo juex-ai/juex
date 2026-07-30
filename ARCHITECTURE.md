@@ -471,17 +471,17 @@ request errors are returned immediately. The Codex Responses SSE adapter adds a
 second retry layer for stream-read failures after a streaming response has
 already started. It retries by the `codexSSEReadError` category instead of a
 transport-message allowlist, keeps context cancellation and deadlines
-non-retryable, and does not retry an attempt after it has emitted a live delta
-because that observable output cannot be rolled back. It emits `llm.retry`
-diagnostics with provider, model,
+non-retryable, and may retry after emitting a live delta because deltas are
+discardable text/reasoning projections with no durable or tool side effects.
+The retry event clears the abandoned browser projection before replay. It
+emits `llm.retry` diagnostics with provider, model,
 transport, attempt, delay, reason, and exhaustion state so session event logs
 and debug bundles can explain retry behavior. Semantic stream events such as
 `response.failed` are returned without retry.
 The Codex SSE adapter retries one stream-idle timeout, including a stall after
-transient reasoning or text deltas. The retry event clears the browser's
-pending assistant projection before replay, while completed assistant messages
-and tool effects remain untouched. An exhausted idle retry is classified as a
-deadline timeout rather than user cancellation.
+transient reasoning or text deltas. Completed assistant messages and tool
+effects remain untouched. An exhausted idle retry is classified as a deadline
+timeout rather than user cancellation.
 Codex request encoding also maps provider-history tool call IDs longer than the
 backend's 64-character limit to stable hashed wire IDs. Matching tool calls and
 results receive the same mapping, while canonical session history remains
@@ -1062,6 +1062,11 @@ cooldown ladder and single-request half-open reservations. `internal/runtime`
 owns request replay, candidate-specific context preflight, `llm.fallback`
 events, and `model_fallback` notices. A successful switch atomically appends
 the notice and assistant response; failed attempts never persist a notice.
+Eligible failures may switch candidates after provisional output because
+`CompleteOptions.OnDelta` is restricted to discardable text and reasoning
+projections; it must never carry executable Tool Calls. Browser projections
+clear abandoned deltas on the fallback event, while the verbose CLI resets its
+stream bookkeeping when the next `llm.requested` event arrives.
 `juex listen` shares one health instance across all session Apps.
 
 Turns are Codex-aligned long-running loops: the runtime does not enforce a
