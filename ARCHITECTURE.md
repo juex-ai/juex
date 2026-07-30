@@ -209,7 +209,7 @@ implementation decisions live.
 | `internal/sandbox` | Command sandbox policy, platform backend selection, execution wrapping, structured availability errors | Shell Tool lifecycle, config parsing, runtime permission policy outside commands |
 | `internal/observable` | Tagged Command Observable/Schedule specs, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
 | `internal/eventmedia` | Workdir-confined external-event attachment validation, size gates, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
-| `internal/mcp` | MCP config normalization, stdio process/client lifecycle, Tool discovery, notification transport | Turn policy, active Session selection, Web ownership |
+| `internal/mcp` | MCP config normalization, handwritten stdio process/client lifecycle, Tool discovery, and the official SDK notification transport adapter | Turn policy, active Session selection, Web ownership |
 | `internal/memory` | `AGENTS.md` hierarchy loading, Agent-owned Memory Entry storage, memory Tool registration | Final prompt-section ordering, Session history, Skill loading |
 | `internal/skills` | `SKILL.md` frontmatter loading, Skill metadata, catalog prompt rendering, compression, and budget selection | Final system-prompt section assembly, task execution policy, Tool dispatch |
 | `internal/prompt` | System-prompt section assembly from guidance, Skills, Memory, runtime metadata, and shell profile | Provider wire formatting, Session persistence, resource discovery policy |
@@ -2169,13 +2169,26 @@ that write before read-only commands retry.
 
 ## 7. MCP
 
-Handwritten stdio client (no external SDK). Supports:
+The production client remains handwritten stdio. It supports:
 
 - `initialize` handshake
 - `tools/list`
 - `tools/call`
 - `notifications/initialized`
 - `notifications/claude/channel`
+
+The module also contains an official Go SDK `Transport` decorator that
+intercepts `notifications/claude/channel` before the SDK rejects the custom
+method. It wraps `Connection.Read`, dispatches the existing Juex notification
+shape asynchronously, and passes every other message through unchanged. This
+adapter is a migration prerequisite and is not yet wired into the production
+client.
+
+With go-sdk v1.7.0, wrapping a connection hides the SDK's package-private
+client session update callback. Command transport is unaffected, but a future
+Streamable HTTP migration must resolve that SDK boundary or require the
+2026-07-28 protocol before claiming compatibility with legacy standalone SSE
+notifications.
 
 Each MCP tool is registered as `mcp__<server>__<tool>` to avoid name clashes.
 `mcp.Manager` owns the stdio clients for one process and can register those
@@ -2461,7 +2474,7 @@ provider replay, or long-session behavior changes.
 | Decision | Early preference | Current implementation | Why |
 |---|---|---|---|
 | LLM client | official SDKs | **official SDKs** | matches design |
-| MCP client | mark3labs/mcp-go | **handwritten stdio** | only stdio + 3 RPCs needed |
+| MCP client | mark3labs/mcp-go | **handwritten stdio; official SDK notification adapter staged** | stdio remains live while remote transport migration is prepared |
 | Event dispatch | channel + goroutine pool | **synchronous map** | no async listener required yet |
 | Frontmatter | `gopkg.in/yaml.v3` | **handwritten** | top-level string fields only |
 | Config | viper / koanf | **small YAML loader** | few runtime fields, predictable precedence |
