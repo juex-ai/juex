@@ -447,7 +447,7 @@ with Arrow Up/Down, Page Up/Down, Home, and End.
 
 Schedule rows show three distinct controls: `Run` uses a lightning icon to
 emit one configured Observation, Start/Stop controls the timetable lifecycle,
-and Delete removes a project-owned source. Plugin rows show their
+and Delete removes a project-owned source. Extension rows show their
 `ext:<name>` resource source and type/config summary but omit Delete; direct
 API mutation remains rejected. Project rows show source `project`. Command
 rows do not show Run. The Schedule

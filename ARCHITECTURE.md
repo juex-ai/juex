@@ -196,8 +196,8 @@ implementation decisions live.
 | `internal/fleetservice` | Per-user launchd/systemd/Termux supervisor definitions and service-manager transactions | Individual Agent lifecycle, Fleet address policy, CLI presentation |
 | `internal/fleetweb` | Fleet HTTP/SSE transport, roster DTOs, directory-browser endpoints, verified Agent reverse proxy, embedded SPA fallback | Registry/process policy, single-Agent routes, frontend domain policy |
 | `internal/processmetrics` | Cross-platform per-process RSS and cumulative CPU-time sampling, interval CPU derivation, process-identity baseline reset | Polling cadence, Agent health policy, HTTP DTOs, UI formatting, persistence |
-| `internal/extensions` | Ordered extension-root discovery, allowed-name filtering, same-name winner selection, source identity, resource references, trust requirement projection | Plugin-policy inheritance, Skill/MCP/hook/Observable parsing, runtime registration, extension execution |
-| `internal/config` | YAML and user/Workspace config layering, plugin allowlist inheritance, runtime-environment layer ordering, Provider selection inputs, path and policy projection | Extension directory scanning, Dotenv syntax, mutable process-global environment ownership, canonical Provider Profile semantics, Turn behavior, Provider requests, HTTP routing |
+| `internal/extensions` | Ordered extension-root discovery, allowed-name filtering, same-name winner selection, source identity, resource references, trust requirement projection | Extension allowlist inheritance, Skill/MCP/hook/Observable parsing, runtime registration, Extension execution |
+| `internal/config` | YAML and user/Workspace config layering, extension allowlist inheritance, runtime-environment layer ordering, Provider selection inputs, path and policy projection | Extension directory scanning, Dotenv syntax, mutable process-global environment ownership, canonical Provider Profile semantics, Turn behavior, Provider requests, HTTP routing |
 | `internal/environment` | Portable environment-name validation, deterministic dotenv parsing, immutable effective snapshots, child overlays, value-free metadata, controlled single-workspace activation | Config-file discovery, subprocess ownership, runtime policy, diagnostic presentation |
 | `internal/providerreadiness` | Provider selection, credential, construction, and connectivity readiness checks | Provider Protocol semantics, runtime fallback, CLI presentation |
 | `internal/llm` | Canonical messages and blocks, Provider interfaces/profiles, Protocol and Capability resolution, wire/SDK adapters, provider transport/API/stream retry, model health | Model-chain fallback, Session lifecycle, Tool execution, CLI/HTTP DTOs |
@@ -214,7 +214,7 @@ implementation decisions live.
 | `internal/chunkedwrite` | Canonical chunked-write lifecycle facts and deterministic state derivation | Tool schemas/dispatch, filesystem execution, runtime Event transport |
 | `internal/hooks` | Trusted hook config, matching, bounded command execution, and hook result facts | Lifecycle phase ordering, interpretation of deny/continue results, Tool execution |
 | `internal/sandbox` | Command sandbox policy, platform backend selection, exact additional-writable-root projection, blocked-path conflict checks, execution wrapping, structured availability errors | Shell Tool lifecycle, config parsing, runtime permission policy outside commands |
-| `internal/observable` | Tagged Command Observable/Schedule specs, project/plugin definition-source validation and ownership, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Extension discovery, Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
+| `internal/observable` | Tagged Command Observable/Schedule specs, project and Extension definition-source validation and ownership, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Extension discovery, Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
 | `internal/eventmedia` | Workdir-confined external-event attachment validation, size gates, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
 | `internal/mcp` | Adapter over the official Go SDK: Claude-compatible MCP config normalization, command and Streamable HTTP sessions, static HTTP header handling, Tool discovery, staged remote readiness, custom notification preservation, and transport-specific diagnostics | Protocol framing/negotiation, Turn policy, active Session selection, Web ownership |
 | `internal/memory` | `AGENTS.md` hierarchy loading, Agent-owned Memory Entry storage, memory Tool registration | Final prompt-section ordering, Session history, Skill loading |
@@ -710,7 +710,7 @@ resolved sandbox policy. The runner normalizes Workspace and additional roots
 once for both platform backends and rejects any lexical or symlink-resolved
 ancestor, exact, or descendant overlap with `blocked_paths` before launching a
 wrapper. An extension context projects only its exact Agent-owned data
-directory, never the Agent parent or sibling plugin paths.
+directory, never the Agent parent or sibling extension paths.
 Sandbox helper discovery uses the inherited launch snapshot rather than a
 workspace-controlled runtime `PATH`. Dynamic-loader variables such as `LD_*`,
 `DYLD_*`, and `GLIBC_TUNABLES` are removed from the wrapper process and restored
@@ -849,8 +849,8 @@ project-local scope. User-global `~/.agents` resources are also loaded by
 default unless `enable_user_agents_resources` or
 `--enable-user-agents-resources` disables them. Project MCP servers and skills
 override user entries by name; AGENTS.md files are concatenated in load order.
-This switch does not gate plugin bundles. Their separate `plugins.allow`
-policy selects extension resources from JueX Home and Workspace scopes.
+This switch does not gate Extensions. The separate `extensions.allow`
+allowlist selects Extension resources from JueX Home and Workspace scopes.
 
 ### 3.5 Session
 
@@ -1600,7 +1600,7 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | POST | `/api/observables/<id>/run` | emit one durable Schedule Observation without changing lifecycle state |
 | POST | `/api/observables/<id>/start` | start a stopped or exited Observable |
 | POST | `/api/observables/<id>/stop` | stop a running Observable |
-| DELETE | `/api/observables/<id>` | delete a project-owned Observable spec and stop its source; plugin definitions return `409` |
+| DELETE | `/api/observables/<id>` | delete a project-owned Observable spec and stop its source; extension definitions return `409` |
 | GET | `/api/observables/<id>/observations` | recent Observation history |
 | GET | `/api/files/tree` | workdir file tree for the web sidebar |
 | GET | `/api/files/content?path=<path>` | bounded text preview or image preview metadata for one workdir file |
@@ -1637,16 +1637,16 @@ The frontend mirrors the tagged Web DTO and does not duplicate source
 validation policy.
 
 `internal/app` composes the writable project file with ordered, intrinsically
-read-only `observables.json` references from selected plugin bundles. The
+read-only `observables.json` references from selected Extensions. The
 Observable package parses every file, projects required resource source
 `project` or `ext:<name>`, and rejects any validated ID collision with both
-sources named. Invalid plugin entries remain source-qualified error statuses
+sources named. Invalid extension entries remain source-qualified error statuses
 without blocking project edits. Only project definitions reach `SaveConfig`;
-plugin Delete and same-ID Create return typed read-only conflicts before any
+extension Delete and same-ID Create return typed read-only conflicts before any
 stop, state deletion, or file write.
 
-Plugin Command execution receives a neutral runtime tuple adapted from the
-selected `ExtensionRuntimeContext`: installation directory, one Agent-owned
+A Command Observable defined by an Extension receives a neutral runtime tuple
+adapted from the selected `ExtensionRuntimeContext`: installation directory, one Agent-owned
 data directory, and its deferred prepare callback. The runner expands command,
 args, cwd, and env without a shell, injects authoritative `WORKDIR`,
 `JUEX_WORKDIR`, `JUEX_EXT_DIR`, and `JUEX_EXT_DATA_DIR`, and derives the sole
@@ -1707,8 +1707,8 @@ otherwise the default home. Juex reads `~/.juex/juex.yaml` first, then reads
 `$JUEX_HOME/juex.yaml` only when the two canonical home directories differ.
 The default-home file is a read-only base for a non-default instance; user
 configuration writes, locks, Fleet state, and Agent state target only the
-effective home. Allowed plugin bundles may be read from both the default and
-effective Home extension directories. The work-local config is
+effective home. Selected Extensions may be read from both the default and
+effective Home Extension directories. The work-local config is
 `<WorkDir>/.juex/juex.yaml`, except when `WorkDir` itself is a `.juex`
 directory, where Juex reads `<WorkDir>/juex.yaml`. The repository root ships
 `juex.yaml.example` as a copyable template:
@@ -1726,7 +1726,7 @@ skills:
   prompt_budget_chars: 8000
   include: []
   exclude: []
-plugins:
+extensions:
   allow: []
 shell:
   profile: auto
@@ -1786,10 +1786,10 @@ compaction:
 |---|---|
 | `model` | active model reference in `provider:model` form |
 | `fallback_models` | optional ordered `provider:model` list used after eligible request failures; an explicit empty list clears an inherited list |
-| `enable_user_agents_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores only `~/.agents/AGENTS.md`, `~/.agents/skills`, and `~/.agents/mcp.json`; plugin policy is unchanged |
+| `enable_user_agents_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores only `~/.agents/AGENTS.md`, `~/.agents/skills`, and `~/.agents/mcp.json`; the Extension allowlist is unchanged |
 | `environment.load_dotenv` | optional boolean; defaults to `true`; reads exactly `<WorkDir>/.env` once during runtime config loading; a missing file is allowed and malformed input fails startup |
 | `environment.variables` | optional string map merged into the immutable runtime environment; portable names are required and Juex-owned identity/path names are rejected |
-| `plugins.allow` | optional exact, case-sensitive plugin-name allowlist; an omitted layer inherits, an explicit list replaces, and no effective setting loads no plugin bundles; accepted only in default-Home, instance-Home, or Workspace config |
+| `extensions.allow` | optional exact, case-sensitive Extension-name allowlist; an omitted layer inherits, an explicit list replaces, and no effective setting selects any Extensions; accepted only in default-Home, instance-Home, or Workspace config |
 | `skills.prompt_budget_chars` | optional compact skill catalog budget in characters; defaults to `8000` and is capped by the model context-window policy |
 | `skills.include` | optional filesystem skill-name whitelist applied after user, extension, and project merging; when non-empty, `skills.exclude` is ignored; required builtin guides remain loaded |
 | `skills.exclude` | optional filesystem skill-name blacklist applied after merging when `skills.include` is empty; required builtin guides remain loaded |
@@ -2116,7 +2116,7 @@ effective JueX-home, agent-home, and work-local:
 
 $JUEX_HOME/
 ├── juex.yaml                     # instance override; also the shared base when this is ~/.juex
-├── extensions/<name>/            # optional JueX-home extension bundle
+├── extensions/<name>/            # optional JueX-home Extension
 │   ├── hooks.yaml                # lifecycle command hooks, trusted by location
 │   ├── mcp.json                  # extension MCP servers
 │   ├── observables.json          # read-only extension Observables
@@ -2131,7 +2131,7 @@ $JUEX_HOME/
     ├── api.sock                  # preferred local endpoint while serving
     ├── history.json              # cached session summaries + active primary id
     ├── logs/fleet.log            # detached child stdout + stderr
-    ├── extensions/<name>/        # Agent-owned persistent plugin data
+    ├── extensions/<name>/        # Agent-owned persistent extension data
     ├── memory/
     ├── observables/              # generated runs, observations, oversized payload files, and schedule state
     └── sessions/<id>/            # conversation history and session sidecars
@@ -2147,7 +2147,7 @@ $JUEX_HOME/
 └── .juex/
     ├── juex.local.json           # workspace-to-agent identity marker
     ├── artifacts/                # durable bytes managed by internal/artifact
-    ├── extensions/<name>/        # work-local extension bundle; may include observables.json
+    ├── extensions/<name>/        # work-local Extension; may include observables.json
     ├── juex.yaml                 # local runtime provider config
     └── observables.json          # workspace observable configuration
 ```
@@ -2159,7 +2159,7 @@ tool, and per-session log files described in §3.5.
 `JUEX_HOME` scopes the writable instance config and extension installation,
 supervisor/endpoint/Fleet locks, and Agent registry state. A canonically
 distinct home reads `~/.juex/juex.yaml` as its configuration base and may read
-allowed default-Home plugin bundles, but never writes instance config or
+selected default-Home Extensions, but never writes instance config or
 runtime state there. The existing `~/.agents` AGENTS.md, skill, and MCP
 resource tree remains at its current location.
 
@@ -2209,24 +2209,25 @@ projects it to metadata plus an explicit cannot-view/do-not-guess instruction
 for that provider request. Vision-capable projection remains unchanged.
 
 The personal `~/.agents` resources are read-only from Juex's view and are
-loaded only when user-agent resources are enabled. Plugin policy is resolved
-independently as default Home, distinct effective Home, then Workspace.
-Omitted `plugins.allow` inherits; an explicit list replaces; no final setting
-loads no plugin bundle. `internal/app` projects the three extension directories
+loaded only when user-agent resources are enabled. The Extension allowlist is
+resolved independently as default Home, distinct effective Home, then Workspace.
+Omitted `extensions.allow` inherits; an explicit list replaces; no final setting
+selects any Extension. `internal/app` projects the three Extension directories
 as low-to-high typed roots into `internal/extensions`. Discovery first filters
-logical names and selects one whole-bundle winner, then inspects only the
-winners for Skills, MCP config, Hooks, and Observable config. A Workspace same-name bundle
-therefore replaces a Home bundle and carries Workspace trust requirements.
+logical names and selects one whole Extension, then inspects only the selected
+Extensions for Skills, MCP config, Hooks, and Observable config. A same-name
+Workspace Extension therefore replaces a Home Extension and carries Workspace
+trust requirements.
 This logical-name policy is not publisher or source authentication.
 Extension-provided MCP server, Skill, Hook, or Observable names still must not
 collide with existing resources or another selected extension. Runtime status
 reports selected extension resources as `ext:<name>`.
-Unlike project command hooks, plugin `observables.json` has no separate
+Unlike project command hooks, extension `observables.json` has no separate
 `trusted` marker: an allowed work-local winner starts valid Command
 Observables with the Primary Session. A Workspace can therefore authorize its
-own plugin code; Sandbox policy, not the allowlist, is the filesystem
+own extension code; Sandbox policy, not the allowlist, is the filesystem
 capability boundary.
-For every selected bundle, `internal/app` derives an extension runtime context
+For every selected Extension, `internal/app` derives an extension runtime context
 from the resolved Agent Address. Its persistent data directory is
 `<AgentAddress.StateDir()>/extensions/<name>`; state-free resource projections
 carry no data directory. Discovery remains installation-only and never creates
@@ -2337,7 +2338,7 @@ server `env` entries win over the global runtime snapshot after expansion, but
 Juex injects its reserved `WORKDIR`, `JUEX_WORKDIR`, and `JUEX_EXT_DIR` values
 last so server-local config cannot spoof runtime identity or extension paths.
 Extension MCP servers also receive and may expand `JUEX_EXT_DIR`, the absolute
-path to the extension bundle root. After layered conflict resolution, a
+path to the Extension root. After layered conflict resolution, a
 winning local extension MCP config carries a deferred preparation callback.
 Juex creates the Agent-owned data directory with mode `0700` on Unix after
 command resolution and immediately before the local MCP connection starts.
@@ -2346,8 +2347,8 @@ the reserved value last. Configuration discovery, status, doctor inspection,
 remote MCP servers, and remote-only extensions do not create the directory.
 Remote MCP servers never receive this process environment, and the value never
 enters HTTP headers or the global runtime environment snapshot. Directory
-preparation rejects symlinks at the extension-data root or plugin directory and
-verifies the physical plugin path remains below the physical Agent
+preparation rejects symlinks at the extension-data root or extension directory and
+verifies the physical extension path remains below the physical Agent
 extension-data root.
 
 ---

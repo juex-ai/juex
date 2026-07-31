@@ -31,7 +31,7 @@ func (s *commandSourceRuntime) start(callCtx context.Context, run *observableRun
 		submit:        s.kernel.submitDelivery,
 		runtime:       s.origin.Runtime,
 		source:        s.origin.Source,
-		plugin:        s.origin.ReadOnly,
+		extension:     s.origin.ReadOnly,
 	})
 	run.sourceState = &commandRunState{runner: r}
 	cmd, err := r.start(startupCtx, run.ctx)

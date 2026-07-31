@@ -190,7 +190,7 @@ func TestLiveBinary_LoadsExtensionSkillsAndMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	configBody := "model: openai:m\n" +
-		"plugins:\n" +
+		"extensions:\n" +
 		"  allow: [demo]\n" +
 		"providers:\n" +
 		"  - id: openai\n" +
@@ -239,13 +239,13 @@ func TestLiveBinary_LoadsExtensionSkillsAndMCP(t *testing.T) {
 		t.Errorf("mcp__extlocal__echo not in tool list (extension MCP server not loaded?). tools=%v", plan.Tools)
 	}
 	if have["mcp__blockedlocal__echo"] {
-		t.Errorf("blocked plugin MCP tool entered the plan. tools=%v", plan.Tools)
+		t.Errorf("blocked extension MCP tool entered the plan. tools=%v", plan.Tools)
 	}
 
 	skillFound := false
 	for _, s := range plan.Skills {
 		if s.Name == "blocked-skill" {
-			t.Errorf("blocked plugin skill entered the plan: %+v", plan.Skills)
+			t.Errorf("blocked extension skill entered the plan: %+v", plan.Skills)
 		}
 		if s.Name == "ext-skill" {
 			skillFound = true
@@ -277,7 +277,7 @@ func TestLiveBinary_UserAgentsGateDoesNotDisableHomeExtensions(t *testing.T) {
 	}
 	configBody := `model: openai:m
 enable_user_agents_resources: false
-plugins:
+extensions:
   allow: [home-bundle]
 providers:
   - id: openai

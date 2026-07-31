@@ -26,7 +26,7 @@ type runnerOptions struct {
 	submit        func(context.Context, ObservationRecord) bool
 	runtime       RuntimeContext
 	source        string
-	plugin        bool
+	extension     bool
 }
 
 type runner struct {
@@ -55,7 +55,7 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 	if err := callCtx.Err(); err != nil {
 		return nil, err
 	}
-	runtimeSpec, reserved, err := prepareCommandRuntime(r.opts.spec, r.opts.workDir, r.opts.runtime, r.opts.plugin)
+	runtimeSpec, reserved, err := prepareCommandRuntime(r.opts.spec, r.opts.workDir, r.opts.runtime, r.opts.extension)
 	if err != nil {
 		return nil, err
 	}
@@ -77,9 +77,9 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 		Env:    r.env(runtimeSpec.Env, reserved),
 	}
 	var additionalWritableRoots []string
-	if r.opts.plugin && r.opts.runtime.ExtensionDataDir != "" {
+	if r.opts.extension && r.opts.runtime.ExtensionDataDir != "" {
 		if r.opts.runtime.PrepareExtensionDataDir == nil {
-			return nil, fmt.Errorf("observable: plugin source %s has a data directory without a prepare callback", r.opts.source)
+			return nil, fmt.Errorf("observable: extension source %s has a data directory without a prepare callback", r.opts.source)
 		}
 		if err := callCtx.Err(); err != nil {
 			return nil, err
@@ -298,13 +298,13 @@ func (r *runner) env(child, reserved map[string]string) []string {
 		child,
 		reserved,
 	)
-	if r.opts.plugin {
+	if r.opts.extension {
 		return env
 	}
 	return stripExtensionEnvironment(env)
 }
 
-func prepareCommandRuntime(spec commandRuntimeSpec, workDir string, runtime RuntimeContext, plugin bool) (commandRuntimeSpec, map[string]string, error) {
+func prepareCommandRuntime(spec commandRuntimeSpec, workDir string, runtime RuntimeContext, extension bool) (commandRuntimeSpec, map[string]string, error) {
 	out := spec
 	out.Args = append([]string(nil), spec.Args...)
 	out.Env = cloneStringMap(spec.Env)
@@ -312,7 +312,7 @@ func prepareCommandRuntime(spec commandRuntimeSpec, workDir string, runtime Runt
 		"WORKDIR":      workDir,
 		"JUEX_WORKDIR": workDir,
 	}
-	if plugin {
+	if extension {
 		reserved["JUEX_EXT_DIR"] = runtime.ExtensionDir
 		reserved["JUEX_EXT_DATA_DIR"] = runtime.ExtensionDataDir
 	} else {
@@ -323,19 +323,19 @@ func prepareCommandRuntime(spec commandRuntimeSpec, workDir string, runtime Runt
 		}
 	}
 	var err error
-	if out.Command, err = expandRuntimeValue(out.Command, reserved, plugin); err != nil {
+	if out.Command, err = expandRuntimeValue(out.Command, reserved, extension); err != nil {
 		return commandRuntimeSpec{}, nil, err
 	}
 	for index := range out.Args {
-		if out.Args[index], err = expandRuntimeValue(out.Args[index], reserved, plugin); err != nil {
+		if out.Args[index], err = expandRuntimeValue(out.Args[index], reserved, extension); err != nil {
 			return commandRuntimeSpec{}, nil, err
 		}
 	}
-	if out.CWD, err = expandRuntimeValue(out.CWD, reserved, plugin); err != nil {
+	if out.CWD, err = expandRuntimeValue(out.CWD, reserved, extension); err != nil {
 		return commandRuntimeSpec{}, nil, err
 	}
 	for key, value := range out.Env {
-		if out.Env[key], err = expandRuntimeValue(value, reserved, plugin); err != nil {
+		if out.Env[key], err = expandRuntimeValue(value, reserved, extension); err != nil {
 			return commandRuntimeSpec{}, nil, err
 		}
 	}

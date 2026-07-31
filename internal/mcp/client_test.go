@@ -957,7 +957,7 @@ func TestMCPClient_LocalProcessPreparationFailurePreventsConnect(t *testing.T) {
 	}
 }
 
-func TestMCPClient_NonPluginServerDoesNotInheritExtensionDataDir(t *testing.T) {
+func TestMCPClient_NonExtensionServerDoesNotInheritExtensionDataDir(t *testing.T) {
 	snapshot, err := environment.Resolve(environment.Options{
 		Inherited: []string{"JUEX_EXT_DATA_DIR=/inherited"},
 	})
@@ -990,7 +990,7 @@ func TestMCPClient_NonPluginServerDoesNotInheritExtensionDataDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "ext_data_dir=\n") {
-		t.Fatalf("non-plugin server inherited extension data dir:\n%s", out)
+		t.Fatalf("non-extension server inherited extension data dir:\n%s", out)
 	}
 }
 

@@ -242,12 +242,12 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 			return nil, fmt.Errorf("observable: duplicate read-only definition source %q", readonly.Source)
 		}
 		seenReadOnlySources[readonly.Source] = struct{}{}
-		pluginCfg, pluginIssues, loadErr := LoadConfigLenient(readonly.Path)
+		extensionCfg, extensionIssues, loadErr := LoadConfigLenient(readonly.Path)
 		if loadErr != nil {
 			return nil, loadErr
 		}
 		origin := definitionOrigin{Source: readonly.Source, ReadOnly: true, Runtime: readonly.Runtime}
-		for _, spec := range pluginCfg.Observables {
+		for _, spec := range extensionCfg.Observables {
 			if previous, exists := m.origins[spec.ID]; exists {
 				return nil, fmt.Errorf("observable: duplicate id %q from %s and %s", spec.ID, previous.Source, origin.Source)
 			}
@@ -260,7 +260,7 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 			m.sources[spec.ID] = source
 			m.lastStatus[spec.ID] = source.statusSnapshot(baseStatusFromSpec(spec, RunStateStopped))
 		}
-		for _, issue := range pluginIssues {
+		for _, issue := range extensionIssues {
 			status := statusFromSpec(issue.Spec, RunStateErrored)
 			status.ID = configIssueStatusID(origin.Source, issue)
 			status.Source = origin.Source

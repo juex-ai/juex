@@ -25,7 +25,7 @@ func TestDiscoverLoadsNoExtensionsWithoutAllowedNames(t *testing.T) {
 		len(resources.MCPConfigs) != 0 ||
 		len(resources.HookFiles) != 0 ||
 		len(resources.ObservableConfigs) != 0 {
-		t.Fatalf("resources = %+v, want no plugin resources", resources)
+		t.Fatalf("resources = %+v, want no extension resources", resources)
 	}
 }
 

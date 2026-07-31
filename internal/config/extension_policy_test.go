@@ -7,14 +7,14 @@ import (
 	"testing"
 )
 
-func TestLoadPluginPolicyInheritsWhenLowerLayersOmitAllow(t *testing.T) {
+func TestLoadExtensionPolicyInheritsWhenLowerLayersOmitAllow(t *testing.T) {
 	userHome := prepareConfigTest(t)
 	defaultHome := filepath.Join(userHome, ".juex")
 	instanceHome := t.TempDir()
 	workDir := t.TempDir()
 	t.Setenv("JUEX_HOME", instanceHome)
 
-	writeTextFile(t, filepath.Join(defaultHome, "juex.yaml"), "plugins:\n  allow: [chanwire, taskline]\n")
+	writeTextFile(t, filepath.Join(defaultHome, "juex.yaml"), "extensions:\n  allow: [chanwire, taskline]\n")
 	writeTextFile(t, filepath.Join(instanceHome, "juex.yaml"), "sandbox:\n  enabled: true\n")
 	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "skills:\n  include: []\n")
 
@@ -22,89 +22,89 @@ func TestLoadPluginPolicyInheritsWhenLowerLayersOmitAllow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy := cfg.PluginPolicy()
+	policy := cfg.ExtensionPolicy()
 	if !policy.Configured {
-		t.Fatal("plugin policy should be configured by the default Home")
+		t.Fatal("extension allowlist should be configured by the default Home")
 	}
 	if want := []string{"chanwire", "taskline"}; !reflect.DeepEqual(policy.Allow, want) {
 		t.Fatalf("allow = %v, want %v", policy.Allow, want)
 	}
 }
 
-func TestLoadPluginPolicyReplacesInheritedAllowlistAsAWhole(t *testing.T) {
+func TestLoadExtensionPolicyReplacesInheritedAllowlistAsAWhole(t *testing.T) {
 	userHome := prepareConfigTest(t)
 	defaultHome := filepath.Join(userHome, ".juex")
 	instanceHome := t.TempDir()
 	workDir := t.TempDir()
 	t.Setenv("JUEX_HOME", instanceHome)
 
-	writeTextFile(t, filepath.Join(defaultHome, "juex.yaml"), "plugins:\n  allow: [base, shared]\n")
-	writeTextFile(t, filepath.Join(instanceHome, "juex.yaml"), "plugins:\n  allow: [fleet, shared]\n")
-	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "plugins:\n  allow: [agent]\n")
+	writeTextFile(t, filepath.Join(defaultHome, "juex.yaml"), "extensions:\n  allow: [base, shared]\n")
+	writeTextFile(t, filepath.Join(instanceHome, "juex.yaml"), "extensions:\n  allow: [fleet, shared]\n")
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "extensions:\n  allow: [agent]\n")
 
 	cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy := cfg.PluginPolicy()
+	policy := cfg.ExtensionPolicy()
 	if !policy.Configured {
-		t.Fatal("plugin policy should be configured")
+		t.Fatal("extension allowlist should be configured")
 	}
 	if want := []string{"agent"}; !reflect.DeepEqual(policy.Allow, want) {
 		t.Fatalf("allow = %v, want replacement %v", policy.Allow, want)
 	}
 }
 
-func TestLoadPluginPolicyExplicitEmptyListDisablesInheritedPlugins(t *testing.T) {
+func TestLoadExtensionPolicyExplicitEmptyListDisablesInheritedExtensions(t *testing.T) {
 	userHome := prepareConfigTest(t)
 	workDir := t.TempDir()
-	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), "plugins:\n  allow: [base]\n")
-	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "plugins:\n  allow: []\n")
+	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), "extensions:\n  allow: [base]\n")
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "extensions:\n  allow: []\n")
 
 	cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy := cfg.PluginPolicy()
+	policy := cfg.ExtensionPolicy()
 	if !policy.Configured || len(policy.Allow) != 0 {
-		t.Fatalf("plugin policy = %+v, want configured empty allowlist", policy)
+		t.Fatalf("extension allowlist = %+v, want configured empty allowlist", policy)
 	}
 }
 
-func TestLoadPluginPolicyDefaultsToUnconfiguredEmptyAllowlist(t *testing.T) {
+func TestLoadExtensionPolicyDefaultsToUnconfiguredEmptyAllowlist(t *testing.T) {
 	prepareConfigTest(t)
 	cfg, err := LoadWithOptions(LoadOptions{WorkDir: t.TempDir(), AgentState: AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy := cfg.PluginPolicy()
+	policy := cfg.ExtensionPolicy()
 	if policy.Configured || len(policy.Allow) != 0 {
-		t.Fatalf("plugin policy = %+v, want unconfigured empty allowlist", policy)
+		t.Fatalf("extension allowlist = %+v, want unconfigured empty allowlist", policy)
 	}
 }
 
-func TestPluginPolicyIgnoresNamesWhenPolicyIsNotConfigured(t *testing.T) {
-	policy := (Config{Plugins: PluginPolicy{Allow: []string{"demo"}}}).PluginPolicy()
+func TestExtensionPolicyIgnoresNamesWhenPolicyIsNotConfigured(t *testing.T) {
+	policy := (Config{Extensions: ExtensionPolicy{Allow: []string{"demo"}}}).ExtensionPolicy()
 	if policy.Configured || len(policy.Allow) != 0 {
-		t.Fatalf("plugin policy = %+v, want unconfigured policy to expose no allowed names", policy)
+		t.Fatalf("extension allowlist = %+v, want unconfigured policy to expose no allowed names", policy)
 	}
 }
 
-func TestLoadPluginPolicyNormalizesDuplicatesWithoutReordering(t *testing.T) {
+func TestLoadExtensionPolicyNormalizesDuplicatesWithoutReordering(t *testing.T) {
 	prepareConfigTest(t)
 	workDir := t.TempDir()
-	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "plugins:\n  allow: [beta, alpha, beta]\n")
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "extensions:\n  allow: [beta, alpha, beta]\n")
 
 	cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"beta", "alpha"}; !reflect.DeepEqual(cfg.PluginPolicy().Allow, want) {
-		t.Fatalf("allow = %v, want %v", cfg.PluginPolicy().Allow, want)
+	if want := []string{"beta", "alpha"}; !reflect.DeepEqual(cfg.ExtensionPolicy().Allow, want) {
+		t.Fatalf("allow = %v, want %v", cfg.ExtensionPolicy().Allow, want)
 	}
 }
 
-func TestLoadPluginPolicyRejectsNonPortablePluginNames(t *testing.T) {
+func TestLoadExtensionPolicyRejectsNonPortableExtensionNames(t *testing.T) {
 	for _, name := range []string{"", " ", ".", "..", "../demo", "group/demo", `group\demo`} {
 		t.Run(strings.ReplaceAll(name, "/", "_"), func(t *testing.T) {
 			prepareConfigTest(t)
@@ -116,22 +116,22 @@ func TestLoadPluginPolicyRejectsNonPortablePluginNames(t *testing.T) {
 			writeTextFile(
 				t,
 				filepath.Join(workDir, ".juex", "juex.yaml"),
-				"plugins:\n  allow:\n    - "+yamlName+"\n",
+				"extensions:\n  allow:\n    - "+yamlName+"\n",
 			)
 
 			_, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
-			if err == nil || !strings.Contains(err.Error(), "plugins.allow") {
-				t.Fatalf("err = %v, want plugins.allow validation error for %q", err, name)
+			if err == nil || !strings.Contains(err.Error(), "extensions.allow") {
+				t.Fatalf("err = %v, want extensions.allow validation error for %q", err, name)
 			}
 		})
 	}
 }
 
-func TestLoadPluginPolicyRejectsAdHocExplicitOverride(t *testing.T) {
+func TestLoadExtensionPolicyRejectsAdHocExplicitOverride(t *testing.T) {
 	prepareConfigTest(t)
 	workDir := t.TempDir()
 	explicitPath := filepath.Join(t.TempDir(), "override.yaml")
-	writeTextFile(t, explicitPath, "plugins:\n  allow: [demo]\n")
+	writeTextFile(t, explicitPath, "extensions:\n  allow: [demo]\n")
 
 	_, err := LoadWithOptions(LoadOptions{
 		WorkDir:    workDir,
@@ -139,17 +139,17 @@ func TestLoadPluginPolicyRejectsAdHocExplicitOverride(t *testing.T) {
 		AgentState: AgentStateNone,
 	})
 	if err == nil ||
-		!strings.Contains(err.Error(), "plugins.allow") ||
+		!strings.Contains(err.Error(), "extensions.allow") ||
 		!strings.Contains(err.Error(), "default Home, instance Home, or workspace") {
-		t.Fatalf("err = %v, want durable plugin-policy scope error", err)
+		t.Fatalf("err = %v, want durable Extension-allowlist scope error", err)
 	}
 }
 
-func TestLoadPluginPolicyAcceptsExplicitReferenceToWorkspaceConfig(t *testing.T) {
+func TestLoadExtensionPolicyAcceptsExplicitReferenceToWorkspaceConfig(t *testing.T) {
 	prepareConfigTest(t)
 	workDir := t.TempDir()
 	workspacePath := filepath.Join(workDir, ".juex", "juex.yaml")
-	writeTextFile(t, workspacePath, "plugins:\n  allow: [demo]\n")
+	writeTextFile(t, workspacePath, "extensions:\n  allow: [demo]\n")
 
 	cfg, err := LoadWithOptions(LoadOptions{
 		WorkDir:    workDir,
@@ -159,12 +159,12 @@ func TestLoadPluginPolicyAcceptsExplicitReferenceToWorkspaceConfig(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"demo"}; !reflect.DeepEqual(cfg.PluginPolicy().Allow, want) {
-		t.Fatalf("allow = %v, want %v", cfg.PluginPolicy().Allow, want)
+	if want := []string{"demo"}; !reflect.DeepEqual(cfg.ExtensionPolicy().Allow, want) {
+		t.Fatalf("allow = %v, want %v", cfg.ExtensionPolicy().Allow, want)
 	}
 }
 
-func TestLoadPluginPolicyAcceptsExplicitReferenceToLoadedHomeConfig(t *testing.T) {
+func TestLoadExtensionPolicyAcceptsExplicitReferenceToLoadedHomeConfig(t *testing.T) {
 	t.Run("default home", func(t *testing.T) {
 		userHome := prepareConfigTest(t)
 		defaultPath := filepath.Join(userHome, ".juex", "juex.yaml")
@@ -178,13 +178,13 @@ providers:
     models:
       - id: default
       - id: workspace
-plugins:
+extensions:
   allow: [default]
 `)
 		writeTextFile(
 			t,
 			filepath.Join(workDir, ".juex", "juex.yaml"),
-			"model: local:workspace\nplugins:\n  allow: [workspace]\n",
+			"model: local:workspace\nextensions:\n  allow: [workspace]\n",
 		)
 
 		cfg, err := LoadWithOptions(LoadOptions{
@@ -198,8 +198,8 @@ plugins:
 		if cfg.Model != "default" {
 			t.Fatalf("model = %q, want explicit default-Home config to override workspace", cfg.Model)
 		}
-		if want := []string{"workspace"}; !reflect.DeepEqual(cfg.PluginPolicy().Allow, want) {
-			t.Fatalf("allow = %v, want %v", cfg.PluginPolicy().Allow, want)
+		if want := []string{"workspace"}; !reflect.DeepEqual(cfg.ExtensionPolicy().Allow, want) {
+			t.Fatalf("allow = %v, want %v", cfg.ExtensionPolicy().Allow, want)
 		}
 	})
 
@@ -208,7 +208,7 @@ plugins:
 		instanceHome := t.TempDir()
 		instancePath := filepath.Join(instanceHome, "juex.yaml")
 		t.Setenv("JUEX_HOME", instanceHome)
-		writeTextFile(t, instancePath, "plugins:\n  allow: [instance]\n")
+		writeTextFile(t, instancePath, "extensions:\n  allow: [instance]\n")
 
 		cfg, err := LoadWithOptions(LoadOptions{
 			WorkDir:    t.TempDir(),
@@ -218,13 +218,13 @@ plugins:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := []string{"instance"}; !reflect.DeepEqual(cfg.PluginPolicy().Allow, want) {
-			t.Fatalf("allow = %v, want %v", cfg.PluginPolicy().Allow, want)
+		if want := []string{"instance"}; !reflect.DeepEqual(cfg.ExtensionPolicy().Allow, want) {
+			t.Fatalf("allow = %v, want %v", cfg.ExtensionPolicy().Allow, want)
 		}
 	})
 }
 
-func TestResourcePathsExposeReadOnlyDefaultAndEffectiveHomePluginRoots(t *testing.T) {
+func TestResourcePathsExposeReadOnlyDefaultAndEffectiveHomeExtensionRoots(t *testing.T) {
 	userHome := prepareConfigTest(t)
 	instanceHome := t.TempDir()
 	t.Setenv("JUEX_HOME", instanceHome)

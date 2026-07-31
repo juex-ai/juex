@@ -540,7 +540,7 @@ body`)
 
 func TestRuntimeStatusIncludesExtensionSources(t *testing.T) {
 	srv := newTestServer(t)
-	srv.opts.Cfg.Plugins = config.PluginPolicy{Allow: []string{"demo"}, Configured: true}
+	srv.opts.Cfg.Extensions = config.ExtensionPolicy{Allow: []string{"demo"}, Configured: true}
 	work := srv.opts.Cfg.WorkDir
 	extDir := filepath.Join(work, ".juex", "extensions", "demo")
 	mustWriteRuntimeFile(t, filepath.Join(extDir, "mcp.json"), `{

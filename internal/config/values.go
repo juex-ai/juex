@@ -274,13 +274,13 @@ func (c Config) SkillPolicy() SkillPolicy {
 	return policy
 }
 
-func (c Config) PluginPolicy() PluginPolicy {
-	if !c.Plugins.Configured {
-		return PluginPolicy{}
+func (c Config) ExtensionPolicy() ExtensionPolicy {
+	if !c.Extensions.Configured {
+		return ExtensionPolicy{}
 	}
-	return PluginPolicy{
-		Allow:      append([]string(nil), c.Plugins.Allow...),
-		Configured: c.Plugins.Configured,
+	return ExtensionPolicy{
+		Allow:      append([]string(nil), c.Extensions.Allow...),
+		Configured: c.Extensions.Configured,
 	}
 }
 

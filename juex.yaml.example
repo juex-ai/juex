@@ -18,7 +18,7 @@ model: openai:gpt-4.1
 
 # Personal resources under ~/.agents are enabled by default. Set to false or 0
 # to ignore ~/.agents/AGENTS.md, ~/.agents/skills, and ~/.agents/mcp.json for
-# this workspace or run. Plugin selection is controlled separately below.
+# this workspace or run. Extension selection is controlled separately below.
 # enable_user_agents_resources: true
 
 # Runtime environment is resolved once when run, repl, listen, or manual
@@ -42,15 +42,15 @@ model: openai:gpt-4.1
 # credentials may reference values such as ${REMOTE_MCP_TOKEN} from the runtime
 # environment or the gitignored <WorkDir>/.env.
 
-# Plugin bundles are existing extension directories under ~/.juex/extensions,
+# Extensions are named directories under ~/.juex/extensions,
 # a distinct $JUEX_HOME/extensions, or .juex/extensions. An omitted allowlist
 # inherits from the previous durable config layer; an explicit list replaces
-# it, and no effective allowlist loads no bundles. The highest-precedence
-# same-name bundle wins as a whole. Each selected bundle may contain
+# it, and no effective allowlist selects any Extensions. The highest-precedence
+# same-name Extension wins as a whole. Each selected Extension may contain
 # skills/<skill>/SKILL.md, mcp.json, and hooks.yaml. Work-local hooks must set
 # trusted: true before Juex executes them. This logical-name allowlist is not a
-# bundle signature or publisher identity. Ad-hoc --config files cannot set it.
-# plugins:
+# signature or publisher identity. Ad-hoc --config files cannot set it.
+# extensions:
 #   allow: [chanwire, taskline]
 
 # Optional skill catalog controls. Juex loads user, extension, and project

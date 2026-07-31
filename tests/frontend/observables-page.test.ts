@@ -88,7 +88,7 @@ test("Observables table exposes complete truncated content in a bounded tooltip"
   assert.match(observablesPageSource, /content\.scrollTo\(\{ top: nextTop, behavior: "smooth" \}\)/);
 });
 
-test("Observables display resource source and hide delete for plugin definitions", () => {
+test("Observables display resource source and hide delete for extension definitions", () => {
   assert.match(observablesPageSource, /\{item\.source\}/);
   assert.match(observablesPageSource, /Type: \{item\.source_type \|\| "command"\}/);
   assert.match(observablesPageSource, /item\.source === "project" \? \(/);

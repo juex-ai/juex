@@ -625,7 +625,7 @@ func ExpandVariables(value, workDir string) string {
 
 var runtimeVariablePattern = regexp.MustCompile(`\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))`)
 
-func expandRuntimeValue(value string, variables map[string]string, plugin bool) (string, error) {
+func expandRuntimeValue(value string, variables map[string]string, extension bool) (string, error) {
 	var expansionErr error
 	out := runtimeVariablePattern.ReplaceAllStringFunc(value, func(token string) string {
 		if expansionErr != nil {
@@ -638,13 +638,13 @@ func expandRuntimeValue(value string, variables map[string]string, plugin bool) 
 		}
 		switch name {
 		case "JUEX_EXT_DIR", "JUEX_EXT_DATA_DIR":
-			if !plugin {
-				expansionErr = fmt.Errorf("observable: %s is only available to plugin definitions", name)
+			if !extension {
+				expansionErr = fmt.Errorf("observable: %s is only available to extension definitions", name)
 				return token
 			}
 			resolved := variables[name]
 			if resolved == "" {
-				expansionErr = fmt.Errorf("observable: %s is unavailable for this plugin definition", name)
+				expansionErr = fmt.Errorf("observable: %s is unavailable for this extension definition", name)
 				return token
 			}
 			return resolved

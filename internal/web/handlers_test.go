@@ -508,23 +508,23 @@ func TestObservablesAPI_CreateDetailObservationsDelete(t *testing.T) {
 	}
 }
 
-func TestObservablesAPIPluginDefinitionsAreReadOnlyConflicts(t *testing.T) {
+func TestObservablesAPIExtensionDefinitionsAreReadOnlyConflicts(t *testing.T) {
 	work := t.TempDir()
-	pluginPath := filepath.Join(work, ".juex", "extensions", "demo", "observables.json")
-	if err := os.MkdirAll(filepath.Dir(pluginPath), 0o755); err != nil {
+	extensionPath := filepath.Join(work, ".juex", "extensions", "demo", "observables.json")
+	if err := os.MkdirAll(filepath.Dir(extensionPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	body := `{
   "observables": [{
-    "id": "plugin-schedule",
+    "id": "extension-schedule",
     "type": "schedule",
     "schedule_config": {
       "interval": {"every_seconds": 3600},
-      "observation": {"content": "plugin schedule"}
+      "observation": {"content": "extension schedule"}
     }
   }]
 }`
-	if err := os.WriteFile(pluginPath, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(extensionPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	srv := NewServer(Options{
@@ -533,7 +533,7 @@ func TestObservablesAPIPluginDefinitionsAreReadOnlyConflicts(t *testing.T) {
 			APIKey:     "x",
 			Model:      "m",
 			WorkDir:    work,
-			Plugins: config.PluginPolicy{
+			Extensions: config.ExtensionPolicy{
 				Allow:      []string{"demo"},
 				Configured: true,
 			},
@@ -554,12 +554,12 @@ func TestObservablesAPIPluginDefinitionsAreReadOnlyConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	status, ok := listed.ByID("plugin-schedule")
+	status, ok := listed.ByID("extension-schedule")
 	if resp.StatusCode != http.StatusOK || !ok || status.Source != "ext:demo" {
 		t.Fatalf("list status=%d observable=%+v ok=%v", resp.StatusCode, status, ok)
 	}
 
-	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/observables/plugin-schedule", nil)
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/observables/extension-schedule", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +574,7 @@ func TestObservablesAPIPluginDefinitionsAreReadOnlyConflicts(t *testing.T) {
 	}
 
 	createBody := strings.NewReader(`{
-  "id": "plugin-schedule",
+  "id": "extension-schedule",
   "type": "schedule",
   "schedule_config": {
     "interval": {"every_seconds": 3600},

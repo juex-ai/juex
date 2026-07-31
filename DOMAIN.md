@@ -29,9 +29,9 @@ domain boundary.
 | Ephemeral Agent | A process-local Agent identity with private temporary Agent state. It uses the normal Workspace and user configuration/resources but has no Workspace marker, is not registered with Fleet, and is deleted on exit unless explicitly kept. |
 | Workspace marker | `.juex/juex.local.json`, the narrow binding from a Workspace to its Resident Agent id. A marker is identity, not configuration or a copyable cache. |
 | Agent Address | The value that binds a resolved Agent id to its identity-owned state directory and endpoint guard. Consumers use the address rather than deriving identity or Juex-home layout from directory names. |
-| Agent home | The identity-owned state directory for one Resident Agent at `$JUEX_HOME/agents/<id>`, containing its registry record, Sessions, history, memory, logs, plugin data, and generated Observable state. |
+| Agent home | The identity-owned state directory for one Resident Agent at `$JUEX_HOME/agents/<id>`, containing its registry record, Sessions, history, memory, logs, extension data, and generated Observable state. |
 | Runtime Instance | One serving process incarnation for an Agent, identified independently from the Agent id and described by its instance id, process id, endpoint, start time, and binary version. Restarting changes the Runtime Instance without changing the Agent. |
-| Workspace-local state | User-authored configuration and resources plus workspace-rooted artifacts under the Workspace. Project-owned Observable definitions are workspace-local; selected plugin definitions remain in their bundle; generated Observable state is not Workspace-local. |
+| Workspace-local state | User-authored configuration and resources plus workspace-rooted artifacts under the Workspace. Project-owned Observable definitions are workspace-local; selected extension definitions remain in their bundle; generated Observable state is not Workspace-local. |
 | Agent state | Runtime state owned by an Agent identity, including Session history, memory, logs, and generated Observable state. Resident Agent state lives in its Agent home; Ephemeral Agent state lives in its private temporary home. |
 | Fleet | The control surface for Resident Agents registered under one effective Juex home. It projects binding and runtime health and manages lifecycle without owning user-authored Workspace content. |
 
@@ -65,9 +65,9 @@ domain boundary.
 | Tool Call | A Provider-requested Tool operation identified within an assistant message. Its result is persisted in provider order and remains adjacent to the call in valid model context. |
 | MCP Server | A configured stdio process that contributes Tools and may emit external notifications. One failed MCP Server does not disable healthy servers or builtin Tools. |
 | MCP Notification | An external event from an MCP Server that is admitted as pending input or as a system-originated Turn. It is not user-authored input. |
-| Plugin bundle | A named extension directory that may contribute Skills, MCP Servers, lifecycle Hooks, and read-only Observable definitions after it is selected by the effective plugin policy. Same-name bundles form a default-Home, effective-Home, and Workspace override chain. |
-| Plugin allowlist | The exact logical plugin names permitted for one Fleet or Workspace-bound Agent. An omitted layer inherits, an explicit layer replaces, and no effective allowlist permits no plugin bundles. It is not publisher or source authentication. |
-| Plugin data directory | Private persistent state owned by one Agent and one logical plugin at `<Agent home>/extensions/<name>`. It is distinct from the selected Plugin bundle installation and survives runtime or Workspace lifecycle changes until the Agent is deleted. |
+| Extension | A named directory that may contribute Skills, MCP Servers, lifecycle Hooks, and read-only Observable definitions after selection by the effective Extension allowlist. Same-name Extensions form a default-Home, effective-Home, and Workspace override chain. |
+| Extension allowlist | The exact logical Extension names permitted for one Fleet or Workspace-bound Agent. An omitted layer inherits, an explicit layer replaces, and no effective allowlist selects no Extensions. It is not publisher or source authentication. |
+| Extension data directory | Private persistent state owned by one Agent and one logical Extension at `<Agent home>/extensions/<name>`. It is distinct from the selected Extension installation and survives runtime or Workspace lifecycle changes until the Agent is deleted. |
 | Skill | A Markdown instruction package discovered from configured resource scopes and made available to the model through prompt metadata and Tool access. |
 | Memory Entry | Reusable Agent-owned context managed through memory Tools and stored with Agent state. It is distinct from work-local or user-global `AGENTS.md` guidance. |
 | Prompt Section | A named part of the assembled system prompt, such as guidance, available Skills, Memory, runtime state, or shell context. |
@@ -76,7 +76,7 @@ domain boundary.
 
 | Term | Meaning |
 | --- | --- |
-| Observable | A project-owned or selected-plugin external signal source with a shared lifecycle, globally unique logical id, resource source, and durable generated state. Plugin definitions are read-only. |
+| Observable | A project-owned external signal source or one defined by a selected Extension, with a shared lifecycle, globally unique logical id, resource source, and durable generated state. Extension definitions are read-only. |
 | Command Observable | An Observable backed by a managed command whose parsed, filtered, and bounded output batches become Observations. |
 | Schedule | An Observable backed by a one-shot, daily, or interval timetable and a pre-authored Observation payload. |
 | Observation | A durable normalized signal emitted by an Observable, with source identity, content, attachments, delivery state, and target Session when admitted. |
@@ -129,8 +129,8 @@ domain boundary.
 
 ### Observable And Observation
 
-1. A Workspace or selected plugin defines a tagged Command Observable or
-   Schedule. The project source is writable; plugin sources are read-only.
+1. A Workspace or selected extension defines a tagged Command Observable or
+   Schedule. The project source is writable; extension sources are read-only.
 2. Starting or manually running the source records generated run state in the
    Agent home.
 3. Each accepted signal is normalized and durably recorded as an Observation
@@ -164,7 +164,7 @@ domain boundary.
    target.
 4. **Storage follows ownership.** Workspace-authored configuration, resources,
    project Observable definitions, and Artifacts stay with the Workspace;
-   plugin Observable definitions stay in the selected bundle.
+   Extension Observable definitions stay in the selected Extension.
    Identity-owned Sessions, memory, history, logs, and generated Observable
    state stay with the Agent. The default `~/.juex/juex.yaml` may supply shared
    configuration, but a non-default Juex home never writes runtime state or
@@ -184,8 +184,8 @@ domain boundary.
 11. **Events report facts.** A durable Event is committed only after the fact
     it represents and before live consumers treat it as authoritative.
 12. **Observable definition and state are separate.** Project definitions
-    follow the Workspace and read-only plugin definitions follow the selected
-    bundle; generated runs, Observations, delivery records, and schedule
+    follow the Workspace and read-only Extension definitions follow the selected
+    Extension; generated runs, Observations, delivery records, and schedule
     cursors follow the Agent and remain keyed by the global logical id.
 13. **Artifact references are bounded.** Durable bytes remain Workspace-local,
     references are safe relative paths with integrity metadata, and User Media

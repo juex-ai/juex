@@ -1215,7 +1215,7 @@ commands:
     command: `+string(command)+`
 `)
 	a, err := New(Options{
-		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, Plugins: allowPlugins("demo")},
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, Extensions: allowExtensions("demo")},
 		Provider: &stubProvider{replies: []llm.Response{}},
 		WorkDir:  dir,
 	})
@@ -1234,7 +1234,7 @@ commands:
 	}
 }
 
-func TestApp_NewStartsAllowedPluginObservableWithoutWritingProjectConfig(t *testing.T) {
+func TestApp_NewStartsAllowedExtensionObservableWithoutWritingProjectConfig(t *testing.T) {
 	work := t.TempDir()
 	home := t.TempDir()
 	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
@@ -1247,13 +1247,13 @@ func TestApp_NewStartsAllowedPluginObservableWithoutWritingProjectConfig(t *test
 	extensionDir := filepath.Join(home, "extensions", "demo")
 	configBody, err := json.Marshal(map[string]any{
 		"observables": []map[string]any{{
-			"id":   "plugin-default-start",
+			"id":   "extension-default-start",
 			"type": "command",
 			"command_config": map[string]any{
 				"command": "$JUEX_EXT_DIR/" + filepath.Base(os.Args[0]),
-				"args":    []string{"-test.run=TestAppPluginObservableHelperProcess"},
+				"args":    []string{"-test.run=TestAppExtensionObservableHelperProcess"},
 				"env": map[string]string{
-					"JUEX_APP_PLUGIN_OBSERVABLE": "1",
+					"JUEX_APP_EXTENSION_OBSERVABLE": "1",
 				},
 				"streams": []string{"stdout"},
 				"parser": map[string]string{
@@ -1287,7 +1287,7 @@ func TestApp_NewStartsAllowedPluginObservableWithoutWritingProjectConfig(t *test
 		WorkDir:      work,
 		HomeJuexDir:  home,
 		AgentAddress: address,
-		Plugins:      allowPlugins("demo"),
+		Extensions:   allowExtensions("demo"),
 	}
 	a, err := New(Options{
 		Config:     cfg,
@@ -1298,24 +1298,24 @@ func TestApp_NewStartsAllowedPluginObservableWithoutWritingProjectConfig(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForAppObservable(t, a.Observables(), "plugin-default-start", func(status observable.ObservableStatus) bool {
+	waitForAppObservable(t, a.Observables(), "extension-default-start", func(status observable.ObservableStatus) bool {
 		return status.Source == "ext:demo" && (status.State == observable.RunStateExited || status.State == observable.RunStateStopped)
 	})
 	dataDir := filepath.Join(address.StateDir(), "extensions", "demo")
 	if body, err := os.ReadFile(filepath.Join(dataDir, "started")); err != nil || string(body) != "ok" {
-		t.Fatalf("plugin data marker = %q err=%v", body, err)
+		t.Fatalf("extension data marker = %q err=%v", body, err)
 	}
 	if _, err := os.Stat(cfg.ObservablesConfigPath()); !os.IsNotExist(err) {
-		t.Fatalf("plugin definition wrote project config, stat err = %v", err)
+		t.Fatalf("extension definition wrote project config, stat err = %v", err)
 	}
 	if err := a.CloseAndWait(); err != nil {
 		t.Fatal(err)
 	}
 
-	withoutPlugin := cfg
-	withoutPlugin.Plugins = allowPlugins()
+	withoutExtension := cfg
+	withoutExtension.Extensions = allowExtensions()
 	restarted, err := New(Options{
-		Config:      withoutPlugin,
+		Config:      withoutExtension,
 		Provider:    &stubProvider{replies: []llm.Response{}},
 		WorkDir:     work,
 		DisableMCP:  true,
@@ -1329,8 +1329,8 @@ func TestApp_NewStartsAllowedPluginObservableWithoutWritingProjectConfig(t *test
 			t.Errorf("close restarted app: %v", err)
 		}
 	}()
-	if _, ok := restarted.Observables().Status().ByID("plugin-default-start"); ok {
-		t.Fatal("plugin Observable remained after allowlist removal and restart")
+	if _, ok := restarted.Observables().Status().ByID("extension-default-start"); ok {
+		t.Fatal("extension Observable remained after allowlist removal and restart")
 	}
 }
 
@@ -1348,8 +1348,8 @@ func waitForAppObservable(t *testing.T, manager *observable.Manager, id string, 
 	t.Fatalf("observable %s did not become ready: status=%+v err=%v", id, status, err)
 }
 
-func TestAppPluginObservableHelperProcess(t *testing.T) {
-	if os.Getenv("JUEX_APP_PLUGIN_OBSERVABLE") != "1" {
+func TestAppExtensionObservableHelperProcess(t *testing.T) {
+	if os.Getenv("JUEX_APP_EXTENSION_OBSERVABLE") != "1" {
 		return
 	}
 	dataDir := os.Getenv("JUEX_EXT_DATA_DIR")
@@ -1357,7 +1357,7 @@ func TestAppPluginObservableHelperProcess(t *testing.T) {
 		_, _ = os.Stderr.WriteString(err.Error())
 		os.Exit(2)
 	}
-	_, _ = os.Stdout.WriteString(`{"type":"plugin_event","level":"info","content":"plugin started"}` + "\n")
+	_, _ = os.Stdout.WriteString(`{"type":"extension_event","level":"info","content":"extension started"}` + "\n")
 	os.Exit(0)
 }
 
