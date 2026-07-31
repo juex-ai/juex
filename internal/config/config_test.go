@@ -302,6 +302,40 @@ hooks:
 	}
 }
 
+func TestLoadForCaseVariantDefaultHomeReadsSharedConfigOnce(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	defaultHome := filepath.Join(userHome, ".juex")
+	writeTextFile(t, filepath.Join(defaultHome, "juex.yaml"), `model: local:test
+providers:
+  - id: local
+    protocol: openai/chat
+    api_key: test-key
+    models:
+      - id: test
+hooks:
+  commands:
+    - name: once
+      events: [UserPromptSubmit]
+      command: ["echo", "{}"]
+`)
+	caseVariant := filepath.Join(userHome, ".JUEX")
+	if _, err := os.Stat(caseVariant); err != nil {
+		if os.IsNotExist(err) {
+			t.Skip("filesystem is case-sensitive")
+		}
+		t.Fatal(err)
+	}
+	t.Setenv("JUEX_HOME", caseVariant)
+
+	cfg, err := LoadForWorkDirForValidation(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Hooks.Commands) != 1 || cfg.Hooks.Commands[0].Name != "once" {
+		t.Fatalf("case-variant default-home config loaded more than once: %+v", cfg.Hooks.Commands)
+	}
+}
+
 func TestLoadWithOptionsDotenvPolicyAndProviderOverrides(t *testing.T) {
 	t.Run("loads only workdir dotenv and provider uses snapshot", func(t *testing.T) {
 		prepareConfigTest(t)

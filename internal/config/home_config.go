@@ -83,7 +83,11 @@ func resolveHomeConfigSources() (homeConfigResolution, error) {
 			MissingOK: true,
 		}},
 	}
-	if effectiveHome != defaultHome {
+	sameHome, err := sameHomeConfigDir(defaultHome, effectiveHome)
+	if err != nil {
+		return homeConfigResolution{}, fmt.Errorf("config: compare default and effective JueX homes: %w", err)
+	}
+	if !sameHome {
 		resolution.Sources = append(resolution.Sources, yamlConfigSource{
 			Path:      filepath.Join(effectiveHome, "juex.yaml"),
 			Scope:     configScopeInstanceHome,
@@ -91,6 +95,27 @@ func resolveHomeConfigSources() (homeConfigResolution, error) {
 		})
 	}
 	return resolution, nil
+}
+
+func sameHomeConfigDir(left, right string) (bool, error) {
+	if left == right {
+		return true, nil
+	}
+	leftInfo, err := os.Stat(left)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	rightInfo, err := os.Stat(right)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return os.SameFile(leftInfo, rightInfo), nil
 }
 
 func canonicalHomeConfigDir(path string) (string, error) {
