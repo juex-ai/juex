@@ -125,23 +125,27 @@ func TestServerSpecRuntimeMetadataNormalizesTransportAndProtectsURLQuery(t *test
 }
 
 func TestServerSpecDisplaySafeTextRedactsQueryFromDiagnosticVariants(t *testing.T) {
-	const secret = "query-secret"
+	const (
+		decodedSecret = "query secret"
+		rawSecret     = "query%20secret"
+	)
 	spec := ServerSpec{
 		Type: "http",
-		URL:  "https://mcp.example.com/mcp?token=" + secret + "&tenant=demo",
+		URL:  "https://mcp.example.com/mcp?token=" + rawSecret + "&tenant=demo",
 	}
 	tests := []string{
-		"request failed: /mcp?token=" + secret + "&tenant=demo",
-		"request failed: https%3A%2F%2Fmcp.example.com%2Fmcp%3Ftoken%3D" + secret + "%26tenant%3Ddemo",
-		`request failed: https:\/\/mcp.example.com\/mcp?token=` + secret + `&tenant=demo`,
-		"request rejected query parameter token value " + secret,
+		"request failed: /mcp?token=" + rawSecret + "&tenant=demo",
+		"request failed: https%3A%2F%2Fmcp.example.com%2Fmcp%3Ftoken%3Dquery%2520secret%26tenant%3Ddemo",
+		`request failed: https:\/\/mcp.example.com\/mcp?token=` + rawSecret + `&tenant=demo`,
+		"request rejected query parameter token value " + decodedSecret,
+		"request rejected raw query value " + rawSecret,
 	}
 	for _, diagnostic := range tests {
 		got, err := spec.DisplaySafeText(diagnostic)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(got, secret) || strings.Contains(got, "token") || strings.Contains(got, "tenant") {
+		if strings.Contains(got, decodedSecret) || strings.Contains(got, rawSecret) || strings.Contains(got, "token") || strings.Contains(got, "tenant") {
 			t.Fatalf("DisplaySafeText() leaked query data: %q", got)
 		}
 	}

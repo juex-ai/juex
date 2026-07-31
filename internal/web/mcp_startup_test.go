@@ -146,7 +146,10 @@ func TestOpenSessionWaitsForInFlightMCPStartup(t *testing.T) {
 }
 
 func TestRuntimeRedactsQueryDiagnosticsFromFailedRemoteMCPStartup(t *testing.T) {
-	const secret = "runtime-query-secret"
+	const (
+		decodedSecret = "runtime query secret"
+		rawSecret     = "runtime%20query%20secret"
+	)
 	tests := []struct {
 		name string
 		body func(*http.Request) string
@@ -156,6 +159,10 @@ func TestRuntimeRedactsQueryDiagnosticsFromFailedRemoteMCPStartup(t *testing.T) 
 		}},
 		{name: "parsed query fields", body: func(r *http.Request) string {
 			return "rejected query parameter token value " + r.URL.Query().Get("token")
+		}},
+		{name: "raw encoded query value", body: func(r *http.Request) string {
+			_, rawValue, _ := strings.Cut(strings.SplitN(r.URL.RawQuery, "&", 2)[0], "=")
+			return "rejected raw query value " + rawValue
 		}},
 	}
 	for _, test := range tests {
@@ -171,7 +178,7 @@ func TestRuntimeRedactsQueryDiagnosticsFromFailedRemoteMCPStartup(t *testing.T) 
 				"mcpServers": map[string]any{
 					"remote": map[string]any{
 						"type": "http",
-						"url":  remote.URL + "/mcp?token=" + secret + "&tenant=demo",
+						"url":  remote.URL + "/mcp?token=" + rawSecret + "&tenant=demo",
 					},
 				},
 			}, "", "  ")
@@ -187,7 +194,7 @@ func TestRuntimeRedactsQueryDiagnosticsFromFailedRemoteMCPStartup(t *testing.T) 
 			if startupError == "" {
 				t.Fatal("missing remote MCP startup error")
 			}
-			if strings.Contains(startupError, secret) || strings.Contains(startupError, "token") || strings.Contains(startupError, "tenant") {
+			if strings.Contains(startupError, decodedSecret) || strings.Contains(startupError, rawSecret) || strings.Contains(startupError, "token") || strings.Contains(startupError, "tenant") {
 				t.Fatalf("startup error leaked query data: %q", startupError)
 			}
 
@@ -196,7 +203,7 @@ func TestRuntimeRedactsQueryDiagnosticsFromFailedRemoteMCPStartup(t *testing.T) 
 			if recorder.Code != http.StatusOK {
 				t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
 			}
-			if leaked := recorder.Body.String(); strings.Contains(leaked, secret) || strings.Contains(leaked, "/mcp?token=") || strings.Contains(leaked, "tenant=demo") {
+			if leaked := recorder.Body.String(); strings.Contains(leaked, decodedSecret) || strings.Contains(leaked, rawSecret) || strings.Contains(leaked, "/mcp?token=") || strings.Contains(leaked, "tenant=demo") {
 				t.Fatalf("runtime API leaked query data from failed startup:\n%s", leaked)
 			}
 		})
