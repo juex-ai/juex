@@ -149,6 +149,18 @@ func TestServerSpecDisplaySafeTextRedactsQueryFromDiagnosticVariants(t *testing.
 			t.Fatalf("DisplaySafeText() leaked query data: %q", got)
 		}
 	}
+
+	semicolonSpec := ServerSpec{
+		Type: "http",
+		URL:  "https://mcp.example.com/mcp?token=semicolon-secret;tenant=demo",
+	}
+	got, err := semicolonSpec.DisplaySafeText("request rejected value semicolon-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "semicolon-secret") {
+		t.Fatalf("DisplaySafeText() leaked semicolon-delimited query value: %q", got)
+	}
 }
 
 func TestLoadConfigValidatesRemoteHeaders(t *testing.T) {

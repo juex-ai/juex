@@ -151,8 +151,10 @@ func TestRuntimeRedactsQueryDiagnosticsFromFailedRemoteMCPStartup(t *testing.T) 
 		rawSecret     = "runtime%20query%20secret"
 	)
 	tests := []struct {
-		name string
-		body func(*http.Request) string
+		name      string
+		query     string
+		body      func(*http.Request) string
+		forbidden []string
 	}{
 		{name: "request URI", body: func(r *http.Request) string {
 			return "rejected request " + r.URL.RequestURI()
@@ -164,6 +166,15 @@ func TestRuntimeRedactsQueryDiagnosticsFromFailedRemoteMCPStartup(t *testing.T) 
 			_, rawValue, _ := strings.Cut(strings.SplitN(r.URL.RawQuery, "&", 2)[0], "=")
 			return "rejected raw query value " + rawValue
 		}},
+		{
+			name:  "semicolon-delimited query value",
+			query: "token=semicolon-secret;tenant=demo",
+			body: func(r *http.Request) string {
+				_, rawValue, _ := strings.Cut(strings.SplitN(r.URL.RawQuery, ";", 2)[0], "=")
+				return "rejected semicolon query value " + rawValue
+			},
+			forbidden: []string{"semicolon-secret"},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -174,11 +185,15 @@ func TestRuntimeRedactsQueryDiagnosticsFromFailedRemoteMCPStartup(t *testing.T) 
 
 			srv := newTestServer(t)
 			work := srv.opts.Cfg.WorkDir
+			query := test.query
+			if query == "" {
+				query = "token=" + rawSecret + "&tenant=demo"
+			}
 			body, err := json.MarshalIndent(map[string]any{
 				"mcpServers": map[string]any{
 					"remote": map[string]any{
 						"type": "http",
-						"url":  remote.URL + "/mcp?token=" + rawSecret + "&tenant=demo",
+						"url":  remote.URL + "/mcp?" + query,
 					},
 				},
 			}, "", "  ")
@@ -194,8 +209,10 @@ func TestRuntimeRedactsQueryDiagnosticsFromFailedRemoteMCPStartup(t *testing.T) 
 			if startupError == "" {
 				t.Fatal("missing remote MCP startup error")
 			}
-			if strings.Contains(startupError, decodedSecret) || strings.Contains(startupError, rawSecret) || strings.Contains(startupError, "token") || strings.Contains(startupError, "tenant") {
-				t.Fatalf("startup error leaked query data: %q", startupError)
+			for _, forbidden := range append([]string{decodedSecret, rawSecret, "token", "tenant"}, test.forbidden...) {
+				if strings.Contains(startupError, forbidden) {
+					t.Fatalf("startup error leaked query data %q: %q", forbidden, startupError)
+				}
 			}
 
 			recorder := httptest.NewRecorder()
@@ -203,8 +220,11 @@ func TestRuntimeRedactsQueryDiagnosticsFromFailedRemoteMCPStartup(t *testing.T) 
 			if recorder.Code != http.StatusOK {
 				t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
 			}
-			if leaked := recorder.Body.String(); strings.Contains(leaked, decodedSecret) || strings.Contains(leaked, rawSecret) || strings.Contains(leaked, "/mcp?token=") || strings.Contains(leaked, "tenant=demo") {
-				t.Fatalf("runtime API leaked query data from failed startup:\n%s", leaked)
+			leaked := recorder.Body.String()
+			for _, forbidden := range append([]string{decodedSecret, rawSecret, "/mcp?token=", "tenant=demo"}, test.forbidden...) {
+				if strings.Contains(leaked, forbidden) {
+					t.Fatalf("runtime API leaked query data %q from failed startup:\n%s", forbidden, leaked)
+				}
 			}
 		})
 	}
