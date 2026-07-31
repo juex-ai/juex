@@ -11,6 +11,7 @@ import type {
   ToolUseBlock,
 } from "@/types";
 import type { ToolUIPartState } from "@/components/ai-elements/_local-types";
+import { thinkingProcessVisibleText } from "./tool-display.ts";
 
 export type ToolDisplayUnit = {
   kind: "tool";
@@ -89,7 +90,7 @@ export function messagesToGroups(
           units.push({ kind: "image", block });
           break;
         case "reasoning":
-          units.push({ kind: "reasoning", block });
+          appendReasoningUnit(units, block);
           break;
         case "tool_use": {
           const unit = {
@@ -159,6 +160,29 @@ export function messagesToGroups(
   }
 
   return groups;
+}
+
+function appendReasoningUnit(
+  units: UnbatchedDisplayUnit[],
+  block: ReasoningBlock,
+) {
+  const previous = units.at(-1);
+  if (previous?.kind !== "reasoning") {
+    units.push({ kind: "reasoning", block });
+    return;
+  }
+
+  const text = [
+    thinkingProcessVisibleText(previous.block),
+    thinkingProcessVisibleText(block),
+  ]
+    .filter((part) => part.trim().length > 0)
+    .join("\n\n");
+  previous.block = {
+    type: "reasoning",
+    ...(text ? { text } : {}),
+    ...(previous.block.redacted || block.redacted ? { redacted: true } : {}),
+  };
 }
 
 function foldToolBatches(units: UnbatchedDisplayUnit[]): DisplayUnit[] {

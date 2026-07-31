@@ -69,7 +69,10 @@ func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys s
 		params.MaxOutputTokens = param.NewOpt(int64(opts.MaxOutputTokens))
 	}
 	if p.profile.Capabilities.ReasoningEffort && p.profile.ThinkingEffort != "" {
-		params.Reasoning = shared.ReasoningParam{Effort: shared.ReasoningEffort(p.profile.ThinkingEffort)}
+		params.Reasoning = shared.ReasoningParam{
+			Effort:  shared.ReasoningEffort(p.profile.ThinkingEffort),
+			Summary: shared.ReasoningSummaryAuto,
+		}
 	}
 	if p.profile.Capabilities.ReasoningReplay {
 		params.Include = []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent}

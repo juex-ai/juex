@@ -99,6 +99,121 @@ test("messagesToGroups folds contiguous assistant tools into a batch paired by i
   );
 });
 
+test("messagesToGroups coalesces adjacent opaque reasoning without hiding its paired tool", () => {
+  const encrypted = Array.from({ length: 12 }, (_, index) => ({
+    type: "reasoning" as const,
+    signature: `rs-${index}`,
+    content: `encrypted-${index}`,
+    redacted: true,
+  }));
+  const messages: Message[] = [
+    {
+      id: "assistant-process",
+      role: "assistant",
+      blocks: [
+        ...encrypted,
+        {
+          type: "tool_use",
+          tool_use_id: "tool-1",
+          tool_name: "exec_command",
+          input: { cmd: "pwd" },
+        },
+      ],
+    },
+    {
+      id: "tool-result",
+      role: "user",
+      blocks: [
+        { type: "tool_result", tool_use_id: "tool-1", content: "done" },
+      ],
+    },
+  ];
+
+  const groups = messagesToGroups(messages);
+
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].units.map((unit) => unit.kind), [
+    "reasoning",
+    "tool",
+  ]);
+  const reasoning = groups[0].units[0];
+  const tool = groups[0].units[1];
+  assert.equal(reasoning.kind, "reasoning");
+  assert.equal(tool.kind, "tool");
+  if (reasoning.kind !== "reasoning" || tool.kind !== "tool") return;
+  assert.equal(reasoning.block.redacted, true);
+  assert.equal(reasoning.block.text, undefined);
+  assert.equal(reasoning.block.content, undefined);
+  assert.equal(reasoning.block.signature, undefined);
+  assert.equal(tool.use?.tool_use_id, "tool-1");
+  assert.equal(tool.result?.content, "done");
+});
+
+test("messagesToGroups preserves safe reasoning summaries and merge boundaries", () => {
+  const messages: Message[] = [
+    {
+      id: "mixed-process",
+      role: "assistant",
+      blocks: [
+        {
+          type: "reasoning",
+          text: "    code line\n  keep indent  ",
+          content: "encrypted-first",
+          redacted: true,
+        },
+        {
+          type: "reasoning",
+          content: "encrypted-opaque",
+          redacted: true,
+        },
+        { type: "reasoning", text: "second summary" },
+        { type: "text", text: "separator" },
+        { type: "reasoning", text: "after text" },
+        {
+          type: "image",
+          media: { artifact_path: ".juex/artifacts/image.png" },
+        },
+        { type: "reasoning", text: "after image" },
+        {
+          type: "tool_use",
+          tool_use_id: "tool-boundary",
+          tool_name: "read",
+        },
+        { type: "reasoning", text: "after tool" },
+      ],
+    },
+    {
+      id: "next-message",
+      role: "assistant",
+      blocks: [{ type: "reasoning", text: "next message" }],
+    },
+  ];
+
+  const groups = messagesToGroups(messages);
+
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups[0].units.map((unit) => unit.kind), [
+    "reasoning",
+    "text",
+    "reasoning",
+    "image",
+    "reasoning",
+    "tool",
+    "reasoning",
+  ]);
+  const first = groups[0].units[0];
+  assert.equal(first.kind, "reasoning");
+  if (first.kind !== "reasoning") return;
+  assert.equal(
+    first.block.text,
+    "    code line\n  keep indent  \n\nsecond summary",
+  );
+  assert.equal(first.block.redacted, true);
+  assert.equal(first.block.content, undefined);
+  assert.equal(first.block.signature, undefined);
+  assert.equal(groups[1].units[0]?.kind, "reasoning");
+});
+
 test("toolState prefers the authoritative runtime lifecycle", () => {
   assert.equal(toolState(null, null, "requested"), "input-streaming");
   assert.equal(toolState(null, null, "running"), "input-available");

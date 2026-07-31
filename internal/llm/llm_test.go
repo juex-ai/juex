@@ -2099,6 +2099,7 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 			"id":"resp_1","object":"response","model":"gpt-test","status":"completed",
 			"output":[
 				{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"thought summary"}],"encrypted_content":"enc"},
+				{"type":"reasoning","id":"rs_2","summary":[{"type":"summary_text","text":"second thought"}],"encrypted_content":"enc_2"},
 				{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hello","annotations":[]}]},
 				{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read","arguments":"{\"path\":\"x\"}","status":"completed"}
 			],
@@ -2140,7 +2141,8 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 	if capturedBody["model"] != "gpt-test" || capturedBody["instructions"] != "system" {
 		t.Fatalf("captured body = %+v", capturedBody)
 	}
-	if capturedBody["reasoning"] == nil || capturedBody["include"] == nil {
+	reasoning, _ := capturedBody["reasoning"].(map[string]any)
+	if reasoning["effort"] != "low" || reasoning["summary"] != "auto" || capturedBody["include"] == nil {
 		t.Fatalf("responses request should include reasoning controls: %+v", capturedBody)
 	}
 	tools, _ := capturedBody["tools"].([]any)
@@ -2160,14 +2162,90 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 	if calls := resp.Message.ToolCalls(); len(calls) != 1 || calls[0].ToolName != "read" || calls[0].Input["path"] != "x" {
 		t.Fatalf("tool calls = %+v", calls)
 	}
-	if len(resp.Message.Blocks) == 0 || resp.Message.Blocks[0].Type != BlockReasoning || resp.Message.Blocks[0].Signature != "rs_1" {
+	if len(resp.Message.Blocks) < 2 || resp.Message.Blocks[0].Type != BlockReasoning || resp.Message.Blocks[0].Signature != "rs_1" {
 		t.Fatalf("reasoning block not preserved: %+v", resp.Message.Blocks)
 	}
 	if resp.Message.Blocks[0].Text != "thought summary" || !resp.Message.Blocks[0].Redacted || resp.Message.Blocks[0].Content == "" {
 		t.Fatalf("reasoning summary/replay metadata = %+v", resp.Message.Blocks[0])
 	}
+	if got := resp.Message.Blocks[1]; got.Type != BlockReasoning || got.Signature != "rs_2" || got.Text != "second thought" || got.Content != "enc_2" || !got.Redacted {
+		t.Fatalf("second reasoning item not preserved independently: %+v", resp.Message.Blocks)
+	}
 	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 {
 		t.Fatalf("usage = %+v", resp.Usage)
+	}
+}
+
+func TestOpenAIResponses_ReasoningSummaryFollowsEffortGateIndependentlyOfReplay(t *testing.T) {
+	disabled := false
+	tests := []struct {
+		name            string
+		thinkingEffort  string
+		reasoningEffort *bool
+		reasoningReplay *bool
+		wantReasoning   bool
+		wantInclude     bool
+	}{
+		{
+			name:            "summary without replay",
+			thinkingEffort:  "high",
+			reasoningReplay: &disabled,
+			wantReasoning:   true,
+		},
+		{
+			name:        "replay without configured effort",
+			wantInclude: true,
+		},
+		{
+			name:            "replay with disabled effort capability",
+			thinkingEffort:  "high",
+			reasoningEffort: &disabled,
+			wantInclude:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedBody map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(body, &capturedBody)
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"id":"resp_1","object":"response","model":"gpt-test","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)
+			}))
+			defer srv.Close()
+
+			p, err := New(blockingConfig(Config{
+				ID:             "openai",
+				Protocol:       "openai/responses",
+				BaseURL:        srv.URL,
+				APIKey:         "k",
+				Model:          "gpt-test",
+				ThinkingEffort: tt.thinkingEffort,
+				Capabilities: CapabilityOverrides{
+					ReasoningEffort: tt.reasoningEffort,
+					ReasoningReplay: tt.reasoningReplay,
+				},
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
+				t.Fatal(err)
+			}
+
+			reasoning, hasReasoning := capturedBody["reasoning"].(map[string]any)
+			if hasReasoning != tt.wantReasoning {
+				t.Fatalf("reasoning present = %v, want %v; body=%+v", hasReasoning, tt.wantReasoning, capturedBody)
+			}
+			if hasReasoning && (reasoning["effort"] != tt.thinkingEffort || reasoning["summary"] != "auto") {
+				t.Fatalf("reasoning = %+v", reasoning)
+			}
+			_, hasInclude := capturedBody["include"]
+			if hasInclude != tt.wantInclude {
+				t.Fatalf("include present = %v, want %v; body=%+v", hasInclude, tt.wantInclude, capturedBody)
+			}
+		})
 	}
 }
 
@@ -2448,7 +2526,8 @@ func TestOpenAIResponses_ReplaysReasoningWithEmptySummary(t *testing.T) {
 		[]Message{
 			TextMessage(RoleUser, "first"),
 			{Role: RoleAssistant, Blocks: []Block{
-				{Type: BlockReasoning, Signature: "rs_prev", Content: "enc_prev", Redacted: true},
+				{Type: BlockReasoning, Signature: "rs_prev_1", Content: "enc_prev_1", Redacted: true},
+				{Type: BlockReasoning, Text: "second summary", Signature: "rs_prev_2", Content: "enc_prev_2", Redacted: true},
 				{Type: BlockText, Text: "first answer"},
 			}},
 			TextMessage(RoleUser, "second"),
@@ -2460,21 +2539,33 @@ func TestOpenAIResponses_ReplaysReasoningWithEmptySummary(t *testing.T) {
 	}
 
 	input, _ := capturedBody["input"].([]any)
+	var reasoningItems []map[string]any
 	for _, item := range input {
 		obj, _ := item.(map[string]any)
-		if obj["type"] != "reasoning" {
-			continue
+		if obj["type"] == "reasoning" {
+			reasoningItems = append(reasoningItems, obj)
 		}
-		if _, ok := obj["summary"]; !ok {
-			t.Fatalf("reasoning replay omitted required summary field: %+v", obj)
-		}
-		summary, ok := obj["summary"].([]any)
-		if !ok || len(summary) != 0 {
-			t.Fatalf("reasoning summary = %#v, want empty array", obj["summary"])
-		}
-		return
 	}
-	t.Fatalf("reasoning replay item not found in input: %+v", input)
+	if len(reasoningItems) != 2 {
+		t.Fatalf("reasoning replay items = %+v, want two", reasoningItems)
+	}
+	if reasoningItems[0]["id"] != "rs_prev_1" || reasoningItems[0]["encrypted_content"] != "enc_prev_1" {
+		t.Fatalf("first reasoning replay item = %+v", reasoningItems[0])
+	}
+	if summary, ok := reasoningItems[0]["summary"].([]any); !ok || len(summary) != 0 {
+		t.Fatalf("first reasoning summary = %#v, want empty array", reasoningItems[0]["summary"])
+	}
+	if reasoningItems[1]["id"] != "rs_prev_2" || reasoningItems[1]["encrypted_content"] != "enc_prev_2" {
+		t.Fatalf("second reasoning replay item = %+v", reasoningItems[1])
+	}
+	secondSummary, ok := reasoningItems[1]["summary"].([]any)
+	if !ok || len(secondSummary) != 1 {
+		t.Fatalf("second reasoning summary = %#v", reasoningItems[1]["summary"])
+	}
+	secondSummaryPart, ok := secondSummary[0].(map[string]any)
+	if !ok || secondSummaryPart["text"] != "second summary" {
+		t.Fatalf("second reasoning summary = %#v", reasoningItems[1]["summary"])
+	}
 }
 
 func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
