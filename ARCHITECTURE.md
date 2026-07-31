@@ -2315,14 +2315,17 @@ Juex injects its reserved `WORKDIR`, `JUEX_WORKDIR`, and `JUEX_EXT_DIR` values
 last so server-local config cannot spoof runtime identity or extension paths.
 Extension MCP servers also receive and may expand `JUEX_EXT_DIR`, the absolute
 path to the extension bundle root. After layered conflict resolution, a
-winning local extension MCP config also causes its Agent-owned data directory
-to be prepared with mode `0700` on Unix. Local `command`, `args`, and `env`
-may expand `JUEX_EXT_DATA_DIR`; Juex injects the reserved value last. Remote
-MCP servers never receive this process environment, remote-only extensions do
-not create the directory, and the value never enters HTTP headers or the
-global runtime environment snapshot. Directory preparation rejects symlinks
-at the extension-data root or plugin directory and verifies the physical
-plugin path remains below the physical Agent extension-data root.
+winning local extension MCP config carries a deferred preparation callback.
+Juex creates the Agent-owned data directory with mode `0700` on Unix after
+command resolution and immediately before the local MCP connection starts.
+Local `command`, `args`, and `env` may expand `JUEX_EXT_DATA_DIR`; Juex injects
+the reserved value last. Configuration discovery, status, doctor inspection,
+remote MCP servers, and remote-only extensions do not create the directory.
+Remote MCP servers never receive this process environment, and the value never
+enters HTTP headers or the global runtime environment snapshot. Directory
+preparation rejects symlinks at the extension-data root or plugin directory and
+verifies the physical plugin path remains below the physical Agent
+extension-data root.
 
 ---
 

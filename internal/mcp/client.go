@@ -157,6 +157,11 @@ func ConnectWithOptions(ctx context.Context, name string, spec ServerSpec, opts 
 		transport = wrappedTransport
 		transportCloser = wrappedTransport
 	}
+	if !remote && spec.prepareLocalProcess != nil {
+		if err := spec.prepareLocalProcess(); err != nil {
+			return nil, fmt.Errorf("mcp[%s]: prepare local process: %w", name, err)
+		}
+	}
 	diagnostic := newRemoteDiagnostic()
 	session, err := sdkClient.Connect(withRemoteDiagnostic(ctx, diagnostic), transport, nil)
 	if err != nil {

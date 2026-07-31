@@ -287,12 +287,12 @@ func loadMCPConfigRefs(refs []mcpConfigRef, workDir string, runtimeEnvironment e
 }
 
 type mcpConfigLoadOptions struct {
-	PrepareExtensionData bool
+	EnableExtensionData bool
 }
 
-func loadMCPConfigRefsForStartup(refs []mcpConfigRef, workDir string, runtimeEnvironment environment.Snapshot) ([]mcp.Config, mcp.Config, map[string]string, error) {
+func loadMCPConfigRefsForRuntime(refs []mcpConfigRef, workDir string, runtimeEnvironment environment.Snapshot) ([]mcp.Config, mcp.Config, map[string]string, error) {
 	return loadMCPConfigRefsWithOptions(refs, workDir, runtimeEnvironment, mcpConfigLoadOptions{
-		PrepareExtensionData: true,
+		EnableExtensionData: true,
 	})
 }
 
@@ -334,22 +334,20 @@ func loadMCPConfigRefsWithOptions(refs []mcpConfigRef, workDir string, runtimeEn
 			continue
 		}
 		extensionDataDir := ""
-		if opts.PrepareExtensionData && effective.HasLocalServers() && item.ref.ExtensionRuntime.DataDir != "" {
+		var prepareLocalProcess func() error
+		if opts.EnableExtensionData && effective.HasLocalServers() && item.ref.ExtensionRuntime.DataDir != "" {
 			extensionDataDir = item.ref.ExtensionRuntime.DataDir
+			prepareLocalProcess = item.ref.ExtensionRuntime.PrepareDataDir
 		}
 		prepared, err := mcp.PrepareConfigWithOptions(effective, mcp.PrepareOptions{
-			WorkDir:          workDir,
-			ExtensionDir:     item.ref.ExtensionRuntime.ExtensionDir,
-			ExtensionDataDir: extensionDataDir,
-			Environment:      runtimeEnvironment,
+			WorkDir:             workDir,
+			ExtensionDir:        item.ref.ExtensionRuntime.ExtensionDir,
+			ExtensionDataDir:    extensionDataDir,
+			PrepareLocalProcess: prepareLocalProcess,
+			Environment:         runtimeEnvironment,
 		})
 		if err != nil {
 			return nil, mcp.Config{}, nil, err
-		}
-		if extensionDataDir != "" {
-			if err := item.ref.ExtensionRuntime.PrepareDataDir(); err != nil {
-				return nil, mcp.Config{}, nil, fmt.Errorf("%s: %w", item.ref.Source, err)
-			}
 		}
 		for name, spec := range prepared.MCPServers {
 			merged.MCPServers[name] = spec
@@ -366,6 +364,6 @@ func LoadMCPConfigs(cfg config.Config, workDir string) ([]mcp.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	configs, _, _, err := loadMCPConfigRefsForStartup(graph.MCPConfigs(), workDir, cfg.EnvironmentSnapshot())
+	configs, _, _, err := loadMCPConfigRefsForRuntime(graph.MCPConfigs(), workDir, cfg.EnvironmentSnapshot())
 	return configs, err
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/extensions"
+	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/skills"
 )
 
@@ -176,7 +177,7 @@ commands:
 	}
 }
 
-func TestLoadMCPConfigRefsCreatesAgentOwnedDataDirForSelectedLocalExtension(t *testing.T) {
+func TestLoadMCPConfigsPreparesAgentOwnedDataDirForSelectedLocalExtensionWithoutCreatingIt(t *testing.T) {
 	home := t.TempDir()
 	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
 	if err != nil {
@@ -200,12 +201,13 @@ func TestLoadMCPConfigRefsCreatesAgentOwnedDataDirForSelectedLocalExtension(t *t
     }
   }
 }`)
-	graph, err := ResolveRuntimeResourceGraph(config.Config{
+	cfg := config.Config{
 		WorkDir:      work,
 		HomeJuexDir:  home,
 		AgentAddress: address,
 		Plugins:      allowPlugins("demo"),
-	})
+	}
+	graph, err := ResolveRuntimeResourceGraph(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,12 +237,13 @@ func TestLoadMCPConfigRefsCreatesAgentOwnedDataDirForSelectedLocalExtension(t *t
 		t.Fatalf("status-style config preview injected data dir: %#v", preview.MCPServers["local"].Env)
 	}
 
-	_, merged, _, err := loadMCPConfigRefsForStartup(graph.MCPConfigs(), work, environment.Snapshot{})
+	configs, err := LoadMCPConfigs(cfg, work)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err := os.Stat(dataDir); err != nil || !info.IsDir() {
-		t.Fatalf("prepared data dir info = %+v, %v", info, err)
+	merged := mcp.MergeConfigs(configs)
+	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+		t.Fatalf("LoadMCPConfigs created data dir, stat error = %v", err)
 	}
 	local := merged.MCPServers["local"]
 	if local.Command != filepath.Join(extensionDir, "bin", "server") {
@@ -281,7 +284,7 @@ func TestLoadMCPConfigRefsDoesNotCreateDataDirForRemoteOnlyExtension(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := loadMCPConfigRefsForStartup(graph.MCPConfigs(), t.TempDir(), environment.Snapshot{}); err != nil {
+	if _, _, _, err := loadMCPConfigRefsForRuntime(graph.MCPConfigs(), t.TempDir(), environment.Snapshot{}); err != nil {
 		t.Fatal(err)
 	}
 	dataDir := filepath.Join(address.StateDir(), "extensions", "remote")
@@ -319,7 +322,7 @@ func TestLoadMCPConfigRefsDoesNotCreateDataDirWhenMixedExtensionPreparationFails
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, err = loadMCPConfigRefsForStartup(graph.MCPConfigs(), t.TempDir(), environment.Snapshot{})
+	_, _, _, err = loadMCPConfigRefsForRuntime(graph.MCPConfigs(), t.TempDir(), environment.Snapshot{})
 	if err == nil || !strings.Contains(err.Error(), "MISSING_TOKEN") {
 		t.Fatalf("startup error = %v, want missing credential", err)
 	}
@@ -348,7 +351,7 @@ func TestLoadMCPConfigRefsDoesNotPrepareOverriddenLocalExtension(t *testing.T) {
 		Source: extensions.Source("demo"),
 	})
 
-	_, merged, _, err := loadMCPConfigRefsForStartup([]mcpConfigRef{
+	_, merged, _, err := loadMCPConfigRefsForRuntime([]mcpConfigRef{
 		{Path: extensionPath, Source: extensions.Source("demo"), ExtensionRuntime: context},
 		{Path: projectPath, Source: "project"},
 	}, t.TempDir(), environment.Snapshot{})

@@ -122,6 +122,7 @@ type ServerSpec struct {
 	headersSet bool
 
 	extensionDataDirSet bool
+	prepareLocalProcess func() error
 }
 
 func (s *ServerSpec) UnmarshalJSON(data []byte) error {
@@ -425,7 +426,10 @@ type PrepareOptions struct {
 	WorkDir          string
 	ExtensionDir     string
 	ExtensionDataDir string
-	Environment      environment.Snapshot
+	// PrepareLocalProcess runs after command resolution and immediately before
+	// a configured local MCP process connection starts.
+	PrepareLocalProcess func() error
+	Environment         environment.Snapshot
 }
 
 // PrepareConfig returns a runtime-ready copy of cfg for a specific Juex work
@@ -477,6 +481,7 @@ func PrepareConfigWithOptions(cfg Config, opts PrepareOptions) (Config, error) {
 		}
 		if spec.Command != "" {
 			prepared.extensionDataDirSet = opts.ExtensionDataDir != ""
+			prepared.prepareLocalProcess = opts.PrepareLocalProcess
 			prepared.Env = make(map[string]string, len(spec.Env)+len(runtimeEnv))
 			for i, arg := range spec.Args {
 				prepared.Args[i] = expandRuntimeEnvRefs(arg, runtimeEnv)

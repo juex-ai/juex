@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -851,6 +852,7 @@ func TestPrepareConfigWithOptions_InjectsExtensionDir(t *testing.T) {
 func TestMCPClient_ExtensionDataDirReachesLocalServer(t *testing.T) {
 	workDir := t.TempDir()
 	dataDir := filepath.Join(t.TempDir(), "agent data")
+	prepareCalls := 0
 	cfg, err := PrepareConfigWithOptions(Config{MCPServers: map[string]ServerSpec{
 		"fake": {
 			Command: os.Args[0],
@@ -863,9 +865,19 @@ func TestMCPClient_ExtensionDataDirReachesLocalServer(t *testing.T) {
 	}}, PrepareOptions{
 		WorkDir:          workDir,
 		ExtensionDataDir: dataDir,
+		PrepareLocalProcess: func() error {
+			prepareCalls++
+			return os.MkdirAll(dataDir, 0o700)
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if prepareCalls != 0 {
+		t.Fatalf("PrepareConfigWithOptions called process preparation %d times", prepareCalls)
+	}
+	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+		t.Fatalf("PrepareConfigWithOptions created data dir, stat error = %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -874,6 +886,12 @@ func TestMCPClient_ExtensionDataDirReachesLocalServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
+	if prepareCalls != 1 {
+		t.Fatalf("Connect process preparation calls = %d, want 1", prepareCalls)
+	}
+	if info, err := os.Stat(dataDir); err != nil || !info.IsDir() {
+		t.Fatalf("connected data dir info = %+v, %v", info, err)
+	}
 	out, err := client.CallTool(ctx, "envcheck", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -885,6 +903,57 @@ func TestMCPClient_ExtensionDataDirReachesLocalServer(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("envcheck output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestMCPClient_DoesNotPrepareLocalProcessBeforeCommandResolution(t *testing.T) {
+	prepareCalls := 0
+	cfg, err := PrepareConfigWithOptions(Config{MCPServers: map[string]ServerSpec{
+		"missing": {
+			Command: "/definitely/does/not/exist/__juex_nope__",
+		},
+	}}, PrepareOptions{
+		WorkDir:          t.TempDir(),
+		ExtensionDataDir: filepath.Join(t.TempDir(), "agent data"),
+		PrepareLocalProcess: func() error {
+			prepareCalls++
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Connect(t.Context(), "missing", cfg.MCPServers["missing"])
+	if err == nil || !strings.Contains(err.Error(), "resolve command") {
+		t.Fatalf("Connect error = %v, want command resolution error", err)
+	}
+	if prepareCalls != 0 {
+		t.Fatalf("failed command resolution called process preparation %d times", prepareCalls)
+	}
+}
+
+func TestMCPClient_LocalProcessPreparationFailurePreventsConnect(t *testing.T) {
+	prepareErr := errors.New("data directory rejected")
+	cfg, err := PrepareConfigWithOptions(Config{MCPServers: map[string]ServerSpec{
+		"fake": {
+			Command: os.Args[0],
+			Env:     map[string]string{"JUEX_FAKE_MCP": "1"},
+		},
+	}}, PrepareOptions{
+		WorkDir:          t.TempDir(),
+		ExtensionDataDir: filepath.Join(t.TempDir(), "agent data"),
+		PrepareLocalProcess: func() error {
+			return prepareErr
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Connect(t.Context(), "fake", cfg.MCPServers["fake"])
+	if !errors.Is(err, prepareErr) || !strings.Contains(err.Error(), "prepare local process") {
+		t.Fatalf("Connect error = %v, want wrapped process preparation error", err)
 	}
 }
 

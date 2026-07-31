@@ -378,11 +378,12 @@ Local extension MCP servers receive `JUEX_EXT_DIR`, the selected installation
 root, and `JUEX_EXT_DATA_DIR`, the private persistent directory at
 `$JUEX_HOME/agents/<id>/extensions/<name>`, alongside `WORKDIR` and
 `JUEX_WORKDIR`. The data directory is created with private permissions only
-when a selected local MCP server is prepared; remote-only extensions and
-state-free resource previews do not create or receive it. Plugin data survives
-runtime restarts, Workspace moves, allowlist changes, and bundle uninstall, and
-is removed with the owning Agent. Workspace artifacts and Observable
-definitions remain under `.juex/`. Provider configuration uses the same
+immediately before a selected local MCP process connects; configuration
+discovery, status, doctor inspection, remote-only extensions, and state-free
+resource previews do not create it. Plugin data survives runtime restarts,
+Workspace moves, allowlist changes, and bundle uninstall, and is removed with
+the owning Agent. Workspace artifacts and Observable definitions remain under
+`.juex/`. Provider configuration uses the same
 default-home then instance-home merge. A serving agent prefers
 `unix://$JUEX_HOME/agents/<id>/api.sock` and falls back loudly to an ephemeral
 `tcp://127.0.0.1:<port>` endpoint when AF_UNIX is unavailable.

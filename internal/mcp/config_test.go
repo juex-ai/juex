@@ -227,9 +227,10 @@ func TestPrepareConfigWithOptionsInjectsExtensionDataDirOnlyIntoLocalServers(t *
 	}
 
 	got, err := PrepareConfigWithOptions(cfg, PrepareOptions{
-		WorkDir:          workDir,
-		ExtensionDir:     extensionDir,
-		ExtensionDataDir: dataDir,
+		WorkDir:             workDir,
+		ExtensionDir:        extensionDir,
+		ExtensionDataDir:    dataDir,
+		PrepareLocalProcess: func() error { return nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -244,9 +245,15 @@ func TestPrepareConfigWithOptionsInjectsExtensionDataDirOnlyIntoLocalServers(t *
 	if local.Env["JUEX_EXT_DATA_DIR"] != dataDir || local.Env["DATA_COPY"] != dataDir {
 		t.Fatalf("local env = %#v", local.Env)
 	}
+	if local.prepareLocalProcess == nil {
+		t.Fatal("local process preparation callback is nil")
+	}
 	remote := got.MCPServers["remote"]
 	if remote.Env != nil || remote.Args != nil {
 		t.Fatalf("remote process environment leaked: %+v", remote)
+	}
+	if remote.prepareLocalProcess != nil {
+		t.Fatal("remote server received local process preparation callback")
 	}
 }
 
