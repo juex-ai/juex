@@ -549,6 +549,10 @@ show a green status dot. Collapsed chevrons point right and expanded chevrons
 point down. The expanded body renders the reasoning text directly through
 streamdown without a `CONTENT` label. Redacted reasoning keeps its provider
 redaction text in the expanded body.
+Adjacent reasoning blocks from one persisted message share one `Thinking` row;
+the display-only fold preserves readable summaries in provider order without
+exposing encrypted replay content. Text, image, and tool blocks remain hard
+boundaries, and canonical message storage is unchanged.
 
 ### 7.8 Tool
 

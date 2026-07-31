@@ -525,7 +525,9 @@ relying on every endpoint to ignore unknown fields. Reasoning replay fields are
 provider-compatible knobs: OpenAI-compatible chat can replay
 `reasoning_content` / `reasoning` / `thinking`, Anthropic replays thinking
 blocks, and Responses stores reasoning item IDs plus encrypted content when the
-provider returns them. The ChatGPT Codex Responses adapter captures reasoning
+provider returns them. OpenAI Responses requests automatic readable reasoning
+summaries whenever a configured reasoning effort is sent; encrypted-content
+inclusion remains an independent replay capability. The ChatGPT Codex Responses adapter captures reasoning
 output locally, but does not replay reasoning item IDs while sending
 `store=false`; those IDs are not persisted by the backend and can fail future
 requests.
