@@ -3,6 +3,7 @@ package mcp
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -48,6 +49,46 @@ func TestSecureEndpointHTTPClientAllowsHTTPSRedirect(t *testing.T) {
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusNoContent)
+	}
+}
+
+func TestRemoteHeadersStayOnConfiguredOrigin(t *testing.T) {
+	const secret = "redirect-secret"
+	targetHeader := make(chan string, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHeader <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+
+	sourceHeader := make(chan string, 1)
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sourceHeader <- r.Header.Get("Authorization")
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+
+	endpoint, err := url.Parse(source.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := newSecureEndpointHTTPClient(&remoteDiagnosticRoundTripper{
+		base:     http.DefaultTransport,
+		endpoint: endpoint,
+		headers: map[string]Credential{
+			"Authorization": {value: "Bearer " + secret},
+		},
+	})
+	response, err := client.Get(source.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if got := <-sourceHeader; got != "Bearer "+secret {
+		t.Fatalf("configured origin Authorization = %q", got)
+	}
+	if got := <-targetHeader; got != "" {
+		t.Fatalf("redirect target received Authorization = %q", got)
 	}
 }
 

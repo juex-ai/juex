@@ -79,7 +79,6 @@ func (SDKRemoteReadinessProbe) Probe(
 	spec ServerSpec,
 	opts ConnectOptions,
 ) error {
-	ctx = withOAuthRefreshDeadline(ctx)
 	client, err := ConnectWithOptions(ctx, name, spec, opts)
 	if err != nil {
 		return err
@@ -94,6 +93,14 @@ func (SDKRemoteReadinessProbe) Probe(
 // CheckRemoteSelection validates that spec selects one secure remote endpoint.
 func CheckRemoteSelection(name string, spec ServerSpec) ReadinessResult {
 	details := remoteReadinessDetails(name)
+	transport, err := serverTransport(spec)
+	if err != nil {
+		return readinessFailure(name, ReadinessStageSelection, err, "configure type as http or streamable-http", details)
+	}
+	if transport != mcpTransportHTTP {
+		err := fmt.Errorf("server is not configured with an HTTP transport")
+		return readinessFailure(name, ReadinessStageSelection, err, "select a remote MCP server with type http", details)
+	}
 	if strings.TrimSpace(spec.URL) == "" {
 		err := fmt.Errorf("server is not configured with a remote URL")
 		return readinessFailure(name, ReadinessStageSelection, err, "select a remote MCP server with a valid url", details)
@@ -122,19 +129,13 @@ func CheckRemoteSelection(name string, spec ServerSpec) ReadinessResult {
 	}
 }
 
-// CheckRemoteCredentials validates configured remote authentication material.
+// CheckRemoteCredentials validates configured remote header credentials.
 func CheckRemoteCredentials(name string, spec ServerSpec) ReadinessResult {
 	details := remoteReadinessDetails(name)
-	if spec.Auth == nil {
-		if spec.authSet {
-			err := fmt.Errorf("auth must not be null")
-			return readinessFailure(
-				name,
-				ReadinessStageCredentials,
-				err,
-				"configure auth.token, auth.refresh, or remove auth for anonymous access",
-				details,
-			)
+	if spec.Headers == nil {
+		if spec.headersSet {
+			err := fmt.Errorf("headers must not be null")
+			return readinessFailure(name, ReadinessStageCredentials, err, "configure headers or remove them for anonymous access", details)
 		}
 		return ReadinessResult{
 			Server:  name,
@@ -144,12 +145,12 @@ func CheckRemoteCredentials(name string, spec ServerSpec) ReadinessResult {
 			Details: details,
 		}
 	}
-	if err := validateAuthSpec(spec.Auth); err != nil {
+	if err := validateHeaders(spec.Headers); err != nil {
 		return readinessFailure(
 			name,
 			ReadinessStageCredentials,
 			err,
-			"configure auth.token or a complete auth.refresh block",
+			"configure valid static HTTP headers",
 			details,
 		)
 	}
@@ -224,7 +225,7 @@ func remoteReadinessFailure(name string, err error) ReadinessResult {
 	case ReadinessStageSelection:
 		suggestion = "check the remote MCP url and endpoint path"
 	case ReadinessStageCredentials:
-		suggestion = "configure or refresh auth.token or auth.refresh credentials"
+		suggestion = "check the configured remote MCP headers and credentials"
 	}
 	return readinessFailure(name, stage, err, suggestion, remoteReadinessDetails(name))
 }

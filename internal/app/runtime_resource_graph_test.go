@@ -115,11 +115,12 @@ commands:
 func TestLoadMCPConfigRefsPreparesRemoteExtensionCredentials(t *testing.T) {
 	work := t.TempDir()
 	mustWriteRuntimeStatusFile(t, filepath.Join(work, ".juex", "extensions", "remote", "mcp.json"), `{
-  "mcpServers": {
-    "search": {
-      "url": "https://mcp.example.com/mcp",
-      "auth": {"token": "${REMOTE_MCP_TOKEN}"}
-    }
+	"mcpServers": {
+	    "search": {
+	      "type": "http",
+	      "url": "https://mcp.example.com/mcp",
+	      "headers": {"Authorization": "Bearer ${REMOTE_MCP_TOKEN}"}
+	    }
   }
 }`)
 	graph, err := ResolveRuntimeResourceGraph(config.Config{WorkDir: work})
@@ -144,8 +145,8 @@ func TestLoadMCPConfigRefsPreparesRemoteExtensionCredentials(t *testing.T) {
 	if server.URL != "https://mcp.example.com/mcp" {
 		t.Fatalf("URL = %q", server.URL)
 	}
-	if server.Auth == nil || server.Auth.Token == nil || server.Auth.Token.Value() != "extension-secret" {
-		t.Fatalf("prepared auth = %+v", server.Auth)
+	if server.Headers["Authorization"].Value() != "Bearer extension-secret" {
+		t.Fatalf("prepared headers = %+v", server.Headers)
 	}
 	if sources["search"] != "ext:remote" {
 		t.Fatalf("source = %q, want ext:remote", sources["search"])
@@ -157,9 +158,10 @@ func TestLoadMCPConfigRefsResolvesCredentialsAfterLayerOverrides(t *testing.T) {
 	projectPath := filepath.Join(t.TempDir(), "project-mcp.json")
 	mustWriteRuntimeStatusFile(t, userPath, `{
   "mcpServers": {
-    "shared": {
-      "url": "https://mcp.example.com/mcp",
-      "auth": {"token": "${OVERRIDDEN_MISSING_TOKEN}"}
+	    "shared": {
+	      "type": "http",
+	      "url": "https://mcp.example.com/mcp",
+	      "headers": {"Authorization": "Bearer ${OVERRIDDEN_MISSING_TOKEN}"}
     }
   }
 }`)
@@ -201,9 +203,10 @@ func TestLoadMCPConfigRefsRejectsMissingCredentialOnWinningLayer(t *testing.T) {
 }`)
 	mustWriteRuntimeStatusFile(t, projectPath, `{
   "mcpServers": {
-    "shared": {
-      "url": "https://mcp.example.com/mcp",
-      "auth": {"token": "${WINNING_MISSING_TOKEN}"}
+	    "shared": {
+	      "type": "http",
+	      "url": "https://mcp.example.com/mcp",
+	      "headers": {"Authorization": "Bearer ${WINNING_MISSING_TOKEN}"}
     }
   }
 }`)
