@@ -1326,13 +1326,19 @@ implicitly restarting that detached process.
 
 `internal/fleetservice` owns user-service definitions and service-manager
 transactions for the resident fleet supervisor. Fleet address precedence is
-explicit `--addr`, then `fleet.addr` in `$JUEX_HOME/juex.yaml`, then
-`127.0.0.1:5839`. Non-loopback permission comes from an explicit
+explicit `--addr`, then field-wise merged `fleet` settings from
+`~/.juex/juex.yaml` and a distinct `$JUEX_HOME/juex.yaml`, then
+`127.0.0.1:5839`. An instance may explicitly set
+`fleet.unsafe_bind_any: false` to override a true default-home value.
+An absent or empty instance `fleet.addr` inherits the default-home address.
+Non-loopback permission comes from an explicit
 `--unsafe-bind-any`, or from `fleet.unsafe_bind_any` when the address also
 comes from home config. An explicit address never inherits the home permission.
 Home fleet config is loaded independently of provider and workspace config
-resolution. `juex fleet install` atomically persists explicitly supplied
-address and unsafe-bind settings before installing. The opt-in
+resolution but uses the same canonical home-source resolver. Invalid
+default-home Fleet settings fail before instance overrides are considered.
+`juex fleet install` atomically persists explicitly supplied address and
+unsafe-bind settings to the effective home before installing. The opt-in
 `--restart-agents` flag runs a sequential
 `internal/fleet` bulk operation after service installation. It selects only
 enabled, bound, healthy agents from one status snapshot, reports every
@@ -1672,9 +1678,13 @@ exposes this capability.
 
 ## 5. Configuration
 
-Runtime config is resolved from user-global and work-local YAML files.
-`JUEX_HOME` defaults to `~/.juex`; the user-global fallback is
-`$JUEX_HOME/juex.yaml`. The work-local config is
+Runtime config is resolved from home and work-local YAML files. The canonical
+default home is `~/.juex`; the effective writable home is `JUEX_HOME` when set,
+otherwise the default home. Juex reads `~/.juex/juex.yaml` first, then reads
+`$JUEX_HOME/juex.yaml` only when the two canonical home directories differ.
+The default-home file is a read-only base for a non-default instance; user
+configuration writes, extensions, locks, Fleet state, and Agent state target
+only the effective home. The work-local config is
 `<WorkDir>/.juex/juex.yaml`, except when `WorkDir` itself is a `.juex`
 directory, where Juex reads `<WorkDir>/juex.yaml`. The repository root ships
 `juex.yaml.example` as a copyable template:
@@ -1777,7 +1787,7 @@ compaction:
 | `providers[].models[].capabilities` | optional model-level capability overrides, including `vision` for image input support |
 | `providers[].models[].compat.reasoning_replay_fields` | optional model-level compatibility overrides |
 | `providers[].models[].compat.codex_transport` | optional model-level override for `providers[].compat.codex_transport` |
-| `hooks.trusted` | required for project-local or explicit config command hooks; user-global hooks are trusted by location |
+| `hooks.trusted` | required for project-local or explicit config command hooks; default-home and instance-home hooks are trusted by location |
 | `hooks.commands[].name` | stable hook name used in `hook.*` events |
 | `hooks.commands[].events` | lifecycle events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop` |
 | `hooks.commands[].tools` | optional tool-name filter for tool hook events |
@@ -1806,8 +1816,9 @@ compaction:
 | `compaction.max_auto_failures` | consecutive automatic compaction failures before the session pauses proactive compaction with a clear error |
 
 YAML resolution order (later wins) is `defaults` <
-`$JUEX_HOME/juex.yaml` < `<WorkDir>/.juex/juex.yaml` (or
-`<WorkDir>/juex.yaml` when `WorkDir` is a `.juex` directory) <
+`~/.juex/juex.yaml` < a canonically distinct `$JUEX_HOME/juex.yaml` <
+`<WorkDir>/.juex/juex.yaml` (or `<WorkDir>/juex.yaml` when `WorkDir` is a
+`.juex` directory) <
 `--config <path>` (if supplied) < supported environment overrides < explicit
 CLI flags. `--model provider:model` selects a configured
 provider:model after YAML merge and wins over `PROVIDER_API_ID`,
@@ -1820,10 +1831,11 @@ as the primary by YAML layering, environment, or CLI override is removed from
 the effective chain.
 
 The runtime child-process environment is a separate immutable snapshot with
-this precedence (later wins): user YAML `environment.variables` <
-`<WorkDir>/.env` < workspace YAML `environment.variables` < explicit
-`--config` YAML `environment.variables` < the environment inherited when Juex
-started < child-local MCP or Observable values < Juex-owned runtime injection.
+this precedence (later wins): default-home YAML `environment.variables` <
+instance-home YAML `environment.variables` when distinct < `<WorkDir>/.env` <
+workspace YAML `environment.variables` < explicit `--config` YAML
+`environment.variables` < the environment inherited when Juex started <
+child-local MCP or Observable values < Juex-owned runtime injection.
 The final merged `environment.load_dotenv` toggle is evaluated before reading
 the fixed workspace dotenv path. Dotenv input is data only: variable expansion,
 shell commands, and startup-time reloads are not performed. Empty inherited
@@ -1839,9 +1851,9 @@ environment plus required bootstrap identity, and the child resolves its own
 workspace YAML and `.env`. A process may activate only one workspace snapshot
 at a time.
 Provider definitions merge by `providers[].id` and
-`providers[].models[].id`, so a workspace config can set only `model:
-provider:model` or override a few fields while inheriting missing values
-from `$JUEX_HOME/juex.yaml`. `shell` is an object-level override rather than a
+`providers[].models[].id`, so an instance or workspace config can set only
+`model: provider:model` or override a few fields while inheriting missing
+values from the preceding home layer. `shell` is an object-level override rather than a
 deep merge: workspace `shell: {}` resets any user-global shell config back to
 auto.
 
@@ -1949,7 +1961,7 @@ terminal status. Goal state is exposed through `/status` and
 
 Only command hooks are supported in the MVP. Hooks cannot mutate tool input,
 and `PermissionRequest` is intentionally deferred until the permission engine
-exists. User-global hooks in `$JUEX_HOME/juex.yaml` are trusted by location;
+exists. Default-home and instance-home hooks are trusted by location;
 project-local and explicit config hooks require `hooks.trusted: true`.
 Codex auth is not configurable. When provider id `openai-codex` is selected and
 `providers[].api_key` is empty, Juex loads the Codex CLI/app auth cache from
@@ -2064,8 +2076,8 @@ ordinary user turns keep failing loudly on compaction errors.
 
 ## 6. Filesystem Conventions
 
-Resources and state split between personal, JueX-home, agent-home, and
-work-local:
+Resources and state split between personal, default-home configuration,
+effective JueX-home, agent-home, and work-local:
 
 ```
 ~/.agents/                       # optional user-global resources
@@ -2073,8 +2085,10 @@ work-local:
 ├── mcp.json                     # global MCP servers (project may override)
 └── skills/<name>/SKILL.md       # global skills (project may override)
 
+~/.juex/juex.yaml                # shared read-only config base for a distinct effective home
+
 $JUEX_HOME/
-├── juex.yaml                     # user-global provider/runtime config
+├── juex.yaml                     # instance override; also the shared base when this is ~/.juex
 ├── extensions/<name>/            # optional JueX-home extension bundle
 │   ├── hooks.yaml                # lifecycle command hooks, trusted by location
 │   ├── mcp.json                  # extension MCP servers
@@ -2113,9 +2127,11 @@ The full session subtree beneath the agent home retains the existing
 `session.json`, transcript, event, lock, notes, scratchpad, goal, trace, span,
 tool, and per-session log files described in §3.5.
 
-`JUEX_HOME` scopes JueX-owned config, extensions, supervisor/endpoint/Fleet
-locks, and Agent registry state. The existing `~/.agents` AGENTS.md, skill, and
-MCP resource tree remains at its current location.
+`JUEX_HOME` scopes the writable instance config, extensions,
+supervisor/endpoint/Fleet locks, and Agent registry state. A canonically
+distinct home reads `~/.juex/juex.yaml` as its configuration base but never
+writes instance config or runtime state there. The existing `~/.agents`
+AGENTS.md, skill, and MCP resource tree remains at its current location.
 
 An Ephemeral Agent uses the same identity-owned `agents/<id>/` shape plus
 `.locks/endpoints/` under a private temporary root. That root is not the

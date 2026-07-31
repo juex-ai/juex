@@ -82,6 +82,260 @@ func TestLoadWithOptionsResolvesRuntimeEnvironmentPrecedenceAndMetadata(t *testi
 	}
 }
 
+func TestLoadForNonDefaultHomeMergesDefaultAndInstanceConfig(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	defaultConfigPath := filepath.Join(userHome, ".juex", "juex.yaml")
+	writeTextFile(t, defaultConfigPath, `model: local:base
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: http://127.0.0.1:12345
+    api_key: shared-key
+    models:
+      - id: base
+      - id: instance
+sandbox:
+  enabled: true
+runtime:
+  tool_timeout: 70s
+environment:
+  variables:
+    BASE_ONLY: base
+    SHARED: base
+fleet:
+  addr: 127.0.0.1:5840
+  unsafe_bind_any: true
+`)
+	instanceHome := t.TempDir()
+	writeTextFile(t, filepath.Join(instanceHome, "juex.yaml"), `model: local:instance
+runtime:
+  tool_timeout: 80s
+environment:
+  variables:
+    INSTANCE_ONLY: instance
+    SHARED: instance
+fleet:
+  addr: 127.0.0.1:5999
+`)
+	t.Setenv("JUEX_HOME", instanceHome)
+
+	cfg, err := LoadForWorkDirForValidation(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "local" || cfg.Model != "instance" ||
+		cfg.BaseURL != "http://127.0.0.1:12345" || cfg.APIKey != "shared-key" {
+		t.Fatalf("provider selection = id:%q model:%q base:%q key:%q", cfg.ProviderID, cfg.Model, cfg.BaseURL, cfg.APIKey)
+	}
+	if !cfg.Sandbox.Enabled {
+		t.Fatalf("sandbox policy = %+v, want inherited enabled policy", cfg.Sandbox)
+	}
+	if cfg.ToolTimeout != 80*time.Second {
+		t.Fatalf("tool timeout = %s, want instance override 80s", cfg.ToolTimeout)
+	}
+	if cfg.Fleet.Addr != "127.0.0.1:5999" {
+		t.Fatalf("fleet address = %q, want instance override", cfg.Fleet.Addr)
+	}
+	if !cfg.Fleet.UnsafeBindAny {
+		t.Fatalf("fleet unsafe bind setting was not inherited: %+v", cfg.Fleet)
+	}
+	for key, want := range map[string]string{
+		"BASE_ONLY":     "base",
+		"INSTANCE_ONLY": "instance",
+		"SHARED":        "instance",
+	} {
+		got, ok := cfg.EnvironmentSnapshot().Lookup(key)
+		if !ok || got != want {
+			t.Fatalf("%s = %q, %v, want %q", key, got, ok, want)
+		}
+	}
+	defaultConfigPath, err = filepath.EvalSymlinks(defaultConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instanceConfigPath, err := filepath.EvalSymlinks(filepath.Join(instanceHome, "juex.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := map[string]environment.Metadata{}
+	for _, item := range cfg.EnvironmentSnapshot().ConfiguredMetadata() {
+		metadata[item.Key] = item
+	}
+	if got := metadata["BASE_ONLY"]; got.Source != environment.SourceUserConfig || got.Path != defaultConfigPath {
+		t.Fatalf("BASE_ONLY metadata = %+v, want default-home config", got)
+	}
+	if got := metadata["INSTANCE_ONLY"]; got.Source != environment.SourceUserConfig || got.Path != instanceConfigPath {
+		t.Fatalf("INSTANCE_ONLY metadata = %+v, want instance-home config", got)
+	}
+	if got := metadata["SHARED"]; got.Source != environment.SourceUserConfig || got.Path != instanceConfigPath {
+		t.Fatalf("SHARED metadata = %+v, want instance override", got)
+	}
+}
+
+func TestLoadWithOptionsNonDefaultHomePrecedence(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), `model: local:base
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: http://127.0.0.1:12345
+    api_key: shared-key
+    models:
+      - id: base
+      - id: instance
+      - id: workspace
+      - id: explicit
+      - id: env
+      - id: cli
+`)
+	instanceHome := t.TempDir()
+	writeTextFile(t, filepath.Join(instanceHome, "juex.yaml"), "model: local:instance\n")
+	t.Setenv("JUEX_HOME", instanceHome)
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "model: local:workspace\n")
+	explicitPath := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, explicitPath, "model: local:explicit\n")
+
+	load := func(modelRef string) Config {
+		t.Helper()
+		cfg, err := LoadWithOptions(LoadOptions{
+			WorkDir:    workDir,
+			ConfigPath: explicitPath,
+			ModelRef:   modelRef,
+			AgentState: AgentStateNone,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	if cfg := load(""); cfg.Model != "explicit" {
+		t.Fatalf("model = %q, want explicit config to win over workspace and both homes", cfg.Model)
+	}
+	t.Setenv("PROVIDER_API_MODEL", "env")
+	if cfg := load(""); cfg.Model != "env" {
+		t.Fatalf("model = %q, want environment override", cfg.Model)
+	}
+	if cfg := load("local:cli"); cfg.Model != "cli" {
+		t.Fatalf("model = %q, want explicit model override", cfg.Model)
+	}
+}
+
+func TestLoadForNonDefaultHomeMergesTrustedHooksInOrder(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), `model: local:test
+providers:
+  - id: local
+    protocol: openai/chat
+    api_key: shared-key
+    models:
+      - id: test
+hooks:
+  commands:
+    - name: default-hook
+      events: [UserPromptSubmit]
+      command: ["echo", "default"]
+`)
+	instanceHome := t.TempDir()
+	writeTextFile(t, filepath.Join(instanceHome, "juex.yaml"), `hooks:
+  commands:
+    - name: instance-hook
+      events: [UserPromptSubmit]
+      command: ["echo", "instance"]
+`)
+	t.Setenv("JUEX_HOME", instanceHome)
+
+	cfg, err := LoadForWorkDirForValidation(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Hooks.Commands) != 2 {
+		t.Fatalf("hooks = %+v, want default then instance", cfg.Hooks.Commands)
+	}
+	if got := cfg.Hooks.Commands[0]; got.Name != "default-hook" || got.Source != "home:default" {
+		t.Fatalf("default hook = %+v", got)
+	}
+	if got := cfg.Hooks.Commands[1]; got.Name != "instance-hook" || got.Source != "home:instance" {
+		t.Fatalf("instance hook = %+v", got)
+	}
+}
+
+func TestLoadForCanonicalDefaultHomeReadsSharedConfigOnce(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	defaultHome := filepath.Join(userHome, ".juex")
+	writeTextFile(t, filepath.Join(defaultHome, "juex.yaml"), `model: local:test
+providers:
+  - id: local
+    protocol: openai/chat
+    api_key: test-key
+    models:
+      - id: test
+hooks:
+  commands:
+    - name: once
+      events: [UserPromptSubmit]
+      command: ["echo", "{}"]
+`)
+	alias := filepath.Join(userHome, "default-home-alias")
+	if err := os.Symlink(defaultHome, alias); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("JUEX_HOME", alias)
+	canonicalDefaultHome, err := filepath.EvalSymlinks(defaultHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForWorkDirForValidation(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HomeJuexDir != canonicalDefaultHome {
+		t.Fatalf("effective home dir = %q, want %q", cfg.HomeJuexDir, canonicalDefaultHome)
+	}
+	if cfg.HomeRuntimeConfigPath() != filepath.Join(canonicalDefaultHome, "juex.yaml") ||
+		cfg.DefaultHomeRuntimeConfigPath() != filepath.Join(canonicalDefaultHome, "juex.yaml") {
+		t.Fatalf("runtime paths = %+v", cfg.RuntimePaths())
+	}
+	if len(cfg.Hooks.Commands) != 1 || cfg.Hooks.Commands[0].Name != "once" {
+		t.Fatalf("default-home config loaded more than once: %+v", cfg.Hooks.Commands)
+	}
+}
+
+func TestLoadForCaseVariantDefaultHomeReadsSharedConfigOnce(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	defaultHome := filepath.Join(userHome, ".juex")
+	writeTextFile(t, filepath.Join(defaultHome, "juex.yaml"), `model: local:test
+providers:
+  - id: local
+    protocol: openai/chat
+    api_key: test-key
+    models:
+      - id: test
+hooks:
+  commands:
+    - name: once
+      events: [UserPromptSubmit]
+      command: ["echo", "{}"]
+`)
+	caseVariant := filepath.Join(userHome, ".JUEX")
+	if _, err := os.Stat(caseVariant); err != nil {
+		if os.IsNotExist(err) {
+			t.Skip("filesystem is case-sensitive")
+		}
+		t.Fatal(err)
+	}
+	t.Setenv("JUEX_HOME", caseVariant)
+
+	cfg, err := LoadForWorkDirForValidation(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Hooks.Commands) != 1 || cfg.Hooks.Commands[0].Name != "once" {
+		t.Fatalf("case-variant default-home config loaded more than once: %+v", cfg.Hooks.Commands)
+	}
+}
+
 func TestLoadWithOptionsDotenvPolicyAndProviderOverrides(t *testing.T) {
 	t.Run("loads only workdir dotenv and provider uses snapshot", func(t *testing.T) {
 		prepareConfigTest(t)
@@ -869,7 +1123,7 @@ hooks:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Hooks.Commands) != 1 || cfg.Hooks.Commands[0].Name != "global-context" || cfg.Hooks.Commands[0].Source != "user" {
+	if len(cfg.Hooks.Commands) != 1 || cfg.Hooks.Commands[0].Name != "global-context" || cfg.Hooks.Commands[0].Source != "home:default" {
 		t.Fatalf("hooks = %+v", cfg.Hooks.Commands)
 	}
 }
@@ -932,7 +1186,7 @@ hooks:
 	if len(cfg.Hooks.Commands) != 2 {
 		t.Fatalf("hooks = %+v", cfg.Hooks.Commands)
 	}
-	if cfg.Hooks.Commands[0].Name != "global-context" || cfg.Hooks.Commands[0].Source != "user" {
+	if cfg.Hooks.Commands[0].Name != "global-context" || cfg.Hooks.Commands[0].Source != "home:default" {
 		t.Fatalf("first hook = %+v", cfg.Hooks.Commands[0])
 	}
 	if cfg.Hooks.Commands[1].Name != "project-guard" || cfg.Hooks.Commands[1].Source != "project" {
@@ -1354,6 +1608,9 @@ func TestLoadForWorkDirUsesJUEXHomeForAgentState(t *testing.T) {
 	}
 	if cfg.HomeAgentsDir != filepath.Join(home, ".agents") {
 		t.Fatalf("HomeAgentsDir = %q, want existing user resource home", cfg.HomeAgentsDir)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".juex")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("loading an alternate JUEX_HOME wrote to the default home: %v", err)
 	}
 }
 

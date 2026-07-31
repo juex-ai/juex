@@ -52,9 +52,10 @@ Or build from source:
 make build
 ```
 
-Create runtime config with the first-run wizard. By default it writes shared
-provider settings to `$JUEX_HOME/juex.yaml` (`~/.juex/juex.yaml` by default);
-use `--scope workspace` when a
+Create runtime config with the first-run wizard. With the default home it
+writes shared provider settings to `~/.juex/juex.yaml`. When `JUEX_HOME`
+selects another home, it writes only that instance's `$JUEX_HOME/juex.yaml`
+override and leaves the shared base unchanged. Use `--scope workspace` when a
 repository needs its own `.juex/juex.yaml` override:
 
 ```bash
@@ -77,16 +78,17 @@ environment:
     NODE_ENV: production
 ```
 
-Environment precedence is user-global YAML, workspace `.env`, workspace YAML,
-explicit `--config` YAML, the environment inherited at launch, child-local
-MCP/Observable values, then Juex-owned runtime injection. Inherited values
-therefore preserve existing service and shell overrides. `--config` never
-changes the `.env` location. Keep non-secret defaults in YAML and secrets in a
-gitignored workspace `.env`: every configured value is intentionally granted
-to provider code and managed MCP, Observable, hook, shell, and grep processes.
-Juex rejects portable-name violations, NUL bytes, Windows case conflicts, and
-bootstrap/runtime names such as `JUEX_HOME`, `HOME`, `USERPROFILE`, `WORKDIR`,
-`JUEX_WORKDIR`, and `JUEX_EXT_DIR`.
+Environment precedence is default-home YAML, a distinct instance-home YAML,
+workspace `.env`, workspace YAML, explicit `--config` YAML, the environment
+inherited at launch, child-local MCP/Observable values, then Juex-owned runtime
+injection. Inherited values therefore preserve existing service and shell
+overrides. `--config` never changes the `.env` location. Keep non-secret
+defaults in YAML and secrets in a gitignored workspace `.env`: every
+configured value is intentionally granted to provider code and managed MCP,
+Observable, hook, shell, and grep processes. Juex rejects portable-name
+violations, NUL bytes, Windows case conflicts, and bootstrap/runtime names such
+as `JUEX_HOME`, `HOME`, `USERPROFILE`, `WORKDIR`, `JUEX_WORKDIR`, and
+`JUEX_EXT_DIR`.
 
 MCP servers are configured separately from `juex.yaml`. Personal servers live
 in `~/.agents/mcp.json`; project servers live in
@@ -139,8 +141,9 @@ juex fleet status
 ```
 
 `--model` uses the same `provider:model` format as config and can select
-any model declared in the merged provider config, including providers from
-`$JUEX_HOME/juex.yaml` when the current directory has no local config.
+any model declared in the merged provider config, including providers inherited
+from `~/.juex/juex.yaml` and overridden by `$JUEX_HOME/juex.yaml` when the
+effective home is distinct.
 Configure an ordered top-level `fallback_models` list to continue a provider
 request on another declared model after exhausted transient, authentication,
 permission, or model-not-found failures. Juex skips unhealthy models during a
@@ -167,7 +170,10 @@ to add a TCP API listener. That listener does not serve the React SPA; its
 non-API routes point users to `juex fleet serve` for the browser UI.
 
 `juex fleet` manages all resident agents registered under the effective
-`JUEX_HOME`. `fleet add` registers an explicit absolute workspace;
+`JUEX_HOME`. Fleet settings inherit from `~/.juex/juex.yaml` and may be
+overridden field by field in a distinct `$JUEX_HOME/juex.yaml`; all Fleet state
+still belongs only to the effective home. `fleet add` registers an explicit
+absolute workspace;
 `enable|disable`, `start|stop|restart`, `remove`, `status`, and `logs` operate
 on an exact agent id or unique name. Disable stops before persisting its
 reversible flag. Remove is a separate confirmed destructive operation and
@@ -207,14 +213,14 @@ continuation.
 Agent, session, and troubleshooting commands resolve the workspace agent from
 the current directory or `--cwd`. `juex fleet ...` manages all agents
 registered under the effective `$JUEX_HOME`. CLI information commands do not
-operate on an agent. `juex init` sets up either the shared user config
-(default) or the current workspace config.
+operate on an agent. `juex init` sets up the effective-home config (the shared
+default config when `JUEX_HOME` is unset) or the current workspace config.
 
 ### Workspace agent (current directory)
 
 | Command | Purpose |
 | --- | --- |
-| `juex init` | Create or merge a first-run runtime config in `$JUEX_HOME/juex.yaml` or the workspace. |
+| `juex init` | Create or merge a first-run runtime config in the effective `$JUEX_HOME/juex.yaml` or the workspace; a non-default home never modifies the shared base. |
 | `juex run "<prompt>"` | Run one prompt in the active primary session and exit. |
 | `juex run --ephemeral "<prompt>"` | Run with isolated temporary agent state; add `--keep` to retain and print the state path. |
 | `juex run --attach <path> ["<prompt>"]` | Attach one or more local images to a text, image-only, or mixed-content turn; repeat `--attach` for multiple images. |
@@ -308,7 +314,7 @@ uses the same isolated scratch-state behavior automatically.
 └── observables.json             # workspace-authored observable config
 
 $JUEX_HOME/
-├── juex.yaml                    # user-global config
+├── juex.yaml                    # instance override; also the shared base when this is ~/.juex
 ├── extensions/
 ├── .locks/
 │   ├── endpoints/<agent-id>.lock # serving-process and GC maintenance guard
@@ -337,9 +343,13 @@ $JUEX_HOME/
 ```
 
 Personal agent resources live under `~/.agents/`; JueX-home extension bundles
-live under `$JUEX_HOME/extensions/`. `JUEX_HOME` scopes JueX config,
-extensions, and the agent registry; it does not relocate the existing
-`~/.agents` resource tree. By default, Juex loads `~/.agents/AGENTS.md` before
+live under `$JUEX_HOME/extensions/`. Juex always reads
+`~/.juex/juex.yaml` as the shared configuration base. When `JUEX_HOME` selects
+a canonically distinct directory, `$JUEX_HOME/juex.yaml` overrides that base,
+while configuration writes, extensions, locks, Fleet state, and the Agent
+registry remain isolated to the effective home. `JUEX_HOME` does not relocate
+the existing `~/.agents` resource tree. By default, Juex loads
+`~/.agents/AGENTS.md` before
 work-local AGENTS.md files, reads user-global skills and MCP servers from
 `~/.agents/skills` and `~/.agents/mcp.json`, and discovers JueX-home
 extension bundles under `$JUEX_HOME/extensions/<name>/`. Set
@@ -355,8 +365,8 @@ JueX-home extension hooks are trusted by location.
 Extension MCP servers receive `JUEX_EXT_DIR` alongside `WORKDIR` and
 `JUEX_WORKDIR`. Identity-owned runtime state lives under
 `$JUEX_HOME/agents/<id>`; workspace artifacts and Observable
-definitions remain under `.juex/`. User-global provider configuration lives
-at `$JUEX_HOME/juex.yaml`. A serving agent prefers
+definitions remain under `.juex/`. Provider configuration uses the same
+default-home then instance-home merge. A serving agent prefers
 `unix://$JUEX_HOME/agents/<id>/api.sock` and falls back loudly to an ephemeral
 `tcp://127.0.0.1:<port>` endpoint when AF_UNIX is unavailable.
 
@@ -548,7 +558,7 @@ plain-text context or request Stop continuation with exit code `2`.
 
 Lifecycle command hooks can be configured under `hooks.commands` to observe or
 gate session start, user prompt submission, tool use, compaction, and stop
-checks. User-global hooks in `~/.juex/juex.yaml` are trusted by location;
+checks. Default-home and instance-home hooks are trusted by location;
 project-local hooks must set `hooks.trusted: true` before Juex executes them.
 Hooks receive JSON on stdin and respond with plain stdout plus an exit code:
 `0` allows, `2` requests the event-specific block/correction, and other exit

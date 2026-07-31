@@ -69,6 +69,10 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 	if err != nil {
 		t.Fatalf("resolve user home for live provider config: %v", err)
 	}
+	codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if codexHome == "" {
+		codexHome = filepath.Join(home, ".codex")
+	}
 	configuredPath := strings.TrimSpace(os.Getenv(liveProviderConfigEnv))
 	path := resolveLiveProviderConfigPath(root, home, configuredPath)
 	if _, err := os.Stat(path); err != nil {
@@ -85,12 +89,16 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 		t.Fatalf("check live provider config %s: %v", path, err)
 	}
 
-	juexHome := t.TempDir()
+	runtimeUserHome := t.TempDir()
+	juexHome := filepath.Join(runtimeUserHome, ".juex")
+	t.Setenv("HOME", runtimeUserHome)
+	t.Setenv("USERPROFILE", runtimeUserHome)
 	t.Setenv("JUEX_HOME", juexHome)
+	t.Setenv("CODEX_HOME", codexHome)
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(juexHome, "gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	// Preserve credentials and tuning overrides, but keep the extracted
-	// provider:model selection stable.
+	// Preserve Codex auth, credentials, and tuning overrides, but keep the
+	// extracted provider:model selection and Juex home layers isolated.
 	for _, k := range liveConfigSelectorEnvKeys {
 		t.Setenv(k, "")
 	}

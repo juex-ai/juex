@@ -200,12 +200,16 @@ func doctorAgentCheck(workDir string) doctorCheck {
 
 func doctorConfigCheck(cfg config.Config) doctorCheck {
 	_, result := providerreadiness.ResolveProfile(cfg)
+	check := doctorCheckFromReadiness("config", result)
 	if result.Status != providerreadiness.StatusOK {
-		check := doctorCheckFromReadiness("config", result)
 		check.Suggestion = "check top-level model and providers[] entries in juex.yaml"
-		return check
 	}
-	return doctorCheckFromReadiness("config", result)
+	if check.Details == nil {
+		check.Details = map[string]any{}
+	}
+	check.Details["default_home_config_path"] = cfg.DefaultHomeRuntimeConfigPath()
+	check.Details["effective_home_config_path"] = cfg.HomeRuntimeConfigPath()
+	return check
 }
 
 func doctorCredentialsCheck(cfg config.Config) doctorCheck {

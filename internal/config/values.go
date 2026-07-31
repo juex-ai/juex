@@ -162,14 +162,15 @@ func (s ProviderSelection) llmConfig() llm.Config {
 // RuntimePaths separates workspace-local configuration from identity-owned
 // runtime state.
 type RuntimePaths struct {
-	WorkDir               string
-	JuexDir               string
-	StateDir              string
-	MemoryDir             string
-	SessionsDir           string
-	HistoryPath           string
-	RuntimeConfigPath     string
-	HomeRuntimeConfigPath string
+	WorkDir                      string
+	JuexDir                      string
+	StateDir                     string
+	MemoryDir                    string
+	SessionsDir                  string
+	HistoryPath                  string
+	RuntimeConfigPath            string
+	DefaultHomeRuntimeConfigPath string
+	HomeRuntimeConfigPath        string
 }
 
 func (c Config) RuntimePaths() RuntimePaths {
@@ -194,6 +195,7 @@ func (c Config) RuntimePaths() RuntimePaths {
 	if c.HomeJuexDir != "" {
 		paths.HomeRuntimeConfigPath = filepath.Join(c.HomeJuexDir, "juex.yaml")
 	}
+	paths.DefaultHomeRuntimeConfigPath = c.defaultHomeRuntimeConfigPath
 	return paths
 }
 
