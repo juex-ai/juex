@@ -1324,7 +1324,11 @@ func TestApp_NewStartsAllowedPluginObservableWithoutWritingProjectConfig(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer restarted.CloseAndWait()
+	defer func() {
+		if err := restarted.CloseAndWait(); err != nil {
+			t.Errorf("close restarted app: %v", err)
+		}
+	}()
 	if _, ok := restarted.Observables().Status().ByID("plugin-default-start"); ok {
 		t.Fatal("plugin Observable remained after allowlist removal and restart")
 	}
