@@ -275,8 +275,17 @@ func TestPluginCommandExpandsRuntimeAndGetsExactSandboxRoot(t *testing.T) {
 	if len(runner.last.AdditionalWritableRoots) != 1 || runner.last.AdditionalWritableRoots[0] != dataDir {
 		t.Fatalf("additional writable roots = %v, want only %q", runner.last.AdditionalWritableRoots, dataDir)
 	}
-	if runner.last.Spec.Binary != filepath.Join(pluginDir, filepath.Base(helper)) {
-		t.Fatalf("binary = %q, want expanded plugin helper", runner.last.Spec.Binary)
+	gotBinary, err := os.Stat(runner.last.Spec.Binary)
+	if err != nil {
+		t.Fatalf("stat expanded plugin helper %q: %v", runner.last.Spec.Binary, err)
+	}
+	wantBinaryPath := filepath.Join(pluginDir, filepath.Base(helper))
+	wantBinary, err := os.Stat(wantBinaryPath)
+	if err != nil {
+		t.Fatalf("stat expected plugin helper %q: %v", wantBinaryPath, err)
+	}
+	if !os.SameFile(gotBinary, wantBinary) {
+		t.Fatalf("binary = %q, want expanded plugin helper %q", runner.last.Spec.Binary, wantBinaryPath)
 	}
 	if len(runner.last.Spec.Args) < 4 ||
 		runner.last.Spec.Args[2] != dataDir ||
