@@ -13,13 +13,21 @@ func headerCredentialValues(headers map[string]Credential) []string {
 		value := headers[name].Value()
 		values = appendSecret(values, value)
 		if strings.EqualFold(name, "Authorization") {
-			scheme, token, ok := strings.Cut(value, " ")
-			if ok && strings.EqualFold(scheme, "Bearer") {
-				values = appendSecret(values, strings.TrimSpace(token))
+			if credential, ok := authorizationCredential(value); ok {
+				values = appendSecret(values, credential)
 			}
 		}
 	}
 	return values
+}
+
+func authorizationCredential(value string) (string, bool) {
+	separator := strings.IndexAny(value, " \t")
+	if separator <= 0 {
+		return "", false
+	}
+	credential := strings.TrimSpace(value[separator+1:])
+	return credential, credential != ""
 }
 
 func appendSecret(values []string, value string) []string {

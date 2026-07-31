@@ -165,8 +165,8 @@ func (t *remoteDiagnosticRoundTripper) RoundTrip(request *http.Request) (*http.R
 	}
 
 	redactions := append([]string(nil), t.redactions...)
-	if authorization := outbound.Header.Get("Authorization"); strings.HasPrefix(authorization, "Bearer ") {
-		redactions = append(redactions, strings.TrimPrefix(authorization, "Bearer "))
+	if credential, ok := authorizationCredential(outbound.Header.Get("Authorization")); ok {
+		redactions = append(redactions, credential)
 	}
 	redactionValues := secretRedactionValues(redactions)
 	readLimit := remoteDiagnosticBodyBytes + longestString(redactionValues)

@@ -98,6 +98,48 @@ func TestRemoteDiagnosticRoundTripperRedactsAcrossExcerptBoundary(t *testing.T) 
 	}
 }
 
+func TestRemoteDiagnosticRoundTripperRedactsNonBearerAuthorizationCredential(t *testing.T) {
+	const secret = "basic-credential"
+	transport := &remoteDiagnosticRoundTripper{
+		base: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusUnauthorized,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("rejected " + secret)),
+			}, nil
+		}),
+	}
+	diagnostic := newRemoteDiagnostic()
+	request, err := http.NewRequestWithContext(
+		withRemoteDiagnostic(t.Context(), diagnostic),
+		http.MethodPost,
+		"https://example.test/mcp",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Basic "+secret)
+	response, err := transport.RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredBody, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enriched := diagnostic.enrich(errors.New("unauthorized"))
+	for _, text := range []string{string(restoredBody), enriched.Error()} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("credential leaked in %q", text)
+		}
+		if !strings.Contains(text, "[REDACTED]") {
+			t.Fatalf("text = %q, want redaction marker", text)
+		}
+	}
+}
+
 func TestRemoteDiagnosticRoundTripperRedactsEscapedSecretAcrossExcerptBoundary(t *testing.T) {
 	secret := strings.Repeat("\\", 48) + "\""
 	encoded, err := json.Marshal(secret)
