@@ -2,8 +2,8 @@
 
 Juex is a small Go agent runtime distributed as a managed CLI package. It provides a CLI,
 a local web UI, Anthropic and OpenAI-compatible providers, builtin file/shell
-tools, workspace Observables, MCP stdio tools, skills and hooks from local resource bundles,
-agent-home memory, and resumable session history.
+tools, workspace Observables, local and remote MCP tools, skills and hooks from
+local resource bundles, agent-home memory, and resumable session history.
 
 The project is intentionally narrow: it is a runtime for experimenting with
 agent loops, not a hosted service or a framework with plugins for every
@@ -87,6 +87,32 @@ to provider code and managed MCP, Observable, hook, shell, and grep processes.
 Juex rejects portable-name violations, NUL bytes, Windows case conflicts, and
 bootstrap/runtime names such as `JUEX_HOME`, `HOME`, `USERPROFILE`, `WORKDIR`,
 `JUEX_WORKDIR`, and `JUEX_EXT_DIR`.
+
+MCP servers are configured separately from `juex.yaml`. Personal servers live
+in `~/.agents/mcp.json`; project servers live in
+`<WorkDir>/.agents/mcp.json` and override personal servers with the same name.
+Each server selects exactly one local `command` or remote `url`. Copy
+`mcp.json.example` to either location for a remote example. Credentials may
+reference the runtime environment without embedding a secret in the resource
+file:
+
+```json
+{
+  "mcpServers": {
+    "remote-search": {
+      "url": "https://mcp.example.com/mcp",
+      "auth": {
+        "token": "${REMOTE_MCP_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Place `REMOTE_MCP_TOKEN` in the inherited environment or the gitignored
+`<WorkDir>/.env`, then restart Juex. `juex doctor` checks remote server
+selection, credentials, and connectivity; `juex doctor --offline` skips only
+the network request.
 
 For non-interactive setup, pass the provider, model, and key explicitly:
 

@@ -34,6 +34,11 @@ model: openai:gpt-4.1
 # put secrets in the gitignored <WorkDir>/.env, and scope both carefully.
 # JUEX_HOME, HOME, USERPROFILE, WORKDIR, JUEX_WORKDIR, and JUEX_EXT_DIR cannot
 # be declared here or in .env because Juex owns their bootstrap/runtime meaning.
+#
+# MCP servers use a separate ~/.agents/mcp.json or <WorkDir>/.agents/mcp.json,
+# not this YAML. Copy mcp.json.example to the desired resource scope. Remote
+# credentials may reference values such as ${REMOTE_MCP_TOKEN} from the runtime
+# environment or the gitignored <WorkDir>/.env.
 
 # Optional extension bundles live at ~/.juex/extensions/<name> and
 # .juex/extensions/<name>. Each bundle may contain skills/<skill>/SKILL.md,

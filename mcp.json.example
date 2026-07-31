@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "remote-search": {
+      "url": "https://mcp.example.com/mcp",
+      "auth": {
+        "token": "${REMOTE_MCP_TOKEN}"
+      }
+    }
+  }
+}
