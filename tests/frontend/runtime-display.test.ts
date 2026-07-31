@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { NotesSnapshot } from "../../frontend/src/types.ts";
+import type { MCPServerInfo, NotesSnapshot } from "../../frontend/src/types.ts";
 
 import {
   formatRuntimeTokenCount,
@@ -14,10 +14,39 @@ import {
   runtimeGoalIsActive,
   runtimeHookCommandLabel,
   runtimeHooksSummaryLabel,
+  runtimeMCPConnectionLabel,
   runtimeSessionStateBadgeLabel,
   runtimeSessionStateIsActive,
   runtimeTokenUsageDetailLabel,
 } from "../../frontend/src/lib/runtime-display.ts";
+
+test("runtimeMCPConnectionLabel uses explicit transport metadata", () => {
+  const base: MCPServerInfo = {
+    name: "server",
+    source: "project",
+    type: "stdio",
+    command: "node",
+    args: ["server.js"],
+    status: "connected",
+    connected: true,
+    tool_count: 1,
+  };
+  assert.equal(runtimeMCPConnectionLabel(base), "node server.js");
+  assert.equal(
+    runtimeMCPConnectionLabel({
+      ...base,
+      type: "http",
+      command: "must-not-render",
+      args: ["ignored"],
+      url: "https://mcp.example.com/mcp",
+    }),
+    "https://mcp.example.com/mcp",
+  );
+  assert.equal(
+    runtimeMCPConnectionLabel({ ...base, type: "unknown" } as MCPServerInfo),
+    "-",
+  );
+});
 
 test("formatRuntimeTokenCount keeps sub-thousand counts exact", () => {
   assert.equal(formatRuntimeTokenCount(999), "999");

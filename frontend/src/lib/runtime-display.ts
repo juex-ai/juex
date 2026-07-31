@@ -1,10 +1,23 @@
 import type {
   ContextUsage,
   GoalStatusSnapshot,
+  MCPServerInfo,
   NotesSnapshot,
   RuntimeHooksStatus,
   TokenUsage,
 } from "../types";
+
+export function runtimeMCPConnectionLabel(server: MCPServerInfo): string {
+  if (server.type === "stdio") {
+    return [server.command, ...(server.args ?? [])]
+      .filter(Boolean)
+      .join(" ") || "-";
+  }
+  if (server.type === "http") {
+    return server.url?.trim() || "-";
+  }
+  return "-";
+}
 
 export function formatRuntimeTokenCount(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return "0";

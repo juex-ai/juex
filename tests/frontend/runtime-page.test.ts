@@ -175,11 +175,12 @@ test("Runtime parameter table exposes a caption and scoped column headers", () =
   assert.equal(toolDetails.getText().match(/<th scope="col"/g)?.length, 4);
 });
 
-test("MCP table row keeps command and error visible and lazily mounts tools", () => {
+test("MCP table row keeps transport connection and error visible and lazily mounts tools", () => {
   const sourceFile = parseSource(runtimePageSource, "Runtime.tsx");
   const row = requireFunction(sourceFile, "MCPServerRow");
 
-  assert.match(row.getText(), /mcpServerCommand\(server\.command/);
+  assert.match(row.getText(), /server\.type/);
+  assert.match(row.getText(), /runtimeMCPConnectionLabel\(server\)/);
   assert.match(row.getText(), /server\.error/);
   assert.ok(
     jsxElementNames(row, "Runtime.tsx").includes("RuntimeDisclosureButton"),
@@ -195,6 +196,8 @@ test("MCP table row keeps command and error visible and lazily mounts tools", ()
     runtimePageSource,
     /Tool details unavailable in this response/,
   );
+  assert.match(runtimePageSource, /Command \/ URL/);
+  assert.match(row.getText(), /colSpan=\{8\}/);
 });
 
 test("Runtime table long-value handling is applied inside cells", () => {

@@ -972,6 +972,8 @@ export interface SystemPromptEntry {
 export interface MCPServerInfo {
   name: string;
   source: string;
+  type: string;
+  url?: string;
   command: string;
   args?: string[];
   status: "not_started" | "connected" | "error";

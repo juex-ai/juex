@@ -416,12 +416,14 @@ shows seconds; a tool-managed lifecycle is labeled as such instead of showing
 a misleading duration. Empty groups remain visible with a zero count and an
 explicit empty state.
 
-MCP uses a semantic server table that always shows source, connection state,
-tool count, command, and startup error. Each server row expands to the same tool
-table used by builtin groups. Failed and not-started servers explain why no
-tools are available, while a connected zero-tool server states that it
-advertised none. MCP servers and skills list project-local sources before
-user-global sources.
+MCP uses a semantic server table that always shows source, canonical transport,
+connection state, tool count, command or display-safe URL, and startup error.
+stdio rows show command plus arguments, while HTTP rows show the endpoint with
+its potentially credential-bearing query removed. Each server row expands to
+the same tool table used by builtin groups. Failed and not-started servers
+explain why no tools are available, while a connected zero-tool server states
+that it advertised none. MCP servers and skills list project-local sources
+before user-global sources.
 The selected agent starts MCP at server startup, so this page reports live
 process-level MCP state rather than waiting for a chat session to be opened.
 Tool group, tool, raw-schema, and MCP tool disclosure bodies mount only while

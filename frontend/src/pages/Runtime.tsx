@@ -19,6 +19,7 @@ import {
   formatRuntimeTokenCount,
   runtimeHookCommandLabel,
   runtimeHooksSummaryLabel,
+  runtimeMCPConnectionLabel,
 } from "@/lib/runtime-display";
 
 export function Runtime() {
@@ -496,7 +497,7 @@ function SystemPromptEntryRow({ entry }: { entry: SystemPromptEntry }) {
 
 function MCPServerTable({ servers }: { servers: MCPServerInfo[] }) {
   return (
-    <table className="w-full min-w-[72rem] text-left text-sm">
+    <table className="w-full min-w-[80rem] text-left text-sm">
       <caption className="sr-only">MCP servers</caption>
       <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
         <tr>
@@ -509,6 +510,9 @@ function MCPServerTable({ servers }: { servers: MCPServerInfo[] }) {
           <th scope="col" className="w-28 px-3 py-2 font-medium">
             Source
           </th>
+          <th scope="col" className="w-24 px-3 py-2 font-medium">
+            Type
+          </th>
           <th scope="col" className="w-32 px-3 py-2 font-medium">
             Status
           </th>
@@ -516,7 +520,7 @@ function MCPServerTable({ servers }: { servers: MCPServerInfo[] }) {
             Tools
           </th>
           <th scope="col" className="px-3 py-2 font-medium">
-            Command
+            Command / URL
           </th>
           <th scope="col" className="px-3 py-2 font-medium">
             Error
@@ -556,6 +560,11 @@ function MCPServerRow({ server }: { server: MCPServerInfo }) {
           </Badge>
         </td>
         <td className="px-3 py-2">
+          <Badge variant="secondary" className="font-mono text-[11px]">
+            {server.type || "unknown"}
+          </Badge>
+        </td>
+        <td className="px-3 py-2">
           <Badge
             variant={mcpStatusVariant(server.status)}
             className="font-mono text-[11px]"
@@ -570,7 +579,7 @@ function MCPServerRow({ server }: { server: MCPServerInfo }) {
         </td>
         <td className="px-3 py-2.5">
           <div className="max-w-[24rem] break-all font-mono text-xs">
-            {mcpServerCommand(server.command, server.args)}
+            {runtimeMCPConnectionLabel(server)}
           </div>
         </td>
         <td
@@ -590,7 +599,7 @@ function MCPServerRow({ server }: { server: MCPServerInfo }) {
       </tr>
       {serverOpen && (
         <tr className="border-t bg-muted/20">
-          <td colSpan={7} className="p-0 pl-4">
+          <td colSpan={8} className="p-0 pl-4">
             {server.error ? (
               <div className="border-b bg-destructive/5 px-3 py-3">
                 <p className="text-muted-foreground text-[11px] font-semibold uppercase tracking-[0.14em]">
@@ -616,10 +625,6 @@ function mcpStatusLabel(status: string): string {
   if (status === "connected") return "connected";
   if (status === "error") return "error";
   return "not started";
-}
-
-function mcpServerCommand(command: string, args?: string[]): string {
-  return [command, ...(args ?? [])].filter(Boolean).join(" ") || "-";
 }
 
 function mcpToolEmptyLabel(status: string, toolsAvailable: boolean): string {
