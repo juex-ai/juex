@@ -14,10 +14,10 @@ import (
 )
 
 type mcpConfigRef struct {
-	Path            string
-	Source          string
-	ExtensionDir    string
-	StrictConflicts bool
+	Path             string
+	Source           string
+	ExtensionRuntime ExtensionRuntimeContext
+	StrictConflicts  bool
 }
 
 type RuntimeResourceKind string
@@ -30,14 +30,15 @@ const (
 )
 
 type RuntimeResourceNode struct {
-	Kind            RuntimeResourceKind
-	Source          string
-	Path            string
-	ExtensionName   string
-	ExtensionDir    string
-	RequireTrust    bool
-	StrictConflicts bool
-	Precedence      int
+	Kind             RuntimeResourceKind
+	Source           string
+	Path             string
+	ExtensionName    string
+	ExtensionDir     string
+	ExtensionDataDir string
+	RequireTrust     bool
+	StrictConflicts  bool
+	Precedence       int
 }
 
 type RuntimeResourceGraph struct {
@@ -68,12 +69,13 @@ func ResolveRuntimeResourceGraph(cfg config.Config) (RuntimeResourceGraph, error
 	}
 
 	skillDirs := skillDirRefs(paths, extResources.SkillDirs)
-	mcpConfigs := mcpConfigRefs(paths, extResources.MCPConfigs)
+	runtimeContexts := extensionRuntimeContexts(cfg, extResources.Extensions)
+	mcpConfigs := mcpConfigRefs(paths, extResources.MCPConfigs, runtimeContexts)
 	return RuntimeResourceGraph{
 		skillDirs:  skillDirs,
 		mcpConfigs: mcpConfigs,
 		hooks:      hookConfig,
-		nodes:      runtimeResourceNodes(paths, extResources),
+		nodes:      runtimeResourceNodes(paths, extResources, runtimeContexts),
 	}, nil
 }
 
@@ -93,7 +95,7 @@ func (g RuntimeResourceGraph) Nodes() []RuntimeResourceNode {
 	return append([]RuntimeResourceNode(nil), g.nodes...)
 }
 
-func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Resources) []RuntimeResourceNode {
+func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Resources, runtimeContexts map[string]ExtensionRuntimeContext) []RuntimeResourceNode {
 	var nodes []RuntimeResourceNode
 	if paths.UserAgentsResources && paths.HomeAgentsDir != "" {
 		nodes = append(nodes,
@@ -105,23 +107,25 @@ func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Re
 	mcpConfigsByExt := resourceRefsByExtension(extResources.MCPConfigs)
 	hookFilesByExt := resourceRefsByExtension(extResources.HookFiles)
 	for _, ext := range extResources.Extensions {
+		runtimeContext := runtimeContexts[ext.Name]
 		nodes = append(nodes, RuntimeResourceNode{
-			Kind:          RuntimeResourceExtension,
-			Source:        ext.Source,
-			Path:          ext.Dir,
-			ExtensionName: ext.Name,
-			ExtensionDir:  ext.Dir,
-			RequireTrust:  ext.Scope == extensions.ScopeProject,
-			Precedence:    runtimeSourceRank(ext.Source),
+			Kind:             RuntimeResourceExtension,
+			Source:           ext.Source,
+			Path:             ext.Dir,
+			ExtensionName:    ext.Name,
+			ExtensionDir:     ext.Dir,
+			ExtensionDataDir: runtimeContext.DataDir,
+			RequireTrust:     ext.Scope == extensions.ScopeProject,
+			Precedence:       runtimeSourceRank(ext.Source),
 		})
 		for _, ref := range skillDirsByExt[ext.Name] {
-			nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceSkillDir, ref, true))
+			nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceSkillDir, ref, runtimeContexts[ref.ExtensionName], true))
 		}
 		for _, ref := range mcpConfigsByExt[ext.Name] {
-			nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceMCPConfig, ref, true))
+			nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceMCPConfig, ref, runtimeContexts[ref.ExtensionName], true))
 		}
 		for _, ref := range hookFilesByExt[ext.Name] {
-			nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceHookFile, ref, true))
+			nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceHookFile, ref, runtimeContexts[ref.ExtensionName], true))
 		}
 	}
 	if paths.ProjectAgentsDir != "" {
@@ -152,10 +156,11 @@ func runtimeResourceNode(kind RuntimeResourceKind, source, path string, requireT
 	}
 }
 
-func runtimeExtensionResourceNode(kind RuntimeResourceKind, ref extensions.ResourceRef, strictConflicts bool) RuntimeResourceNode {
+func runtimeExtensionResourceNode(kind RuntimeResourceKind, ref extensions.ResourceRef, runtimeContext ExtensionRuntimeContext, strictConflicts bool) RuntimeResourceNode {
 	node := runtimeResourceNode(kind, ref.Source, ref.Path, ref.RequireTrust, strictConflicts)
 	node.ExtensionName = ref.ExtensionName
 	node.ExtensionDir = ref.ExtensionDir
+	node.ExtensionDataDir = runtimeContext.DataDir
 	return node
 }
 
@@ -220,7 +225,7 @@ func skillDirRefs(paths config.ResourcePaths, extRefs []extensions.ResourceRef) 
 	return refs
 }
 
-func mcpConfigRefs(paths config.ResourcePaths, extRefs []extensions.ResourceRef) []mcpConfigRef {
+func mcpConfigRefs(paths config.ResourcePaths, extRefs []extensions.ResourceRef, runtimeContexts map[string]ExtensionRuntimeContext) []mcpConfigRef {
 	var refs []mcpConfigRef
 	if paths.UserAgentsResources && paths.HomeAgentsDir != "" {
 		refs = append(refs, mcpConfigRef{
@@ -230,10 +235,10 @@ func mcpConfigRefs(paths config.ResourcePaths, extRefs []extensions.ResourceRef)
 	}
 	for _, ref := range extRefs {
 		refs = append(refs, mcpConfigRef{
-			Path:            ref.Path,
-			Source:          ref.Source,
-			ExtensionDir:    ref.ExtensionDir,
-			StrictConflicts: true,
+			Path:             ref.Path,
+			Source:           ref.Source,
+			ExtensionRuntime: runtimeContexts[ref.ExtensionName],
+			StrictConflicts:  true,
 		})
 	}
 	if paths.ProjectAgentsDir != "" {
@@ -243,6 +248,14 @@ func mcpConfigRefs(paths config.ResourcePaths, extRefs []extensions.ResourceRef)
 		})
 	}
 	return refs
+}
+
+func extensionRuntimeContexts(cfg config.Config, selected []extensions.Extension) map[string]ExtensionRuntimeContext {
+	contexts := make(map[string]ExtensionRuntimeContext, len(selected))
+	for _, extension := range selected {
+		contexts[extension.Name] = newExtensionRuntimeContext(cfg.AgentAddress, extension)
+	}
+	return contexts
 }
 
 func appendExtensionHooks(base hooks.Config, refs []extensions.ResourceRef) (hooks.Config, error) {
@@ -270,6 +283,20 @@ func appendExtensionHooks(base hooks.Config, refs []extensions.ResourceRef) (hoo
 }
 
 func loadMCPConfigRefs(refs []mcpConfigRef, workDir string, runtimeEnvironment environment.Snapshot) ([]mcp.Config, mcp.Config, map[string]string, error) {
+	return loadMCPConfigRefsWithOptions(refs, workDir, runtimeEnvironment, mcpConfigLoadOptions{})
+}
+
+type mcpConfigLoadOptions struct {
+	EnableExtensionData bool
+}
+
+func loadMCPConfigRefsForRuntime(refs []mcpConfigRef, workDir string, runtimeEnvironment environment.Snapshot) ([]mcp.Config, mcp.Config, map[string]string, error) {
+	return loadMCPConfigRefsWithOptions(refs, workDir, runtimeEnvironment, mcpConfigLoadOptions{
+		EnableExtensionData: true,
+	})
+}
+
+func loadMCPConfigRefsWithOptions(refs []mcpConfigRef, workDir string, runtimeEnvironment environment.Snapshot, opts mcpConfigLoadOptions) ([]mcp.Config, mcp.Config, map[string]string, error) {
 	type loadedConfig struct {
 		ref mcpConfigRef
 		cfg mcp.Config
@@ -306,10 +333,18 @@ func loadMCPConfigRefs(refs []mcpConfigRef, workDir string, runtimeEnvironment e
 		if len(effective.MCPServers) == 0 {
 			continue
 		}
+		extensionDataDir := ""
+		var prepareLocalProcess func() error
+		if opts.EnableExtensionData && effective.HasLocalServers() && item.ref.ExtensionRuntime.DataDir != "" {
+			extensionDataDir = item.ref.ExtensionRuntime.DataDir
+			prepareLocalProcess = item.ref.ExtensionRuntime.PrepareDataDir
+		}
 		prepared, err := mcp.PrepareConfigWithOptions(effective, mcp.PrepareOptions{
-			WorkDir:      workDir,
-			ExtensionDir: item.ref.ExtensionDir,
-			Environment:  runtimeEnvironment,
+			WorkDir:             workDir,
+			ExtensionDir:        item.ref.ExtensionRuntime.ExtensionDir,
+			ExtensionDataDir:    extensionDataDir,
+			PrepareLocalProcess: prepareLocalProcess,
+			Environment:         runtimeEnvironment,
 		})
 		if err != nil {
 			return nil, mcp.Config{}, nil, err
@@ -329,6 +364,6 @@ func LoadMCPConfigs(cfg config.Config, workDir string) ([]mcp.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	configs, _, _, err := loadMCPConfigRefs(graph.MCPConfigs(), workDir, cfg.EnvironmentSnapshot())
+	configs, _, _, err := loadMCPConfigRefsForRuntime(graph.MCPConfigs(), workDir, cfg.EnvironmentSnapshot())
 	return configs, err
 }

@@ -29,12 +29,13 @@ const (
 )
 
 var reservedNames = map[string]struct{}{
-	"JUEX_HOME":    {},
-	"HOME":         {},
-	"USERPROFILE":  {},
-	"WORKDIR":      {},
-	"JUEX_WORKDIR": {},
-	"JUEX_EXT_DIR": {},
+	"JUEX_HOME":         {},
+	"HOME":              {},
+	"USERPROFILE":       {},
+	"WORKDIR":           {},
+	"JUEX_WORKDIR":      {},
+	"JUEX_EXT_DIR":      {},
+	"JUEX_EXT_DATA_DIR": {},
 }
 
 // Layer is one ordered source of environment declarations. Strict layers are

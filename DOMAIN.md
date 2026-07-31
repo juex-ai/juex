@@ -29,7 +29,7 @@ domain boundary.
 | Ephemeral Agent | A process-local Agent identity with private temporary Agent state. It uses the normal Workspace and user configuration/resources but has no Workspace marker, is not registered with Fleet, and is deleted on exit unless explicitly kept. |
 | Workspace marker | `.juex/juex.local.json`, the narrow binding from a Workspace to its Resident Agent id. A marker is identity, not configuration or a copyable cache. |
 | Agent Address | The value that binds a resolved Agent id to its identity-owned state directory and endpoint guard. Consumers use the address rather than deriving identity or Juex-home layout from directory names. |
-| Agent home | The identity-owned state directory for one Resident Agent at `$JUEX_HOME/agents/<id>`, containing its registry record, Sessions, history, memory, logs, and generated Observable state. |
+| Agent home | The identity-owned state directory for one Resident Agent at `$JUEX_HOME/agents/<id>`, containing its registry record, Sessions, history, memory, logs, plugin data, and generated Observable state. |
 | Runtime Instance | One serving process incarnation for an Agent, identified independently from the Agent id and described by its instance id, process id, endpoint, start time, and binary version. Restarting changes the Runtime Instance without changing the Agent. |
 | Workspace-local state | User-authored configuration and resources plus workspace-rooted artifacts under the Workspace. Observable definitions are workspace-local; generated Observable state is not. |
 | Agent state | Runtime state owned by an Agent identity, including Session history, memory, logs, and generated Observable state. Resident Agent state lives in its Agent home; Ephemeral Agent state lives in its private temporary home. |
@@ -67,6 +67,7 @@ domain boundary.
 | MCP Notification | An external event from an MCP Server that is admitted as pending input or as a system-originated Turn. It is not user-authored input. |
 | Plugin bundle | A named extension directory that may contribute Skills, MCP Servers, and lifecycle Hooks after it is selected by the effective plugin policy. Same-name bundles form a default-Home, effective-Home, and Workspace override chain. |
 | Plugin allowlist | The exact logical plugin names permitted for one Fleet or Workspace-bound Agent. An omitted layer inherits, an explicit layer replaces, and no effective allowlist permits no plugin bundles. It is not publisher or source authentication. |
+| Plugin data directory | Private persistent state owned by one Agent and one logical plugin at `<Agent home>/extensions/<name>`. It is distinct from the selected Plugin bundle installation and survives runtime or Workspace lifecycle changes until the Agent is deleted. |
 | Skill | A Markdown instruction package discovered from configured resource scopes and made available to the model through prompt metadata and Tool access. |
 | Memory Entry | Reusable Agent-owned context managed through memory Tools and stored with Agent state. It is distinct from work-local or user-global `AGENTS.md` guidance. |
 | Prompt Section | A named part of the assembled system prompt, such as guidance, available Skills, Memory, runtime state, or shell context. |
