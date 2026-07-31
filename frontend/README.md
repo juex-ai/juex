@@ -111,7 +111,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/pages/AgentConfig.tsx` | workspace config editor with validation and post-save restart reconciliation |
 | `src/pages/AgentLogs.tsx` | bounded resident agent log tail with explicit refresh and line-count controls |
 | `src/pages/Observables.tsx` | compact workspace Observable list with full-content tooltips, sticky actions, and Schedule Run plus lifecycle controls |
-| `src/pages/ObservableDetail.tsx` | Observable source details, recent Observation history, and Schedule Run plus lifecycle controls |
+| `src/pages/ObservableDetail.tsx` | Observable origin and type details, recent Observation history, and Schedule Run plus lifecycle controls |
 | `src/pages/Runtime.tsx` | Provider, shell, sandbox, grouped builtin/MCP tool catalog, hooks, system prompt, and skills detail view for `/runtime` |
 | `src/components/ui/` | shadcn primitives |
 | `src/components/ai-elements/` | AI Elements primitives (Conversation, Message, Reasoning, Tool, CodeBlock, PromptInput) |

@@ -437,7 +437,7 @@ section. This is operational metadata, not a conversational surface.
 ### 6.6 Observables (`/agents/:agentId/observables`, `/agents/:agentId/observables/:id`)
 
 The list uses a compact five-column grid that fits inside the standard
-`max-w-5xl` content width on tablet and desktop. Observable, Source, and Last
+`max-w-5xl` content width on tablet and desktop. Observable, Origin, and Last
 Observation values remain single-line and truncate with an ellipsis. Hovering
 or focusing the accessible full-row link opens a bounded, wrapping tooltip
 with the complete values. On narrower screens the data columns may scroll
@@ -447,12 +447,12 @@ with Arrow Up/Down, Page Up/Down, Home, and End.
 
 Schedule rows show three distinct controls: `Run` uses a lightning icon to
 emit one configured Observation, Start/Stop controls the timetable lifecycle,
-and Delete removes a project-owned source. Extension rows show their
-`ext:<name>` resource source and type/config summary but omit Delete; direct
-API mutation remains rejected. Project rows show source `project`. Command
-rows do not show Run. The Schedule
+and Delete removes a project-owned definition. Extension rows show their
+`ext:<name>` Origin and Type/config summary but omit Delete; direct API
+mutation remains rejected. Project rows show Origin `project`. Command rows do
+not show Run. The Schedule
 detail page repeats the labeled Run control beside its lifecycle actions.
-The detail status separates resource Source from command/schedule Type.
+The detail status separates definition Origin from command/schedule Type.
 The detail action group wraps and stays right-aligned on narrow screens.
 Actions refresh the current view after success and surface API errors in the
 existing page-level error region.

@@ -213,7 +213,7 @@ export function ObservableDetail() {
                   <DetailRow label="State" first>
                     <StateBadge state={observable.state} />
                   </DetailRow>
-                  <DetailRow label="Source">
+                  <DetailRow label="Origin">
                     <span className="break-all font-mono text-xs">
                       {observable.source}
                     </span>

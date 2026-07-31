@@ -170,7 +170,7 @@ export function Observables() {
                     State
                   </div>
                   <div className="px-3 py-2 font-medium" role="columnheader">
-                    Source
+                    Origin
                   </div>
                   <div className="px-3 py-2 font-medium" role="columnheader">
                     Last Observation
@@ -252,7 +252,7 @@ function ObservableRow({
             </div>
             <div className="font-mono text-[11px]">{item.id}</div>
             <div>
-              <span className="font-semibold">Source: </span>
+              <span className="font-semibold">Origin: </span>
               <span className="font-mono">{item.source}</span>
             </div>
             <div>

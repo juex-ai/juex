@@ -88,10 +88,13 @@ test("Observables table exposes complete truncated content in a bounded tooltip"
   assert.match(observablesPageSource, /content\.scrollTo\(\{ top: nextTop, behavior: "smooth" \}\)/);
 });
 
-test("Observables display resource source and hide delete for extension definitions", () => {
+test("Observables label definition origin separately from its type", () => {
+  assert.match(observablesPageSource, />\s*Origin\s*</);
+  assert.match(observablesPageSource, />Origin: <\/span>/);
   assert.match(observablesPageSource, /\{item\.source\}/);
   assert.match(observablesPageSource, /Type: \{item\.source_type \|\| "command"\}/);
   assert.match(observablesPageSource, /item\.source === "project" \? \(/);
+  assert.match(observableDetailSource, /<DetailRow label="Origin">/);
   assert.match(observableDetailSource, /\{observable\.source\}/);
   assert.match(observableDetailSource, /<DetailRow label="Type">/);
   assert.match(observableDetailSource, /observable\?\.source === "project" \? \(/);
