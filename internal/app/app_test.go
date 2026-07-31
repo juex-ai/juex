@@ -1214,7 +1214,7 @@ commands:
     command: `+string(command)+`
 `)
 	a, err := New(Options{
-		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, Plugins: allowPlugins("demo")},
 		Provider: &stubProvider{replies: []llm.Response{}},
 		WorkDir:  dir,
 	})

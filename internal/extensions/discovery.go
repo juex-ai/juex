@@ -23,8 +23,15 @@ const (
 )
 
 type DiscoverOptions struct {
-	HomeJuexDir string
-	WorkDir     string
+	Roots        []Root
+	AllowedNames []string
+}
+
+// Root is one installed extension directory in low-to-high precedence order.
+type Root struct {
+	Path         string
+	Scope        Scope
+	RequireTrust bool
 }
 
 type Extension struct {
@@ -51,61 +58,74 @@ type Resources struct {
 
 func Discover(opts DiscoverOptions) (Resources, error) {
 	var roots []extensionRoot
-	if opts.HomeJuexDir != "" {
-		roots = appendDistinctExtensionRoot(roots, extensionRoot{
-			Path:         filepath.Join(opts.HomeJuexDir, "extensions"),
-			Scope:        ScopeUser,
-			RequireTrust: false,
-		})
+	for _, root := range opts.Roots {
+		if root.Path == "" {
+			continue
+		}
+		roots = appendDistinctExtensionRoot(roots, extensionRoot(root))
 	}
-	if opts.WorkDir != "" {
-		roots = appendDistinctExtensionRoot(roots, extensionRoot{
-			Path:         filepath.Join(opts.WorkDir, ".juex", "extensions"),
-			Scope:        ScopeProject,
-			RequireTrust: true,
-		})
+	if len(opts.AllowedNames) == 0 {
+		return Resources{}, nil
 	}
 
-	var out Resources
-	seen := map[string]Extension{}
+	allowed := make(map[string]struct{}, len(opts.AllowedNames))
+	for _, name := range opts.AllowedNames {
+		allowed[name] = struct{}{}
+	}
+	type selectedExtension struct {
+		Extension
+		RequireTrust bool
+	}
+	selected := make(map[string]selectedExtension)
 	for _, root := range roots {
-		extensions, err := discoverRoot(root)
+		discovered, err := discoverRoot(root)
 		if err != nil {
 			return Resources{}, err
 		}
-		for _, ext := range extensions {
-			if prev, ok := seen[ext.Name]; ok {
-				return Resources{}, fmt.Errorf("extensions: duplicate extension %q in %s and %s", ext.Name, prev.Dir, ext.Dir)
+		for _, ext := range discovered {
+			if _, ok := allowed[ext.Name]; !ok {
+				continue
 			}
-			seen[ext.Name] = ext
-			out.Extensions = append(out.Extensions, ext)
-			ref := ResourceRef{
-				Source:        ext.Source,
-				ExtensionName: ext.Name,
-				ExtensionDir:  ext.Dir,
-				RequireTrust:  root.RequireTrust,
-			}
-			if ok, err := skillDirExists(filepath.Join(ext.Dir, "skills")); err != nil {
-				return Resources{}, err
-			} else if ok {
-				skillRef := ref
-				skillRef.Path = filepath.Join(ext.Dir, "skills")
-				out.SkillDirs = append(out.SkillDirs, skillRef)
-			}
-			if ok, err := pathExists(filepath.Join(ext.Dir, "mcp.json")); err != nil {
-				return Resources{}, err
-			} else if ok {
-				mcpRef := ref
-				mcpRef.Path = filepath.Join(ext.Dir, "mcp.json")
-				out.MCPConfigs = append(out.MCPConfigs, mcpRef)
-			}
-			if ok, err := pathExists(filepath.Join(ext.Dir, "hooks.yaml")); err != nil {
-				return Resources{}, err
-			} else if ok {
-				hookRef := ref
-				hookRef.Path = filepath.Join(ext.Dir, "hooks.yaml")
-				out.HookFiles = append(out.HookFiles, hookRef)
-			}
+			selected[ext.Name] = selectedExtension{Extension: ext, RequireTrust: root.RequireTrust}
+		}
+	}
+
+	names := make([]string, 0, len(selected))
+	for name := range selected {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out Resources
+	for _, name := range names {
+		selection := selected[name]
+		ext := selection.Extension
+		out.Extensions = append(out.Extensions, ext)
+		ref := ResourceRef{
+			Source:        ext.Source,
+			ExtensionName: ext.Name,
+			ExtensionDir:  ext.Dir,
+			RequireTrust:  selection.RequireTrust,
+		}
+		if ok, err := skillDirExists(filepath.Join(ext.Dir, "skills")); err != nil {
+			return Resources{}, err
+		} else if ok {
+			skillRef := ref
+			skillRef.Path = filepath.Join(ext.Dir, "skills")
+			out.SkillDirs = append(out.SkillDirs, skillRef)
+		}
+		if ok, err := pathExists(filepath.Join(ext.Dir, "mcp.json")); err != nil {
+			return Resources{}, err
+		} else if ok {
+			mcpRef := ref
+			mcpRef.Path = filepath.Join(ext.Dir, "mcp.json")
+			out.MCPConfigs = append(out.MCPConfigs, mcpRef)
+		}
+		if ok, err := pathExists(filepath.Join(ext.Dir, "hooks.yaml")); err != nil {
+			return Resources{}, err
+		} else if ok {
+			hookRef := ref
+			hookRef.Path = filepath.Join(ext.Dir, "hooks.yaml")
+			out.HookFiles = append(out.HookFiles, hookRef)
 		}
 	}
 	return out, nil
@@ -126,9 +146,11 @@ type extensionRoot struct {
 }
 
 func appendDistinctExtensionRoot(roots []extensionRoot, candidate extensionRoot) []extensionRoot {
-	for _, root := range roots {
+	for index, root := range roots {
 		if sameExtensionRoot(root.Path, candidate.Path) {
-			return roots
+			copy(roots[index:], roots[index+1:])
+			roots = roots[:len(roots)-1]
+			return append(roots, candidate)
 		}
 	}
 	return append(roots, candidate)

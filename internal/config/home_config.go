@@ -55,6 +55,10 @@ func (s yamlConfigSource) allowsFleet() bool {
 	return s.Scope == configScopeDefaultHome || s.Scope == configScopeInstanceHome
 }
 
+func (s yamlConfigSource) allowsPluginPolicy() bool {
+	return s.Scope != configScopeExplicit
+}
+
 type homeConfigResolution struct {
 	DefaultConfigPath string
 	EffectiveHomeDir  string
@@ -83,7 +87,7 @@ func resolveHomeConfigSources() (homeConfigResolution, error) {
 			MissingOK: true,
 		}},
 	}
-	sameHome, err := sameHomeConfigDir(defaultHome, effectiveHome)
+	sameHome, err := sameConfigPath(defaultHome, effectiveHome)
 	if err != nil {
 		return homeConfigResolution{}, fmt.Errorf("config: compare default and effective JueX homes: %w", err)
 	}
@@ -97,7 +101,7 @@ func resolveHomeConfigSources() (homeConfigResolution, error) {
 	return resolution, nil
 }
 
-func sameHomeConfigDir(left, right string) (bool, error) {
+func sameConfigPath(left, right string) (bool, error) {
 	if left == right {
 		return true, nil
 	}

@@ -172,12 +172,26 @@ func TestLiveBinary_LoadsExtensionSkillsAndMCP(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
+	blockedExtDir := filepath.Join(work, ".juex", "extensions", "blocked")
+	if err := writeExtensionSkillFile(blockedExtDir, "blocked-skill", "must not load"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeMCPConfigFile(
+		filepath.Join(blockedExtDir, "mcp.json"),
+		"blockedlocal",
+		"uv",
+		[]string{"run", "--quiet", "--project", root, "python", mcpScript},
+	); err != nil {
+		t.Fatal(err)
+	}
 
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	configBody := "model: openai:m\n" +
+		"plugins:\n" +
+		"  allow: [demo]\n" +
 		"providers:\n" +
 		"  - id: openai\n" +
 		"    base_url: https://example\n" +
@@ -224,9 +238,15 @@ func TestLiveBinary_LoadsExtensionSkillsAndMCP(t *testing.T) {
 	if !have["mcp__extlocal__echo"] {
 		t.Errorf("mcp__extlocal__echo not in tool list (extension MCP server not loaded?). tools=%v", plan.Tools)
 	}
+	if have["mcp__blockedlocal__echo"] {
+		t.Errorf("blocked plugin MCP tool entered the plan. tools=%v", plan.Tools)
+	}
 
 	skillFound := false
 	for _, s := range plan.Skills {
+		if s.Name == "blocked-skill" {
+			t.Errorf("blocked plugin skill entered the plan: %+v", plan.Skills)
+		}
 		if s.Name == "ext-skill" {
 			skillFound = true
 			wantPath := filepath.Join(extDir, "skills", "ext-skill", "SKILL.md")
@@ -257,6 +277,8 @@ func TestLiveBinary_UserAgentsGateDoesNotDisableHomeExtensions(t *testing.T) {
 	}
 	configBody := `model: openai:m
 enable_user_agents_resources: false
+plugins:
+  allow: [home-bundle]
 providers:
   - id: openai
     base_url: https://example

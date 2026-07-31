@@ -26,6 +26,7 @@ func TestResolveRuntimeResourceGraphSourceNodes(t *testing.T) {
 		WorkDir:                   work,
 		HomeAgentsDir:             homeAgents,
 		HomeJuexDir:               homeJuex,
+		Plugins:                   allowPlugins("chanwire"),
 		EnableUserAgentsResources: true,
 	})
 	if err != nil {
@@ -51,6 +52,65 @@ func TestResolveRuntimeResourceGraphSourceNodes(t *testing.T) {
 	}
 }
 
+func TestResolveRuntimeResourceGraphUsesLayeredPluginPolicyAndWinningBundle(t *testing.T) {
+	userHome := t.TempDir()
+	instanceHome := t.TempDir()
+	work := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	t.Setenv("JUEX_HOME", instanceHome)
+	t.Setenv("CODEX_HOME", filepath.Join(userHome, "missing-codex-home"))
+	for _, key := range []string{
+		"PROVIDER_API_ID",
+		"PROVIDER_API_PROTOCOL",
+		"PROVIDER_API_BASE",
+		"PROVIDER_API_KEY",
+		"PROVIDER_API_MODEL",
+		"PROVIDER_THINKING_EFFORT",
+		"PROVIDER_CONTEXT_WINDOW",
+	} {
+		t.Setenv(key, "")
+	}
+
+	mustWriteRuntimeStatusFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), "plugins:\n  allow: [shared]\n")
+	mustWriteRuntimeStatusFile(t, filepath.Join(instanceHome, "juex.yaml"), "skills:\n  include: []\n")
+	mustWriteRuntimeStatusFile(t, filepath.Join(work, ".juex", "juex.yaml"), "sandbox:\n  enabled: true\n")
+	mustWriteRuntimeStatusFile(t, filepath.Join(userHome, ".juex", "extensions", "shared", "skills"), "invalid lower bundle")
+	mustWriteRuntimeStatusFile(t, filepath.Join(instanceHome, "extensions", "shared", "mcp.json"), "{}")
+	projectExtensionDir := filepath.Join(work, ".juex", "extensions", "shared")
+	mustWriteRuntimeStatusFile(t, filepath.Join(projectExtensionDir, "hooks.yaml"), "trusted: true\ncommands: []\n")
+
+	cfg, err := config.LoadWithOptions(config.LoadOptions{
+		WorkDir:    work,
+		AgentState: config.AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph, err := ResolveRuntimeResourceGraph(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var extensionNode RuntimeResourceNode
+	for _, node := range graph.Nodes() {
+		if node.Kind == RuntimeResourceExtension {
+			extensionNode = node
+			break
+		}
+	}
+	if extensionNode.Source != "ext:shared" ||
+		extensionNode.Path != projectExtensionDir ||
+		!extensionNode.RequireTrust {
+		t.Fatalf("winning extension node = %+v", extensionNode)
+	}
+	for _, ref := range graph.MCPConfigs() {
+		if ref.Source == "ext:shared" {
+			t.Fatalf("lower Fleet bundle leaked MCP config: %+v", graph.MCPConfigs())
+		}
+	}
+}
+
 func TestResolveRuntimeResourceGraphExcludesUserResourcesWhenDisabled(t *testing.T) {
 	work := t.TempDir()
 	homeAgents := t.TempDir()
@@ -63,6 +123,7 @@ func TestResolveRuntimeResourceGraphExcludesUserResourcesWhenDisabled(t *testing
 		WorkDir:                   work,
 		HomeAgentsDir:             homeAgents,
 		HomeJuexDir:               homeJuex,
+		Plugins:                   allowPlugins("home"),
 		EnableUserAgentsResources: false,
 	})
 	if err != nil {
@@ -83,7 +144,7 @@ commands:
     command: ["python3", "demo.py"]
 `)
 
-	graph, err := ResolveRuntimeResourceGraph(config.Config{WorkDir: work})
+	graph, err := ResolveRuntimeResourceGraph(config.Config{WorkDir: work, Plugins: allowPlugins("demo")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +184,7 @@ func TestLoadMCPConfigRefsPreparesRemoteExtensionCredentials(t *testing.T) {
 	    }
   }
 }`)
-	graph, err := ResolveRuntimeResourceGraph(config.Config{WorkDir: work})
+	graph, err := ResolveRuntimeResourceGraph(config.Config{WorkDir: work, Plugins: allowPlugins("remote")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,4 +325,8 @@ func nodeKindsAndSources(nodes []RuntimeResourceNode) []string {
 		out = append(out, string(node.Kind)+":"+node.Source)
 	}
 	return out
+}
+
+func allowPlugins(names ...string) config.PluginPolicy {
+	return config.PluginPolicy{Allow: append([]string(nil), names...), Configured: true}
 }

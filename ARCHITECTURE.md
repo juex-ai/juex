@@ -196,8 +196,8 @@ implementation decisions live.
 | `internal/fleetservice` | Per-user launchd/systemd/Termux supervisor definitions and service-manager transactions | Individual Agent lifecycle, Fleet address policy, CLI presentation |
 | `internal/fleetweb` | Fleet HTTP/SSE transport, roster DTOs, directory-browser endpoints, verified Agent reverse proxy, embedded SPA fallback | Registry/process policy, single-Agent routes, frontend domain policy |
 | `internal/processmetrics` | Cross-platform per-process RSS and cumulative CPU-time sampling, interval CPU derivation, process-identity baseline reset | Polling cadence, Agent health policy, HTTP DTOs, UI formatting, persistence |
-| `internal/extensions` | Home/Workspace extension discovery, source identity, duplicate-name rejection, resource references, trust requirement projection | Skill/MCP/hook parsing, runtime registration, extension execution |
-| `internal/config` | YAML and user/Workspace config layering, runtime-environment layer ordering, Provider selection inputs, path and policy projection | Dotenv syntax, mutable process-global environment ownership, canonical Provider Profile semantics, Turn behavior, Provider requests, HTTP routing |
+| `internal/extensions` | Ordered extension-root discovery, allowed-name filtering, same-name winner selection, source identity, resource references, trust requirement projection | Plugin-policy inheritance, Skill/MCP/hook parsing, runtime registration, extension execution |
+| `internal/config` | YAML and user/Workspace config layering, plugin allowlist inheritance, runtime-environment layer ordering, Provider selection inputs, path and policy projection | Extension directory scanning, Dotenv syntax, mutable process-global environment ownership, canonical Provider Profile semantics, Turn behavior, Provider requests, HTTP routing |
 | `internal/environment` | Portable environment-name validation, deterministic dotenv parsing, immutable effective snapshots, child overlays, value-free metadata, controlled single-workspace activation | Config-file discovery, subprocess ownership, runtime policy, diagnostic presentation |
 | `internal/providerreadiness` | Provider selection, credential, construction, and connectivity readiness checks | Provider Protocol semantics, runtime fallback, CLI presentation |
 | `internal/llm` | Canonical messages and blocks, Provider interfaces/profiles, Protocol and Capability resolution, wire/SDK adapters, provider transport/API/stream retry, model health | Model-chain fallback, Session lifecycle, Tool execution, CLI/HTTP DTOs |
@@ -843,8 +843,8 @@ project-local scope. User-global `~/.agents` resources are also loaded by
 default unless `enable_user_agents_resources` or
 `--enable-user-agents-resources` disables them. Project MCP servers and skills
 override user entries by name; AGENTS.md files are concatenated in load order.
-This switch does not gate `$JUEX_HOME/extensions`, which belongs to the
-selected JueX home.
+This switch does not gate plugin bundles. Their separate `plugins.allow`
+policy selects extension resources from JueX Home and Workspace scopes.
 
 ### 3.5 Session
 
@@ -1683,8 +1683,9 @@ default home is `~/.juex`; the effective writable home is `JUEX_HOME` when set,
 otherwise the default home. Juex reads `~/.juex/juex.yaml` first, then reads
 `$JUEX_HOME/juex.yaml` only when the two canonical home directories differ.
 The default-home file is a read-only base for a non-default instance; user
-configuration writes, extensions, locks, Fleet state, and Agent state target
-only the effective home. The work-local config is
+configuration writes, locks, Fleet state, and Agent state target only the
+effective home. Allowed plugin bundles may be read from both the default and
+effective Home extension directories. The work-local config is
 `<WorkDir>/.juex/juex.yaml`, except when `WorkDir` itself is a `.juex`
 directory, where Juex reads `<WorkDir>/juex.yaml`. The repository root ships
 `juex.yaml.example` as a copyable template:
@@ -1702,6 +1703,8 @@ skills:
   prompt_budget_chars: 8000
   include: []
   exclude: []
+plugins:
+  allow: []
 shell:
   profile: auto
 providers:
@@ -1760,9 +1763,10 @@ compaction:
 |---|---|
 | `model` | active model reference in `provider:model` form |
 | `fallback_models` | optional ordered `provider:model` list used after eligible request failures; an explicit empty list clears an inherited list |
-| `enable_user_agents_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores only `~/.agents/AGENTS.md`, `~/.agents/skills`, and `~/.agents/mcp.json`; `$JUEX_HOME/extensions` remains enabled |
+| `enable_user_agents_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores only `~/.agents/AGENTS.md`, `~/.agents/skills`, and `~/.agents/mcp.json`; plugin policy is unchanged |
 | `environment.load_dotenv` | optional boolean; defaults to `true`; reads exactly `<WorkDir>/.env` once during runtime config loading; a missing file is allowed and malformed input fails startup |
 | `environment.variables` | optional string map merged into the immutable runtime environment; portable names are required and Juex-owned identity/path names are rejected |
+| `plugins.allow` | optional exact, case-sensitive plugin-name allowlist; an omitted layer inherits, an explicit list replaces, and no effective setting loads no plugin bundles; accepted only in default-Home, instance-Home, or Workspace config |
 | `skills.prompt_budget_chars` | optional compact skill catalog budget in characters; defaults to `8000` and is capped by the model context-window policy |
 | `skills.include` | optional filesystem skill-name whitelist applied after user, extension, and project merging; when non-empty, `skills.exclude` is ignored; required builtin guides remain loaded |
 | `skills.exclude` | optional filesystem skill-name blacklist applied after merging when `skills.include` is empty; required builtin guides remain loaded |
@@ -2127,11 +2131,12 @@ The full session subtree beneath the agent home retains the existing
 `session.json`, transcript, event, lock, notes, scratchpad, goal, trace, span,
 tool, and per-session log files described in §3.5.
 
-`JUEX_HOME` scopes the writable instance config, extensions,
+`JUEX_HOME` scopes the writable instance config and extension installation,
 supervisor/endpoint/Fleet locks, and Agent registry state. A canonically
-distinct home reads `~/.juex/juex.yaml` as its configuration base but never
-writes instance config or runtime state there. The existing `~/.agents`
-AGENTS.md, skill, and MCP resource tree remains at its current location.
+distinct home reads `~/.juex/juex.yaml` as its configuration base and may read
+allowed default-Home plugin bundles, but never writes instance config or
+runtime state there. The existing `~/.agents` AGENTS.md, skill, and MCP
+resource tree remains at its current location.
 
 An Ephemeral Agent uses the same identity-owned `agents/<id>/` shape plus
 `.locks/endpoints/` under a private temporary root. That root is not the
@@ -2179,12 +2184,18 @@ projects it to metadata plus an explicit cannot-view/do-not-guess instruction
 for that provider request. Vision-capable projection remains unchanged.
 
 The personal `~/.agents` resources are read-only from Juex's view and are
-loaded only when user-agent resources are enabled. Extension bundles under
-both `$JUEX_HOME/extensions` and `<WorkDir>/.juex/extensions` are always
-discovered. Extension names are global within one run; a duplicate extension
-name is a startup error. Extension-provided MCP server, skill, or hook names
-must not collide with existing resources or another extension. Runtime status
-reports extension resources as `ext:<name>`.
+loaded only when user-agent resources are enabled. Plugin policy is resolved
+independently as default Home, distinct effective Home, then Workspace.
+Omitted `plugins.allow` inherits; an explicit list replaces; no final setting
+loads no plugin bundle. `internal/app` projects the three extension directories
+as low-to-high typed roots into `internal/extensions`. Discovery first filters
+logical names and selects one whole-bundle winner, then inspects only the
+winners for Skills, MCP config, and Hooks. A Workspace same-name bundle
+therefore replaces a Home bundle and carries Workspace trust requirements.
+This logical-name policy is not publisher or source authentication.
+Extension-provided MCP server, Skill, or Hook names still must not collide with
+existing resources or another selected extension. Runtime status reports
+selected extension resources as `ext:<name>`.
 
 The workspace marker is globally ignored through Git's user excludes file,
 never by editing project `.gitignore`. Read-only `existing` resolution never
