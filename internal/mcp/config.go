@@ -28,6 +28,45 @@ type Credential struct {
 	value string
 }
 
+// ReadinessConfigError classifies an MCP configuration failure by the
+// readiness stage that can repair it without changing its public error text.
+type ReadinessConfigError struct {
+	Stage ReadinessStage
+	Err   error
+}
+
+func (e *ReadinessConfigError) Error() string {
+	if e == nil || e.Err == nil {
+		return ""
+	}
+	return e.Err.Error()
+}
+
+func (e *ReadinessConfigError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// CredentialResolutionError identifies a missing environment-backed MCP
+// credential without retaining or rendering the credential expression.
+type CredentialResolutionError struct {
+	Field               string
+	EnvironmentVariable string
+}
+
+func (e *CredentialResolutionError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf(
+		"%s references unset or empty environment variable %s",
+		e.Field,
+		e.EnvironmentVariable,
+	)
+}
+
 func (c *Credential) UnmarshalJSON(data []byte) error {
 	var value string
 	if err := json.Unmarshal(data, &value); err != nil {
@@ -217,33 +256,44 @@ func validateServerSpec(spec ServerSpec) error {
 	hasCommand := spec.commandSet || spec.Command != ""
 	hasURL := spec.urlSet || spec.URL != ""
 	if hasCommand == hasURL {
-		return fmt.Errorf("exactly one of command or url is required")
+		return selectionConfigError(fmt.Errorf("exactly one of command or url is required"))
 	}
 	if hasCommand {
 		if strings.TrimSpace(spec.Command) == "" {
-			return fmt.Errorf("command must not be empty")
+			return selectionConfigError(fmt.Errorf("command must not be empty"))
 		}
 		if spec.authSet || spec.Auth != nil {
-			return fmt.Errorf("auth is only valid for remote servers")
+			return selectionConfigError(fmt.Errorf("auth is only valid for remote servers"))
 		}
 		return nil
 	}
 	if strings.TrimSpace(spec.URL) == "" {
-		return fmt.Errorf("url must not be empty")
+		return selectionConfigError(fmt.Errorf("url must not be empty"))
 	}
 	if spec.argsSet || spec.Args != nil {
-		return fmt.Errorf("args are only valid for command servers")
+		return selectionConfigError(fmt.Errorf("args are only valid for command servers"))
 	}
 	if spec.envSet || spec.Env != nil {
-		return fmt.Errorf("env is only valid for command servers")
+		return selectionConfigError(fmt.Errorf("env is only valid for command servers"))
 	}
 	if err := validateSecureEndpoint(spec.URL); err != nil {
-		return fmt.Errorf("url: %w", err)
+		return selectionConfigError(fmt.Errorf("url: %w", err))
 	}
 	if spec.authSet && spec.Auth == nil {
-		return fmt.Errorf("auth must not be null")
+		return credentialsConfigError(fmt.Errorf("auth must not be null"))
 	}
-	return validateAuthSpec(spec.Auth)
+	if err := validateAuthSpec(spec.Auth); err != nil {
+		return credentialsConfigError(err)
+	}
+	return nil
+}
+
+func selectionConfigError(err error) error {
+	return &ReadinessConfigError{Stage: ReadinessStageSelection, Err: err}
+}
+
+func credentialsConfigError(err error) error {
+	return &ReadinessConfigError{Stage: ReadinessStageCredentials, Err: err}
 }
 
 func validateAuthSpec(auth *AuthSpec) error {
@@ -432,7 +482,10 @@ func resolveCredential(credential Credential, snapshot environment.Snapshot, fie
 	}
 	value, ok := snapshot.Lookup(name)
 	if !ok || value == "" {
-		return Credential{}, fmt.Errorf("%s references unset or empty environment variable %s", field, name)
+		return Credential{}, &CredentialResolutionError{
+			Field:               field,
+			EnvironmentVariable: name,
+		}
 	}
 	return Credential{value: value}, nil
 }

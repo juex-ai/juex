@@ -45,10 +45,27 @@ func newManager(ctx context.Context, cfg Config, opts ConnectOptions) *Manager {
 			mgr.errors[name] = &ServerError{Server: name, Op: "tool name", Err: err}
 			continue
 		}
+		if spec.URL != "" {
+			if result := CheckRemoteSelection(name, spec); result.Status != ReadinessStatusOK {
+				mgr.errors[name] = &ServerError{
+					Server: name,
+					Op:     "readiness " + string(result.Stage),
+					Err:    result.Err,
+				}
+				continue
+			}
+			if result := CheckRemoteCredentials(name, spec); result.Status != ReadinessStatusOK {
+				mgr.errors[name] = &ServerError{
+					Server: name,
+					Op:     "readiness " + string(result.Stage),
+					Err:    result.Err,
+				}
+				continue
+			}
+		}
 		client, err := ConnectWithOptions(ctx, name, spec, opts)
 		if err != nil {
-			serverErr := &ServerError{Server: name, Op: "connect", Err: err}
-			mgr.errors[name] = serverErr
+			mgr.errors[name] = remoteReadinessServerError(name, spec, "connect", err)
 			continue
 		}
 		mgr.clients[name] = client
@@ -56,8 +73,7 @@ func newManager(ctx context.Context, cfg Config, opts ConnectOptions) *Manager {
 		if err != nil {
 			client.Close()
 			delete(mgr.clients, name)
-			serverErr := &ServerError{Server: name, Op: "tools/list", Err: err}
-			mgr.errors[name] = serverErr
+			mgr.errors[name] = remoteReadinessServerError(name, spec, "tools/list", err)
 			continue
 		}
 		mgr.tools[name] = append([]ToolDescriptor(nil), descs...)
