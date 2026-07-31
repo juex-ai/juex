@@ -43,7 +43,12 @@ func newManager(ctx context.Context, cfg Config, opts ConnectOptions) *Manager {
 		specs:   map[string]ServerSpec{},
 	}
 	for name, spec := range cfg.MCPServers {
-		mgr.specs[name] = ServerSpec{Type: spec.Type, URL: spec.URL}
+		mgr.specs[name] = ServerSpec{
+			Type:    spec.Type,
+			Command: spec.Command,
+			Args:    append([]string(nil), spec.Args...),
+			URL:     spec.URL,
+		}
 		if err := validateToolNameServer(name); err != nil {
 			mgr.errors[name] = &ServerError{Server: name, Op: "tool name", Err: err}
 			continue
@@ -146,6 +151,30 @@ func (m *Manager) ToolDescriptors() map[string][]ToolDescriptor {
 		}
 		sort.Slice(copied, func(i, j int) bool { return copied[i].Name < copied[j].Name })
 		out[serverName] = copied
+	}
+	return out
+}
+
+// RuntimeConnectionSpecs returns display-safe startup transport metadata owned
+// by this manager. It remains stable if configuration files change in place.
+func (m *Manager) RuntimeConnectionSpecs() map[string]ServerSpec {
+	out := map[string]ServerSpec{}
+	if m == nil {
+		return out
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.closed {
+		return out
+	}
+	for name, spec := range m.specs {
+		spec.Args = append([]string(nil), spec.Args...)
+		if displayURL, err := spec.DisplayURL(); err != nil {
+			spec.URL = ""
+		} else if displayURL != "" {
+			spec.URL = displayURL
+		}
+		out[name] = spec
 	}
 	return out
 }

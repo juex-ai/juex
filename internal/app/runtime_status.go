@@ -33,6 +33,7 @@ func NewRuntimeCatalogService(cfg config.Config) RuntimeCatalogService {
 type RuntimeStatusOptions struct {
 	MCPToolDescriptors map[string][]mcp.ToolDescriptor
 	MCPErrors          map[string]string
+	MCPConnectionSpecs map[string]mcp.ServerSpec
 	SkillCache         *RuntimeStatusSkillCache
 	ScratchpadDir      string
 }
@@ -479,6 +480,9 @@ func (s RuntimeCatalogService) mcpStatus(opts RuntimeStatusOptions, refs []mcpCo
 	statuses := make([]RuntimeMCPServerStatus, 0, len(servers))
 	defaultTimeoutSeconds := durationSeconds(s.cfg.RuntimeLimits().ToolTimeout)
 	for _, server := range servers {
+		if connectionSpec, ok := opts.MCPConnectionSpecs[server.Name]; ok {
+			server.Spec = connectionSpec
+		}
 		transport, err := server.Spec.NormalizedTransport()
 		if err != nil {
 			return RuntimeMCPStatus{}, fmt.Errorf("mcp server %q transport: %w", server.Name, err)

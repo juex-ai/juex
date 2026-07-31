@@ -246,6 +246,64 @@ func TestRuntimeRedactsQueryDiagnosticsFromFailedRemoteMCPStartup(t *testing.T) 
 	}
 }
 
+func TestRuntimeUsesMCPStartupSpecAfterConfigEdit(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "rejected "+r.URL.RequestURI(), http.StatusUnauthorized)
+	}))
+	defer remote.Close()
+
+	srv := newTestServer(t)
+	configPath := filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "mcp.json")
+	writeConfig := func(endpoint string) {
+		t.Helper()
+		body, err := json.MarshalIndent(map[string]any{
+			"mcpServers": map[string]any{
+				"remote": map[string]any{"type": "http", "url": endpoint},
+			},
+		}, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustWriteRuntimeFile(t, configPath, string(body))
+	}
+	writeConfig(remote.URL + "/mcp?token=startup-secret")
+	if err := srv.ensureMCPStarted(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	writeConfig("https://new.example.test/mcp?token=edited-secret")
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/runtime", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var got struct {
+		MCP struct {
+			Servers []struct {
+				Name   string `json:"name"`
+				URL    string `json:"url"`
+				Status string `json:"status"`
+				Error  string `json:"error"`
+			} `json:"servers"`
+		} `json:"mcp"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.MCP.Servers) != 1 {
+		t.Fatalf("MCP servers = %+v", got.MCP.Servers)
+	}
+	server := got.MCP.Servers[0]
+	if server.URL != remote.URL+"/mcp" || server.Status != "error" || server.Error == "" {
+		t.Fatalf("runtime MCP status = %+v, want startup endpoint and error", server)
+	}
+	for _, secret := range []string{"startup-secret", "edited-secret"} {
+		if strings.Contains(recorder.Body.String(), secret) {
+			t.Fatalf("runtime API leaked %q after config edit:\n%s", secret, recorder.Body.String())
+		}
+	}
+}
+
 type blockingWebProvider struct {
 	started chan struct{}
 	release chan struct{}

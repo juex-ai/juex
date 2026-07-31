@@ -169,6 +169,7 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	status, err := app.NewRuntimeCatalogService(s.opts.Cfg).Snapshot(app.RuntimeStatusOptions{
 		MCPToolDescriptors: s.mcpToolDescriptors(),
 		MCPErrors:          s.mcpErrors(),
+		MCPConnectionSpecs: s.mcpConnectionSpecs(),
 		SkillCache:         s.runtimeSkills,
 		ScratchpadDir:      scratchpadDir,
 	})

@@ -1205,6 +1205,33 @@ func TestManagerStartupErrorsUseConnectionSpecForRedaction(t *testing.T) {
 	}
 }
 
+func TestManagerRuntimeConnectionSpecsAreDisplaySafeAndDefensive(t *testing.T) {
+	mgr := &Manager{specs: map[string]ServerSpec{
+		"remote": {
+			Type: "http",
+			URL:  "https://mcp.example.test/mcp?token=runtime-secret",
+		},
+		"local": {
+			Command: "mcp-server",
+			Args:    []string{"--stdio"},
+		},
+	}}
+
+	first := mgr.RuntimeConnectionSpecs()
+	if got := first["remote"].URL; got != "https://mcp.example.test/mcp" {
+		t.Fatalf("remote URL = %q", got)
+	}
+	local := first["local"]
+	if local.Command != "mcp-server" || len(local.Args) != 1 || local.Args[0] != "--stdio" {
+		t.Fatalf("local spec = %+v", local)
+	}
+	local.Args[0] = "changed"
+	first["local"] = local
+	if got := mgr.RuntimeConnectionSpecs()["local"].Args[0]; got != "--stdio" {
+		t.Fatalf("manager args changed through snapshot: %q", got)
+	}
+}
+
 func TestManagerToolDescriptorsReturnsSortedDefensiveSnapshot(t *testing.T) {
 	mgr := &Manager{tools: map[string][]ToolDescriptor{
 		"empty": {},
