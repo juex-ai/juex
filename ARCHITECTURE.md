@@ -106,10 +106,16 @@ juex/
 │   │   ├── output_hygiene.go     # binary/binary-like output sanitization
 │   │   ├── apply_patch.go
 │   │   └── chunked_write.go
-│   ├── mcp/                      # stdio JSON-RPC 2.0 client, config, process manager
+│   ├── mcp/                      # official Go SDK adapter for local and remote MCP
 │   │   ├── config.go
 │   │   ├── client.go
-│   │   └── manager.go
+│   │   ├── manager.go
+│   │   ├── readiness.go
+│   │   ├── sdk_auth.go
+│   │   ├── sdk_http_security.go
+│   │   ├── sdk_notification_transport.go
+│   │   ├── sdk_remote_diagnostic.go
+│   │   └── sdk_remote_notification.go
 │   ├── skills/     loader.go     # SKILL.md frontmatter loader
 │   ├── memory/     memory.go     # AGENTS.md hierarchy + entry store
 │   ├── frontmatter/parser.go     # shared YAML frontmatter parser
@@ -163,6 +169,7 @@ juex/
 ├── go.mod / go.sum
 ├── README.md / DOMAIN.md / PHILOSOPHY.md / ARCHITECTURE.md / DESIGN.md
 ├── AGENTS.md / CLAUDE.md→AGENTS.md
+├── mcp.json.example              # copyable remote MCP resource template
 └── juex.yaml.example
 ```
 
@@ -209,7 +216,7 @@ implementation decisions live.
 | `internal/sandbox` | Command sandbox policy, platform backend selection, execution wrapping, structured availability errors | Shell Tool lifecycle, config parsing, runtime permission policy outside commands |
 | `internal/observable` | Tagged Command Observable/Schedule specs, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
 | `internal/eventmedia` | Workdir-confined external-event attachment validation, size gates, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
-| `internal/mcp` | MCP config normalization, official SDK command and Streamable HTTP sessions, OAuth token handling, Tool discovery, staged remote readiness, custom notification preservation, and transport-specific diagnostics | Turn policy, active Session selection, Web ownership |
+| `internal/mcp` | Adapter over the official Go SDK: MCP config normalization, command and Streamable HTTP sessions, OAuth token handling, Tool discovery, staged remote readiness, custom notification preservation, and transport-specific diagnostics | Protocol framing/negotiation, Turn policy, active Session selection, Web ownership |
 | `internal/memory` | `AGENTS.md` hierarchy loading, Agent-owned Memory Entry storage, memory Tool registration | Final prompt-section ordering, Session history, Skill loading |
 | `internal/skills` | `SKILL.md` frontmatter loading, Skill metadata, catalog prompt rendering, compression, and budget selection | Final system-prompt section assembly, task execution policy, Tool dispatch |
 | `internal/prompt` | System-prompt section assembly from guidance, Skills, Memory, runtime metadata, and shell profile | Provider wire formatting, Session persistence, resource discovery policy |
@@ -2089,6 +2096,7 @@ $JUEX_HOME/
 <WorkDir>/                        # the agent's working directory (--cwd or $PWD)
 ├── AGENTS.md                     # project rules (concatenated, not overriding)
 ├── juex.yaml.example             # template for .juex/juex.yaml
+├── mcp.json.example              # template for .agents/mcp.json
 ├── .agents/
 │   ├── AGENTS.md                 # subdir rules (also concatenated)
 │   ├── mcp.json                  # project MCP (project wins on duplicate names)
