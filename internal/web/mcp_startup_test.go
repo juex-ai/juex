@@ -304,6 +304,93 @@ func TestRuntimeUsesMCPStartupSpecAfterConfigEdit(t *testing.T) {
 	}
 }
 
+func TestRuntimeUsesMCPStartupRowSetAfterConfigEdit(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "startup rejected", http.StatusUnauthorized)
+	}))
+	defer remote.Close()
+
+	srv := newTestServer(t)
+	configPath := filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "mcp.json")
+	writeConfig := func(name, endpoint string) {
+		t.Helper()
+		body, err := json.MarshalIndent(map[string]any{
+			"mcpServers": map[string]any{
+				name: map[string]any{"type": "http", "url": endpoint},
+			},
+		}, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustWriteRuntimeFile(t, configPath, string(body))
+	}
+	writeConfig("startup", remote.URL+"/mcp")
+	if err := srv.ensureMCPStarted(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	writeConfig("added", "https://new.example.test/mcp")
+	assertStartupRow := func() {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/runtime", nil))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+		}
+		var got struct {
+			MCP struct {
+				Servers []struct {
+					Name   string `json:"name"`
+					Source string `json:"source"`
+					URL    string `json:"url"`
+					Status string `json:"status"`
+				} `json:"servers"`
+			} `json:"mcp"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.MCP.Servers) != 1 {
+			t.Fatalf("MCP servers = %+v, want startup row only", got.MCP.Servers)
+		}
+		server := got.MCP.Servers[0]
+		if server.Name != "startup" || server.Source != "project" || server.URL != remote.URL+"/mcp" || server.Status != "error" {
+			t.Fatalf("runtime MCP row = %+v, want project startup snapshot", server)
+		}
+	}
+	assertStartupRow()
+	mustWriteRuntimeFile(t, configPath, "{")
+	assertStartupRow()
+}
+
+func TestRuntimeKeepsEmptyMCPStartupRowSetAfterConfigBecomesInvalid(t *testing.T) {
+	srv := newTestServer(t)
+	if err := srv.ensureMCPStarted(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteRuntimeFile(t, filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "mcp.json"), "{")
+
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/runtime", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var got struct {
+		MCP struct {
+			Configured int `json:"configured"`
+			Servers    []struct {
+				Name string `json:"name"`
+			} `json:"servers"`
+		} `json:"mcp"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.MCP.Configured != 0 || len(got.MCP.Servers) != 0 {
+		t.Fatalf("runtime MCP status = %+v, want empty startup row set", got.MCP)
+	}
+}
+
 type blockingWebProvider struct {
 	started chan struct{}
 	release chan struct{}

@@ -711,10 +711,16 @@ func (s *Server) mcpToolDescriptors() map[string][]mcp.ToolDescriptor {
 	return mgr.ToolDescriptors()
 }
 
-func (s *Server) mcpConnectionSpecs() map[string]mcp.ServerSpec {
-	mgr := s.mcpManagerSnapshot()
+func (s *Server) mcpConnectionSpecs() map[string]mcp.RuntimeConnectionSpec {
+	s.mcpMu.Lock()
+	started := s.mcpStarted
+	mgr := s.mcpManager
+	s.mcpMu.Unlock()
+	if !started {
+		return nil
+	}
 	if mgr == nil {
-		return map[string]mcp.ServerSpec{}
+		return map[string]mcp.RuntimeConnectionSpec{}
 	}
 	return mgr.RuntimeConnectionSpecs()
 }

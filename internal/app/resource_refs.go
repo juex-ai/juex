@@ -370,12 +370,13 @@ func loadMCPConfigRefsWithOptions(refs []mcpConfigRef, workDir string, runtimeEn
 	}
 
 	var configs []mcp.Config
-	merged := mcp.Config{MCPServers: map[string]mcp.ServerSpec{}}
+	merged := mcp.Config{MCPServers: map[string]mcp.ServerSpec{}, Sources: map[string]string{}}
 	for layer, item := range loaded {
-		effective := mcp.Config{MCPServers: map[string]mcp.ServerSpec{}}
+		effective := mcp.Config{MCPServers: map[string]mcp.ServerSpec{}, Sources: map[string]string{}}
 		for name, spec := range item.cfg.MCPServers {
 			if winnerLayer[name] == layer {
 				effective.MCPServers[name] = spec
+				effective.Sources[name] = item.ref.Source
 			}
 		}
 		if len(effective.MCPServers) == 0 {
@@ -399,6 +400,7 @@ func loadMCPConfigRefsWithOptions(refs []mcpConfigRef, workDir string, runtimeEn
 		}
 		for name, spec := range prepared.MCPServers {
 			merged.MCPServers[name] = spec
+			merged.Sources[name] = prepared.Sources[name]
 		}
 		configs = append(configs, prepared)
 	}

@@ -1215,19 +1215,22 @@ func TestManagerRuntimeConnectionSpecsAreDisplaySafeAndDefensive(t *testing.T) {
 			Command: "mcp-server",
 			Args:    []string{"--stdio"},
 		},
-	}}
+	}, sources: map[string]string{"remote": "project", "local": "user"}}
 
 	first := mgr.RuntimeConnectionSpecs()
-	if got := first["remote"].URL; got != "https://mcp.example.test/mcp" {
+	if got := first["remote"].Spec.URL; got != "https://mcp.example.test/mcp" {
 		t.Fatalf("remote URL = %q", got)
 	}
+	if got := first["remote"].Source; got != "project" {
+		t.Fatalf("remote source = %q", got)
+	}
 	local := first["local"]
-	if local.Command != "mcp-server" || len(local.Args) != 1 || local.Args[0] != "--stdio" {
+	if local.Source != "user" || local.Spec.Command != "mcp-server" || len(local.Spec.Args) != 1 || local.Spec.Args[0] != "--stdio" {
 		t.Fatalf("local spec = %+v", local)
 	}
-	local.Args[0] = "changed"
+	local.Spec.Args[0] = "changed"
 	first["local"] = local
-	if got := mgr.RuntimeConnectionSpecs()["local"].Args[0]; got != "--stdio" {
+	if got := mgr.RuntimeConnectionSpecs()["local"].Spec.Args[0]; got != "--stdio" {
 		t.Fatalf("manager args changed through snapshot: %q", got)
 	}
 }

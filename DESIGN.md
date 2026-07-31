@@ -426,6 +426,8 @@ that it advertised none. MCP servers and skills list project-local sources
 before user-global sources.
 The selected agent starts MCP at server startup, so this page reports live
 process-level MCP state rather than waiting for a chat session to be opened.
+Its server rows, sources, and transport metadata remain the startup snapshot
+until the agent restarts; editing MCP config does not project an unapplied row.
 Tool group, tool, raw-schema, and MCP tool disclosure bodies mount only while
 open. Every expandable table row uses the same leftmost chevron button: right
 when collapsed and down when expanded. Dense tables scroll inside their section
