@@ -135,6 +135,7 @@ type refreshOAuthHandler struct {
 	refreshToken   string
 	token          *oauth2.Token
 	refreshTimeout time.Duration
+	httpClient     *http.Client
 }
 
 func (h *refreshOAuthHandler) TokenSource(context.Context) (oauth2.TokenSource, error) {
@@ -165,6 +166,11 @@ func (h *refreshOAuthHandler) refresh() (*oauth2.Token, error) {
 	// stale setup context or allowing token I/O to block indefinitely.
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	httpClient := h.httpClient
+	if httpClient == nil {
+		httpClient = newSecureEndpointHTTPClient(nil)
+	}
+	ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
 	token, err := h.config.TokenSource(ctx, seed).Token()
 	if err != nil {
 		return nil, err

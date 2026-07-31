@@ -200,14 +200,12 @@ func newSDKTransport(
 		if err != nil {
 			return nil, nil, nil, true, fmt.Errorf("mcp[%s]: auth: %w", name, err)
 		}
-		httpClient := &http.Client{
-			Transport: &remoteDiagnosticRoundTripper{
-				base:           http.DefaultTransport,
-				redactions:     credentialValues(spec.Auth),
-				serverName:     name,
-				onNotification: opts.OnNotification,
-			},
-		}
+		httpClient := newSecureEndpointHTTPClient(&remoteDiagnosticRoundTripper{
+			base:           http.DefaultTransport,
+			redactions:     credentialValues(spec.Auth),
+			serverName:     name,
+			onNotification: opts.OnNotification,
+		})
 		return &sdkmcp.StreamableClientTransport{
 			Endpoint:     spec.URL,
 			HTTPClient:   httpClient,

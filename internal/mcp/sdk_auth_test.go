@@ -199,6 +199,38 @@ func TestRefreshOAuthHandlerBoundsRefreshRequests(t *testing.T) {
 	}
 }
 
+func TestRefreshOAuthHandlerRejectsInsecureRedirect(t *testing.T) {
+	redirect := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://auth.example.test/token", http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+
+	transport := &insecureCountingTransport{base: redirect.Client().Transport}
+	handler := &refreshOAuthHandler{
+		config: oauth2.Config{
+			ClientID:     "client",
+			ClientSecret: "client-secret",
+			Endpoint: oauth2.Endpoint{
+				TokenURL:  redirect.URL,
+				AuthStyle: oauth2.AuthStyleInHeader,
+			},
+		},
+		refreshToken: "refresh-token",
+		httpClient:   newSecureEndpointHTTPClient(transport),
+	}
+	source, err := handler.TokenSource(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = source.Token()
+	if err == nil || !strings.Contains(err.Error(), "insecure redirect") {
+		t.Fatalf("Token error = %v, want insecure redirect rejection", err)
+	}
+	if got := transport.insecureRequests.Load(); got != 0 {
+		t.Fatalf("downgrade target received %d token requests", got)
+	}
+}
+
 func TestRedactingTokenSourceClassifiesTypedFailures(t *testing.T) {
 	const secret = "token-secret"
 	tests := []struct {
