@@ -30,6 +30,7 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 		wantPathSuffix        string
 		wantReasoningEffort   string
 		wantNoReasoningEffort bool
+		wantReasoningBlocks   int
 		responseBody          string
 	}{
 		{
@@ -37,6 +38,7 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 			modelRef:            "openai:gpt-test",
 			wantPathSuffix:      "/responses",
 			wantReasoningEffort: "high",
+			wantReasoningBlocks: 2,
 			providerYAML: `  - id: openai
     protocol: openai/responses
     base_url: BASE_URL
@@ -53,6 +55,18 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
   "model": "gpt-test",
   "status": "completed",
   "output": [
+	{
+	  "type": "reasoning",
+	  "id": "rs_e2e_1",
+	  "summary": [{"type": "summary_text", "text": "first summary"}],
+	  "encrypted_content": "encrypted-e2e-1"
+	},
+	{
+	  "type": "reasoning",
+	  "id": "rs_e2e_2",
+	  "summary": [{"type": "summary_text", "text": "second summary"}],
+	  "encrypted_content": "encrypted-e2e-2"
+	},
     {
       "type": "message",
       "id": "msg_1",
@@ -141,10 +155,17 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 
 			cmd := exec.Command(bin, "-C", work, "run", "--json", "hello")
 			home := t.TempDir()
-			cmd.Env = isolatedJuexBinaryEnv(home)
+			env := isolatedJuexBinaryEnv(home)
+			cmd.Env = env
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("juex run: %v\n%s", err, out)
+			}
+			var runResult struct {
+				SessionID string `json:"session_id"`
+			}
+			if err := json.Unmarshal(out, &runResult); err != nil {
+				t.Fatalf("decode run result: %v\n%s", err, out)
 			}
 			var captured capturedProviderRequest
 			select {
@@ -169,13 +190,89 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 			}
 			if tc.wantPathSuffix == "/responses" {
 				reasoning, ok := captured.body["reasoning"].(map[string]any)
-				if !ok || reasoning["effort"] != tc.wantReasoningEffort {
+				if !ok || reasoning["effort"] != tc.wantReasoningEffort || reasoning["summary"] != "auto" {
 					t.Fatalf("responses reasoning = %+v, want effort %q; body=%+v", reasoning, tc.wantReasoningEffort, captured.body)
 				}
 			} else if got := captured.body["reasoning_effort"]; got != tc.wantReasoningEffort {
 				t.Fatalf("reasoning_effort = %v, want %q; body=%+v", got, tc.wantReasoningEffort, captured.body)
 			}
+			if tc.wantReasoningBlocks > 0 {
+				assertLiveResponsesReasoningHistory(
+					t,
+					bin,
+					work,
+					env,
+					runResult.SessionID,
+					tc.wantReasoningBlocks,
+				)
+			}
 		})
+	}
+}
+
+func assertLiveResponsesReasoningHistory(
+	t *testing.T,
+	bin, work string,
+	env []string,
+	sessionID string,
+	want int,
+) {
+	t.Helper()
+	if sessionID == "" {
+		t.Fatal("run result omitted session id")
+	}
+
+	listen := exec.Command(bin, "-C", work, "listen", "--addr", "127.0.0.1:0")
+	listen.Env = env
+	stdout := &lockedBuffer{}
+	stderr := &lockedBuffer{}
+	listen.Stdout = stdout
+	listen.Stderr = stderr
+	if err := listen.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- listen.Wait() }()
+	defer func() {
+		_ = listen.Process.Kill()
+		<-done
+	}()
+
+	address := waitForListenTCPAddress(t, stdout)
+	response, err := http.Get("http://" + address + "/api/sessions/" + sessionID)
+	if err != nil {
+		t.Fatalf("get session API: %v\nlisten stderr:\n%s", err, stderr.String())
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("get session API status = %d", response.StatusCode)
+	}
+	var payload struct {
+		Messages []llm.Message `json:"messages"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+
+	var reasoning []llm.Block
+	for _, message := range payload.Messages {
+		if message.Role != llm.RoleAssistant {
+			continue
+		}
+		for _, block := range message.Blocks {
+			if block.Type == llm.BlockReasoning {
+				reasoning = append(reasoning, block)
+			}
+		}
+	}
+	if len(reasoning) != want {
+		t.Fatalf("session API reasoning blocks = %+v, want %d independent blocks", reasoning, want)
+	}
+	if reasoning[0].Signature != "rs_e2e_1" || reasoning[0].Content != "encrypted-e2e-1" || reasoning[0].Text != "first summary" || !reasoning[0].Redacted {
+		t.Fatalf("first session API reasoning block = %+v", reasoning[0])
+	}
+	if reasoning[1].Signature != "rs_e2e_2" || reasoning[1].Content != "encrypted-e2e-2" || reasoning[1].Text != "second summary" || !reasoning[1].Redacted {
+		t.Fatalf("second session API reasoning block = %+v", reasoning[1])
 	}
 }
 
