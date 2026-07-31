@@ -95,6 +95,7 @@ func secretRedactionValues(values []string) []string {
 		if err == nil && len(encoded) >= 2 {
 			secrets = appendSecret(secrets, string(encoded[1:len(encoded)-1]))
 		}
+		secrets = appendSecret(secrets, url.QueryEscape(value))
 	}
 	sort.Slice(secrets, func(i, j int) bool {
 		if len(secrets[i]) == len(secrets[j]) {

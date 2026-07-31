@@ -90,6 +90,36 @@ func TestRedactingTokenSourceRedactsJSONEscapedSecret(t *testing.T) {
 	}
 }
 
+func TestRedactingTokenSourceRedactsFormEncodedSecret(t *testing.T) {
+	const secret = "a+b/c% token"
+	encoded := url.QueryEscape(secret)
+	cause := &oauth2.RetrieveError{
+		Response: &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Status:     "400 Bad Request",
+		},
+		Body: []byte("request=" + encoded),
+	}
+	source := &redactingTokenSource{
+		source: tokenSourceFunc(func() (*oauth2.Token, error) {
+			return nil, cause
+		}),
+		secrets: []string{secret},
+	}
+	_, err := source.Token()
+	if err == nil {
+		t.Fatal("expected refresh error")
+	}
+	for _, leaked := range []string{encoded, "%2B", "%2F", "%25"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Fatalf("form-encoded credential fragment %q leaked in error: %v", leaked, err)
+		}
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("redaction broke the typed error chain")
+	}
+}
+
 func TestRedactingTokenSourceClassifiesTypedFailures(t *testing.T) {
 	const secret = "token-secret"
 	tests := []struct {
