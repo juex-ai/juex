@@ -18,17 +18,29 @@ type Manager struct {
 	tools   map[string][]ToolDescriptor
 	errors  map[string]error
 	specs   map[string]ServerSpec
+	sources map[string]string
 	closed  bool
+}
+
+type RuntimeConnectionSpec struct {
+	Source string
+	Spec   ServerSpec
 }
 
 func MergeConfigs(configs []Config) Config {
 	merged := map[string]ServerSpec{}
+	sources := map[string]string{}
 	for _, c := range configs {
 		for name, spec := range c.MCPServers {
 			merged[name] = spec
+			if source := c.Sources[name]; source != "" {
+				sources[name] = source
+			} else {
+				delete(sources, name)
+			}
 		}
 	}
-	return Config{MCPServers: merged}
+	return Config{MCPServers: merged, Sources: sources}
 }
 
 func NewManagerLayeredSoft(ctx context.Context, configs []Config, opts ConnectOptions) (*Manager, error) {
@@ -41,8 +53,10 @@ func newManager(ctx context.Context, cfg Config, opts ConnectOptions) *Manager {
 		tools:   map[string][]ToolDescriptor{},
 		errors:  map[string]error{},
 		specs:   map[string]ServerSpec{},
+		sources: map[string]string{},
 	}
 	for name, spec := range cfg.MCPServers {
+		mgr.sources[name] = cfg.Sources[name]
 		mgr.specs[name] = ServerSpec{
 			Type:    spec.Type,
 			Command: spec.Command,
@@ -157,8 +171,8 @@ func (m *Manager) ToolDescriptors() map[string][]ToolDescriptor {
 
 // RuntimeConnectionSpecs returns display-safe startup transport metadata owned
 // by this manager. It remains stable if configuration files change in place.
-func (m *Manager) RuntimeConnectionSpecs() map[string]ServerSpec {
-	out := map[string]ServerSpec{}
+func (m *Manager) RuntimeConnectionSpecs() map[string]RuntimeConnectionSpec {
+	out := map[string]RuntimeConnectionSpec{}
 	if m == nil {
 		return out
 	}
@@ -174,7 +188,7 @@ func (m *Manager) RuntimeConnectionSpecs() map[string]ServerSpec {
 		} else if displayURL != "" {
 			spec.URL = displayURL
 		}
-		out[name] = spec
+		out[name] = RuntimeConnectionSpec{Source: m.sources[name], Spec: spec}
 	}
 	return out
 }

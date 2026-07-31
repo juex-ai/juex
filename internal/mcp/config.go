@@ -238,6 +238,7 @@ func (s *ServerSpec) UnmarshalJSON(data []byte) error {
 // Config mirrors the mcp.json file root.
 type Config struct {
 	MCPServers map[string]ServerSpec `json:"mcpServers"`
+	Sources    map[string]string     `json:"-"`
 }
 
 // HasLocalServers reports whether the config contains a process-backed stdio
@@ -515,7 +516,13 @@ func PrepareConfigWithOptions(cfg Config, opts PrepareOptions) (Config, error) {
 		}
 		runtimeEnv[extDataDirEnvKey] = dataDir
 	}
-	out := Config{MCPServers: make(map[string]ServerSpec, len(cfg.MCPServers))}
+	out := Config{
+		MCPServers: make(map[string]ServerSpec, len(cfg.MCPServers)),
+		Sources:    make(map[string]string, len(cfg.Sources)),
+	}
+	for name, source := range cfg.Sources {
+		out.Sources[name] = source
+	}
 	for _, name := range sortedServerNames(cfg.MCPServers) {
 		spec := cfg.MCPServers[name]
 		prepared := ServerSpec{

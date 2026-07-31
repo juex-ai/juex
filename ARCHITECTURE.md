@@ -2312,8 +2312,10 @@ errors that echo the endpoint receive the same projection; the original URL
 remains private to the connection layer. Tool entries expose normalized schema
 plus semantic timeout metadata: `bounded` carries the effective seconds and
 `disabled` means the tool owns its lifecycle. The catalog is the process startup
-view: builtin definitions are static, MCP descriptors come from the manager
-cache, no active session is required, and status reads do not rediscover tools.
+view: builtin definitions are static, while the manager-owned MCP row set,
+sources, transport metadata, and descriptors remain fixed until restart. No
+active session is required, and status reads do not reload unapplied MCP config
+or rediscover tools.
 The web layer adds the latest per-server startup error and translates the app
 status into the browser DTO.
 
