@@ -50,10 +50,11 @@ type ResourceRef struct {
 }
 
 type Resources struct {
-	Extensions []Extension
-	SkillDirs  []ResourceRef
-	MCPConfigs []ResourceRef
-	HookFiles  []ResourceRef
+	Extensions        []Extension
+	SkillDirs         []ResourceRef
+	MCPConfigs        []ResourceRef
+	HookFiles         []ResourceRef
+	ObservableConfigs []ResourceRef
 }
 
 func Discover(opts DiscoverOptions) (Resources, error) {
@@ -126,6 +127,13 @@ func Discover(opts DiscoverOptions) (Resources, error) {
 			hookRef := ref
 			hookRef.Path = filepath.Join(ext.Dir, "hooks.yaml")
 			out.HookFiles = append(out.HookFiles, hookRef)
+		}
+		if ok, err := regularFileExists(filepath.Join(ext.Dir, "observables.json")); err != nil {
+			return Resources{}, err
+		} else if ok {
+			observableRef := ref
+			observableRef.Path = filepath.Join(ext.Dir, "observables.json")
+			out.ObservableConfigs = append(out.ObservableConfigs, observableRef)
 		}
 	}
 	return out, nil
@@ -243,6 +251,20 @@ func pathExists(path string) (bool, error) {
 			return false, nil
 		}
 		return false, fmt.Errorf("extensions: stat %s: %w", path, err)
+	}
+	return true, nil
+}
+
+func regularFileExists(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("extensions: stat %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("extensions: %s is not a regular file", path)
 	}
 	return true, nil
 }

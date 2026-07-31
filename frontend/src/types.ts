@@ -594,6 +594,7 @@ export interface ObservableScheduleStatus {
 export interface ObservableStatus {
   id: string;
   name?: string;
+  source: string;
   source_type?: "command" | "schedule" | string;
   command: string;
   args?: string[];
@@ -644,6 +645,7 @@ export interface EventAttachmentRef {
 export interface ObservableEventPayload {
   id: string;
   name?: string;
+  source: string;
   state: ObservableRunState | string;
   run_id?: string;
   pid?: number;

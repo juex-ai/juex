@@ -37,6 +37,10 @@ func (s *Server) handleObservables(w http.ResponseWriter, r *http.Request) {
 		}
 		status, err := mgr.Create(r.Context(), observable.Spec(req))
 		if err != nil {
+			if errors.Is(err, observable.ErrReadOnlyDefinition) {
+				writeErr(w, http.StatusConflict, "conflict", err.Error())
+				return
+			}
 			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}
@@ -100,6 +104,10 @@ func (s *Server) dispatchObservable(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, status)
 	case rest == "" && r.Method == http.MethodDelete:
 		if err := mgr.Delete(r.Context(), id); err != nil {
+			if errors.Is(err, observable.ErrReadOnlyDefinition) {
+				writeErr(w, http.StatusConflict, "conflict", err.Error())
+				return
+			}
 			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}

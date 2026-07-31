@@ -253,7 +253,13 @@ function ObservableRow({
             <div className="font-mono text-[11px]">{item.id}</div>
             <div>
               <span className="font-semibold">Source: </span>
-              <span className="font-mono">{sourceSummary(item)}</span>
+              <span className="font-mono">{item.source}</span>
+            </div>
+            <div>
+              <span className="font-semibold">Type: </span>
+              <span className="font-mono">
+                {item.source_type || "command"} · {sourceSummary(item)}
+              </span>
             </div>
             {last ? (
               <div>
@@ -283,11 +289,11 @@ function ObservableRow({
         <div className="pointer-events-none relative z-10 min-w-0">
           <div className="flex items-center gap-1.5">
             <Badge variant="outline" className="font-mono text-[11px]">
-              {item.source_type || "command"}
+              {item.source}
             </Badge>
-            <span className="truncate font-mono text-xs">
-              {sourceSummary(item)}
-            </span>
+          </div>
+          <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+            Type: {item.source_type || "command"} · {sourceSummary(item)}
           </div>
           {item.source_type === "schedule" ? (
             <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
@@ -353,18 +359,20 @@ function ObservableRow({
               <Play className="size-3.5" />
             </Button>
           )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            title="Delete"
-            aria-label="Delete observable"
-            disabled={busy}
-            onClick={() => void onAction(item.id, "delete")}
-            className="text-muted-foreground hover:text-destructive"
-          >
-            <Trash2 className="size-3.5" />
-          </Button>
+          {item.source === "project" ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              title="Delete"
+              aria-label="Delete observable"
+              disabled={busy}
+              onClick={() => void onAction(item.id, "delete")}
+              className="text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          ) : null}
         </div>
       </div>
     </div>

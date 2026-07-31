@@ -14,6 +14,7 @@ type scheduleSourceRuntime struct {
 	spec   scheduleRuntimeSpec
 	kernel sourceKernel
 	store  scheduleStateStore
+	source string
 }
 
 func (s *scheduleSourceRuntime) start(callCtx context.Context, run *observableRun) error {
@@ -105,6 +106,7 @@ func (s *scheduleSourceRuntime) runOnce(ctx context.Context) (ObservationRecord,
 }
 
 func (s *scheduleSourceRuntime) statusSnapshot(status ObservableStatus) ObservableStatus {
+	status.Source = s.source
 	status.ScheduleConfig = scheduleConfigSnapshot(s.spec)
 	schedule := &ScheduleStatus{
 		Summary:     scheduleSummary(s.spec),

@@ -21,19 +21,46 @@ var (
 	ErrManagerClosed      = errors.New("observable: manager closed")
 	ErrObservableDeleting = errors.New("observable: deleting")
 	ErrRunOnceUnsupported = errors.New("observable: run once unsupported")
+	ErrReadOnlyDefinition = errors.New("observable: read-only definition")
 )
 
+const SourceProject = "project"
+
+type RuntimeContext struct {
+	ExtensionDir            string
+	ExtensionDataDir        string
+	PrepareExtensionDataDir func() error
+}
+
+type ReadOnlyConfigSource struct {
+	Path    string
+	Source  string
+	Runtime RuntimeContext
+}
+
+type ReadOnlyDefinitionError struct {
+	ID     string
+	Source string
+}
+
+func (e *ReadOnlyDefinitionError) Error() string {
+	return fmt.Sprintf("observable: %q from %s is read-only", e.ID, e.Source)
+}
+
+func (e *ReadOnlyDefinitionError) Unwrap() error { return ErrReadOnlyDefinition }
+
 type ManagerOptions struct {
-	ConfigPath    string
-	StateDir      string
-	WorkDir       string
-	Environment   environment.Snapshot
-	Shell         config.ShellProfile
-	Sandbox       sandbox.Policy
-	SandboxRunner sandbox.Runner
-	Bus           *events.Bus
-	Deliver       DeliveryFunc
-	Now           func() time.Time
+	ConfigPath            string
+	ReadOnlyConfigSources []ReadOnlyConfigSource
+	StateDir              string
+	WorkDir               string
+	Environment           environment.Snapshot
+	Shell                 config.ShellProfile
+	Sandbox               sandbox.Policy
+	SandboxRunner         sandbox.Runner
+	Bus                   *events.Bus
+	Deliver               DeliveryFunc
+	Now                   func() time.Time
 }
 
 type Manager struct {
@@ -42,6 +69,7 @@ type Manager struct {
 	issues         []ConfigIssue
 	store          *Store
 	specs          map[string]Spec
+	origins        map[string]definitionOrigin
 	sources        map[string]sourceRuntime
 	deleting       map[string]bool
 	runs           map[string]*observableRun
@@ -58,6 +86,12 @@ type Manager struct {
 	deliveryMu     sync.Mutex
 	deliveryWG     sync.WaitGroup
 	deliveryClosed bool
+}
+
+type definitionOrigin struct {
+	Source   string
+	ReadOnly bool
+	Runtime  RuntimeContext
 }
 
 type closeAttempt struct {
@@ -134,6 +168,7 @@ type StatusCounts struct {
 type ObservableStatus struct {
 	ID              string              `json:"id"`
 	Name            string              `json:"name,omitempty"`
+	Source          string              `json:"source"`
 	SourceType      string              `json:"source_type,omitempty"`
 	Command         string              `json:"command"`
 	Args            []string            `json:"args,omitempty"`
@@ -161,6 +196,7 @@ type ScheduleStatus struct {
 }
 
 func NewManager(opts ManagerOptions) (*Manager, error) {
+	opts.ReadOnlyConfigSources = cloneReadOnlyConfigSources(opts.ReadOnlyConfigSources)
 	cfg, issues, err := LoadConfigLenient(opts.ConfigPath)
 	if err != nil {
 		return nil, err
@@ -171,6 +207,7 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		issues:     issues,
 		store:      NewStore(opts.StateDir, StoreOptions{Now: opts.Now}),
 		specs:      map[string]Spec{},
+		origins:    map[string]definitionOrigin{},
 		sources:    map[string]sourceRuntime{},
 		deleting:   map[string]bool{},
 		runs:       map[string]*observableRun{},
@@ -178,22 +215,72 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		workers:    map[*observableRun]struct{}{},
 		lastStatus: map[string]ObservableStatus{},
 	}
+	projectOrigin := definitionOrigin{Source: SourceProject}
 	for _, spec := range cfg.Observables {
-		source, sourceErr := newSourceRuntime(spec, m, sourceDependencies{opts: opts, store: m.store})
+		source, sourceErr := newSourceRuntime(spec, m, sourceDependencies{opts: opts, store: m.store, origin: projectOrigin})
 		if sourceErr != nil {
 			return nil, sourceErr
 		}
 		m.specs[spec.ID] = spec
+		m.origins[spec.ID] = projectOrigin
 		m.sources[spec.ID] = source
 		m.lastStatus[spec.ID] = source.statusSnapshot(baseStatusFromSpec(spec, RunStateStopped))
 	}
 	for _, issue := range issues {
 		status := statusFromSpec(issue.Spec, RunStateErrored)
-		status.ID = issue.ID
+		status.ID = configIssueStatusID(SourceProject, issue)
+		status.Source = SourceProject
 		status.LastError = issue.Error.Error()
 		m.lastStatus[status.ID] = status
 	}
+	seenReadOnlySources := make(map[string]struct{}, len(opts.ReadOnlyConfigSources))
+	for _, readonly := range opts.ReadOnlyConfigSources {
+		if strings.TrimSpace(readonly.Source) == "" || readonly.Source == SourceProject {
+			return nil, fmt.Errorf("observable: invalid read-only definition source %q", readonly.Source)
+		}
+		if _, duplicate := seenReadOnlySources[readonly.Source]; duplicate {
+			return nil, fmt.Errorf("observable: duplicate read-only definition source %q", readonly.Source)
+		}
+		seenReadOnlySources[readonly.Source] = struct{}{}
+		pluginCfg, pluginIssues, loadErr := LoadConfigLenient(readonly.Path)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		origin := definitionOrigin{Source: readonly.Source, ReadOnly: true, Runtime: readonly.Runtime}
+		for _, spec := range pluginCfg.Observables {
+			if previous, exists := m.origins[spec.ID]; exists {
+				return nil, fmt.Errorf("observable: duplicate id %q from %s and %s", spec.ID, previous.Source, origin.Source)
+			}
+			source, sourceErr := newSourceRuntime(spec, m, sourceDependencies{opts: opts, store: m.store, origin: origin})
+			if sourceErr != nil {
+				return nil, sourceErr
+			}
+			m.specs[spec.ID] = spec
+			m.origins[spec.ID] = origin
+			m.sources[spec.ID] = source
+			m.lastStatus[spec.ID] = source.statusSnapshot(baseStatusFromSpec(spec, RunStateStopped))
+		}
+		for _, issue := range pluginIssues {
+			status := statusFromSpec(issue.Spec, RunStateErrored)
+			status.ID = configIssueStatusID(origin.Source, issue)
+			status.Source = origin.Source
+			status.LastError = issue.Error.Error()
+			m.lastStatus[status.ID] = status
+		}
+	}
 	return m, nil
+}
+
+func cloneReadOnlyConfigSources(in []ReadOnlyConfigSource) []ReadOnlyConfigSource {
+	return append([]ReadOnlyConfigSource(nil), in...)
+}
+
+func configIssueStatusID(source string, issue ConfigIssue) string {
+	index := "file"
+	if issue.Index >= 0 {
+		index = fmt.Sprintf("%d", issue.Index)
+	}
+	return fmt.Sprintf("config:%s:%s:%s", source, index, issue.ID)
 }
 
 func (m *Manager) StartAll(ctx context.Context) error {
@@ -330,18 +417,23 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (ObservableStatus, erro
 	if err != nil {
 		return ObservableStatus{}, err
 	}
-	source, err := newSourceRuntime(normalized, m, sourceDependencies{opts: m.opts, store: m.store})
+	projectOrigin := definitionOrigin{Source: SourceProject}
+	source, err := newSourceRuntime(normalized, m, sourceDependencies{opts: m.opts, store: m.store, origin: projectOrigin})
 	if err != nil {
 		return ObservableStatus{}, err
 	}
 	m.mu.Lock()
+	if _, ok := m.specs[normalized.ID]; ok {
+		origin := m.origins[normalized.ID]
+		m.mu.Unlock()
+		if origin.ReadOnly {
+			return ObservableStatus{}, &ReadOnlyDefinitionError{ID: normalized.ID, Source: origin.Source}
+		}
+		return ObservableStatus{}, fmt.Errorf("observable: duplicate id %q", normalized.ID)
+	}
 	if err := m.configEditableLocked(); err != nil {
 		m.mu.Unlock()
 		return ObservableStatus{}, err
-	}
-	if _, ok := m.specs[normalized.ID]; ok {
-		m.mu.Unlock()
-		return ObservableStatus{}, fmt.Errorf("observable: duplicate id %q", normalized.ID)
 	}
 	cfg := FileConfig{Observables: append(append([]Spec(nil), m.cfg.Observables...), normalized)}
 	if err := SaveConfig(m.opts.ConfigPath, cfg); err != nil {
@@ -350,6 +442,7 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (ObservableStatus, erro
 	}
 	m.cfg = cfg
 	m.specs[normalized.ID] = normalized
+	m.origins[normalized.ID] = projectOrigin
 	m.sources[normalized.ID] = source
 	status := source.statusSnapshot(baseStatusFromSpec(normalized, RunStateStopped))
 	m.lastStatus[normalized.ID] = status
@@ -405,12 +498,18 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		return nil
 	}
 	m.mu.Lock()
+	source := m.sources[id]
+	_, exists := m.specs[id]
+	if exists {
+		if origin := m.origins[id]; origin.ReadOnly {
+			m.mu.Unlock()
+			return &ReadOnlyDefinitionError{ID: id, Source: origin.Source}
+		}
+	}
 	if err := m.configEditableLocked(); err != nil {
 		m.mu.Unlock()
 		return err
 	}
-	source := m.sources[id]
-	_, exists := m.specs[id]
 	if exists && source != nil {
 		if m.deleting[id] {
 			m.mu.Unlock()
@@ -492,6 +591,7 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	delete(m.specs, id)
+	delete(m.origins, id)
 	delete(m.sources, id)
 	delete(m.deleting, id)
 	delete(m.runs, id)
@@ -1149,6 +1249,7 @@ func (m *Manager) emitObservable(eventType string, status ObservableStatus) {
 		Payload: ObservableEventPayload{
 			ID:       status.ID,
 			Name:     status.Name,
+			Source:   status.Source,
 			State:    status.State,
 			RunID:    status.RunID,
 			PID:      status.PID,

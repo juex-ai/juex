@@ -10,6 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/extensions"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/skills"
 )
 
@@ -20,13 +21,20 @@ type mcpConfigRef struct {
 	StrictConflicts  bool
 }
 
+type observableConfigRef struct {
+	Path             string
+	Source           string
+	ExtensionRuntime ExtensionRuntimeContext
+}
+
 type RuntimeResourceKind string
 
 const (
-	RuntimeResourceExtension RuntimeResourceKind = "extension"
-	RuntimeResourceSkillDir  RuntimeResourceKind = "skill_dir"
-	RuntimeResourceMCPConfig RuntimeResourceKind = "mcp_config"
-	RuntimeResourceHookFile  RuntimeResourceKind = "hook_file"
+	RuntimeResourceExtension        RuntimeResourceKind = "extension"
+	RuntimeResourceSkillDir         RuntimeResourceKind = "skill_dir"
+	RuntimeResourceMCPConfig        RuntimeResourceKind = "mcp_config"
+	RuntimeResourceHookFile         RuntimeResourceKind = "hook_file"
+	RuntimeResourceObservableConfig RuntimeResourceKind = "observable_config"
 )
 
 type RuntimeResourceNode struct {
@@ -42,10 +50,11 @@ type RuntimeResourceNode struct {
 }
 
 type RuntimeResourceGraph struct {
-	skillDirs  []skills.Dir
-	mcpConfigs []mcpConfigRef
-	hooks      hooks.Config
-	nodes      []RuntimeResourceNode
+	skillDirs         []skills.Dir
+	mcpConfigs        []mcpConfigRef
+	observableConfigs []observableConfigRef
+	hooks             hooks.Config
+	nodes             []RuntimeResourceNode
 }
 
 func ResolveRuntimeResourceGraph(cfg config.Config) (RuntimeResourceGraph, error) {
@@ -71,11 +80,13 @@ func ResolveRuntimeResourceGraph(cfg config.Config) (RuntimeResourceGraph, error
 	skillDirs := skillDirRefs(paths, extResources.SkillDirs)
 	runtimeContexts := extensionRuntimeContexts(cfg, extResources.Extensions)
 	mcpConfigs := mcpConfigRefs(paths, extResources.MCPConfigs, runtimeContexts)
+	observableConfigs := observableConfigRefs(extResources.ObservableConfigs, runtimeContexts)
 	return RuntimeResourceGraph{
-		skillDirs:  skillDirs,
-		mcpConfigs: mcpConfigs,
-		hooks:      hookConfig,
-		nodes:      runtimeResourceNodes(paths, extResources, runtimeContexts),
+		skillDirs:         skillDirs,
+		mcpConfigs:        mcpConfigs,
+		observableConfigs: observableConfigs,
+		hooks:             hookConfig,
+		nodes:             runtimeResourceNodes(paths, extResources, runtimeContexts),
 	}, nil
 }
 
@@ -85,6 +96,10 @@ func (g RuntimeResourceGraph) SkillDirs() []skills.Dir {
 
 func (g RuntimeResourceGraph) MCPConfigs() []mcpConfigRef {
 	return append([]mcpConfigRef(nil), g.mcpConfigs...)
+}
+
+func (g RuntimeResourceGraph) ObservableConfigs() []observableConfigRef {
+	return append([]observableConfigRef(nil), g.observableConfigs...)
 }
 
 func (g RuntimeResourceGraph) HooksConfig() hooks.Config {
@@ -106,6 +121,7 @@ func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Re
 	skillDirsByExt := resourceRefsByExtension(extResources.SkillDirs)
 	mcpConfigsByExt := resourceRefsByExtension(extResources.MCPConfigs)
 	hookFilesByExt := resourceRefsByExtension(extResources.HookFiles)
+	observableConfigsByExt := resourceRefsByExtension(extResources.ObservableConfigs)
 	for _, ext := range extResources.Extensions {
 		runtimeContext := runtimeContexts[ext.Name]
 		nodes = append(nodes, RuntimeResourceNode{
@@ -126,6 +142,9 @@ func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Re
 		}
 		for _, ref := range hookFilesByExt[ext.Name] {
 			nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceHookFile, ref, runtimeContexts[ref.ExtensionName], true))
+		}
+		for _, ref := range observableConfigsByExt[ext.Name] {
+			nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceObservableConfig, ref, runtimeContexts[ref.ExtensionName], true))
 		}
 	}
 	if paths.ProjectAgentsDir != "" {
@@ -248,6 +267,35 @@ func mcpConfigRefs(paths config.ResourcePaths, extRefs []extensions.ResourceRef,
 		})
 	}
 	return refs
+}
+
+func observableConfigRefs(extRefs []extensions.ResourceRef, runtimeContexts map[string]ExtensionRuntimeContext) []observableConfigRef {
+	refs := make([]observableConfigRef, 0, len(extRefs))
+	for _, ref := range extRefs {
+		refs = append(refs, observableConfigRef{
+			Path:             ref.Path,
+			Source:           ref.Source,
+			ExtensionRuntime: runtimeContexts[ref.ExtensionName],
+		})
+	}
+	return refs
+}
+
+func observableReadOnlyConfigSources(refs []observableConfigRef) []observable.ReadOnlyConfigSource {
+	out := make([]observable.ReadOnlyConfigSource, 0, len(refs))
+	for _, ref := range refs {
+		runtimeContext := ref.ExtensionRuntime
+		out = append(out, observable.ReadOnlyConfigSource{
+			Path:   ref.Path,
+			Source: ref.Source,
+			Runtime: observable.RuntimeContext{
+				ExtensionDir:            runtimeContext.ExtensionDir,
+				ExtensionDataDir:        runtimeContext.DataDir,
+				PrepareExtensionDataDir: runtimeContext.PrepareDataDir,
+			},
+		})
+	}
+	return out
 }
 
 func extensionRuntimeContexts(cfg config.Config, selected []extensions.Extension) map[string]ExtensionRuntimeContext {

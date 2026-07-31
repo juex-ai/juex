@@ -47,6 +47,7 @@ type FileConfig struct {
 
 type ConfigIssue struct {
 	ID    string
+	Index int
 	Spec  Spec
 	Error error
 }
@@ -347,7 +348,7 @@ func LoadConfigLenient(path string) (FileConfig, []ConfigIssue, error) {
 		Observables []json.RawMessage `json:"observables"`
 	}
 	if err := decodeStrict(data, &raw); err != nil {
-		return FileConfig{}, []ConfigIssue{{ID: "config", Error: fmt.Errorf("observable config: parse %s: %w", path, err)}}, nil
+		return FileConfig{}, []ConfigIssue{{ID: "config", Index: -1, Error: fmt.Errorf("observable config: parse %s: %w", path, err)}}, nil
 	}
 	seen := map[string]struct{}{}
 	out := FileConfig{Observables: make([]Spec, 0, len(raw.Observables))}
@@ -359,6 +360,7 @@ func LoadConfigLenient(path string) (FileConfig, []ConfigIssue, error) {
 			issueSpec := Spec{ID: id, Name: name}
 			issues = append(issues, ConfigIssue{
 				ID:    id,
+				Index: i,
 				Spec:  issueSpec,
 				Error: fmt.Errorf("observable config: observables[%d] %q: %w; rewrite as type plus %s", i, id, err, hint),
 			})
@@ -366,7 +368,7 @@ func LoadConfigLenient(path string) (FileConfig, []ConfigIssue, error) {
 		}
 		if _, ok := seen[spec.ID]; ok {
 			id := fmt.Sprintf("%s#%d", spec.ID, i)
-			issues = append(issues, ConfigIssue{ID: id, Spec: spec, Error: fmt.Errorf("observable config: duplicate id %q", spec.ID)})
+			issues = append(issues, ConfigIssue{ID: id, Index: i, Spec: spec, Error: fmt.Errorf("observable config: duplicate id %q", spec.ID)})
 			continue
 		}
 		seen[spec.ID] = struct{}{}
@@ -614,13 +616,46 @@ func validateScheduleSpec(id, name string, source ScheduleSourceSpec) (Spec, err
 }
 
 func ExpandVariables(value, workDir string) string {
-	replacer := strings.NewReplacer(
-		"${WORKDIR}", workDir,
-		"$WORKDIR", workDir,
-		"${JUEX_WORKDIR}", workDir,
-		"$JUEX_WORKDIR", workDir,
-	)
-	return replacer.Replace(value)
+	expanded, _ := expandRuntimeValue(value, map[string]string{
+		"WORKDIR":      workDir,
+		"JUEX_WORKDIR": workDir,
+	}, false)
+	return expanded
+}
+
+var runtimeVariablePattern = regexp.MustCompile(`\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))`)
+
+func expandRuntimeValue(value string, variables map[string]string, plugin bool) (string, error) {
+	var expansionErr error
+	out := runtimeVariablePattern.ReplaceAllStringFunc(value, func(token string) string {
+		if expansionErr != nil {
+			return token
+		}
+		matches := runtimeVariablePattern.FindStringSubmatch(token)
+		name := matches[1]
+		if name == "" {
+			name = matches[2]
+		}
+		switch name {
+		case "JUEX_EXT_DIR", "JUEX_EXT_DATA_DIR":
+			if !plugin {
+				expansionErr = fmt.Errorf("observable: %s is only available to plugin definitions", name)
+				return token
+			}
+			resolved := variables[name]
+			if resolved == "" {
+				expansionErr = fmt.Errorf("observable: %s is unavailable for this plugin definition", name)
+				return token
+			}
+			return resolved
+		default:
+			if resolved, ok := variables[name]; ok {
+				return resolved
+			}
+			return token
+		}
+	})
+	return out, expansionErr
 }
 
 func cloneCommandSourceSpec(in CommandSourceSpec) CommandSourceSpec {

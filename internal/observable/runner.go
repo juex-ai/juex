@@ -3,9 +3,11 @@ package observable
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +24,9 @@ type runnerOptions struct {
 	sandboxRunner sandbox.Runner
 	store         *Store
 	submit        func(context.Context, ObservationRecord) bool
+	runtime       RuntimeContext
+	source        string
+	plugin        bool
 }
 
 type runner struct {
@@ -50,22 +55,42 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 	if err := callCtx.Err(); err != nil {
 		return nil, err
 	}
+	runtimeSpec, reserved, err := prepareCommandRuntime(r.opts.spec, r.opts.workDir, r.opts.runtime, r.opts.plugin)
+	if err != nil {
+		return nil, err
+	}
 	cwd := r.opts.workDir
-	if r.opts.spec.CWD != "" {
-		cwd = ExpandVariables(r.opts.spec.CWD, r.opts.workDir)
+	if runtimeSpec.CWD != "" {
+		cwd = runtimeSpec.CWD
 		if !filepath.IsAbs(cwd) && r.opts.workDir != "" {
 			cwd = filepath.Join(r.opts.workDir, cwd)
 		}
 	}
-	command, err := r.opts.environment.LookPathInDir(r.opts.spec.Command, cwd)
+	command, err := r.opts.environment.LookPathInDir(runtimeSpec.Command, cwd)
 	if err != nil {
 		return nil, err
 	}
 	spec := sandbox.ExecSpec{
 		Binary: command,
-		Args:   append([]string(nil), r.opts.spec.Args...),
+		Args:   append([]string(nil), runtimeSpec.Args...),
 		Dir:    cwd,
-		Env:    r.env(),
+		Env:    r.env(runtimeSpec.Env, reserved),
+	}
+	var additionalWritableRoots []string
+	if r.opts.plugin && r.opts.runtime.ExtensionDataDir != "" {
+		if r.opts.runtime.PrepareExtensionDataDir == nil {
+			return nil, fmt.Errorf("observable: plugin source %s has a data directory without a prepare callback", r.opts.source)
+		}
+		if err := callCtx.Err(); err != nil {
+			return nil, err
+		}
+		if err := r.opts.runtime.PrepareExtensionDataDir(); err != nil {
+			return nil, err
+		}
+		if err := callCtx.Err(); err != nil {
+			return nil, err
+		}
+		additionalWritableRoots = []string{r.opts.runtime.ExtensionDataDir}
 	}
 	if r.opts.sandboxPolicy.Enabled {
 		sandboxRunner := r.opts.sandboxRunner
@@ -73,9 +98,10 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 			sandboxRunner = sandbox.DefaultRunner{}
 		}
 		prepared, err := sandboxRunner.Prepare(callCtx, sandbox.Request{
-			Policy:         r.opts.sandboxPolicy,
-			WorkspaceRoots: []string{r.opts.workDir},
-			Spec:           spec,
+			Policy:                  r.opts.sandboxPolicy,
+			WorkspaceRoots:          []string{r.opts.workDir},
+			AdditionalWritableRoots: additionalWritableRoots,
+			Spec:                    spec,
 		})
 		if err != nil {
 			return nil, err
@@ -267,16 +293,66 @@ func (r *runner) watchesStream(stream string) bool {
 	return false
 }
 
-func (r *runner) env() []string {
-	child := make(map[string]string, len(r.opts.spec.Env))
-	for key, value := range r.opts.spec.Env {
-		child[key] = ExpandVariables(value, r.opts.workDir)
-	}
-	return r.opts.environment.Environ(
+func (r *runner) env(child, reserved map[string]string) []string {
+	env := r.opts.environment.Environ(
 		child,
-		map[string]string{
-			"WORKDIR":      r.opts.workDir,
-			"JUEX_WORKDIR": r.opts.workDir,
-		},
+		reserved,
 	)
+	if r.opts.plugin {
+		return env
+	}
+	return stripExtensionEnvironment(env)
+}
+
+func prepareCommandRuntime(spec commandRuntimeSpec, workDir string, runtime RuntimeContext, plugin bool) (commandRuntimeSpec, map[string]string, error) {
+	out := spec
+	out.Args = append([]string(nil), spec.Args...)
+	out.Env = cloneStringMap(spec.Env)
+	reserved := map[string]string{
+		"WORKDIR":      workDir,
+		"JUEX_WORKDIR": workDir,
+	}
+	if plugin {
+		reserved["JUEX_EXT_DIR"] = runtime.ExtensionDir
+		reserved["JUEX_EXT_DATA_DIR"] = runtime.ExtensionDataDir
+	} else {
+		for key := range out.Env {
+			if key == "JUEX_EXT_DIR" || key == "JUEX_EXT_DATA_DIR" {
+				return commandRuntimeSpec{}, nil, fmt.Errorf("observable: project definition cannot set reserved environment key %s", key)
+			}
+		}
+	}
+	var err error
+	if out.Command, err = expandRuntimeValue(out.Command, reserved, plugin); err != nil {
+		return commandRuntimeSpec{}, nil, err
+	}
+	for index := range out.Args {
+		if out.Args[index], err = expandRuntimeValue(out.Args[index], reserved, plugin); err != nil {
+			return commandRuntimeSpec{}, nil, err
+		}
+	}
+	if out.CWD, err = expandRuntimeValue(out.CWD, reserved, plugin); err != nil {
+		return commandRuntimeSpec{}, nil, err
+	}
+	for key, value := range out.Env {
+		if out.Env[key], err = expandRuntimeValue(value, reserved, plugin); err != nil {
+			return commandRuntimeSpec{}, nil, err
+		}
+	}
+	return out, reserved, nil
+}
+
+func stripExtensionEnvironment(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, item := range env {
+		key := item
+		if index := strings.IndexByte(item, '='); index >= 0 {
+			key = item[:index]
+		}
+		if strings.EqualFold(key, "JUEX_EXT_DIR") || strings.EqualFold(key, "JUEX_EXT_DATA_DIR") {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
 }

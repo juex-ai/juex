@@ -1218,10 +1218,10 @@ func TestWeb_OldObservableShapeIsVisibleAndBlocksTaggedEdits(t *testing.T) {
 			return false
 		}
 		statuses = body.Observables
-		valid, invalid := observableStatusByID(statuses, "valid-schedule"), observableStatusByID(statuses, "invalid-command")
+		valid, invalid := observableStatusByID(statuses, "valid-schedule"), observableStatusByConfigError(statuses, "invalid-command")
 		return valid != nil && valid.State == observable.RunStateRunning && invalid != nil && invalid.State == observable.RunStateErrored
 	})
-	invalid := observableStatusByID(statuses, "invalid-command")
+	invalid := observableStatusByConfigError(statuses, "invalid-command")
 	if invalid == nil || !strings.Contains(invalid.LastError, "type plus command_config") {
 		t.Fatalf("invalid config issue = %+v, want rewrite hint", invalid)
 	}
@@ -1245,6 +1245,15 @@ func observableStatusByID(statuses []observable.ObservableStatus, id string) *ob
 	for i := range statuses {
 		if statuses[i].ID == id {
 			return &statuses[i]
+		}
+	}
+	return nil
+}
+
+func observableStatusByConfigError(statuses []observable.ObservableStatus, id string) *observable.ObservableStatus {
+	for index := range statuses {
+		if strings.Contains(statuses[index].LastError, id) {
+			return &statuses[index]
 		}
 	}
 	return nil

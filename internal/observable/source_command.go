@@ -10,6 +10,7 @@ type commandSourceRuntime struct {
 	kernel sourceKernel
 	opts   ManagerOptions
 	store  *Store
+	origin definitionOrigin
 }
 
 type commandRunState struct {
@@ -28,6 +29,9 @@ func (s *commandSourceRuntime) start(callCtx context.Context, run *observableRun
 		sandboxRunner: s.opts.SandboxRunner,
 		store:         s.store,
 		submit:        s.kernel.submitDelivery,
+		runtime:       s.origin.Runtime,
+		source:        s.origin.Source,
+		plugin:        s.origin.ReadOnly,
 	})
 	run.sourceState = &commandRunState{runner: r}
 	cmd, err := r.start(startupCtx, run.ctx)
@@ -114,6 +118,7 @@ func (s *commandSourceRuntime) stop(ctx context.Context, run *observableRun, rea
 func (s *commandSourceRuntime) deleteState(context.Context, string) error { return nil }
 
 func (s *commandSourceRuntime) statusSnapshot(status ObservableStatus) ObservableStatus {
+	status.Source = s.origin.Source
 	status.Command = s.spec.Command
 	status.Args = append([]string(nil), s.spec.Args...)
 	status.Streams = append([]string(nil), s.spec.Streams...)

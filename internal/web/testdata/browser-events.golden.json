@@ -901,6 +901,7 @@
     "ts": "2026-06-15T00:00:07.5Z",
     "payload": {
       "id": "lark-events",
+      "source": "project",
       "state": "running",
       "run_id": "run-1",
       "pid": 1234

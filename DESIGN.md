@@ -447,8 +447,12 @@ with Arrow Up/Down, Page Up/Down, Home, and End.
 
 Schedule rows show three distinct controls: `Run` uses a lightning icon to
 emit one configured Observation, Start/Stop controls the timetable lifecycle,
-and Delete removes the source. Command rows do not show Run. The Schedule
+and Delete removes a project-owned source. Plugin rows show their
+`ext:<name>` resource source and type/config summary but omit Delete; direct
+API mutation remains rejected. Project rows show source `project`. Command
+rows do not show Run. The Schedule
 detail page repeats the labeled Run control beside its lifecycle actions.
+The detail status separates resource Source from command/schedule Type.
 The detail action group wraps and stays right-aligned on narrow screens.
 Actions refresh the current view after success and surface API errors in the
 existing page-level error region.
