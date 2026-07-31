@@ -1,38 +1,28 @@
-// Package mcp implements a minimal Model Context Protocol client over stdio.
-//
-// Only the JSON-RPC 2.0 calls that v0.1 needs are supported:
-//   - initialize
-//   - tools/list
-//   - tools/call
-//
-// Each MCP server is launched as a subprocess; messages are exchanged as
-// newline-delimited JSON over the server's stdin/stdout. A separate goroutine
-// reads stdout and routes responses back to waiting callers via a map keyed by
-// JSON-RPC request id.
+// Package mcp adapts the official Model Context Protocol Go SDK to Juex tools.
 package mcp
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/http"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/tools"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
-	protocolVersion = "2024-11-05"
-	clientName      = "juex"
-	clientVersion   = "0.1.0"
+	clientName    = "juex"
+	clientVersion = "0.1.0"
 )
 
 // ToolDescriptor is a tool advertised by an MCP server.
@@ -57,19 +47,12 @@ func toolDefinition(name string, descriptor ToolDescriptor) tools.ToolDefinition
 
 // Client is one MCP server connection.
 type Client struct {
-	name string
-	cmd  *exec.Cmd
-	in   io.WriteCloser
-
-	mu      sync.Mutex
-	pending map[string]chan rpcCallResult
-	readErr error
-
-	nextID atomic.Int64
-	closed atomic.Bool
-
-	onNotification func(Notification)
-	stderrTail     *stderrTailBuffer
+	name       string
+	session    *sdkmcp.ClientSession
+	cmd        *exec.Cmd
+	remote     bool
+	closed     atomic.Bool
+	stderrTail *stderrTailBuffer
 }
 
 // Notification is a server-initiated MCP JSON-RPC notification that Juex
@@ -129,125 +112,211 @@ func ErrorServerName(err error) (string, bool) {
 	return "", false
 }
 
-// Connect launches the server subprocess and performs the initialize handshake.
+// Connect opens one local or remote MCP session and performs SDK negotiation.
 func Connect(ctx context.Context, name string, spec ServerSpec) (*Client, error) {
 	return ConnectWithOptions(ctx, name, spec, ConnectOptions{})
 }
 
-// ConnectWithOptions launches the server subprocess and performs the
-// initialize handshake while registering optional notification callbacks.
+// ConnectWithOptions opens one SDK session while registering optional
+// notification callbacks.
 func ConnectWithOptions(ctx context.Context, name string, spec ServerSpec, opts ConnectOptions) (*Client, error) {
-	if spec.Command == "" {
+	if spec.Command == "" && spec.URL == "" {
 		return nil, fmt.Errorf("mcp[%s]: missing command", name)
 	}
-	command, err := opts.Environment.LookPath(spec.Command)
-	if err != nil {
-		return nil, fmt.Errorf("mcp[%s]: resolve command %q: %w", name, spec.Command, err)
+	if spec.Command != "" && spec.URL != "" {
+		return nil, fmt.Errorf("mcp[%s]: exactly one of command or url is required", name)
 	}
-	cmd := exec.CommandContext(ctx, command, spec.Args...)
-	cmd.Env = opts.Environment.Environ(spec.Env)
 
-	stdin, err := cmd.StdinPipe()
+	transport, cmd, stderrTail, remote, err := newSDKTransport(name, spec, opts)
 	if err != nil {
 		return nil, err
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, err
-	}
-	stderrTail := newStderrTailBuffer(mcpStderrTailBytes)
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("mcp[%s]: start: %w", name, err)
-	}
-
-	c := &Client{
-		name:           name,
-		cmd:            cmd,
-		in:             stdin,
-		pending:        make(map[string]chan rpcCallResult),
-		onNotification: opts.OnNotification,
-		stderrTail:     stderrTail,
-	}
-	go c.readLoop(stdout)
-	go copyServerStderr(name, stderr, stderrTail, opts)
-
-	capabilities := map[string]any{}
+	capabilities := &sdkmcp.ClientCapabilities{}
 	if opts.EnableClaudeChannel {
-		capabilities["experimental"] = map[string]any{
+		capabilities.Experimental = map[string]any{
 			"claude/channel": map[string]any{},
 		}
 	}
-	if _, err := c.call(ctx, "initialize", map[string]any{
-		"protocolVersion": protocolVersion,
-		"capabilities":    capabilities,
-		"clientInfo":      map[string]any{"name": clientName, "version": clientVersion},
-	}); err != nil {
-		c.Close()
-		return nil, c.withStderrTail(fmt.Errorf("mcp[%s]: initialize: %w", name, err))
+	sdkClient := sdkmcp.NewClient(
+		&sdkmcp.Implementation{Name: clientName, Version: clientVersion},
+		&sdkmcp.ClientOptions{
+			Capabilities: capabilities,
+			Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		},
+	)
+	sdkClient.AddSendingMiddleware(omitEmptyToolArguments)
+
+	var transportCloser interface{ Close() error }
+	if remote {
+		trackedTransport := trackSDKTransport(transport)
+		transport = trackedTransport
+		transportCloser = trackedTransport
+	} else {
+		wrappedTransport := wrapSDKNotificationTransport(transport, name, opts.OnNotification)
+		transport = wrappedTransport
+		transportCloser = wrappedTransport
 	}
-	// notifications/initialized — no id, no response expected
-	if err := c.notify("notifications/initialized", map[string]any{}); err != nil {
-		c.Close()
-		return nil, c.withStderrTail(err)
+	diagnostic := newRemoteDiagnostic()
+	session, err := sdkClient.Connect(withRemoteDiagnostic(ctx, diagnostic), transport, nil)
+	if err != nil {
+		_ = transportCloser.Close()
+		if remote {
+			err = diagnostic.enrich(err)
+		} else {
+			err = commandProtocolError(err)
+			err = withStderrTail(stderrTail, err)
+		}
+		return nil, fmt.Errorf("mcp[%s]: connect: %w", name, err)
 	}
-	return c, nil
+	return &Client{
+		name:       name,
+		session:    session,
+		cmd:        cmd,
+		remote:     remote,
+		stderrTail: stderrTail,
+	}, nil
+}
+
+func commandProtocolError(err error) error {
+	if err == nil {
+		return nil
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "invalid character") ||
+		strings.Contains(lower, "invalid json") ||
+		strings.Contains(lower, "decoding json") {
+		return fmt.Errorf("invalid stdout from server: %w", err)
+	}
+	return err
+}
+
+func newSDKTransport(
+	name string,
+	spec ServerSpec,
+	opts ConnectOptions,
+) (sdkmcp.Transport, *exec.Cmd, *stderrTailBuffer, bool, error) {
+	if spec.URL != "" {
+		authHandler, err := newOAuthHandler(spec.Auth)
+		if err != nil {
+			return nil, nil, nil, true, fmt.Errorf("mcp[%s]: auth: %w", name, err)
+		}
+		httpClient := newSecureEndpointHTTPClient(&remoteDiagnosticRoundTripper{
+			base:           http.DefaultTransport,
+			redactions:     credentialValues(spec.Auth),
+			serverName:     name,
+			onNotification: opts.OnNotification,
+		})
+		return &sdkmcp.StreamableClientTransport{
+			Endpoint:     spec.URL,
+			HTTPClient:   httpClient,
+			OAuthHandler: authHandler,
+		}, nil, nil, true, nil
+	}
+
+	command, err := opts.Environment.LookPath(spec.Command)
+	if err != nil {
+		return nil, nil, nil, false, fmt.Errorf("mcp[%s]: resolve command %q: %w", name, spec.Command, err)
+	}
+	cmd := exec.Command(command, spec.Args...)
+	cmd.Env = opts.Environment.Environ(spec.Env)
+	stderrTail := newStderrTailBuffer(mcpStderrTailBytes)
+	stderrWriters := []io.Writer{stderrTail}
+	if opts.ForwardStderr && opts.Stderr != nil {
+		stderrWriters = append(stderrWriters, newLinePrefixWriter(opts.Stderr, fmt.Sprintf("[mcp:%s] ", name)))
+	}
+	cmd.Stderr = io.MultiWriter(stderrWriters...)
+	return &sdkmcp.CommandTransport{Command: cmd}, cmd, stderrTail, false, nil
 }
 
 func (c *Client) Name() string { return c.name }
 
 // ListTools queries the server for its tools.
 func (c *Client) ListTools(ctx context.Context) ([]ToolDescriptor, error) {
-	resp, err := c.call(ctx, "tools/list", map[string]any{})
-	if err != nil {
-		return nil, c.withStderrTail(err)
+	var descriptors []ToolDescriptor
+	var cursor string
+	seenCursors := map[string]bool{}
+	for {
+		diagnostic := &remoteDiagnostic{}
+		result, err := c.session.ListTools(withRemoteDiagnostic(ctx, diagnostic), &sdkmcp.ListToolsParams{Cursor: cursor})
+		if err != nil {
+			return nil, c.enrich(err, diagnostic)
+		}
+		for _, tool := range result.Tools {
+			descriptor, err := descriptorFromSDK(tool)
+			if err != nil {
+				return nil, fmt.Errorf("mcp[%s]: tools/list: %w", c.name, err)
+			}
+			descriptors = append(descriptors, descriptor)
+		}
+		if result.NextCursor == "" {
+			return descriptors, nil
+		}
+		if seenCursors[result.NextCursor] {
+			return nil, fmt.Errorf("mcp[%s]: tools/list repeated cursor %q", c.name, result.NextCursor)
+		}
+		seenCursors[result.NextCursor] = true
+		cursor = result.NextCursor
 	}
-	var payload struct {
-		Tools []ToolDescriptor `json:"tools"`
-	}
-	if err := json.Unmarshal(resp.Result, &payload); err != nil {
-		return nil, err
-	}
-	return payload.Tools, nil
 }
 
 // CallTool invokes one tool and returns the textual result.
 // Server responses can have multiple content blocks; we concatenate text blocks.
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]any) (string, error) {
-	params := map[string]any{"name": name}
-	if len(args) > 0 {
-		params["arguments"] = args
-	}
-	resp, err := c.call(ctx, "tools/call", params)
+	diagnostic := &remoteDiagnostic{}
+	result, err := c.session.CallTool(withRemoteDiagnostic(ctx, diagnostic), &sdkmcp.CallToolParams{
+		Name:      name,
+		Arguments: args,
+	})
 	if err != nil {
-		return "", err
-	}
-	var payload struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		IsError bool `json:"isError,omitempty"`
-	}
-	if err := json.Unmarshal(resp.Result, &payload); err != nil {
-		return "", err
+		return "", c.enrich(err, diagnostic)
 	}
 	var sb strings.Builder
-	for _, b := range payload.Content {
-		if b.Type == "text" {
+	for _, content := range result.Content {
+		if text, ok := content.(*sdkmcp.TextContent); ok {
 			if sb.Len() > 0 {
 				sb.WriteString("\n")
 			}
-			sb.WriteString(b.Text)
+			sb.WriteString(text.Text)
 		}
 	}
-	if payload.IsError {
+	if result.IsError {
 		return sb.String(), fmt.Errorf("mcp[%s].%s: %s", c.name, name, sb.String())
 	}
 	return sb.String(), nil
+}
+
+func descriptorFromSDK(tool *sdkmcp.Tool) (ToolDescriptor, error) {
+	if tool == nil {
+		return ToolDescriptor{}, fmt.Errorf("server returned a null tool")
+	}
+	var schema map[string]any
+	if tool.InputSchema != nil {
+		data, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			return ToolDescriptor{}, fmt.Errorf("tool %q input schema: %w", tool.Name, err)
+		}
+		if err := json.Unmarshal(data, &schema); err != nil {
+			return ToolDescriptor{}, fmt.Errorf("tool %q input schema: %w", tool.Name, err)
+		}
+	}
+	return ToolDescriptor{
+		Name:        tool.Name,
+		Description: tool.Description,
+		InputSchema: schema,
+	}, nil
+}
+
+func omitEmptyToolArguments(next sdkmcp.MethodHandler) sdkmcp.MethodHandler {
+	return func(ctx context.Context, method string, req sdkmcp.Request) (sdkmcp.Result, error) {
+		if method == "tools/call" {
+			if params, ok := req.GetParams().(*sdkmcp.CallToolParams); ok {
+				if args, ok := params.Arguments.(map[string]any); ok && len(args) == 0 {
+					params.Arguments = nil
+				}
+			}
+		}
+		return next(ctx, method, req)
+	}
 }
 
 // RegisterAll connects servers from cfg and registers their tools into reg
@@ -306,201 +375,35 @@ func (c *Client) Close() error {
 	if c.closed.Swap(true) {
 		return nil
 	}
-	if c.in != nil {
-		_ = c.in.Close()
+	if c.session == nil {
+		return nil
 	}
-	if c.cmd != nil && c.cmd.Process != nil {
-		_ = c.cmd.Process.Kill()
-		_ = c.cmd.Wait()
-	}
-	return nil
-}
-
-// ----- internals -----
-
-type rpcRequest struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      *int   `json:"id,omitempty"`
-	Method  string `json:"method"`
-	Params  any    `json:"params,omitempty"`
-}
-
-type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-type rpcResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *rpcError       `json:"error,omitempty"`
-}
-
-type rpcCallResult struct {
-	resp rpcResponse
-	err  error
-}
-
-type rpcEnvelope struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"`
-	Method  string          `json:"method,omitempty"`
-	Params  json.RawMessage `json:"params,omitempty"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *rpcError       `json:"error,omitempty"`
-}
-
-func (c *Client) call(ctx context.Context, method string, params any) (rpcResponse, error) {
-	id := int(c.nextID.Add(1))
-	idKey := rpcIDKey(json.RawMessage(strconv.Itoa(id)))
-	ch := make(chan rpcCallResult, 1)
-	c.mu.Lock()
-	if c.readErr != nil {
-		err := c.readErr
-		c.mu.Unlock()
-		return rpcResponse{}, err
-	}
-	c.pending[idKey] = ch
-	c.mu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		delete(c.pending, idKey)
-		c.mu.Unlock()
-	}()
-
-	req := rpcRequest{JSONRPC: "2.0", ID: &id, Method: method, Params: params}
-	if err := c.send(req); err != nil {
-		return rpcResponse{}, err
-	}
-
-	select {
-	case <-ctx.Done():
-		return rpcResponse{}, ctx.Err()
-	case result := <-ch:
-		if result.err != nil {
-			return rpcResponse{}, result.err
-		}
-		resp := result.resp
-		if resp.Error != nil {
-			return resp, fmt.Errorf("mcp[%s].%s: %s (code=%d)", c.name, method, resp.Error.Message, resp.Error.Code)
-		}
-		return resp, nil
-	}
-}
-
-func (c *Client) notify(method string, params any) error {
-	return c.send(rpcRequest{JSONRPC: "2.0", Method: method, Params: params})
-}
-
-func (c *Client) send(req rpcRequest) error {
-	buf, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	buf = append(buf, '\n')
-	_, err = c.in.Write(buf)
-	return err
-}
-
-func (c *Client) readLoop(r io.Reader) {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var msg rpcEnvelope
-		if err := json.Unmarshal(line, &msg); err != nil {
-			c.failPending(fmt.Errorf("mcp[%s]: invalid stdout from server: %q", c.name, truncateProtocolLine(string(line), 300)))
-			return
-		}
-		idKey := rpcIDKey(msg.ID)
-		if idKey == "" {
-			c.handleNotification(msg)
-			continue
-		}
-		resp := rpcResponse{JSONRPC: msg.JSONRPC, Result: msg.Result, Error: msg.Error}
-		c.mu.Lock()
-		ch, ok := c.pending[idKey]
-		c.mu.Unlock()
-		if ok {
-			ch <- rpcCallResult{resp: resp}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		c.failPending(fmt.Errorf("mcp[%s]: stdout read error: %w", c.name, err))
-		return
-	}
-	c.failPending(fmt.Errorf("mcp[%s]: stdout closed before response", c.name))
-}
-
-func (c *Client) failPending(err error) {
-	c.mu.Lock()
-	if c.readErr == nil {
-		c.readErr = err
-	}
-	pending := c.pending
-	c.pending = make(map[string]chan rpcCallResult)
-	c.mu.Unlock()
-	for _, ch := range pending {
-		select {
-		case ch <- rpcCallResult{err: err}:
-		default:
-		}
-	}
-}
-
-func truncateProtocolLine(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "...(truncated)"
-}
-
-func (c *Client) handleNotification(msg rpcEnvelope) {
-	if msg.Method != claudeChannelNotificationMethod {
-		return
-	}
-	dispatchClaudeChannelNotification(c.name, msg.Method, msg.Params, c.onNotification)
-}
-
-func rpcIDKey(raw json.RawMessage) string {
-	if len(raw) == 0 || string(raw) == "null" {
-		return ""
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return s
-	}
-	var n json.Number
-	if err := json.Unmarshal(raw, &n); err == nil {
-		return n.String()
-	}
-	return string(raw)
-}
-
-func copyServerStderr(name string, r io.Reader, tail *stderrTailBuffer, opts ConnectOptions) {
-	if tail == nil {
-		tail = newStderrTailBuffer(mcpStderrTailBytes)
-	}
-	writers := []io.Writer{tail}
-	if opts.ForwardStderr && opts.Stderr != nil {
-		writers = append(writers, newLinePrefixWriter(opts.Stderr, fmt.Sprintf("[mcp:%s] ", name)))
-	}
-	_, _ = io.Copy(io.MultiWriter(writers...), r)
+	return c.session.Close()
 }
 
 func (c *Client) withStderrTail(err error) error {
-	if err == nil || c == nil || c.stderrTail == nil {
+	if c == nil {
 		return err
 	}
-	tail := strings.TrimSpace(c.stderrTail.String())
+	return withStderrTail(c.stderrTail, err)
+}
+
+func withStderrTail(stderrTail *stderrTailBuffer, err error) error {
+	if err == nil || stderrTail == nil {
+		return err
+	}
+	tail := strings.TrimSpace(stderrTail.String())
 	if tail == "" {
 		return err
 	}
 	return fmt.Errorf("%w\nmcp stderr tail:\n%s", err, tail)
+}
+
+func (c *Client) enrich(err error, diagnostic *remoteDiagnostic) error {
+	if c == nil || !c.remote {
+		return c.withStderrTail(err)
+	}
+	return diagnostic.enrich(err)
 }
 
 type stderrTailBuffer struct {
