@@ -246,7 +246,7 @@ func TestLoadMCPConfigsPreparesAgentOwnedDataDirForSelectedLocalExtensionWithout
 		t.Fatalf("LoadMCPConfigs created data dir, stat error = %v", err)
 	}
 	local := merged.MCPServers["local"]
-	if local.Command != filepath.Join(extensionDir, "bin", "server") {
+	if filepath.Clean(local.Command) != filepath.Join(extensionDir, "bin", "server") {
 		t.Fatalf("local command = %q", local.Command)
 	}
 	if local.Env["JUEX_EXT_DATA_DIR"] != dataDir || local.Env["DATA_COPY"] != dataDir {

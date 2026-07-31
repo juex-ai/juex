@@ -236,7 +236,7 @@ func TestPrepareConfigWithOptionsInjectsExtensionDataDirOnlyIntoLocalServers(t *
 		t.Fatal(err)
 	}
 	local := got.MCPServers["local"]
-	if local.Command != filepath.Join(extensionDir, "bin", "server") {
+	if filepath.Clean(local.Command) != filepath.Join(extensionDir, "bin", "server") {
 		t.Fatalf("local command = %q", local.Command)
 	}
 	if got := strings.Join(local.Args, "\x00"); got != "--data\x00"+dataDir {
