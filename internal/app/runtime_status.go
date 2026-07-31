@@ -471,12 +471,15 @@ type runtimeMCPServerConfig struct {
 }
 
 func (s RuntimeCatalogService) mcpStatus(opts RuntimeStatusOptions, refs []mcpConfigRef) (RuntimeMCPStatus, error) {
-	servers, err := s.configuredMCPServers(refs)
-	if err != nil {
-		return RuntimeMCPStatus{}, err
-	}
+	var servers []runtimeMCPServerConfig
 	if opts.MCPConnectionSpecs != nil {
 		servers = runtimeMCPServersFromConnectionSpecs(opts.MCPConnectionSpecs)
+	} else {
+		var err error
+		servers, err = s.configuredMCPServers(refs)
+		if err != nil {
+			return RuntimeMCPStatus{}, err
+		}
 	}
 	connectedCount := 0
 	errorCount := 0
