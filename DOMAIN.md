@@ -65,6 +65,8 @@ domain boundary.
 | Tool Call | A Provider-requested Tool operation identified within an assistant message. Its result is persisted in provider order and remains adjacent to the call in valid model context. |
 | MCP Server | A configured stdio process that contributes Tools and may emit external notifications. One failed MCP Server does not disable healthy servers or builtin Tools. |
 | MCP Notification | An external event from an MCP Server that is admitted as pending input or as a system-originated Turn. It is not user-authored input. |
+| Plugin bundle | A named extension directory that may contribute Skills, MCP Servers, and lifecycle Hooks after it is selected by the effective plugin policy. Same-name bundles form a default-Home, effective-Home, and Workspace override chain. |
+| Plugin allowlist | The exact logical plugin names permitted for one Fleet or Workspace-bound Agent. An omitted layer inherits, an explicit layer replaces, and no effective allowlist permits no plugin bundles. It is not publisher or source authentication. |
 | Skill | A Markdown instruction package discovered from configured resource scopes and made available to the model through prompt metadata and Tool access. |
 | Memory Entry | Reusable Agent-owned context managed through memory Tools and stored with Agent state. It is distinct from work-local or user-global `AGENTS.md` guidance. |
 | Prompt Section | A named part of the assembled system prompt, such as guidance, available Skills, Memory, runtime state, or shell context. |

@@ -150,6 +150,7 @@ func TestRunCmd_DryRunLoadsExtensionMCPAndSkills(t *testing.T) {
 	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
+	mustWriteCLITestFile(t, filepath.Join(dir, ".juex", "juex.yaml"), "plugins:\n  allow: [demo]\n")
 	extDir := filepath.Join(dir, ".juex", "extensions", "demo")
 	marker := filepath.Join(dir, "mcp-started")
 	body, err := json.MarshalIndent(map[string]any{
@@ -174,6 +175,22 @@ name: ext-skill
 description: Extension skill
 ---
 body`)
+	blockedMarker := filepath.Join(dir, "blocked-mcp-started")
+	blockedBody, err := json.MarshalIndent(map[string]any{
+		"mcpServers": map[string]any{
+			"blocked": map[string]any{
+				"command": os.Args[0],
+				"env": map[string]string{
+					"JUEX_CLI_FAKE_MCP":        "1",
+					"JUEX_CLI_FAKE_MCP_MARKER": blockedMarker,
+				},
+			},
+		},
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteCLITestFile(t, filepath.Join(dir, ".juex", "extensions", "blocked", "mcp.json"), string(blockedBody))
 
 	root := newRootCmd()
 	var out bytes.Buffer
@@ -192,6 +209,9 @@ body`)
 	for _, tool := range plan.Tools {
 		if tool == "mcp__alpha__echo" {
 			haveTool = true
+		}
+		if strings.HasPrefix(tool, "mcp__blocked__") {
+			t.Fatalf("dry-run tools include blocked plugin MCP tool: %+v", plan.Tools)
 		}
 	}
 	if !haveTool {
@@ -212,6 +232,9 @@ body`)
 	}
 	if !strings.Contains(string(markerBody), "ext_dir="+extDir) || !strings.Contains(string(markerBody), "args=--ext|"+extDir) {
 		t.Fatalf("marker missing extension dir:\n%s", markerBody)
+	}
+	if _, err := os.Stat(blockedMarker); !os.IsNotExist(err) {
+		t.Fatalf("blocked plugin MCP process started: %v", err)
 	}
 }
 

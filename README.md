@@ -343,25 +343,36 @@ $JUEX_HOME/
 ```
 
 Personal agent resources live under `~/.agents/`; JueX-home extension bundles
-live under `$JUEX_HOME/extensions/`. Juex always reads
+live under the default and effective JueX homes. Juex always reads
 `~/.juex/juex.yaml` as the shared configuration base. When `JUEX_HOME` selects
 a canonically distinct directory, `$JUEX_HOME/juex.yaml` overrides that base,
-while configuration writes, extensions, locks, Fleet state, and the Agent
-registry remain isolated to the effective home. `JUEX_HOME` does not relocate
+while configuration writes, locks, Fleet state, and the Agent registry remain
+isolated to the effective home. `JUEX_HOME` does not relocate
 the existing `~/.agents` resource tree. By default, Juex loads
 `~/.agents/AGENTS.md` before
 work-local AGENTS.md files, reads user-global skills and MCP servers from
-`~/.agents/skills` and `~/.agents/mcp.json`, and discovers JueX-home
-extension bundles under `$JUEX_HOME/extensions/<name>/`. Set
+`~/.agents/skills` and `~/.agents/mcp.json`. Set
 `enable_user_agents_resources: false` in `juex.yaml`, or pass
 `--enable-user-agents-resources=false`, to ignore only the personal
-`~/.agents` resources for a run. Home extension bundles remain enabled because
-they are explicit configuration of the selected JueX home. Project-local
-AGENTS.md, skills, and MCP servers still come from `.agents/`, and project
-extension bundles still come from `.juex/extensions/<name>/`. Extension bundles
-may provide `skills/`, `mcp.json`, and `hooks.yaml`; runtime status reports them
-with source `ext:<name>`. Work-local extension hooks must set `trusted: true`;
-JueX-home extension hooks are trusted by location.
+`~/.agents` resources for a run; this switch does not change plugin policy.
+
+Plugin bundles are the existing extension directories. Configure their exact,
+case-sensitive logical names with `plugins.allow`. An omitted setting inherits
+the previous default-Home, effective-Home, or workspace layer; an explicit
+list replaces it, and `plugins.allow: []` disables all plugins. If no layer
+configures the field, Juex loads no plugin bundles. For each allowed name Juex
+selects the highest-precedence installed bundle from
+`~/.juex/extensions/<name>/`, a distinct
+`$JUEX_HOME/extensions/<name>/`, then
+`.juex/extensions/<name>/`. A higher layer replaces the whole same-name
+bundle; it does not merge resources with the lower copy.
+
+Extension bundles may provide `skills/`, `mcp.json`, and `hooks.yaml`; runtime
+status reports selected resources with source `ext:<name>`. Work-local
+extension hooks must set `trusted: true`; JueX-home extension hooks are trusted
+by location. The allowlist authorizes a logical name, so a work-local
+same-name bundle can override a Home bundle; it is not a publisher signature
+or source-authentication mechanism.
 Extension MCP servers receive `JUEX_EXT_DIR` alongside `WORKDIR` and
 `JUEX_WORKDIR`. Identity-owned runtime state lives under
 `$JUEX_HOME/agents/<id>`; workspace artifacts and Observable

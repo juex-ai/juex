@@ -216,16 +216,17 @@ func (c Config) ObservablesStateDir() string {
 
 // ResourcePaths contains AGENTS, skill, MCP, and extension resource locations.
 type ResourcePaths struct {
-	WorkDir              string
-	HomeAgentsDir        string
-	HomeExtensionsDir    string
-	ProjectAgentsDir     string
-	ProjectExtensionsDir string
-	GlobalAgentsMDPath   string
-	SkillDirs            []string
-	AgentsMDDirs         []string
-	MCPConfigPaths       []string
-	UserAgentsResources  bool
+	WorkDir                  string
+	HomeAgentsDir            string
+	DefaultHomeExtensionsDir string
+	HomeExtensionsDir        string
+	ProjectAgentsDir         string
+	ProjectExtensionsDir     string
+	GlobalAgentsMDPath       string
+	SkillDirs                []string
+	AgentsMDDirs             []string
+	MCPConfigPaths           []string
+	UserAgentsResources      bool
 }
 
 func (c Config) ResourcePaths() ResourcePaths {
@@ -241,6 +242,9 @@ func (c Config) ResourcePaths() ResourcePaths {
 	}
 	if c.HomeJuexDir != "" {
 		paths.HomeExtensionsDir = filepath.Join(c.HomeJuexDir, "extensions")
+	}
+	if c.defaultHomeRuntimeConfigPath != "" {
+		paths.DefaultHomeExtensionsDir = filepath.Join(filepath.Dir(c.defaultHomeRuntimeConfigPath), "extensions")
 	}
 	if c.WorkDir != "" {
 		paths.ProjectAgentsDir = filepath.Join(c.WorkDir, ".agents")
@@ -268,6 +272,16 @@ func (c Config) SkillPolicy() SkillPolicy {
 		}
 	}
 	return policy
+}
+
+func (c Config) PluginPolicy() PluginPolicy {
+	if !c.Plugins.Configured {
+		return PluginPolicy{}
+	}
+	return PluginPolicy{
+		Allow:      append([]string(nil), c.Plugins.Allow...),
+		Configured: c.Plugins.Configured,
+	}
 }
 
 // RuntimeLimits contains runtime policy values after config resolution.

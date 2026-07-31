@@ -50,6 +50,7 @@ type Config struct {
 	Shell                     ShellProfile
 	Sandbox                   sandbox.Policy
 	Skills                    SkillsConfig
+	Plugins                   PluginPolicy
 	Fleet                     FleetConfig
 	EnableUserAgentsResources bool
 
@@ -110,6 +111,7 @@ type fileConfig struct {
 	Shell                     *ShellConfig      `yaml:"shell"`
 	Sandbox                   sandboxConfig     `yaml:"sandbox"`
 	Skills                    skillsConfig      `yaml:"skills"`
+	Plugins                   pluginsConfig     `yaml:"plugins"`
 	Fleet                     *fleetFileConfig  `yaml:"fleet"`
 	Environment               environmentConfig `yaml:"environment"`
 }
@@ -270,6 +272,17 @@ type skillsConfig struct {
 	PromptBudgetChars int       `yaml:"prompt_budget_chars"`
 }
 
+// PluginPolicy is the effective logical-name allowlist after durable config
+// layers have been resolved.
+type PluginPolicy struct {
+	Allow      []string
+	Configured bool
+}
+
+type pluginsConfig struct {
+	Allow *[]string `yaml:"allow"`
+}
+
 func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
 	if node == nil || node.Kind == 0 || node.Tag == "!!null" {
 		return nil
@@ -362,7 +375,7 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 		return cfg, err
 	}
 	if strings.TrimSpace(opts.ConfigPath) != "" {
-		if err := applyYAMLFile(&cfg, explicitYAMLSource(opts.ConfigPath)); err != nil {
+		if err := applyExplicitYAMLFile(&cfg, opts.ConfigPath); err != nil {
 			return cfg, err
 		}
 	}
@@ -477,7 +490,7 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	err = applyYAMLFile(&cfg, explicitYAMLSource(path))
+	err = applyExplicitYAMLFile(&cfg, path)
 	if err != nil {
 		return cfg, err
 	}
@@ -494,7 +507,7 @@ func LoadFromFileForWorkDirForValidation(path, workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if err := applyYAMLFile(&cfg, explicitYAMLSource(path)); err != nil {
+	if err := applyExplicitYAMLFile(&cfg, path); err != nil {
 		return cfg, err
 	}
 	if err := finalizeConfigLoadForValidation(&cfg, "", true); err != nil {
@@ -510,7 +523,7 @@ func LoadFromFileForWorkDirWithModelOverride(path, workDir, modelRef string) (Co
 	if err != nil {
 		return cfg, err
 	}
-	err = applyYAMLFile(&cfg, explicitYAMLSource(path))
+	err = applyExplicitYAMLFile(&cfg, path)
 	if err != nil {
 		return cfg, err
 	}
@@ -758,6 +771,32 @@ func applyYAMLFile(cfg *Config, source yamlConfigSource) error {
 	return applyYAMLData(cfg, data, source)
 }
 
+func applyExplicitYAMLFile(cfg *Config, path string) error {
+	// A CLI may point --config at a durable file that was already loaded.
+	// Preserve that file's durable scope and avoid applying it twice.
+	loadedPaths := []string{
+		cfg.DefaultHomeRuntimeConfigPath(),
+		cfg.HomeRuntimeConfigPath(),
+		cfg.RuntimeConfigPath(),
+	}
+	for _, loadedPath := range loadedPaths {
+		if loadedPath == "" {
+			continue
+		}
+		sameLoadedFile, err := sameConfigPath(path, loadedPath)
+		if err != nil {
+			return err
+		}
+		if sameLoadedFile {
+			if _, err := os.Stat(path); err != nil {
+				return err
+			}
+			return nil
+		}
+	}
+	return applyYAMLFile(cfg, explicitYAMLSource(path))
+}
+
 func applyYAMLData(cfg *Config, data []byte, source yamlConfigSource) error {
 	var fc fileConfig
 	dec := yaml.NewDecoder(bytes.NewReader(data))
@@ -794,6 +833,15 @@ func applyYAMLData(cfg *Config, data []byte, source yamlConfigSource) error {
 	applyCompactionConfig(cfg, fc.Compaction)
 	applyRuntimeConfig(cfg, fc.Runtime)
 	if err := applySkillsConfig(cfg, fc.Skills); err != nil {
+		return fmt.Errorf("config: parse %s: %w", source.Path, err)
+	}
+	if fc.Plugins.Allow != nil && !source.allowsPluginPolicy() {
+		return fmt.Errorf(
+			"config: parse %s: plugins.allow is only supported in default Home, instance Home, or workspace config",
+			source.Path,
+		)
+	}
+	if err := applyPluginsConfig(cfg, fc.Plugins); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
 	if err := applySandboxConfig(cfg, fc.Sandbox); err != nil {
@@ -918,6 +966,41 @@ func applySkillsConfig(cfg *Config, fileSkills skillsConfig) error {
 		cfg.Skills.PromptBudgetChars = fileSkills.PromptBudgetChars
 	}
 	return nil
+}
+
+func applyPluginsConfig(cfg *Config, filePlugins pluginsConfig) error {
+	if filePlugins.Allow == nil {
+		return nil
+	}
+	allow, err := cleanPluginNames(*filePlugins.Allow)
+	if err != nil {
+		return err
+	}
+	cfg.Plugins.Allow = allow
+	cfg.Plugins.Configured = true
+	return nil
+}
+
+func cleanPluginNames(values []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for index, raw := range values {
+		name := strings.TrimSpace(raw)
+		if name == "" ||
+			name == "." ||
+			name == ".." ||
+			filepath.IsAbs(name) ||
+			strings.ContainsAny(name, `/\`) ||
+			strings.ContainsRune(name, 0) {
+			return nil, fmt.Errorf("plugins.allow[%d] must be a portable plugin directory name, got %q", index, raw)
+		}
+		if _, duplicate := seen[name]; duplicate {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out, nil
 }
 
 func cleanStringList(values []string) []string {
