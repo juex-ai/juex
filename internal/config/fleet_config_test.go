@@ -179,7 +179,9 @@ func TestLoadHomeFleetConfigRejectsInvalidDefaultBeforeInstance(t *testing.T) {
 	}
 
 	_, err := LoadHomeFleetConfig()
-	if err == nil || !strings.Contains(err.Error(), defaultPath) || !strings.Contains(err.Error(), "host:port") {
+	if err == nil ||
+		!strings.Contains(err.Error(), "fleet.addr") ||
+		!strings.Contains(err.Error(), `got "invalid"`) {
 		t.Fatalf("error = %v, want invalid default-home fleet config", err)
 	}
 }
