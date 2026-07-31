@@ -19,6 +19,7 @@ const (
 	workDirEnvKey              = "WORKDIR"
 	juexWorkDirEnvKey          = "JUEX_WORKDIR"
 	extDirEnvKey               = "JUEX_EXT_DIR"
+	extDataDirEnvKey           = "JUEX_EXT_DATA_DIR"
 	mcpTransportStdio          = "stdio"
 	mcpTransportHTTP           = "http"
 	mcpTransportStreamableHTTP = "streamable-http"
@@ -119,6 +120,8 @@ type ServerSpec struct {
 	envSet     bool
 	urlSet     bool
 	headersSet bool
+
+	extensionDataDirSet bool
 }
 
 func (s *ServerSpec) UnmarshalJSON(data []byte) error {
@@ -183,6 +186,18 @@ func (s *ServerSpec) UnmarshalJSON(data []byte) error {
 // Config mirrors the mcp.json file root.
 type Config struct {
 	MCPServers map[string]ServerSpec `json:"mcpServers"`
+}
+
+// HasLocalServers reports whether the config contains a process-backed stdio
+// server. Transport classification remains owned by the MCP package.
+func (c Config) HasLocalServers() bool {
+	for _, spec := range c.MCPServers {
+		transport, err := serverTransport(spec)
+		if err == nil && transport == mcpTransportStdio {
+			return true
+		}
+	}
+	return false
 }
 
 // LoadConfig reads and validates mcp.json. A missing file produces an empty
@@ -407,9 +422,10 @@ func isLoopbackHost(host string) bool {
 }
 
 type PrepareOptions struct {
-	WorkDir      string
-	ExtensionDir string
-	Environment  environment.Snapshot
+	WorkDir          string
+	ExtensionDir     string
+	ExtensionDataDir string
+	Environment      environment.Snapshot
 }
 
 // PrepareConfig returns a runtime-ready copy of cfg for a specific Juex work
@@ -437,6 +453,13 @@ func PrepareConfigWithOptions(cfg Config, opts PrepareOptions) (Config, error) {
 		}
 		runtimeEnv[extDirEnvKey] = extDir
 	}
+	if opts.ExtensionDataDir != "" {
+		dataDir := opts.ExtensionDataDir
+		if abs, err := filepath.Abs(dataDir); err == nil {
+			dataDir = abs
+		}
+		runtimeEnv[extDataDirEnvKey] = dataDir
+	}
 	out := Config{MCPServers: make(map[string]ServerSpec, len(cfg.MCPServers))}
 	for _, name := range sortedServerNames(cfg.MCPServers) {
 		spec := cfg.MCPServers[name]
@@ -453,11 +476,15 @@ func PrepareConfigWithOptions(cfg Config, opts PrepareOptions) (Config, error) {
 			headersSet: spec.headersSet,
 		}
 		if spec.Command != "" {
+			prepared.extensionDataDirSet = opts.ExtensionDataDir != ""
 			prepared.Env = make(map[string]string, len(spec.Env)+len(runtimeEnv))
 			for i, arg := range spec.Args {
 				prepared.Args[i] = expandRuntimeEnvRefs(arg, runtimeEnv)
 			}
 			for k, v := range spec.Env {
+				if strings.EqualFold(k, extDataDirEnvKey) {
+					continue
+				}
 				prepared.Env[k] = expandRuntimeEnvRefs(v, runtimeEnv)
 			}
 			for k, v := range runtimeEnv {
@@ -567,8 +594,11 @@ func RuntimeEnv(workDir string) map[string]string {
 }
 
 func expandRuntimeEnvRefs(s string, env map[string]string) string {
-	for _, key := range []string{extDirEnvKey, juexWorkDirEnvKey, workDirEnvKey} {
-		value := env[key]
+	for _, key := range []string{extDataDirEnvKey, extDirEnvKey, juexWorkDirEnvKey, workDirEnvKey} {
+		value, ok := env[key]
+		if !ok {
+			continue
+		}
 		s = strings.ReplaceAll(s, "${"+key+"}", value)
 		s = replaceUnbracedEnvRef(s, key, value)
 	}

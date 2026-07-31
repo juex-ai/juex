@@ -165,6 +165,114 @@ func TestPrepareConfigRejectsMissingCredentialEnvironment(t *testing.T) {
 	}
 }
 
+func TestConfigHasLocalServersOwnsTransportClassification(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		want bool
+	}{
+		{
+			name: "local stdio",
+			cfg: Config{MCPServers: map[string]ServerSpec{
+				"local": {Command: "server"},
+			}},
+			want: true,
+		},
+		{
+			name: "remote only",
+			cfg: Config{MCPServers: map[string]ServerSpec{
+				"remote": {Type: "http", URL: "https://mcp.example.com/mcp"},
+			}},
+		},
+		{
+			name: "mixed",
+			cfg: Config{MCPServers: map[string]ServerSpec{
+				"local":  {Type: "stdio", Command: "server"},
+				"remote": {Type: "streamable-http", URL: "https://mcp.example.com/mcp"},
+			}},
+			want: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.HasLocalServers(); got != tc.want {
+				t.Fatalf("HasLocalServers() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPrepareConfigWithOptionsInjectsExtensionDataDirOnlyIntoLocalServers(t *testing.T) {
+	workDir := t.TempDir()
+	extensionDir := filepath.Join(t.TempDir(), "installed demo")
+	dataDir := filepath.Join(t.TempDir(), "agent data")
+	cfg, err := loadConfigBody(t, `{
+  "mcpServers": {
+    "local": {
+      "command": "${JUEX_EXT_DIR}/bin/server",
+      "args": ["--data", "$JUEX_EXT_DATA_DIR"],
+      "env": {
+        "DATA_COPY": "${JUEX_EXT_DATA_DIR}",
+        "JUEX_EXT_DATA_DIR": "/spoofed"
+      }
+    },
+    "remote": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp"
+    }
+  }
+}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := PrepareConfigWithOptions(cfg, PrepareOptions{
+		WorkDir:          workDir,
+		ExtensionDir:     extensionDir,
+		ExtensionDataDir: dataDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := got.MCPServers["local"]
+	if local.Command != filepath.Join(extensionDir, "bin", "server") {
+		t.Fatalf("local command = %q", local.Command)
+	}
+	if got := strings.Join(local.Args, "\x00"); got != "--data\x00"+dataDir {
+		t.Fatalf("local args = %#v", local.Args)
+	}
+	if local.Env["JUEX_EXT_DATA_DIR"] != dataDir || local.Env["DATA_COPY"] != dataDir {
+		t.Fatalf("local env = %#v", local.Env)
+	}
+	remote := got.MCPServers["remote"]
+	if remote.Env != nil || remote.Args != nil {
+		t.Fatalf("remote process environment leaked: %+v", remote)
+	}
+}
+
+func TestPrepareConfigWithOptionsRemovesExtensionDataDirFromNonPluginServer(t *testing.T) {
+	cfg := Config{MCPServers: map[string]ServerSpec{
+		"local": {
+			Command: "server",
+			Env: map[string]string{
+				"JUEX_EXT_DATA_DIR": "/spoofed",
+				"KEEP":              "value",
+			},
+		},
+	}}
+	got, err := PrepareConfigWithOptions(cfg, PrepareOptions{WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := got.MCPServers["local"].Env
+	if _, ok := env["JUEX_EXT_DATA_DIR"]; ok {
+		t.Fatalf("non-plugin server received extension data dir: %#v", env)
+	}
+	if env["KEEP"] != "value" {
+		t.Fatalf("ordinary server env lost: %#v", env)
+	}
+}
+
 func TestCredentialValuesAreRedactedFromFormattingAndJSON(t *testing.T) {
 	const secret = "literal-static-secret"
 	cfg, err := loadConfigBody(t, `{"mcpServers":{"remote":{"type":"http","url":"https://mcp.example.com/mcp","headers":{"Authorization":"Bearer `+secret+`"}}}}`)

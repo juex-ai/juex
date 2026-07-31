@@ -194,6 +194,7 @@ func runFakeServer() {
 						"workdir=" + os.Getenv("WORKDIR"),
 						"juex_workdir=" + os.Getenv("JUEX_WORKDIR"),
 						"workspace=" + os.Getenv("WORKSPACE"),
+						"ext_data_dir=" + os.Getenv("JUEX_EXT_DATA_DIR"),
 						"args=" + strings.Join(os.Args[1:], "|"),
 					}, "\n")
 				}
@@ -844,6 +845,83 @@ func TestPrepareConfigWithOptions_InjectsExtensionDir(t *testing.T) {
 	}
 	if alpha.Env["JUEX_EXT_DIR"] != extDir || alpha.Env["EXT_ROOT"] != extDir {
 		t.Fatalf("env = %+v", alpha.Env)
+	}
+}
+
+func TestMCPClient_ExtensionDataDirReachesLocalServer(t *testing.T) {
+	workDir := t.TempDir()
+	dataDir := filepath.Join(t.TempDir(), "agent data")
+	cfg, err := PrepareConfigWithOptions(Config{MCPServers: map[string]ServerSpec{
+		"fake": {
+			Command: os.Args[0],
+			Args:    []string{"--data", "$JUEX_EXT_DATA_DIR"},
+			Env: map[string]string{
+				"JUEX_FAKE_MCP":            "1",
+				"JUEX_FAKE_MCP_ENV_DETAIL": "1",
+			},
+		},
+	}}, PrepareOptions{
+		WorkDir:          workDir,
+		ExtensionDataDir: dataDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, err := Connect(ctx, "fake", cfg.MCPServers["fake"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	out, err := client.CallTool(ctx, "envcheck", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"ext_data_dir=" + dataDir,
+		"args=--data|" + dataDir,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("envcheck output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestMCPClient_NonPluginServerDoesNotInheritExtensionDataDir(t *testing.T) {
+	snapshot, err := environment.Resolve(environment.Options{
+		Inherited: []string{"JUEX_EXT_DATA_DIR=/inherited"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := PrepareConfigWithOptions(Config{MCPServers: map[string]ServerSpec{
+		"fake": {
+			Command: os.Args[0],
+			Env: map[string]string{
+				"JUEX_FAKE_MCP":            "1",
+				"JUEX_FAKE_MCP_ENV_DETAIL": "1",
+			},
+		},
+	}}, PrepareOptions{WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, err := ConnectWithOptions(ctx, "fake", cfg.MCPServers["fake"], ConnectOptions{
+		Environment: snapshot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	out, err := client.CallTool(ctx, "envcheck", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "ext_data_dir=\n") {
+		t.Fatalf("non-plugin server inherited extension data dir:\n%s", out)
 	}
 }
 

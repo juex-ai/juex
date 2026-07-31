@@ -85,6 +85,7 @@ func TestResolveRejectsStrictInvalidAndReservedEntries(t *testing.T) {
 		{name: "invalid name", values: map[string]string{"BAD-NAME": "x"}, want: "BAD-NAME"},
 		{name: "nul value", values: map[string]string{"GOOD": "x\x00y"}, want: "NUL"},
 		{name: "reserved", values: map[string]string{"JUEX_HOME": "/tmp/other"}, want: "reserved"},
+		{name: "extension data reserved", values: map[string]string{"JUEX_EXT_DATA_DIR": "/tmp/other"}, want: "reserved"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

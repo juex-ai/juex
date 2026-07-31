@@ -88,7 +88,7 @@ configured value is intentionally granted to provider code and managed MCP,
 Observable, hook, shell, and grep processes. Juex rejects portable-name
 violations, NUL bytes, Windows case conflicts, and bootstrap/runtime names such
 as `JUEX_HOME`, `HOME`, `USERPROFILE`, `WORKDIR`, `JUEX_WORKDIR`, and
-`JUEX_EXT_DIR`.
+`JUEX_EXT_DIR` and `JUEX_EXT_DATA_DIR`.
 
 MCP servers are configured separately from `juex.yaml`. Personal servers live
 in `~/.agents/mcp.json`; project servers live in
@@ -326,6 +326,7 @@ $JUEX_HOME/
     ├── api.sock                 # preferred local API endpoint while serving
     ├── history.json             # cached transcript summaries + active primary id
     ├── logs/fleet.log           # detached child stdout and stderr
+    ├── extensions/<name>/       # Agent-owned persistent plugin data
     ├── memory/
     ├── observables/             # generated runs, observations, and schedule state
     └── sessions/<id>/
@@ -373,9 +374,14 @@ extension hooks must set `trusted: true`; JueX-home extension hooks are trusted
 by location. The allowlist authorizes a logical name, so a work-local
 same-name bundle can override a Home bundle; it is not a publisher signature
 or source-authentication mechanism.
-Extension MCP servers receive `JUEX_EXT_DIR` alongside `WORKDIR` and
-`JUEX_WORKDIR`. Identity-owned runtime state lives under
-`$JUEX_HOME/agents/<id>`; workspace artifacts and Observable
+Local extension MCP servers receive `JUEX_EXT_DIR`, the selected installation
+root, and `JUEX_EXT_DATA_DIR`, the private persistent directory at
+`$JUEX_HOME/agents/<id>/extensions/<name>`, alongside `WORKDIR` and
+`JUEX_WORKDIR`. The data directory is created with private permissions only
+when a selected local MCP server is prepared; remote-only extensions and
+state-free resource previews do not create or receive it. Plugin data survives
+runtime restarts, Workspace moves, allowlist changes, and bundle uninstall, and
+is removed with the owning Agent. Workspace artifacts and Observable
 definitions remain under `.juex/`. Provider configuration uses the same
 default-home then instance-home merge. A serving agent prefers
 `unix://$JUEX_HOME/agents/<id>/api.sock` and falls back loudly to an ephemeral
@@ -479,6 +485,10 @@ temporary scratch paths needed by normal shell tools, but do not silently reopen
 arbitrary user paths outside the workspace. Unsupported platforms, missing
 helpers, permissions errors, or policies a backend cannot enforce fail closed
 instead of falling back to unsandboxed execution.
+Extension-aware sandbox requests may add only the owning plugin's exact Agent
+data directory as a writable root. An overlap with `blocked_paths`, including
+through symlinks, fails before process startup; the Agent parent and sibling
+plugin directories are not granted.
 
 Workspace Observables are configured sources that emit durable Observations.
 A Command Observable captures bounded stdout/stderr batches from a managed

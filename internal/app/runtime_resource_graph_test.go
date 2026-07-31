@@ -1,13 +1,16 @@
 package app
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
+	"github.com/juex-ai/juex/internal/extensions"
 	"github.com/juex-ai/juex/internal/skills"
 )
 
@@ -170,6 +173,217 @@ commands:
 	}
 	if !hookNode.RequireTrust || !hookNode.StrictConflicts {
 		t.Fatalf("hook node flags = %+v", hookNode)
+	}
+}
+
+func TestLoadMCPConfigRefsCreatesAgentOwnedDataDirForSelectedLocalExtension(t *testing.T) {
+	home := t.TempDir()
+	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	extensionDir := filepath.Join(home, "extensions", "demo")
+	mustWriteRuntimeStatusFile(t, filepath.Join(extensionDir, "mcp.json"), `{
+  "mcpServers": {
+    "local": {
+      "command": "${JUEX_EXT_DIR}/bin/server",
+      "args": ["--data", "$JUEX_EXT_DATA_DIR"],
+      "env": {"DATA_COPY": "${JUEX_EXT_DATA_DIR}"}
+    },
+    "remote": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp"
+    }
+  }
+}`)
+	graph, err := ResolveRuntimeResourceGraph(config.Config{
+		WorkDir:      work,
+		HomeJuexDir:  home,
+		AgentAddress: address,
+		Plugins:      allowPlugins("demo"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(address.StateDir(), "extensions", "demo")
+	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+		t.Fatalf("resource discovery created data dir, stat error = %v", err)
+	}
+	var extensionNode RuntimeResourceNode
+	for _, node := range graph.Nodes() {
+		if node.Kind == RuntimeResourceExtension {
+			extensionNode = node
+			break
+		}
+	}
+	if extensionNode.ExtensionDataDir != dataDir {
+		t.Fatalf("extension node data dir = %q, want %q", extensionNode.ExtensionDataDir, dataDir)
+	}
+
+	_, preview, _, err := loadMCPConfigRefs(graph.MCPConfigs(), work, environment.Snapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+		t.Fatalf("status-style config preview created data dir, stat error = %v", err)
+	}
+	if _, ok := preview.MCPServers["local"].Env["JUEX_EXT_DATA_DIR"]; ok {
+		t.Fatalf("status-style config preview injected data dir: %#v", preview.MCPServers["local"].Env)
+	}
+
+	_, merged, _, err := loadMCPConfigRefsForStartup(graph.MCPConfigs(), work, environment.Snapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(dataDir); err != nil || !info.IsDir() {
+		t.Fatalf("prepared data dir info = %+v, %v", info, err)
+	}
+	local := merged.MCPServers["local"]
+	if local.Command != filepath.Join(extensionDir, "bin", "server") {
+		t.Fatalf("local command = %q", local.Command)
+	}
+	if local.Env["JUEX_EXT_DATA_DIR"] != dataDir || local.Env["DATA_COPY"] != dataDir {
+		t.Fatalf("local env = %#v", local.Env)
+	}
+	if remote := merged.MCPServers["remote"]; remote.Env != nil {
+		t.Fatalf("remote environment leaked = %#v", remote.Env)
+	}
+}
+
+func TestLoadMCPConfigRefsDoesNotCreateDataDirForRemoteOnlyExtension(t *testing.T) {
+	home := t.TempDir()
+	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	extensionDir := filepath.Join(home, "extensions", "remote")
+	mustWriteRuntimeStatusFile(t, filepath.Join(extensionDir, "mcp.json"), `{
+  "mcpServers": {
+    "remote": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp"
+    }
+  }
+}`)
+	graph, err := ResolveRuntimeResourceGraph(config.Config{
+		WorkDir:      t.TempDir(),
+		HomeJuexDir:  home,
+		AgentAddress: address,
+		Plugins:      allowPlugins("remote"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := loadMCPConfigRefsForStartup(graph.MCPConfigs(), t.TempDir(), environment.Snapshot{}); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(address.StateDir(), "extensions", "remote")
+	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+		t.Fatalf("remote-only extension created data dir, stat error = %v", err)
+	}
+}
+
+func TestLoadMCPConfigRefsDoesNotCreateDataDirWhenMixedExtensionPreparationFails(t *testing.T) {
+	home := t.TempDir()
+	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	extensionDir := filepath.Join(home, "extensions", "mixed")
+	mustWriteRuntimeStatusFile(t, filepath.Join(extensionDir, "mcp.json"), `{
+  "mcpServers": {
+    "local": {"command": "local-server"},
+    "remote": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {"Authorization": "Bearer ${MISSING_TOKEN}"}
+    }
+  }
+}`)
+	graph, err := ResolveRuntimeResourceGraph(config.Config{
+		WorkDir:      t.TempDir(),
+		HomeJuexDir:  home,
+		AgentAddress: address,
+		Plugins:      allowPlugins("mixed"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = loadMCPConfigRefsForStartup(graph.MCPConfigs(), t.TempDir(), environment.Snapshot{})
+	if err == nil || !strings.Contains(err.Error(), "MISSING_TOKEN") {
+		t.Fatalf("startup error = %v, want missing credential", err)
+	}
+	dataDir := filepath.Join(address.StateDir(), "extensions", "mixed")
+	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+		t.Fatalf("failed extension preparation created data dir, stat error = %v", err)
+	}
+}
+
+func TestLoadMCPConfigRefsDoesNotPrepareOverriddenLocalExtension(t *testing.T) {
+	home := t.TempDir()
+	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	extensionPath := filepath.Join(t.TempDir(), "extension-mcp.json")
+	projectPath := filepath.Join(t.TempDir(), "project-mcp.json")
+	mustWriteRuntimeStatusFile(t, extensionPath, `{"mcpServers":{"shared":{"command":"extension-server"}}}`)
+	mustWriteRuntimeStatusFile(t, projectPath, `{"mcpServers":{"shared":{"command":"project-server"}}}`)
+	context := newExtensionRuntimeContext(address, extensions.Extension{
+		Name:   "demo",
+		Dir:    filepath.Dir(extensionPath),
+		Source: extensions.Source("demo"),
+	})
+
+	_, merged, _, err := loadMCPConfigRefsForStartup([]mcpConfigRef{
+		{Path: extensionPath, Source: extensions.Source("demo"), ExtensionRuntime: context},
+		{Path: projectPath, Source: "project"},
+	}, t.TempDir(), environment.Snapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := merged.MCPServers["shared"].Command; got != "project-server" {
+		t.Fatalf("winning command = %q", got)
+	}
+	if _, err := os.Stat(context.DataDir); !os.IsNotExist(err) {
+		t.Fatalf("overridden extension created data dir, stat error = %v", err)
+	}
+}
+
+func TestResolveRuntimeResourceGraphStateFreePreviewHasNoExtensionDataDir(t *testing.T) {
+	work := t.TempDir()
+	mustWriteRuntimeStatusFile(t, filepath.Join(work, ".juex", "extensions", "demo", "mcp.json"), `{"mcpServers":{"local":{"command":"server"}}}`)
+	graph, err := ResolveRuntimeResourceGraph(config.Config{
+		WorkDir: work,
+		Plugins: allowPlugins("demo"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range graph.Nodes() {
+		if node.ExtensionName == "demo" && node.ExtensionDataDir != "" {
+			t.Fatalf("state-free node has data dir: %+v", node)
+		}
+	}
+	_, merged, _, err := loadMCPConfigRefs(graph.MCPConfigs(), work, environment.Snapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := merged.MCPServers["local"].Env["JUEX_EXT_DATA_DIR"]; ok {
+		t.Fatalf("state-free preview injected JUEX_EXT_DATA_DIR: %#v", merged.MCPServers["local"].Env)
 	}
 }
 

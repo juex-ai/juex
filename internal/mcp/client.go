@@ -221,6 +221,9 @@ func newSDKTransport(
 	}
 	cmd := exec.Command(command, spec.Args...)
 	cmd.Env = opts.Environment.Environ(spec.Env)
+	if !spec.extensionDataDirSet {
+		cmd.Env = withoutEnvironmentKey(cmd.Env, extDataDirEnvKey)
+	}
 	stderrTail := newStderrTailBuffer(mcpStderrTailBytes)
 	stderrWriters := []io.Writer{stderrTail}
 	if opts.ForwardStderr && opts.Stderr != nil {
@@ -228,6 +231,18 @@ func newSDKTransport(
 	}
 	cmd.Stderr = io.MultiWriter(stderrWriters...)
 	return &sdkmcp.CommandTransport{Command: cmd}, cmd, stderrTail, false, nil
+}
+
+func withoutEnvironmentKey(entries []string, key string) []string {
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok && strings.EqualFold(name, key) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 func (c *Client) Name() string { return c.name }

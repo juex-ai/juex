@@ -213,7 +213,7 @@ implementation decisions live.
 | `internal/tools` | Tool registry and dispatch, builtin file/shell/search adapters, Tool result normalization and output hygiene | Canonical chunked-write lifecycle, Provider wire quirks, Session persistence, Observable/MCP source lifecycles |
 | `internal/chunkedwrite` | Canonical chunked-write lifecycle facts and deterministic state derivation | Tool schemas/dispatch, filesystem execution, runtime Event transport |
 | `internal/hooks` | Trusted hook config, matching, bounded command execution, and hook result facts | Lifecycle phase ordering, interpretation of deny/continue results, Tool execution |
-| `internal/sandbox` | Command sandbox policy, platform backend selection, execution wrapping, structured availability errors | Shell Tool lifecycle, config parsing, runtime permission policy outside commands |
+| `internal/sandbox` | Command sandbox policy, platform backend selection, exact additional-writable-root projection, blocked-path conflict checks, execution wrapping, structured availability errors | Shell Tool lifecycle, config parsing, runtime permission policy outside commands |
 | `internal/observable` | Tagged Command Observable/Schedule specs, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
 | `internal/eventmedia` | Workdir-confined external-event attachment validation, size gates, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
 | `internal/mcp` | Adapter over the official Go SDK: Claude-compatible MCP config normalization, command and Streamable HTTP sessions, static HTTP header handling, Tool discovery, staged remote readiness, custom notification preservation, and transport-specific diagnostics | Protocol framing/negotiation, Turn policy, active Session selection, Web ownership |
@@ -222,7 +222,7 @@ implementation decisions live.
 | `internal/prompt` | System-prompt section assembly from guidance, Skills, Memory, runtime metadata, and shell profile | Provider wire formatting, Session persistence, resource discovery policy |
 | `internal/artifact` | Workspace-rooted path safety, atomic byte storage, content addressing, bounded reads, integrity verification | Media format policy, Provider encoding, context preview policy, retention |
 | `internal/usermedia` | User image validation, per-turn limits, Session namespace policy, media-reference verification | Artifact filesystem mechanics, HTTP multipart parsing, Provider encoding |
-| `internal/app` | Process composition, Session attachment, Turn admission, external input Session selection/delivery, application slash commands | Cobra grammar, HTTP parsing, Provider SDK behavior, Observation state machine |
+| `internal/app` | Process composition, Agent-scoped extension runtime context, Session attachment, Turn admission, external input Session selection/delivery, application slash commands | Cobra grammar, HTTP parsing, Provider SDK behavior, Observation state machine |
 | `internal/cli` | Cobra command grammar, flags, terminal/JSON presentation, CLI exit categories | Shared runtime policy, Session persistence, Fleet lifecycle |
 | `internal/web` | Single-Agent HTTP/SSE transport, browser DTOs, in-process Session cache, cancellation and read-only persisted views | Shared domain decisions, Provider Protocol, Fleet registry policy |
 | `frontend/` | Transcript assembly, visual presentation, DTO mirroring, interaction behavior | Runtime-status projection, backend policy, storage, Provider/runtime decisions |
@@ -705,6 +705,12 @@ filesystem tools so sensitive paths stay inaccessible regardless of whether the
 broader preset is `read_write` or `read_only`. Linux bubblewrap cannot mask a
 blocked path that does not exist without creating a host-visible mountpoint, so
 that backend fails closed for missing blocked paths instead of creating them.
+Callers may provide narrow additional writable roots without mutating the
+resolved sandbox policy. The runner normalizes Workspace and additional roots
+once for both platform backends and rejects any lexical or symlink-resolved
+ancestor, exact, or descendant overlap with `blocked_paths` before launching a
+wrapper. An extension context projects only its exact Agent-owned data
+directory, never the Agent parent or sibling plugin paths.
 Sandbox helper discovery uses the inherited launch snapshot rather than a
 workspace-controlled runtime `PATH`. Dynamic-loader variables such as `LD_*`,
 `DYLD_*`, and `GLIBC_TUNABLES` are removed from the wrapper process and restored
@@ -2107,6 +2113,7 @@ $JUEX_HOME/
     ├── api.sock                  # preferred local endpoint while serving
     ├── history.json              # cached session summaries + active primary id
     ├── logs/fleet.log            # detached child stdout + stderr
+    ├── extensions/<name>/        # Agent-owned persistent plugin data
     ├── memory/
     ├── observables/              # generated runs, observations, oversized payload files, and schedule state
     └── sessions/<id>/            # conversation history and session sidecars
@@ -2196,6 +2203,11 @@ This logical-name policy is not publisher or source authentication.
 Extension-provided MCP server, Skill, or Hook names still must not collide with
 existing resources or another selected extension. Runtime status reports
 selected extension resources as `ext:<name>`.
+For every selected bundle, `internal/app` derives an extension runtime context
+from the resolved Agent Address. Its persistent data directory is
+`<AgentAddress.StateDir()>/extensions/<name>`; state-free resource projections
+carry no data directory. Discovery remains installation-only and never creates
+runtime state.
 
 The workspace marker is globally ignored through Git's user excludes file,
 never by editing project `.gitignore`. Read-only `existing` resolution never
@@ -2302,7 +2314,15 @@ server `env` entries win over the global runtime snapshot after expansion, but
 Juex injects its reserved `WORKDIR`, `JUEX_WORKDIR`, and `JUEX_EXT_DIR` values
 last so server-local config cannot spoof runtime identity or extension paths.
 Extension MCP servers also receive and may expand `JUEX_EXT_DIR`, the absolute
-path to the extension bundle root.
+path to the extension bundle root. After layered conflict resolution, a
+winning local extension MCP config also causes its Agent-owned data directory
+to be prepared with mode `0700` on Unix. Local `command`, `args`, and `env`
+may expand `JUEX_EXT_DATA_DIR`; Juex injects the reserved value last. Remote
+MCP servers never receive this process environment, remote-only extensions do
+not create the directory, and the value never enters HTTP headers or the
+global runtime environment snapshot. Directory preparation rejects symlinks
+at the extension-data root or plugin directory and verifies the physical
+plugin path remains below the physical Agent extension-data root.
 
 ---
 

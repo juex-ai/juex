@@ -34,6 +34,51 @@ func TestLinuxReadOnlyProvidesWritableDevicesAndTemp(t *testing.T) {
 	}
 }
 
+func TestLinuxReadOnlyBindsExactAdditionalWritableRoot(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	dataRoot := filepath.Join(root, "agent", "extensions")
+	dataDir := filepath.Join(dataRoot, "demo")
+	sibling := filepath.Join(dataRoot, "other")
+	for _, path := range []string{workspace, dataDir, sibling} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy := DefaultPolicy()
+	policy.Enabled = true
+	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
+	got, err := (DefaultRunner{
+		RuntimeOS: "linux",
+		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+	}).Prepare(context.Background(), Request{
+		Policy:                  policy,
+		WorkspaceRoots:          []string{workspace},
+		AdditionalWritableRoots: []string{dataDir},
+		Spec:                    ExecSpec{Binary: "/bin/true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Join(got.Args, "\x00")
+	for _, want := range []string{
+		"--bind\x00" + workspace + "\x00" + workspace,
+		"--bind\x00" + dataDir + "\x00" + dataDir,
+	} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("args missing %q: %#v", want, got.Args)
+		}
+	}
+	for _, forbidden := range []string{
+		"--bind\x00" + dataRoot + "\x00" + dataRoot,
+		"--bind\x00" + sibling + "\x00" + sibling,
+	} {
+		if strings.Contains(args, forbidden) {
+			t.Fatalf("args grant forbidden root %q: %#v", forbidden, got.Args)
+		}
+	}
+}
+
 func TestLinuxBackendRestoresTargetEnvironmentInsideSandbox(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.Enabled = true
