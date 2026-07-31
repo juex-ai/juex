@@ -157,7 +157,7 @@ test("messagesToGroups preserves safe reasoning summaries and merge boundaries",
       blocks: [
         {
           type: "reasoning",
-          text: "first summary",
+          text: "    code line\n  keep indent  ",
           content: "encrypted-first",
           redacted: true,
         },
@@ -204,7 +204,10 @@ test("messagesToGroups preserves safe reasoning summaries and merge boundaries",
   const first = groups[0].units[0];
   assert.equal(first.kind, "reasoning");
   if (first.kind !== "reasoning") return;
-  assert.equal(first.block.text, "first summary\n\nsecond summary");
+  assert.equal(
+    first.block.text,
+    "    code line\n  keep indent  \n\nsecond summary",
+  );
   assert.equal(first.block.redacted, true);
   assert.equal(first.block.content, undefined);
   assert.equal(first.block.signature, undefined);

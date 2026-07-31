@@ -176,8 +176,7 @@ function appendReasoningUnit(
     thinkingProcessVisibleText(previous.block),
     thinkingProcessVisibleText(block),
   ]
-    .map((part) => part.trim())
-    .filter(Boolean)
+    .filter((part) => part.trim().length > 0)
     .join("\n\n");
   previous.block = {
     type: "reasoning",
