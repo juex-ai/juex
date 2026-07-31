@@ -48,7 +48,7 @@ func TestMCPClient_RemoteToolRoundTrip(t *testing.T) {
 	}
 }
 
-func TestMCPClient_RemoteStaticToken(t *testing.T) {
+func TestMCPClient_RemoteStaticHeader(t *testing.T) {
 	const token = "static-secret"
 	server := newRemoteMCPTestServer(t, func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -62,8 +62,8 @@ func TestMCPClient_RemoteStaticToken(t *testing.T) {
 
 	client, err := Connect(t.Context(), "remote", ServerSpec{
 		URL: server.URL,
-		Auth: &AuthSpec{
-			Token: &Credential{value: token},
+		Headers: map[string]Credential{
+			"Authorization": {value: "Bearer " + token},
 		},
 	})
 	if err != nil {
@@ -75,84 +75,6 @@ func TestMCPClient_RemoteStaticToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	if output != "remote: authorized" {
-		t.Fatalf("output = %q", output)
-	}
-}
-
-func TestMCPClient_RemoteRefreshTokenRetriesAfterUnauthorized(t *testing.T) {
-	const (
-		clientID     = "client-id"
-		clientSecret = "client-secret"
-		refreshToken = "refresh-secret"
-	)
-	var tokenRequests atomic.Int32
-	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		gotID, gotSecret, ok := r.BasicAuth()
-		if !ok || gotID != clientID || gotSecret != clientSecret ||
-			r.Form.Get("grant_type") != "refresh_token" {
-			http.Error(w, "invalid refresh request", http.StatusBadRequest)
-			return
-		}
-		attempt := tokenRequests.Add(1)
-		accessToken := "stale-access"
-		nextRefreshToken := "rotated-refresh"
-		if attempt == 1 {
-			if r.Form.Get("refresh_token") != refreshToken {
-				http.Error(w, "expected original refresh token", http.StatusBadRequest)
-				return
-			}
-		} else {
-			if r.Form.Get("refresh_token") != nextRefreshToken {
-				http.Error(w, "expected rotated refresh token", http.StatusBadRequest)
-				return
-			}
-			accessToken = "fresh-access"
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"access_token":  accessToken,
-			"refresh_token": nextRefreshToken,
-			"token_type":    "Bearer",
-			"expires_in":    3600,
-		})
-	}))
-	t.Cleanup(tokenServer.Close)
-
-	server := newRemoteMCPTestServer(t, func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Authorization") != "Bearer fresh-access" {
-				http.Error(w, "expired access token", http.StatusUnauthorized)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	})
-	client, err := Connect(t.Context(), "remote", ServerSpec{
-		URL: server.URL,
-		Auth: &AuthSpec{Refresh: &RefreshAuthSpec{
-			TokenURL:     tokenServer.URL,
-			ClientID:     clientID,
-			ClientSecret: &Credential{value: clientSecret},
-			RefreshToken: Credential{value: refreshToken},
-			Scopes:       []string{"mcp.tools"},
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	if got := tokenRequests.Load(); got != 2 {
-		t.Fatalf("token requests = %d, want 2", got)
-	}
-	output, err := client.CallTool(t.Context(), "echo", map[string]any{"text": "refreshed"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if output != "remote: refreshed" {
 		t.Fatalf("output = %q", output)
 	}
 }
@@ -385,8 +307,10 @@ func TestMCPClient_RemoteDiagnosticsRedactCredentials(t *testing.T) {
 	defer server.Close()
 
 	_, err := Connect(t.Context(), "remote", ServerSpec{
-		URL:  server.URL,
-		Auth: &AuthSpec{Token: &Credential{value: secret}},
+		URL: server.URL,
+		Headers: map[string]Credential{
+			"Authorization": {value: "Bearer " + secret},
+		},
 	})
 	if err == nil {
 		t.Fatal("expected authentication error")
@@ -398,82 +322,6 @@ func TestMCPClient_RemoteDiagnosticsRedactCredentials(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q does not contain %q", err, want)
 		}
-	}
-	if got := errorclass.Classify(err).Kind; got != errorclass.KindAuth {
-		t.Fatalf("error kind = %q, want auth", got)
-	}
-}
-
-func TestMCPClient_RefreshTokenErrorRedactsCredentials(t *testing.T) {
-	const (
-		clientSecret = "client-secret"
-		refreshToken = "refresh-secret"
-	)
-	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "bad "+clientSecret+" "+refreshToken, http.StatusBadRequest)
-	}))
-	defer tokenServer.Close()
-	remoteServer := newRemoteMCPTestServer(t, nil)
-
-	_, err := Connect(t.Context(), "remote", ServerSpec{
-		URL: remoteServer.URL,
-		Auth: &AuthSpec{Refresh: &RefreshAuthSpec{
-			TokenURL:     tokenServer.URL,
-			ClientID:     "client-id",
-			ClientSecret: &Credential{value: clientSecret},
-			RefreshToken: Credential{value: refreshToken},
-		}},
-	})
-	if err == nil {
-		t.Fatal("expected refresh error")
-	}
-	if strings.Contains(err.Error(), clientSecret) || strings.Contains(err.Error(), refreshToken) {
-		t.Fatalf("credential leaked in error: %v", err)
-	}
-	if !strings.Contains(err.Error(), "[REDACTED]") ||
-		!strings.Contains(err.Error(), "remote MCP authentication failed") {
-		t.Fatalf("error = %v", err)
-	}
-	if got := errorclass.Classify(err).Kind; got != errorclass.KindAuth {
-		t.Fatalf("error kind = %q, want auth", got)
-	}
-}
-
-func TestMCPClient_RefreshAccessTokenIsRedactedFromRemoteError(t *testing.T) {
-	const (
-		accessToken  = "dynamic-access-secret"
-		refreshToken = "refresh-secret"
-	)
-	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"access_token": accessToken,
-			"token_type":   "Bearer",
-			"expires_in":   3600,
-		})
-	}))
-	defer tokenServer.Close()
-	remoteServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "rejected "+strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), http.StatusUnauthorized)
-	}))
-	defer remoteServer.Close()
-
-	_, err := Connect(t.Context(), "remote", ServerSpec{
-		URL: remoteServer.URL,
-		Auth: &AuthSpec{Refresh: &RefreshAuthSpec{
-			TokenURL:     tokenServer.URL,
-			ClientID:     "client-id",
-			RefreshToken: Credential{value: refreshToken},
-		}},
-	})
-	if err == nil {
-		t.Fatal("expected authentication error")
-	}
-	if strings.Contains(err.Error(), accessToken) {
-		t.Fatalf("dynamic access token leaked in error: %v", err)
-	}
-	if !strings.Contains(err.Error(), "[REDACTED]") {
-		t.Fatalf("error = %v, want redacted body excerpt", err)
 	}
 	if got := errorclass.Classify(err).Kind; got != errorclass.KindAuth {
 		t.Fatalf("error kind = %q, want auth", got)

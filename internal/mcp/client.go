@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"sync"
@@ -196,20 +197,21 @@ func newSDKTransport(
 	opts ConnectOptions,
 ) (sdkmcp.Transport, *exec.Cmd, *stderrTailBuffer, bool, error) {
 	if spec.URL != "" {
-		authHandler, err := newOAuthHandler(spec.Auth)
+		endpoint, err := url.Parse(spec.URL)
 		if err != nil {
-			return nil, nil, nil, true, fmt.Errorf("mcp[%s]: auth: %w", name, err)
+			return nil, nil, nil, true, fmt.Errorf("mcp[%s]: url: %w", name, err)
 		}
 		httpClient := newSecureEndpointHTTPClient(&remoteDiagnosticRoundTripper{
 			base:           http.DefaultTransport,
-			redactions:     credentialValues(spec.Auth),
+			endpoint:       endpoint,
+			headers:        spec.Headers,
+			redactions:     headerCredentialValues(spec.Headers),
 			serverName:     name,
 			onNotification: opts.OnNotification,
 		})
 		return &sdkmcp.StreamableClientTransport{
-			Endpoint:     spec.URL,
-			HTTPClient:   httpClient,
-			OAuthHandler: authHandler,
+			Endpoint:   spec.URL,
+			HTTPClient: httpClient,
 		}, nil, nil, true, nil
 	}
 

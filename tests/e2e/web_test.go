@@ -185,7 +185,7 @@ func TestWeb_RemoteMCPToolRoundTrip(t *testing.T) {
 	if err := os.MkdirAll(projectAgents, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mcpJSON := fmt.Sprintf(`{"mcpServers":{"remote":{"url":%q}}}`, remote.URL)
+	mcpJSON := fmt.Sprintf(`{"mcpServers":{"remote":{"type":"http","url":%q}}}`, remote.URL)
 	if err := os.WriteFile(filepath.Join(projectAgents, "mcp.json"), []byte(mcpJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}

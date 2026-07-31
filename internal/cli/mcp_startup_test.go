@@ -255,8 +255,8 @@ func TestRunCmd_DryRunReportsMCPStartupErrors(t *testing.T) {
 func TestDoctorMCPProbesRemoteServer(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteCLITestFile(t, filepath.Join(dir, ".agents", "mcp.json"), `{
-  "mcpServers": {
-    "remote": {"url": "https://mcp.example.com/mcp"}
+	  "mcpServers": {
+	    "remote": {"type": "http", "url": "https://mcp.example.com/mcp"}
   }
 }`)
 
@@ -282,8 +282,8 @@ func TestDoctorMCPProbesRemoteServer(t *testing.T) {
 func TestDoctorMCPReportsRemoteReadinessStage(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteCLITestFile(t, filepath.Join(dir, ".agents", "mcp.json"), `{
-  "mcpServers": {
-    "remote": {"url": "https://mcp.example.com/mcp"}
+	  "mcpServers": {
+	    "remote": {"type": "http", "url": "https://mcp.example.com/mcp"}
   }
 }`)
 
@@ -330,8 +330,8 @@ func TestDoctorMCPReportsRemoteReadinessStage(t *testing.T) {
 func TestDoctorMCPOfflineSkipsRemoteProbe(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteCLITestFile(t, filepath.Join(dir, ".agents", "mcp.json"), `{
-  "mcpServers": {
-    "remote": {"url": "https://mcp.example.com/mcp"}
+	  "mcpServers": {
+	    "remote": {"type": "http", "url": "https://mcp.example.com/mcp"}
   }
 }`)
 	called := false
@@ -359,9 +359,10 @@ func TestDoctorMCPReportsMissingCredentialEnvironmentStage(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteCLITestFile(t, filepath.Join(dir, ".agents", "mcp.json"), `{
   "mcpServers": {
-    "remote": {
-      "url": "https://mcp.example.com/mcp",
-      "auth": {"token": "${MISSING_MCP_TOKEN}"}
+	    "remote": {
+	      "type": "http",
+	      "url": "https://mcp.example.com/mcp",
+	      "headers": {"Authorization": "Bearer ${MISSING_MCP_TOKEN}"}
     }
   }
 }`)

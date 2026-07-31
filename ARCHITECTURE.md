@@ -111,11 +111,11 @@ juex/
 │   │   ├── client.go
 │   │   ├── manager.go
 │   │   ├── readiness.go
-│   │   ├── sdk_auth.go
 │   │   ├── sdk_http_security.go
 │   │   ├── sdk_notification_transport.go
 │   │   ├── sdk_remote_diagnostic.go
-│   │   └── sdk_remote_notification.go
+│   │   ├── sdk_remote_notification.go
+│   │   └── sdk_secret.go
 │   ├── skills/     loader.go     # SKILL.md frontmatter loader
 │   ├── memory/     memory.go     # AGENTS.md hierarchy + entry store
 │   ├── frontmatter/parser.go     # shared YAML frontmatter parser
@@ -216,7 +216,7 @@ implementation decisions live.
 | `internal/sandbox` | Command sandbox policy, platform backend selection, execution wrapping, structured availability errors | Shell Tool lifecycle, config parsing, runtime permission policy outside commands |
 | `internal/observable` | Tagged Command Observable/Schedule specs, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
 | `internal/eventmedia` | Workdir-confined external-event attachment validation, size gates, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
-| `internal/mcp` | Adapter over the official Go SDK: MCP config normalization, command and Streamable HTTP sessions, OAuth token handling, Tool discovery, staged remote readiness, custom notification preservation, and transport-specific diagnostics | Protocol framing/negotiation, Turn policy, active Session selection, Web ownership |
+| `internal/mcp` | Adapter over the official Go SDK: Claude-compatible MCP config normalization, command and Streamable HTTP sessions, static HTTP header handling, Tool discovery, staged remote readiness, custom notification preservation, and transport-specific diagnostics | Protocol framing/negotiation, Turn policy, active Session selection, Web ownership |
 | `internal/memory` | `AGENTS.md` hierarchy loading, Agent-owned Memory Entry storage, memory Tool registration | Final prompt-section ordering, Session history, Skill loading |
 | `internal/skills` | `SKILL.md` frontmatter loading, Skill metadata, catalog prompt rendering, compression, and budget selection | Final system-prompt section assembly, task execution policy, Tool dispatch |
 | `internal/prompt` | System-prompt section assembly from guidance, Skills, Memory, runtime metadata, and shell profile | Provider wire formatting, Session persistence, resource discovery policy |
@@ -2182,10 +2182,21 @@ that write before read-only commands retry.
 The production client is a thin adapter over the official Go SDK. Local
 servers use `CommandTransport`; remote servers use
 `StreamableClientTransport`. The SDK owns JSON-RPC framing, initialization,
-protocol negotiation, Streamable HTTP reconnect, and OAuth request
-authorization. Juex owns configuration, transport-neutral Tool projection,
-process-scoped connection lifecycle, custom notification delivery, and
-transport-specific diagnostics.
+protocol negotiation, and Streamable HTTP reconnect. Juex owns configuration,
+static HTTP header injection, transport-neutral Tool projection, process-scoped
+connection lifecycle, custom notification delivery, and transport-specific
+diagnostics. Configured headers are added only to requests on the configured
+endpoint origin, so cross-origin redirects cannot receive credentials.
+
+The supported `mcpServers` JSON shape follows Claude's core transport fields.
+An omitted `type` selects `stdio`; explicit `type: "stdio"` is equivalent.
+Remote entries require `type: "http"` or `type: "streamable-http"`, both of
+which select the same Streamable HTTP implementation, plus `url` and optional
+static `headers`. Header values support `${VAR}` and `${VAR:-default}` expansion
+from the immutable runtime environment and remain redacted in formatting,
+JSON projections, logs, and remote error excerpts. Legacy SSE, Claude's
+WebSocket extension, interactive OAuth, and `headersHelper` are outside the
+supported transport subset and fail configuration instead of being ignored.
 
 `notifications/claude/channel` is preserved before the SDK rejects the custom
 method. Command connections use a `Connection.Read` decorator. Streamable HTTP
@@ -2248,7 +2259,7 @@ cover layered config behavior exercise the same manager API instead of a
 separate layered registration helper.
 
 Remote MCP readiness is staged as selection, credentials, then connectivity.
-Configuration and environment-backed credential failures retain that stage
+Configuration and environment-backed header failures retain that stage
 through wrapping. Runtime startup uses the negotiated connection and
 `tools/list` request, while `juex doctor` opens a bounded diagnostic session and
 issues its own `tools/list` request. Authentication and permission failures map

@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -59,18 +60,18 @@ func (d *remoteDiagnostic) enrich(err error) error {
 	d.mu.Unlock()
 
 	if kind, ok := errorclass.ExplicitKind(err); ok {
-		message := "remote MCP token request failed"
+		message := "remote MCP request failed"
 		switch kind {
 		case errorclass.KindAuth:
 			message = "remote MCP authentication failed"
 		case errorclass.KindPermission:
-			message = "remote MCP token request permission denied"
+			message = "remote MCP permission denied"
 		case errorclass.KindConnectivity:
-			message = "remote MCP token endpoint connectivity failed"
+			message = "remote MCP connectivity failed"
 		case errorclass.KindTimeout:
-			message = "remote MCP token request timed out"
+			message = "remote MCP request timed out"
 		case errorclass.KindRetryable:
-			message = "retryable remote MCP token request failed"
+			message = "retryable remote MCP request failed"
 		}
 		return errorclass.WithKind(kind, fmt.Errorf("%s: %w", message, err))
 	}
@@ -116,6 +117,8 @@ func (d *remoteDiagnostic) enrich(err error) error {
 
 type remoteDiagnosticRoundTripper struct {
 	base           http.RoundTripper
+	endpoint       *url.URL
+	headers        map[string]Credential
 	redactions     []string
 	serverName     string
 	onNotification func(Notification)
@@ -130,7 +133,15 @@ func (t *remoteDiagnosticRoundTripper) RoundTrip(request *http.Request) (*http.R
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	response, err := base.RoundTrip(request)
+	outbound := request
+	if len(t.headers) > 0 && sameURLOrigin(t.endpoint, request.URL) {
+		outbound = request.Clone(request.Context())
+		outbound.Header = request.Header.Clone()
+		for _, name := range sortedCredentialNames(t.headers) {
+			outbound.Header.Set(name, t.headers[name].Value())
+		}
+	}
+	response, err := base.RoundTrip(outbound)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +165,7 @@ func (t *remoteDiagnosticRoundTripper) RoundTrip(request *http.Request) (*http.R
 	}
 
 	redactions := append([]string(nil), t.redactions...)
-	if authorization := request.Header.Get("Authorization"); strings.HasPrefix(authorization, "Bearer ") {
+	if authorization := outbound.Header.Get("Authorization"); strings.HasPrefix(authorization, "Bearer ") {
 		redactions = append(redactions, strings.TrimPrefix(authorization, "Bearer "))
 	}
 	redactionValues := secretRedactionValues(redactions)
@@ -169,6 +180,29 @@ func (t *remoteDiagnosticRoundTripper) RoundTrip(request *http.Request) (*http.R
 		return nil, readErr
 	}
 	return response, nil
+}
+
+func sameURLOrigin(configured, request *url.URL) bool {
+	if configured == nil || request == nil {
+		return false
+	}
+	return strings.EqualFold(configured.Scheme, request.Scheme) &&
+		strings.EqualFold(configured.Hostname(), request.Hostname()) &&
+		effectiveURLPort(configured) == effectiveURLPort(request)
+}
+
+func effectiveURLPort(value *url.URL) string {
+	if port := value.Port(); port != "" {
+		return port
+	}
+	switch strings.ToLower(value.Scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
 }
 
 func longestString(values []string) int {

@@ -60,11 +60,13 @@ func TestCheckRemoteReadinessCredentials(t *testing.T) {
 		}
 	})
 
-	t.Run("configured empty token fails before probe", func(t *testing.T) {
+	t.Run("invalid configured header fails before probe", func(t *testing.T) {
 		probe := &recordingRemoteReadinessProbe{}
 		got := CheckRemoteReadiness(t.Context(), "remote", ServerSpec{
-			URL:  "https://mcp.example.com/mcp",
-			Auth: &AuthSpec{Token: &Credential{}},
+			URL: "https://mcp.example.com/mcp",
+			Headers: map[string]Credential{
+				"Bad Header": {value: "secret"},
+			},
 		}, RemoteReadinessOptions{Probe: probe})
 		if got.Stage != ReadinessStageCredentials || got.Status != ReadinessStatusFail {
 			t.Fatalf("result = %+v, want credentials failure", got)
@@ -72,8 +74,8 @@ func TestCheckRemoteReadinessCredentials(t *testing.T) {
 		if probe.called {
 			t.Fatal("credential failure should not call connectivity probe")
 		}
-		if !strings.Contains(got.Message, "token") {
-			t.Fatalf("message = %q, want token context", got.Message)
+		if !strings.Contains(got.Message, "header") {
+			t.Fatalf("message = %q, want header context", got.Message)
 		}
 	})
 
@@ -152,45 +154,6 @@ func TestSDKRemoteReadinessProbeUsesMCPRequest(t *testing.T) {
 	}
 }
 
-func TestSDKRemoteReadinessProbeBoundsOAuthRefresh(t *testing.T) {
-	started := make(chan struct{})
-	release := make(chan struct{})
-	tokenServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		close(started)
-		select {
-		case <-request.Context().Done():
-		case <-release:
-		}
-	}))
-	defer tokenServer.Close()
-	defer close(release)
-	remoteServer := newRemoteMCPTestServer(t, nil)
-
-	start := time.Now()
-	got := CheckRemoteReadiness(t.Context(), "remote", ServerSpec{
-		URL: remoteServer.URL,
-		Auth: &AuthSpec{Refresh: &RefreshAuthSpec{
-			TokenURL:     tokenServer.URL,
-			ClientID:     "client-id",
-			RefreshToken: Credential{value: "refresh-token"},
-		}},
-	}, RemoteReadinessOptions{Timeout: 50 * time.Millisecond})
-	if got.Stage != ReadinessStageConnectivity || got.Status != ReadinessStatusFail {
-		t.Fatalf("result = %+v, want connectivity timeout", got)
-	}
-	select {
-	case <-started:
-	default:
-		t.Fatal("OAuth refresh did not start")
-	}
-	if !errors.Is(got.Err, context.DeadlineExceeded) {
-		t.Fatalf("error = %v, want context deadline exceeded", got.Err)
-	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("readiness took %v, want OAuth refresh bounded by its timeout", elapsed)
-	}
-}
-
 func TestRemoteReadinessServerErrorNamesStage(t *testing.T) {
 	authErr := errorclass.WithKind(errorclass.KindAuth, errors.New("unauthorized"))
 	err := remoteReadinessServerError("remote", ServerSpec{URL: "https://mcp.example.com/mcp"}, "connect", authErr)
@@ -207,7 +170,7 @@ func TestRemoteReadinessServerErrorNamesStage(t *testing.T) {
 func TestMCPConfigErrorsExposeReadinessStage(t *testing.T) {
 	_, err := loadConfigBody(t, `{
 		"mcpServers": {
-			"remote": {"url": "http://mcp.example.com/mcp"}
+			"remote": {"type": "http", "url": "http://mcp.example.com/mcp"}
 		}
 	}`)
 	if stage, ok := ErrorReadinessStage(err); !ok || stage != ReadinessStageSelection {
@@ -217,8 +180,9 @@ func TestMCPConfigErrorsExposeReadinessStage(t *testing.T) {
 	cfg, err := loadConfigBody(t, `{
 		"mcpServers": {
 			"remote": {
+				"type": "http",
 				"url": "https://mcp.example.com/mcp",
-				"auth": {"token": "${MISSING_MCP_TOKEN}"}
+				"headers": {"Authorization": "Bearer ${MISSING_MCP_TOKEN}"}
 			}
 		}
 	}`)

@@ -16,12 +16,15 @@ import (
 )
 
 const (
-	workDirEnvKey     = "WORKDIR"
-	juexWorkDirEnvKey = "JUEX_WORKDIR"
-	extDirEnvKey      = "JUEX_EXT_DIR"
+	workDirEnvKey              = "WORKDIR"
+	juexWorkDirEnvKey          = "JUEX_WORKDIR"
+	extDirEnvKey               = "JUEX_EXT_DIR"
+	mcpTransportStdio          = "stdio"
+	mcpTransportHTTP           = "http"
+	mcpTransportStreamableHTTP = "streamable-http"
 )
 
-// Credential is a sensitive MCP authentication value. Value is the explicit
+// Credential is a sensitive MCP header value. Value is the explicit
 // boundary where transport construction may access the secret; diagnostics and
 // JSON projections remain redacted.
 type Credential struct {
@@ -49,8 +52,8 @@ func (e *ReadinessConfigError) Unwrap() error {
 	return e.Err
 }
 
-// CredentialResolutionError identifies a missing environment-backed MCP
-// credential without retaining or rendering the credential expression.
+// CredentialResolutionError identifies a missing environment-backed MCP header
+// without retaining or rendering the credential expression.
 type CredentialResolutionError struct {
 	Field               string
 	EnvironmentVariable string
@@ -68,6 +71,9 @@ func (e *CredentialResolutionError) Error() string {
 }
 
 func (c *Credential) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return fmt.Errorf("must be a string")
+	}
 	var value string
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -92,49 +98,37 @@ func (c Credential) Format(state fmt.State, _ rune) {
 	_, _ = io.WriteString(state, "[REDACTED]")
 }
 
-// Value returns the credential only for authentication transport construction.
+// Value returns the header value only for HTTP transport construction.
 func (c Credential) Value() string {
 	return c.value
 }
 
-// AuthSpec selects one supported non-interactive authentication mode.
-type AuthSpec struct {
-	Token   *Credential      `json:"token,omitempty"`
-	Refresh *RefreshAuthSpec `json:"refresh,omitempty"`
-}
-
-// RefreshAuthSpec contains the inputs required by oauth2.Config.TokenSource.
-type RefreshAuthSpec struct {
-	TokenURL     string      `json:"token_url"`
-	ClientID     string      `json:"client_id"`
-	ClientSecret *Credential `json:"client_secret,omitempty"`
-	RefreshToken Credential  `json:"refresh_token"`
-	Scopes       []string    `json:"scopes,omitempty"`
-}
-
-// ServerSpec mirrors a single entry in mcp.json's mcpServers map. Exactly one
-// of Command or URL is valid.
+// ServerSpec mirrors the Claude MCP JSON shape supported by Juex. An omitted
+// type selects stdio; http and streamable-http both select Streamable HTTP.
 type ServerSpec struct {
-	Command string            `json:"command,omitempty"`
-	Args    []string          `json:"args,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	URL     string            `json:"url,omitempty"`
-	Auth    *AuthSpec         `json:"auth,omitempty"`
+	Type    string                `json:"type,omitempty"`
+	Command string                `json:"command,omitempty"`
+	Args    []string              `json:"args,omitempty"`
+	Env     map[string]string     `json:"env,omitempty"`
+	URL     string                `json:"url,omitempty"`
+	Headers map[string]Credential `json:"headers,omitempty"`
 
+	typeSet    bool
 	commandSet bool
 	argsSet    bool
 	envSet     bool
 	urlSet     bool
-	authSet    bool
+	headersSet bool
 }
 
 func (s *ServerSpec) UnmarshalJSON(data []byte) error {
 	var raw struct {
+		Type    json.RawMessage `json:"type"`
 		Command json.RawMessage `json:"command"`
 		Args    json.RawMessage `json:"args"`
 		Env     json.RawMessage `json:"env"`
 		URL     json.RawMessage `json:"url"`
-		Auth    json.RawMessage `json:"auth"`
+		Headers json.RawMessage `json:"headers"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -146,6 +140,12 @@ func (s *ServerSpec) UnmarshalJSON(data []byte) error {
 	}
 
 	var decoded ServerSpec
+	if raw.Type != nil {
+		decoded.typeSet = true
+		if err := json.Unmarshal(raw.Type, &decoded.Type); err != nil {
+			return fmt.Errorf("type: %w", err)
+		}
+	}
 	if raw.Command != nil {
 		decoded.commandSet = true
 		if err := json.Unmarshal(raw.Command, &decoded.Command); err != nil {
@@ -170,23 +170,14 @@ func (s *ServerSpec) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("url: %w", err)
 		}
 	}
-	if raw.Auth != nil {
-		decoded.authSet = true
-		if err := decodeStrictConfigValue(raw.Auth, &decoded.Auth); err != nil {
-			return fmt.Errorf("auth: %w", err)
+	if raw.Headers != nil {
+		decoded.headersSet = true
+		if err := json.Unmarshal(raw.Headers, &decoded.Headers); err != nil {
+			return fmt.Errorf("headers: %w", err)
 		}
 	}
 	*s = decoded
 	return nil
-}
-
-func decodeStrictConfigValue(data []byte, destination any) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return err
-	}
-	return ensureConfigEOF(decoder)
 }
 
 // Config mirrors the mcp.json file root.
@@ -195,7 +186,7 @@ type Config struct {
 }
 
 // LoadConfig reads and validates mcp.json. A missing file produces an empty
-// config. Unknown fields are rejected so transport and authentication settings
+// config. Unknown fields are rejected so transport and security settings
 // cannot be silently ignored.
 func LoadConfig(path string) (Config, error) {
 	data, err := os.ReadFile(path)
@@ -232,8 +223,8 @@ func ensureConfigEOF(decoder *json.Decoder) error {
 	return err
 }
 
-// ValidateConfig validates the local-or-remote tagged union and remote
-// authentication shape without including credential values in errors.
+// ValidateConfig validates the supported Claude transport subset without
+// including header values in errors.
 func ValidateConfig(cfg Config) error {
 	for _, name := range sortedServerNames(cfg.MCPServers) {
 		if err := validateServerSpec(cfg.MCPServers[name]); err != nil {
@@ -253,39 +244,74 @@ func sortedServerNames(servers map[string]ServerSpec) []string {
 }
 
 func validateServerSpec(spec ServerSpec) error {
-	hasCommand := spec.commandSet || spec.Command != ""
-	hasURL := spec.urlSet || spec.URL != ""
-	if hasCommand == hasURL {
-		return selectionConfigError(fmt.Errorf("exactly one of command or url is required"))
+	transport, err := serverTransport(spec)
+	if err != nil {
+		return selectionConfigError(err)
 	}
-	if hasCommand {
+	switch transport {
+	case mcpTransportStdio:
 		if strings.TrimSpace(spec.Command) == "" {
-			return selectionConfigError(fmt.Errorf("command must not be empty"))
+			return selectionConfigError(fmt.Errorf("command is required for stdio servers"))
 		}
-		if spec.authSet || spec.Auth != nil {
-			return selectionConfigError(fmt.Errorf("auth is only valid for remote servers"))
+		if spec.urlSet || spec.URL != "" {
+			return selectionConfigError(fmt.Errorf("url is not valid for stdio servers"))
+		}
+		if spec.headersSet || spec.Headers != nil {
+			return selectionConfigError(fmt.Errorf("headers are only valid for HTTP servers"))
 		}
 		return nil
+	case mcpTransportHTTP:
+		if strings.TrimSpace(spec.URL) == "" {
+			return selectionConfigError(fmt.Errorf("url is required for HTTP servers"))
+		}
+		if spec.commandSet || spec.Command != "" {
+			return selectionConfigError(fmt.Errorf("command is not valid for HTTP servers"))
+		}
+		if spec.argsSet || spec.Args != nil {
+			return selectionConfigError(fmt.Errorf("args are only valid for stdio servers"))
+		}
+		if spec.envSet || spec.Env != nil {
+			return selectionConfigError(fmt.Errorf("env is only valid for stdio servers"))
+		}
+		if err := validateSecureEndpoint(spec.URL); err != nil {
+			return selectionConfigError(fmt.Errorf("url: %w", err))
+		}
+		if spec.headersSet && spec.Headers == nil {
+			return credentialsConfigError(fmt.Errorf("headers must not be null"))
+		}
+		if err := validateHeaders(spec.Headers); err != nil {
+			return credentialsConfigError(err)
+		}
+		return nil
+	default:
+		panic("unreachable MCP transport")
 	}
-	if strings.TrimSpace(spec.URL) == "" {
-		return selectionConfigError(fmt.Errorf("url must not be empty"))
+}
+
+func serverTransport(spec ServerSpec) (string, error) {
+	transport := strings.TrimSpace(spec.Type)
+	if !spec.typeSet && transport == "" {
+		if spec.urlSet {
+			return "", fmt.Errorf(`server has a url but no type; add "type": "http"`)
+		}
+		if spec.URL != "" {
+			// Programmatic internal specs predate the JSON type field.
+			return mcpTransportHTTP, nil
+		}
+		return mcpTransportStdio, nil
 	}
-	if spec.argsSet || spec.Args != nil {
-		return selectionConfigError(fmt.Errorf("args are only valid for command servers"))
+	switch transport {
+	case mcpTransportStdio:
+		return mcpTransportStdio, nil
+	case mcpTransportHTTP, mcpTransportStreamableHTTP:
+		return mcpTransportHTTP, nil
+	case "sse":
+		return "", fmt.Errorf(`transport type "sse" is not supported; use "http" for Streamable HTTP`)
+	case "ws":
+		return "", fmt.Errorf(`transport type "ws" is not supported; Juex does not implement Claude's WebSocket extension`)
+	default:
+		return "", fmt.Errorf("unsupported transport type %q", transport)
 	}
-	if spec.envSet || spec.Env != nil {
-		return selectionConfigError(fmt.Errorf("env is only valid for command servers"))
-	}
-	if err := validateSecureEndpoint(spec.URL); err != nil {
-		return selectionConfigError(fmt.Errorf("url: %w", err))
-	}
-	if spec.authSet && spec.Auth == nil {
-		return credentialsConfigError(fmt.Errorf("auth must not be null"))
-	}
-	if err := validateAuthSpec(spec.Auth); err != nil {
-		return credentialsConfigError(err)
-	}
-	return nil
 }
 
 func selectionConfigError(err error) error {
@@ -296,38 +322,46 @@ func credentialsConfigError(err error) error {
 	return &ReadinessConfigError{Stage: ReadinessStageCredentials, Err: err}
 }
 
-func validateAuthSpec(auth *AuthSpec) error {
-	if auth == nil {
-		return nil
-	}
-	hasToken := auth.Token != nil
-	hasRefresh := auth.Refresh != nil
-	if hasToken == hasRefresh {
-		return fmt.Errorf("auth requires exactly one of token or refresh")
-	}
-	if hasToken {
-		if auth.Token.value == "" {
-			return fmt.Errorf("auth.token must not be empty")
+func validateHeaders(headers map[string]Credential) error {
+	seen := make(map[string]string, len(headers))
+	for _, name := range sortedCredentialNames(headers) {
+		if !validHTTPHeaderName(name) {
+			return fmt.Errorf("invalid header name %q", name)
 		}
-		return nil
-	}
-	refresh := auth.Refresh
-	if strings.TrimSpace(refresh.TokenURL) == "" {
-		return fmt.Errorf("auth.refresh.token_url is required")
-	}
-	if err := validateSecureEndpoint(refresh.TokenURL); err != nil {
-		return fmt.Errorf("auth.refresh.token_url: %w", err)
-	}
-	if strings.TrimSpace(refresh.ClientID) == "" {
-		return fmt.Errorf("auth.refresh.client_id is required")
-	}
-	if refresh.ClientSecret != nil && refresh.ClientSecret.value == "" {
-		return fmt.Errorf("auth.refresh.client_secret must not be empty")
-	}
-	if refresh.RefreshToken.value == "" {
-		return fmt.Errorf("auth.refresh.refresh_token is required")
+		canonical := strings.ToLower(name)
+		if previous, ok := seen[canonical]; ok {
+			return fmt.Errorf("duplicate header names %q and %q", previous, name)
+		}
+		seen[canonical] = name
+		if strings.ContainsAny(headers[name].value, "\r\n") {
+			return fmt.Errorf("header %q must not contain newlines", name)
+		}
 	}
 	return nil
+}
+
+func validHTTPHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		b := name[i]
+		if (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') ||
+			(b >= '0' && b <= '9') || strings.ContainsRune("!#$%&'*+-.^_`|~", rune(b)) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func sortedCredentialNames(values map[string]Credential) []string {
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func validateSecureEndpoint(raw string) error {
@@ -386,8 +420,8 @@ func PrepareConfig(cfg Config, workDir string) (Config, error) {
 }
 
 // PrepareConfigWithOptions returns a runtime-ready copy of cfg and optionally
-// injects extension-specific env such as JUEX_EXT_DIR. Credential references
-// are resolved only from the supplied immutable environment snapshot.
+// injects extension-specific env such as JUEX_EXT_DIR. Header references are
+// resolved only from the supplied immutable environment snapshot.
 func PrepareConfigWithOptions(cfg Config, opts PrepareOptions) (Config, error) {
 	if len(cfg.MCPServers) == 0 {
 		return Config{}, nil
@@ -407,14 +441,16 @@ func PrepareConfigWithOptions(cfg Config, opts PrepareOptions) (Config, error) {
 	for _, name := range sortedServerNames(cfg.MCPServers) {
 		spec := cfg.MCPServers[name]
 		prepared := ServerSpec{
+			Type:       spec.Type,
 			Command:    expandRuntimeEnvRefs(spec.Command, runtimeEnv),
 			Args:       make([]string, len(spec.Args)),
 			URL:        spec.URL,
+			typeSet:    spec.typeSet,
 			commandSet: spec.commandSet,
 			argsSet:    spec.argsSet,
 			envSet:     spec.envSet,
 			urlSet:     spec.urlSet,
-			authSet:    spec.authSet,
+			headersSet: spec.headersSet,
 		}
 		if spec.Command != "" {
 			prepared.Env = make(map[string]string, len(spec.Env)+len(runtimeEnv))
@@ -431,79 +467,87 @@ func PrepareConfigWithOptions(cfg Config, opts PrepareOptions) (Config, error) {
 			prepared.Args = nil
 		}
 		var err error
-		prepared.Auth, err = prepareAuthSpec(spec.Auth, opts.Environment)
+		prepared.Headers, err = prepareHeaders(spec.Headers, opts.Environment)
 		if err != nil {
 			return Config{}, fmt.Errorf("mcp: server %q: %w", name, err)
 		}
 		out.MCPServers[name] = prepared
 	}
+	if err := ValidateConfig(out); err != nil {
+		return Config{}, fmt.Errorf("mcp: %w", err)
+	}
 	return out, nil
 }
 
-func prepareAuthSpec(auth *AuthSpec, snapshot environment.Snapshot) (*AuthSpec, error) {
-	if auth == nil {
+func prepareHeaders(headers map[string]Credential, snapshot environment.Snapshot) (map[string]Credential, error) {
+	if headers == nil {
 		return nil, nil
 	}
-	out := &AuthSpec{}
-	if auth.Token != nil {
-		token, err := resolveCredential(*auth.Token, snapshot, "auth.token")
+	out := make(map[string]Credential, len(headers))
+	for _, name := range sortedCredentialNames(headers) {
+		value, err := resolveCredentialTemplate(headers[name], snapshot, "headers."+name)
 		if err != nil {
 			return nil, err
 		}
-		out.Token = &token
-	}
-	if auth.Refresh != nil {
-		refresh := auth.Refresh
-		out.Refresh = &RefreshAuthSpec{
-			TokenURL: refresh.TokenURL,
-			ClientID: refresh.ClientID,
-			Scopes:   append([]string(nil), refresh.Scopes...),
-		}
-		if refresh.ClientSecret != nil {
-			clientSecret, err := resolveCredential(*refresh.ClientSecret, snapshot, "auth.refresh.client_secret")
-			if err != nil {
-				return nil, err
-			}
-			out.Refresh.ClientSecret = &clientSecret
-		}
-		refreshToken, err := resolveCredential(refresh.RefreshToken, snapshot, "auth.refresh.refresh_token")
-		if err != nil {
-			return nil, err
-		}
-		out.Refresh.RefreshToken = refreshToken
+		out[name] = value
 	}
 	return out, nil
 }
 
-func resolveCredential(credential Credential, snapshot environment.Snapshot, field string) (Credential, error) {
-	name, isReference := credentialEnvironmentReference(credential.value)
-	if !isReference {
-		return credential, nil
-	}
-	value, ok := snapshot.Lookup(name)
-	if !ok || value == "" {
-		return Credential{}, &CredentialResolutionError{
-			Field:               field,
-			EnvironmentVariable: name,
+func resolveCredentialTemplate(
+	credential Credential,
+	snapshot environment.Snapshot,
+	field string,
+) (Credential, error) {
+	input := credential.value
+	var out strings.Builder
+	for offset := 0; offset < len(input); {
+		start := strings.Index(input[offset:], "${")
+		if start < 0 {
+			out.WriteString(input[offset:])
+			break
 		}
+		start += offset
+		out.WriteString(input[offset:start])
+		end := strings.IndexByte(input[start+2:], '}')
+		if end < 0 {
+			out.WriteString(input[start:])
+			break
+		}
+		end += start + 2
+		expression := input[start+2 : end]
+		name, fallback, hasFallback := strings.Cut(expression, ":-")
+		if !validEnvironmentName(name) {
+			out.WriteString(input[start : end+1])
+			offset = end + 1
+			continue
+		}
+		value, ok := snapshot.Lookup(name)
+		if !ok || value == "" {
+			if !hasFallback {
+				return Credential{}, &CredentialResolutionError{
+					Field:               field,
+					EnvironmentVariable: name,
+				}
+			}
+			value = fallback
+		}
+		out.WriteString(value)
+		offset = end + 1
 	}
-	return Credential{value: value}, nil
+	return Credential{value: out.String()}, nil
 }
 
-func credentialEnvironmentReference(value string) (string, bool) {
-	if len(value) < 4 || !strings.HasPrefix(value, "${") || !strings.HasSuffix(value, "}") {
-		return "", false
-	}
-	name := value[2 : len(value)-1]
+func validEnvironmentName(name string) bool {
 	if name == "" || !isEnvNameStart(name[0]) {
-		return "", false
+		return false
 	}
 	for i := 1; i < len(name); i++ {
 		if !isEnvNameByte(name[i]) {
-			return "", false
+			return false
 		}
 	}
-	return name, true
+	return true
 }
 
 func isEnvNameStart(b byte) bool {

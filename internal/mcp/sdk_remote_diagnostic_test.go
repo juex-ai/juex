@@ -23,14 +23,14 @@ func TestRemoteDiagnosticRoundTripperResetsStatusBeforeNetworkError(t *testing.T
 					Body:       io.NopCloser(strings.NewReader("stale authentication body")),
 				}, nil
 			}
-			return nil, errors.New("dial token.example.test: connection refused")
+			return nil, errors.New("dial mcp.example.test: connection refused")
 		}),
 	}
 	diagnostic := newRemoteDiagnostic()
 	request, err := http.NewRequestWithContext(
 		withRemoteDiagnostic(t.Context(), diagnostic),
 		http.MethodPost,
-		"https://token.example.test/mcp",
+		"https://mcp.example.test/mcp",
 		nil,
 	)
 	if err != nil {
@@ -231,20 +231,20 @@ func TestRemoteDiagnosticRoundTripperDoesNotDispatchRejectedSSE(t *testing.T) {
 	}
 }
 
-func TestRemoteDiagnosticPreservesExplicitTokenFailureKinds(t *testing.T) {
+func TestRemoteDiagnosticPreservesExplicitFailureKinds(t *testing.T) {
 	tests := []struct {
 		kind errorclass.Kind
 		want string
 	}{
 		{kind: errorclass.KindAuth, want: "remote MCP authentication failed"},
-		{kind: errorclass.KindPermission, want: "remote MCP token request permission denied"},
-		{kind: errorclass.KindConnectivity, want: "remote MCP token endpoint connectivity failed"},
-		{kind: errorclass.KindTimeout, want: "remote MCP token request timed out"},
-		{kind: errorclass.KindRetryable, want: "retryable remote MCP token request failed"},
+		{kind: errorclass.KindPermission, want: "remote MCP permission denied"},
+		{kind: errorclass.KindConnectivity, want: "remote MCP connectivity failed"},
+		{kind: errorclass.KindTimeout, want: "remote MCP request timed out"},
+		{kind: errorclass.KindRetryable, want: "retryable remote MCP request failed"},
 	}
 	for _, test := range tests {
 		t.Run(string(test.kind), func(t *testing.T) {
-			cause := errorclass.WithKind(test.kind, errors.New("token source failed"))
+			cause := errorclass.WithKind(test.kind, errors.New("remote request failed"))
 			enriched := newRemoteDiagnostic().enrich(cause)
 			classification := errorclass.Classify(enriched)
 			if classification.Kind != test.kind {
@@ -260,7 +260,7 @@ func TestRemoteDiagnosticPreservesExplicitTokenFailureKinds(t *testing.T) {
 	}
 }
 
-func TestRemoteDiagnosticExplicitTokenFailureOverridesPreviousHTTPStatus(t *testing.T) {
+func TestRemoteDiagnosticExplicitFailureOverridesPreviousHTTPStatus(t *testing.T) {
 	tests := []struct {
 		kind errorclass.Kind
 	}{
@@ -272,13 +272,13 @@ func TestRemoteDiagnosticExplicitTokenFailureOverridesPreviousHTTPStatus(t *test
 			diagnostic := newRemoteDiagnostic()
 			diagnostic.record(http.StatusUnauthorized, "stale authentication response")
 
-			cause := errorclass.WithKind(test.kind, errors.New("token source failed"))
+			cause := errorclass.WithKind(test.kind, errors.New("remote request failed"))
 			enriched := diagnostic.enrich(cause)
 			if got := errorclass.Classify(enriched).Kind; got != test.kind {
 				t.Fatalf("error kind = %q, want %q; error=%v", got, test.kind, enriched)
 			}
 			if strings.Contains(enriched.Error(), "stale authentication response") {
-				t.Fatalf("stale HTTP diagnostic overrode token failure: %v", enriched)
+				t.Fatalf("stale HTTP diagnostic overrode explicit failure: %v", enriched)
 			}
 		})
 	}

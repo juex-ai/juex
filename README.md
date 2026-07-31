@@ -91,18 +91,20 @@ bootstrap/runtime names such as `JUEX_HOME`, `HOME`, `USERPROFILE`, `WORKDIR`,
 MCP servers are configured separately from `juex.yaml`. Personal servers live
 in `~/.agents/mcp.json`; project servers live in
 `<WorkDir>/.agents/mcp.json` and override personal servers with the same name.
-Each server selects exactly one local `command` or remote `url`. Copy
-`mcp.json.example` to either location for a remote example. Credentials may
-reference the runtime environment without embedding a secret in the resource
-file:
+The supported JSON shape matches Claude MCP configuration: an omitted
+`type` means `stdio`, while remote servers require `type: "http"` or the
+equivalent `type: "streamable-http"`. Static HTTP headers may reference the
+runtime environment without embedding a secret in the resource file. Copy
+`mcp.json.example` to either location for a remote example:
 
 ```json
 {
   "mcpServers": {
     "remote-search": {
+      "type": "http",
       "url": "https://mcp.example.com/mcp",
-      "auth": {
-        "token": "${REMOTE_MCP_TOKEN}"
+      "headers": {
+        "Authorization": "Bearer ${REMOTE_MCP_TOKEN}"
       }
     }
   }
@@ -112,7 +114,9 @@ file:
 Place `REMOTE_MCP_TOKEN` in the inherited environment or the gitignored
 `<WorkDir>/.env`, then restart Juex. `juex doctor` checks remote server
 selection, credentials, and connectivity; `juex doctor --offline` skips only
-the network request.
+the network request. Header values support `${VAR}` and `${VAR:-default}`.
+Legacy SSE, Claude's WebSocket extension, interactive OAuth, and
+`headersHelper` are not supported.
 
 For non-interactive setup, pass the provider, model, and key explicitly:
 

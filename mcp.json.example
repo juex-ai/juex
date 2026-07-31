@@ -1,9 +1,10 @@
 {
   "mcpServers": {
     "remote-search": {
+      "type": "http",
       "url": "https://mcp.example.com/mcp",
-      "auth": {
-        "token": "${REMOTE_MCP_TOKEN}"
+      "headers": {
+        "Authorization": "Bearer ${REMOTE_MCP_TOKEN}"
       }
     }
   }
