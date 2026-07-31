@@ -96,11 +96,13 @@ func (c ExtensionRuntimeContext) PrepareDataDir() error {
 
 func ensurePrivateDirectoryWithoutSymlink(path string) error {
 	info, err := os.Lstat(path)
-	switch {
-	case os.IsNotExist(err):
-		if err := os.Mkdir(path, 0o700); err != nil {
-			return err
+	if os.IsNotExist(err) {
+		if mkdirErr := os.Mkdir(path, 0o700); mkdirErr != nil && !os.IsExist(mkdirErr) {
+			return mkdirErr
 		}
+		info, err = os.Lstat(path)
+	}
+	switch {
 	case err != nil:
 		return err
 	case info.Mode()&os.ModeSymlink != 0:

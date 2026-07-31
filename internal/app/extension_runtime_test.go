@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/agentstate"
@@ -104,6 +105,43 @@ func TestExtensionRuntimeContextPrepareDataDirIsPrivateAndPersistent(t *testing.
 		if got := info.Mode().Perm(); got != 0o700 {
 			t.Fatalf("data dir mode = %o, want 700", got)
 		}
+	}
+}
+
+func TestExtensionRuntimeContextPrepareDataDirIsConcurrent(t *testing.T) {
+	home := t.TempDir()
+	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	context := newExtensionRuntimeContext(address, extensions.Extension{Name: "demo"})
+
+	const workers = 64
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- context.PrepareDataDir()
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent PrepareDataDir() error = %v", err)
+		}
+	}
+	if info, err := os.Stat(context.DataDir); err != nil || !info.IsDir() {
+		t.Fatalf("concurrent data dir info = %+v, %v", info, err)
 	}
 }
 
