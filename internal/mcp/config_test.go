@@ -134,6 +134,7 @@ func TestServerSpecDisplaySafeTextRedactsQueryFromDiagnosticVariants(t *testing.
 		"request failed: /mcp?token=" + secret + "&tenant=demo",
 		"request failed: https%3A%2F%2Fmcp.example.com%2Fmcp%3Ftoken%3D" + secret + "%26tenant%3Ddemo",
 		`request failed: https:\/\/mcp.example.com\/mcp?token=` + secret + `&tenant=demo`,
+		"request rejected query parameter token value " + secret,
 	}
 	for _, diagnostic := range tests {
 		got, err := spec.DisplaySafeText(diagnostic)

@@ -29,6 +29,14 @@ func endpointQueryCredentialValues(endpoint *url.URL) []string {
 	if decoded, err := url.QueryUnescape(endpoint.RawQuery); err == nil {
 		values = appendSecret(values, decoded)
 	}
+	query := endpoint.Query()
+	values = appendSecret(values, query.Encode())
+	for name, entries := range query {
+		values = appendSecret(values, name)
+		for _, value := range entries {
+			values = appendSecret(values, value)
+		}
+	}
 	return values
 }
 
