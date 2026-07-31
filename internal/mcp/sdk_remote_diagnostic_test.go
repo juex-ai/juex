@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -94,6 +95,54 @@ func TestRemoteDiagnosticRoundTripperRedactsAcrossExcerptBoundary(t *testing.T) 
 	}
 	if !strings.Contains(enriched.Error(), "[REDACTED]") {
 		t.Fatalf("error = %v, want redaction marker", enriched)
+	}
+}
+
+func TestRemoteDiagnosticRoundTripperRedactsEscapedSecretAcrossExcerptBoundary(t *testing.T) {
+	secret := strings.Repeat("\\", 48) + "\""
+	encoded, err := json.Marshal(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	escaped := string(encoded[1 : len(encoded)-1])
+	body := strings.Repeat("x", remoteDiagnosticBodyBytes-8) + escaped + "tail"
+	transport := &remoteDiagnosticRoundTripper{
+		base: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusUnauthorized,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+		}),
+	}
+	diagnostic := newRemoteDiagnostic()
+	request, err := http.NewRequestWithContext(
+		withRemoteDiagnostic(t.Context(), diagnostic),
+		http.MethodPost,
+		"https://example.test/mcp",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+secret)
+	response, err := transport.RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredBody, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enriched := diagnostic.enrich(errors.New("unauthorized"))
+	for _, text := range []string{string(restoredBody), enriched.Error()} {
+		if strings.Contains(text, `\\\\`) || strings.Contains(text, `\\\"`) {
+			t.Fatalf("escaped credential fragment leaked across excerpt boundary: %q", text)
+		}
+		if !strings.Contains(text, "[REDACTED]") {
+			t.Fatalf("error = %q, want redaction marker", text)
+		}
 	}
 }
 

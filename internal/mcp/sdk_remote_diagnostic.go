@@ -157,10 +157,11 @@ func (t *remoteDiagnosticRoundTripper) RoundTrip(request *http.Request) (*http.R
 	if authorization := request.Header.Get("Authorization"); strings.HasPrefix(authorization, "Bearer ") {
 		redactions = append(redactions, strings.TrimPrefix(authorization, "Bearer "))
 	}
-	readLimit := remoteDiagnosticBodyBytes + longestString(redactions)
+	redactionValues := secretRedactionValues(redactions)
+	readLimit := remoteDiagnosticBodyBytes + longestString(redactionValues)
 	data, readErr := io.ReadAll(io.LimitReader(response.Body, int64(readLimit+1)))
 	_ = response.Body.Close()
-	bodyExcerpt := redactSecrets(string(data), redactions)
+	bodyExcerpt := redactSecretValues(string(data), redactionValues)
 	bodyExcerpt = truncateDiagnosticExcerpt(bodyExcerpt, remoteDiagnosticBodyBytes)
 	response.Body = io.NopCloser(bytes.NewReader([]byte(bodyExcerpt)))
 	diagnostic.record(response.StatusCode, bodyExcerpt)

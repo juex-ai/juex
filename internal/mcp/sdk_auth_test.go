@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -61,6 +62,30 @@ func TestRedactingTokenSourceRedactsOverlappingSecrets(t *testing.T) {
 	for _, leaked := range []string{shortSecret, "sensitive-suffix"} {
 		if strings.Contains(err.Error(), leaked) {
 			t.Fatalf("credential fragment %q leaked in error: %v", leaked, err)
+		}
+	}
+}
+
+func TestRedactingTokenSourceRedactsJSONEscapedSecret(t *testing.T) {
+	const secret = "token\"with\\slashes\nand-newline"
+	encoded, err := json.Marshal(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	escaped := string(encoded[1 : len(encoded)-1])
+	source := &redactingTokenSource{
+		source: tokenSourceFunc(func() (*oauth2.Token, error) {
+			return nil, errors.New("refresh rejected " + escaped)
+		}),
+		secrets: []string{secret},
+	}
+	_, err = source.Token()
+	if err == nil {
+		t.Fatal("expected refresh error")
+	}
+	for _, leaked := range []string{escaped, "with", "slashes", "and-newline"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Fatalf("escaped credential fragment %q leaked in error: %v", leaked, err)
 		}
 	}
 }

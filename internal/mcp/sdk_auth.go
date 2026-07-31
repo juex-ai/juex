@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -83,13 +84,28 @@ func appendSecret(values []string, value string) []string {
 }
 
 func redactSecrets(text string, values []string) string {
-	secrets := make([]string, 0, len(values))
+	return redactSecretValues(text, secretRedactionValues(values))
+}
+
+func secretRedactionValues(values []string) []string {
+	secrets := make([]string, 0, len(values)*2)
 	for _, value := range values {
 		secrets = appendSecret(secrets, value)
+		encoded, err := json.Marshal(value)
+		if err == nil && len(encoded) >= 2 {
+			secrets = appendSecret(secrets, string(encoded[1:len(encoded)-1]))
+		}
 	}
 	sort.Slice(secrets, func(i, j int) bool {
+		if len(secrets[i]) == len(secrets[j]) {
+			return secrets[i] < secrets[j]
+		}
 		return len(secrets[i]) > len(secrets[j])
 	})
+	return secrets
+}
+
+func redactSecretValues(text string, secrets []string) string {
 	for _, secret := range secrets {
 		text = strings.ReplaceAll(text, secret, "[REDACTED]")
 	}
