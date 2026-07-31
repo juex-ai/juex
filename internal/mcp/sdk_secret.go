@@ -21,6 +21,17 @@ func headerCredentialValues(headers map[string]Credential) []string {
 	return values
 }
 
+func endpointQueryCredentialValues(endpoint *url.URL) []string {
+	if endpoint == nil || endpoint.RawQuery == "" {
+		return nil
+	}
+	values := appendSecret(nil, endpoint.RawQuery)
+	if decoded, err := url.QueryUnescape(endpoint.RawQuery); err == nil {
+		values = appendSecret(values, decoded)
+	}
+	return values
+}
+
 func authorizationCredential(value string) (string, bool) {
 	separator := strings.IndexAny(value, " \t")
 	if separator <= 0 {

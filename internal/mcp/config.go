@@ -165,7 +165,15 @@ func (s ServerSpec) DisplaySafeText(text string) (string, error) {
 	if displayURL == "" || displayURL == s.URL {
 		return text, nil
 	}
-	return strings.ReplaceAll(text, s.URL, displayURL), nil
+	endpoint, err := url.Parse(s.URL)
+	if err != nil {
+		return "", fmt.Errorf("must be a valid absolute URL")
+	}
+	text = strings.ReplaceAll(text, s.URL, displayURL)
+	return redactSecretValues(
+		text,
+		secretRedactionValues(endpointQueryCredentialValues(endpoint)),
+	), nil
 }
 
 func (s *ServerSpec) UnmarshalJSON(data []byte) error {

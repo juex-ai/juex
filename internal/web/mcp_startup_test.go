@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -141,6 +142,49 @@ func TestOpenSessionWaitsForInFlightMCPStartup(t *testing.T) {
 	}
 	if err := <-startErrCh; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRuntimeRedactsRequestURIFromFailedRemoteMCPStartup(t *testing.T) {
+	const secret = "runtime-query-secret"
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "rejected request "+r.URL.RequestURI(), http.StatusUnauthorized)
+	}))
+	defer remote.Close()
+
+	srv := newTestServer(t)
+	work := srv.opts.Cfg.WorkDir
+	body, err := json.MarshalIndent(map[string]any{
+		"mcpServers": map[string]any{
+			"remote": map[string]any{
+				"type": "http",
+				"url":  remote.URL + "/mcp?token=" + secret + "&tenant=demo",
+			},
+		},
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteRuntimeFile(t, filepath.Join(work, ".agents", "mcp.json"), string(body))
+
+	if err := srv.ensureMCPStarted(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	startupError := srv.mcpErrors()["remote"]
+	if startupError == "" {
+		t.Fatal("missing remote MCP startup error")
+	}
+	if strings.Contains(startupError, secret) || strings.Contains(startupError, "token") || strings.Contains(startupError, "tenant") {
+		t.Fatalf("startup error leaked query data: %q", startupError)
+	}
+
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/runtime", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if leaked := recorder.Body.String(); strings.Contains(leaked, secret) || strings.Contains(leaked, "/mcp?token=") || strings.Contains(leaked, "tenant=demo") {
+		t.Fatalf("runtime API leaked query data from failed startup:\n%s", leaked)
 	}
 }
 
