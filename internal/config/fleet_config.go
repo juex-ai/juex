@@ -21,62 +21,70 @@ type FleetConfig struct {
 }
 
 type fleetFileConfig struct {
-	Addr          string `yaml:"addr"`
-	UnsafeBindAny bool   `yaml:"unsafe_bind_any"`
+	Addr          string       `yaml:"addr"`
+	UnsafeBindAny optionalBool `yaml:"unsafe_bind_any"`
 }
 
 func LoadHomeFleetConfig() (FleetConfig, error) {
 	cfg := FleetConfig{Addr: DefaultFleetAddr}
-	home, err := EffectiveHomeDir()
+	resolution, err := resolveHomeConfigSources()
 	if err != nil {
 		return cfg, err
 	}
-	path := filepath.Join(home, "juex.yaml")
-	doc, root, _, err := readFleetConfigDocument(path)
-	if err != nil {
-		return cfg, err
+	for _, source := range resolution.Sources {
+		if err := applyHomeFleetConfig(&cfg, source.Path); err != nil {
+			return cfg, err
+		}
 	}
-	_ = doc
+	return cfg, nil
+}
+
+func applyHomeFleetConfig(cfg *FleetConfig, path string) error {
+	_, root, _, err := readFleetConfigDocument(path)
+	if err != nil {
+		return err
+	}
 	fleetNode := yamlMappingValue(root, "fleet")
 	if fleetNode == nil || fleetNode.Tag == "!!null" {
-		return cfg, nil
+		return nil
 	}
 	if fleetNode.Kind != yaml.MappingNode {
-		return cfg, fmt.Errorf("config: parse %s: fleet must be a mapping", path)
+		return fmt.Errorf("config: parse %s: fleet must be a mapping", path)
 	}
 	seen := map[string]struct{}{}
 	for i := 0; i+1 < len(fleetNode.Content); i += 2 {
 		key := strings.TrimSpace(fleetNode.Content[i].Value)
 		if _, duplicate := seen[key]; duplicate {
-			return cfg, fmt.Errorf("config: parse %s: duplicate fleet.%s", path, key)
+			return fmt.Errorf("config: parse %s: duplicate fleet.%s", path, key)
 		}
 		seen[key] = struct{}{}
 		value := fleetNode.Content[i+1]
 		switch key {
 		case "addr":
 			if value.Kind != yaml.ScalarNode || value.Tag == "!!null" {
-				return cfg, fmt.Errorf("config: parse %s: fleet.addr must be a host:port string", path)
+				return fmt.Errorf("config: parse %s: fleet.addr must be a host:port string", path)
 			}
-			cfg.Addr = strings.TrimSpace(value.Value)
-			cfg.AddrConfigured = cfg.Addr != ""
+			addr := strings.TrimSpace(value.Value)
+			if addr == "" {
+				continue
+			}
+			if err := ValidateStableFleetAddr(addr); err != nil {
+				return fmt.Errorf("config: parse %s: fleet.addr: %w", path, err)
+			}
+			cfg.Addr = addr
+			cfg.AddrConfigured = true
 		case "unsafe_bind_any":
 			if value.Kind != yaml.ScalarNode || value.Tag == "!!null" {
-				return cfg, fmt.Errorf("config: parse %s: fleet.unsafe_bind_any must be a boolean", path)
+				return fmt.Errorf("config: parse %s: fleet.unsafe_bind_any must be a boolean", path)
 			}
 			if err := value.Decode(&cfg.UnsafeBindAny); err != nil {
-				return cfg, fmt.Errorf("config: parse %s: fleet.unsafe_bind_any must be a boolean", path)
+				return fmt.Errorf("config: parse %s: fleet.unsafe_bind_any must be a boolean", path)
 			}
 		default:
-			return cfg, fmt.Errorf("config: parse %s: field fleet.%s not found", path, key)
+			return fmt.Errorf("config: parse %s: field fleet.%s not found", path, key)
 		}
 	}
-	if cfg.Addr == "" {
-		cfg.Addr = DefaultFleetAddr
-	}
-	if err := ValidateStableFleetAddr(cfg.Addr); err != nil {
-		return cfg, fmt.Errorf("config: parse %s: fleet.addr: %w", path, err)
-	}
-	return cfg, nil
+	return nil
 }
 
 func ValidateStableFleetAddr(addr string) error {

@@ -1,6 +1,8 @@
 # Prefer `juex init` for first-run setup. Copy this template manually only when
-# you want full control over .juex/juex.yaml in a workspace or
-# ~/.juex/juex.yaml for user-global provider settings.
+# you want full control over .juex/juex.yaml in a workspace,
+# ~/.juex/juex.yaml as the shared base, or $JUEX_HOME/juex.yaml as a
+# non-default instance override. Instance config and state writes never modify
+# the shared base.
 # The workspace .juex directory is local runtime state and should not be
 # committed.
 
@@ -40,7 +42,7 @@ model: openai:gpt-4.1
 # credentials may reference values such as ${REMOTE_MCP_TOKEN} from the runtime
 # environment or the gitignored <WorkDir>/.env.
 
-# Optional extension bundles live at ~/.juex/extensions/<name> and
+# Optional extension bundles live at $JUEX_HOME/extensions/<name> and
 # .juex/extensions/<name>. Each bundle may contain skills/<skill>/SKILL.md,
 # mcp.json, and hooks.yaml. Work-local extension hooks must set trusted: true
 # before Juex executes them.
@@ -97,9 +99,9 @@ model: openai:gpt-4.1
 #   # Optional normal-turn provider output cap. Omit to use provider default.
 #   max_output_tokens: 8192
 
-# Optional lifecycle command hooks. User-global hooks in ~/.juex/juex.yaml are
-# trusted by location. Project-local hooks must set trusted: true before Juex
-# will execute them.
+# Optional lifecycle command hooks. Hooks in the default-home and instance-home
+# juex.yaml files are trusted by location. Project-local hooks must set
+# trusted: true before Juex will execute them.
 # hooks:
 #   trusted: true
 #   commands:

@@ -9,6 +9,9 @@ import (
 )
 
 func TestLoadHomeFleetConfigDefaultsAndLoadsAddress(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
 	home := t.TempDir()
 	t.Setenv("JUEX_HOME", home)
 
@@ -48,7 +51,143 @@ func TestLoadHomeFleetConfigDefaultsAndLoadsAddress(t *testing.T) {
 	}
 }
 
+func TestLoadHomeFleetConfigMergesDefaultAndInstanceHomes(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	defaultHome := filepath.Join(userHome, ".juex")
+	if err := os.MkdirAll(defaultHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(defaultHome, "juex.yaml"),
+		[]byte("fleet:\n  addr: 127.0.0.1:5840\n  unsafe_bind_any: true\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	instanceHome := t.TempDir()
+	t.Setenv("JUEX_HOME", instanceHome)
+	if err := os.WriteFile(
+		filepath.Join(instanceHome, "juex.yaml"),
+		[]byte("fleet:\n  addr: 127.0.0.1:5999\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadHomeFleetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Addr != "127.0.0.1:5999" || !got.AddrConfigured {
+		t.Fatalf("instance fleet address = %+v", got)
+	}
+	if !got.UnsafeBindAny {
+		t.Fatalf("unsafe bind setting was not inherited from default home: %+v", got)
+	}
+}
+
+func TestLoadHomeFleetConfigInstanceFalseOverridesDefaultTrue(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	defaultHome := filepath.Join(userHome, ".juex")
+	if err := os.MkdirAll(defaultHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(defaultHome, "juex.yaml"),
+		[]byte("fleet:\n  addr: 127.0.0.1:5840\n  unsafe_bind_any: true\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	instanceHome := t.TempDir()
+	t.Setenv("JUEX_HOME", instanceHome)
+	if err := os.WriteFile(
+		filepath.Join(instanceHome, "juex.yaml"),
+		[]byte("fleet:\n  unsafe_bind_any: false\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadHomeFleetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Addr != "127.0.0.1:5840" || !got.AddrConfigured || got.UnsafeBindAny {
+		t.Fatalf("fleet config = %+v, want inherited addr and explicit false", got)
+	}
+}
+
+func TestLoadHomeFleetConfigEmptyInstanceAddressKeepsDefaultHomeAddress(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	defaultHome := filepath.Join(userHome, ".juex")
+	if err := os.MkdirAll(defaultHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(defaultHome, "juex.yaml"),
+		[]byte("fleet:\n  addr: 127.0.0.1:5840\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	instanceHome := t.TempDir()
+	t.Setenv("JUEX_HOME", instanceHome)
+	if err := os.WriteFile(
+		filepath.Join(instanceHome, "juex.yaml"),
+		[]byte("fleet:\n  addr: \"\"\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadHomeFleetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Addr != "127.0.0.1:5840" || !got.AddrConfigured {
+		t.Fatalf("fleet config = %+v, want inherited default-home address", got)
+	}
+}
+
+func TestLoadHomeFleetConfigRejectsInvalidDefaultBeforeInstance(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	defaultHome := filepath.Join(userHome, ".juex")
+	if err := os.MkdirAll(defaultHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defaultPath := filepath.Join(defaultHome, "juex.yaml")
+	if err := os.WriteFile(defaultPath, []byte("fleet:\n  addr: invalid\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	instanceHome := t.TempDir()
+	t.Setenv("JUEX_HOME", instanceHome)
+	if err := os.WriteFile(
+		filepath.Join(instanceHome, "juex.yaml"),
+		[]byte("providers: deliberately-ignored\nfleet:\n  addr: 127.0.0.1:5999\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadHomeFleetConfig()
+	if err == nil || !strings.Contains(err.Error(), defaultPath) || !strings.Contains(err.Error(), "host:port") {
+		t.Fatalf("error = %v, want invalid default-home fleet config", err)
+	}
+}
+
 func TestSetHomeFleetSettingsMergesYAMLAtomically(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
 	home := t.TempDir()
 	t.Setenv("JUEX_HOME", home)
 	path := filepath.Join(home, "juex.yaml")
@@ -95,7 +234,53 @@ func TestSetHomeFleetSettingsMergesYAMLAtomically(t *testing.T) {
 	}
 }
 
+func TestSetHomeFleetSettingsWritesOnlyInstanceHome(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	defaultHome := filepath.Join(userHome, ".juex")
+	if err := os.MkdirAll(defaultHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defaultPath := filepath.Join(defaultHome, "juex.yaml")
+	defaultBody := []byte("model: shared:base\nfleet:\n  addr: 127.0.0.1:5840\n")
+	if err := os.WriteFile(defaultPath, defaultBody, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	instanceHome := t.TempDir()
+	t.Setenv("JUEX_HOME", instanceHome)
+	canonicalInstanceHome, err := filepath.EvalSymlinks(instanceHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotPath, err := SetHomeFleetSettings("127.0.0.1:5999", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != filepath.Join(canonicalInstanceHome, "juex.yaml") {
+		t.Fatalf("write path = %q, want instance home", gotPath)
+	}
+	gotDefault, err := os.ReadFile(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotDefault) != string(defaultBody) {
+		t.Fatalf("default config changed:\n%s", gotDefault)
+	}
+	info, err := os.Stat(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
+		t.Fatalf("default config mode = %o, want unchanged 640", info.Mode().Perm())
+	}
+}
+
 func TestRuntimeConfigLoadsFleetUnsafeBindSetting(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
 	home := t.TempDir()
 	t.Setenv("JUEX_HOME", home)
 	if err := os.WriteFile(
@@ -116,6 +301,9 @@ func TestRuntimeConfigLoadsFleetUnsafeBindSetting(t *testing.T) {
 }
 
 func TestWorkspaceFleetConfigIsRejectedAsMisplaced(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
 	home := t.TempDir()
 	work := t.TempDir()
 	t.Setenv("JUEX_HOME", home)

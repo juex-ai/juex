@@ -1431,8 +1431,57 @@ hooks:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Hooks.Commands) != 1 || cfg.Hooks.Commands[0].Name != "global-context" || cfg.Hooks.Commands[0].Source != "user" {
+	if len(cfg.Hooks.Commands) != 1 || cfg.Hooks.Commands[0].Name != "global-context" || cfg.Hooks.Commands[0].Source != "home:default" {
 		t.Fatalf("hooks = %+v", cfg.Hooks.Commands)
+	}
+}
+
+func TestInitCmdUserScopeWritesOnlyEffectiveInstanceHome(t *testing.T) {
+	home := setHomeForCLITest(t)
+	defaultHome := filepath.Join(home, ".juex")
+	if err := os.MkdirAll(defaultHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defaultPath := filepath.Join(defaultHome, "juex.yaml")
+	defaultBody := []byte("model: shared:base\nproviders:\n  - id: shared\n    protocol: openai/chat\n    api_key: shared-key\n    models:\n      - id: base\n")
+	if err := os.WriteFile(defaultPath, defaultBody, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	instanceHome := filepath.Join(home, "instance")
+	t.Setenv("JUEX_HOME", instanceHome)
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{
+		"init",
+		"--scope", "user",
+		"--provider", "openai",
+		"--model", "gpt-4.1",
+		"--api-key", "sk-instance",
+		"--skip-check",
+		"--yes",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("init: %v\n%s", err, out.String())
+	}
+	instancePath := filepath.Join(instanceHome, "juex.yaml")
+	if _, err := os.Stat(instancePath); err != nil {
+		t.Fatalf("instance config: %v", err)
+	}
+	gotDefault, err := os.ReadFile(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotDefault, defaultBody) {
+		t.Fatalf("default config changed:\n%s", gotDefault)
+	}
+	info, err := os.Stat(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
+		t.Fatalf("default config mode = %o, want unchanged 640", info.Mode().Perm())
 	}
 }
 
@@ -1535,6 +1584,55 @@ func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
 	}
 	if skillsMessage != "4 skill(s) loaded" {
 		t.Fatalf("skills doctor message = %q, want project plus three builtin guides", skillsMessage)
+	}
+}
+
+func TestDoctorConfigCheckDistinguishesDefaultAndInstanceHomePaths(t *testing.T) {
+	home := setHomeForCLITest(t)
+	for _, key := range []string{
+		"PROVIDER_API_ID",
+		"PROVIDER_API_PROTOCOL",
+		"PROVIDER_API_BASE",
+		"PROVIDER_API_KEY",
+		"PROVIDER_API_MODEL",
+	} {
+		t.Setenv(key, "")
+	}
+	defaultPath := filepath.Join(home, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(defaultPath, "openai", "https://example.invalid", "sk-shared", "gpt-4.1"); err != nil {
+		t.Fatal(err)
+	}
+	instanceHome := filepath.Join(home, "instance")
+	if err := os.MkdirAll(instanceHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	instancePath := filepath.Join(instanceHome, "juex.yaml")
+	if err := writeTextFile(instancePath, "model: openai:gpt-4.1\n"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("JUEX_HOME", instanceHome)
+	defaultPath, err := filepath.EvalSymlinks(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instancePath, err = filepath.EvalSymlinks(instancePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadForWorkDirForValidation(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := doctorConfigCheck(cfg)
+	if check.Status != doctorStatusOK {
+		t.Fatalf("check = %+v", check)
+	}
+	if got := check.Details["default_home_config_path"]; got != defaultPath {
+		t.Fatalf("default home config path = %#v, want %q", got, defaultPath)
+	}
+	if got := check.Details["effective_home_config_path"]; got != instancePath {
+		t.Fatalf("effective home config path = %#v, want %q", got, instancePath)
 	}
 }
 

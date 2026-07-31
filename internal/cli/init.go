@@ -42,8 +42,9 @@ func newInitCmd(flags *persistentFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Create a user or workspace juex.yaml config (user by default)",
-		Long: `Create or update a Juex runtime config. By default this writes
-~/.juex/juex.yaml so provider settings can be shared across workspaces.
+		Long: `Create or update a Juex runtime config. User scope writes the
+effective $JUEX_HOME/juex.yaml. With the default home this is the shared
+~/.juex/juex.yaml; a non-default home writes only its instance override.
 Use --scope workspace to write the current workspace .juex/juex.yaml.`,
 		Example: `  juex init
   juex init --scope workspace --provider openai --model gpt-4.1 --api-key "$OPENAI_API_KEY" --skip-check --yes

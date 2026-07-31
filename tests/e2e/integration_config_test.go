@@ -264,8 +264,13 @@ providers:
 
 func isolateLiveConfigTest(t *testing.T) {
 	t.Helper()
-	t.Setenv("JUEX_HOME", t.TempDir())
-	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
+	home := t.TempDir()
+	juexHome := filepath.Join(home, ".juex")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("JUEX_HOME", juexHome)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "missing-codex-home"))
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	for _, key := range []string{
 		liveProviderConfigEnv,

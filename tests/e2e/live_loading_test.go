@@ -362,6 +362,167 @@ providers:
 	}
 }
 
+func TestLiveBinary_NonDefaultHomesShareConfigAndIsolateWritableState(t *testing.T) {
+	bin := buildJuex(t)
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, chatCompletionResponse("multi-home ok"))
+	}))
+	defer provider.Close()
+	userHome := t.TempDir()
+	defaultHome := filepath.Join(userHome, ".juex")
+	if err := os.MkdirAll(defaultHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defaultPath := filepath.Join(defaultHome, "juex.yaml")
+	defaultBody := []byte("model: local:base\n" +
+		"providers:\n" +
+		"  - id: local\n" +
+		"    protocol: openai/chat\n" +
+		"    base_url: " + provider.URL + "\n" +
+		"    api_key: shared-key\n" +
+		"    capabilities:\n" +
+		"      streaming: false\n" +
+		"    models:\n" +
+		"      - id: base\n" +
+		"      - id: one\n" +
+		"      - id: two\n" +
+		"sandbox:\n" +
+		"  enabled: true\n")
+	if err := os.WriteFile(defaultPath, defaultBody, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	type instanceCase struct {
+		name      string
+		model     string
+		fleetAddr string
+		home      string
+		work      string
+	}
+	firstFleetAddr := availableFleetAddress(t)
+	secondFleetAddr := availableFleetAddress(t)
+	for secondFleetAddr == firstFleetAddr {
+		secondFleetAddr = availableFleetAddress(t)
+	}
+	cases := []instanceCase{
+		{name: "first", model: "one", fleetAddr: firstFleetAddr, home: t.TempDir(), work: t.TempDir()},
+		{name: "second", model: "two", fleetAddr: secondFleetAddr, home: t.TempDir(), work: t.TempDir()},
+	}
+	for _, tc := range cases {
+		if err := os.WriteFile(
+			filepath.Join(tc.home, "juex.yaml"),
+			[]byte("model: local:"+tc.model+"\nfleet:\n  addr: "+tc.fleetAddr+"\n"),
+			0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+		environment := filteredEnv(
+			"HOME",
+			"USERPROFILE",
+			"JUEX_HOME",
+			"CODEX_HOME",
+			"GIT_CONFIG_GLOBAL",
+			"GIT_CONFIG_NOSYSTEM",
+			"PROVIDER_API_ID",
+			"PROVIDER_API_PROTOCOL",
+			"PROVIDER_API_BASE",
+			"PROVIDER_API_KEY",
+			"PROVIDER_API_MODEL",
+		)
+		environment = append(environment,
+			"HOME="+userHome,
+			"USERPROFILE="+userHome,
+			"JUEX_HOME="+tc.home,
+			"CODEX_HOME="+filepath.Join(userHome, "missing-codex-home"),
+			"GIT_CONFIG_GLOBAL="+filepath.Join(userHome, "gitconfig"),
+			"GIT_CONFIG_NOSYSTEM=1",
+		)
+
+		command := exec.Command(bin, "-C", tc.work, "run", "--dry-run", "--json", "x")
+		command.Env = environment
+		var stdout, stderr bytes.Buffer
+		command.Stdout = &stdout
+		command.Stderr = &stderr
+		err := command.Run()
+		if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 10 {
+			t.Fatalf("%s dry run: %v\nstdout:\n%s\nstderr:\n%s", tc.name, err, stdout.String(), stderr.String())
+		}
+		var plan struct {
+			ProviderID string `json:"provider_id"`
+			Model      string `json:"model"`
+			Sandbox    struct {
+				Enabled bool `json:"enabled"`
+			} `json:"sandbox"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+			t.Fatalf("%s parse plan: %v\n%s", tc.name, err, stdout.String())
+		}
+		if plan.ProviderID != "local" || plan.Model != tc.model || !plan.Sandbox.Enabled {
+			t.Fatalf("%s plan = %+v, want shared provider/sandbox and instance model", tc.name, plan)
+		}
+
+		command = exec.Command(bin, "fleet", "add", tc.work, "--name", tc.name)
+		command.Env = environment
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("%s fleet add: %v\n%s", tc.name, err, output)
+		}
+		entries, err := os.ReadDir(filepath.Join(tc.home, "agents"))
+		if err != nil {
+			t.Fatalf("%s instance registry: %v", tc.name, err)
+		}
+		if len(entries) != 1 || !entries[0].IsDir() {
+			t.Fatalf("%s instance registry entries = %+v, want one agent", tc.name, entries)
+		}
+		agentDir := filepath.Join(tc.home, "agents", entries[0].Name())
+		command = exec.Command(bin, "--debug", "-C", tc.work, "run", "--json", "hello")
+		command.Env = environment
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("%s run: %v\n%s", tc.name, err, output)
+		}
+		if _, err := os.Stat(filepath.Join(agentDir, "history.json")); err != nil {
+			t.Fatalf("%s history: %v", tc.name, err)
+		}
+		sessions, err := os.ReadDir(filepath.Join(agentDir, "sessions"))
+		if err != nil {
+			t.Fatalf("%s sessions: %v", tc.name, err)
+		}
+		if len(sessions) != 1 || !sessions[0].IsDir() {
+			t.Fatalf("%s sessions = %+v, want one durable session", tc.name, sessions)
+		}
+		if _, err := os.Stat(filepath.Join(agentDir, "sessions", sessions[0].Name(), "logs")); err != nil {
+			t.Fatalf("%s debug logs: %v", tc.name, err)
+		}
+
+		supervisor := startFleetSupervisorWithArgs(t, bin, environment)
+		if got := waitFleetWebReady(t, supervisor); got != tc.fleetAddr {
+			t.Fatalf("%s fleet address = %q, want instance override %q", tc.name, got, tc.fleetAddr)
+		}
+		killSupervisor(t, supervisor)
+	}
+
+	if _, err := os.Stat(filepath.Join(defaultHome, "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("default home received instance agent state: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(defaultHome, ".locks")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("default home received instance locks: %v", err)
+	}
+	gotDefault, err := os.ReadFile(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotDefault, defaultBody) {
+		t.Fatalf("default config changed:\n%s", gotDefault)
+	}
+	info, err := os.Stat(defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
+		t.Fatalf("default config mode = %o, want unchanged 640", info.Mode().Perm())
+	}
+}
+
 func TestLiveBinary_BundleCreatesRedactedArchive(t *testing.T) {
 	bin := buildJuex(t)
 	work := t.TempDir()

@@ -24,7 +24,7 @@ domain boundary.
 | --- | --- |
 | Agent runtime | The local system that admits input, builds model context, calls a Provider, executes Tool Calls, persists Session state, and emits Events. |
 | Workspace | The project directory from which Juex loads work-local guidance and configuration and in which it stores the identity marker and workspace-rooted artifacts. |
-| Juex home | The effective Juex-owned root selected by `JUEX_HOME`, defaulting to `~/.juex`; it scopes shared configuration, extensions, locks, and the resident Agent registry. |
+| Juex home | The effective writable Juex-owned root selected by `JUEX_HOME`, defaulting to `~/.juex`; it scopes instance configuration, extensions, locks, and the resident Agent registry. A non-default home inherits the read-only configuration base at `~/.juex/juex.yaml`. |
 | Resident Agent | A durable Agent identity bound one-to-one to a Workspace marker, stored in the Juex home registry, and visible to Fleet operations. Its identity-owned state survives Workspace moves. |
 | Ephemeral Agent | A process-local Agent identity with private temporary Agent state. It uses the normal Workspace and user configuration/resources but has no Workspace marker, is not registered with Fleet, and is deleted on exit unless explicitly kept. |
 | Workspace marker | `.juex/juex.local.json`, the narrow binding from a Workspace to its Resident Agent id. A marker is identity, not configuration or a copyable cache. |
@@ -161,7 +161,9 @@ domain boundary.
 4. **Storage follows ownership.** Workspace-authored configuration, resources,
    Observable definitions, and Artifacts stay with the Workspace.
    Identity-owned Sessions, memory, history, logs, and generated Observable
-   state stay with the Agent.
+   state stay with the Agent. The default `~/.juex/juex.yaml` may supply shared
+   configuration, but a non-default Juex home never writes runtime state or
+   instance configuration back to the default home.
 5. **Ephemeral work is isolated.** An Ephemeral Agent never creates, rebinds,
    migrates, or registers a Resident Agent identity.
 6. **Only Primary Sessions activate.** A Side Session cannot replace the active

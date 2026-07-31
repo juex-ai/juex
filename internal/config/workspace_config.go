@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/juex-ai/juex/internal/environment"
 )
 
 func ValidateWorkspaceConfig(content []byte, workDir string) (Config, error) {
@@ -13,7 +11,7 @@ func ValidateWorkspaceConfig(content []byte, workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if err := applyYAMLData(&cfg, content, cfg.RuntimeConfigPath(), "project", true, environment.SourceWorkspaceConfig); err != nil {
+	if err := applyYAMLData(&cfg, content, workspaceYAMLSource(cfg.RuntimeConfigPath())); err != nil {
 		return cfg, err
 	}
 	if err := finalizeConfigLoadForValidation(&cfg, "", true); err != nil {

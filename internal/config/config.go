@@ -23,7 +23,8 @@ import (
 // Config holds runtime-wide settings.
 //
 // HomeAgentsDir hosts user-global resources (AGENTS.md, skills, mcp.json).
-// HomeJuexDir hosts JueX-owned user configuration and the agent registry.
+// HomeJuexDir is the effective instance home and owns all writable state.
+// Runtime config may inherit from the read-only default-home config path.
 // WorkDir hosts work-local resources. Project AGENTS.md, skills, and mcp.json
 // live under .agents. Agent-owned runtime data lives under AgentStateDir.
 type Config struct {
@@ -53,7 +54,7 @@ type Config struct {
 	EnableUserAgentsResources bool
 
 	HomeAgentsDir     string // ~/.agents (user-global resources)
-	HomeJuexDir       string // $JUEX_HOME or ~/.juex
+	HomeJuexDir       string // effective $JUEX_HOME instance root and only write target
 	WorkDir           string // explicit; defaults to os.Getwd()
 	AgentID           string
 	AgentName         string
@@ -62,9 +63,10 @@ type Config struct {
 	AgentStateNotices []string
 	agentStateLoaded  bool
 
-	modelRef        string
-	shellConfig     ShellConfig
-	providerConfigs map[string]providerConfig
+	modelRef                     string
+	shellConfig                  ShellConfig
+	providerConfigs              map[string]providerConfig
+	defaultHomeRuntimeConfigPath string
 
 	loadDotenv         bool
 	environmentLayers  []environment.Layer
@@ -339,11 +341,13 @@ var allowedThinkingEfforts = map[string]struct{}{
 
 const allowedThinkingEffortText = "low, medium, high, xhigh, max"
 
-// Load resolves config from ~/.juex/juex.yaml, the work-local juex.yaml,
-// <WorkDir>/.env when enabled, and the inherited process environment.
+// Load resolves config from the default home, an optional non-default
+// JUEX_HOME, the work-local juex.yaml, <WorkDir>/.env when enabled, and the
+// inherited process environment.
 //
 // YAML priority (later wins): defaults < ~/.juex/juex.yaml <
-// <WorkDir>/.juex/juex.yaml (or <WorkDir>/juex.yaml when WorkDir is .juex).
+// $JUEX_HOME/juex.yaml when distinct < <WorkDir>/.juex/juex.yaml (or
+// <WorkDir>/juex.yaml when WorkDir is .juex).
 // Runtime-environment priority is documented by internal/environment and the
 // architecture guide; config loading itself does not mutate os.Environ.
 func Load() (Config, error) {
@@ -358,7 +362,7 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 		return cfg, err
 	}
 	if strings.TrimSpace(opts.ConfigPath) != "" {
-		if err := applyYAMLFile(&cfg, opts.ConfigPath, false, "project", true, environment.SourceExplicitConfig); err != nil {
+		if err := applyYAMLFile(&cfg, explicitYAMLSource(opts.ConfigPath)); err != nil {
 			return cfg, err
 		}
 	}
@@ -411,7 +415,7 @@ func loadConfigFilesForWorkDir(workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if err := applyYAMLFile(&cfg, cfg.RuntimeConfigPath(), true, "project", true, environment.SourceWorkspaceConfig); err != nil {
+	if err := applyYAMLFile(&cfg, workspaceYAMLSource(cfg.RuntimeConfigPath())); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -446,14 +450,17 @@ func loadUserConfigForWorkDir(workDir string) (Config, error) {
 	if home, err := os.UserHomeDir(); err == nil {
 		cfg.HomeAgentsDir = filepath.Join(home, ".agents")
 	}
-	juexHome, err := agentstate.EffectiveHome()
+	homeConfig, err := resolveHomeConfigSources()
 	if err != nil {
 		return cfg, err
 	}
-	cfg.HomeJuexDir = juexHome
+	cfg.HomeJuexDir = homeConfig.EffectiveHomeDir
+	cfg.defaultHomeRuntimeConfigPath = homeConfig.DefaultConfigPath
 
-	if err := applyYAMLFile(&cfg, cfg.HomeRuntimeConfigPath(), true, "user", false, environment.SourceUserConfig); err != nil {
-		return cfg, err
+	for _, source := range homeConfig.Sources {
+		if err := applyYAMLFile(&cfg, source); err != nil {
+			return cfg, err
+		}
 	}
 	return cfg, nil
 }
@@ -470,7 +477,7 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	err = applyYAMLFile(&cfg, path, false, "project", true, environment.SourceExplicitConfig)
+	err = applyYAMLFile(&cfg, explicitYAMLSource(path))
 	if err != nil {
 		return cfg, err
 	}
@@ -487,7 +494,7 @@ func LoadFromFileForWorkDirForValidation(path, workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if err := applyYAMLFile(&cfg, path, false, "project", true, environment.SourceExplicitConfig); err != nil {
+	if err := applyYAMLFile(&cfg, explicitYAMLSource(path)); err != nil {
 		return cfg, err
 	}
 	if err := finalizeConfigLoadForValidation(&cfg, "", true); err != nil {
@@ -503,7 +510,7 @@ func LoadFromFileForWorkDirWithModelOverride(path, workDir, modelRef string) (Co
 	if err != nil {
 		return cfg, err
 	}
-	err = applyYAMLFile(&cfg, path, false, "project", true, environment.SourceExplicitConfig)
+	err = applyYAMLFile(&cfg, explicitYAMLSource(path))
 	if err != nil {
 		return cfg, err
 	}
@@ -684,9 +691,14 @@ func (c Config) RuntimeConfigPath() string {
 	return c.RuntimePaths().RuntimeConfigPath
 }
 
-// HomeRuntimeConfigPath returns the user-global runtime config path.
+// HomeRuntimeConfigPath returns the effective instance runtime config path.
 func (c Config) HomeRuntimeConfigPath() string {
 	return c.RuntimePaths().HomeRuntimeConfigPath
+}
+
+// DefaultHomeRuntimeConfigPath returns the shared default-home config path.
+func (c Config) DefaultHomeRuntimeConfigPath() string {
+	return c.RuntimePaths().DefaultHomeRuntimeConfigPath
 }
 
 // GlobalAgentsMDPath returns the user-global AGENTS.md path when user-global
@@ -732,26 +744,26 @@ func (c Config) EnvironmentStatus() EnvironmentStatus {
 	return c.runtimeEnvStatus
 }
 
-func applyYAMLFile(cfg *Config, path string, missingOK bool, hookSource string, requireHookTrust bool, envSource environment.Source) error {
-	if path == "" {
+func applyYAMLFile(cfg *Config, source yamlConfigSource) error {
+	if source.Path == "" {
 		return nil
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(source.Path)
 	if err != nil {
-		if missingOK && os.IsNotExist(err) {
+		if source.MissingOK && os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	return applyYAMLData(cfg, data, path, hookSource, requireHookTrust, envSource)
+	return applyYAMLData(cfg, data, source)
 }
 
-func applyYAMLData(cfg *Config, data []byte, source, hookSource string, requireHookTrust bool, envSource environment.Source) error {
+func applyYAMLData(cfg *Config, data []byte, source yamlConfigSource) error {
 	var fc fileConfig
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&fc); err != nil {
-		return fmt.Errorf("config: parse %s: %w", source, err)
+		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
 	if strings.TrimSpace(fc.Model) != "" {
 		cfg.modelRef = strings.TrimSpace(fc.Model)
@@ -767,42 +779,44 @@ func applyYAMLData(cfg *Config, data []byte, source, hookSource string, requireH
 	}
 	if fc.Environment.Variables != nil {
 		cfg.environmentLayers = append(cfg.environmentLayers, environment.Layer{
-			Source: envSource,
-			Path:   source,
+			Source: source.environmentSource(),
+			Path:   source.Path,
 			Values: cloneEnvironmentVariables(fc.Environment.Variables),
 			Strict: true,
 		})
 	}
 	if err := applyProvidersConfig(cfg, fc.Providers); err != nil {
-		return fmt.Errorf("config: parse %s: %w", source, err)
+		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
-	if err := applyHooksConfig(cfg, fc.Hooks, hookSource, requireHookTrust); err != nil {
-		return fmt.Errorf("config: parse %s: %w", source, err)
+	if err := applyHooksConfig(cfg, fc.Hooks, source.hookSource(), source.requireHookTrust()); err != nil {
+		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
 	applyCompactionConfig(cfg, fc.Compaction)
 	applyRuntimeConfig(cfg, fc.Runtime)
 	if err := applySkillsConfig(cfg, fc.Skills); err != nil {
-		return fmt.Errorf("config: parse %s: %w", source, err)
+		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
 	if err := applySandboxConfig(cfg, fc.Sandbox); err != nil {
-		return fmt.Errorf("config: parse %s: %w", source, err)
+		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
 	if fc.Shell != nil {
 		cfg.shellConfig = *fc.Shell
 	}
 	if fc.Fleet != nil {
-		if hookSource != "user" {
-			return fmt.Errorf("config: parse %s: fleet is only supported in $JUEX_HOME/juex.yaml", source)
+		if !source.allowsFleet() {
+			return fmt.Errorf("config: parse %s: fleet is only supported in default or instance JueX Home config", source.Path)
 		}
 		addr := strings.TrimSpace(fc.Fleet.Addr)
 		if addr != "" {
 			if err := ValidateStableFleetAddr(addr); err != nil {
-				return fmt.Errorf("config: parse %s: fleet.addr: %w", source, err)
+				return fmt.Errorf("config: parse %s: fleet.addr: %w", source.Path, err)
 			}
 			cfg.Fleet.Addr = addr
 			cfg.Fleet.AddrConfigured = true
 		}
-		cfg.Fleet.UnsafeBindAny = fc.Fleet.UnsafeBindAny
+		if fc.Fleet.UnsafeBindAny.Set {
+			cfg.Fleet.UnsafeBindAny = fc.Fleet.UnsafeBindAny.Value
+		}
 	}
 	return nil
 }
