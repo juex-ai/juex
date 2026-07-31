@@ -168,17 +168,37 @@ func TestLoadPluginPolicyAcceptsExplicitReferenceToLoadedHomeConfig(t *testing.T
 	t.Run("default home", func(t *testing.T) {
 		userHome := prepareConfigTest(t)
 		defaultPath := filepath.Join(userHome, ".juex", "juex.yaml")
-		writeTextFile(t, defaultPath, "plugins:\n  allow: [default]\n")
+		workDir := t.TempDir()
+		writeTextFile(t, defaultPath, `model: local:default
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: http://127.0.0.1:12345
+    api_key: test-key
+    models:
+      - id: default
+      - id: workspace
+plugins:
+  allow: [default]
+`)
+		writeTextFile(
+			t,
+			filepath.Join(workDir, ".juex", "juex.yaml"),
+			"model: local:workspace\nplugins:\n  allow: [workspace]\n",
+		)
 
 		cfg, err := LoadWithOptions(LoadOptions{
-			WorkDir:    t.TempDir(),
+			WorkDir:    workDir,
 			ConfigPath: defaultPath,
 			AgentState: AgentStateNone,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := []string{"default"}; !reflect.DeepEqual(cfg.PluginPolicy().Allow, want) {
+		if cfg.Model != "default" {
+			t.Fatalf("model = %q, want explicit default-Home config to override workspace", cfg.Model)
+		}
+		if want := []string{"workspace"}; !reflect.DeepEqual(cfg.PluginPolicy().Allow, want) {
 			t.Fatalf("allow = %v, want %v", cfg.PluginPolicy().Allow, want)
 		}
 	})

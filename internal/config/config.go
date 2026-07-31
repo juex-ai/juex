@@ -773,7 +773,8 @@ func applyYAMLFile(cfg *Config, source yamlConfigSource) error {
 
 func applyExplicitYAMLFile(cfg *Config, path string) error {
 	// A CLI may point --config at a durable file that was already loaded.
-	// Preserve that file's durable scope and avoid applying it twice.
+	// Reapply its ordinary explicit overrides while preserving plugin policy
+	// at the file's durable scope.
 	loadedPaths := []string{
 		cfg.DefaultHomeRuntimeConfigPath(),
 		cfg.HomeRuntimeConfigPath(),
@@ -788,16 +789,27 @@ func applyExplicitYAMLFile(cfg *Config, path string) error {
 			return err
 		}
 		if sameLoadedFile {
-			if _, err := os.Stat(path); err != nil {
+			data, err := os.ReadFile(path)
+			if err != nil {
 				return err
 			}
-			return nil
+			return applyYAMLDataWithOptions(cfg, data, explicitYAMLSource(path), applyYAMLDataOptions{
+				SkipPluginPolicy: true,
+			})
 		}
 	}
 	return applyYAMLFile(cfg, explicitYAMLSource(path))
 }
 
 func applyYAMLData(cfg *Config, data []byte, source yamlConfigSource) error {
+	return applyYAMLDataWithOptions(cfg, data, source, applyYAMLDataOptions{})
+}
+
+type applyYAMLDataOptions struct {
+	SkipPluginPolicy bool
+}
+
+func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource, opts applyYAMLDataOptions) error {
 	var fc fileConfig
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -835,14 +847,16 @@ func applyYAMLData(cfg *Config, data []byte, source yamlConfigSource) error {
 	if err := applySkillsConfig(cfg, fc.Skills); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
-	if fc.Plugins.Allow != nil && !source.allowsPluginPolicy() {
-		return fmt.Errorf(
-			"config: parse %s: plugins.allow is only supported in default Home, instance Home, or workspace config",
-			source.Path,
-		)
-	}
-	if err := applyPluginsConfig(cfg, fc.Plugins); err != nil {
-		return fmt.Errorf("config: parse %s: %w", source.Path, err)
+	if !opts.SkipPluginPolicy {
+		if fc.Plugins.Allow != nil && !source.allowsPluginPolicy() {
+			return fmt.Errorf(
+				"config: parse %s: plugins.allow is only supported in default Home, instance Home, or workspace config",
+				source.Path,
+			)
+		}
+		if err := applyPluginsConfig(cfg, fc.Plugins); err != nil {
+			return fmt.Errorf("config: parse %s: %w", source.Path, err)
+		}
 	}
 	if err := applySandboxConfig(cfg, fc.Sandbox); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
