@@ -1,5 +1,5 @@
-// Package extensions discovers JueX extension bundles and reports the
-// standard resources they contribute.
+// Package extensions discovers Juex Extensions and reports their standard
+// resources.
 package extensions
 
 import (

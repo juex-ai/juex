@@ -50,7 +50,7 @@ type Config struct {
 	Shell                     ShellProfile
 	Sandbox                   sandbox.Policy
 	Skills                    SkillsConfig
-	Plugins                   PluginPolicy
+	Extensions                ExtensionPolicy
 	Fleet                     FleetConfig
 	EnableUserAgentsResources bool
 
@@ -111,7 +111,7 @@ type fileConfig struct {
 	Shell                     *ShellConfig      `yaml:"shell"`
 	Sandbox                   sandboxConfig     `yaml:"sandbox"`
 	Skills                    skillsConfig      `yaml:"skills"`
-	Plugins                   pluginsConfig     `yaml:"plugins"`
+	Extensions                extensionsConfig  `yaml:"extensions"`
 	Fleet                     *fleetFileConfig  `yaml:"fleet"`
 	Environment               environmentConfig `yaml:"environment"`
 }
@@ -272,14 +272,14 @@ type skillsConfig struct {
 	PromptBudgetChars int       `yaml:"prompt_budget_chars"`
 }
 
-// PluginPolicy is the effective logical-name allowlist after durable config
+// ExtensionPolicy is the effective logical-name allowlist after durable config
 // layers have been resolved.
-type PluginPolicy struct {
+type ExtensionPolicy struct {
 	Allow      []string
 	Configured bool
 }
 
-type pluginsConfig struct {
+type extensionsConfig struct {
 	Allow *[]string `yaml:"allow"`
 }
 
@@ -773,8 +773,8 @@ func applyYAMLFile(cfg *Config, source yamlConfigSource) error {
 
 func applyExplicitYAMLFile(cfg *Config, path string) error {
 	// A CLI may point --config at a durable file that was already loaded.
-	// Reapply its ordinary explicit overrides while preserving plugin policy
-	// at the file's durable scope.
+	// Reapply its ordinary explicit overrides while preserving the Extension
+	// allowlist at the file's durable scope.
 	loadedPaths := []string{
 		cfg.DefaultHomeRuntimeConfigPath(),
 		cfg.HomeRuntimeConfigPath(),
@@ -794,7 +794,7 @@ func applyExplicitYAMLFile(cfg *Config, path string) error {
 				return err
 			}
 			return applyYAMLDataWithOptions(cfg, data, explicitYAMLSource(path), applyYAMLDataOptions{
-				SkipPluginPolicy: true,
+				SkipExtensionPolicy: true,
 			})
 		}
 	}
@@ -806,7 +806,7 @@ func applyYAMLData(cfg *Config, data []byte, source yamlConfigSource) error {
 }
 
 type applyYAMLDataOptions struct {
-	SkipPluginPolicy bool
+	SkipExtensionPolicy bool
 }
 
 func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource, opts applyYAMLDataOptions) error {
@@ -847,14 +847,14 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 	if err := applySkillsConfig(cfg, fc.Skills); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
-	if !opts.SkipPluginPolicy {
-		if fc.Plugins.Allow != nil && !source.allowsPluginPolicy() {
+	if !opts.SkipExtensionPolicy {
+		if fc.Extensions.Allow != nil && !source.allowsExtensionPolicy() {
 			return fmt.Errorf(
-				"config: parse %s: plugins.allow is only supported in default Home, instance Home, or workspace config",
+				"config: parse %s: extensions.allow is only supported in default Home, instance Home, or workspace config",
 				source.Path,
 			)
 		}
-		if err := applyPluginsConfig(cfg, fc.Plugins); err != nil {
+		if err := applyExtensionsConfig(cfg, fc.Extensions); err != nil {
 			return fmt.Errorf("config: parse %s: %w", source.Path, err)
 		}
 	}
@@ -982,20 +982,20 @@ func applySkillsConfig(cfg *Config, fileSkills skillsConfig) error {
 	return nil
 }
 
-func applyPluginsConfig(cfg *Config, filePlugins pluginsConfig) error {
-	if filePlugins.Allow == nil {
+func applyExtensionsConfig(cfg *Config, fileExtensions extensionsConfig) error {
+	if fileExtensions.Allow == nil {
 		return nil
 	}
-	allow, err := cleanPluginNames(*filePlugins.Allow)
+	allow, err := cleanExtensionNames(*fileExtensions.Allow)
 	if err != nil {
 		return err
 	}
-	cfg.Plugins.Allow = allow
-	cfg.Plugins.Configured = true
+	cfg.Extensions.Allow = allow
+	cfg.Extensions.Configured = true
 	return nil
 }
 
-func cleanPluginNames(values []string) ([]string, error) {
+func cleanExtensionNames(values []string) ([]string, error) {
 	seen := make(map[string]struct{}, len(values))
 	out := make([]string, 0, len(values))
 	for index, raw := range values {
@@ -1006,7 +1006,7 @@ func cleanPluginNames(values []string) ([]string, error) {
 			filepath.IsAbs(name) ||
 			strings.ContainsAny(name, `/\`) ||
 			strings.ContainsRune(name, 0) {
-			return nil, fmt.Errorf("plugins.allow[%d] must be a portable plugin directory name, got %q", index, raw)
+			return nil, fmt.Errorf("extensions.allow[%d] must be a portable extension directory name, got %q", index, raw)
 		}
 		if _, duplicate := seen[name]; duplicate {
 			continue

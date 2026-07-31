@@ -257,7 +257,7 @@ func TestPrepareConfigWithOptionsInjectsExtensionDataDirOnlyIntoLocalServers(t *
 	}
 }
 
-func TestPrepareConfigWithOptionsRemovesExtensionDataDirFromNonPluginServer(t *testing.T) {
+func TestPrepareConfigWithOptionsRemovesExtensionDataDirFromNonExtensionServer(t *testing.T) {
 	cfg := Config{MCPServers: map[string]ServerSpec{
 		"local": {
 			Command: "server",
@@ -273,7 +273,7 @@ func TestPrepareConfigWithOptionsRemovesExtensionDataDirFromNonPluginServer(t *t
 	}
 	env := got.MCPServers["local"].Env
 	if _, ok := env["JUEX_EXT_DATA_DIR"]; ok {
-		t.Fatalf("non-plugin server received extension data dir: %#v", env)
+		t.Fatalf("non-extension server received extension data dir: %#v", env)
 	}
 	if env["KEEP"] != "value" {
 		t.Fatalf("ordinary server env lost: %#v", env)

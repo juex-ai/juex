@@ -150,7 +150,7 @@ func TestRunCmd_DryRunLoadsExtensionMCPAndSkills(t *testing.T) {
 	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
-	mustWriteCLITestFile(t, filepath.Join(dir, ".juex", "juex.yaml"), "plugins:\n  allow: [demo]\n")
+	mustWriteCLITestFile(t, filepath.Join(dir, ".juex", "juex.yaml"), "extensions:\n  allow: [demo]\n")
 	extDir := filepath.Join(dir, ".juex", "extensions", "demo")
 	marker := filepath.Join(dir, "mcp-started")
 	body, err := json.MarshalIndent(map[string]any{
@@ -211,7 +211,7 @@ body`)
 			haveTool = true
 		}
 		if strings.HasPrefix(tool, "mcp__blocked__") {
-			t.Fatalf("dry-run tools include blocked plugin MCP tool: %+v", plan.Tools)
+			t.Fatalf("dry-run tools include blocked extension MCP tool: %+v", plan.Tools)
 		}
 	}
 	if !haveTool {
@@ -234,7 +234,7 @@ body`)
 		t.Fatalf("marker missing extension dir:\n%s", markerBody)
 	}
 	if _, err := os.Stat(blockedMarker); !os.IsNotExist(err) {
-		t.Fatalf("blocked plugin MCP process started: %v", err)
+		t.Fatalf("blocked extension MCP process started: %v", err)
 	}
 }
 

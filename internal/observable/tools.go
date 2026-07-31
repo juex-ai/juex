@@ -59,7 +59,7 @@ func ToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:        "observable_delete",
 			Group:       tools.ToolGroupObservable,
-			Description: "Permanently delete and stop a project-owned Observable; plugin definitions are read-only. Use stop for temporary pause. " + observableGuidePointer,
+			Description: "Permanently delete and stop a project-owned Observable; extension definitions are read-only. Use stop for temporary pause. " + observableGuidePointer,
 			Schema:      idSchema,
 		},
 		{

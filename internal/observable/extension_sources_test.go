@@ -14,19 +14,19 @@ import (
 	"github.com/juex-ai/juex/internal/sandbox"
 )
 
-func TestManagerLoadsReadOnlyPluginDefinitionsWithSource(t *testing.T) {
+func TestManagerLoadsReadOnlyExtensionDefinitionsWithSource(t *testing.T) {
 	dir := t.TempDir()
 	project := validSpec("project-observable")
 	writeObservableConfig(t, dir, project)
-	pluginPath := filepath.Join(dir, "plugin", "observables.json")
-	writeObservableConfigPath(t, pluginPath, validSpec("plugin-observable"))
+	extensionPath := filepath.Join(dir, "extension", "observables.json")
+	writeObservableConfigPath(t, extensionPath, validSpec("extension-observable"))
 
 	mgr, err := observable.NewManager(observable.ManagerOptions{
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
 		ReadOnlyConfigSources: []observable.ReadOnlyConfigSource{{
-			Path:   pluginPath,
+			Path:   extensionPath,
 			Source: "ext:demo",
 		}},
 	})
@@ -39,15 +39,15 @@ func TestManagerLoadsReadOnlyPluginDefinitionsWithSource(t *testing.T) {
 	if !ok || projectStatus.Source != "project" {
 		t.Fatalf("project status = %+v ok=%v", projectStatus, ok)
 	}
-	pluginStatus, ok := mgr.Status().ByID("plugin-observable")
-	if !ok || pluginStatus.Source != "ext:demo" {
-		t.Fatalf("plugin status = %+v ok=%v", pluginStatus, ok)
+	extensionStatus, ok := mgr.Status().ByID("extension-observable")
+	if !ok || extensionStatus.Source != "ext:demo" {
+		t.Fatalf("extension status = %+v ok=%v", extensionStatus, ok)
 	}
 	before, err := os.ReadFile(configPath(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = mgr.Delete(context.Background(), "plugin-observable")
+	err = mgr.Delete(context.Background(), "extension-observable")
 	var readOnlyErr *observable.ReadOnlyDefinitionError
 	if !errors.As(err, &readOnlyErr) || readOnlyErr.Source != "ext:demo" {
 		t.Fatalf("Delete() err = %v, want ext:demo read-only error", err)
@@ -57,12 +57,12 @@ func TestManagerLoadsReadOnlyPluginDefinitionsWithSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(after) != string(before) {
-		t.Fatalf("project config changed after plugin delete\nbefore=%s\nafter=%s", before, after)
+		t.Fatalf("project config changed after extension delete\nbefore=%s\nafter=%s", before, after)
 	}
-	if _, ok := mgr.Status().ByID("plugin-observable"); !ok {
-		t.Fatal("plugin status disappeared after rejected delete")
+	if _, ok := mgr.Status().ByID("extension-observable"); !ok {
+		t.Fatal("extension status disappeared after rejected delete")
 	}
-	if _, err := mgr.Create(context.Background(), validSpec("plugin-observable")); !errors.As(err, &readOnlyErr) {
+	if _, err := mgr.Create(context.Background(), validSpec("extension-observable")); !errors.As(err, &readOnlyErr) {
 		t.Fatalf("Create() err = %v, want read-only conflict", err)
 	}
 }
@@ -70,15 +70,15 @@ func TestManagerLoadsReadOnlyPluginDefinitionsWithSource(t *testing.T) {
 func TestManagerRejectsCrossSourceDuplicateDefinitions(t *testing.T) {
 	dir := t.TempDir()
 	writeObservableConfig(t, dir, validSpec("duplicate"))
-	pluginPath := filepath.Join(dir, "plugin", "observables.json")
-	writeObservableConfigPath(t, pluginPath, validSpec("duplicate"))
+	extensionPath := filepath.Join(dir, "extension", "observables.json")
+	writeObservableConfigPath(t, extensionPath, validSpec("duplicate"))
 
 	_, err := observable.NewManager(observable.ManagerOptions{
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
 		ReadOnlyConfigSources: []observable.ReadOnlyConfigSource{{
-			Path:   pluginPath,
+			Path:   extensionPath,
 			Source: "ext:demo",
 		}},
 	})
@@ -90,10 +90,10 @@ func TestManagerRejectsCrossSourceDuplicateDefinitions(t *testing.T) {
 	}
 }
 
-func TestPluginConfigIssuesAreDistinctAndDoNotBlockProjectCreate(t *testing.T) {
+func TestExtensionConfigIssuesAreDistinctAndDoNotBlockProjectCreate(t *testing.T) {
 	dir := t.TempDir()
-	pluginPath := filepath.Join(dir, "plugin", "observables.json")
-	writeRawObservableConfig(t, pluginPath, `{
+	extensionPath := filepath.Join(dir, "extension", "observables.json")
+	writeRawObservableConfig(t, extensionPath, `{
   "observables": [
     {"id":"broken","type":"command","command_config":{}},
     {"id":"broken","type":"command","command_config":{}}
@@ -104,7 +104,7 @@ func TestPluginConfigIssuesAreDistinctAndDoNotBlockProjectCreate(t *testing.T) {
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
 		ReadOnlyConfigSources: []observable.ReadOnlyConfigSource{{
-			Path:   pluginPath,
+			Path:   extensionPath,
 			Source: "ext:demo",
 		}},
 	})
@@ -121,21 +121,21 @@ func TestPluginConfigIssuesAreDistinctAndDoNotBlockProjectCreate(t *testing.T) {
 		t.Fatalf("issue statuses = %+v, want two distinct ext:demo issues", statuses)
 	}
 	if _, err := mgr.Create(context.Background(), validSpec("created")); err != nil {
-		t.Fatalf("Create() blocked by plugin issues: %v", err)
+		t.Fatalf("Create() blocked by extension issues: %v", err)
 	}
 }
 
 func TestReadOnlyConflictWinsBeforeProjectIssueEditGate(t *testing.T) {
 	dir := t.TempDir()
 	writeRawObservableConfig(t, configPath(dir), `{"observables":[{"id":"project-broken","type":"command","command_config":{}}]}`)
-	pluginPath := filepath.Join(dir, "plugin", "observables.json")
-	writeObservableConfigPath(t, pluginPath, validSpec("plugin-observable"))
+	extensionPath := filepath.Join(dir, "extension", "observables.json")
+	writeObservableConfigPath(t, extensionPath, validSpec("extension-observable"))
 	mgr, err := observable.NewManager(observable.ManagerOptions{
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
 		ReadOnlyConfigSources: []observable.ReadOnlyConfigSource{{
-			Path:   pluginPath,
+			Path:   extensionPath,
 			Source: "ext:demo",
 		}},
 	})
@@ -144,35 +144,35 @@ func TestReadOnlyConflictWinsBeforeProjectIssueEditGate(t *testing.T) {
 	}
 	defer func() { _ = mgr.Close() }()
 	var readOnlyErr *observable.ReadOnlyDefinitionError
-	if err := mgr.Delete(context.Background(), "plugin-observable"); !errors.As(err, &readOnlyErr) {
+	if err := mgr.Delete(context.Background(), "extension-observable"); !errors.As(err, &readOnlyErr) {
 		t.Fatalf("Delete() err = %v, want read-only conflict before project edit gate", err)
 	}
-	if _, err := mgr.Create(context.Background(), validSpec("plugin-observable")); !errors.As(err, &readOnlyErr) {
+	if _, err := mgr.Create(context.Background(), validSpec("extension-observable")); !errors.As(err, &readOnlyErr) {
 		t.Fatalf("Create() err = %v, want read-only conflict before project edit gate", err)
 	}
 }
 
-func TestPluginDataPreparationIsDeferredUntilCommandStart(t *testing.T) {
+func TestExtensionDataPreparationIsDeferredUntilCommandStart(t *testing.T) {
 	dir := t.TempDir()
-	pluginDir := filepath.Join(dir, "plugin")
+	extensionDir := filepath.Join(dir, "extension")
 	dataDir := filepath.Join(dir, "agent-state", "extensions", "demo")
-	pluginPath := filepath.Join(pluginDir, "observables.json")
-	spec := validSpec("plugin-command")
+	extensionPath := filepath.Join(extensionDir, "observables.json")
+	spec := validSpec("extension-command")
 	spec = mutateCommandSpec(spec, func(command *observable.CommandSourceSpec) {
 		command.Command = "$JUEX_EXT_DIR/bin/helper"
 		command.Args = []string{"$JUEX_EXT_DATA_DIR", "${WORKDIR}"}
 	})
-	writeObservableConfigPath(t, pluginPath, spec)
+	writeObservableConfigPath(t, extensionPath, spec)
 	var prepares atomic.Int32
 	mgr, err := observable.NewManager(observable.ManagerOptions{
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
 		ReadOnlyConfigSources: []observable.ReadOnlyConfigSource{{
-			Path:   pluginPath,
+			Path:   extensionPath,
 			Source: "ext:demo",
 			Runtime: observable.RuntimeContext{
-				ExtensionDir:     pluginDir,
+				ExtensionDir:     extensionDir,
 				ExtensionDataDir: dataDir,
 				PrepareExtensionDataDir: func() error {
 					prepares.Add(1)
@@ -188,7 +188,7 @@ func TestPluginDataPreparationIsDeferredUntilCommandStart(t *testing.T) {
 	if prepares.Load() != 0 {
 		t.Fatalf("prepare count after load = %d, want 0", prepares.Load())
 	}
-	if err := mgr.Start(context.Background(), "plugin-command"); err == nil {
+	if err := mgr.Start(context.Background(), "extension-command"); err == nil {
 		t.Fatal("Start() err = nil, want missing expanded helper")
 	}
 	if prepares.Load() != 0 {
@@ -196,16 +196,16 @@ func TestPluginDataPreparationIsDeferredUntilCommandStart(t *testing.T) {
 	}
 }
 
-func TestPluginCommandExpandsRuntimeAndGetsExactSandboxRoot(t *testing.T) {
+func TestExtensionCommandExpandsRuntimeAndGetsExactSandboxRoot(t *testing.T) {
 	dir := t.TempDir()
-	pluginDir := filepath.Join(dir, "plugin with spaces")
-	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+	extensionDir := filepath.Join(dir, "extension with spaces")
+	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	helper := copyObservableHelperExecutable(t, pluginDir)
+	helper := copyObservableHelperExecutable(t, extensionDir)
 	dataDir := filepath.Join(t.TempDir(), "agent state", "extensions", "demo")
-	pluginPath := filepath.Join(pluginDir, "observables.json")
-	spec := helperSpec("plugin-runtime", "json-once")
+	extensionPath := filepath.Join(extensionDir, "observables.json")
+	spec := helperSpec("extension-runtime", "json-once")
 	spec = mutateCommandSpec(spec, func(command *observable.CommandSourceSpec) {
 		command.Command = "$JUEX_EXT_DIR/" + filepath.Base(helper)
 		command.Args = []string{
@@ -220,7 +220,7 @@ func TestPluginCommandExpandsRuntimeAndGetsExactSandboxRoot(t *testing.T) {
 		command.Env["JUEX_EXT_DATA_DIR"] = "spoofed"
 		command.Env["OBSERVABLE_RUNTIME_PATHS"] = "$JUEX_EXT_DIR|${JUEX_EXT_DATA_DIR}|$JUEX_EXT_DIR_SUFFIX"
 	})
-	writeObservableConfigPath(t, pluginPath, spec)
+	writeObservableConfigPath(t, extensionPath, spec)
 	snapshot, err := environment.Resolve(environment.Options{
 		Inherited: []string{
 			"PATH=" + os.Getenv("PATH"),
@@ -247,10 +247,10 @@ func TestPluginCommandExpandsRuntimeAndGetsExactSandboxRoot(t *testing.T) {
 		},
 		SandboxRunner: runner,
 		ReadOnlyConfigSources: []observable.ReadOnlyConfigSource{{
-			Path:   pluginPath,
+			Path:   extensionPath,
 			Source: "ext:demo",
 			Runtime: observable.RuntimeContext{
-				ExtensionDir:     pluginDir,
+				ExtensionDir:     extensionDir,
 				ExtensionDataDir: dataDir,
 				PrepareExtensionDataDir: func() error {
 					prepares.Add(1)
@@ -266,7 +266,7 @@ func TestPluginCommandExpandsRuntimeAndGetsExactSandboxRoot(t *testing.T) {
 	if prepares.Load() != 0 {
 		t.Fatalf("prepare count after load = %d, want 0", prepares.Load())
 	}
-	if err := mgr.Start(context.Background(), "plugin-runtime"); err != nil {
+	if err := mgr.Start(context.Background(), "extension-runtime"); err != nil {
 		t.Fatal(err)
 	}
 	if prepares.Load() != 1 {
@@ -277,15 +277,15 @@ func TestPluginCommandExpandsRuntimeAndGetsExactSandboxRoot(t *testing.T) {
 	}
 	gotBinary, err := os.Stat(runner.last.Spec.Binary)
 	if err != nil {
-		t.Fatalf("stat expanded plugin helper %q: %v", runner.last.Spec.Binary, err)
+		t.Fatalf("stat expanded extension helper %q: %v", runner.last.Spec.Binary, err)
 	}
-	wantBinaryPath := filepath.Join(pluginDir, filepath.Base(helper))
+	wantBinaryPath := filepath.Join(extensionDir, filepath.Base(helper))
 	wantBinary, err := os.Stat(wantBinaryPath)
 	if err != nil {
-		t.Fatalf("stat expected plugin helper %q: %v", wantBinaryPath, err)
+		t.Fatalf("stat expected extension helper %q: %v", wantBinaryPath, err)
 	}
 	if !os.SameFile(gotBinary, wantBinary) {
-		t.Fatalf("binary = %q, want expanded plugin helper %q", runner.last.Spec.Binary, wantBinaryPath)
+		t.Fatalf("binary = %q, want expanded extension helper %q", runner.last.Spec.Binary, wantBinaryPath)
 	}
 	if len(runner.last.Spec.Args) < 4 ||
 		runner.last.Spec.Args[2] != dataDir ||
@@ -293,10 +293,10 @@ func TestPluginCommandExpandsRuntimeAndGetsExactSandboxRoot(t *testing.T) {
 		t.Fatalf("args = %#v, want expanded data/work paths", runner.last.Spec.Args)
 	}
 	env := environmentMap(runner.last.Spec.Env)
-	if env["JUEX_EXT_DIR"] != pluginDir || env["JUEX_EXT_DATA_DIR"] != dataDir {
-		t.Fatalf("authoritative plugin env = %#v", env)
+	if env["JUEX_EXT_DIR"] != extensionDir || env["JUEX_EXT_DATA_DIR"] != dataDir {
+		t.Fatalf("authoritative extension env = %#v", env)
 	}
-	wantPaths := pluginDir + "|" + dataDir + "|$JUEX_EXT_DIR_SUFFIX"
+	wantPaths := extensionDir + "|" + dataDir + "|$JUEX_EXT_DIR_SUFFIX"
 	if env["OBSERVABLE_RUNTIME_PATHS"] != wantPaths {
 		t.Fatalf("runtime paths = %q, want %q", env["OBSERVABLE_RUNTIME_PATHS"], wantPaths)
 	}
@@ -358,25 +358,25 @@ func TestProjectCommandRejectsAndStripsExtensionEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = rejectManager.Close() }()
-	if err := rejectManager.Start(context.Background(), rejected.ID); err == nil || !strings.Contains(err.Error(), "only available to plugin definitions") {
+	if err := rejectManager.Start(context.Background(), rejected.ID); err == nil || !strings.Contains(err.Error(), "only available to extension definitions") {
 		t.Fatalf("Start() err = %v, want explicit project extension variable rejection", err)
 	}
 }
 
-func TestPluginBlockedDataPathFailsAfterPrepareWithoutStartingProcess(t *testing.T) {
+func TestExtensionBlockedDataPathFailsAfterPrepareWithoutStartingProcess(t *testing.T) {
 	dir := t.TempDir()
-	pluginDir := filepath.Join(dir, "plugin")
-	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+	extensionDir := filepath.Join(dir, "extension")
+	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	helper := copyObservableHelperExecutable(t, pluginDir)
+	helper := copyObservableHelperExecutable(t, extensionDir)
 	dataDir := filepath.Join(t.TempDir(), "agent-state", "extensions", "demo")
-	pluginPath := filepath.Join(pluginDir, "observables.json")
-	spec := helperSpec("blocked-plugin", "json-once")
+	extensionPath := filepath.Join(extensionDir, "observables.json")
+	spec := helperSpec("blocked-extension", "json-once")
 	spec = mutateCommandSpec(spec, func(command *observable.CommandSourceSpec) {
 		command.Command = "$JUEX_EXT_DIR/" + filepath.Base(helper)
 	})
-	writeObservableConfigPath(t, pluginPath, spec)
+	writeObservableConfigPath(t, extensionPath, spec)
 	var prepares atomic.Int32
 	mgr, err := observable.NewManager(observable.ManagerOptions{
 		ConfigPath: configPath(dir),
@@ -391,10 +391,10 @@ func TestPluginBlockedDataPathFailsAfterPrepareWithoutStartingProcess(t *testing
 			Network: sandbox.NetworkPolicy{Enabled: true},
 		},
 		ReadOnlyConfigSources: []observable.ReadOnlyConfigSource{{
-			Path:   pluginPath,
+			Path:   extensionPath,
 			Source: "ext:demo",
 			Runtime: observable.RuntimeContext{
-				ExtensionDir:     pluginDir,
+				ExtensionDir:     extensionDir,
 				ExtensionDataDir: dataDir,
 				PrepareExtensionDataDir: func() error {
 					prepares.Add(1)

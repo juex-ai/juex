@@ -18,7 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/observable"
 )
 
-func TestIntegration_PluginObservableSandboxScopesWritableData(t *testing.T) {
+func TestIntegration_ExtensionObservableSandboxScopesWritableData(t *testing.T) {
 	switch runtime.GOOS {
 	case "darwin":
 		if _, err := exec.LookPath("sandbox-exec"); err != nil {
@@ -32,7 +32,7 @@ func TestIntegration_PluginObservableSandboxScopesWritableData(t *testing.T) {
 		t.Skipf("sandbox backend is unavailable on %s", runtime.GOOS)
 	}
 
-	root, err := os.MkdirTemp(".", ".plugin-observable-sandbox-")
+	root, err := os.MkdirTemp(".", ".extension-observable-sandbox-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestIntegration_PluginObservableSandboxScopesWritableData(t *testing.T) {
 	extensionDir := filepath.Join(home, "extensions", "demo")
 	body, err := json.Marshal(map[string]any{
 		"observables": []map[string]any{{
-			"id":   "plugin-sandbox-probe",
+			"id":   "extension-sandbox-probe",
 			"type": "command",
 			"command_config": map[string]any{
 				"command": "/bin/sh",
@@ -103,7 +103,7 @@ func TestIntegration_PluginObservableSandboxScopesWritableData(t *testing.T) {
 			WorkDir:          work,
 			HomeJuexDir:      home,
 			AgentAddress:     address,
-			Plugins: config.PluginPolicy{
+			Extensions: config.ExtensionPolicy{
 				Allow:      []string{"demo"},
 				Configured: true,
 			},
@@ -128,7 +128,7 @@ func TestIntegration_PluginObservableSandboxScopesWritableData(t *testing.T) {
 	var records []observable.ObservationRecord
 	for time.Now().Before(deadline) {
 		records, err = a.Observables().Observations(observable.ObservationFilter{
-			ObservableID: "plugin-sandbox-probe",
+			ObservableID: "extension-sandbox-probe",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -139,7 +139,7 @@ func TestIntegration_PluginObservableSandboxScopesWritableData(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if len(records) != 1 || records[0].Content != "own=ok sibling=blocked agent=blocked" {
-		status, _ := a.Observables().StatusByID("plugin-sandbox-probe")
+		status, _ := a.Observables().StatusByID("extension-sandbox-probe")
 		t.Fatalf("observations = %+v, status = %+v", records, status)
 	}
 
@@ -156,7 +156,7 @@ func TestIntegration_PluginObservableSandboxScopesWritableData(t *testing.T) {
 		}
 	}
 
-	status, err := a.Observables().StatusByID("plugin-sandbox-probe")
+	status, err := a.Observables().StatusByID("extension-sandbox-probe")
 	if err != nil {
 		t.Fatal(err)
 	}

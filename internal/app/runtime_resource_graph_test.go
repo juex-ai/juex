@@ -31,7 +31,7 @@ func TestResolveRuntimeResourceGraphSourceNodes(t *testing.T) {
 		WorkDir:                   work,
 		HomeAgentsDir:             homeAgents,
 		HomeJuexDir:               homeJuex,
-		Plugins:                   allowPlugins("chanwire"),
+		Extensions:                allowExtensions("chanwire"),
 		EnableUserAgentsResources: true,
 	})
 	if err != nil {
@@ -64,7 +64,7 @@ func TestResolveRuntimeResourceGraphSourceNodes(t *testing.T) {
 	}
 }
 
-func TestResolveRuntimeResourceGraphUsesLayeredPluginPolicyAndWinningBundle(t *testing.T) {
+func TestResolveRuntimeResourceGraphUsesLayeredExtensionPolicyAndWinningBundle(t *testing.T) {
 	userHome := t.TempDir()
 	instanceHome := t.TempDir()
 	work := t.TempDir()
@@ -84,7 +84,7 @@ func TestResolveRuntimeResourceGraphUsesLayeredPluginPolicyAndWinningBundle(t *t
 		t.Setenv(key, "")
 	}
 
-	mustWriteRuntimeStatusFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), "plugins:\n  allow: [shared]\n")
+	mustWriteRuntimeStatusFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), "extensions:\n  allow: [shared]\n")
 	mustWriteRuntimeStatusFile(t, filepath.Join(instanceHome, "juex.yaml"), "skills:\n  include: []\n")
 	mustWriteRuntimeStatusFile(t, filepath.Join(work, ".juex", "juex.yaml"), "sandbox:\n  enabled: true\n")
 	mustWriteRuntimeStatusFile(t, filepath.Join(userHome, ".juex", "extensions", "shared", "skills"), "invalid lower bundle")
@@ -135,7 +135,7 @@ func TestResolveRuntimeResourceGraphExcludesUserResourcesWhenDisabled(t *testing
 		WorkDir:                   work,
 		HomeAgentsDir:             homeAgents,
 		HomeJuexDir:               homeJuex,
-		Plugins:                   allowPlugins("home"),
+		Extensions:                allowExtensions("home"),
 		EnableUserAgentsResources: false,
 	})
 	if err != nil {
@@ -156,7 +156,7 @@ commands:
     command: ["python3", "demo.py"]
 `)
 
-	graph, err := ResolveRuntimeResourceGraph(config.Config{WorkDir: work, Plugins: allowPlugins("demo")})
+	graph, err := ResolveRuntimeResourceGraph(config.Config{WorkDir: work, Extensions: allowExtensions("demo")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestLoadMCPConfigsPreparesAgentOwnedDataDirForSelectedLocalExtensionWithout
 		WorkDir:      work,
 		HomeJuexDir:  home,
 		AgentAddress: address,
-		Plugins:      allowPlugins("demo"),
+		Extensions:   allowExtensions("demo"),
 	}
 	graph, err := ResolveRuntimeResourceGraph(cfg)
 	if err != nil {
@@ -287,7 +287,7 @@ func TestLoadMCPConfigRefsDoesNotCreateDataDirForRemoteOnlyExtension(t *testing.
 		WorkDir:      t.TempDir(),
 		HomeJuexDir:  home,
 		AgentAddress: address,
-		Plugins:      allowPlugins("remote"),
+		Extensions:   allowExtensions("remote"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -325,7 +325,7 @@ func TestLoadMCPConfigRefsDoesNotCreateDataDirWhenMixedExtensionPreparationFails
 		WorkDir:      t.TempDir(),
 		HomeJuexDir:  home,
 		AgentAddress: address,
-		Plugins:      allowPlugins("mixed"),
+		Extensions:   allowExtensions("mixed"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -378,8 +378,8 @@ func TestResolveRuntimeResourceGraphStateFreePreviewHasNoExtensionDataDir(t *tes
 	work := t.TempDir()
 	mustWriteRuntimeStatusFile(t, filepath.Join(work, ".juex", "extensions", "demo", "mcp.json"), `{"mcpServers":{"local":{"command":"server"}}}`)
 	graph, err := ResolveRuntimeResourceGraph(config.Config{
-		WorkDir: work,
-		Plugins: allowPlugins("demo"),
+		WorkDir:    work,
+		Extensions: allowExtensions("demo"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -409,7 +409,7 @@ func TestLoadMCPConfigRefsPreparesRemoteExtensionCredentials(t *testing.T) {
 	    }
   }
 }`)
-	graph, err := ResolveRuntimeResourceGraph(config.Config{WorkDir: work, Plugins: allowPlugins("remote")})
+	graph, err := ResolveRuntimeResourceGraph(config.Config{WorkDir: work, Extensions: allowExtensions("remote")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,6 +552,6 @@ func nodeKindsAndSources(nodes []RuntimeResourceNode) []string {
 	return out
 }
 
-func allowPlugins(names ...string) config.PluginPolicy {
-	return config.PluginPolicy{Allow: append([]string(nil), names...), Configured: true}
+func allowExtensions(names ...string) config.ExtensionPolicy {
+	return config.ExtensionPolicy{Allow: append([]string(nil), names...), Configured: true}
 }

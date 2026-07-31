@@ -55,7 +55,7 @@ func (s yamlConfigSource) allowsFleet() bool {
 	return s.Scope == configScopeDefaultHome || s.Scope == configScopeInstanceHome
 }
 
-func (s yamlConfigSource) allowsPluginPolicy() bool {
+func (s yamlConfigSource) allowsExtensionPolicy() bool {
 	return s.Scope != configScopeExplicit
 }
 

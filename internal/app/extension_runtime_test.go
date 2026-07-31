@@ -39,9 +39,9 @@ func TestExtensionRuntimeContextUsesAgentOwnedDataDirectory(t *testing.T) {
 	if first.DataDir == second.DataDir {
 		t.Fatalf("agent data directories are not isolated: %q", first.DataDir)
 	}
-	otherPlugin := newExtensionRuntimeContext(firstAddress, extensions.Extension{Name: "other"})
-	if otherPlugin.DataDir == first.DataDir {
-		t.Fatalf("plugin data directories are not isolated: %q", first.DataDir)
+	otherExtension := newExtensionRuntimeContext(firstAddress, extensions.Extension{Name: "other"})
+	if otherExtension.DataDir == first.DataDir {
+		t.Fatalf("extension data directories are not isolated: %q", first.DataDir)
 	}
 	movedWorkspace := newExtensionRuntimeContext(firstAddress, extensions.Extension{
 		Name:   "demo",
@@ -146,7 +146,7 @@ func TestExtensionRuntimeContextPrepareDataDirIsConcurrent(t *testing.T) {
 }
 
 func TestExtensionRuntimeContextRejectsSymlinkEscape(t *testing.T) {
-	for _, target := range []string{"extensions-root", "plugin-dir"} {
+	for _, target := range []string{"extensions-root", "extension-dir"} {
 		t.Run(target, func(t *testing.T) {
 			home := t.TempDir()
 			address, err := agentstate.NewAgentAddress(home, "abcdefgh")
@@ -163,7 +163,7 @@ func TestExtensionRuntimeContextRejectsSymlinkEscape(t *testing.T) {
 				if err := os.Symlink(outside, extensionsRoot); err != nil {
 					t.Skipf("symlinks unavailable: %v", err)
 				}
-			case "plugin-dir":
+			case "extension-dir":
 				if err := os.Mkdir(extensionsRoot, 0o700); err != nil {
 					t.Fatal(err)
 				}

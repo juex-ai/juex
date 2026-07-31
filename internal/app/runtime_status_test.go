@@ -530,7 +530,7 @@ func TestRuntimeCatalogServiceRejectsExtensionResourceDuplicates(t *testing.T) {
     "shared": { "command": "extension" }
   }
 }`)
-		_, err := NewRuntimeCatalogService(config.Config{WorkDir: work, Plugins: allowPlugins("demo")}).Snapshot(RuntimeStatusOptions{})
+		_, err := NewRuntimeCatalogService(config.Config{WorkDir: work, Extensions: allowExtensions("demo")}).Snapshot(RuntimeStatusOptions{})
 		if err == nil || !strings.Contains(err.Error(), `duplicate MCP server "shared"`) {
 			t.Fatalf("err = %v, want duplicate MCP error", err)
 		}
@@ -548,7 +548,7 @@ name: shared
 description: extension
 ---
 body`)
-		_, err := NewRuntimeCatalogService(config.Config{WorkDir: work, Plugins: allowPlugins("demo")}).Snapshot(RuntimeStatusOptions{})
+		_, err := NewRuntimeCatalogService(config.Config{WorkDir: work, Extensions: allowExtensions("demo")}).Snapshot(RuntimeStatusOptions{})
 		if err == nil || !strings.Contains(err.Error(), `duplicate skill "shared"`) {
 			t.Fatalf("err = %v, want duplicate skill error", err)
 		}
@@ -563,8 +563,8 @@ commands:
     command: ["python3", "x.py"]
 `)
 		cfg := config.Config{
-			WorkDir: work,
-			Plugins: allowPlugins("demo"),
+			WorkDir:    work,
+			Extensions: allowExtensions("demo"),
 			Hooks: hooks.Config{Commands: []hooks.CommandHook{{
 				Name:    "shared",
 				Events:  []hooks.EventName{hooks.EventStop},

@@ -59,14 +59,14 @@ type RuntimeResourceGraph struct {
 
 func ResolveRuntimeResourceGraph(cfg config.Config) (RuntimeResourceGraph, error) {
 	paths := cfg.ResourcePaths()
-	pluginPolicy := cfg.PluginPolicy()
+	extensionPolicy := cfg.ExtensionPolicy()
 	extResources, err := extensions.Discover(extensions.DiscoverOptions{
 		Roots: []extensions.Root{
 			{Path: paths.DefaultHomeExtensionsDir, Scope: extensions.ScopeUser},
 			{Path: paths.HomeExtensionsDir, Scope: extensions.ScopeUser},
 			{Path: paths.ProjectExtensionsDir, Scope: extensions.ScopeProject, RequireTrust: true},
 		},
-		AllowedNames: pluginPolicy.Allow,
+		AllowedNames: extensionPolicy.Allow,
 	})
 	if err != nil {
 		return RuntimeResourceGraph{}, err

@@ -6,8 +6,7 @@ tools, workspace Observables, local and remote MCP tools, skills and hooks from
 local resource bundles, agent-home memory, and resumable session history.
 
 The project is intentionally narrow: it is a runtime for experimenting with
-agent loops, not a hosted service or a framework with plugins for every
-integration.
+agent loops, not a hosted service or an all-in-one integration framework.
 
 ## Quick Start
 
@@ -326,7 +325,7 @@ $JUEX_HOME/
     ├── api.sock                 # preferred local API endpoint while serving
     ├── history.json             # cached transcript summaries + active primary id
     ├── logs/fleet.log           # detached child stdout and stderr
-    ├── extensions/<name>/       # Agent-owned persistent plugin data
+    ├── extensions/<name>/       # Agent-owned persistent extension data
     ├── memory/
     ├── observables/             # generated runs, observations, and schedule state
     └── sessions/<id>/
@@ -343,7 +342,7 @@ $JUEX_HOME/
         └── tools.jsonl
 ```
 
-Personal agent resources live under `~/.agents/`; JueX-home extension bundles
+Personal agent resources live under `~/.agents/`; JueX-home Extensions
 live under the default and effective JueX homes. Juex always reads
 `~/.juex/juex.yaml` as the shared configuration base. When `JUEX_HOME` selects
 a canonically distinct directory, `$JUEX_HOME/juex.yaml` overrides that base,
@@ -355,26 +354,27 @@ work-local AGENTS.md files, reads user-global skills and MCP servers from
 `~/.agents/skills` and `~/.agents/mcp.json`. Set
 `enable_user_agents_resources: false` in `juex.yaml`, or pass
 `--enable-user-agents-resources=false`, to ignore only the personal
-`~/.agents` resources for a run; this switch does not change plugin policy.
+`~/.agents` resources for a run; this switch does not change the Extension
+allowlist.
 
-Plugin bundles are the existing extension directories. Configure their exact,
-case-sensitive logical names with `plugins.allow`. An omitted setting inherits
+Extensions are named directories selected by their exact, case-sensitive
+logical names in `extensions.allow`. An omitted setting inherits
 the previous default-Home, effective-Home, or workspace layer; an explicit
-list replaces it, and `plugins.allow: []` disables all plugins. If no layer
-configures the field, Juex loads no plugin bundles. For each allowed name Juex
-selects the highest-precedence installed bundle from
+list replaces it, and `extensions.allow: []` selects no Extensions. If no layer
+configures the field, Juex loads no Extensions. For each allowed name Juex
+selects the highest-precedence installed Extension from
 `~/.juex/extensions/<name>/`, a distinct
 `$JUEX_HOME/extensions/<name>/`, then
 `.juex/extensions/<name>/`. A higher layer replaces the whole same-name
-bundle; it does not merge resources with the lower copy.
+Extension; it does not merge resources with the lower copy.
 
-Extension bundles may provide `skills/`, `mcp.json`, `hooks.yaml`, and
+Extensions may provide `skills/`, `mcp.json`, `hooks.yaml`, and
 `observables.json`; runtime status reports selected resources with source
 `ext:<name>`. Work-local
 extension hooks must set `trusted: true`; JueX-home extension hooks are trusted
 by location. The allowlist authorizes a logical name, so a work-local
-same-name bundle can override a Home bundle; it is not a publisher signature
-or source-authentication mechanism. Selected plugin Observables use that
+same-name Extension can override a Home Extension; it is not a publisher signature
+or source-authentication mechanism. Selected extension Observables use that
 allowlist boundary and start with the Primary Session, so Sandbox policy
 remains the process capability boundary for Command Observables.
 Local extension MCP servers receive `JUEX_EXT_DIR`, the selected installation
@@ -383,11 +383,11 @@ root, and `JUEX_EXT_DATA_DIR`, the private persistent directory at
 `JUEX_WORKDIR`. The data directory is created with private permissions only
 immediately before a selected local MCP process connects; configuration
 discovery, status, doctor inspection, remote-only extensions, and state-free
-resource previews do not create it. Plugin data survives runtime restarts,
-Workspace moves, allowlist changes, and bundle uninstall, and is removed with
+resource previews do not create it. Extension data survives runtime restarts,
+Workspace moves, allowlist changes, and Extension removal, and is removed with
 the owning Agent. Workspace artifacts and project-owned Observable definitions
-remain under `.juex/`; plugin-owned definitions remain read-only in the
-selected bundle. Provider configuration uses the same
+remain under `.juex/`; extension-owned definitions remain read-only in the
+selected Extension. Provider configuration uses the same
 default-home then instance-home merge. A serving agent prefers
 `unix://$JUEX_HOME/agents/<id>/api.sock` and falls back loudly to an ephemeral
 `tcp://127.0.0.1:<port>` endpoint when AF_UNIX is unavailable.
@@ -490,16 +490,16 @@ temporary scratch paths needed by normal shell tools, but do not silently reopen
 arbitrary user paths outside the workspace. Unsupported platforms, missing
 helpers, permissions errors, or policies a backend cannot enforce fail closed
 instead of falling back to unsandboxed execution.
-Extension-aware sandbox requests may add only the owning plugin's exact Agent
+Extension-aware sandbox requests may add only the owning extension's exact Agent
 data directory as a writable root. An overlap with `blocked_paths`, including
 through symlinks, fails before process startup; the Agent parent and sibling
-plugin directories are not granted.
+extension directories are not granted.
 
 Observables are configured sources that emit durable Observations. Definitions
 come from writable `.juex/observables.json` with source `project`, plus
-read-only `observables.json` files from selected plugins with source
+read-only `observables.json` files from selected extensions with source
 `ext:<name>`. IDs are globally unique across sources; collisions fail with
-both sources named. Plugin definitions support the existing temporary
+both sources named. Extension definitions support the existing temporary
 start/stop/run lifecycle but cannot be deleted or persisted into the project
 file.
 A Command Observable captures bounded stdout/stderr batches from a managed
@@ -514,7 +514,7 @@ The Web UI also exposes `Run` for Schedules. It emits one durable configured
 Observation without changing whether the Schedule is running or stopped.
 `Run` is a Web/API control only; no agent-facing tool is registered for it.
 
-Both project and plugin `observables.json` accept only tagged entries:
+Both project and extension `observables.json` accept only tagged entries:
 `type: "command"` with `command_config`, or `type: "schedule"` with
 `schedule_config`. Old top-level
 command fields and the earlier nested `source` shape are reported as config
@@ -533,13 +533,13 @@ attachments are copied into content-addressed
 batching or asynchronous delivery, and then become provider image blocks.
 Validation failures are emitted as `observation.errored` and still leave
 structured text in context.
-Command fields expand `WORKDIR`, `JUEX_WORKDIR`, and, for plugin definitions,
+Command fields expand `WORKDIR`, `JUEX_WORKDIR`, and, for extension definitions,
 `JUEX_EXT_DIR` and `JUEX_EXT_DATA_DIR` across command, args, cwd, and env
 values without a shell. Project definitions cannot set or reference the two
 extension-only variables, and inherited values are removed from their child
-environment. A plugin Command receives only its exact Agent-owned data
+environment. An Extension Command receives only its exact Agent-owned data
 directory as an additional writable root; with Sandbox enabled and
-`outside_workspace: read_only`, sibling plugin data and unrelated Agent-home
+`outside_workspace: read_only`, sibling extension data and unrelated Agent-home
 paths remain read-only. Explicit `blocked_paths` still wins.
 
 Generated run, Observation, delivery, idempotency, and schedule state follow
