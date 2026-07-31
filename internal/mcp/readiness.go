@@ -79,6 +79,7 @@ func (SDKRemoteReadinessProbe) Probe(
 	spec ServerSpec,
 	opts ConnectOptions,
 ) error {
+	ctx = withOAuthRefreshDeadline(ctx)
 	client, err := ConnectWithOptions(ctx, name, spec, opts)
 	if err != nil {
 		return err

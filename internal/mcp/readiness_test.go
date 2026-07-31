@@ -152,6 +152,45 @@ func TestSDKRemoteReadinessProbeUsesMCPRequest(t *testing.T) {
 	}
 }
 
+func TestSDKRemoteReadinessProbeBoundsOAuthRefresh(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		close(started)
+		select {
+		case <-request.Context().Done():
+		case <-release:
+		}
+	}))
+	defer tokenServer.Close()
+	defer close(release)
+	remoteServer := newRemoteMCPTestServer(t, nil)
+
+	start := time.Now()
+	got := CheckRemoteReadiness(t.Context(), "remote", ServerSpec{
+		URL: remoteServer.URL,
+		Auth: &AuthSpec{Refresh: &RefreshAuthSpec{
+			TokenURL:     tokenServer.URL,
+			ClientID:     "client-id",
+			RefreshToken: Credential{value: "refresh-token"},
+		}},
+	}, RemoteReadinessOptions{Timeout: 50 * time.Millisecond})
+	if got.Stage != ReadinessStageConnectivity || got.Status != ReadinessStatusFail {
+		t.Fatalf("result = %+v, want connectivity timeout", got)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatal("OAuth refresh did not start")
+	}
+	if !errors.Is(got.Err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context deadline exceeded", got.Err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("readiness took %v, want OAuth refresh bounded by its timeout", elapsed)
+	}
+}
+
 func TestRemoteReadinessServerErrorNamesStage(t *testing.T) {
 	authErr := errorclass.WithKind(errorclass.KindAuth, errors.New("unauthorized"))
 	err := remoteReadinessServerError("remote", ServerSpec{URL: "https://mcp.example.com/mcp"}, "connect", authErr)
