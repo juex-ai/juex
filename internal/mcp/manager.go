@@ -17,6 +17,7 @@ type Manager struct {
 	clients map[string]*Client
 	tools   map[string][]ToolDescriptor
 	errors  map[string]error
+	specs   map[string]ServerSpec
 	closed  bool
 }
 
@@ -39,8 +40,10 @@ func newManager(ctx context.Context, cfg Config, opts ConnectOptions) *Manager {
 		clients: map[string]*Client{},
 		tools:   map[string][]ToolDescriptor{},
 		errors:  map[string]error{},
+		specs:   map[string]ServerSpec{},
 	}
 	for name, spec := range cfg.MCPServers {
+		mgr.specs[name] = ServerSpec{Type: spec.Type, URL: spec.URL}
 		if err := validateToolNameServer(name); err != nil {
 			mgr.errors[name] = &ServerError{Server: name, Op: "tool name", Err: err}
 			continue
@@ -209,7 +212,15 @@ func (m *Manager) StartupErrors() map[string]string {
 	defer m.mu.RUnlock()
 	for serverName, err := range m.errors {
 		if err != nil {
-			out[serverName] = err.Error()
+			message := err.Error()
+			if spec, ok := m.specs[serverName]; ok {
+				if safeMessage, safeErr := spec.DisplaySafeText(message); safeErr == nil {
+					message = safeMessage
+				} else {
+					message = fmt.Sprintf("mcp[%s]: startup error diagnostic redacted", serverName)
+				}
+			}
+			out[serverName] = message
 		}
 	}
 	return out
@@ -232,6 +243,7 @@ func (m *Manager) Close() error {
 	m.clients = nil
 	m.tools = nil
 	m.errors = nil
+	m.specs = nil
 	m.mu.Unlock()
 
 	var firstErr error

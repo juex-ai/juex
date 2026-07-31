@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1174,6 +1176,32 @@ func TestNewManagerLayeredSoftKeepsHealthyServersAndRecordsFailures(t *testing.T
 	}
 	if _, ok := reg.Get("mcp__beta__echo"); ok {
 		t.Fatalf("unexpected beta tool, have %+v", reg.List())
+	}
+}
+
+func TestManagerStartupErrorsUseConnectionSpecForRedaction(t *testing.T) {
+	const secret = "startup-spec-secret"
+	remote := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	endpoint := remote.URL
+	remote.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	mgr := newManager(ctx, Config{MCPServers: map[string]ServerSpec{
+		"remote": {Type: "http", URL: endpoint + "/mcp?token=" + secret},
+	}}, ConnectOptions{})
+	defer func() {
+		if err := mgr.Close(); err != nil {
+			t.Errorf("close manager: %v", err)
+		}
+	}()
+
+	startupError := mgr.StartupErrors()["remote"]
+	if startupError == "" {
+		t.Fatal("missing startup error")
+	}
+	if strings.Contains(startupError, secret) || strings.Contains(startupError, "token") {
+		t.Fatalf("startup error leaked connection spec query: %q", startupError)
 	}
 }
 

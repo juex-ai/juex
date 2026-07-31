@@ -175,6 +175,22 @@ func TestRuntimeRedactsQueryDiagnosticsFromFailedRemoteMCPStartup(t *testing.T) 
 			},
 			forbidden: []string{"semicolon-secret"},
 		},
+		{
+			name:  "JSON escaped slash value",
+			query: "token=abc%2Fdef",
+			body: func(*http.Request) string {
+				return `rejected JSON value abc\/def`
+			},
+			forbidden: []string{`abc\/def`, "abc/def", "abc%2Fdef"},
+		},
+		{
+			name:  "JSON escaped unicode value",
+			query: "token=%E4%B8%AD%E6%96%87",
+			body: func(*http.Request) string {
+				return `rejected JSON value \u4e2d\u6587`
+			},
+			forbidden: []string{`\u4e2d\u6587`, "中文", "%E4%B8%AD%E6%96%87"},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

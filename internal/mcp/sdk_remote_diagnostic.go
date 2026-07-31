@@ -172,7 +172,12 @@ func (t *remoteDiagnosticRoundTripper) RoundTrip(request *http.Request) (*http.R
 	readLimit := remoteDiagnosticBodyBytes + longestString(redactionValues)
 	data, readErr := io.ReadAll(io.LimitReader(response.Body, int64(readLimit+1)))
 	_ = response.Body.Close()
-	bodyExcerpt := redactSecretValues(string(data), redactionValues)
+	bodyExcerpt := "[REDACTED]"
+	// A query may carry credentials that the server can echo with arbitrary
+	// transformations, so queried endpoints keep no server-controlled detail.
+	if t.endpoint == nil || t.endpoint.RawQuery == "" {
+		bodyExcerpt = redactSecretValues(string(data), redactionValues)
+	}
 	bodyExcerpt = truncateDiagnosticExcerpt(bodyExcerpt, remoteDiagnosticBodyBytes)
 	response.Body = io.NopCloser(bytes.NewReader([]byte(bodyExcerpt)))
 	diagnostic.record(response.StatusCode, bodyExcerpt)
