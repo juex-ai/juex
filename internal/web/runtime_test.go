@@ -56,7 +56,7 @@ body`)
 	if got.MCP.Configured != 1 || got.MCP.Connected != 1 {
 		t.Fatalf("mcp = %+v", got.MCP)
 	}
-	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "alpha" || got.MCP.Servers[0].Command != os.Args[0] || got.MCP.Servers[0].Status != "connected" || got.MCP.Servers[0].ToolCount != 1 {
+	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "alpha" || got.MCP.Servers[0].Type != "stdio" || got.MCP.Servers[0].URL != "" || got.MCP.Servers[0].Command != os.Args[0] || got.MCP.Servers[0].Status != "connected" || got.MCP.Servers[0].ToolCount != 1 {
 		t.Fatalf("servers = %+v", got.MCP.Servers)
 	}
 	if got.Tools.Count != 28 || len(got.Tools.Groups) != 8 {
@@ -203,6 +203,60 @@ func TestRuntimeStatusResponseSerializesEmptyCatalogCollectionsAsArrays(t *testi
 	}
 	if string(got.MCP.Servers[0].Tools) != "[]" {
 		t.Fatalf("empty MCP tools JSON = %s, body=%s", got.MCP.Servers[0].Tools, recorder.Body.Bytes())
+	}
+}
+
+func TestRuntimeAPISerializesSafeMCPTransportMetadata(t *testing.T) {
+	const (
+		querySecret  = "runtime-query-secret"
+		headerSecret = "runtime-header-secret"
+	)
+	srv := newTestServer(t)
+	work := srv.opts.Cfg.WorkDir
+	mustWriteRuntimeFile(t, filepath.Join(work, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "local": { "command": "local-server", "args": ["--stdio"] },
+    "remote": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp?token=`+querySecret+`",
+      "headers": { "Authorization": "Bearer `+headerSecret+`" }
+    }
+  }
+}`)
+
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/runtime", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if strings.Contains(body, querySecret) || strings.Contains(body, headerSecret) || strings.Contains(body, "Authorization") {
+		t.Fatalf("runtime API leaked MCP credentials:\n%s", body)
+	}
+
+	var got struct {
+		MCP struct {
+			Servers []map[string]any `json:"servers"`
+		} `json:"mcp"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.MCP.Servers) != 2 {
+		t.Fatalf("servers = %+v", got.MCP.Servers)
+	}
+	local, remote := got.MCP.Servers[0], got.MCP.Servers[1]
+	if local["type"] != "stdio" || local["command"] != "local-server" {
+		t.Fatalf("local = %+v", local)
+	}
+	if _, ok := local["url"]; ok {
+		t.Fatalf("stdio server unexpectedly exposed url: %+v", local)
+	}
+	if remote["type"] != "http" || remote["url"] != "https://mcp.example.com/mcp" {
+		t.Fatalf("remote = %+v", remote)
+	}
+	if command, ok := remote["command"]; !ok || command != "" {
+		t.Fatalf("remote command compatibility field = %#v, present=%v", command, ok)
 	}
 }
 

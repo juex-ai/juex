@@ -83,6 +83,8 @@ type mcpStatus struct {
 type mcpServerInfo struct {
 	Name      string            `json:"name"`
 	Source    string            `json:"source"`
+	Type      string            `json:"type"`
+	URL       string            `json:"url,omitempty"`
 	Command   string            `json:"command"`
 	Args      []string          `json:"args,omitempty"`
 	Status    string            `json:"status"`
@@ -167,6 +169,7 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	status, err := app.NewRuntimeCatalogService(s.opts.Cfg).Snapshot(app.RuntimeStatusOptions{
 		MCPToolDescriptors: s.mcpToolDescriptors(),
 		MCPErrors:          s.mcpErrors(),
+		MCPConnectionSpecs: s.mcpConnectionSpecs(),
 		SkillCache:         s.runtimeSkills,
 		ScratchpadDir:      scratchpadDir,
 	})
@@ -271,6 +274,8 @@ func mcpStatusFromApp(status app.RuntimeMCPStatus) mcpStatus {
 		servers = append(servers, mcpServerInfo{
 			Name:      server.Name,
 			Source:    server.Source,
+			Type:      server.Type,
+			URL:       server.URL,
 			Command:   server.Command,
 			Args:      append([]string(nil), server.Args...),
 			Status:    server.Status,

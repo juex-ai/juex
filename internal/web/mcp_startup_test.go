@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -141,6 +142,165 @@ func TestOpenSessionWaitsForInFlightMCPStartup(t *testing.T) {
 	}
 	if err := <-startErrCh; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRuntimeRedactsQueryDiagnosticsFromFailedRemoteMCPStartup(t *testing.T) {
+	const (
+		decodedSecret = "runtime query secret"
+		rawSecret     = "runtime%20query%20secret"
+	)
+	tests := []struct {
+		name      string
+		query     string
+		body      func(*http.Request) string
+		forbidden []string
+	}{
+		{name: "request URI", body: func(r *http.Request) string {
+			return "rejected request " + r.URL.RequestURI()
+		}},
+		{name: "parsed query fields", body: func(r *http.Request) string {
+			return "rejected query parameter token value " + r.URL.Query().Get("token")
+		}},
+		{name: "raw encoded query value", body: func(r *http.Request) string {
+			_, rawValue, _ := strings.Cut(strings.SplitN(r.URL.RawQuery, "&", 2)[0], "=")
+			return "rejected raw query value " + rawValue
+		}},
+		{
+			name:  "semicolon-delimited query value",
+			query: "token=semicolon-secret;tenant=demo",
+			body: func(r *http.Request) string {
+				_, rawValue, _ := strings.Cut(strings.SplitN(r.URL.RawQuery, ";", 2)[0], "=")
+				return "rejected semicolon query value " + rawValue
+			},
+			forbidden: []string{"semicolon-secret"},
+		},
+		{
+			name:  "JSON escaped slash value",
+			query: "token=abc%2Fdef",
+			body: func(*http.Request) string {
+				return `rejected JSON value abc\/def`
+			},
+			forbidden: []string{`abc\/def`, "abc/def", "abc%2Fdef"},
+		},
+		{
+			name:  "JSON escaped unicode value",
+			query: "token=%E4%B8%AD%E6%96%87",
+			body: func(*http.Request) string {
+				return `rejected JSON value \u4e2d\u6587`
+			},
+			forbidden: []string{`\u4e2d\u6587`, "中文", "%E4%B8%AD%E6%96%87"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, test.body(r), http.StatusUnauthorized)
+			}))
+			defer remote.Close()
+
+			srv := newTestServer(t)
+			work := srv.opts.Cfg.WorkDir
+			query := test.query
+			if query == "" {
+				query = "token=" + rawSecret + "&tenant=demo"
+			}
+			body, err := json.MarshalIndent(map[string]any{
+				"mcpServers": map[string]any{
+					"remote": map[string]any{
+						"type": "http",
+						"url":  remote.URL + "/mcp?" + query,
+					},
+				},
+			}, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustWriteRuntimeFile(t, filepath.Join(work, ".agents", "mcp.json"), string(body))
+
+			if err := srv.ensureMCPStarted(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			startupError := srv.mcpErrors()["remote"]
+			if startupError == "" {
+				t.Fatal("missing remote MCP startup error")
+			}
+			for _, forbidden := range append([]string{decodedSecret, rawSecret, "token", "tenant"}, test.forbidden...) {
+				if strings.Contains(startupError, forbidden) {
+					t.Fatalf("startup error leaked query data %q: %q", forbidden, startupError)
+				}
+			}
+
+			recorder := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/runtime", nil))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+			}
+			leaked := recorder.Body.String()
+			for _, forbidden := range append([]string{decodedSecret, rawSecret, "/mcp?token=", "tenant=demo"}, test.forbidden...) {
+				if strings.Contains(leaked, forbidden) {
+					t.Fatalf("runtime API leaked query data %q from failed startup:\n%s", forbidden, leaked)
+				}
+			}
+		})
+	}
+}
+
+func TestRuntimeUsesMCPStartupSpecAfterConfigEdit(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "rejected "+r.URL.RequestURI(), http.StatusUnauthorized)
+	}))
+	defer remote.Close()
+
+	srv := newTestServer(t)
+	configPath := filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "mcp.json")
+	writeConfig := func(endpoint string) {
+		t.Helper()
+		body, err := json.MarshalIndent(map[string]any{
+			"mcpServers": map[string]any{
+				"remote": map[string]any{"type": "http", "url": endpoint},
+			},
+		}, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustWriteRuntimeFile(t, configPath, string(body))
+	}
+	writeConfig(remote.URL + "/mcp?token=startup-secret")
+	if err := srv.ensureMCPStarted(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	writeConfig("https://new.example.test/mcp?token=edited-secret")
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/runtime", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var got struct {
+		MCP struct {
+			Servers []struct {
+				Name   string `json:"name"`
+				URL    string `json:"url"`
+				Status string `json:"status"`
+				Error  string `json:"error"`
+			} `json:"servers"`
+		} `json:"mcp"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.MCP.Servers) != 1 {
+		t.Fatalf("MCP servers = %+v", got.MCP.Servers)
+	}
+	server := got.MCP.Servers[0]
+	if server.URL != remote.URL+"/mcp" || server.Status != "error" || server.Error == "" {
+		t.Fatalf("runtime MCP status = %+v, want startup endpoint and error", server)
+	}
+	for _, secret := range []string{"startup-secret", "edited-secret"} {
+		if strings.Contains(recorder.Body.String(), secret) {
+			t.Fatalf("runtime API leaked %q after config edit:\n%s", secret, recorder.Body.String())
+		}
 	}
 }
 

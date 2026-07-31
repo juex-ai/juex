@@ -400,7 +400,7 @@ func TestRuntimeCatalogServiceMCPStatusSourcesAndOverrides(t *testing.T) {
 		t.Fatalf("servers = %+v", status.MCP.Servers)
 	}
 	alpha, shared, zeta := status.MCP.Servers[0], status.MCP.Servers[1], status.MCP.Servers[2]
-	if alpha.Name != "alpha" || alpha.Source != "project" || filepath.ToSlash(alpha.Command) != filepath.ToSlash(work)+"/bin/alpha" || alpha.Args[0] != "--workdir" || alpha.Args[1] != work || alpha.Status != "not_started" {
+	if alpha.Name != "alpha" || alpha.Source != "project" || alpha.Type != "stdio" || alpha.URL != "" || filepath.ToSlash(alpha.Command) != filepath.ToSlash(work)+"/bin/alpha" || alpha.Args[0] != "--workdir" || alpha.Args[1] != work || alpha.Status != "not_started" {
 		t.Fatalf("alpha = %+v", alpha)
 	}
 	if shared.Name != "shared" || shared.Source != "project" || shared.Command != "project-shared" || !shared.Connected || shared.ToolCount != 2 {
@@ -408,6 +408,35 @@ func TestRuntimeCatalogServiceMCPStatusSourcesAndOverrides(t *testing.T) {
 	}
 	if zeta.Name != "zeta" || zeta.Source != "user" || zeta.Status != "error" || zeta.Error != "boom" {
 		t.Fatalf("zeta = %+v", zeta)
+	}
+}
+
+func TestRuntimeCatalogServiceMCPTransportMetadata(t *testing.T) {
+	work := t.TempDir()
+	mustWriteRuntimeStatusFile(t, filepath.Join(work, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "alias": { "type": "streamable-http", "url": "https://alias.example.com/mcp?token=alias-secret" },
+    "local": { "command": "local-server", "args": ["--stdio"] },
+    "remote": { "type": "http", "url": "https://remote.example.com/mcp?token=remote-secret" }
+  }
+}`)
+
+	status, err := NewRuntimeCatalogService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.MCP.Servers) != 3 {
+		t.Fatalf("servers = %+v", status.MCP.Servers)
+	}
+	alias, local, remote := status.MCP.Servers[0], status.MCP.Servers[1], status.MCP.Servers[2]
+	if alias.Name != "alias" || alias.Type != "http" || alias.URL != "https://alias.example.com/mcp" || alias.Command != "" || len(alias.Args) != 0 {
+		t.Fatalf("alias = %+v", alias)
+	}
+	if local.Name != "local" || local.Type != "stdio" || local.URL != "" || local.Command != "local-server" || !reflect.DeepEqual(local.Args, []string{"--stdio"}) {
+		t.Fatalf("local = %+v", local)
+	}
+	if remote.Name != "remote" || remote.Type != "http" || remote.URL != "https://remote.example.com/mcp" || remote.Command != "" || len(remote.Args) != 0 {
+		t.Fatalf("remote = %+v", remote)
 	}
 }
 

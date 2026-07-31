@@ -2306,13 +2306,16 @@ stdout fails the connection as a protocol error; server logs must go to stderr.
 The app runtime catalog service assembles read-only facts for `/api/runtime`:
 provider, shell, system prompt sections, hooks, skills, a fixed-order grouped
 builtin tool catalog, and configured MCP servers with their advertised tool
-details. Tool entries expose normalized schema plus semantic timeout metadata:
-`bounded` carries the effective seconds and `disabled` means the tool owns its
-lifecycle. The catalog is the process startup view: builtin definitions are
-static, MCP descriptors come from the manager cache, no active session is
-required, and status reads do not rediscover tools. The web layer adds the
-latest per-server startup error and translates the app status into the browser
-DTO.
+details. MCP server entries expose canonical `stdio` or `http` transport plus
+command metadata or an operator-facing URL with its query removed. Startup
+errors that echo the endpoint receive the same projection; the original URL
+remains private to the connection layer. Tool entries expose normalized schema
+plus semantic timeout metadata: `bounded` carries the effective seconds and
+`disabled` means the tool owns its lifecycle. The catalog is the process startup
+view: builtin definitions are static, MCP descriptors come from the manager
+cache, no active session is required, and status reads do not rediscover tools.
+The web layer adds the latest per-server startup error and translates the app
+status into the browser DTO.
 
 Production paths load user-global MCP configs, extension MCP configs, and
 project MCP configs, then start a best-effort process manager with

@@ -72,6 +72,97 @@ func TestLoadConfigValidatesServerTransport(t *testing.T) {
 	}
 }
 
+func TestServerSpecRuntimeMetadataNormalizesTransportAndProtectsURLQuery(t *testing.T) {
+	tests := []struct {
+		name          string
+		spec          ServerSpec
+		wantTransport string
+		wantURL       string
+		wantErr       string
+	}{
+		{name: "implicit stdio", spec: ServerSpec{Command: "server"}, wantTransport: "stdio"},
+		{name: "explicit stdio", spec: ServerSpec{Type: "stdio", Command: "server"}, wantTransport: "stdio"},
+		{name: "http", spec: ServerSpec{Type: "http", URL: "https://mcp.example.com/mcp?token=query-secret"}, wantTransport: "http", wantURL: "https://mcp.example.com/mcp"},
+		{name: "streamable http alias", spec: ServerSpec{Type: "streamable-http", URL: "https://mcp.example.com/mcp?tenant=demo"}, wantTransport: "http", wantURL: "https://mcp.example.com/mcp"},
+		{name: "programmatic legacy url", spec: ServerSpec{URL: "https://mcp.example.com/legacy?key=secret"}, wantTransport: "http", wantURL: "https://mcp.example.com/legacy"},
+		{name: "invalid type", spec: ServerSpec{Type: "grpc", URL: "https://mcp.example.com/mcp"}, wantErr: "unsupported transport"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			transport, err := tc.spec.NormalizedTransport()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("NormalizedTransport() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if transport != tc.wantTransport {
+				t.Fatalf("NormalizedTransport() = %q, want %q", transport, tc.wantTransport)
+			}
+			displayURL, err := tc.spec.DisplayURL()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if displayURL != tc.wantURL {
+				t.Fatalf("DisplayURL() = %q, want %q", displayURL, tc.wantURL)
+			}
+			if strings.Contains(displayURL, "secret") || strings.Contains(displayURL, "tenant") {
+				t.Fatalf("DisplayURL() leaked query data: %q", displayURL)
+			}
+			displayText, err := tc.spec.DisplaySafeText("connect " + tc.spec.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(displayText, "secret") || strings.Contains(displayText, "tenant") {
+				t.Fatalf("DisplaySafeText() leaked query data: %q", displayText)
+			}
+		})
+	}
+}
+
+func TestServerSpecDisplaySafeTextRedactsQueryFromDiagnosticVariants(t *testing.T) {
+	const (
+		decodedSecret = "query secret"
+		rawSecret     = "query%20secret"
+	)
+	spec := ServerSpec{
+		Type: "http",
+		URL:  "https://mcp.example.com/mcp?token=" + rawSecret + "&tenant=demo",
+	}
+	tests := []string{
+		"request failed: /mcp?token=" + rawSecret + "&tenant=demo",
+		"request failed: https%3A%2F%2Fmcp.example.com%2Fmcp%3Ftoken%3Dquery%2520secret%26tenant%3Ddemo",
+		`request failed: https:\/\/mcp.example.com\/mcp?token=` + rawSecret + `&tenant=demo`,
+		"request rejected query parameter token value " + decodedSecret,
+		"request rejected raw query value " + rawSecret,
+	}
+	for _, diagnostic := range tests {
+		got, err := spec.DisplaySafeText(diagnostic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(got, decodedSecret) || strings.Contains(got, rawSecret) || strings.Contains(got, "token") || strings.Contains(got, "tenant") {
+			t.Fatalf("DisplaySafeText() leaked query data: %q", got)
+		}
+	}
+
+	semicolonSpec := ServerSpec{
+		Type: "http",
+		URL:  "https://mcp.example.com/mcp?token=semicolon-secret;tenant=demo",
+	}
+	got, err := semicolonSpec.DisplaySafeText("request rejected value semicolon-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "semicolon-secret") {
+		t.Fatalf("DisplaySafeText() leaked semicolon-delimited query value: %q", got)
+	}
+}
+
 func TestLoadConfigValidatesRemoteHeaders(t *testing.T) {
 	tests := []struct {
 		name    string

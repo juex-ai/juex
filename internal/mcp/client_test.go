@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1174,6 +1176,59 @@ func TestNewManagerLayeredSoftKeepsHealthyServersAndRecordsFailures(t *testing.T
 	}
 	if _, ok := reg.Get("mcp__beta__echo"); ok {
 		t.Fatalf("unexpected beta tool, have %+v", reg.List())
+	}
+}
+
+func TestManagerStartupErrorsUseConnectionSpecForRedaction(t *testing.T) {
+	const secret = "startup-spec-secret"
+	remote := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	endpoint := remote.URL
+	remote.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	mgr := newManager(ctx, Config{MCPServers: map[string]ServerSpec{
+		"remote": {Type: "http", URL: endpoint + "/mcp?token=" + secret},
+	}}, ConnectOptions{})
+	defer func() {
+		if err := mgr.Close(); err != nil {
+			t.Errorf("close manager: %v", err)
+		}
+	}()
+
+	startupError := mgr.StartupErrors()["remote"]
+	if startupError == "" {
+		t.Fatal("missing startup error")
+	}
+	if strings.Contains(startupError, secret) || strings.Contains(startupError, "token") {
+		t.Fatalf("startup error leaked connection spec query: %q", startupError)
+	}
+}
+
+func TestManagerRuntimeConnectionSpecsAreDisplaySafeAndDefensive(t *testing.T) {
+	mgr := &Manager{specs: map[string]ServerSpec{
+		"remote": {
+			Type: "http",
+			URL:  "https://mcp.example.test/mcp?token=runtime-secret",
+		},
+		"local": {
+			Command: "mcp-server",
+			Args:    []string{"--stdio"},
+		},
+	}}
+
+	first := mgr.RuntimeConnectionSpecs()
+	if got := first["remote"].URL; got != "https://mcp.example.test/mcp" {
+		t.Fatalf("remote URL = %q", got)
+	}
+	local := first["local"]
+	if local.Command != "mcp-server" || len(local.Args) != 1 || local.Args[0] != "--stdio" {
+		t.Fatalf("local spec = %+v", local)
+	}
+	local.Args[0] = "changed"
+	first["local"] = local
+	if got := mgr.RuntimeConnectionSpecs()["local"].Args[0]; got != "--stdio" {
+		t.Fatalf("manager args changed through snapshot: %q", got)
 	}
 }
 

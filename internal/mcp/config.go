@@ -125,6 +125,57 @@ type ServerSpec struct {
 	prepareLocalProcess func() error
 }
 
+// NormalizedTransport returns the canonical transport used by the runtime.
+// An omitted type selects stdio, while http and streamable-http both select
+// Streamable HTTP.
+func (s ServerSpec) NormalizedTransport() (string, error) {
+	return serverTransport(s)
+}
+
+// DisplayURL returns an operator-facing HTTP endpoint without its query.
+// Query keys and values may contain credentials, so only the connection layer
+// receives the original URL.
+func (s ServerSpec) DisplayURL() (string, error) {
+	transport, err := s.NormalizedTransport()
+	if err != nil {
+		return "", err
+	}
+	if transport != mcpTransportHTTP {
+		return "", nil
+	}
+	if err := validateSecureEndpoint(s.URL); err != nil {
+		return "", err
+	}
+	parsed, err := url.Parse(s.URL)
+	if err != nil {
+		return "", fmt.Errorf("must be a valid absolute URL")
+	}
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	return parsed.String(), nil
+}
+
+// DisplaySafeText removes the configured URL query from operator-facing text,
+// including transport errors that echo the original endpoint.
+func (s ServerSpec) DisplaySafeText(text string) (string, error) {
+	displayURL, err := s.DisplayURL()
+	if err != nil {
+		return "", err
+	}
+	if displayURL == "" || displayURL == s.URL {
+		return text, nil
+	}
+	endpoint, err := url.Parse(s.URL)
+	if err != nil {
+		return "", fmt.Errorf("must be a valid absolute URL")
+	}
+	text = strings.ReplaceAll(text, s.URL, displayURL)
+	return redactSecretValues(
+		text,
+		secretRedactionValues(endpointQueryCredentialValues(endpoint)),
+	), nil
+}
+
 func (s *ServerSpec) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		Type    json.RawMessage `json:"type"`

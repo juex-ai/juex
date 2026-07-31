@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -296,6 +297,15 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	if err := os.WriteFile(configPath, initialConfig, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	remoteMCP := newWebRemoteMCPServer(t)
+	if err := os.MkdirAll(filepath.Join(workspace, ".agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const mcpQuerySecret = "fleet-runtime-query-secret"
+	mcpConfig := fmt.Sprintf(`{"mcpServers":{"remote":{"type":"streamable-http","url":%q}}}`, remoteMCP.URL+"?token="+mcpQuerySecret)
+	if err := os.WriteFile(filepath.Join(workspace, ".agents", "mcp.json"), []byte(mcpConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(
 		filepath.Join(secondWorkspace, ".juex", "juex.yaml"),
 		fleetWebConfig("second-model"),
@@ -403,6 +413,14 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 		Provider struct {
 			Model string `json:"model"`
 		} `json:"provider"`
+		MCP struct {
+			Servers []struct {
+				Name    string `json:"name"`
+				Type    string `json:"type"`
+				URL     string `json:"url"`
+				Command string `json:"command"`
+			} `json:"servers"`
+		} `json:"mcp"`
 	}
 	fleetWebJSON(
 		t,
@@ -415,6 +433,14 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	)
 	if runtimeStatus.Provider.Model != "old-model" {
 		t.Fatalf("initial proxied model = %q", runtimeStatus.Provider.Model)
+	}
+	if len(runtimeStatus.MCP.Servers) != 1 ||
+		runtimeStatus.MCP.Servers[0].Name != "remote" ||
+		runtimeStatus.MCP.Servers[0].Type != "http" ||
+		runtimeStatus.MCP.Servers[0].URL != remoteMCP.URL ||
+		runtimeStatus.MCP.Servers[0].Command != "" ||
+		strings.Contains(runtimeStatus.MCP.Servers[0].URL, mcpQuerySecret) {
+		t.Fatalf("proxied MCP runtime metadata = %+v", runtimeStatus.MCP.Servers)
 	}
 
 	var visibleConfig fleet.AgentConfig

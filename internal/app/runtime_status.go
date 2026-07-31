@@ -33,6 +33,7 @@ func NewRuntimeCatalogService(cfg config.Config) RuntimeCatalogService {
 type RuntimeStatusOptions struct {
 	MCPToolDescriptors map[string][]mcp.ToolDescriptor
 	MCPErrors          map[string]string
+	MCPConnectionSpecs map[string]mcp.ServerSpec
 	SkillCache         *RuntimeStatusSkillCache
 	ScratchpadDir      string
 }
@@ -120,6 +121,8 @@ type RuntimeMCPStatus struct {
 type RuntimeMCPServerStatus struct {
 	Name      string
 	Source    string
+	Type      string
+	URL       string
 	Command   string
 	Args      []string
 	Status    string
@@ -477,8 +480,23 @@ func (s RuntimeCatalogService) mcpStatus(opts RuntimeStatusOptions, refs []mcpCo
 	statuses := make([]RuntimeMCPServerStatus, 0, len(servers))
 	defaultTimeoutSeconds := durationSeconds(s.cfg.RuntimeLimits().ToolTimeout)
 	for _, server := range servers {
+		if connectionSpec, ok := opts.MCPConnectionSpecs[server.Name]; ok {
+			server.Spec = connectionSpec
+		}
+		transport, err := server.Spec.NormalizedTransport()
+		if err != nil {
+			return RuntimeMCPStatus{}, fmt.Errorf("mcp server %q transport: %w", server.Name, err)
+		}
+		displayURL, err := server.Spec.DisplayURL()
+		if err != nil {
+			return RuntimeMCPStatus{}, fmt.Errorf("mcp server %q display url: %w", server.Name, err)
+		}
 		descriptors, connected := opts.MCPToolDescriptors[server.Name]
 		errText := opts.MCPErrors[server.Name]
+		errText, err = server.Spec.DisplaySafeText(errText)
+		if err != nil {
+			return RuntimeMCPStatus{}, fmt.Errorf("mcp server %q display error: %w", server.Name, err)
+		}
 		status := "not_started"
 		projectedTools := runtimeMCPToolInfos(nil, defaultTimeoutSeconds)
 		if errText != "" {
@@ -491,6 +509,8 @@ func (s RuntimeCatalogService) mcpStatus(opts RuntimeStatusOptions, refs []mcpCo
 		info := RuntimeMCPServerStatus{
 			Name:      server.Name,
 			Source:    server.Source,
+			Type:      transport,
+			URL:       displayURL,
 			Command:   server.Spec.Command,
 			Args:      append([]string(nil), server.Spec.Args...),
 			Status:    status,
