@@ -182,16 +182,18 @@ export function ObservableDetail() {
                 Start
               </Button>
             )}
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              onClick={() => void runAction("delete")}
-              disabled={busy || !observable}
-            >
-              <Trash2 className="size-3.5" />
-              Delete
-            </Button>
+            {observable?.source === "project" ? (
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                onClick={() => void runAction("delete")}
+                disabled={busy}
+              >
+                <Trash2 className="size-3.5" />
+                Delete
+              </Button>
+            ) : null}
           </div>
         </div>
         {visibleError ? (
@@ -212,6 +214,11 @@ export function ObservableDetail() {
                     <StateBadge state={observable.state} />
                   </DetailRow>
                   <DetailRow label="Source">
+                    <span className="break-all font-mono text-xs">
+                      {observable.source}
+                    </span>
+                  </DetailRow>
+                  <DetailRow label="Type">
                     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                       <Badge variant="outline" className="font-mono text-[11px]">
                         {observable.source_type || "command"}

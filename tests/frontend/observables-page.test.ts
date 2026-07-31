@@ -88,6 +88,15 @@ test("Observables table exposes complete truncated content in a bounded tooltip"
   assert.match(observablesPageSource, /content\.scrollTo\(\{ top: nextTop, behavior: "smooth" \}\)/);
 });
 
+test("Observables display resource source and hide delete for plugin definitions", () => {
+  assert.match(observablesPageSource, /\{item\.source\}/);
+  assert.match(observablesPageSource, /Type: \{item\.source_type \|\| "command"\}/);
+  assert.match(observablesPageSource, /item\.source === "project" \? \(/);
+  assert.match(observableDetailSource, /\{observable\.source\}/);
+  assert.match(observableDetailSource, /<DetailRow label="Type">/);
+  assert.match(observableDetailSource, /observable\?\.source === "project" \? \(/);
+});
+
 test("Schedule rows and details offer a distinct Run action", () => {
   assert.match(observablesPageSource, /import \{[^}]*Zap[^}]*\} from "lucide-react"/);
   assert.match(observablesPageSource, /runObservable/);

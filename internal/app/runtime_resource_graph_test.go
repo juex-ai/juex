@@ -25,6 +25,7 @@ func TestResolveRuntimeResourceGraphSourceNodes(t *testing.T) {
 	mustWriteRuntimeStatusFile(t, filepath.Join(work, ".agents", "mcp.json"), `{"mcpServers":{"project":{"command":"project"}}}`)
 	mustWriteRuntimeStatusFile(t, filepath.Join(homeJuex, "extensions", "chanwire", "skills", "ext", "SKILL.md"), "---\nname: ext\n---\n")
 	mustWriteRuntimeStatusFile(t, filepath.Join(homeJuex, "extensions", "chanwire", "mcp.json"), `{"mcpServers":{"ext":{"command":"ext"}}}`)
+	mustWriteRuntimeStatusFile(t, filepath.Join(homeJuex, "extensions", "chanwire", "observables.json"), `{"observables":[]}`)
 
 	graph, err := ResolveRuntimeResourceGraph(config.Config{
 		WorkDir:                   work,
@@ -49,10 +50,17 @@ func TestResolveRuntimeResourceGraphSourceNodes(t *testing.T) {
 		"extension:ext:chanwire",
 		"skill_dir:ext:chanwire",
 		"mcp_config:ext:chanwire",
+		"observable_config:ext:chanwire",
 		"skill_dir:project",
 		"mcp_config:project",
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("nodes = %v, want %v", got, want)
+	}
+	refs := graph.ObservableConfigs()
+	if len(refs) != 1 ||
+		refs[0].Source != "ext:chanwire" ||
+		refs[0].ExtensionRuntime.ExtensionDir == "" {
+		t.Fatalf("observable config refs = %+v", refs)
 	}
 }
 

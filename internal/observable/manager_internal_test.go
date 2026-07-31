@@ -36,8 +36,12 @@ func TestCommandRunnerEnvironmentPrecedence(t *testing.T) {
 			},
 		}},
 	})
+	prepared, reserved, err := prepareCommandRuntime(r.opts.spec, r.opts.workDir, RuntimeContext{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got := map[string]string{}
-	for _, item := range r.env() {
+	for _, item := range r.env(prepared.Env, reserved) {
 		key, value, ok := strings.Cut(item, "=")
 		if ok {
 			got[key] = value

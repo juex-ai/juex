@@ -196,7 +196,7 @@ implementation decisions live.
 | `internal/fleetservice` | Per-user launchd/systemd/Termux supervisor definitions and service-manager transactions | Individual Agent lifecycle, Fleet address policy, CLI presentation |
 | `internal/fleetweb` | Fleet HTTP/SSE transport, roster DTOs, directory-browser endpoints, verified Agent reverse proxy, embedded SPA fallback | Registry/process policy, single-Agent routes, frontend domain policy |
 | `internal/processmetrics` | Cross-platform per-process RSS and cumulative CPU-time sampling, interval CPU derivation, process-identity baseline reset | Polling cadence, Agent health policy, HTTP DTOs, UI formatting, persistence |
-| `internal/extensions` | Ordered extension-root discovery, allowed-name filtering, same-name winner selection, source identity, resource references, trust requirement projection | Plugin-policy inheritance, Skill/MCP/hook parsing, runtime registration, extension execution |
+| `internal/extensions` | Ordered extension-root discovery, allowed-name filtering, same-name winner selection, source identity, resource references, trust requirement projection | Plugin-policy inheritance, Skill/MCP/hook/Observable parsing, runtime registration, extension execution |
 | `internal/config` | YAML and user/Workspace config layering, plugin allowlist inheritance, runtime-environment layer ordering, Provider selection inputs, path and policy projection | Extension directory scanning, Dotenv syntax, mutable process-global environment ownership, canonical Provider Profile semantics, Turn behavior, Provider requests, HTTP routing |
 | `internal/environment` | Portable environment-name validation, deterministic dotenv parsing, immutable effective snapshots, child overlays, value-free metadata, controlled single-workspace activation | Config-file discovery, subprocess ownership, runtime policy, diagnostic presentation |
 | `internal/providerreadiness` | Provider selection, credential, construction, and connectivity readiness checks | Provider Protocol semantics, runtime fallback, CLI presentation |
@@ -214,7 +214,7 @@ implementation decisions live.
 | `internal/chunkedwrite` | Canonical chunked-write lifecycle facts and deterministic state derivation | Tool schemas/dispatch, filesystem execution, runtime Event transport |
 | `internal/hooks` | Trusted hook config, matching, bounded command execution, and hook result facts | Lifecycle phase ordering, interpretation of deny/continue results, Tool execution |
 | `internal/sandbox` | Command sandbox policy, platform backend selection, exact additional-writable-root projection, blocked-path conflict checks, execution wrapping, structured availability errors | Shell Tool lifecycle, config parsing, runtime permission policy outside commands |
-| `internal/observable` | Tagged Command Observable/Schedule specs, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
+| `internal/observable` | Tagged Command Observable/Schedule specs, project/plugin definition-source validation and ownership, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Extension discovery, Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
 | `internal/eventmedia` | Workdir-confined external-event attachment validation, size gates, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
 | `internal/mcp` | Adapter over the official Go SDK: Claude-compatible MCP config normalization, command and Streamable HTTP sessions, static HTTP header handling, Tool discovery, staged remote readiness, custom notification preservation, and transport-specific diagnostics | Protocol framing/negotiation, Turn policy, active Session selection, Web ownership |
 | `internal/memory` | `AGENTS.md` hierarchy loading, Agent-owned Memory Entry storage, memory Tool registration | Final prompt-section ordering, Session history, Skill loading |
@@ -1600,7 +1600,7 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | POST | `/api/observables/<id>/run` | emit one durable Schedule Observation without changing lifecycle state |
 | POST | `/api/observables/<id>/start` | start a stopped or exited Observable |
 | POST | `/api/observables/<id>/stop` | stop a running Observable |
-| DELETE | `/api/observables/<id>` | delete an Observable spec and stop its source |
+| DELETE | `/api/observables/<id>` | delete a project-owned Observable spec and stop its source; plugin definitions return `409` |
 | GET | `/api/observables/<id>/observations` | recent Observation history |
 | GET | `/api/files/tree` | workdir file tree for the web sidebar |
 | GET | `/api/files/content?path=<path>` | bounded text preview or image preview metadata for one workdir file |
@@ -1635,6 +1635,23 @@ beside its runtime `schedule` status so callers can compare configured intent
 without reading workspace persistence directly.
 The frontend mirrors the tagged Web DTO and does not duplicate source
 validation policy.
+
+`internal/app` composes the writable project file with ordered, intrinsically
+read-only `observables.json` references from selected plugin bundles. The
+Observable package parses every file, projects required resource source
+`project` or `ext:<name>`, and rejects any validated ID collision with both
+sources named. Invalid plugin entries remain source-qualified error statuses
+without blocking project edits. Only project definitions reach `SaveConfig`;
+plugin Delete and same-ID Create return typed read-only conflicts before any
+stop, state deletion, or file write.
+
+Plugin Command execution receives a neutral runtime tuple adapted from the
+selected `ExtensionRuntimeContext`: installation directory, one Agent-owned
+data directory, and its deferred prepare callback. The runner expands command,
+args, cwd, and env without a shell, injects authoritative `WORKDIR`,
+`JUEX_WORKDIR`, `JUEX_EXT_DIR`, and `JUEX_EXT_DATA_DIR`, and derives the sole
+additional Sandbox writable root from that one data directory. Project
+definitions reject extension-only variables and strip inherited values.
 
 Manual Schedule execution is the one source-specific Web control.
 `Manager.RunOnce` selects a private Schedule-only capability, persists a
@@ -2102,6 +2119,7 @@ $JUEX_HOME/
 ├── extensions/<name>/            # optional JueX-home extension bundle
 │   ├── hooks.yaml                # lifecycle command hooks, trusted by location
 │   ├── mcp.json                  # extension MCP servers
+│   ├── observables.json          # read-only extension Observables
 │   └── skills/<skill>/SKILL.md   # extension skills
 ├── fleet.lock                    # one resident fleet supervisor
 ├── .locks/
@@ -2129,7 +2147,7 @@ $JUEX_HOME/
 └── .juex/
     ├── juex.local.json           # workspace-to-agent identity marker
     ├── artifacts/                # durable bytes managed by internal/artifact
-    ├── extensions/<name>/        # work-local extension bundle
+    ├── extensions/<name>/        # work-local extension bundle; may include observables.json
     ├── juex.yaml                 # local runtime provider config
     └── observables.json          # workspace observable configuration
 ```
@@ -2197,12 +2215,17 @@ Omitted `plugins.allow` inherits; an explicit list replaces; no final setting
 loads no plugin bundle. `internal/app` projects the three extension directories
 as low-to-high typed roots into `internal/extensions`. Discovery first filters
 logical names and selects one whole-bundle winner, then inspects only the
-winners for Skills, MCP config, and Hooks. A Workspace same-name bundle
+winners for Skills, MCP config, Hooks, and Observable config. A Workspace same-name bundle
 therefore replaces a Home bundle and carries Workspace trust requirements.
 This logical-name policy is not publisher or source authentication.
-Extension-provided MCP server, Skill, or Hook names still must not collide with
-existing resources or another selected extension. Runtime status reports
-selected extension resources as `ext:<name>`.
+Extension-provided MCP server, Skill, Hook, or Observable names still must not
+collide with existing resources or another selected extension. Runtime status
+reports selected extension resources as `ext:<name>`.
+Unlike project command hooks, plugin `observables.json` has no separate
+`trusted` marker: an allowed work-local winner starts valid Command
+Observables with the Primary Session. A Workspace can therefore authorize its
+own plugin code; Sandbox policy, not the allowlist, is the filesystem
+capability boundary.
 For every selected bundle, `internal/app` derives an extension runtime context
 from the resolved Agent Address. Its persistent data directory is
 `<AgentAddress.StateDir()>/extensions/<name>`; state-free resource projections

@@ -23,7 +23,8 @@ func TestDiscoverLoadsNoExtensionsWithoutAllowedNames(t *testing.T) {
 	if len(resources.Extensions) != 0 ||
 		len(resources.SkillDirs) != 0 ||
 		len(resources.MCPConfigs) != 0 ||
-		len(resources.HookFiles) != 0 {
+		len(resources.HookFiles) != 0 ||
+		len(resources.ObservableConfigs) != 0 {
 		t.Fatalf("resources = %+v, want no plugin resources", resources)
 	}
 }
@@ -77,8 +78,10 @@ func TestDiscoverFindsUserAndProjectExtensions(t *testing.T) {
 	home := t.TempDir()
 	work := t.TempDir()
 	writeExtensionFile(t, filepath.Join(home, "extensions", "user-ext", "mcp.json"), "{}")
+	writeExtensionFile(t, filepath.Join(home, "extensions", "user-ext", "observables.json"), `{"observables":[]}`)
 	writeExtensionFile(t, filepath.Join(home, "extensions", "user-ext", "skills", "alpha", "SKILL.md"), "---\nname: alpha\n---\n")
 	writeExtensionFile(t, filepath.Join(work, ".juex", "extensions", "project-ext", "hooks.yaml"), "trusted: true\n")
+	writeExtensionFile(t, filepath.Join(work, ".juex", "extensions", "project-ext", "observables.json"), `{"observables":[]}`)
 
 	resources, err := Discover(DiscoverOptions{
 		Roots: []Root{
@@ -107,6 +110,26 @@ func TestDiscoverFindsUserAndProjectExtensions(t *testing.T) {
 	}
 	if len(resources.HookFiles) != 1 || resources.HookFiles[0].Source != "ext:project-ext" || !resources.HookFiles[0].RequireTrust {
 		t.Fatalf("hook refs = %+v", resources.HookFiles)
+	}
+	if len(resources.ObservableConfigs) != 2 ||
+		resources.ObservableConfigs[0].Source != "ext:project-ext" ||
+		!resources.ObservableConfigs[0].RequireTrust ||
+		resources.ObservableConfigs[1].Source != "ext:user-ext" {
+		t.Fatalf("observable refs = %+v", resources.ObservableConfigs)
+	}
+}
+
+func TestDiscoverObservableConfigRequiresRegularFile(t *testing.T) {
+	work := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(work, "bad", "observables.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Discover(DiscoverOptions{
+		Roots:        []Root{{Path: work, Scope: ScopeUser}},
+		AllowedNames: []string{"bad"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "observables.json") || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("err = %v, want regular-file diagnostic", err)
 	}
 }
 

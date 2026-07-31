@@ -456,15 +456,16 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 	obsv, err := observable.NewManager(observable.ManagerOptions{
-		ConfigPath:    cfg.ObservablesConfigPath(),
-		StateDir:      cfg.ObservablesStateDir(),
-		WorkDir:       runtimePaths.WorkDir,
-		Environment:   runtimeEnvironment,
-		Shell:         cfg.Shell,
-		Sandbox:       cfg.SandboxPolicy(),
-		SandboxRunner: sandboxRunner,
-		Bus:           bus,
-		Deliver:       a.DeliverObservation,
+		ConfigPath:            cfg.ObservablesConfigPath(),
+		ReadOnlyConfigSources: observableReadOnlyConfigSources(resourceGraph.ObservableConfigs()),
+		StateDir:              cfg.ObservablesStateDir(),
+		WorkDir:               runtimePaths.WorkDir,
+		Environment:           runtimeEnvironment,
+		Shell:                 cfg.Shell,
+		Sandbox:               cfg.SandboxPolicy(),
+		SandboxRunner:         sandboxRunner,
+		Bus:                   bus,
+		Deliver:               a.DeliverObservation,
 	})
 	if err != nil {
 		_ = a.detachObservability()

@@ -1170,9 +1170,15 @@ func TestManager_BadConfigDoesNotFailConstruction(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = mgr.Close() }()
-	status, ok := mgr.Status().ByID("bad-regex")
-	if !ok || status.State != observable.RunStateErrored || status.LastError == "" {
-		t.Fatalf("status = %+v ok=%v, want bad config surfaced as errored", status, ok)
+	var status observable.ObservableStatus
+	for _, candidate := range mgr.Status().Observables {
+		if strings.Contains(candidate.LastError, "bad-regex") {
+			status = candidate
+			break
+		}
+	}
+	if status.State != observable.RunStateErrored || status.LastError == "" || status.Source != observable.SourceProject {
+		t.Fatalf("status = %+v, want source-qualified bad config surfaced as errored", status)
 	}
 	if _, err := mgr.Create(context.Background(), validSpec("new-one")); err == nil || !strings.Contains(err.Error(), "fix invalid entries") {
 		t.Fatalf("Create with invalid config err = %v, want explicit edit block", err)

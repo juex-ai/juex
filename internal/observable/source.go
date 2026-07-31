@@ -88,24 +88,28 @@ type scheduleStateStore interface {
 }
 
 type sourceDependencies struct {
-	opts  ManagerOptions
-	store *Store
+	opts   ManagerOptions
+	store  *Store
+	origin definitionOrigin
 }
 
 func newSourceRuntime(spec Spec, kernel sourceKernel, deps sourceDependencies) (sourceRuntime, error) {
+	if deps.origin.Source == "" {
+		deps.origin.Source = SourceProject
+	}
 	switch spec.SourceType() {
 	case SourceTypeCommand:
 		command, ok := spec.commandRuntime()
 		if !ok {
 			return nil, fmt.Errorf("observable %q has no command configuration", spec.ID)
 		}
-		return &commandSourceRuntime{spec: command, kernel: kernel, opts: deps.opts, store: deps.store}, nil
+		return &commandSourceRuntime{spec: command, kernel: kernel, opts: deps.opts, store: deps.store, origin: deps.origin}, nil
 	case SourceTypeSchedule:
 		schedule, ok := spec.scheduleRuntime()
 		if !ok {
 			return nil, fmt.Errorf("observable %q has no schedule configuration", spec.ID)
 		}
-		return &scheduleSourceRuntime{spec: schedule, kernel: kernel, store: deps.store}, nil
+		return &scheduleSourceRuntime{spec: schedule, kernel: kernel, store: deps.store, source: deps.origin.Source}, nil
 	default:
 		return nil, fmt.Errorf("observable %q has unsupported source type %q", spec.ID, spec.SourceType())
 	}
@@ -139,6 +143,7 @@ func baseStatusFromSpec(spec Spec, state string) ObservableStatus {
 	return ObservableStatus{
 		ID:         spec.ID,
 		Name:       spec.Name,
+		Source:     SourceProject,
 		SourceType: spec.SourceType(),
 		State:      state,
 	}

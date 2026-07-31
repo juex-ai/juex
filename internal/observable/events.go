@@ -15,6 +15,7 @@ const (
 type ObservableEventPayload struct {
 	ID       string `json:"id"`
 	Name     string `json:"name,omitempty"`
+	Source   string `json:"source"`
 	State    string `json:"state"`
 	RunID    string `json:"run_id,omitempty"`
 	PID      int    `json:"pid,omitempty"`

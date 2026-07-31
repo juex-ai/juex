@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/config"
@@ -1231,6 +1232,129 @@ commands:
 	if !strings.Contains(body, `"name":"ext-startup"`) || !strings.Contains(body, `"source":"ext:demo"`) {
 		t.Fatalf("events missing extension SessionStart hook source:\n%s", body)
 	}
+}
+
+func TestApp_NewStartsAllowedPluginObservableWithoutWritingProjectConfig(t *testing.T) {
+	work := t.TempDir()
+	home := t.TempDir()
+	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	extensionDir := filepath.Join(home, "extensions", "demo")
+	configBody, err := json.Marshal(map[string]any{
+		"observables": []map[string]any{{
+			"id":   "plugin-default-start",
+			"type": "command",
+			"command_config": map[string]any{
+				"command": "$JUEX_EXT_DIR/" + filepath.Base(os.Args[0]),
+				"args":    []string{"-test.run=TestAppPluginObservableHelperProcess"},
+				"env": map[string]string{
+					"JUEX_APP_PLUGIN_OBSERVABLE": "1",
+				},
+				"streams": []string{"stdout"},
+				"parser": map[string]string{
+					"type":           "jsonl",
+					"content_field":  "content",
+					"kind_field":     "type",
+					"severity_field": "level",
+				},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteAppTestFile(t, filepath.Join(extensionDir, "observables.json"), string(configBody))
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	executableBody, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extensionDir, filepath.Base(os.Args[0])), executableBody, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		ProviderID:   "openai",
+		APIKey:       "x",
+		Model:        "m",
+		WorkDir:      work,
+		HomeJuexDir:  home,
+		AgentAddress: address,
+		Plugins:      allowPlugins("demo"),
+	}
+	a, err := New(Options{
+		Config:     cfg,
+		Provider:   &stubProvider{replies: []llm.Response{}},
+		WorkDir:    work,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForAppObservable(t, a.Observables(), "plugin-default-start", func(status observable.ObservableStatus) bool {
+		return status.Source == "ext:demo" && (status.State == observable.RunStateExited || status.State == observable.RunStateStopped)
+	})
+	dataDir := filepath.Join(address.StateDir(), "extensions", "demo")
+	if body, err := os.ReadFile(filepath.Join(dataDir, "started")); err != nil || string(body) != "ok" {
+		t.Fatalf("plugin data marker = %q err=%v", body, err)
+	}
+	if _, err := os.Stat(cfg.ObservablesConfigPath()); !os.IsNotExist(err) {
+		t.Fatalf("plugin definition wrote project config, stat err = %v", err)
+	}
+	if err := a.CloseAndWait(); err != nil {
+		t.Fatal(err)
+	}
+
+	withoutPlugin := cfg
+	withoutPlugin.Plugins = allowPlugins()
+	restarted, err := New(Options{
+		Config:      withoutPlugin,
+		Provider:    &stubProvider{replies: []llm.Response{}},
+		WorkDir:     work,
+		DisableMCP:  true,
+		SessionMode: SessionModeNewPrimary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.CloseAndWait()
+	if _, ok := restarted.Observables().Status().ByID("plugin-default-start"); ok {
+		t.Fatal("plugin Observable remained after allowlist removal and restart")
+	}
+}
+
+func waitForAppObservable(t *testing.T, manager *observable.Manager, id string, ready func(observable.ObservableStatus) bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		status, err := manager.StatusByID(id)
+		if err == nil && ready(status) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	status, err := manager.StatusByID(id)
+	t.Fatalf("observable %s did not become ready: status=%+v err=%v", id, status, err)
+}
+
+func TestAppPluginObservableHelperProcess(t *testing.T) {
+	if os.Getenv("JUEX_APP_PLUGIN_OBSERVABLE") != "1" {
+		return
+	}
+	dataDir := os.Getenv("JUEX_EXT_DATA_DIR")
+	if err := os.WriteFile(filepath.Join(dataDir, "started"), []byte("ok"), 0o600); err != nil {
+		_, _ = os.Stderr.WriteString(err.Error())
+		os.Exit(2)
+	}
+	_, _ = os.Stdout.WriteString(`{"type":"plugin_event","level":"info","content":"plugin started"}` + "\n")
+	os.Exit(0)
 }
 
 func TestApp_DebugObservabilityWritesSessionArtifacts(t *testing.T) {

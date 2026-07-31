@@ -508,6 +508,90 @@ func TestObservablesAPI_CreateDetailObservationsDelete(t *testing.T) {
 	}
 }
 
+func TestObservablesAPIPluginDefinitionsAreReadOnlyConflicts(t *testing.T) {
+	work := t.TempDir()
+	pluginPath := filepath.Join(work, ".juex", "extensions", "demo", "observables.json")
+	if err := os.MkdirAll(filepath.Dir(pluginPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{
+  "observables": [{
+    "id": "plugin-schedule",
+    "type": "schedule",
+    "schedule_config": {
+      "interval": {"every_seconds": 3600},
+      "observation": {"content": "plugin schedule"}
+    }
+  }]
+}`
+	if err := os.WriteFile(pluginPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(Options{
+		Cfg: config.Config{
+			ProviderID: "openai",
+			APIKey:     "x",
+			Model:      "m",
+			WorkDir:    work,
+			Plugins: config.PluginPolicy{
+				Allow:      []string{"demo"},
+				Configured: true,
+			},
+		},
+		Provider: stubProvider{},
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/observables")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listed observable.StatusSnapshot
+	if err := json.NewDecoder(resp.Body).Decode(&listed); err != nil {
+		_ = resp.Body.Close()
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	status, ok := listed.ByID("plugin-schedule")
+	if resp.StatusCode != http.StatusOK || !ok || status.Source != "ext:demo" {
+		t.Fatalf("list status=%d observable=%+v ok=%v", resp.StatusCode, status, ok)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/observables/plugin-schedule", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteBody, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(string(deleteBody), "ext:demo") {
+		t.Fatalf("delete status=%d body=%s, want read-only conflict", resp.StatusCode, deleteBody)
+	}
+
+	createBody := strings.NewReader(`{
+  "id": "plugin-schedule",
+  "type": "schedule",
+  "schedule_config": {
+    "interval": {"every_seconds": 3600},
+    "observation": {"content": "override"}
+  }
+}`)
+	resp, err = http.Post(ts.URL+"/api/observables", "application/json", createBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrideBody, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(string(overrideBody), "ext:demo") {
+		t.Fatalf("create status=%d body=%s, want read-only conflict", resp.StatusCode, overrideBody)
+	}
+}
+
 func TestWebObservableHelperProcess(t *testing.T) {
 	if os.Getenv("JUEX_WEB_OBSERVABLE_HELPER") != "1" {
 		return
