@@ -209,7 +209,7 @@ implementation decisions live.
 | `internal/sandbox` | Command sandbox policy, platform backend selection, execution wrapping, structured availability errors | Shell Tool lifecycle, config parsing, runtime permission policy outside commands |
 | `internal/observable` | Tagged Command Observable/Schedule specs, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
 | `internal/eventmedia` | Workdir-confined external-event attachment validation, size gates, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
-| `internal/mcp` | MCP config normalization, official SDK command and Streamable HTTP sessions, OAuth token handling, Tool discovery, custom notification preservation, and transport-specific diagnostics | Turn policy, active Session selection, Web ownership |
+| `internal/mcp` | MCP config normalization, official SDK command and Streamable HTTP sessions, OAuth token handling, Tool discovery, staged remote readiness, custom notification preservation, and transport-specific diagnostics | Turn policy, active Session selection, Web ownership |
 | `internal/memory` | `AGENTS.md` hierarchy loading, Agent-owned Memory Entry storage, memory Tool registration | Final prompt-section ordering, Session history, Skill loading |
 | `internal/skills` | `SKILL.md` frontmatter loading, Skill metadata, catalog prompt rendering, compression, and budget selection | Final system-prompt section assembly, task execution policy, Tool dispatch |
 | `internal/prompt` | System-prompt section assembly from guidance, Skills, Memory, runtime metadata, and shell profile | Provider wire formatting, Session persistence, resource discovery policy |
@@ -1167,8 +1167,10 @@ verbose build and runtime context.
 `juex.yaml` using conservative YAML node edits and validates the file through
 `internal/config`; it does not change runtime config semantics. `doctor` is a
 read-only diagnostic surface that maps `internal/providerreadiness` results
-into CLI checks, then adds shell resolution, MCP config loading without
-starting servers, skill scanning, and value-free runtime-environment metadata.
+into CLI checks, then adds shell resolution, local MCP command checks, bounded
+remote MCP readiness requests, skill scanning, and value-free
+runtime-environment metadata. `--offline` retains configuration and credential
+checks while skipping provider and remote MCP network requests.
 
 `bundle` is implemented as a thin CLI wrapper over `internal/bundle`. The
 package owns session file collection, tar.gz writing, manifest hashes,
@@ -2236,6 +2238,14 @@ entries override user-level servers with the same name; extension MCP server
 names must be unique and reject collisions instead of overriding. Tests that
 cover layered config behavior exercise the same manager API instead of a
 separate layered registration helper.
+
+Remote MCP readiness is staged as selection, credentials, then connectivity.
+Configuration and environment-backed credential failures retain that stage
+through wrapping. Runtime startup uses the negotiated connection and
+`tools/list` request, while `juex doctor` opens a bounded diagnostic session and
+issues its own `tools/list` request. Authentication and permission failures map
+to credentials, wrong endpoints map to selection, and transport, DNS, TLS,
+timeout, rate-limit, and server failures map to connectivity.
 
 Before MCP subprocess startup, Juex prepares each loaded server config for the
 active work directory. It injects `WORKDIR` and `JUEX_WORKDIR` into every MCP

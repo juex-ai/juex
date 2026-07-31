@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -92,7 +93,7 @@ func newDoctorCmd(flags *persistentFlags) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "text", "output format: text, table, or json")
-	cmd.Flags().BoolVar(&offline, "offline", false, "skip provider connectivity checks")
+	cmd.Flags().BoolVar(&offline, "offline", false, "skip network connectivity checks")
 	declareAgentStatePolicy(cmd, agentStateNone)
 	return cmd
 }
@@ -143,7 +144,7 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 		return toolruntime.ResolveRipgrepWithEnvironment(cfg.EnvironmentSnapshot())
 	}))
 	checks = append(checks, doctorWorkdirCheck(workDir))
-	checks = append(checks, doctorMCPCheck(cfg))
+	checks = append(checks, doctorMCPCheck(ctx, cfg, offline))
 	checks = append(checks, doctorSkillsCheck(cfg))
 	return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: cfg.EnvironmentSnapshot()}
 }
@@ -350,33 +351,133 @@ func doctorWorkdirCheck(workDir string) doctorCheck {
 	return doctorCheck{Name: "workdir", Status: doctorStatusOK, Message: "workdir and .juex are readable"}
 }
 
-func doctorMCPCheck(cfg config.Config) doctorCheck {
-	configs, err := app.LoadMCPConfigs(cfg, cfg.WorkDir)
-	if err != nil {
-		return doctorCheck{Name: "mcp", Status: doctorStatusFail, Message: err.Error(), Suggestion: "fix mcp.json, credential environment, or extension MCP conflicts"}
+func doctorMCPCheck(ctx context.Context, cfg config.Config, offline bool) doctorCheck {
+	opts := mcp.RemoteReadinessOptions{Offline: offline}
+	if offline {
+		return doctorMCPCheckWithOptions(ctx, cfg, opts)
 	}
-	var servers []mcp.ServerSpec
-	for _, c := range configs {
-		for _, spec := range c.MCPServers {
-			servers = append(servers, spec)
+	restore, err := cfg.EnvironmentSnapshot().Activate()
+	if err != nil {
+		return doctorCheck{
+			Name:       "mcp",
+			Status:     doctorStatusFail,
+			Message:    "activate runtime environment: " + err.Error(),
+			Suggestion: "fix the configured runtime environment and retry",
 		}
 	}
+	check := doctorMCPCheckWithOptions(ctx, cfg, opts)
+	if err := restore(); err != nil {
+		check.Status = doctorStatusFail
+		check.Message += "; restore runtime environment: " + err.Error()
+		check.Suggestion = "check process environment permissions and retry"
+	}
+	return check
+}
+
+func doctorMCPCheckWithOptions(
+	ctx context.Context,
+	cfg config.Config,
+	opts mcp.RemoteReadinessOptions,
+) doctorCheck {
+	configs, err := app.LoadMCPConfigs(cfg, cfg.WorkDir)
+	if err != nil {
+		if stage, ok := mcp.ErrorReadinessStage(err); ok {
+			suggestion := "configure exactly one valid command or url for the named MCP server"
+			if stage == mcp.ReadinessStageCredentials {
+				suggestion = "configure the named MCP credential environment variable"
+			}
+			return doctorCheck{
+				Name:       "mcp",
+				Status:     doctorStatusFail,
+				Message:    string(stage) + ": " + err.Error(),
+				Suggestion: suggestion,
+				Details:    map[string]any{"stage": stage},
+			}
+		}
+		return doctorCheck{Name: "mcp", Status: doctorStatusFail, Message: err.Error(), Suggestion: "fix mcp.json, credential environment, or extension MCP conflicts"}
+	}
+	servers := mcp.MergeConfigs(configs).MCPServers
 	if len(servers) == 0 {
 		return doctorCheck{Name: "mcp", Status: doctorStatusOK, Message: "no MCP servers configured"}
 	}
+	names := make([]string, 0, len(servers))
+	for name := range servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	opts.ConnectOptions.Environment = cfg.EnvironmentSnapshot()
 	var failures []string
-	for _, spec := range servers {
-		if spec.Command == "" {
+	var suggestions []string
+	var details []map[string]any
+	hasRemote := false
+	for _, name := range names {
+		spec := servers[name]
+		if spec.URL != "" {
+			hasRemote = true
+			result := mcp.CheckRemoteReadiness(ctx, name, spec, opts)
+			details = append(details, map[string]any{
+				"name":      name,
+				"transport": "remote",
+				"stage":     result.Stage,
+				"status":    result.Status,
+				"message":   result.Message,
+			})
+			if result.Status != mcp.ReadinessStatusOK {
+				failures = append(failures, fmt.Sprintf("%s: %s: %s", name, result.Stage, result.Message))
+				suggestions = appendUniqueString(suggestions, result.Suggestion)
+			}
 			continue
 		}
 		if err := commandExecutable(cfg, spec.Command); err != nil {
-			failures = append(failures, spec.Command+": "+err.Error())
+			failures = append(failures, name+": "+err.Error())
+			suggestions = appendUniqueString(suggestions, "install missing MCP commands or update mcp.json")
+			details = append(details, map[string]any{
+				"name":      name,
+				"transport": "stdio",
+				"status":    mcp.ReadinessStatusFail,
+				"message":   err.Error(),
+			})
+			continue
 		}
+		details = append(details, map[string]any{
+			"name":      name,
+			"transport": "stdio",
+			"status":    mcp.ReadinessStatusOK,
+			"message":   "command available",
+		})
 	}
 	if len(failures) > 0 {
-		return doctorCheck{Name: "mcp", Status: doctorStatusFail, Message: strings.Join(failures, "; "), Suggestion: "install missing MCP commands or update mcp.json"}
+		return doctorCheck{
+			Name:       "mcp",
+			Status:     doctorStatusFail,
+			Message:    strings.Join(failures, "; "),
+			Suggestion: strings.Join(suggestions, "; "),
+			Details:    map[string]any{"servers": details},
+		}
 	}
-	return doctorCheck{Name: "mcp", Status: doctorStatusOK, Message: fmt.Sprintf("%d MCP server(s) configured", len(servers))}
+	message := fmt.Sprintf("%d MCP server(s) ready", len(servers))
+	if opts.Offline && hasRemote {
+		message = fmt.Sprintf("%d MCP server(s) configured; remote connectivity skipped", len(servers))
+	}
+	return doctorCheck{
+		Name:    "mcp",
+		Status:  doctorStatusOK,
+		Message: message,
+		Details: map[string]any{"servers": details},
+	}
+}
+
+func appendUniqueString(values []string, value string) []string {
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func doctorSkillsCheck(cfg config.Config) doctorCheck {

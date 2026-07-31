@@ -138,13 +138,23 @@ type refreshOAuthHandler struct {
 	httpClient     *http.Client
 }
 
-func (h *refreshOAuthHandler) TokenSource(context.Context) (oauth2.TokenSource, error) {
+type oauthRefreshDeadlineContextKey struct{}
+
+func withOAuthRefreshDeadline(ctx context.Context) context.Context {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ctx
+	}
+	return context.WithValue(ctx, oauthRefreshDeadlineContextKey{}, deadline)
+}
+
+func (h *refreshOAuthHandler) TokenSource(ctx context.Context) (oauth2.TokenSource, error) {
 	return h.redactingTokenSource(oauthTokenSourceFunc(func() (*oauth2.Token, error) {
-		return h.refresh()
+		return h.refresh(ctx)
 	})), nil
 }
 
-func (h *refreshOAuthHandler) refresh() (*oauth2.Token, error) {
+func (h *refreshOAuthHandler) refresh(parent context.Context) (*oauth2.Token, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.token != nil && h.token.Valid() {
@@ -161,11 +171,16 @@ func (h *refreshOAuthHandler) refresh() (*oauth2.Token, error) {
 	if timeout <= 0 {
 		timeout = oauthRefreshTimeout
 	}
-	// The SDK supplies its connection context here, not the active request
-	// context. Give each refresh an independent bound instead of retaining a
-	// stale setup context or allowing token I/O to block indefinitely.
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
+	if deadline, ok := parent.Value(oauthRefreshDeadlineContextKey{}).(time.Time); ok {
+		var deadlineCancel context.CancelFunc
+		ctx, deadlineCancel = context.WithDeadline(ctx, deadline)
+		defer deadlineCancel()
+	}
 	httpClient := h.httpClient
 	if httpClient == nil {
 		httpClient = newSecureEndpointHTTPClient(nil)

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/errorclass"
+	"github.com/juex-ai/juex/internal/mcp"
 )
 
 func TestMain(m *testing.M) {
@@ -249,7 +252,7 @@ func TestRunCmd_DryRunReportsMCPStartupErrors(t *testing.T) {
 	}
 }
 
-func TestDoctorMCPAcceptsRemoteServerWithoutCommandLookup(t *testing.T) {
+func TestDoctorMCPProbesRemoteServer(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteCLITestFile(t, filepath.Join(dir, ".agents", "mcp.json"), `{
   "mcpServers": {
@@ -257,12 +260,148 @@ func TestDoctorMCPAcceptsRemoteServerWithoutCommandLookup(t *testing.T) {
   }
 }`)
 
-	check := doctorMCPCheck(config.Config{WorkDir: dir})
+	probe := mcp.RemoteReadinessProbeFunc(func(
+		context.Context,
+		string,
+		mcp.ServerSpec,
+		mcp.ConnectOptions,
+	) error {
+		return nil
+	})
+	check := doctorMCPCheckWithOptions(t.Context(), config.Config{WorkDir: dir}, mcp.RemoteReadinessOptions{
+		Probe: probe,
+	})
 	if check.Status != doctorStatusOK {
 		t.Fatalf("doctor MCP check = %+v", check)
 	}
-	if check.Message != "1 MCP server(s) configured" {
+	if check.Message != "1 MCP server(s) ready" {
 		t.Fatalf("message = %q", check.Message)
+	}
+}
+
+func TestDoctorMCPReportsRemoteReadinessStage(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteCLITestFile(t, filepath.Join(dir, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "remote": {"url": "https://mcp.example.com/mcp"}
+  }
+}`)
+
+	tests := []struct {
+		name      string
+		err       error
+		wantStage string
+	}{
+		{
+			name:      "credentials",
+			err:       errorclass.WithKind(errorclass.KindAuth, errors.New("unauthorized")),
+			wantStage: "credentials",
+		},
+		{
+			name:      "connectivity",
+			err:       errorclass.WithKind(errorclass.KindConnectivity, errors.New("connection refused")),
+			wantStage: "connectivity",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			check := doctorMCPCheckWithOptions(t.Context(), config.Config{WorkDir: dir}, mcp.RemoteReadinessOptions{
+				Probe: mcp.RemoteReadinessProbeFunc(func(
+					context.Context,
+					string,
+					mcp.ServerSpec,
+					mcp.ConnectOptions,
+				) error {
+					return test.err
+				}),
+			})
+			if check.Status != doctorStatusFail {
+				t.Fatalf("check = %+v, want failure", check)
+			}
+			for _, want := range []string{"remote", test.wantStage} {
+				if !strings.Contains(check.Message, want) {
+					t.Fatalf("message = %q, want %q", check.Message, want)
+				}
+			}
+		})
+	}
+}
+
+func TestDoctorMCPOfflineSkipsRemoteProbe(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteCLITestFile(t, filepath.Join(dir, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "remote": {"url": "https://mcp.example.com/mcp"}
+  }
+}`)
+	called := false
+	check := doctorMCPCheckWithOptions(t.Context(), config.Config{WorkDir: dir}, mcp.RemoteReadinessOptions{
+		Offline: true,
+		Probe: mcp.RemoteReadinessProbeFunc(func(
+			context.Context,
+			string,
+			mcp.ServerSpec,
+			mcp.ConnectOptions,
+		) error {
+			called = true
+			return nil
+		}),
+	})
+	if check.Status != doctorStatusOK || called {
+		t.Fatalf("check = %+v, called = %v", check, called)
+	}
+	if !strings.Contains(check.Message, "connectivity skipped") {
+		t.Fatalf("message = %q, want offline context", check.Message)
+	}
+}
+
+func TestDoctorMCPReportsMissingCredentialEnvironmentStage(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteCLITestFile(t, filepath.Join(dir, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "remote": {
+      "url": "https://mcp.example.com/mcp",
+      "auth": {"token": "${MISSING_MCP_TOKEN}"}
+    }
+  }
+}`)
+	check := doctorMCPCheckWithOptions(t.Context(), config.Config{WorkDir: dir}, mcp.RemoteReadinessOptions{
+		Probe: mcp.RemoteReadinessProbeFunc(func(
+			context.Context,
+			string,
+			mcp.ServerSpec,
+			mcp.ConnectOptions,
+		) error {
+			t.Fatal("credential failure should not call connectivity probe")
+			return nil
+		}),
+	})
+	if check.Status != doctorStatusFail {
+		t.Fatalf("check = %+v, want failure", check)
+	}
+	for _, want := range []string{"credentials", "MISSING_MCP_TOKEN"} {
+		if !strings.Contains(check.Message, want) {
+			t.Fatalf("message = %q, want %q", check.Message, want)
+		}
+	}
+}
+
+func TestDoctorMCPReportsTransportSelectionStage(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteCLITestFile(t, filepath.Join(dir, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "invalid": {}
+  }
+}`)
+	check := doctorMCPCheckWithOptions(t.Context(), config.Config{WorkDir: dir}, mcp.RemoteReadinessOptions{})
+	if check.Status != doctorStatusFail {
+		t.Fatalf("check = %+v, want failure", check)
+	}
+	if !strings.Contains(check.Message, "selection") {
+		t.Fatalf("message = %q, want selection stage", check.Message)
+	}
+	if !strings.Contains(check.Suggestion, "command or url") {
+		t.Fatalf("suggestion = %q, want transport selection hint", check.Suggestion)
 	}
 }
 
