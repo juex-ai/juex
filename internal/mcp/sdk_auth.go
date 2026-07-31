@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"golang.org/x/oauth2"
 )
+
+const oauthRefreshTimeout = 15 * time.Second
 
 func newOAuthHandler(spec *AuthSpec) (auth.OAuthHandler, error) {
 	if spec == nil {
@@ -127,39 +130,89 @@ func (h *staticOAuthHandler) Authorize(_ context.Context, _ *http.Request, respo
 }
 
 type refreshOAuthHandler struct {
-	mu           sync.Mutex
-	config       oauth2.Config
-	refreshToken string
-	source       oauth2.TokenSource
+	mu             sync.Mutex
+	config         oauth2.Config
+	refreshToken   string
+	token          *oauth2.Token
+	refreshTimeout time.Duration
 }
 
-func (h *refreshOAuthHandler) TokenSource(ctx context.Context) (oauth2.TokenSource, error) {
+func (h *refreshOAuthHandler) TokenSource(context.Context) (oauth2.TokenSource, error) {
+	return h.redactingTokenSource(oauthTokenSourceFunc(func() (*oauth2.Token, error) {
+		return h.refresh()
+	})), nil
+}
+
+func (h *refreshOAuthHandler) refresh() (*oauth2.Token, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.source == nil {
-		h.source = &redactingTokenSource{
-			source: h.config.TokenSource(ctx, &oauth2.Token{
-				RefreshToken: h.refreshToken,
-				Expiry:       time.Unix(0, 0),
-			}),
-			secrets: []string{h.refreshToken, h.config.ClientSecret},
-			onToken: func(token *oauth2.Token) {
-				if token == nil || token.RefreshToken == "" {
-					return
-				}
-				h.mu.Lock()
-				h.refreshToken = token.RefreshToken
-				h.mu.Unlock()
-			},
+	if h.token != nil && h.token.Valid() {
+		return cloneOAuthToken(h.token), nil
+	}
+	seed := cloneOAuthToken(h.token)
+	if seed == nil {
+		seed = &oauth2.Token{
+			RefreshToken: h.refreshToken,
+			Expiry:       time.Unix(0, 0),
 		}
 	}
-	return h.source, nil
+	timeout := h.refreshTimeout
+	if timeout <= 0 {
+		timeout = oauthRefreshTimeout
+	}
+	// The SDK supplies its connection context here, not the active request
+	// context. Give each refresh an independent bound instead of retaining a
+	// stale setup context or allowing token I/O to block indefinitely.
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	token, err := h.config.TokenSource(ctx, seed).Token()
+	if err != nil {
+		return nil, err
+	}
+	if token.RefreshToken == "" {
+		token.RefreshToken = h.refreshToken
+	}
+	h.refreshToken = token.RefreshToken
+	h.token = cloneOAuthToken(token)
+	return cloneOAuthToken(token), nil
+}
+
+func (h *refreshOAuthHandler) redactingTokenSource(source oauth2.TokenSource) oauth2.TokenSource {
+	h.mu.Lock()
+	secrets := []string{h.refreshToken, h.config.ClientSecret}
+	if h.config.ClientSecret != "" {
+		secrets = appendSecret(secrets, basicAuthCredential(h.config.ClientID, h.config.ClientSecret))
+		secrets = appendSecret(secrets, basicAuthCredential(
+			url.QueryEscape(h.config.ClientID),
+			url.QueryEscape(h.config.ClientSecret),
+		))
+	}
+	h.mu.Unlock()
+	return &redactingTokenSource{source: source, secrets: secrets}
+}
+
+func basicAuthCredential(username, password string) string {
+	return base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+}
+
+func cloneOAuthToken(token *oauth2.Token) *oauth2.Token {
+	if token == nil {
+		return nil
+	}
+	clone := *token
+	return &clone
+}
+
+type oauthTokenSourceFunc func() (*oauth2.Token, error)
+
+func (f oauthTokenSourceFunc) Token() (*oauth2.Token, error) {
+	return f()
 }
 
 func (h *refreshOAuthHandler) Authorize(_ context.Context, _ *http.Request, response *http.Response) error {
 	closeAuthResponse(response)
 	h.mu.Lock()
-	h.source = nil
+	h.token = nil
 	h.mu.Unlock()
 	return nil
 }

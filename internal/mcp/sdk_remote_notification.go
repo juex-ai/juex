@@ -3,15 +3,22 @@ package mcp
 import (
 	"bufio"
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"strings"
 
 	sdkjsonrpc "github.com/modelcontextprotocol/go-sdk/jsonrpc"
 )
 
+const sseChannelEventMaxBytes = 16 * 1024 * 1024
+
+var errSSEEventTooLarge = errors.New("SSE event exceeds read limit")
+
 type sseChannelFilter struct {
 	body           io.ReadCloser
 	reader         *bufio.Reader
+	maxEventBytes  int
 	output         bytes.Buffer
 	pendingErr     error
 	serverName     string
@@ -26,6 +33,7 @@ func newSSEChannelFilter(
 	return &sseChannelFilter{
 		body:           body,
 		reader:         bufio.NewReader(body),
+		maxEventBytes:  sseChannelEventMaxBytes,
 		serverName:     serverName,
 		onNotification: onNotification,
 	}
@@ -38,7 +46,7 @@ func (f *sseChannelFilter) Read(p []byte) (int, error) {
 			f.pendingErr = nil
 			return 0, err
 		}
-		event, err := readSSEEvent(f.reader)
+		event, err := readSSEEvent(f.reader, f.maxEventBytes)
 		if len(event) > 0 {
 			if f.intercept(event) {
 				event = sseResumeMetadata(event)
@@ -80,14 +88,20 @@ func (f *sseChannelFilter) intercept(event []byte) bool {
 	return true
 }
 
-func readSSEEvent(reader *bufio.Reader) ([]byte, error) {
+func readSSEEvent(reader *bufio.Reader, maxBytes int) ([]byte, error) {
 	var event bytes.Buffer
 	for {
-		line, err := reader.ReadString('\n')
-		if line != "" {
-			_, _ = event.WriteString(line)
+		line, err := reader.ReadSlice('\n')
+		if len(line) > maxBytes-event.Len() {
+			return nil, fmt.Errorf("%w: maximum is %d bytes", errSSEEventTooLarge, maxBytes)
 		}
-		if strings.TrimRight(line, "\r\n") == "" && line != "" {
+		if len(line) > 0 {
+			_, _ = event.Write(line)
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if len(line) > 0 && len(bytes.TrimRight(line, "\r\n")) == 0 {
 			return event.Bytes(), err
 		}
 		if err != nil {

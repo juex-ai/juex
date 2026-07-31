@@ -354,6 +354,24 @@ func TestSSEChannelFilterPreservesEventsSDKWouldNotDecode(t *testing.T) {
 	}
 }
 
+func TestSSEChannelFilterRejectsOversizedEvent(t *testing.T) {
+	const maxEventBytes = 64
+	filter := newSSEChannelFilter(
+		io.NopCloser(strings.NewReader("data: "+strings.Repeat("x", maxEventBytes)+"\n\n")),
+		"remote",
+		nil,
+	)
+	filter.(*sseChannelFilter).maxEventBytes = maxEventBytes
+
+	got, err := io.ReadAll(filter)
+	if !errors.Is(err, errSSEEventTooLarge) {
+		t.Fatalf("ReadAll error = %v, want %v", err, errSSEEventTooLarge)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ReadAll returned %d bytes from oversized event", len(got))
+	}
+}
+
 func TestSDKNotificationTransportCommandHelperProcess(t *testing.T) {
 	if os.Getenv("JUEX_SDK_NOTIFICATION_HELPER") != "1" {
 		return

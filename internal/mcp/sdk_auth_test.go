@@ -2,14 +2,17 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/errorclass"
 	"golang.org/x/oauth2"
@@ -117,6 +120,82 @@ func TestRedactingTokenSourceRedactsFormEncodedSecret(t *testing.T) {
 	}
 	if !errors.Is(err, cause) {
 		t.Fatal("redaction broke the typed error chain")
+	}
+}
+
+func TestRefreshOAuthHandlerRedactsBasicAuthCredential(t *testing.T) {
+	const (
+		clientID     = "client+id"
+		clientSecret = "a+b/c% token"
+	)
+	encoded := base64.StdEncoding.EncodeToString([]byte(
+		url.QueryEscape(clientID) + ":" + url.QueryEscape(clientSecret),
+	))
+	handler := &refreshOAuthHandler{
+		config: oauth2.Config{
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+		},
+		refreshToken: "refresh-token",
+	}
+	source := handler.redactingTokenSource(tokenSourceFunc(func() (*oauth2.Token, error) {
+		return nil, &oauth2.RetrieveError{
+			Response: &http.Response{
+				StatusCode: http.StatusBadRequest,
+				Status:     "400 Bad Request",
+			},
+			Body: []byte("Authorization: Basic " + encoded),
+		}
+	}))
+	_, err := source.Token()
+	if err == nil {
+		t.Fatal("expected refresh error")
+	}
+	if strings.Contains(err.Error(), encoded) || strings.Contains(err.Error(), clientSecret) {
+		t.Fatalf("Basic-auth credential leaked in error: %v", err)
+	}
+}
+
+func TestRefreshOAuthHandlerBoundsRefreshRequests(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer tokenServer.Close()
+	defer close(release)
+
+	handler := &refreshOAuthHandler{
+		config: oauth2.Config{
+			ClientID: "client",
+			Endpoint: oauth2.Endpoint{TokenURL: tokenServer.URL},
+		},
+		refreshToken:   "refresh-token",
+		refreshTimeout: 50 * time.Millisecond,
+	}
+	source, err := handler.TokenSource(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_, err = source.Token()
+	if err == nil {
+		t.Fatal("expected bounded token refresh to time out")
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatal("token refresh did not start")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("refresh error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("token refresh took %v, want a bounded failure", elapsed)
 	}
 }
 
