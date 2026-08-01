@@ -489,10 +489,12 @@ The Codex SSE adapter retries one stream-idle timeout, including a stall after
 transient reasoning or text deltas. Completed assistant messages and tool
 effects remain untouched. An exhausted idle retry is classified as a deadline
 timeout rather than user cancellation.
-Codex request encoding also maps provider-history tool call IDs longer than the
-backend's 64-character limit to stable hashed wire IDs. Matching tool calls and
-results receive the same mapping, while canonical session history remains
-unchanged so cross-provider fallback can replay tool exchanges safely.
+OpenAI Responses request encoding maps provider-history tool call IDs longer
+than the protocol's 64-character limit to stable hashed wire IDs. Matching
+tool calls and results receive the same mapping, while canonical session
+history remains unchanged so cross-provider fallback can replay tool exchanges
+safely. The same encoding boundary serves ordinary Responses and Codex
+Responses transports.
 Provider adapters share a canonical projection helper before they encode SDK
 requests. The runtime also applies the same provider-visible tool input
 projection before invoking any provider implementation. The helper compacts

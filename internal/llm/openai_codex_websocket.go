@@ -195,7 +195,7 @@ func codexResponsesOutputAsInput(resp *responses.Response, profile ProviderProfi
 	if len(assistant.Blocks) == 0 {
 		return nil
 	}
-	encoded := encodeOpenAIResponseInput(normalizeCodexToolCallIDs([]Message{assistant}), profile)
+	encoded := encodeOpenAIResponseInput([]Message{assistant}, profile)
 	raw, err := json.Marshal(encoded)
 	if err != nil {
 		return nil
