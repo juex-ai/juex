@@ -61,6 +61,8 @@ func TestFleetRestartResumesInterruptedTurnOnNewBinary(t *testing.T) {
 			defer provider.Close()
 
 			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			workspace := t.TempDir()
 			agentID := "aaaaaaaa"
 			agentAddress := writeFleetE2EAgent(t, home, workspace, agentID)
@@ -883,6 +885,8 @@ func writeFleetE2EJSON(t *testing.T, path string, value any) {
 func writeFleetProviderConfig(t *testing.T, workspace string, providerURL string) {
 	t.Helper()
 	body := fmt.Sprintf(`model: local-chat:chat-test
+extensions:
+  allow: []
 providers:
   - id: local-chat
     protocol: openai/chat
