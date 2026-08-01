@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,11 @@ import (
 	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/responses"
 	"github.com/openai/openai-go/shared"
+)
+
+const (
+	openAIResponsesToolCallIDMaxLength  = 64
+	openAIResponsesToolCallIDHashPrefix = "juex_"
 )
 
 type openAIResponsesProvider struct {
@@ -236,14 +242,14 @@ func encodeOpenAIResponseInput(history []Message, profile ProviderProfile) respo
 				}
 			case BlockToolUse:
 				flushMessage()
-				out = append(out, responses.ResponseInputItemParamOfFunctionCall(toolCallArguments(b.ToolName, b.Input), b.ToolUseID, b.ToolName))
+				out = append(out, responses.ResponseInputItemParamOfFunctionCall(toolCallArguments(b.ToolName, b.Input), boundedOpenAIResponsesToolCallID(b.ToolUseID), b.ToolName))
 			case BlockToolResult:
 				flushMessage()
 				content := b.Content
 				if b.Media != nil {
 					content = toolResultContentWithMediaReference(b)
 				}
-				out = append(out, responses.ResponseInputItemParamOfFunctionCallOutput(b.ToolUseID, content))
+				out = append(out, responses.ResponseInputItemParamOfFunctionCallOutput(boundedOpenAIResponsesToolCallID(b.ToolUseID), content))
 				if b.Media != nil {
 					if dataURL, ok := imageDataURL(profile.WorkDir, b.Media); ok {
 						imagePart := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
@@ -278,6 +284,14 @@ func encodeOpenAIResponseInput(history []Message, profile ProviderProfile) respo
 		flushMessage()
 	}
 	return out
+}
+
+func boundedOpenAIResponsesToolCallID(id string) string {
+	if len(id) <= openAIResponsesToolCallIDMaxLength {
+		return id
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(id)))
+	return openAIResponsesToolCallIDHashPrefix + digest[:openAIResponsesToolCallIDMaxLength-len(openAIResponsesToolCallIDHashPrefix)]
 }
 
 func appendResponseMessage(out responses.ResponseInputParam, role Role, textParts []string, contentParts responses.ResponseInputMessageContentListParam) responses.ResponseInputParam {

@@ -2714,6 +2714,113 @@ func TestOpenAICodexResponses_BoundsReplayedToolCallIDs(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponses_BoundsCrossProviderToolCallIDs(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id":"resp_1","object":"response","model":"gpt-test","status":"completed",
+			"output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],
+			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+		}`)
+	}))
+	defer srv.Close()
+
+	p, err := New(blockingConfig(Config{
+		ID:       "clip-local-responses",
+		Protocol: "openai/responses",
+		BaseURL:  srv.URL,
+		APIKey:   "k",
+		Model:    "gpt-test",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	longID := "mcp__wechat-wire__wechat_wire_send_message-1785521763244099543-113"
+	if len(longID) != 66 {
+		t.Fatalf("fixture call ID length = %d, want 66", len(longID))
+	}
+	history := []Message{
+		TextMessage(RoleUser, "send"),
+		{Role: RoleAssistant, Blocks: []Block{{
+			Type: BlockToolUse, ToolUseID: longID, ToolName: "mcp__wechat-wire__wechat_wire_send_message",
+			Input: map[string]any{"text": "hello"},
+		}}},
+		{Role: RoleUser, Blocks: []Block{{
+			Type: BlockToolResult, ToolUseID: longID, Content: "sent",
+		}}},
+	}
+	if _, err := p.Complete(context.Background(), "", history, nil); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	input, _ := capturedBody["input"].([]any)
+	var callIDs []string
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		switch item["type"] {
+		case "function_call", "function_call_output":
+			callID, _ := item["call_id"].(string)
+			if len(callID) > 64 {
+				t.Fatalf("Responses call_id length = %d, want <= 64: %q", len(callID), callID)
+			}
+			callIDs = append(callIDs, callID)
+		}
+	}
+	if len(callIDs) != 2 || callIDs[0] != callIDs[1] {
+		t.Fatalf("call IDs = %q, want matching function call and output IDs", callIDs)
+	}
+	if history[1].Blocks[0].ToolUseID != longID || history[2].Blocks[0].ToolUseID != longID {
+		t.Fatalf("canonical history was mutated: %+v", history)
+	}
+}
+
+func TestBoundedOpenAIResponsesToolCallID(t *testing.T) {
+	tests := []struct {
+		name string
+		id   string
+		want string
+	}{
+		{name: "empty", id: "", want: ""},
+		{name: "under limit", id: "call_1", want: "call_1"},
+		{name: "exact limit", id: strings.Repeat("a", 64), want: strings.Repeat("a", 64)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := boundedOpenAIResponsesToolCallID(tc.id); got != tc.want {
+				t.Fatalf("bounded ID = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	longIDs := []string{
+		strings.Repeat("b", 65),
+		strings.Repeat("c", 66),
+		strings.Repeat("界", 22),
+	}
+	bounded := map[string]bool{}
+	for _, id := range longIDs {
+		got := boundedOpenAIResponsesToolCallID(id)
+		if len(got) != 64 || !strings.HasPrefix(got, "juex_") {
+			t.Fatalf("bounded ID = %q (%d bytes), want 64-byte juex_ ID", got, len(got))
+		}
+		for i := range len(got) {
+			if got[i] >= 0x80 {
+				t.Fatalf("bounded ID contains non-ASCII byte: %q", got)
+			}
+		}
+		if got != boundedOpenAIResponsesToolCallID(id) {
+			t.Fatalf("bounded ID is not deterministic for %q", id)
+		}
+		if bounded[got] {
+			t.Fatalf("distinct fixture IDs collided at %q", got)
+		}
+		bounded[got] = true
+	}
+}
+
 func TestOpenAICodexResponses_DoesNotReplayReasoningItemsWithStoreFalse(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
