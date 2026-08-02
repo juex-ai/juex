@@ -554,6 +554,7 @@ commands:
 	status, err := NewRuntimeCatalogService(config.Config{
 		WorkDir:    work,
 		Extensions: allowExtensions("demo"),
+		Skills:     config.SkillsConfig{Include: []string{"alpha"}},
 	}).Snapshot(RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -565,8 +566,11 @@ commands:
 	if ext.Name != "demo" || ext.Version != "1.2.3" || ext.Description != "Demo integration" || ext.Scope != "project" || ext.Path != extensionDir || ext.ManifestVersion != 1 {
 		t.Fatalf("extension metadata = %+v", ext)
 	}
-	if ext.Resources.Skills != 2 || ext.Resources.MCPServers != 2 || ext.Resources.Hooks != 2 || ext.Resources.Observables != 2 {
+	if ext.Resources.Skills != 1 || ext.Resources.MCPServers != 2 || ext.Resources.Hooks != 2 || ext.Resources.Observables != 2 {
 		t.Fatalf("extension resource counts = %+v", ext.Resources)
+	}
+	if len(status.Skills.Filtered) != 1 || status.Skills.Filtered[0].Name != "beta" {
+		t.Fatalf("filtered skills = %+v, want beta excluded from effective Extension count", status.Skills.Filtered)
 	}
 }
 

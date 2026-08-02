@@ -275,11 +275,6 @@ func runtimeExtensionsStatus(graph RuntimeResourceGraph, skills RuntimeSkillsSta
 			items[index].Resources.Skills++
 		}
 	}
-	for _, skill := range skills.Filtered {
-		if index, ok := indexes[skill.Source]; ok {
-			items[index].Resources.Skills++
-		}
-	}
 	for _, server := range mcpStatus.Servers {
 		if index, ok := indexes[server.Source]; ok {
 			items[index].Resources.MCPServers++

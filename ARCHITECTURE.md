@@ -1566,10 +1566,11 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | GET | `/agents/<id>` | Selected agent sessions SPA route |
 | GET | `/agents/<id>/sessions/<session-id>` | Selected agent conversation SPA route |
 | GET | `/agents/<id>/history` | Selected agent history SPA route |
-| GET | `/agents/<id>/runtime` | Selected agent runtime SPA route |
-| GET | `/agents/<id>/observables[/<observable-id>]` | Selected agent Observables SPA routes |
-| GET | `/agents/<id>/logs` | Selected agent bounded logs SPA route |
-| GET | `/agents/<id>/config` | Selected agent config SPA route |
+| GET | `/agents/<id>/runtime` | Selected agent Runtime Overview SPA route |
+| GET | `/agents/<id>/runtime/extensions` | Selected agent Extensions SPA route |
+| GET | `/agents/<id>/runtime/observables[/<observable-id>]` | Selected agent Observables SPA routes |
+| GET | `/agents/<id>/runtime/logs` | Selected agent bounded logs SPA route |
+| GET | `/agents/<id>/runtime/config` | Selected agent config SPA route |
 | GET | `/settings` | Fleet settings SPA route |
 | GET | `/assets/*` | embedded JS/CSS/font assets |
 | GET | `/api/agents` | Fleet roster JSON with best-effort live activity for healthy agents |
