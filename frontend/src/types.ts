@@ -806,6 +806,28 @@ export interface ShellProfile {
   environment?: string;
 }
 
+export interface ExtensionResourceCounts {
+  skills: number;
+  mcp_servers: number;
+  hooks: number;
+  observables: number;
+}
+
+export interface ExtensionInfo {
+  manifest_version: number;
+  name: string;
+  version: string;
+  description?: string;
+  display_name?: string;
+  author?: string;
+  homepage?: string;
+  repository?: string;
+  license?: string;
+  scope: "default_home" | "instance_home" | "project" | string;
+  path: string;
+  resources: ExtensionResourceCounts;
+}
+
 export interface RuntimeStatusResponse {
   start_time: string;
   work_dir: string;
@@ -831,6 +853,10 @@ export interface RuntimeStatusResponse {
     network: {
       enabled: boolean;
     };
+  };
+  extensions: {
+    count: number;
+    items: ExtensionInfo[];
   };
   system_prompt?: {
     count: number;

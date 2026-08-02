@@ -309,12 +309,14 @@ uses the same isolated scratch-state behavior automatically.
 ├── juex.local.json              # {"agent_id":"..."}
 ├── juex.yaml                    # workspace config
 ├── artifacts/                   # workspace-relative durable artifacts
-├── extensions/
+├── extensions/<name>/
+│   └── juex.extension.json      # required Extension manifest
 └── observables.json             # workspace-authored observable config
 
 $JUEX_HOME/
 ├── juex.yaml                    # instance override; also the shared base when this is ~/.juex
-├── extensions/
+├── extensions/<name>/
+│   └── juex.extension.json      # required Extension manifest
 ├── .locks/
 │   ├── endpoints/<agent-id>.lock # serving-process and GC maintenance guard
 │   └── fleet/<agent-id>.lock     # fleet lifecycle serialization
@@ -368,6 +370,31 @@ selects the highest-precedence installed Extension from
 `.juex/extensions/<name>/`. A higher layer replaces the whole same-name
 Extension; it does not merge resources with the lower copy.
 
+Every selected Extension must contain an exact-case `juex.extension.json` at
+its root. Manifest version 1 requires `name`, whose case-sensitive value must
+match the directory name, and a SemVer `version`. Descriptive metadata is
+optional:
+
+```json
+{
+  "manifest_version": 1,
+  "name": "example",
+  "version": "1.0.0",
+  "display_name": "Example",
+  "description": "Example Extension",
+  "author": "Example Author",
+  "homepage": "https://example.com",
+  "repository": "https://example.com/repository",
+  "license": "MIT"
+}
+```
+
+Juex chooses the winning directory before reading its manifest. Only selected
+winners are validated; an invalid winner fails startup and never falls back to
+a lower-precedence copy. Validation rejects malformed JSON, duplicate or
+unknown fields, `null` values, unsupported manifest versions, name mismatch,
+and invalid SemVer. Unselected installed directories remain inert.
+
 Extensions may provide `skills/`, `mcp.json`, `hooks.yaml`, and
 `observables.json`; runtime status reports selected resources with source
 `ext:<name>`. Work-local
@@ -377,6 +404,10 @@ same-name Extension can override a Home Extension; it is not a publisher signatu
 or source-authentication mechanism. Selected extension Observables use that
 allowlist boundary and start with the Primary Session, so Sandbox policy
 remains the process capability boundary for Command Observables.
+The Web Runtime stage exposes Overview, Extensions, Observables, Logs, and
+Config subsections. Its read-only Extensions view shows the selected manifest,
+installation scope and path, and effective Skill, MCP server, Hook, and
+Observable counts from the same runtime resource graph used at startup.
 Local extension MCP servers receive `JUEX_EXT_DIR`, the selected installation
 root, and `JUEX_EXT_DATA_DIR`, the private persistent directory at
 `$JUEX_HOME/agents/<id>/extensions/<name>`, alongside `WORKDIR` and

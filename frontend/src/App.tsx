@@ -43,6 +43,16 @@ const History = lazy(() =>
 const Runtime = lazy(() =>
   import("@/pages/Runtime").then((module) => ({ default: module.Runtime }))
 );
+const RuntimeLayout = lazy(() =>
+  import("@/pages/RuntimeLayout").then((module) => ({
+    default: module.RuntimeLayout,
+  }))
+);
+const Extensions = lazy(() =>
+  import("@/pages/Extensions").then((module) => ({
+    default: module.Extensions,
+  }))
+);
 
 function RouteSuspense({ children }: { children: ReactNode }) {
   return (
@@ -89,22 +99,6 @@ const router = createBrowserRouter([
             ),
           },
           {
-            path: "observables",
-            element: (
-              <RouteSuspense>
-                <Observables />
-              </RouteSuspense>
-            ),
-          },
-          {
-            path: "observables/:id",
-            element: (
-              <RouteSuspense>
-                <ObservableDetail />
-              </RouteSuspense>
-            ),
-          },
-          {
             path: "history",
             element: (
               <RouteSuspense>
@@ -116,25 +110,59 @@ const router = createBrowserRouter([
             path: "runtime",
             element: (
               <RouteSuspense>
-                <Runtime />
+                <RuntimeLayout />
               </RouteSuspense>
             ),
-          },
-          {
-            path: "logs",
-            element: (
-              <RouteSuspense>
-                <AgentLogs />
-              </RouteSuspense>
-            ),
-          },
-          {
-            path: "config",
-            element: (
-              <RouteSuspense>
-                <AgentConfig />
-              </RouteSuspense>
-            ),
+            children: [
+              {
+                index: true,
+                element: (
+                  <RouteSuspense>
+                    <Runtime />
+                  </RouteSuspense>
+                ),
+              },
+              {
+                path: "extensions",
+                element: (
+                  <RouteSuspense>
+                    <Extensions />
+                  </RouteSuspense>
+                ),
+              },
+              {
+                path: "observables",
+                element: (
+                  <RouteSuspense>
+                    <Observables />
+                  </RouteSuspense>
+                ),
+              },
+              {
+                path: "observables/:observableId",
+                element: (
+                  <RouteSuspense>
+                    <ObservableDetail />
+                  </RouteSuspense>
+                ),
+              },
+              {
+                path: "logs",
+                element: (
+                  <RouteSuspense>
+                    <AgentLogs />
+                  </RouteSuspense>
+                ),
+              },
+              {
+                path: "config",
+                element: (
+                  <RouteSuspense>
+                    <AgentConfig />
+                  </RouteSuspense>
+                ),
+              },
+            ],
           },
         ],
       },

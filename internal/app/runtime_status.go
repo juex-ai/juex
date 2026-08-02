@@ -60,11 +60,39 @@ type RuntimeStatus struct {
 	Provider     RuntimeProviderStatus
 	Shell        config.ShellProfile
 	Sandbox      sandbox.Policy
+	Extensions   RuntimeExtensionsStatus
 	SystemPrompt RuntimeSystemPromptStatus
 	Tools        RuntimeToolsStatus
 	MCP          RuntimeMCPStatus
 	Hooks        RuntimeHooksStatus
 	Skills       RuntimeSkillsStatus
+}
+
+type RuntimeExtensionsStatus struct {
+	Count int
+	Items []RuntimeExtensionStatus
+}
+
+type RuntimeExtensionStatus struct {
+	ManifestVersion int
+	Name            string
+	Version         string
+	Description     string
+	DisplayName     string
+	Author          string
+	Homepage        string
+	Repository      string
+	License         string
+	Scope           string
+	Path            string
+	Resources       RuntimeExtensionResourceCounts
+}
+
+type RuntimeExtensionResourceCounts struct {
+	Skills      int
+	MCPServers  int
+	Hooks       int
+	Observables int
 }
 
 type RuntimeToolsStatus struct {
@@ -202,17 +230,78 @@ func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatu
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
+	hookStatus := hooksStatus(resourceGraph.HooksConfig())
+	extensionsStatus, err := runtimeExtensionsStatus(resourceGraph, skillStatus, mcpStatus, hookStatus)
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
 	return RuntimeStatus{
 		WorkDir:      s.absoluteWorkDir(),
 		Provider:     providerRuntimeStatusFromConfig(s.cfg),
 		Shell:        s.cfg.Shell,
 		Sandbox:      s.cfg.SandboxPolicy(),
+		Extensions:   extensionsStatus,
 		SystemPrompt: systemPrompt,
 		Tools:        toolsStatus,
 		MCP:          mcpStatus,
-		Hooks:        hooksStatus(resourceGraph.HooksConfig()),
+		Hooks:        hookStatus,
 		Skills:       skillStatus,
 	}, nil
+}
+
+func runtimeExtensionsStatus(graph RuntimeResourceGraph, skills RuntimeSkillsStatus, mcpStatus RuntimeMCPStatus, hookStatus RuntimeHooksStatus) (RuntimeExtensionsStatus, error) {
+	descriptors := graph.Extensions()
+	items := make([]RuntimeExtensionStatus, 0, len(descriptors))
+	indexes := make(map[string]int, len(descriptors))
+	for _, descriptor := range descriptors {
+		manifest := descriptor.Manifest
+		indexes[descriptor.Source] = len(items)
+		items = append(items, RuntimeExtensionStatus{
+			ManifestVersion: manifest.ManifestVersion,
+			Name:            descriptor.Name,
+			Version:         manifest.Version,
+			Description:     manifest.Description,
+			DisplayName:     manifest.DisplayName,
+			Author:          manifest.Author,
+			Homepage:        manifest.Homepage,
+			Repository:      manifest.Repository,
+			License:         manifest.License,
+			Scope:           string(descriptor.Scope),
+			Path:            descriptor.Dir,
+		})
+	}
+	for _, skill := range skills.Items {
+		if index, ok := indexes[skill.Source]; ok {
+			items[index].Resources.Skills++
+		}
+	}
+	for _, skill := range skills.Filtered {
+		if index, ok := indexes[skill.Source]; ok {
+			items[index].Resources.Skills++
+		}
+	}
+	for _, server := range mcpStatus.Servers {
+		if index, ok := indexes[server.Source]; ok {
+			items[index].Resources.MCPServers++
+		}
+	}
+	for _, hook := range hookStatus.Commands {
+		if index, ok := indexes[hook.Source]; ok {
+			items[index].Resources.Hooks++
+		}
+	}
+	for _, ref := range graph.ObservableConfigs() {
+		index, ok := indexes[ref.Source]
+		if !ok {
+			continue
+		}
+		cfg, issues, err := observable.LoadConfigLenient(ref.Path)
+		if err != nil {
+			return RuntimeExtensionsStatus{}, err
+		}
+		items[index].Resources.Observables += len(cfg.Observables) + len(issues)
+	}
+	return RuntimeExtensionsStatus{Count: len(items), Items: items}, nil
 }
 
 func (s RuntimeCatalogService) toolsStatus() (RuntimeToolsStatus, error) {

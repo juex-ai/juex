@@ -161,6 +161,9 @@ func TestLiveBinary_LoadsExtensionSkillsAndMCP(t *testing.T) {
 
 	work := t.TempDir()
 	extDir := filepath.Join(work, ".juex", "extensions", "demo")
+	if err := writeExtensionManifestFile(extDir, "demo"); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeExtensionSkillFile(extDir, "ext-skill", "extension provided skill"); err != nil {
 		t.Fatal(err)
 	}
@@ -268,6 +271,9 @@ func TestLiveBinary_UserAgentsGateDoesNotDisableHomeExtensions(t *testing.T) {
 		t.Fatal(err)
 	}
 	extDir := filepath.Join(home, "extensions", "home-bundle")
+	if err := writeExtensionManifestFile(extDir, "home-bundle"); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeExtensionSkillFile(extDir, "home-extension", "home extension skill"); err != nil {
 		t.Fatal(err)
 	}
@@ -1156,6 +1162,14 @@ func writeExtensionSkillFile(extensionDir, name, description string) error {
 	}
 	body := "---\nname: " + name + "\ndescription: " + description + "\ntype: model-invocable\n---\nFull skill body."
 	return os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644)
+}
+
+func writeExtensionManifestFile(extensionDir, name string) error {
+	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
+		return err
+	}
+	body := `{"manifest_version":1,"name":"` + name + `","version":"1.0.0"}`
+	return os.WriteFile(filepath.Join(extensionDir, "juex.extension.json"), []byte(body), 0o644)
 }
 
 func writeMCPConfig(workDir, command string, args []string) error {

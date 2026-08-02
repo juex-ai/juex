@@ -3,24 +3,44 @@
 package extensions
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
 
 const (
-	SourcePrefix = "ext:"
-	EnvDirKey    = "JUEX_EXT_DIR"
+	SourcePrefix     = "ext:"
+	EnvDirKey        = "JUEX_EXT_DIR"
+	manifestFilename = "juex.extension.json"
 )
+
+var semVerPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`)
 
 type Scope string
 
 const (
-	ScopeUser    Scope = "user"
-	ScopeProject Scope = "project"
+	ScopeDefaultHome  Scope = "default_home"
+	ScopeInstanceHome Scope = "instance_home"
+	ScopeProject      Scope = "project"
 )
+
+type Manifest struct {
+	ManifestVersion int    `json:"manifest_version"`
+	Name            string `json:"name"`
+	Version         string `json:"version"`
+	Description     string `json:"description,omitempty"`
+	DisplayName     string `json:"display_name,omitempty"`
+	Author          string `json:"author,omitempty"`
+	Homepage        string `json:"homepage,omitempty"`
+	Repository      string `json:"repository,omitempty"`
+	License         string `json:"license,omitempty"`
+}
 
 type DiscoverOptions struct {
 	Roots        []Root
@@ -35,10 +55,12 @@ type Root struct {
 }
 
 type Extension struct {
-	Name   string
-	Dir    string
-	Scope  Scope
-	Source string
+	Name         string
+	Dir          string
+	Scope        Scope
+	Source       string
+	RequireTrust bool
+	Manifest     Manifest
 }
 
 type ResourceRef struct {
@@ -100,6 +122,12 @@ func Discover(opts DiscoverOptions) (Resources, error) {
 	for _, name := range names {
 		selection := selected[name]
 		ext := selection.Extension
+		ext.RequireTrust = selection.RequireTrust
+		manifest, err := loadManifest(ext)
+		if err != nil {
+			return Resources{}, err
+		}
+		ext.Manifest = manifest
 		out.Extensions = append(out.Extensions, ext)
 		ref := ResourceRef{
 			Source:        ext.Source,
@@ -137,6 +165,195 @@ func Discover(opts DiscoverOptions) (Resources, error) {
 		}
 	}
 	return out, nil
+}
+
+func loadManifest(ext Extension) (Manifest, error) {
+	path := filepath.Join(ext.Dir, manifestFilename)
+	entries, err := os.ReadDir(ext.Dir)
+	if err != nil {
+		return Manifest{}, manifestError(ext.Name, path, "read", err)
+	}
+	found := false
+	for _, entry := range entries {
+		if entry.Name() == manifestFilename {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return Manifest{}, manifestError(ext.Name, path, "read", os.ErrNotExist)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Manifest{}, manifestError(ext.Name, path, "read", err)
+	}
+	if err := validateUniqueJSONKeys(data); err != nil {
+		return Manifest{}, manifestError(ext.Name, path, "parse", err)
+	}
+	var fields map[string]json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&fields); err != nil {
+		return Manifest{}, manifestError(ext.Name, path, "parse", err)
+	}
+	if fields == nil {
+		return Manifest{}, manifestError(ext.Name, path, "parse", fmt.Errorf("manifest must be a JSON object"))
+	}
+	allowed := map[string]struct{}{
+		"manifest_version": {},
+		"name":             {},
+		"version":          {},
+		"description":      {},
+		"display_name":     {},
+		"author":           {},
+		"homepage":         {},
+		"repository":       {},
+		"license":          {},
+	}
+	for name := range fields {
+		if _, ok := allowed[name]; !ok {
+			return Manifest{}, manifestError(ext.Name, path, "parse", fmt.Errorf("unknown field %q", name))
+		}
+	}
+	manifest, err := manifestFromFields(fields)
+	if err != nil {
+		return Manifest{}, manifestError(ext.Name, path, "validate", err)
+	}
+	if manifest.ManifestVersion != 1 {
+		return Manifest{}, manifestError(ext.Name, path, "validate", fmt.Errorf("manifest_version must be 1, got %d", manifest.ManifestVersion))
+	}
+	if manifest.Name != ext.Name {
+		return Manifest{}, manifestError(ext.Name, path, "validate", fmt.Errorf("name %q must match containing directory %q", manifest.Name, ext.Name))
+	}
+	if !semVerPattern.MatchString(manifest.Version) {
+		return Manifest{}, manifestError(ext.Name, path, "validate", fmt.Errorf("version %q must be valid SemVer", manifest.Version))
+	}
+	return manifest, nil
+}
+
+func manifestFromFields(fields map[string]json.RawMessage) (Manifest, error) {
+	manifestVersion, err := requiredManifestInt(fields, "manifest_version")
+	if err != nil {
+		return Manifest{}, err
+	}
+	name, err := requiredManifestString(fields, "name")
+	if err != nil {
+		return Manifest{}, err
+	}
+	version, err := requiredManifestString(fields, "version")
+	if err != nil {
+		return Manifest{}, err
+	}
+	manifest := Manifest{ManifestVersion: manifestVersion, Name: name, Version: version}
+	optional := []struct {
+		name string
+		dst  *string
+	}{
+		{name: "description", dst: &manifest.Description},
+		{name: "display_name", dst: &manifest.DisplayName},
+		{name: "author", dst: &manifest.Author},
+		{name: "homepage", dst: &manifest.Homepage},
+		{name: "repository", dst: &manifest.Repository},
+		{name: "license", dst: &manifest.License},
+	}
+	for _, field := range optional {
+		raw, ok := fields[field.name]
+		if !ok {
+			continue
+		}
+		if err := json.Unmarshal(raw, field.dst); err != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			if err == nil {
+				err = fmt.Errorf("must be a string")
+			}
+			return Manifest{}, fmt.Errorf("%s %w", field.name, err)
+		}
+	}
+	return manifest, nil
+}
+
+func requiredManifestInt(fields map[string]json.RawMessage, name string) (int, error) {
+	raw, ok := fields[name]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return 0, fmt.Errorf("%s is required", name)
+	}
+	var value int
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", name, err)
+	}
+	return value, nil
+}
+
+func requiredManifestString(fields map[string]json.RawMessage, name string) (string, error) {
+	raw, ok := fields[name]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", fmt.Errorf("%s is required", name)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", fmt.Errorf("%s must be a string: %w", name, err)
+	}
+	return value, nil
+}
+
+func validateUniqueJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := validateJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+func validateJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := map[string]struct{}{}
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return fmt.Errorf("object key must be a string")
+			}
+			if _, exists := seen[key]; exists {
+				return fmt.Errorf("duplicate JSON key %q", key)
+			}
+			seen[key] = struct{}{}
+			if err := validateJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		_, err = decoder.Token()
+		return err
+	case '[':
+		for decoder.More() {
+			if err := validateJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		_, err = decoder.Token()
+		return err
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %q", delim)
+	}
+}
+
+func manifestError(name, path, action string, err error) error {
+	return fmt.Errorf("extensions: extension %q manifest %s: %s: %w", name, path, action, err)
 }
 
 func Source(name string) string {

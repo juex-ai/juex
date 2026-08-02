@@ -514,6 +514,9 @@ func TestObservablesAPIExtensionDefinitionsAreReadOnlyConflicts(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(extensionPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(extensionPath), "juex.extension.json"), []byte(`{"manifest_version":1,"name":"demo","version":"1.0.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	body := `{
   "observables": [{
     "id": "extension-schedule",

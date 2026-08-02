@@ -128,16 +128,13 @@ test("tab routing remounts existing selected-agent pages", () => {
   assert.equal(agentTabFromPath("/agents/alpha/sessions/s1"), "chat");
   assert.equal(agentTabFromPath("/agents/alpha/history"), "chat");
   assert.equal(agentTabFromPath("/agents/alpha/runtime"), "runtime");
-  assert.equal(agentTabFromPath("/agents/alpha/observables/weekly"), "observables");
-  assert.equal(agentTabFromPath("/agents/alpha/logs"), "logs");
-  assert.equal(agentTabFromPath("/agents/alpha/config"), "config");
+  assert.equal(agentTabFromPath("/agents/alpha/runtime/extensions"), "runtime");
+  assert.equal(agentTabFromPath("/agents/alpha/runtime/observables/weekly"), "runtime");
+  assert.equal(agentTabFromPath("/agents/alpha/runtime/logs"), "runtime");
+  assert.equal(agentTabFromPath("/agents/alpha/runtime/config"), "runtime");
 
   assert.equal(agentTabPath("alpha", "chat"), "/agents/alpha");
   assert.equal(agentTabPath("alpha", "runtime"), "/agents/alpha/runtime");
-  assert.equal(
-    agentTabPath("alpha", "observables"),
-    "/agents/alpha/observables",
-  );
 });
 
 test("agent lifecycle toggle retries failed runtimes from the sidebar and state bar", () => {

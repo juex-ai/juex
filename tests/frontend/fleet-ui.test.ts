@@ -35,6 +35,8 @@ const apiSource = source("../../frontend/src/api.ts");
 const typesSource = source("../../frontend/src/types.ts");
 const logsSource = source("../../frontend/src/pages/AgentLogs.tsx");
 const configSource = source("../../frontend/src/pages/AgentConfig.tsx");
+const runtimeLayoutSource = source("../../frontend/src/pages/RuntimeLayout.tsx");
+const extensionsSource = source("../../frontend/src/pages/Extensions.tsx");
 const viteSource = source("../../frontend/vite.config.ts");
 
 test("router exposes fleet and selected-agent pages", () => {
@@ -43,8 +45,9 @@ test("router exposes fleet and selected-agent pages", () => {
     'path: "sessions/:id"',
     'path: "history"',
     'path: "runtime"',
+    'path: "extensions"',
     'path: "observables"',
-    'path: "observables/:id"',
+    'path: "observables/:observableId"',
     'path: "logs"',
     'path: "config"',
     'path: "settings"',
@@ -52,6 +55,22 @@ test("router exposes fleet and selected-agent pages", () => {
     assert.match(appSource, new RegExp(route.replace(/[/:]/g, "\\$&")));
   }
   assert.doesNotMatch(appSource, /history\/sessions\/:id/);
+  assert.match(appSource, /path: "runtime"[\s\S]*element:[\s\S]*<RuntimeLayout \/>[\s\S]*children:/);
+  assert.doesNotMatch(appSource, /path: "agents\/:agentId"[\s\S]*path: "logs"[\s\S]*path: "runtime"/);
+});
+
+test("runtime navigation consolidates operational views without duplicating page behavior", () => {
+  assert.match(runtimeLayoutSource, /<Outlet \/>/);
+  assert.match(runtimeLayoutSource, /runtimeSections\.map/);
+  assert.match(runtimeLayoutSource, /runtimeSectionFromPath\(location\.pathname\)/);
+  assert.match(runtimeLayoutSource, /flex min-h-0 flex-1 flex-col overflow-hidden/);
+  assert.match(extensionsSource, /getRuntimeStatus/);
+  assert.match(extensionsSource, /No Extensions are selected for this Agent\./);
+  assert.doesNotMatch(extensionsSource, /<Button[\s\S]*(Install|Update|Delete|Enable|Disable)/);
+  assert.equal((stageHeaderSource.match(/label: "Chat"/g) ?? []).length, 1);
+  assert.equal((stageHeaderSource.match(/label: "Runtime"/g) ?? []).length, 1);
+  assert.doesNotMatch(stageHeaderSource, /label: "Observables"|label: "Logs"|label: "Config"/);
+  assert.match(shellSource, /agentTabPath\(failedAgent\.id, "runtime"\) \+ "\/logs"/);
 });
 
 test("agent shell keeps the fleet rail mounted around selected-agent pages", () => {
@@ -132,8 +151,8 @@ test("fleet rail keeps its header controls lightweight and vertically stable", (
   assert.match(sidebarSource, /dark:bg-juex-gold-400\/10/);
 });
 
-test("stage remounts existing pages through tabs and gates offline composers", () => {
-  for (const label of ["Chat", "Runtime", "Observables", "Logs", "Config"]) {
+test("stage remounts primary pages through tabs and gates offline composers", () => {
+  for (const label of ["Chat", "Runtime"]) {
     assert.match(stageHeaderSource, new RegExp(`label: "${label}"`));
   }
   assert.match(stageHeaderSource, /agentTabPath\(agent\.id, tab\.id\)/);
