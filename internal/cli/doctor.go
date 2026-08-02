@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -593,7 +594,13 @@ func renderDoctorResult(cmd *cobra.Command, format string, result doctorResult) 
 			cmdPrintln(cmd, `{"status":"fail","checks":[]}`)
 			return
 		}
-		cmdPrintln(cmd, string(data))
+		var redacted doctorResult
+		if err := json.Unmarshal(data, &redacted); err != nil {
+			cmdPrintln(cmd, `{"status":"fail","checks":[]}`)
+			return
+		}
+		restoreDoctorExtensionEnvironmentMetadata(&redacted, result)
+		cmdPrintln(cmd, mustJSON(redacted))
 		return
 	}
 	var output strings.Builder
@@ -608,4 +615,36 @@ func renderDoctorResult(cmd *cobra.Command, format string, result doctorResult) 
 	output.WriteString("status: " + string(result.Status))
 	data, _ := result.environment.RedactConfiguredValues([]byte(output.String()))
 	cmdPrintln(cmd, string(data))
+}
+
+func restoreDoctorExtensionEnvironmentMetadata(redacted *doctorResult, public doctorResult) {
+	const detailsKey = "extension_default_variables"
+	for i := range redacted.Checks {
+		if i >= len(public.Checks) || redacted.Checks[i].Name != "environment" || public.Checks[i].Name != "environment" {
+			continue
+		}
+		publicRows, ok := public.Checks[i].Details[detailsKey].([]map[string]string)
+		if !ok {
+			return
+		}
+		redactedRows, ok := redacted.Checks[i].Details[detailsKey].([]any)
+		if !ok {
+			return
+		}
+		for rowIndex, publicRow := range publicRows {
+			if rowIndex >= len(redactedRows) {
+				break
+			}
+			redactedRow, ok := redactedRows[rowIndex].(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, key := range []string{"key", "source", "status", "path", "shadowed_by_source", "shadowed_by_path"} {
+				if value, exists := publicRow[key]; exists {
+					redactedRow[key] = value
+				}
+			}
+		}
+		return
+	}
 }

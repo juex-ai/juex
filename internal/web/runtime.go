@@ -220,9 +220,24 @@ func writeRuntimeStatusJSON(w http.ResponseWriter, httpStatus int, status runtim
 	// ${WORKDIR} or ${JUEX_EXT_DIR} may equal them byte-for-byte, but that does
 	// not turn the public path into an environment-value disclosure.
 	redacted.WorkDir = publicWorkDir
-	redacted.Extensions = publicExtensions
+	restorePublicExtensionStructure(&redacted.Extensions, publicExtensions)
 	writeJSON(w, httpStatus, redacted)
 	return nil
+}
+
+func restorePublicExtensionStructure(redacted *extensionsStatus, public extensionsStatus) {
+	redacted.Count = public.Count
+	for i := range redacted.Items {
+		if i >= len(public.Items) {
+			break
+		}
+		redacted.Items[i].ManifestVersion = public.Items[i].ManifestVersion
+		redacted.Items[i].Name = public.Items[i].Name
+		redacted.Items[i].Scope = public.Items[i].Scope
+		redacted.Items[i].Path = public.Items[i].Path
+		redacted.Items[i].Resources = public.Items[i].Resources
+		redacted.Items[i].Environment = public.Items[i].Environment
+	}
 }
 
 func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {

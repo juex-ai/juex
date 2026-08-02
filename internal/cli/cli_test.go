@@ -1656,6 +1656,7 @@ func TestDoctorCmd_ReportsExtensionEnvironmentWithoutValues(t *testing.T) {
   "version":"1.0.0",
   "agent":{"environment":{"variables":{
     "DOCTOR_EXTENSION_DEFAULT":"`+secretDefault+`",
+	"DOCTOR_EXTENSION_DIR":"${JUEX_EXT_DIR}",
     "DOCTOR_EXTENSION_DATA":"${JUEX_EXT_DATA_DIR}"
   }}}
 }`); err != nil {
@@ -1676,8 +1677,9 @@ func TestDoctorCmd_ReportsExtensionEnvironmentWithoutValues(t *testing.T) {
 		t.Fatalf("doctor leaked Extension environment value:\n%s", out.String())
 	}
 	for _, want := range []string{
-		`"extension_default_count": 2`,
+		`"extension_default_count": 3`,
 		`"key": "DOCTOR_EXTENSION_DEFAULT"`,
+		`"key": "DOCTOR_EXTENSION_DIR"`,
 		`"key": "DOCTOR_EXTENSION_DATA"`,
 		`"source": "ext:demo"`,
 		`"status": "effective"`,
@@ -1685,6 +1687,30 @@ func TestDoctorCmd_ReportsExtensionEnvironmentWithoutValues(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("doctor Extension environment metadata missing %q:\n%s", want, out.String())
 		}
+	}
+	var result doctorResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("doctor JSON: %v\n%s", err, out.String())
+	}
+	wantManifestPath := filepath.Join(extensionDir, "juex.extension.json")
+	foundExtensionDir := false
+	for _, check := range result.Checks {
+		if check.Name != "environment" {
+			continue
+		}
+		rows, _ := check.Details["extension_default_variables"].([]any)
+		for _, raw := range rows {
+			row, _ := raw.(map[string]any)
+			if row["key"] == "DOCTOR_EXTENSION_DIR" {
+				foundExtensionDir = true
+				if row["path"] != wantManifestPath {
+					t.Fatalf("doctor Extension provenance path = %q, want %q", row["path"], wantManifestPath)
+				}
+			}
+		}
+	}
+	if !foundExtensionDir {
+		t.Fatalf("doctor Extension provenance row not found: %s", out.String())
 	}
 }
 

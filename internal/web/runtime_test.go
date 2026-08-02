@@ -254,6 +254,7 @@ func TestRuntimeAPIRedactsExtensionDefaultsWithoutHidingPublicPaths(t *testing.T
   "manifest_version":1,
   "name":"demo",
   "version":"1.2.3",
+	"description":"`+secretDefault+`",
   "agent":{"environment":{"variables":{
     "DEMO_SECRET":"`+secretDefault+`",
     "DEMO_EXTENSION_DIR":"${JUEX_EXT_DIR}",
@@ -279,6 +280,9 @@ func TestRuntimeAPIRedactsExtensionDefaultsWithoutHidingPublicPaths(t *testing.T
 	}
 	if len(got.Extensions.Items) != 1 || got.Extensions.Items[0].Path != extensionDir {
 		t.Fatalf("Extension path was redacted: %+v", got.Extensions.Items)
+	}
+	if got.Extensions.Items[0].Description != "[REDACTED_ENV]" {
+		t.Fatalf("arbitrary Extension metadata was restored: %+v", got.Extensions.Items[0])
 	}
 	if len(got.Extensions.Items[0].Environment) != 3 || got.Extensions.Items[0].Environment[0].Name == "" {
 		t.Fatalf("value-free environment metadata was redacted: %+v", got.Extensions.Items[0].Environment)
