@@ -101,6 +101,12 @@ export function assistantWorkItems(
       continue;
     }
 
+    if (isUserWorkBoundary(group)) {
+      items.push(buildWorkItem(buffer.groups, effectiveModel, "completed"));
+      buffer = undefined;
+      continue;
+    }
+
     flushOriginal(items, buffer.groups);
     buffer = undefined;
   }
@@ -209,6 +215,10 @@ function canContinueWork(group: MessageGroup): boolean {
 
 function canCompleteWork(group: MessageGroup): boolean {
   return isNormalAssistant(group) && hasVisibleContent(group);
+}
+
+function isUserWorkBoundary(group: MessageGroup): boolean {
+  return group.role === "user";
 }
 
 function isNormalAssistant(group: MessageGroup): boolean {

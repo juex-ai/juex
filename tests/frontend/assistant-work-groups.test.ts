@@ -228,7 +228,7 @@ test("running title follows the latest single or parallel tool-bearing group", (
   );
 });
 
-test("inactive incomplete tail and interrupted buffers flush original messages", () => {
+test("inactive incomplete tail flushes original messages", () => {
   const starter = assistant("starter", [
     reasoning("x"),
     tool("tu-1", "read"),
@@ -239,10 +239,21 @@ test("inactive incomplete tail and interrupted buffers flush original messages",
     ),
     ["message"],
   );
+});
 
-  const interrupted = assistantWorkItems(
+test("a user message completes preceding process-only work", () => {
+  const items = assistantWorkItems(
     [
-      starter,
+      assistant(
+        "starter",
+        [reasoning("plan"), tool("tu-1", "read")],
+        { createdAt: "2026-07-20T01:00:00Z" },
+      ),
+      assistant(
+        "continue",
+        [reasoning("execute"), tool("tu-2", "exec_command")],
+        { createdAt: "2026-07-20T01:00:02Z" },
+      ),
       {
         key: "user",
         role: "user",
@@ -252,10 +263,46 @@ test("inactive incomplete tail and interrupted buffers flush original messages",
     ],
     { tailActive: true },
   );
+
   assert.deepEqual(
-    interrupted.map((item) => item.kind),
-    ["message", "message"],
+    items.map((item) => item.kind),
+    ["assistant_work", "message"],
   );
+  const work = items[0];
+  assert.equal(work.kind, "assistant_work");
+  if (work.kind !== "assistant_work") return;
+  assert.equal(work.phase, "completed");
+  assert.equal(work.contentGroup, undefined);
+  assert.equal(work.toolCount, 2);
+  assert.equal(assistantWorkTitle(work), "Worked for 2s, called 2 tools");
+});
+
+test("a user-scoped notification completes preceding process-only work", () => {
+  const items = assistantWorkItems(
+    [
+      assistant("starter", [
+        reasoning("plan"),
+        tool("tu-1", "read"),
+      ]),
+      {
+        key: "notice",
+        role: "user",
+        kind: "system_notice",
+        pending: false,
+        units: [text("cancelled")],
+      },
+    ],
+    { tailActive: false },
+  );
+
+  assert.deepEqual(
+    items.map((item) => item.kind),
+    ["assistant_work", "message"],
+  );
+  assert.equal(items[0].kind, "assistant_work");
+  assert.equal(items[1].kind, "message");
+  if (items[1].kind !== "message") return;
+  assert.equal(items[1].group.kind, "system_notice");
 });
 
 test("tail activity follows only the canonical runtime turn", () => {
