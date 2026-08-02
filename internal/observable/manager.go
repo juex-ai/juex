@@ -50,17 +50,19 @@ func (e *ReadOnlyDefinitionError) Error() string {
 func (e *ReadOnlyDefinitionError) Unwrap() error { return ErrReadOnlyDefinition }
 
 type ManagerOptions struct {
-	ConfigPath            string
-	ReadOnlyConfigSources []ReadOnlyConfigSource
-	StateDir              string
-	WorkDir               string
-	Environment           environment.Snapshot
-	Shell                 config.ShellProfile
-	Sandbox               sandbox.Policy
-	SandboxRunner         sandbox.Runner
-	Bus                   *events.Bus
-	Deliver               DeliveryFunc
-	Now                   func() time.Time
+	ConfigPath                 string
+	ReadOnlyConfigSources      []ReadOnlyConfigSource
+	StateDir                   string
+	WorkDir                    string
+	Environment                environment.Snapshot
+	Shell                      config.ShellProfile
+	Sandbox                    sandbox.Policy
+	SandboxRunner              sandbox.Runner
+	Bus                        *events.Bus
+	Deliver                    DeliveryFunc
+	Now                        func() time.Time
+	AgentExtensionsRoot        string
+	PrepareAgentExtensionsRoot func() error
 }
 
 type Manager struct {

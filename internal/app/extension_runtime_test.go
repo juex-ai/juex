@@ -64,6 +64,78 @@ func TestExtensionRuntimeContextUsesAgentOwnedDataDirectory(t *testing.T) {
 	}
 }
 
+func TestAgentExtensionsRuntimePreparesPrivatePersistentRoot(t *testing.T) {
+	home := t.TempDir()
+	address, err := agentstate.NewAgentAddress(home, "abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtimeContext := newAgentExtensionsRuntime(address)
+	if got := runtimeContext.AdditionalWritableRoots(); len(got) != 1 || got[0] != runtimeContext.RootDir {
+		t.Fatalf("additional writable roots = %#v", got)
+	}
+	if _, err := os.Stat(runtimeContext.RootDir); !os.IsNotExist(err) {
+		t.Fatalf("runtime construction created extensions root: %v", err)
+	}
+
+	if err := runtimeContext.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(runtimeContext.RootDir, "keep")
+	if err := os.WriteFile(marker, []byte("persistent"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(runtimeContext.RootDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runtimeContext.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(marker); err != nil || string(got) != "persistent" {
+		t.Fatalf("persistent marker = %q, %v", got, err)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(runtimeContext.RootDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o700 {
+			t.Fatalf("extensions root mode = %o, want 700", got)
+		}
+	}
+}
+
+func TestAgentExtensionsRuntimeRejectsSymlinkEscape(t *testing.T) {
+	home := t.TempDir()
+	address, err := agentstate.NewAgentAddress(home, "abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtimeContext := newAgentExtensionsRuntime(address)
+	if err := os.Symlink(t.TempDir(), runtimeContext.RootDir); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := runtimeContext.Prepare(); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("Prepare() error = %v, want symlink rejection", err)
+	}
+
+	stateFree := newAgentExtensionsRuntime(agentstate.AgentAddress{})
+	if stateFree.RootDir != "" || len(stateFree.AdditionalWritableRoots()) != 0 {
+		t.Fatalf("state-free runtime = %+v", stateFree)
+	}
+	if err := stateFree.Prepare(); err != nil {
+		t.Fatalf("state-free Prepare() = %v", err)
+	}
+}
+
 func TestExtensionRuntimeContextPrepareDataDirIsPrivateAndPersistent(t *testing.T) {
 	home := t.TempDir()
 	address, err := agentstate.NewAgentAddress(home, "abcdef")

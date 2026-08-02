@@ -44,19 +44,21 @@ type ShellSessionManager struct {
 }
 
 type ShellStartRequest struct {
-	Binary          string
-	Args            []string
-	Command         string
-	Env             []string
-	Cwd             string
-	WorkspaceRoots  []string
-	Sandbox         sandbox.Policy
-	SandboxRunner   sandbox.Runner
-	Yield           time.Duration
-	MaxOutputTokens int
-	TTY             bool
-	CallContext     context.Context
-	Events          ToolCallEvents
+	Binary                         string
+	Args                           []string
+	Command                        string
+	Env                            []string
+	Cwd                            string
+	WorkspaceRoots                 []string
+	Sandbox                        sandbox.Policy
+	SandboxRunner                  sandbox.Runner
+	Yield                          time.Duration
+	MaxOutputTokens                int
+	TTY                            bool
+	CallContext                    context.Context
+	Events                         ToolCallEvents
+	AdditionalWritableRoots        []string
+	PrepareAdditionalWritableRoots func() error
 }
 
 type ShellContinueRequest struct {
@@ -294,14 +296,23 @@ func prepareShellExecSpec(ctx context.Context, req ShellStartRequest) (sandbox.E
 	if !req.Sandbox.Enabled {
 		return spec, nil
 	}
+	if len(req.AdditionalWritableRoots) > 0 {
+		if req.PrepareAdditionalWritableRoots == nil {
+			return sandbox.ExecSpec{}, fmt.Errorf("exec_command: additional writable roots have no prepare callback")
+		}
+		if err := req.PrepareAdditionalWritableRoots(); err != nil {
+			return sandbox.ExecSpec{}, fmt.Errorf("exec_command: prepare additional writable roots: %w", err)
+		}
+	}
 	runner := req.SandboxRunner
 	if runner == nil {
 		runner = sandbox.DefaultRunner{}
 	}
 	return runner.Prepare(ctx, sandbox.Request{
-		Policy:         req.Sandbox,
-		WorkspaceRoots: append([]string(nil), req.WorkspaceRoots...),
-		Spec:           spec,
+		Policy:                  req.Sandbox,
+		WorkspaceRoots:          append([]string(nil), req.WorkspaceRoots...),
+		AdditionalWritableRoots: append([]string(nil), req.AdditionalWritableRoots...),
+		Spec:                    spec,
 	})
 }
 

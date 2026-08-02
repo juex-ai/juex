@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app"
-	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
@@ -38,22 +37,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	enc.Encode(v)
-}
-
-func writeEnvironmentSafeJSON(w http.ResponseWriter, status int, v any, snapshot environment.Snapshot) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	data, _, err = snapshot.RedactConfiguredJSON(data)
-	if err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, err = w.Write(data)
-	return err
 }
 
 func writeErr(w http.ResponseWriter, status int, kind, msg string) {

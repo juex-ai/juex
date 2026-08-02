@@ -16,17 +16,19 @@ import (
 )
 
 type runnerOptions struct {
-	spec          commandRuntimeSpec
-	runID         string
-	workDir       string
-	environment   environment.Snapshot
-	sandboxPolicy sandbox.Policy
-	sandboxRunner sandbox.Runner
-	store         *Store
-	submit        func(context.Context, ObservationRecord) bool
-	runtime       RuntimeContext
-	source        string
-	extension     bool
+	spec                       commandRuntimeSpec
+	runID                      string
+	workDir                    string
+	environment                environment.Snapshot
+	sandboxPolicy              sandbox.Policy
+	sandboxRunner              sandbox.Runner
+	store                      *Store
+	submit                     func(context.Context, ObservationRecord) bool
+	runtime                    RuntimeContext
+	source                     string
+	extension                  bool
+	agentExtensionsRoot        string
+	prepareAgentExtensionsRoot func() error
 }
 
 type runner struct {
@@ -90,9 +92,26 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 		if err := callCtx.Err(); err != nil {
 			return nil, err
 		}
-		additionalWritableRoots = []string{r.opts.runtime.ExtensionDataDir}
 	}
 	if r.opts.sandboxPolicy.Enabled {
+		agentExtensionsRoot := r.opts.agentExtensionsRoot
+		prepareAgentExtensionsRoot := r.opts.prepareAgentExtensionsRoot
+		if agentExtensionsRoot == "" && r.opts.extension && r.opts.runtime.ExtensionDataDir != "" {
+			agentExtensionsRoot = filepath.Dir(r.opts.runtime.ExtensionDataDir)
+			prepareAgentExtensionsRoot = func() error { return nil }
+		}
+		if agentExtensionsRoot != "" {
+			if prepareAgentExtensionsRoot == nil {
+				return nil, fmt.Errorf("observable: Agent extensions root has no prepare callback")
+			}
+			if err := callCtx.Err(); err != nil {
+				return nil, err
+			}
+			if err := prepareAgentExtensionsRoot(); err != nil {
+				return nil, err
+			}
+			additionalWritableRoots = []string{agentExtensionsRoot}
+		}
 		sandboxRunner := r.opts.sandboxRunner
 		if sandboxRunner == nil {
 			sandboxRunner = sandbox.DefaultRunner{}

@@ -28,6 +28,15 @@ const (
 	SourceRuntime         Source = "runtime"
 )
 
+type DefaultStatus string
+
+const (
+	DefaultStatusEffective    DefaultStatus = "effective"
+	DefaultStatusShadowed     DefaultStatus = "shadowed"
+	DefaultStatusDeduplicated DefaultStatus = "deduplicated"
+	DefaultStatusConflict     DefaultStatus = "conflict"
+)
+
 var reservedNames = map[string]struct{}{
 	"JUEX_HOME":         {},
 	"HOME":              {},
@@ -36,6 +45,21 @@ var reservedNames = map[string]struct{}{
 	"JUEX_WORKDIR":      {},
 	"JUEX_EXT_DIR":      {},
 	"JUEX_EXT_DATA_DIR": {},
+}
+
+var restrictedExtensionNames = map[string]struct{}{
+	"WORKDIR":        {},
+	"HOME":           {},
+	"USERPROFILE":    {},
+	"PATH":           {},
+	"PATHEXT":        {},
+	"COMSPEC":        {},
+	"GLIBC_TUNABLES": {},
+	"NODE_OPTIONS":   {},
+	"PYTHONPATH":     {},
+	"PYTHONHOME":     {},
+	"BASH_ENV":       {},
+	"ENV":            {},
 }
 
 // Layer is one ordered source of environment declarations. Strict layers are
@@ -62,11 +86,45 @@ type Metadata struct {
 	Path   string `json:"path,omitempty"`
 }
 
+// DefaultDeclaration is one low-priority child-runtime value supplied by a
+// trusted runtime resource. Source and Path are value-free provenance only.
+type DefaultDeclaration struct {
+	Key    string
+	Value  string
+	Source Source
+	Path   string
+}
+
+// DefaultMetadata deliberately excludes values. One item is returned for
+// every declaration, including declarations that are not effective.
+type DefaultMetadata struct {
+	Key          string        `json:"key"`
+	Source       Source        `json:"source"`
+	Path         string        `json:"path,omitempty"`
+	Status       DefaultStatus `json:"status"`
+	ShadowedBy   Source        `json:"shadowed_by,omitempty"`
+	ShadowedPath string        `json:"shadowed_path,omitempty"`
+}
+
+type DefaultConflictError struct {
+	Key     string
+	Sources []Source
+}
+
+func (e *DefaultConflictError) Error() string {
+	items := make([]string, 0, len(e.Sources))
+	for _, source := range e.Sources {
+		items = append(items, string(source))
+	}
+	return fmt.Sprintf("environment: default variable %q conflicts between %s", e.Key, strings.Join(items, ", "))
+}
+
 type entry struct {
-	key    string
-	value  string
-	source Source
-	path   string
+	key      string
+	value    string
+	source   Source
+	path     string
+	activate bool
 }
 
 // Snapshot owns an immutable effective environment. Its maps are never
@@ -108,10 +166,11 @@ func Resolve(opts Options) (Snapshot, error) {
 			value := layer.Values[key]
 			canonical := canonicalKey(key, caseInsensitive)
 			snapshot.entries[canonical] = entry{
-				key:    key,
-				value:  value,
-				source: layer.Source,
-				path:   layer.Path,
+				key:      key,
+				value:    value,
+				source:   layer.Source,
+				path:     layer.Path,
+				activate: layer.Source != SourceInherited,
 			}
 			if layer.Source != SourceInherited {
 				snapshot.configured[canonical] = Metadata{
@@ -136,6 +195,105 @@ func Resolve(opts Options) (Snapshot, error) {
 		}
 	}
 	return snapshot, nil
+}
+
+// WithDefaults returns a new immutable snapshot with declarations applied only
+// when the base environment does not already contain the key. Defaults are
+// child-runtime data and are intentionally excluded from Activate.
+func (s Snapshot) WithDefaults(declarations []DefaultDeclaration) (Snapshot, []DefaultMetadata, error) {
+	if !s.resolved {
+		s = FromEnviron(os.Environ())
+	}
+	ordered := append([]DefaultDeclaration(nil), declarations...)
+	for _, declaration := range ordered {
+		if err := ValidateExtensionDefault(declaration.Key, declaration.Value); err != nil {
+			return Snapshot{}, nil, fmt.Errorf("environment: %s: %w", sourceLabel(declaration.Path, declaration.Source), err)
+		}
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left := canonicalKey(ordered[i].Key, s.caseInsensitive)
+		right := canonicalKey(ordered[j].Key, s.caseInsensitive)
+		if left != right {
+			return left < right
+		}
+		if ordered[i].Source != ordered[j].Source {
+			return ordered[i].Source < ordered[j].Source
+		}
+		if ordered[i].Path != ordered[j].Path {
+			return ordered[i].Path < ordered[j].Path
+		}
+		return ordered[i].Key < ordered[j].Key
+	})
+	out := s.clone()
+	metadata := make([]DefaultMetadata, 0, len(ordered))
+	for _, declaration := range ordered {
+		out.configuredValues = append(out.configuredValues, declaration.Value)
+	}
+	for start := 0; start < len(ordered); {
+		canonical := canonicalKey(ordered[start].Key, s.caseInsensitive)
+		end := start + 1
+		for end < len(ordered) && canonicalKey(ordered[end].Key, s.caseInsensitive) == canonical {
+			end++
+		}
+		group := ordered[start:end]
+		if existing, ok := out.entries[canonical]; ok {
+			for _, declaration := range group {
+				metadata = append(metadata, DefaultMetadata{
+					Key: declaration.Key, Source: declaration.Source, Path: declaration.Path,
+					Status: DefaultStatusShadowed, ShadowedBy: existing.source, ShadowedPath: existing.path,
+				})
+			}
+			start = end
+			continue
+		}
+		conflict := false
+		for _, declaration := range group[1:] {
+			if declaration.Value != group[0].Value {
+				conflict = true
+				break
+			}
+		}
+		if conflict {
+			sources := make([]Source, 0, len(group))
+			for _, declaration := range group {
+				metadata = append(metadata, DefaultMetadata{
+					Key: declaration.Key, Source: declaration.Source, Path: declaration.Path, Status: DefaultStatusConflict,
+				})
+				sources = append(sources, declaration.Source)
+			}
+			return out, metadata, &DefaultConflictError{Key: canonical, Sources: sources}
+		}
+		winner := group[0]
+		out.entries[canonical] = entry{
+			key: winner.Key, value: winner.Value, source: winner.Source, path: winner.Path, activate: false,
+		}
+		out.configured[canonical] = Metadata{Key: winner.Key, Source: winner.Source, Path: winner.Path}
+		for index, declaration := range group {
+			status := DefaultStatusDeduplicated
+			if index == 0 {
+				status = DefaultStatusEffective
+			}
+			metadata = append(metadata, DefaultMetadata{
+				Key: declaration.Key, Source: declaration.Source, Path: declaration.Path, Status: status,
+			})
+		}
+		start = end
+	}
+	return out, metadata, nil
+}
+
+func (s Snapshot) clone() Snapshot {
+	out := Snapshot{
+		entries: make(map[string]entry, len(s.entries)), configured: make(map[string]Metadata, len(s.configured)),
+		configuredValues: append([]string(nil), s.configuredValues...), caseInsensitive: s.caseInsensitive, resolved: s.resolved,
+	}
+	for key, item := range s.entries {
+		out.entries[key] = item
+	}
+	for key, item := range s.configured {
+		out.configured[key] = item
+	}
+	return out
 }
 
 func splitInheritedEntry(item string, windows bool) (string, string, bool) {
@@ -403,9 +561,10 @@ func (s Snapshot) Environ(overlays ...map[string]string) []string {
 		for _, key := range sortedMapKeys(overlay, s.caseInsensitive) {
 			canonical := canonicalKey(key, s.caseInsensitive)
 			entries[canonical] = entry{
-				key:    key,
-				value:  overlay[key],
-				source: source,
+				key:      key,
+				value:    overlay[key],
+				source:   source,
+				activate: false,
 			}
 		}
 	}
@@ -459,7 +618,7 @@ func (s Snapshot) Activate() (func() error, error) {
 	}
 	var previous []previousValue
 	for _, item := range s.entries {
-		if item.source == SourceInherited {
+		if !item.activate {
 			continue
 		}
 		value, set := os.LookupEnv(item.key)
@@ -536,6 +695,26 @@ func validateConfiguredEntry(key, value string) error {
 	}
 	if _, reserved := reservedNames[strings.ToUpper(key)]; reserved {
 		return fmt.Errorf("variable %q is reserved by Juex", key)
+	}
+	return nil
+}
+
+// ValidateExtensionDefault applies the portable-name rules plus the stricter
+// process identity, executable lookup, and loader-injection restrictions used
+// for Extension-provided defaults.
+func ValidateExtensionDefault(key, value string) error {
+	if strings.IndexByte(key, 0) >= 0 || strings.IndexByte(value, 0) >= 0 {
+		return fmt.Errorf("variable %q contains a NUL byte", key)
+	}
+	if !validPortableName(key) {
+		return fmt.Errorf("invalid variable name %q", key)
+	}
+	upper := strings.ToUpper(key)
+	if strings.HasPrefix(upper, "JUEX_") || strings.HasPrefix(upper, "LD_") || strings.HasPrefix(upper, "DYLD_") {
+		return fmt.Errorf("variable %q is restricted for Extension defaults", key)
+	}
+	if _, restricted := restrictedExtensionNames[upper]; restricted {
+		return fmt.Errorf("variable %q is restricted for Extension defaults", key)
 	}
 	return nil
 }

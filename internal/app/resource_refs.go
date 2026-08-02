@@ -57,6 +57,7 @@ type RuntimeExtensionDescriptor struct {
 	Scope        extensions.Scope
 	RequireTrust bool
 	Manifest     extensions.Manifest
+	Runtime      ExtensionRuntimeContext
 }
 
 type RuntimeResourceGraph struct {
@@ -93,7 +94,7 @@ func ResolveRuntimeResourceGraph(cfg config.Config) (RuntimeResourceGraph, error
 	mcpConfigs := mcpConfigRefs(paths, extResources.MCPConfigs, runtimeContexts)
 	observableConfigs := observableConfigRefs(extResources.ObservableConfigs, runtimeContexts)
 	return RuntimeResourceGraph{
-		extensions:        runtimeExtensionDescriptors(extResources.Extensions),
+		extensions:        runtimeExtensionDescriptors(extResources.Extensions, runtimeContexts),
 		skillDirs:         skillDirs,
 		mcpConfigs:        mcpConfigs,
 		observableConfigs: observableConfigs,
@@ -193,7 +194,7 @@ func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Re
 	return nodes
 }
 
-func runtimeExtensionDescriptors(selected []extensions.Extension) []RuntimeExtensionDescriptor {
+func runtimeExtensionDescriptors(selected []extensions.Extension, runtimeContexts map[string]ExtensionRuntimeContext) []RuntimeExtensionDescriptor {
 	descriptors := make([]RuntimeExtensionDescriptor, 0, len(selected))
 	for _, ext := range selected {
 		descriptors = append(descriptors, RuntimeExtensionDescriptor{
@@ -203,6 +204,7 @@ func runtimeExtensionDescriptors(selected []extensions.Extension) []RuntimeExten
 			Scope:        ext.Scope,
 			RequireTrust: ext.RequireTrust,
 			Manifest:     ext.Manifest,
+			Runtime:      runtimeContexts[ext.Name],
 		})
 	}
 	return descriptors
@@ -459,13 +461,13 @@ func loadMCPConfigRefsWithOptions(refs []mcpConfigRef, workDir string, runtimeEn
 	return configs, merged, sources, nil
 }
 
-// LoadMCPConfigs resolves configured MCP resources, including extension MCP
-// bundles, into runtime-ready configs for process-scoped startup.
-func LoadMCPConfigs(cfg config.Config, workDir string) ([]mcp.Config, error) {
-	graph, err := ResolveRuntimeResourceGraph(cfg)
-	if err != nil {
-		return nil, err
-	}
-	configs, _, _, err := loadMCPConfigRefsForRuntime(graph.MCPConfigs(), workDir, cfg.EnvironmentSnapshot())
+// LoadMCPConfigs prepares process-scoped MCP configs from the same
+// immutable Agent runtime resolution used by sessions and Runtime status.
+func LoadMCPConfigs(runtime AgentRuntimeResolution, workDir string) ([]mcp.Config, error) {
+	configs, _, _, err := loadMCPConfigRefsForRuntime(
+		runtime.ResourceGraph().MCPConfigs(),
+		workDir,
+		runtime.Environment(),
+	)
 	return configs, err
 }

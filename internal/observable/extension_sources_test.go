@@ -196,7 +196,7 @@ func TestExtensionDataPreparationIsDeferredUntilCommandStart(t *testing.T) {
 	}
 }
 
-func TestExtensionCommandExpandsRuntimeAndGetsExactSandboxRoot(t *testing.T) {
+func TestExtensionCommandExpandsRuntimeAndGetsAgentExtensionsSandboxRoot(t *testing.T) {
 	dir := t.TempDir()
 	extensionDir := filepath.Join(dir, "extension with spaces")
 	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
@@ -272,8 +272,9 @@ func TestExtensionCommandExpandsRuntimeAndGetsExactSandboxRoot(t *testing.T) {
 	if prepares.Load() != 1 {
 		t.Fatalf("prepare count = %d, want 1", prepares.Load())
 	}
-	if len(runner.last.AdditionalWritableRoots) != 1 || runner.last.AdditionalWritableRoots[0] != dataDir {
-		t.Fatalf("additional writable roots = %v, want only %q", runner.last.AdditionalWritableRoots, dataDir)
+	wantWritableRoot := filepath.Dir(dataDir)
+	if len(runner.last.AdditionalWritableRoots) != 1 || runner.last.AdditionalWritableRoots[0] != wantWritableRoot {
+		t.Fatalf("additional writable roots = %v, want only %q", runner.last.AdditionalWritableRoots, wantWritableRoot)
 	}
 	gotBinary, err := os.Stat(runner.last.Spec.Binary)
 	if err != nil {
@@ -299,6 +300,77 @@ func TestExtensionCommandExpandsRuntimeAndGetsExactSandboxRoot(t *testing.T) {
 	wantPaths := extensionDir + "|" + dataDir + "|$JUEX_EXT_DIR_SUFFIX"
 	if env["OBSERVABLE_RUNTIME_PATHS"] != wantPaths {
 		t.Fatalf("runtime paths = %q, want %q", env["OBSERVABLE_RUNTIME_PATHS"], wantPaths)
+	}
+}
+
+func TestProjectCommandGetsPreparedAgentExtensionsSandboxRoot(t *testing.T) {
+	dir := t.TempDir()
+	writeObservableConfig(t, dir, helperSpec("project-runtime", "json-once"))
+	agentExtensionsRoot := filepath.Join(t.TempDir(), "agents", "abcdef", "extensions")
+	runner := &recordingSandboxRunner{}
+	var prepares atomic.Int32
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath:  configPath(dir),
+		StateDir:    stateDir(dir),
+		WorkDir:     dir,
+		Environment: environment.FromEnviron(os.Environ()),
+		Sandbox: sandbox.Policy{
+			Enabled:    true,
+			FileSystem: sandbox.FileSystemPolicy{OutsideWorkspace: sandbox.OutsideWorkspaceReadOnly},
+		},
+		SandboxRunner:       runner,
+		AgentExtensionsRoot: agentExtensionsRoot,
+		PrepareAgentExtensionsRoot: func() error {
+			prepares.Add(1)
+			return os.MkdirAll(agentExtensionsRoot, 0o700)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if prepares.Load() != 0 {
+		t.Fatalf("prepare count after load = %d, want 0", prepares.Load())
+	}
+	if err := mgr.Start(context.Background(), "project-runtime"); err != nil {
+		t.Fatal(err)
+	}
+	if prepares.Load() != 1 {
+		t.Fatalf("prepare count = %d, want 1", prepares.Load())
+	}
+	if got := runner.last.AdditionalWritableRoots; len(got) != 1 || got[0] != agentExtensionsRoot {
+		t.Fatalf("additional writable roots = %#v", got)
+	}
+}
+
+func TestProjectCommandDoesNotPrepareAgentExtensionsRootWithoutSandbox(t *testing.T) {
+	dir := t.TempDir()
+	writeObservableConfig(t, dir, helperSpec("project-unsandboxed", "json-once"))
+	agentExtensionsRoot := filepath.Join(t.TempDir(), "agents", "abcdef", "extensions")
+	var prepares atomic.Int32
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath:          configPath(dir),
+		StateDir:            stateDir(dir),
+		WorkDir:             dir,
+		Environment:         environment.FromEnviron(os.Environ()),
+		AgentExtensionsRoot: agentExtensionsRoot,
+		PrepareAgentExtensionsRoot: func() error {
+			prepares.Add(1)
+			return os.MkdirAll(agentExtensionsRoot, 0o700)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), "project-unsandboxed"); err != nil {
+		t.Fatal(err)
+	}
+	if prepares.Load() != 0 {
+		t.Fatalf("unsandboxed prepare count = %d, want 0", prepares.Load())
+	}
+	if _, err := os.Stat(agentExtensionsRoot); !os.IsNotExist(err) {
+		t.Fatalf("unsandboxed command created Agent extensions root: %v", err)
 	}
 }
 

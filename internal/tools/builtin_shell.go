@@ -27,7 +27,7 @@ func (ShellToolProvider) definitions(opts BuiltinDefinitionOptions) []ToolDefini
 
 func (ShellToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	return []Tool{
-		execCommandTool(ctx.WorkDir, ctx.Environment, ctx.Shell, ctx.ShellSessions, ctx.Sandbox, ctx.SandboxRunner),
+		execCommandTool(ctx.WorkDir, ctx.Environment, ctx.Shell, ctx.ShellSessions, ctx.Sandbox, ctx.SandboxRunner, ctx.AdditionalWritableRoots, ctx.PrepareAdditionalWritableRoots),
 		listShellSessionsTool(ctx.ShellSessions),
 		writeStdinTool(ctx.ShellSessions),
 	}
@@ -113,7 +113,7 @@ func writeStdinToolDefinition() ToolDefinition {
 	}
 }
 
-func execCommandTool(defaultWorkdir string, snapshot environment.Snapshot, profile ShellProfile, sessions *ShellSessionManager, sandboxPolicy sandbox.Policy, sandboxRunner sandbox.Runner) Tool {
+func execCommandTool(defaultWorkdir string, snapshot environment.Snapshot, profile ShellProfile, sessions *ShellSessionManager, sandboxPolicy sandbox.Policy, sandboxRunner sandbox.Runner, additionalWritableRoots []string, prepareAdditionalWritableRoots func() error) Tool {
 	return execCommandToolDefinition(profile).BindResult(func(ctx context.Context, in map[string]any) (Result, error) {
 		cmd, _ := in["cmd"].(string)
 		if cmd == "" {
@@ -132,19 +132,21 @@ func execCommandTool(defaultWorkdir string, snapshot environment.Snapshot, profi
 			yield = time.Duration(yieldMS) * time.Millisecond
 		}
 		result, err := sessions.Start(ShellStartRequest{
-			Binary:          profile.Binary,
-			Args:            profile.Args,
-			Command:         cmd,
-			Env:             snapshot.Environ(map[string]string{"PWD": workdir}),
-			Cwd:             workdir,
-			WorkspaceRoots:  shellWorkspaceRoots(defaultWorkdir),
-			Sandbox:         sandboxPolicy,
-			SandboxRunner:   sandboxRunner,
-			Yield:           yield,
-			MaxOutputTokens: maxOutputTokens,
-			TTY:             tty,
-			CallContext:     ctx,
-			Events:          ToolCallEventsFromContext(ctx),
+			Binary:                         profile.Binary,
+			Args:                           profile.Args,
+			Command:                        cmd,
+			Env:                            snapshot.Environ(map[string]string{"PWD": workdir}),
+			Cwd:                            workdir,
+			WorkspaceRoots:                 shellWorkspaceRoots(defaultWorkdir),
+			Sandbox:                        sandboxPolicy,
+			SandboxRunner:                  sandboxRunner,
+			Yield:                          yield,
+			MaxOutputTokens:                maxOutputTokens,
+			TTY:                            tty,
+			CallContext:                    ctx,
+			Events:                         ToolCallEventsFromContext(ctx),
+			AdditionalWritableRoots:        append([]string(nil), additionalWritableRoots...),
+			PrepareAdditionalWritableRoots: prepareAdditionalWritableRoots,
 		})
 		if err != nil {
 			return Result{}, err

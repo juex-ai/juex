@@ -68,6 +68,10 @@ type Server struct {
 	mcpStartErr error
 	mcpManager  *mcp.Manager
 
+	agentRuntimeOnce sync.Once
+	agentRuntime     app.AgentRuntimeResolution
+	agentRuntimeErr  error
+
 	endpointMu       sync.RWMutex
 	endpointRuntime  endpoint.Runtime
 	endpointShutdown chan struct{}
@@ -512,6 +516,10 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 			return v.(*activeSession), nil
 		}
 	}
+	agentRuntime, err := s.resolveAgentRuntime()
+	if err != nil {
+		return nil, err
+	}
 	a, err := app.New(app.Options{
 		Config:      s.opts.Cfg,
 		Provider:    s.opts.Provider,
@@ -527,7 +535,8 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 		SessionMode: mode,
 		// A fresh web session should not write transcript files until
 		// the first message; history.active is recorded immediately.
-		LazySession: resumeDir == "",
+		LazySession:  resumeDir == "",
+		AgentRuntime: &agentRuntime,
 	})
 	if err != nil {
 		s.recordMCPError(err)
@@ -581,6 +590,13 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 		s.closeOtherPrimarySessions(identity.ID)
 	}
 	return as, nil
+}
+
+func (s *Server) resolveAgentRuntime() (app.AgentRuntimeResolution, error) {
+	s.agentRuntimeOnce.Do(func() {
+		s.agentRuntime, s.agentRuntimeErr = app.ResolveAgentRuntime(s.opts.Cfg)
+	})
+	return s.agentRuntime, s.agentRuntimeErr
 }
 
 func (s *Server) ensureActivePrimarySession(ctx context.Context) error {
@@ -641,7 +657,11 @@ func (s *Server) ensureMCPStarted(ctx context.Context) (err error) {
 		}
 	}()
 
-	mcpConfigs, err := s.loadMCPConfigs()
+	agentRuntime, err := s.resolveAgentRuntime()
+	if err != nil {
+		return err
+	}
+	mcpConfigs, err := s.loadMCPConfigs(agentRuntime)
 	if err != nil {
 		return err
 	}
@@ -665,7 +685,7 @@ func (s *Server) ensureMCPStarted(ctx context.Context) (err error) {
 	mgr, err := mcp.NewManagerLayeredSoft(ctx, mcpConfigs, mcp.ConnectOptions{
 		OnNotification:      handleNotification,
 		EnableClaudeChannel: true,
-		Environment:         s.opts.Cfg.EnvironmentSnapshot(),
+		Environment:         agentRuntime.Environment(),
 	})
 	if err != nil {
 		s.recordMCPError(err)
@@ -782,7 +802,8 @@ func (s *Server) logVerbose(format string, args ...any) {
 	if !s.opts.Verbose {
 		return
 	}
-	fmt.Fprintf(s.stderr(), format+"\n", args...)
+	message := fmt.Sprintf(format, args...)
+	fmt.Fprintln(s.stderr(), s.redactRuntimeText(message))
 }
 
 func (s *Server) recordMCPError(err error) {
@@ -795,7 +816,7 @@ func (s *Server) recordMCPError(err error) {
 	if s.runtimeMCPErr == nil {
 		s.runtimeMCPErr = map[string]string{}
 	}
-	s.runtimeMCPErr[name] = err.Error()
+	s.runtimeMCPErr[name] = s.redactRuntimeText(err.Error())
 }
 
 func (s *Server) setMCPErrors(errors map[string]string) {
@@ -804,9 +825,18 @@ func (s *Server) setMCPErrors(errors map[string]string) {
 	s.runtimeMCPErr = map[string]string{}
 	for name, msg := range errors {
 		if msg != "" {
-			s.runtimeMCPErr[name] = msg
+			s.runtimeMCPErr[name] = s.redactRuntimeText(msg)
 		}
 	}
+}
+
+func (s *Server) redactRuntimeText(message string) string {
+	runtime, err := s.resolveAgentRuntime()
+	if err != nil {
+		return message
+	}
+	redacted, _ := runtime.Environment().RedactConfiguredValues([]byte(message))
+	return string(redacted)
 }
 
 func (s *Server) mcpErrors() map[string]string {

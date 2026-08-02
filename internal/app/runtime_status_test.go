@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
@@ -519,6 +520,10 @@ func TestRuntimeCatalogServiceIncludesSandboxPolicy(t *testing.T) {
 
 func TestRuntimeCatalogServiceIncludesSelectedExtensionMetadataAndDefinitionCounts(t *testing.T) {
 	work := t.TempDir()
+	address, err := agentstate.NewAgentAddress(t.TempDir(), "abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
 	extensionDir := filepath.Join(work, ".juex", "extensions", "demo")
 	mustWriteRuntimeStatusFile(t, filepath.Join(extensionDir, "juex.extension.json"), `{
   "manifest_version": 1,
@@ -529,6 +534,13 @@ func TestRuntimeCatalogServiceIncludesSelectedExtensionMetadataAndDefinitionCoun
 	for _, name := range []string{"alpha", "beta"} {
 		mustWriteRuntimeStatusFile(t, filepath.Join(extensionDir, "skills", name, "SKILL.md"), "---\nname: "+name+"\ndescription: "+name+"\n---\nbody")
 	}
+	mustWriteRuntimeStatusFile(t, filepath.Join(extensionDir, "juex.extension.json"), `{
+  "manifest_version":1,
+  "name":"demo",
+  "version":"1.2.3",
+  "description":"Demo integration",
+  "agent":{"environment":{"variables":{"DEMO_RUNTIME_DEFAULT":"${JUEX_EXT_DATA_DIR}"}}}
+}`)
 	mustWriteRuntimeStatusFile(t, filepath.Join(extensionDir, "mcp.json"), `{
   "mcpServers": {
     "alpha": {"command":"alpha"},
@@ -552,9 +564,10 @@ commands:
 }`)
 
 	status, err := NewRuntimeCatalogService(config.Config{
-		WorkDir:    work,
-		Extensions: allowExtensions("demo"),
-		Skills:     config.SkillsConfig{Include: []string{"alpha"}},
+		WorkDir:      work,
+		AgentAddress: address,
+		Extensions:   allowExtensions("demo"),
+		Skills:       config.SkillsConfig{Include: []string{"alpha"}},
 	}).Snapshot(RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -568,6 +581,9 @@ commands:
 	}
 	if ext.Resources.Skills != 1 || ext.Resources.MCPServers != 2 || ext.Resources.Hooks != 2 || ext.Resources.Observables != 2 {
 		t.Fatalf("extension resource counts = %+v", ext.Resources)
+	}
+	if len(ext.Environment) != 1 || ext.Environment[0].Name != "DEMO_RUNTIME_DEFAULT" || ext.Environment[0].Source != "ext:demo" || ext.Environment[0].Status != "effective" {
+		t.Fatalf("extension environment diagnostics = %+v", ext.Environment)
 	}
 	if len(status.Skills.Filtered) != 1 || status.Skills.Filtered[0].Name != "beta" {
 		t.Fatalf("filtered skills = %+v, want beta excluded from effective Extension count", status.Skills.Filtered)

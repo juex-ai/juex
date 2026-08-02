@@ -516,6 +516,54 @@ func TestDoctorDoesNotCreateAgentState(t *testing.T) {
 	}
 }
 
+func TestDoctorInspectsExtensionDataDefaultsBeforeAgentCreation(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(configPath, "openai", "https://example.invalid", "sk-test", "gpt-4.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendTextFile(configPath, "extensions:\n  allow: [demo]\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextFile(filepath.Join(work, ".juex", "extensions", "demo", "juex.extension.json"), `{
+  "manifest_version":1,
+  "name":"demo",
+  "version":"1.0.0",
+  "agent":{"environment":{"variables":{"DOCTOR_DATA":"${JUEX_EXT_DATA_DIR}"}}}
+}`); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
+	err := root.Execute()
+	var doctorErr *doctorExitError
+	if !errors.As(err, &doctorErr) || doctorErr.status != doctorStatusWarn {
+		t.Fatalf("doctor execute: %T %v, want no-Agent warning\n%s", err, err, out.String())
+	}
+	var result doctorResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("doctor JSON: %v\n%s", err, out.String())
+	}
+	checks := map[string]doctorCheck{}
+	for _, check := range result.Checks {
+		checks[check.Name] = check
+	}
+	if checks["agent"].Status != doctorStatusWarn || checks["environment"].Status != doctorStatusOK || checks["mcp"].Status == doctorStatusFail {
+		t.Fatalf("doctor checks = %+v", checks)
+	}
+	if checks["environment"].Details["extension_default_count"] != float64(1) {
+		t.Fatalf("environment details = %+v", checks["environment"].Details)
+	}
+	if _, err := os.Stat(filepath.Join(work, ".juex", "juex.local.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("doctor created Agent marker: %v", err)
+	}
+}
+
 func TestDoctorAgentCheckExplainsStatefulRebind(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
@@ -1584,6 +1632,85 @@ func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
 	}
 	if skillsMessage != "4 skill(s) loaded" {
 		t.Fatalf("skills doctor message = %q, want project plus three builtin guides", skillsMessage)
+	}
+}
+
+func TestDoctorCmd_ReportsExtensionEnvironmentWithoutValues(t *testing.T) {
+	const secretDefault = "doctor-extension-default-secret"
+	home := setHomeForCLITest(t)
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(configPath, "openai", "https://example.invalid", "sk-test", "gpt-4.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendTextFile(configPath, "extensions:\n  allow: [demo]\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agentstate.Resolve(agentstate.Options{HomeDir: filepath.Join(home, ".juex"), WorkDir: work}); err != nil {
+		t.Fatal(err)
+	}
+	extensionDir := filepath.Join(work, ".juex", "extensions", "demo")
+	if err := writeTextFile(filepath.Join(extensionDir, "juex.extension.json"), `{
+  "manifest_version":1,
+  "name":"demo",
+  "version":"1.0.0",
+  "agent":{"environment":{"variables":{
+    "DOCTOR_EXTENSION_DEFAULT":"`+secretDefault+`",
+	"DOCTOR_EXTENSION_DIR":"${JUEX_EXT_DIR}",
+    "DOCTOR_EXTENSION_DATA":"${JUEX_EXT_DATA_DIR}"
+  }}}
+}`); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
+	err := root.Execute()
+	var doctorErr *doctorExitError
+	if err != nil && !errors.As(err, &doctorErr) {
+		t.Fatalf("doctor execute: %T %v\n%s", err, err, out.String())
+	}
+	if strings.Contains(out.String(), secretDefault) {
+		t.Fatalf("doctor leaked Extension environment value:\n%s", out.String())
+	}
+	for _, want := range []string{
+		`"extension_default_count": 3`,
+		`"key": "DOCTOR_EXTENSION_DEFAULT"`,
+		`"key": "DOCTOR_EXTENSION_DIR"`,
+		`"key": "DOCTOR_EXTENSION_DATA"`,
+		`"source": "ext:demo"`,
+		`"status": "effective"`,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("doctor Extension environment metadata missing %q:\n%s", want, out.String())
+		}
+	}
+	var result doctorResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("doctor JSON: %v\n%s", err, out.String())
+	}
+	wantManifestPath := filepath.Join(extensionDir, "juex.extension.json")
+	foundExtensionDir := false
+	for _, check := range result.Checks {
+		if check.Name != "environment" {
+			continue
+		}
+		rows, _ := check.Details["extension_default_variables"].([]any)
+		for _, raw := range rows {
+			row, _ := raw.(map[string]any)
+			if row["key"] == "DOCTOR_EXTENSION_DIR" {
+				foundExtensionDir = true
+				if row["path"] != wantManifestPath {
+					t.Fatalf("doctor Extension provenance path = %q, want %q", row["path"], wantManifestPath)
+				}
+			}
+		}
+	}
+	if !foundExtensionDir {
+		t.Fatalf("doctor Extension provenance row not found: %s", out.String())
 	}
 }
 

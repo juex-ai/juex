@@ -21,17 +21,19 @@ func (s *commandSourceRuntime) start(callCtx context.Context, run *observableRun
 	startupCtx, cancelStartup := linkedStartupContext(callCtx, run.ctx)
 	defer cancelStartup()
 	r := newRunner(runnerOptions{
-		spec:          s.spec,
-		runID:         run.runID,
-		workDir:       s.opts.WorkDir,
-		environment:   s.opts.Environment,
-		sandboxPolicy: s.opts.Sandbox,
-		sandboxRunner: s.opts.SandboxRunner,
-		store:         s.store,
-		submit:        s.kernel.submitDelivery,
-		runtime:       s.origin.Runtime,
-		source:        s.origin.Source,
-		extension:     s.origin.ReadOnly,
+		spec:                       s.spec,
+		runID:                      run.runID,
+		workDir:                    s.opts.WorkDir,
+		environment:                s.opts.Environment,
+		sandboxPolicy:              s.opts.Sandbox,
+		sandboxRunner:              s.opts.SandboxRunner,
+		store:                      s.store,
+		submit:                     s.kernel.submitDelivery,
+		runtime:                    s.origin.Runtime,
+		source:                     s.origin.Source,
+		extension:                  s.origin.ReadOnly,
+		agentExtensionsRoot:        s.opts.AgentExtensionsRoot,
+		prepareAgentExtensionsRoot: s.opts.PrepareAgentExtensionsRoot,
 	})
 	run.sourceState = &commandRunState{runner: r}
 	cmd, err := r.start(startupCtx, run.ctx)

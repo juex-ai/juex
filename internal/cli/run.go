@@ -412,7 +412,7 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 	}
 
 	planJSON := []byte(mustJSON(plan))
-	planJSON, _, err = cfg.EnvironmentSnapshot().RedactConfiguredJSON(planJSON)
+	planJSON, _, err = a.RedactRuntimeJSON(planJSON)
 	if err != nil {
 		return err
 	}

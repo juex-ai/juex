@@ -63,14 +63,16 @@ func (f builtinProviderFunc) Tools(ctx BuiltinProviderContext) []Tool {
 }
 
 type fakeSandboxRunner struct {
-	calls int
-	specs []sandbox.ExecSpec
-	err   error
+	calls    int
+	specs    []sandbox.ExecSpec
+	requests []sandbox.Request
+	err      error
 }
 
 func (r *fakeSandboxRunner) Prepare(ctx context.Context, req sandbox.Request) (sandbox.ExecSpec, error) {
 	r.calls++
 	r.specs = append(r.specs, req.Spec)
+	r.requests = append(r.requests, req)
 	if r.err != nil {
 		return sandbox.ExecSpec{}, r.err
 	}
@@ -2551,6 +2553,69 @@ func TestBuiltins_ExecCommandSandboxEnabledWrapsBeforeStart(t *testing.T) {
 	}
 	if len(runner.specs) != 1 || runner.specs[0].Binary != os.Args[0] || !containsString(runner.specs[0].Args, "hello") {
 		t.Fatalf("sandbox runner specs = %+v", runner.specs)
+	}
+}
+
+func TestBuiltins_ExecCommandGrantsPreparedAgentExtensionsRoot(t *testing.T) {
+	workDir := t.TempDir()
+	agentExtensionsRoot := filepath.Join(t.TempDir(), "agents", "abcdef", "extensions")
+	runner := &fakeSandboxRunner{}
+	policy := sandbox.DefaultPolicy()
+	policy.Enabled = true
+	prepareCalls := 0
+	r := NewRegistry()
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir:                 workDir,
+		Shell:                   fakeShellProfile(),
+		Sandbox:                 policy,
+		SandboxRunner:           runner,
+		AdditionalWritableRoots: []string{agentExtensionsRoot},
+		PrepareAdditionalWritableRoots: func() error {
+			prepareCalls++
+			return os.MkdirAll(agentExtensionsRoot, 0o700)
+		},
+	})
+
+	if _, err := r.Call(context.Background(), "exec_command", map[string]any{"cmd": "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	if prepareCalls != 1 {
+		t.Fatalf("prepare calls = %d, want 1", prepareCalls)
+	}
+	if len(runner.requests) != 1 {
+		t.Fatalf("sandbox requests = %d", len(runner.requests))
+	}
+	if got := runner.requests[0].AdditionalWritableRoots; len(got) != 1 || got[0] != agentExtensionsRoot {
+		t.Fatalf("additional writable roots = %#v", got)
+	}
+	if info, err := os.Stat(agentExtensionsRoot); err != nil || !info.IsDir() {
+		t.Fatalf("prepared root = %+v, %v", info, err)
+	}
+}
+
+func TestBuiltins_ExecCommandDoesNotPrepareAgentExtensionsRootWithoutSandbox(t *testing.T) {
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "instant")
+	agentExtensionsRoot := filepath.Join(t.TempDir(), "agents", "abcdef", "extensions")
+	prepareCalls := 0
+	r := NewRegistry()
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir:                 t.TempDir(),
+		Shell:                   fakeShellProfile(),
+		AdditionalWritableRoots: []string{agentExtensionsRoot},
+		PrepareAdditionalWritableRoots: func() error {
+			prepareCalls++
+			return os.MkdirAll(agentExtensionsRoot, 0o700)
+		},
+	})
+	if _, err := r.Call(context.Background(), "exec_command", map[string]any{"cmd": "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	if prepareCalls != 0 {
+		t.Fatalf("unsandboxed prepare calls = %d, want 0", prepareCalls)
+	}
+	if _, err := os.Stat(agentExtensionsRoot); !os.IsNotExist(err) {
+		t.Fatalf("unsandboxed command created Agent extensions root: %v", err)
 	}
 }
 
