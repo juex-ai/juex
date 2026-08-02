@@ -29,11 +29,22 @@ type RuntimeExtensionEnvironmentDeclaration struct {
 }
 
 func ResolveAgentRuntime(cfg config.Config) (AgentRuntimeResolution, error) {
+	return resolveAgentRuntime(cfg, false)
+}
+
+// InspectAgentRuntime validates and reports selected Extension defaults without
+// requiring an Agent data directory. The returned environment is diagnostic
+// only and must not be used to launch runtime children.
+func InspectAgentRuntime(cfg config.Config) (AgentRuntimeResolution, error) {
+	return resolveAgentRuntime(cfg, true)
+}
+
+func resolveAgentRuntime(cfg config.Config, allowMissingAgentData bool) (AgentRuntimeResolution, error) {
 	graph, err := ResolveRuntimeResourceGraph(cfg)
 	if err != nil {
 		return AgentRuntimeResolution{}, err
 	}
-	resolvedEnvironment, declarations, err := resolveExtensionEnvironment(cfg, graph)
+	resolvedEnvironment, declarations, err := resolveExtensionEnvironment(cfg, graph, allowMissingAgentData)
 	resolution := AgentRuntimeResolution{
 		graph:                   graph,
 		environment:             resolvedEnvironment,
@@ -62,7 +73,7 @@ func (r AgentRuntimeResolution) ExtensionsRuntime() AgentExtensionsRuntime {
 	return r.extensions
 }
 
-func resolveExtensionEnvironment(cfg config.Config, graph RuntimeResourceGraph) (environment.Snapshot, []RuntimeExtensionEnvironmentDeclaration, error) {
+func resolveExtensionEnvironment(cfg config.Config, graph RuntimeResourceGraph, allowMissingAgentData bool) (environment.Snapshot, []RuntimeExtensionEnvironmentDeclaration, error) {
 	workDir := strings.TrimSpace(cfg.WorkDir)
 	if workDir != "" {
 		if absolute, err := filepath.Abs(workDir); err == nil {
@@ -78,9 +89,13 @@ func resolveExtensionEnvironment(cfg config.Config, graph RuntimeResourceGraph) 
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
+			extensionDataDir := descriptor.Runtime.DataDir
+			if extensionDataDir == "" && allowMissingAgentData {
+				extensionDataDir = "[JUEX_EXT_DATA_DIR:" + descriptor.Name + "]"
+			}
 			value, err := expandExtensionEnvironmentValue(variables[key], extensionEnvironmentPlaceholders{
 				ExtensionDir:     descriptor.Dir,
-				ExtensionDataDir: descriptor.Runtime.DataDir,
+				ExtensionDataDir: extensionDataDir,
 				WorkDir:          workDir,
 			})
 			if err != nil {

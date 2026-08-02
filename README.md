@@ -454,7 +454,9 @@ selected Extension. Manifest `agent.environment.variables` values support only
 processes without changing the Juex process, Fleet supervisor, parent shell, or
 shell profiles. Same-valued defaults deduplicate; different unshadowed values,
 unknown placeholders, and dangerous process-control names fail startup without
-printing values. Provider configuration uses the same
+printing values. Names prefixed with `JUEX_`, `LD_`, or `DYLD_`, including
+`JUEX_RG`, are process-control names and cannot be supplied by Extensions.
+Provider configuration uses the same
 default-home then instance-home merge. A serving agent prefers
 `unix://$JUEX_HOME/agents/<id>/api.sock` and falls back loudly to an ephemeral
 `tcp://127.0.0.1:<port>` endpoint when AF_UNIX is unavailable.

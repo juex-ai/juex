@@ -255,7 +255,7 @@ func TestSnapshotWithDefaultsRedactsEveryDeclarationAndNeverActivatesThem(t *tes
 
 func TestValidateExtensionDefaultRejectsDangerousNamesCaseInsensitively(t *testing.T) {
 	for _, key := range []string{
-		"JUEX_HOME", "juex_custom", "workdir", "Home", "userprofile", "Path", "pathext", "comspec",
+		"JUEX_HOME", "JUEX_RG", "juex_custom", "workdir", "Home", "userprofile", "Path", "pathext", "comspec",
 		"ld_preload", "LD_AUDIT", "dyld_insert_libraries", "glibc_tunables", "node_options",
 		"pythonpath", "pythonhome", "bash_env", "ENV",
 	} {

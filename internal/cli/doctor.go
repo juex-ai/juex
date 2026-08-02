@@ -124,11 +124,13 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: cfg.EnvironmentSnapshot()}
 	}
 	cfg.WorkDir = workDir
+	agentAvailable := false
 	if resolution, resolveErr := agentstate.ResolveExisting(agentstate.Options{HomeDir: cfg.HomeJuexDir, WorkDir: workDir}); resolveErr == nil {
 		cfg.AgentID = resolution.Agent.ID
 		cfg.AgentName = resolution.Agent.Name
 		cfg.AgentStateDir = resolution.Address.StateDir()
 		cfg.AgentAddress = resolution.Address
+		agentAvailable = true
 	}
 	if err := ensureSelectedRuntimeConfig(cfg); err != nil {
 		checks = append(checks, doctorCheck{
@@ -141,19 +143,29 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: cfg.EnvironmentSnapshot()}
 	}
 
-	agentRuntime, agentRuntimeErr := app.ResolveAgentRuntime(cfg)
+	var agentRuntime app.AgentRuntimeResolution
+	var agentRuntimeErr error
+	if agentAvailable {
+		agentRuntime, agentRuntimeErr = app.ResolveAgentRuntime(cfg)
+	} else {
+		agentRuntime, agentRuntimeErr = app.InspectAgentRuntime(cfg)
+	}
+	runtimeEnvironment := cfg.EnvironmentSnapshot()
+	if agentAvailable && agentRuntimeErr == nil {
+		runtimeEnvironment = agentRuntime.Environment()
+	}
 	checks = append(checks, doctorConfigCheck(cfg))
 	checks = append(checks, doctorEnvironmentCheck(cfg, agentRuntime, agentRuntimeErr))
 	checks = append(checks, doctorCredentialsCheck(cfg))
 	checks = append(checks, doctorConnectivityCheck(ctx, cfg, offline))
 	checks = append(checks, doctorShellCheck(cfg))
 	checks = append(checks, doctorRipgrepCheck(func() (toolruntime.ResolvedRipgrep, error) {
-		return toolruntime.ResolveRipgrepWithEnvironment(cfg.EnvironmentSnapshot())
+		return toolruntime.ResolveRipgrepWithEnvironment(runtimeEnvironment)
 	}))
 	checks = append(checks, doctorWorkdirCheck(workDir))
-	checks = append(checks, doctorMCPCheck(ctx, cfg, agentRuntime, agentRuntimeErr, offline))
+	checks = append(checks, doctorMCPCheck(ctx, cfg, agentRuntime, agentRuntimeErr, offline || !agentAvailable))
 	checks = append(checks, doctorSkillsCheck(cfg))
-	redactionEnvironment := cfg.EnvironmentSnapshot()
+	redactionEnvironment := runtimeEnvironment
 	if agentRuntimeErr == nil {
 		redactionEnvironment = agentRuntime.Environment()
 	}

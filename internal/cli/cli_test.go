@@ -516,6 +516,54 @@ func TestDoctorDoesNotCreateAgentState(t *testing.T) {
 	}
 }
 
+func TestDoctorInspectsExtensionDataDefaultsBeforeAgentCreation(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(configPath, "openai", "https://example.invalid", "sk-test", "gpt-4.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendTextFile(configPath, "extensions:\n  allow: [demo]\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextFile(filepath.Join(work, ".juex", "extensions", "demo", "juex.extension.json"), `{
+  "manifest_version":1,
+  "name":"demo",
+  "version":"1.0.0",
+  "agent":{"environment":{"variables":{"DOCTOR_DATA":"${JUEX_EXT_DATA_DIR}"}}}
+}`); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
+	err := root.Execute()
+	var doctorErr *doctorExitError
+	if !errors.As(err, &doctorErr) || doctorErr.status != doctorStatusWarn {
+		t.Fatalf("doctor execute: %T %v, want no-Agent warning\n%s", err, err, out.String())
+	}
+	var result doctorResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("doctor JSON: %v\n%s", err, out.String())
+	}
+	checks := map[string]doctorCheck{}
+	for _, check := range result.Checks {
+		checks[check.Name] = check
+	}
+	if checks["agent"].Status != doctorStatusWarn || checks["environment"].Status != doctorStatusOK || checks["mcp"].Status == doctorStatusFail {
+		t.Fatalf("doctor checks = %+v", checks)
+	}
+	if checks["environment"].Details["extension_default_count"] != float64(1) {
+		t.Fatalf("environment details = %+v", checks["environment"].Details)
+	}
+	if _, err := os.Stat(filepath.Join(work, ".juex", "juex.local.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("doctor created Agent marker: %v", err)
+	}
+}
+
 func TestDoctorAgentCheckExplainsStatefulRebind(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()

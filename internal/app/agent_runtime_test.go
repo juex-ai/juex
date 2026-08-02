@@ -75,6 +75,41 @@ func TestResolveAgentRuntimeExpandsDefaultsAndKeepsSnapshotStable(t *testing.T) 
 	}
 }
 
+func TestInspectAgentRuntimeValidatesDefaultsBeforeAgentCreation(t *testing.T) {
+	work := t.TempDir()
+	extensionDir := filepath.Join(work, ".juex", "extensions", "demo")
+	mustWriteAppTestFile(t, filepath.Join(extensionDir, "juex.extension.json"), `{
+  "manifest_version":1,
+  "name":"demo",
+  "version":"1.0.0",
+  "agent":{"environment":{"variables":{
+    "DEMO_DATA":"${JUEX_EXT_DATA_DIR}/cache"
+  }}}
+}`)
+	cfg := config.Config{
+		WorkDir:    work,
+		Extensions: config.ExtensionPolicy{Allow: []string{"demo"}, Configured: true},
+	}
+
+	if _, err := ResolveAgentRuntime(cfg); err == nil || !strings.Contains(err.Error(), "JUEX_EXT_DATA_DIR") {
+		t.Fatalf("runtime resolution without Agent = %v, want unresolved data directory", err)
+	}
+	inspection, err := InspectAgentRuntime(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declarations := inspection.EnvironmentDeclarations()
+	if len(declarations) != 1 || declarations[0].Name != "DEMO_DATA" || declarations[0].Status != environment.DefaultStatusEffective {
+		t.Fatalf("inspection declarations = %+v", declarations)
+	}
+	if inspection.ExtensionsRuntime().RootDir != "" {
+		t.Fatalf("inspection minted Agent extension root %q", inspection.ExtensionsRuntime().RootDir)
+	}
+	if _, err := os.Stat(filepath.Join(work, ".juex", "juex.local.json")); !os.IsNotExist(err) {
+		t.Fatalf("inspection created Agent marker: %v", err)
+	}
+}
+
 func TestResolveAgentRuntimeShadowsAndDeduplicatesWithoutValues(t *testing.T) {
 	const shadowValue = "agent-value"
 	t.Setenv("SHADOWED_EXTENSION_DEFAULT", "")
