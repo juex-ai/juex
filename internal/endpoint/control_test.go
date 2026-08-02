@@ -18,7 +18,7 @@ import (
 
 func TestProbeRequiresExactRuntimeIdentity(t *testing.T) {
 	runtimeState := Runtime{
-		AgentID:    "abcdefghijklmnop",
+		AgentID:    "abcdef",
 		InstanceID: "instance-one",
 		PID:        42,
 		StartedAt:  time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC),
@@ -69,7 +69,7 @@ func TestProbeDoesNotRetainUnixConnections(t *testing.T) {
 	}
 
 	expected := Runtime{
-		AgentID:    "abcdefghijklmnop",
+		AgentID:    "abcdef",
 		InstanceID: "instance-one",
 		PID:        42,
 		Endpoint:   (&url.URL{Scheme: "unix", Path: socketPath}).String(),
@@ -110,7 +110,7 @@ func TestProbeDoesNotRetainUnixConnections(t *testing.T) {
 
 func TestProbeDoesNotRetainTCPConnections(t *testing.T) {
 	expected := Runtime{
-		AgentID:    "abcdefghijklmnop",
+		AgentID:    "abcdef",
 		InstanceID: "instance-one",
 		PID:        42,
 		StartedAt:  time.Date(2026, 7, 19, 8, 0, 0, 0, time.UTC),
@@ -141,7 +141,7 @@ func TestProbeDoesNotRetainTCPConnections(t *testing.T) {
 
 func TestRequestShutdownSendsExpectedRuntime(t *testing.T) {
 	expected := Runtime{
-		AgentID:    "abcdefghijklmnop",
+		AgentID:    "abcdef",
 		InstanceID: "instance-one",
 		PID:        42,
 		StartedAt:  time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC),
@@ -173,7 +173,7 @@ func TestRequestShutdownSendsExpectedRuntime(t *testing.T) {
 
 func TestRequestRestartNegotiatesRestartIntent(t *testing.T) {
 	expected := Runtime{
-		AgentID:    "abcdefghijklmnop",
+		AgentID:    "abcdef",
 		InstanceID: "instance-one",
 		PID:        42,
 		StartedAt:  time.Date(2026, 7, 20, 8, 0, 0, 0, time.UTC),
@@ -221,7 +221,7 @@ func TestRequestRestartRequiresRestartIntentAcknowledgement(t *testing.T) {
 	defer server.Close()
 
 	acknowledged, err := RequestRestart(context.Background(), Runtime{
-		AgentID:    "abcdefghijklmnop",
+		AgentID:    "abcdef",
 		InstanceID: "instance-one",
 		Endpoint:   "tcp://" + server.Listener.Addr().String(),
 	})

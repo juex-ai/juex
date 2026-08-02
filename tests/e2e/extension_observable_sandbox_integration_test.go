@@ -48,7 +48,7 @@ func TestIntegration_ExtensionObservableSandboxScopesWritableData(t *testing.T) 
 
 	work := filepath.Join(root, "workspace")
 	home := filepath.Join(root, "home")
-	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	address, err := agentstate.NewAgentAddress(home, "abcdef")
 	if err != nil {
 		t.Fatal(err)
 	}

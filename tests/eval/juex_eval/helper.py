@@ -876,7 +876,7 @@ def agent_sessions_dir(work_dir: pathlib.Path, juex_home: pathlib.Path) -> pathl
     marker_path = work_dir / ".juex" / "juex.local.json"
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
     agent_id = marker.get("agent_id") if isinstance(marker, dict) else None
-    if not isinstance(agent_id, str) or re.fullmatch(r"[a-z2-7]{8,32}", agent_id) is None:
+    if not isinstance(agent_id, str) or re.fullmatch(r"[a-z2-7]{6}", agent_id) is None:
         raise ValueError(f"invalid or missing agent_id in {marker_path}")
     return juex_home / "agents" / agent_id / "sessions"
 

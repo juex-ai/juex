@@ -21,8 +21,8 @@ func TestResolveCreatesAndReusesWorkspaceIdentity(t *testing.T) {
 	if !first.Created {
 		t.Fatal("first resolution did not report a newly created identity")
 	}
-	if !regexp.MustCompile(`^[a-z2-7]{16}$`).MatchString(first.Agent.ID) {
-		t.Fatalf("agent id = %q, want 16-character lowercase base32", first.Agent.ID)
+	if !regexp.MustCompile(`^[a-z2-7]{6}$`).MatchString(first.Agent.ID) {
+		t.Fatalf("agent id = %q, want 6-character lowercase base32", first.Agent.ID)
 	}
 	if first.Agent.Name != filepath.Base(workDir) || first.Agent.Workspace != workDir {
 		t.Fatalf("agent = %+v", first.Agent)
@@ -70,17 +70,48 @@ func TestResolveCreatesAndReusesWorkspaceIdentity(t *testing.T) {
 	assertContainsOnce(t, ignorePath, "**/juex.local.json")
 }
 
+func TestResolveRetriesAgentIDCollision(t *testing.T) {
+	home, workDir := prepareResolveTest(t)
+	collidingID := "aaaaaa"
+	wantID := "bbbbbb"
+	if err := os.MkdirAll(filepath.Join(home, "agents", collidingID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	previousGenerateID := generateID
+	t.Cleanup(func() { generateID = previousGenerateID })
+	candidates := []string{collidingID, wantID}
+	generateID = func() (string, error) {
+		candidate := candidates[0]
+		candidates = candidates[1:]
+		return candidate, nil
+	}
+
+	resolved, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Agent.ID != wantID {
+		t.Fatalf("agent id = %q, want second candidate %q", resolved.Agent.ID, wantID)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("unused generated candidates = %v", candidates)
+	}
+	assertDir(t, filepath.Join(home, "agents", collidingID))
+	assertFile(t, filepath.Join(home, "agents", wantID, agentFileName))
+}
+
 func TestResolveRejectsUnknownMarkerIdentity(t *testing.T) {
 	home, workDir := prepareResolveTest(t)
 	markerPath := filepath.Join(workDir, ".juex", "juex.local.json")
-	writeJSON(t, markerPath, Marker{AgentID: "abcdefgh2345672a"})
+	writeJSON(t, markerPath, Marker{AgentID: "abcd23"})
 
 	_, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
 	var unknown *UnknownAgentError
 	if !errors.As(err, &unknown) {
 		t.Fatalf("err = %v, want UnknownAgentError", err)
 	}
-	for _, want := range []string{"abcdefgh2345672a", markerPath, home, "restore"} {
+	for _, want := range []string{"abcd23", markerPath, home, "restore"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("err = %q, want %q", err, want)
 		}

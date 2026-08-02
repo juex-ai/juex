@@ -109,8 +109,8 @@ func TestInspectStatusIgnoresUsageFailure(t *testing.T) {
 
 func TestStatusPrunesRemovedAgentMetricBaselines(t *testing.T) {
 	entries := []agentstate.RegistryEntry{
-		registryEntry("aaaaaaaa", "alpha"),
-		registryEntry("bbbbbbbb", "beta"),
+		registryEntry("aaaaaa", "alpha"),
+		registryEntry("bbbbbb", "beta"),
 	}
 	deps := defaultDependencies()
 	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
@@ -130,15 +130,15 @@ func TestStatusPrunesRemovedAgentMetricBaselines(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(metrics.retain) != 2 ||
-		metrics.retain[0] != "aaaaaaaa" ||
-		metrics.retain[1] != "bbbbbbbb" {
+		metrics.retain[0] != "aaaaaa" ||
+		metrics.retain[1] != "bbbbbb" {
 		t.Fatalf("retained keys = %v", metrics.retain)
 	}
 }
 
 func processMetricsRuntime() endpoint.Runtime {
 	return endpoint.Runtime{
-		AgentID:    "aaaaaaaa",
+		AgentID:    "aaaaaa",
 		InstanceID: "instance-one",
 		PID:        42,
 		Endpoint:   "tcp://127.0.0.1:43123",

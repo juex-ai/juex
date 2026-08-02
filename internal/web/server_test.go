@@ -51,7 +51,7 @@ func newTestServer(t *testing.T) *Server {
 
 func setTestAgentAddress(t *testing.T, cfg *config.Config) agentstate.AgentAddress {
 	t.Helper()
-	address, err := agentstate.NewAgentAddress(t.TempDir(), "abcdefghijklmnop")
+	address, err := agentstate.NewAgentAddress(t.TempDir(), "abcdef")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +372,7 @@ func TestRestartShutdownAcknowledgesAndPersistsRuntimeRestartCause(t *testing.T)
 	ts := httptest.NewServer(srv.APIHandler())
 	defer ts.Close()
 	expected := endpoint.Runtime{
-		AgentID:    "abcdefghijklmnop",
+		AgentID:    "abcdef",
 		InstanceID: "instance-one",
 		PID:        42,
 		Endpoint:   "tcp://" + strings.TrimPrefix(ts.URL, "http://"),

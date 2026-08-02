@@ -21,10 +21,11 @@ const (
 	markerName       = "juex.local.json"
 	agentFileName    = "agent.json"
 	globalExclude    = "**/juex.local.json"
-	generatedIDBytes = 10
+	generatedIDBytes = 4
+	generatedIDChars = 6
 )
 
-var validAgentID = regexp.MustCompile(`^[a-z2-7]{8,32}$`)
+var validAgentID = regexp.MustCompile(`^[a-z2-7]{6}$`)
 
 type Marker struct {
 	AgentID string `json:"agent_id"`
@@ -403,7 +404,8 @@ func randomID() (string, error) {
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", err
 	}
-	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw[:])), nil
+	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw[:])
+	return strings.ToLower(encoded[:generatedIDChars]), nil
 }
 
 func canonicalExistingDir(path string) (string, error) {

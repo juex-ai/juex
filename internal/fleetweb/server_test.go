@@ -208,7 +208,7 @@ func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
 	backend := &fakeBackend{
 		endpointErr: errors.New("agent is stopped"),
 		readOnly: fleet.ReadOnlyAgentState{
-			ID:        "aaaaaaaa",
+			ID:        "aaaaaa",
 			Name:      "alpha",
 			Workspace: workspace,
 			StateDir:  stateDir,
@@ -217,8 +217,8 @@ func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
 	handler := newServer(backend, Options{Addr: "127.0.0.1:0"}).Handler()
 
 	for _, path := range []string{
-		"/agents/aaaaaaaa/api/sessions",
-		"/agents/aaaaaaaa/api/sessions/" + sessionID,
+		"/agents/aaaaaa/api/sessions",
+		"/agents/aaaaaa/api/sessions/" + sessionID,
 	} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		response := httptest.NewRecorder()
@@ -230,7 +230,7 @@ func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
 
 	request := httptest.NewRequest(
 		http.MethodGet,
-		"/agents/aaaaaaaa/api/sessions/"+sessionID,
+		"/agents/aaaaaa/api/sessions/"+sessionID,
 		nil,
 	)
 	response := httptest.NewRecorder()
@@ -241,7 +241,7 @@ func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
 
 	request = httptest.NewRequest(
 		http.MethodHead,
-		"/agents/aaaaaaaa/api/media?path=preview.png",
+		"/agents/aaaaaa/api/media?path=preview.png",
 		nil,
 	)
 	response = httptest.NewRecorder()
@@ -291,7 +291,7 @@ func TestReadOnlyAgentPathsStayNarrow(t *testing.T) {
 func TestFleetAPIResponseShapes(t *testing.T) {
 	cpuPercent := 125.5
 	status := fleet.AgentStatus{
-		ID:            "aaaaaaaa",
+		ID:            "aaaaaa",
 		Name:          "alpha",
 		Binding:       fleet.BindingBound,
 		RuntimeHealth: fleet.RuntimeHealthy,
@@ -404,7 +404,7 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 		{
 			name:       "lifecycle",
 			method:     http.MethodPost,
-			path:       "/api/agents/aaaaaaaa/restart",
+			path:       "/api/agents/aaaaaa/restart",
 			wantStatus: http.StatusOK,
 			assert: func(t *testing.T, body []byte) {
 				var got fleet.RestartResult
@@ -426,7 +426,7 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 		{
 			name:       "disable",
 			method:     http.MethodPost,
-			path:       "/api/agents/aaaaaaaa/disable",
+			path:       "/api/agents/aaaaaa/disable",
 			wantStatus: http.StatusOK,
 			assert: func(t *testing.T, body []byte) {
 				var got fleet.AgentStatus
@@ -441,7 +441,7 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 		{
 			name:       "remove",
 			method:     http.MethodDelete,
-			path:       "/api/agents/aaaaaaaa",
+			path:       "/api/agents/aaaaaa",
 			body:       `{"confirm":"alpha"}`,
 			wantStatus: http.StatusOK,
 			assert: func(t *testing.T, body []byte) {
@@ -463,7 +463,7 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 		{
 			name:       "logs",
 			method:     http.MethodGet,
-			path:       "/api/agents/aaaaaaaa/logs?lines=12",
+			path:       "/api/agents/aaaaaa/logs?lines=12",
 			wantStatus: http.StatusOK,
 			assert: func(t *testing.T, body []byte) {
 				var got struct {
@@ -478,7 +478,7 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 		{
 			name:       "config get",
 			method:     http.MethodGet,
-			path:       "/api/agents/aaaaaaaa/config",
+			path:       "/api/agents/aaaaaa/config",
 			wantStatus: http.StatusOK,
 			assert: func(t *testing.T, body []byte) {
 				var got fleet.AgentConfig
@@ -491,7 +491,7 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 		{
 			name:       "config put",
 			method:     http.MethodPut,
-			path:       "/api/agents/aaaaaaaa/config",
+			path:       "/api/agents/aaaaaa/config",
 			body:       `{"content":"model: local:test\n"}`,
 			wantStatus: http.StatusOK,
 			assert: func(t *testing.T, body []byte) {
@@ -703,10 +703,10 @@ func TestFleetAPIErrorMappingAndInputBounds(t *testing.T) {
 		{
 			name: "conflict",
 			backend: &fakeBackend{
-				actionErr: &fleet.ConflictError{AgentID: "aaaaaaaa", Reason: "stopped"},
+				actionErr: &fleet.ConflictError{AgentID: "aaaaaa", Reason: "stopped"},
 			},
 			method:     http.MethodPost,
-			path:       "/api/agents/aaaaaaaa/restart",
+			path:       "/api/agents/aaaaaa/restart",
 			wantStatus: http.StatusConflict,
 		},
 		{
@@ -715,7 +715,7 @@ func TestFleetAPIErrorMappingAndInputBounds(t *testing.T) {
 				updateErr: &fleet.ConfigValidationError{Err: errors.New("missing model")},
 			},
 			method:     http.MethodPut,
-			path:       "/api/agents/aaaaaaaa/config",
+			path:       "/api/agents/aaaaaa/config",
 			body:       strings.NewReader(`{"content":"bad"}`),
 			wantStatus: http.StatusBadRequest,
 		},
@@ -723,7 +723,7 @@ func TestFleetAPIErrorMappingAndInputBounds(t *testing.T) {
 			name:       "missing remove confirmation",
 			backend:    &fakeBackend{},
 			method:     http.MethodDelete,
-			path:       "/api/agents/aaaaaaaa",
+			path:       "/api/agents/aaaaaa",
 			body:       strings.NewReader(`{}`),
 			wantStatus: http.StatusBadRequest,
 		},
@@ -731,14 +731,14 @@ func TestFleetAPIErrorMappingAndInputBounds(t *testing.T) {
 			name:       "bad log lines",
 			backend:    &fakeBackend{},
 			method:     http.MethodGet,
-			path:       "/api/agents/aaaaaaaa/logs?lines=0",
+			path:       "/api/agents/aaaaaa/logs?lines=0",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "malformed json",
 			backend:    &fakeBackend{},
 			method:     http.MethodPut,
-			path:       "/api/agents/aaaaaaaa/config",
+			path:       "/api/agents/aaaaaa/config",
 			body:       strings.NewReader(`{"content":`),
 			wantStatus: http.StatusBadRequest,
 		},
@@ -746,7 +746,7 @@ func TestFleetAPIErrorMappingAndInputBounds(t *testing.T) {
 			name:       "oversize json",
 			backend:    &fakeBackend{},
 			method:     http.MethodPut,
-			path:       "/api/agents/aaaaaaaa/config",
+			path:       "/api/agents/aaaaaa/config",
 			body:       io.MultiReader(strings.NewReader(`{"content":"`), bytes.NewReader(bytes.Repeat([]byte("x"), maxConfigRequestBytes)), strings.NewReader(`"}`)),
 			wantStatus: http.StatusRequestEntityTooLarge,
 		},
@@ -754,7 +754,7 @@ func TestFleetAPIErrorMappingAndInputBounds(t *testing.T) {
 			name:       "wrong method",
 			backend:    &fakeBackend{},
 			method:     http.MethodDelete,
-			path:       "/api/agents/aaaaaaaa/config",
+			path:       "/api/agents/aaaaaa/config",
 			wantStatus: http.StatusMethodNotAllowed,
 		},
 	}
@@ -783,7 +783,7 @@ func TestFleetAPIMissingFleetLogIsNotFound(t *testing.T) {
 	const logPath = "/private/fleet.log"
 	backend := &fakeBackend{
 		logsErr: &fleet.LogUnavailableError{
-			AgentID: "aaaaaaaa",
+			AgentID: "aaaaaa",
 			Path:    logPath,
 		},
 	}
@@ -792,7 +792,7 @@ func TestFleetAPIMissingFleetLogIsNotFound(t *testing.T) {
 
 	server.Handler().ServeHTTP(
 		recorder,
-		httptest.NewRequest(http.MethodGet, "/api/agents/aaaaaaaa/logs", http.NoBody),
+		httptest.NewRequest(http.MethodGet, "/api/agents/aaaaaa/logs", http.NoBody),
 	)
 
 	if recorder.Code != http.StatusNotFound {
@@ -836,7 +836,7 @@ func TestAgentReverseProxyPreservesResponsePathAndQuery(t *testing.T) {
 	)
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/agents/aaaaaaaa/api/runtime?detail=full",
+		"/agents/aaaaaa/api/runtime?detail=full",
 		http.NoBody,
 	)
 	req.Header.Set("X-Test", "forwarded")
@@ -880,7 +880,7 @@ func TestAgentReverseProxyUsesUnixEndpoint(t *testing.T) {
 
 	server := newServer(
 		&fakeBackend{runtime: endpoint.Runtime{
-			AgentID:    "aaaaaaaa",
+			AgentID:    "aaaaaa",
 			InstanceID: "instance-one",
 			PID:        42,
 			Endpoint:   (&url.URL{Scheme: "unix", Path: socketPath}).String(),
@@ -893,7 +893,7 @@ func TestAgentReverseProxyUsesUnixEndpoint(t *testing.T) {
 		recorder,
 		httptest.NewRequest(
 			http.MethodGet,
-			"/agents/aaaaaaaa/api/runtime?via=unix",
+			"/agents/aaaaaa/api/runtime?via=unix",
 			http.NoBody,
 		),
 	)
@@ -924,7 +924,7 @@ func TestAgentReverseProxyFlushesSSEBeforeUpstreamCompletes(t *testing.T) {
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
-		server.URL+"/agents/aaaaaaaa/api/events",
+		server.URL+"/agents/aaaaaa/api/events",
 		http.NoBody,
 	)
 	if err != nil {
@@ -952,7 +952,7 @@ func TestAgentReverseProxyFailureAndSPAFallback(t *testing.T) {
 	server := newServer(
 		&fakeBackend{
 			endpointErr: &fleet.ConflictError{
-				AgentID: "aaaaaaaa",
+				AgentID: "aaaaaa",
 				Reason:  "not healthy",
 			},
 		},
@@ -962,7 +962,7 @@ func TestAgentReverseProxyFailureAndSPAFallback(t *testing.T) {
 	proxyRecorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(
 		proxyRecorder,
-		httptest.NewRequest(http.MethodGet, "/agents/aaaaaaaa/api/runtime", http.NoBody),
+		httptest.NewRequest(http.MethodGet, "/agents/aaaaaa/api/runtime", http.NoBody),
 	)
 	if proxyRecorder.Code != http.StatusConflict {
 		t.Fatalf("proxy status = %d, body = %s", proxyRecorder.Code, proxyRecorder.Body.String())
@@ -971,7 +971,7 @@ func TestAgentReverseProxyFailureAndSPAFallback(t *testing.T) {
 	spaRecorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(
 		spaRecorder,
-		httptest.NewRequest(http.MethodGet, "/agents/aaaaaaaa/sessions/example", http.NoBody),
+		httptest.NewRequest(http.MethodGet, "/agents/aaaaaa/sessions/example", http.NoBody),
 	)
 	if spaRecorder.Code != http.StatusOK ||
 		!strings.Contains(spaRecorder.Header().Get("Content-Type"), "text/html") ||
@@ -1052,7 +1052,7 @@ func tcpRuntime(t *testing.T, rawURL string) endpoint.Runtime {
 		t.Fatal(err)
 	}
 	return endpoint.Runtime{
-		AgentID:    "aaaaaaaa",
+		AgentID:    "aaaaaa",
 		InstanceID: "instance-one",
 		PID:        42,
 		Endpoint:   "tcp://" + address,

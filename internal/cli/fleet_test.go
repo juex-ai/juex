@@ -81,7 +81,7 @@ func TestFleetStatusDoesNotCreateWorkspaceIdentity(t *testing.T) {
 
 func TestMapFleetErrorTreatsUnavailableLogAsNotFound(t *testing.T) {
 	source := &fleet.LogUnavailableError{
-		AgentID: "aaaaaaaa",
+		AgentID: "aaaaaa",
 		Path:    "/private/fleet.log",
 	}
 
@@ -100,7 +100,7 @@ func TestFleetStatusPreservesOrthogonalState(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("JUEX_HOME", home)
-	writeFleetAgentFixture(t, home, workspace, "aaaaaaaa", "alpha")
+	writeFleetAgentFixture(t, home, workspace, "aaaaaa", "alpha")
 
 	root := newRootCmd()
 	var output bytes.Buffer
@@ -146,7 +146,7 @@ func TestFleetGCConfirmationControlsDeletion(t *testing.T) {
 	home := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "missing-workspace")
 	t.Setenv("JUEX_HOME", home)
-	agentDir := writeFleetAgentFixture(t, home, workspace, "aaaaaaaa", "alpha")
+	agentDir := writeFleetAgentFixture(t, home, workspace, "aaaaaa", "alpha")
 	if err := os.RemoveAll(workspace); err != nil {
 		t.Fatal(err)
 	}
@@ -819,7 +819,7 @@ func TestFleetInstallRestartAgentsFlagIsOptIn(t *testing.T) {
 				result: fleet.RestartAgentsResult{
 					Items: []fleet.RestartAgentResult{{
 						Agent: fleet.AgentStatus{
-							ID:            "aaaaaaaa",
+							ID:            "aaaaaa",
 							Name:          "alpha",
 							RuntimeHealth: fleet.RuntimeHealthy,
 						},
@@ -855,7 +855,7 @@ func TestFleetInstallRestartAgentsFlagIsOptIn(t *testing.T) {
 			}
 			if test.wantCalls == 1 {
 				for _, want := range []string{
-					"Agent aaaaaaaa alpha: restarted runtime=healthy resume=sent",
+					"Agent aaaaaa alpha: restarted runtime=healthy resume=sent",
 					"Agent refresh: 1 restarted, 0 skipped, 0 failed.",
 				} {
 					if !strings.Contains(output.String(), want) {
@@ -881,7 +881,7 @@ func TestFleetInstallRestartAgentsRendersCompleteBatchBeforeReturningFailure(t *
 			Items: []fleet.RestartAgentResult{
 				{
 					Agent: fleet.AgentStatus{
-						ID:            "aaaaaaaa",
+						ID:            "aaaaaa",
 						Name:          "failed",
 						RuntimeHealth: fleet.RuntimeHealthy,
 					},
@@ -890,7 +890,7 @@ func TestFleetInstallRestartAgentsRendersCompleteBatchBeforeReturningFailure(t *
 				},
 				{
 					Agent: fleet.AgentStatus{
-						ID:            "bbbbbbbb",
+						ID:            "bbbbbb",
 						Name:          "continued",
 						RuntimeHealth: fleet.RuntimeHealthy,
 					},
@@ -924,8 +924,8 @@ func TestFleetInstallRestartAgentsRendersCompleteBatchBeforeReturningFailure(t *
 		t.Fatalf("error = %T %v, want RestartAgentsError", err, err)
 	}
 	for _, want := range []string{
-		"Agent aaaaaaaa failed: failed",
-		"Agent bbbbbbbb continued: restarted",
+		"Agent aaaaaa failed: failed",
+		"Agent bbbbbb continued: restarted",
 		"resume=unknown",
 		"Agent refresh: 1 restarted, 0 skipped, 1 failed.",
 	} {
@@ -946,7 +946,7 @@ func TestFleetStatusRendersBinaryVersionAndWarnsOnSkew(t *testing.T) {
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
 	statuses := []fleet.AgentStatus{{
-		ID:            "aaaaaaaa",
+		ID:            "aaaaaa",
 		Name:          "alpha",
 		RuntimeHealth: fleet.RuntimeHealthy,
 		BinaryVersion: "1.0.0",
@@ -958,7 +958,7 @@ func TestFleetStatusRendersBinaryVersionAndWarnsOnSkew(t *testing.T) {
 	if !strings.Contains(stdout.String(), "VERSION") || !strings.Contains(stdout.String(), "1.0.0") {
 		t.Fatalf("status table missing version:\n%s", stdout.String())
 	}
-	for _, want := range []string{"installed 2.0.0", "aaaaaaaa(1.0.0)", "not restarted automatically"} {
+	for _, want := range []string{"installed 2.0.0", "aaaaaa(1.0.0)", "not restarted automatically"} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("skew warning missing %q:\n%s", want, stderr.String())
 		}

@@ -16,7 +16,7 @@ func TestListRegistryReturnsSortedEntriesAndKeepsProblemsVisible(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	validID := "bbbbbbbb"
+	validID := "bbbbbb"
 	workspace := filepath.Join(home, "workspace")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
@@ -29,7 +29,7 @@ func TestListRegistryReturnsSortedEntriesAndKeepsProblemsVisible(t *testing.T) {
 		CreatedAt: time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC),
 	})
 
-	malformedID := "cccccccc"
+	malformedID := "cccccc"
 	writeText(t, filepath.Join(agentsDir, malformedID, agentFileName), "{")
 
 	invalidID := "not-an-agent-id"
@@ -37,7 +37,7 @@ func TestListRegistryReturnsSortedEntriesAndKeepsProblemsVisible(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	symlinkID := "aaaaaaaa"
+	symlinkID := "aaaaaa"
 	if err := os.Symlink(filepath.Join(agentsDir, validID), filepath.Join(agentsDir, symlinkID)); err != nil {
 		t.Fatal(err)
 	}
@@ -86,8 +86,8 @@ func TestListRegistryReturnsEmptyWhenAgentsDirectoryIsMissing(t *testing.T) {
 func TestListRegistrySkipsPrivateDeletingTombstones(t *testing.T) {
 	home := t.TempDir()
 	agentsDir := filepath.Join(home, "agents")
-	writeRegistryAgent(t, home, "aaaaaaaa", filepath.Join(home, "workspace"))
-	tombstone := filepath.Join(agentsDir, ".bbbbbbbb.deleting-cccccccc")
+	writeRegistryAgent(t, home, "aaaaaa", filepath.Join(home, "workspace"))
+	tombstone := filepath.Join(agentsDir, ".bbbbbb.deleting-cccccc")
 	if err := os.MkdirAll(tombstone, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestListRegistrySkipsPrivateDeletingTombstones(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].ID != "aaaaaaaa" {
+	if len(entries) != 1 || entries[0].ID != "aaaaaa" {
 		t.Fatalf("registry entries = %+v, want only real agent", entries)
 	}
 }
@@ -110,16 +110,16 @@ func TestListRegistryValidatesAgentMetadata(t *testing.T) {
 	}
 	createdAt := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
 
-	writeJSON(t, filepath.Join(agentsDir, "aaaaaaaa", agentFileName), Agent{
-		ID: "bbbbbbbb", Workspace: workspace, CreatedAt: createdAt,
+	writeJSON(t, filepath.Join(agentsDir, "aaaaaa", agentFileName), Agent{
+		ID: "bbbbbb", Workspace: workspace, CreatedAt: createdAt,
 	})
-	writeJSON(t, filepath.Join(agentsDir, "bbbbbbbb", agentFileName), Agent{
-		ID: "bbbbbbbb", Workspace: "relative/workspace", CreatedAt: createdAt,
+	writeJSON(t, filepath.Join(agentsDir, "bbbbbb", agentFileName), Agent{
+		ID: "bbbbbb", Workspace: "relative/workspace", CreatedAt: createdAt,
 	})
-	writeJSON(t, filepath.Join(agentsDir, "cccccccc", agentFileName), Agent{
-		ID: "cccccccc", Workspace: workspace,
+	writeJSON(t, filepath.Join(agentsDir, "cccccc", agentFileName), Agent{
+		ID: "cccccc", Workspace: workspace,
 	})
-	if err := os.MkdirAll(filepath.Join(agentsDir, "dddddddd"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(agentsDir, "dddddd"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -139,8 +139,8 @@ func TestListRegistryValidatesAgentMetadata(t *testing.T) {
 
 func TestInspectBindingClassifiesWorkspaceBindings(t *testing.T) {
 	root := t.TempDir()
-	const agentID = "aaaaaaaa"
-	const otherID = "bbbbbbbb"
+	const agentID = "aaaaaa"
+	const otherID = "bbbbbb"
 
 	tests := []struct {
 		name     string
@@ -254,19 +254,19 @@ func TestDeleteOrphanRejectsBoundInvalidAndSymlinkEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	boundID := "aaaaaaaa"
+	boundID := "aaaaaa"
 	boundWorkspace := filepath.Join(home, "bound-workspace")
 	writeJSON(t, filepath.Join(boundWorkspace, ".juex", markerName), Marker{AgentID: boundID})
 	boundDir := writeRegistryAgent(t, home, boundID, boundWorkspace)
 
-	invalidID := "bbbbbbbb"
+	invalidID := "bbbbbb"
 	invalidWorkspace := filepath.Join(home, "invalid-workspace")
 	if err := os.MkdirAll(invalidWorkspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	invalidDir := writeRegistryAgent(t, home, invalidID, invalidWorkspace)
 
-	symlinkID := "cccccccc"
+	symlinkID := "cccccc"
 	symlinkTarget := filepath.Join(home, "outside-agent")
 	if err := os.MkdirAll(symlinkTarget, 0o755); err != nil {
 		t.Fatal(err)
@@ -290,9 +290,9 @@ func TestDeleteOrphanRejectsBoundInvalidAndSymlinkEntries(t *testing.T) {
 
 func TestDeleteOrphanDeletesOnlySelectedDefiniteOrphan(t *testing.T) {
 	home := t.TempDir()
-	selectedID := "aaaaaaaa"
+	selectedID := "aaaaaa"
 	selectedDir := writeRegistryAgent(t, home, selectedID, filepath.Join(home, "missing-selected"))
-	otherID := "bbbbbbbb"
+	otherID := "bbbbbb"
 	otherDir := writeRegistryAgent(t, home, otherID, filepath.Join(home, "missing-other"))
 
 	if err := DeleteOrphan(home, selectedID); err != nil {
@@ -375,7 +375,7 @@ func TestWorkspaceHasMarkerReportsAnyRegularMarker(t *testing.T) {
 	if err != nil || hasMarker {
 		t.Fatalf("missing marker = %t, %v", hasMarker, err)
 	}
-	writeJSON(t, filepath.Join(workspace, ".juex", markerName), Marker{AgentID: "zzzzzzzz"})
+	writeJSON(t, filepath.Join(workspace, ".juex", markerName), Marker{AgentID: "zzzzzz"})
 	hasMarker, err = WorkspaceHasMarker(workspace)
 	if err != nil || !hasMarker {
 		t.Fatalf("unknown regular marker = %t, %v", hasMarker, err)
@@ -421,7 +421,7 @@ func TestDeleteRegisteredPreservesMarkerForAnotherIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const otherID = "bbbbbbbb"
+	const otherID = "bbbbbb"
 	writeJSON(t, resolved.MarkerPath, Marker{AgentID: otherID})
 
 	if err := DeleteRegistered(home, resolved.Agent.ID); err != nil {

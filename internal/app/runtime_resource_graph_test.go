@@ -187,7 +187,7 @@ commands:
 
 func TestLoadMCPConfigsPreparesAgentOwnedDataDirForSelectedLocalExtensionWithoutCreatingIt(t *testing.T) {
 	home := t.TempDir()
-	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	address, err := agentstate.NewAgentAddress(home, "abcdef")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestLoadMCPConfigsPreparesAgentOwnedDataDirForSelectedLocalExtensionWithout
 
 func TestLoadMCPConfigRefsDoesNotCreateDataDirForRemoteOnlyExtension(t *testing.T) {
 	home := t.TempDir()
-	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	address, err := agentstate.NewAgentAddress(home, "abcdef")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestLoadMCPConfigRefsDoesNotCreateDataDirForRemoteOnlyExtension(t *testing.
 
 func TestLoadMCPConfigRefsDoesNotCreateDataDirWhenMixedExtensionPreparationFails(t *testing.T) {
 	home := t.TempDir()
-	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	address, err := agentstate.NewAgentAddress(home, "abcdef")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func TestLoadMCPConfigRefsDoesNotCreateDataDirWhenMixedExtensionPreparationFails
 
 func TestLoadMCPConfigRefsDoesNotPrepareOverriddenLocalExtension(t *testing.T) {
 	home := t.TempDir()
-	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	address, err := agentstate.NewAgentAddress(home, "abcdef")
 	if err != nil {
 		t.Fatal(err)
 	}
