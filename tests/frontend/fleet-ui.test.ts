@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { cn } from "../../frontend/src/lib/utils.ts";
+
 function source(path: string): string {
   return readFileSync(new URL(path, import.meta.url), "utf8");
 }
@@ -93,6 +95,28 @@ test("agent shell keeps the fleet rail mounted around selected-agent pages", () 
   );
   assert.match(shellSource, /<FleetEmptyState \/>/);
   assert.match(shellSource, /View logs/);
+});
+
+test("mobile fleet sheet and sidebar share one responsive width", () => {
+  assert.match(
+    shellSource,
+    /<SheetContent[\s\S]*side="left"[\s\S]*className="data-\[side=left\]:w-\[min\(84vw,268px\)\][^"]*"/,
+    "the side-aware override must replace SheetContent's data-[side=left]:w-3/4 default",
+  );
+  assert.match(
+    sidebarSource,
+    /mobile && "w-\[min\(84vw,268px\)\]"/,
+    "the nested mobile sidebar must use the same rendered width",
+  );
+  const mergedSheetClasses = cn(
+    "data-[side=left]:w-3/4 data-[side=left]:border-r",
+    "data-[side=left]:w-[min(84vw,268px)] border-r",
+  );
+  assert.doesNotMatch(mergedSheetClasses, /data-\[side=left\]:w-3\/4/);
+  assert.match(
+    mergedSheetClasses,
+    /data-\[side=left\]:w-\[min\(84vw,268px\)\]/,
+  );
 });
 
 test("fleet rail exposes compact status and exactly two hover actions", () => {

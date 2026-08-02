@@ -344,7 +344,7 @@ export function AppShell() {
           <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
             <SheetContent
               side="left"
-              className="w-[min(84vw,268px)] max-w-none gap-0 border-r p-0 min-[760px]:hidden"
+              className="data-[side=left]:w-[min(84vw,268px)] max-w-none gap-0 border-r p-0 min-[760px]:hidden"
             >
               <SheetHeader className="sr-only">
                 <SheetTitle>Fleet agents</SheetTitle>
