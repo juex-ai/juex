@@ -44,6 +44,7 @@ type Options struct {
 	IncludeArtifacts       bool
 	Now                    func() time.Time
 	Config                 config.Config
+	Environment            environment.Snapshot
 	ExtraFiles             []ExtraFile
 }
 
@@ -155,7 +156,7 @@ func Create(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	snapshot := opts.Config.EnvironmentSnapshot()
+	snapshot := bundleEnvironment(opts)
 	usedArchivePaths := map[string]struct{}{}
 	manifestPath, manifestPathRedacted := uniqueRedactedArchivePath(
 		snapshot,
@@ -279,7 +280,7 @@ func collectEntries(opts Options, workDir, sessionDir string, now time.Time) ([]
 		}
 		entries = append(entries, newEntry(pathInBundle(path), "", data, redacted, false))
 	}
-	snapshot := opts.Config.EnvironmentSnapshot()
+	snapshot := bundleEnvironment(opts)
 	for i := range entries {
 		data, redacted := redactConfiguredArchiveData(snapshot, entries[i].Path, entries[i].Data)
 		if !redacted {
@@ -503,8 +504,15 @@ func runtimeSnapshot(opts Options, workDir, sessionDir string) RuntimeSnapshot {
 		OS:          runtime.GOOS,
 		Arch:        runtime.GOARCH,
 		Paths:       cfg.RuntimePaths(),
-		Environment: cfg.EnvironmentSnapshot().ConfiguredMetadata(),
+		Environment: bundleEnvironment(opts).ConfiguredMetadata(),
 	}
+}
+
+func bundleEnvironment(opts Options) environment.Snapshot {
+	if !opts.Environment.IsZero() {
+		return opts.Environment
+	}
+	return opts.Config.EnvironmentSnapshot()
 }
 
 type sessionBundleFile struct {

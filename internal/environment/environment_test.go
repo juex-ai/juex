@@ -136,6 +136,146 @@ func TestResolveWindowsCaseRulesAndDeterministicOutput(t *testing.T) {
 	}
 }
 
+func TestSnapshotWithDefaultsPreservesExistingValuesAndDeduplicates(t *testing.T) {
+	base, err := Resolve(Options{
+		GOOS: "windows",
+		Layers: []Layer{{
+			Source: SourceWorkspaceConfig,
+			Path:   `C:\work\.juex\juex.yaml`,
+			Values: map[string]string{"Configured": ""},
+			Strict: true,
+		}},
+		Inherited: []string{"Inherited=agent"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, metadata, err := base.WithDefaults([]DefaultDeclaration{
+		{Key: "configured", Value: "extension-configured", Source: "ext:alpha", Path: `C:\ext\alpha\juex.extension.json`},
+		{Key: "INHERITED", Value: "extension-inherited", Source: "ext:alpha", Path: `C:\ext\alpha\juex.extension.json`},
+		{Key: "SHARED", Value: "same", Source: "ext:alpha", Path: `C:\ext\alpha\juex.extension.json`},
+		{Key: "shared", Value: "same", Source: "ext:beta", Path: `C:\ext\beta\juex.extension.json`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := resolved.Lookup("CONFIGURED"); !ok || got != "" {
+		t.Fatalf("configured empty value = %q, %v", got, ok)
+	}
+	if got, _ := resolved.Lookup("inherited"); got != "agent" {
+		t.Fatalf("inherited value = %q", got)
+	}
+	if got, _ := resolved.Lookup("shared"); got != "same" {
+		t.Fatalf("shared value = %q", got)
+	}
+	wantStatuses := []DefaultStatus{DefaultStatusShadowed, DefaultStatusShadowed, DefaultStatusEffective, DefaultStatusDeduplicated}
+	if len(metadata) != len(wantStatuses) {
+		t.Fatalf("metadata = %+v", metadata)
+	}
+	for i, want := range wantStatuses {
+		if metadata[i].Status != want {
+			t.Fatalf("metadata[%d] = %+v, want status %q", i, metadata[i], want)
+		}
+	}
+	if metadata[0].ShadowedBy != SourceWorkspaceConfig || metadata[1].ShadowedBy != SourceInherited {
+		t.Fatalf("shadow provenance = %+v", metadata[:2])
+	}
+}
+
+func TestSnapshotWithDefaultsRejectsConflictsWithoutValues(t *testing.T) {
+	const (
+		firstSecret  = "first-extension-secret"
+		secondSecret = "second-extension-secret"
+	)
+	base, err := Resolve(Options{GOOS: "windows", Inherited: []string{"PATH=C:\\bin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, metadata, err := base.WithDefaults([]DefaultDeclaration{
+		{Key: "Token", Value: firstSecret, Source: "ext:alpha", Path: "alpha"},
+		{Key: "TOKEN", Value: secondSecret, Source: "ext:beta", Path: "beta"},
+	})
+	if err == nil {
+		t.Fatal("expected conflict")
+	}
+	if !strings.Contains(err.Error(), "TOKEN") || !strings.Contains(err.Error(), "ext:alpha") || !strings.Contains(err.Error(), "ext:beta") {
+		t.Fatalf("conflict provenance = %v", err)
+	}
+	if strings.Contains(err.Error(), firstSecret) || strings.Contains(err.Error(), secondSecret) {
+		t.Fatalf("conflict leaked values: %v", err)
+	}
+	if len(metadata) != 2 || metadata[0].Status != DefaultStatusConflict || metadata[1].Status != DefaultStatusConflict {
+		t.Fatalf("metadata = %+v", metadata)
+	}
+	redacted, changed := resolved.RedactConfiguredValues([]byte(firstSecret + " " + secondSecret))
+	if !changed || strings.Contains(string(redacted), firstSecret) || strings.Contains(string(redacted), secondSecret) {
+		t.Fatalf("conflicting default redaction = %q, changed=%v", redacted, changed)
+	}
+}
+
+func TestSnapshotWithDefaultsRedactsEveryDeclarationAndNeverActivatesThem(t *testing.T) {
+	const (
+		key            = "EXTENSION_DEFAULT_ACTIVATION_TEST"
+		effectiveValue = "effective-extension-secret"
+		shadowedValue  = "shadowed-extension-secret"
+	)
+	t.Setenv(key, "parent")
+	base, err := Resolve(Options{Inherited: []string{key + "=parent"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, _, err := base.WithDefaults([]DefaultDeclaration{
+		{Key: "EFFECTIVE_DEFAULT", Value: effectiveValue, Source: "ext:alpha", Path: "alpha"},
+		{Key: key, Value: shadowedValue, Source: "ext:alpha", Path: "alpha"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, changed := resolved.RedactConfiguredValues([]byte(effectiveValue + " " + shadowedValue))
+	if !changed || strings.Contains(string(payload), effectiveValue) || strings.Contains(string(payload), shadowedValue) {
+		t.Fatalf("redacted payload = %q, changed=%v", payload, changed)
+	}
+	restore, err := resolved.Activate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := restore(); err != nil {
+			t.Errorf("restore environment: %v", err)
+		}
+	})
+	if got := os.Getenv(key); got != "parent" {
+		t.Fatalf("parent key changed to %q", got)
+	}
+	if _, ok := os.LookupEnv("EFFECTIVE_DEFAULT"); ok {
+		t.Fatal("Extension default was activated into the JueX process")
+	}
+}
+
+func TestValidateExtensionDefaultRejectsDangerousNamesCaseInsensitively(t *testing.T) {
+	for _, key := range []string{
+		"JUEX_HOME", "juex_custom", "workdir", "Home", "userprofile", "Path", "pathext", "comspec",
+		"ld_preload", "LD_AUDIT", "dyld_insert_libraries", "glibc_tunables", "node_options",
+		"pythonpath", "pythonhome", "bash_env", "ENV",
+	} {
+		if err := ValidateExtensionDefault(key, "safe"); err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("ValidateExtensionDefault(%q) = %v", key, err)
+		}
+	}
+	for _, key := range []string{"LARKSUITE_CLI_CONFIG_DIR", "LARKSUITE_CLI_DATA_DIR", "_PORTABLE_1"} {
+		if err := ValidateExtensionDefault(key, "safe"); err != nil {
+			t.Errorf("ValidateExtensionDefault(%q) = %v", key, err)
+		}
+	}
+	if err := ValidateExtensionDefault("BAD-NAME", "safe"); err == nil {
+		t.Fatal("invalid portable name accepted")
+	}
+	if err := ValidateExtensionDefault("SAFE_NAME", "bad\x00value"); err == nil {
+		t.Fatal("NUL value accepted")
+	}
+}
+
 func TestResolveWindowsPreservesPerDriveEnvironmentEntries(t *testing.T) {
 	snapshot, err := Resolve(Options{
 		GOOS: "windows",

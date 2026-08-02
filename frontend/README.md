@@ -111,7 +111,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/pages/Fleet.tsx` | fleet settings stage with service summaries, registration, inline workspace-directory creation, condensed operational state, lifecycle, enablement, and removal controls |
 | `src/pages/AgentConfig.tsx` | workspace config editor with validation and post-save restart reconciliation |
 | `src/pages/AgentLogs.tsx` | bounded resident agent log tail with explicit refresh and line-count controls |
-| `src/pages/Extensions.tsx` | read-only selected Extension manifests, installation scopes, paths, and effective resource counts |
+| `src/pages/Extensions.tsx` | read-only selected Extension manifests, installation scopes, paths, effective resource counts, and value-free Agent environment declaration status |
 | `src/pages/Observables.tsx` | compact workspace Observable list with full-content tooltips, sticky actions, and Schedule Run plus lifecycle controls |
 | `src/pages/ObservableDetail.tsx` | Observable source details, recent Observation history, and Schedule Run plus lifecycle controls |
 | `src/pages/RuntimeLayout.tsx` | shared Runtime title, subsection selector, and nested route outlet |

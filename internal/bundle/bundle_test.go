@@ -184,6 +184,42 @@ func TestCreateEnvironmentMetadataNeverIncludesValuesRegardlessOfRedaction(t *te
 	}
 }
 
+func TestCreateRedactsResolvedExtensionEnvironmentDefaults(t *testing.T) {
+	const secret = "bundle-extension-default-secret"
+	work := t.TempDir()
+	sessionID := "20260802T120000-extension"
+	seedBundleSession(t, work, sessionID, map[string]string{
+		"session.json":       `{"kind":"primary"}`,
+		"conversation.jsonl": `{"text":"` + secret + `"}` + "\n",
+		"events.jsonl":       "{}\n",
+	})
+	base, err := environment.Resolve(environment.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, _, err := base.WithDefaults([]environment.DefaultDeclaration{{
+		Key: "EXTENSION_BUNDLE_SECRET", Value: secret, Source: "ext:demo", Path: "/manifest",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "debug.tar.gz")
+	result, err := Create(Options{
+		WorkDir: work, SessionID: sessionID, OutPath: out,
+		Config: config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, ".juex")}, Environment: resolved,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Redacted {
+		t.Fatal("Extension environment redaction was not reported")
+	}
+	all := string(joinBundleFiles(readBundleArchive(t, out)))
+	if strings.Contains(all, secret) || !strings.Contains(all, "[REDACTED_ENV]") {
+		t.Fatalf("bundle Extension environment redaction = %q", all)
+	}
+}
+
 func TestCreateEnvironmentRedactionPreservesJSONLAndManifestIntegrity(t *testing.T) {
 	home := t.TempDir()
 	work := t.TempDir()

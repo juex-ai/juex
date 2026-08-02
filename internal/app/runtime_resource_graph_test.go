@@ -224,9 +224,16 @@ func TestLoadMCPConfigsPreparesAgentOwnedDataDirForSelectedLocalExtensionWithout
     },
     "remote": {
       "type": "http",
-      "url": "https://mcp.example.com/mcp"
+      "url": "https://mcp.example.com/mcp",
+      "headers": {"Authorization":"Bearer ${MCP_EXTENSION_DEFAULT}"}
     }
   }
+}`)
+	mustWriteRuntimeStatusFile(t, filepath.Join(extensionDir, "juex.extension.json"), `{
+  "manifest_version":1,
+  "name":"demo",
+  "version":"1.0.0",
+  "agent":{"environment":{"variables":{"MCP_EXTENSION_DEFAULT":"runtime-default"}}}
 }`)
 	cfg := config.Config{
 		WorkDir:      work,
@@ -253,7 +260,11 @@ func TestLoadMCPConfigsPreparesAgentOwnedDataDirForSelectedLocalExtensionWithout
 		t.Fatalf("extension node data dir = %q, want %q", extensionNode.ExtensionDataDir, dataDir)
 	}
 
-	_, preview, _, err := loadMCPConfigRefs(graph.MCPConfigs(), work, environment.Snapshot{})
+	agentRuntime, err := ResolveAgentRuntime(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, preview, _, err := loadMCPConfigRefs(graph.MCPConfigs(), work, agentRuntime.Environment())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +275,7 @@ func TestLoadMCPConfigsPreparesAgentOwnedDataDirForSelectedLocalExtensionWithout
 		t.Fatalf("status-style config preview injected data dir: %#v", preview.MCPServers["local"].Env)
 	}
 
-	configs, err := LoadMCPConfigs(cfg, work)
+	configs, err := LoadMCPConfigs(agentRuntime, work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,8 +290,8 @@ func TestLoadMCPConfigsPreparesAgentOwnedDataDirForSelectedLocalExtensionWithout
 	if local.Env["JUEX_EXT_DATA_DIR"] != dataDir || local.Env["DATA_COPY"] != dataDir {
 		t.Fatalf("local env = %#v", local.Env)
 	}
-	if remote := merged.MCPServers["remote"]; remote.Env != nil {
-		t.Fatalf("remote environment leaked = %#v", remote.Env)
+	if remote := merged.MCPServers["remote"]; remote.Env != nil || remote.Headers["Authorization"].Value() != "Bearer runtime-default" {
+		t.Fatalf("remote environment/header = env %#v header %q", remote.Env, remote.Headers["Authorization"].Value())
 	}
 }
 

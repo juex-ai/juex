@@ -538,6 +538,81 @@ func TestFleetChildrenLoadIndependentWorkspaceDotenvOnRestart(t *testing.T) {
 	probeFleetRuntime(t, waitFleetRuntime(t, cases[1].address))
 }
 
+func TestFleetChildrenLoadAgentScopedExtensionDefaultsOnRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiled-binary Fleet Extension environment isolation is slow")
+	}
+	binary := buildJuex(t)
+	envMCP := buildFleetEnvMCP(t)
+	home := t.TempDir()
+	environment := fleetE2EEnvironment(home)
+	const extensionName = "fleet-env"
+	manifestPath := filepath.Join(home, "extensions", extensionName, "juex.extension.json")
+	writeManifest := func(value string) {
+		t.Helper()
+		body := `{"manifest_version":1,"name":"fleet-env","version":"1.0.0","agent":{"environment":{"variables":{"FLEET_ENV_SENTINEL":"` + value + `"}}}}`
+		if err := os.MkdirAll(filepath.Dir(manifestPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(manifestPath, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeManifest("${JUEX_EXT_DATA_DIR}")
+
+	type agentCase struct {
+		id      string
+		workDir string
+		address agentstate.AgentAddress
+		want    string
+	}
+	cases := []agentCase{
+		{id: "aaaaaa", workDir: t.TempDir()},
+		{id: "bbbbbb", workDir: t.TempDir()},
+	}
+	for i := range cases {
+		item := &cases[i]
+		item.address = writeFleetE2EAgent(t, home, item.workDir, item.id)
+		item.want = filepath.Join(item.address.StateDir(), "extensions", extensionName)
+		if err := os.WriteFile(
+			filepath.Join(item.workDir, ".juex", "juex.yaml"),
+			[]byte("extensions:\n  allow: ["+extensionName+"]\n"),
+			0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeMCPConfig(item.workDir, envMCP, nil); err != nil {
+			t.Fatal(err)
+		}
+		address := item.address
+		t.Cleanup(func() { shutdownFleetAgent(t, address) })
+
+		stdout, stderr, err := runFleetE2E(binary, environment, "", "start", item.id)
+		if err != nil {
+			t.Fatalf("fleet start %s: %v\nstdout:\n%s\nstderr:\n%s", item.id, err, stdout, stderr)
+		}
+		probeFleetRuntime(t, waitFleetRuntime(t, item.address))
+		waitFleetEnvironmentValue(t, item.workDir, item.want)
+	}
+	if cases[0].want == cases[1].want {
+		t.Fatalf("Agent-scoped Extension defaults collided: %q", cases[0].want)
+	}
+
+	firstSeen := filepath.Join(cases[0].workDir, "fleet-env-seen")
+	if err := os.Remove(firstSeen); err != nil {
+		t.Fatal(err)
+	}
+	writeManifest("extension-default-after-restart")
+	stdout, stderr, err := runFleetE2E(binary, environment, "", "restart", cases[0].id)
+	if err != nil {
+		t.Fatalf("fleet restart %s: %v\nstdout:\n%s\nstderr:\n%s", cases[0].id, err, stdout, stderr)
+	}
+	waitFleetEnvironmentValue(t, cases[0].workDir, "extension-default-after-restart")
+	waitFleetEnvironmentValue(t, cases[1].workDir, cases[1].want)
+	probeFleetRuntime(t, waitFleetRuntime(t, cases[0].address))
+	probeFleetRuntime(t, waitFleetRuntime(t, cases[1].address))
+}
+
 type fleetSupervisor struct {
 	cmd    *exec.Cmd
 	lines  <-chan string

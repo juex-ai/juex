@@ -4,7 +4,7 @@ import { getRuntimeStatus } from "@/api";
 import { useShellTitle } from "@/components/AppShell";
 import { LoadingState } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
-import type { ExtensionInfo, RuntimeStatusResponse } from "@/types";
+import type { ExtensionEnvironmentVariable, ExtensionInfo, RuntimeStatusResponse } from "@/types";
 
 export function Extensions() {
   const [data, setData] = useState<RuntimeStatusResponse | null>(null);
@@ -93,6 +93,7 @@ export function Extensions() {
 
 function ExtensionCard({ extension }: { extension: ExtensionInfo }) {
   const resources = extension.resources;
+  const environment = extension.environment ?? [];
   return (
     <section className="overflow-hidden rounded-lg border bg-card shadow-[var(--shadow-sm)]">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
@@ -123,7 +124,36 @@ function ExtensionCard({ extension }: { extension: ExtensionInfo }) {
           <ResourceBadge label="Observables" count={resources.observables} />
         </dd>
       </dl>
+      {environment.length > 0 ? (
+        <div className="border-t px-4 py-3">
+          <h4 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            Agent environment
+          </h4>
+          <div className="mt-2 space-y-2">
+            {environment.map((variable) => (
+              <EnvironmentVariable key={`${variable.source}:${variable.name}`} variable={variable} />
+            ))}
+          </div>
+        </div>
+      ) : null}
     </section>
+  );
+}
+
+function EnvironmentVariable({ variable }: { variable: ExtensionEnvironmentVariable }) {
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-md bg-muted/50 px-3 py-2 text-xs">
+      <code className="break-all font-mono text-foreground">{variable.name}</code>
+      <Badge variant="outline" className="font-mono text-[10px]">
+        {variable.status}
+      </Badge>
+      <span className="break-all text-muted-foreground">{variable.source}</span>
+      {variable.status === "shadowed" && variable.shadowed_by_source ? (
+        <span className="break-all text-muted-foreground">
+          shadowed by {variable.shadowed_by_source}
+        </span>
+      ) : null}
+    </div>
   );
 }
 

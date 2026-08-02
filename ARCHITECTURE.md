@@ -198,7 +198,7 @@ implementation decisions live.
 | `internal/processmetrics` | Cross-platform per-process RSS and cumulative CPU-time sampling, interval CPU derivation, process-identity baseline reset | Polling cadence, Agent health policy, HTTP DTOs, UI formatting, persistence |
 | `internal/extensions` | Ordered extension-root discovery, allowed-name filtering, same-name winner selection, source identity, resource references, trust requirement projection | Extension allowlist inheritance, Skill/MCP/hook/Observable parsing, runtime registration, Extension execution |
 | `internal/config` | YAML and user/Workspace config layering, extension allowlist inheritance, runtime-environment layer ordering, Provider selection inputs, path and policy projection | Extension directory scanning, Dotenv syntax, mutable process-global environment ownership, canonical Provider Profile semantics, Turn behavior, Provider requests, HTTP routing |
-| `internal/environment` | Portable environment-name validation, deterministic dotenv parsing, immutable effective snapshots, child overlays, value-free metadata, controlled single-workspace activation | Config-file discovery, subprocess ownership, runtime policy, diagnostic presentation |
+| `internal/environment` | Portable environment-name validation, deterministic dotenv parsing, immutable effective snapshots, low-priority child-runtime defaults, child overlays, value-free metadata, controlled single-workspace activation | Config-file discovery, Extension discovery, subprocess ownership, runtime policy, diagnostic presentation |
 | `internal/providerreadiness` | Provider selection, credential, construction, and connectivity readiness checks | Provider Protocol semantics, runtime fallback, CLI presentation |
 | `internal/llm` | Canonical messages and blocks, Provider interfaces/profiles, Protocol and Capability resolution, wire/SDK adapters, provider transport/API/stream retry, model health | Model-chain fallback, Session lifecycle, Tool execution, CLI/HTTP DTOs |
 | `internal/runtime` | Turn lifecycle, Provider-iteration and Tool Call ordering, pending-input queue, model-chain fallback and Turn-level retry, active context, compaction, context projection, runtime fact emission | Provider SDK and transport retry, Session discovery, MCP process lifecycle, transport parsing |
@@ -713,8 +713,11 @@ Callers may provide narrow additional writable roots without mutating the
 resolved sandbox policy. The runner normalizes Workspace and additional roots
 once for both platform backends and rejects any lexical or symlink-resolved
 ancestor, exact, or descendant overlap with `blocked_paths` before launching a
-wrapper. An extension context projects only its exact Agent-owned data
-directory, never the Agent parent or sibling extension paths.
+wrapper. Every `exec_command` and Command Observable process projects the
+current Agent's complete `extensions` data root. This grants sibling Extension
+data for the same Agent but never another Agent directory or the rest of the
+current Agent home. Local Extension MCP processes retain their exact
+owning-Extension data directory.
 Sandbox helper discovery uses the inherited launch snapshot rather than a
 workspace-controlled runtime `PATH`. Dynamic-loader variables such as `LD_*`,
 `DYLD_*`, and `GLIBC_TUNABLES` are removed from the wrapper process and restored
@@ -1651,12 +1654,14 @@ extension Delete and same-ID Create return typed read-only conflicts before any
 stop, state deletion, or file write.
 
 A Command Observable defined by an Extension receives a neutral runtime tuple
-adapted from the selected `ExtensionRuntimeContext`: installation directory, one Agent-owned
-data directory, and its deferred prepare callback. The runner expands command,
-args, cwd, and env without a shell, injects authoritative `WORKDIR`,
-`JUEX_WORKDIR`, `JUEX_EXT_DIR`, and `JUEX_EXT_DATA_DIR`, and derives the sole
-additional Sandbox writable root from that one data directory. Project
-definitions reject extension-only variables and strip inherited values.
+adapted from the selected `ExtensionRuntimeContext`: installation directory,
+one Agent-owned data directory, and its deferred prepare callback. The runner
+expands command, args, cwd, and env without a shell and injects authoritative
+`WORKDIR`, `JUEX_WORKDIR`, `JUEX_EXT_DIR`, and `JUEX_EXT_DATA_DIR`. Every
+project or Extension Command Observable receives the separately resolved
+Agent-wide Extension data root as its additional Sandbox writable root.
+Project definitions reject Extension-context variables and strip inherited
+values. Schedule sources do not launch subprocesses.
 
 Manual Schedule execution is the one source-specific Web control.
 `Manager.RunOnce` selects a private Schedule-only capability, persists a
@@ -1863,7 +1868,8 @@ as the primary by YAML layering, environment, or CLI override is removed from
 the effective chain.
 
 The runtime child-process environment is a separate immutable snapshot with
-this precedence (later wins): default-home YAML `environment.variables` <
+this precedence (later wins): selected Extension manifest defaults <
+default-home YAML `environment.variables` <
 instance-home YAML `environment.variables` when distinct < `<WorkDir>/.env` <
 workspace YAML `environment.variables` < explicit `--config` YAML
 `environment.variables` < the environment inherited when Juex started <
@@ -1874,14 +1880,16 @@ shell commands, and startup-time reloads are not performed. Empty inherited
 values are preserved; provider compatibility overrides continue to ignore an
 empty `PROVIDER_API_*` value.
 
-Runtime-bearing CLI commands activate one workspace snapshot for in-process
-provider and SDK lookups and explicitly pass the same snapshot to MCP,
-Observable, hook, shell, and grep subprocesses. Config validation, doctor,
+Runtime-bearing CLI commands activate only the YAML, dotenv, and inherited
+workspace snapshot for in-process provider and SDK lookups. `internal/app`
+adds selected Extension defaults to a process-lifetime Agent resolution that is
+passed explicitly to MCP, Observable, hook, shell, and grep subprocesses; those
+defaults never mutate the Juex process environment. Config validation, doctor,
 bundle, Fleet supervision, and generic `internal/config` loads remain
 side-effect-free. Fleet starts each child with only the supervisor's inherited
 environment plus required bootstrap identity, and the child resolves its own
-workspace YAML and `.env`. A process may activate only one workspace snapshot
-at a time.
+workspace YAML, `.env`, and Extension defaults. A process may activate only one
+workspace snapshot at a time.
 Provider definitions merge by `providers[].id` and
 `providers[].models[].id`, so an instance or workspace config can set only
 `model: provider:model` or override a few fields while inheriting missing
@@ -2227,16 +2235,21 @@ whole Extension. It then strictly validates only each winner's exact-case
 config. Invalid selected manifests fail startup without falling back to a lower
 copy, while unselected installation directories are inert. Manifest version 1
 requires a directory-matching name and SemVer version and rejects unknown,
-duplicate, or null fields. A same-name Workspace Extension therefore replaces a
-Home Extension and carries Workspace trust requirements.
+duplicate, or null fields. Its optional `agent.environment.variables` map
+declares Agent-scoped defaults. `internal/app` resolves its four Juex-owned
+placeholders in the declaring Extension context, merges defaults below every
+existing Agent environment source, rejects dangerous names and unresolved
+conflicts, and retains one immutable resolution for startup, sessions, Runtime
+status, MCP, and debug redaction. A same-name Workspace Extension therefore
+replaces a Home Extension and carries Workspace trust requirements.
 This logical-name policy is not publisher or source authentication.
 Extension-provided MCP server, Skill, Hook, or Observable names still must not
 collide with existing resources or another selected extension. The runtime
 resource graph stores the selected typed descriptors directly. Runtime status
-projects their manifest metadata, installation scope/path, and effective Skill,
-MCP server, Hook, and Observable definition counts from that same graph and the
-normal resource parsers; it does not rescan winners independently. Resources
-remain labeled `ext:<name>`.
+projects their manifest metadata, installation scope/path, effective Skill,
+MCP server, Hook, and Observable definition counts, plus value-free Extension
+environment declaration status from that same resolution; it does not rescan
+winners independently. Resources remain labeled `ext:<name>`.
 Unlike project command hooks, extension `observables.json` has no separate
 `trusted` marker: an allowed work-local winner starts valid Command
 Observables with the Primary Session. A Workspace can therefore authorize its

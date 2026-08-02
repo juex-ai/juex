@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
@@ -36,6 +37,7 @@ type RuntimeStatusOptions struct {
 	MCPConnectionSpecs map[string]mcp.RuntimeConnectionSpec
 	SkillCache         *RuntimeStatusSkillCache
 	ScratchpadDir      string
+	AgentRuntime       *AgentRuntimeResolution
 }
 
 // RuntimeStatusSkillCache caches loaded skills for repeated status snapshots.
@@ -86,6 +88,7 @@ type RuntimeExtensionStatus struct {
 	Scope           string
 	Path            string
 	Resources       RuntimeExtensionResourceCounts
+	Environment     []RuntimeExtensionEnvironmentDeclaration
 }
 
 type RuntimeExtensionResourceCounts struct {
@@ -210,10 +213,17 @@ type RuntimeSkillOmittedInfo struct {
 }
 
 func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus, error) {
-	resourceGraph, err := ResolveRuntimeResourceGraph(s.cfg)
-	if err != nil {
-		return RuntimeStatus{}, err
+	var agentRuntime AgentRuntimeResolution
+	if opts.AgentRuntime != nil {
+		agentRuntime = *opts.AgentRuntime
+	} else {
+		var err error
+		agentRuntime, err = ResolveAgentRuntime(s.cfg)
+		if err != nil {
+			return RuntimeStatus{}, err
+		}
 	}
+	resourceGraph := agentRuntime.ResourceGraph()
 	skillStatus, skillLoader, err := s.skillsStatus(opts.SkillCache, resourceGraph.SkillDirs(), s.cfg.SkillPolicy())
 	if err != nil {
 		return RuntimeStatus{}, err
@@ -222,7 +232,7 @@ func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatu
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	mcpStatus, err := s.mcpStatus(opts, resourceGraph.MCPConfigs())
+	mcpStatus, err := s.mcpStatus(opts, resourceGraph.MCPConfigs(), agentRuntime.Environment())
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
@@ -231,7 +241,7 @@ func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatu
 		return RuntimeStatus{}, err
 	}
 	hookStatus := hooksStatus(resourceGraph.HooksConfig())
-	extensionsStatus, err := runtimeExtensionsStatus(resourceGraph, skillStatus, mcpStatus, hookStatus)
+	extensionsStatus, err := runtimeExtensionsStatus(resourceGraph, skillStatus, mcpStatus, hookStatus, agentRuntime.EnvironmentDeclarations())
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
@@ -249,7 +259,7 @@ func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatu
 	}, nil
 }
 
-func runtimeExtensionsStatus(graph RuntimeResourceGraph, skills RuntimeSkillsStatus, mcpStatus RuntimeMCPStatus, hookStatus RuntimeHooksStatus) (RuntimeExtensionsStatus, error) {
+func runtimeExtensionsStatus(graph RuntimeResourceGraph, skills RuntimeSkillsStatus, mcpStatus RuntimeMCPStatus, hookStatus RuntimeHooksStatus, environmentDeclarations []RuntimeExtensionEnvironmentDeclaration) (RuntimeExtensionsStatus, error) {
 	descriptors := graph.Extensions()
 	items := make([]RuntimeExtensionStatus, 0, len(descriptors))
 	indexes := make(map[string]int, len(descriptors))
@@ -269,6 +279,11 @@ func runtimeExtensionsStatus(graph RuntimeResourceGraph, skills RuntimeSkillsSta
 			Scope:           string(descriptor.Scope),
 			Path:            descriptor.Dir,
 		})
+	}
+	for _, declaration := range environmentDeclarations {
+		if index, ok := indexes[declaration.Source]; ok {
+			items[index].Environment = append(items[index].Environment, declaration)
+		}
 	}
 	for _, skill := range skills.Items {
 		if index, ok := indexes[skill.Source]; ok {
@@ -554,13 +569,13 @@ type runtimeMCPServerConfig struct {
 	Spec   mcp.ServerSpec
 }
 
-func (s RuntimeCatalogService) mcpStatus(opts RuntimeStatusOptions, refs []mcpConfigRef) (RuntimeMCPStatus, error) {
+func (s RuntimeCatalogService) mcpStatus(opts RuntimeStatusOptions, refs []mcpConfigRef, runtimeEnvironment environment.Snapshot) (RuntimeMCPStatus, error) {
 	var servers []runtimeMCPServerConfig
 	if opts.MCPConnectionSpecs != nil {
 		servers = runtimeMCPServersFromConnectionSpecs(opts.MCPConnectionSpecs)
 	} else {
 		var err error
-		servers, err = s.configuredMCPServers(refs)
+		servers, err = s.configuredMCPServers(refs, runtimeEnvironment)
 		if err != nil {
 			return RuntimeMCPStatus{}, err
 		}
@@ -650,9 +665,9 @@ func runtimeMCPToolInfos(descriptors []mcp.ToolDescriptor, defaultTimeoutSeconds
 	return infos
 }
 
-func (s RuntimeCatalogService) configuredMCPServers(refs []mcpConfigRef) ([]runtimeMCPServerConfig, error) {
+func (s RuntimeCatalogService) configuredMCPServers(refs []mcpConfigRef, runtimeEnvironment environment.Snapshot) ([]runtimeMCPServerConfig, error) {
 	serversByName := map[string]runtimeMCPServerConfig{}
-	_, merged, sources, err := loadMCPConfigRefs(refs, s.absoluteWorkDir(), s.cfg.EnvironmentSnapshot())
+	_, merged, sources, err := loadMCPConfigRefs(refs, s.absoluteWorkDir(), runtimeEnvironment)
 	if err != nil {
 		return nil, err
 	}

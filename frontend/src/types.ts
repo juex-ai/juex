@@ -813,6 +813,14 @@ export interface ExtensionResourceCounts {
   observables: number;
 }
 
+export interface ExtensionEnvironmentVariable {
+  name: string;
+  source: string;
+  status: "effective" | "shadowed" | "deduplicated" | string;
+  shadowed_by_source?: string;
+  shadowed_by_path?: string;
+}
+
 export interface ExtensionInfo {
   manifest_version: number;
   name: string;
@@ -826,6 +834,7 @@ export interface ExtensionInfo {
   scope: "default_home" | "instance_home" | "project" | string;
   path: string;
   resources: ExtensionResourceCounts;
+  environment: ExtensionEnvironmentVariable[];
 }
 
 export interface RuntimeStatusResponse {

@@ -61,6 +61,71 @@ func TestDiscoverLoadsSelectedExtensionManifest(t *testing.T) {
 	}
 }
 
+func TestDiscoverLoadsAgentEnvironmentDefaults(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "lark-cli")
+	writeExtensionFile(t, filepath.Join(dir, manifestFilename), `{
+  "manifest_version": 1,
+  "name": "lark-cli",
+  "version": "1.0.0",
+  "agent": {
+    "environment": {
+      "variables": {
+        "LARKSUITE_CLI_CONFIG_DIR": "${JUEX_EXT_DATA_DIR}",
+        "LARKSUITE_CLI_DATA_DIR": "${JUEX_EXT_DATA_DIR}"
+      }
+    }
+  }
+}`)
+
+	resources, err := Discover(DiscoverOptions{
+		Roots:        []Root{{Path: root, Scope: ScopeDefaultHome}},
+		AllowedNames: []string{"lark-cli"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := resources.Extensions[0].Manifest.Agent.Environment.Variables
+	if len(got) != 2 || got["LARKSUITE_CLI_CONFIG_DIR"] != "${JUEX_EXT_DATA_DIR}" || got["LARKSUITE_CLI_DATA_DIR"] != "${JUEX_EXT_DATA_DIR}" {
+		t.Fatalf("variables = %#v", got)
+	}
+}
+
+func TestDiscoverRejectsInvalidAgentEnvironmentManifestShapes(t *testing.T) {
+	tests := []struct {
+		name  string
+		agent string
+		want  string
+	}{
+		{name: "null agent", agent: `null`, want: "agent"},
+		{name: "non object agent", agent: `[]`, want: "agent"},
+		{name: "unknown agent field", agent: `{"environmnt":{}}`, want: "unknown field"},
+		{name: "null environment", agent: `{"environment":null}`, want: "environment"},
+		{name: "unknown environment field", agent: `{"environment":{"variable":{}}}`, want: "unknown field"},
+		{name: "null variables", agent: `{"environment":{"variables":null}}`, want: "variables"},
+		{name: "non string value", agent: `{"environment":{"variables":{"SAFE":42}}}`, want: "string"},
+		{name: "duplicate variable", agent: `{"environment":{"variables":{"SAFE":"one","SAFE":"two"}}}`, want: "duplicate"},
+		{name: "invalid name", agent: `{"environment":{"variables":{"BAD-NAME":"x"}}}`, want: "BAD-NAME"},
+		{name: "restricted name case insensitive", agent: `{"environment":{"variables":{"Path":"x"}}}`, want: "restricted"},
+		{name: "juex prefix", agent: `{"environment":{"variables":{"juex_other":"x"}}}`, want: "restricted"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "demo")
+			manifest := fmt.Sprintf(`{"manifest_version":1,"name":"demo","version":"1.0.0","agent":%s}`, tt.agent)
+			writeRawExtensionFile(t, filepath.Join(dir, manifestFilename), manifest)
+			_, err := Discover(DiscoverOptions{
+				Roots:        []Root{{Path: root, Scope: ScopeDefaultHome}},
+				AllowedNames: []string{"demo"},
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), filepath.Join(dir, manifestFilename)) {
+				t.Fatalf("err = %v, want %q and manifest path", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestDiscoverValidatesOnlySelectedWinningManifest(t *testing.T) {
 	lower := t.TempDir()
 	higher := t.TempDir()

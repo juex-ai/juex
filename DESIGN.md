@@ -453,7 +453,9 @@ The read-only Extensions subsection at
 `/agents/:agentId/runtime/extensions` lists only selected winners. Each card
 shows display name, logical name, version, description, installation scope and
 absolute path, manifest version, and effective Skill, MCP server, Hook, and
-Observable counts. It exposes no install, enable, disable, or edit controls.
+Observable counts. Extension-declared Agent environment variables appear by
+name, source, and effective, shadowed, or deduplicated status; values never
+appear. It exposes no install, enable, disable, or edit controls.
 An empty runtime uses the explicit `No Extensions are selected for this Agent.`
 state.
 

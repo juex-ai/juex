@@ -1587,6 +1587,59 @@ func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
 	}
 }
 
+func TestDoctorCmd_ReportsExtensionEnvironmentWithoutValues(t *testing.T) {
+	const secretDefault = "doctor-extension-default-secret"
+	home := setHomeForCLITest(t)
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(configPath, "openai", "https://example.invalid", "sk-test", "gpt-4.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendTextFile(configPath, "extensions:\n  allow: [demo]\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agentstate.Resolve(agentstate.Options{HomeDir: filepath.Join(home, ".juex"), WorkDir: work}); err != nil {
+		t.Fatal(err)
+	}
+	extensionDir := filepath.Join(work, ".juex", "extensions", "demo")
+	if err := writeTextFile(filepath.Join(extensionDir, "juex.extension.json"), `{
+  "manifest_version":1,
+  "name":"demo",
+  "version":"1.0.0",
+  "agent":{"environment":{"variables":{
+    "DOCTOR_EXTENSION_DEFAULT":"`+secretDefault+`",
+    "DOCTOR_EXTENSION_DATA":"${JUEX_EXT_DATA_DIR}"
+  }}}
+}`); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
+	err := root.Execute()
+	var doctorErr *doctorExitError
+	if err != nil && !errors.As(err, &doctorErr) {
+		t.Fatalf("doctor execute: %T %v\n%s", err, err, out.String())
+	}
+	if strings.Contains(out.String(), secretDefault) {
+		t.Fatalf("doctor leaked Extension environment value:\n%s", out.String())
+	}
+	for _, want := range []string{
+		`"extension_default_count": 2`,
+		`"key": "DOCTOR_EXTENSION_DEFAULT"`,
+		`"key": "DOCTOR_EXTENSION_DATA"`,
+		`"source": "ext:demo"`,
+		`"status": "effective"`,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("doctor Extension environment metadata missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestDoctorConfigCheckDistinguishesDefaultAndInstanceHomePaths(t *testing.T) {
 	home := setHomeForCLITest(t)
 	for _, key := range []string{

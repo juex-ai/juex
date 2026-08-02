@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/bundle"
 )
 
@@ -34,6 +35,10 @@ func newBundleCmd(flags *persistentFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			agentRuntime, err := app.ResolveAgentRuntime(cfg)
+			if err != nil {
+				return err
+			}
 			result, err := bundle.Create(bundle.Options{
 				WorkDir:                cfg.WorkDir,
 				SessionID:              sessionID,
@@ -43,6 +48,7 @@ func newBundleCmd(flags *persistentFlags) *cobra.Command {
 				IncludeArtifacts:       includeArtifacts,
 				IncludeWorktreeSummary: includeWorktreeSummary,
 				Config:                 cfg,
+				Environment:            agentRuntime.Environment(),
 			})
 			if err != nil {
 				switch {

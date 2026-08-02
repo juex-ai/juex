@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/eventmedia"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
@@ -77,6 +78,9 @@ type Options struct {
 	// first message or event is appended. Used by the web UI so abandoned
 	// empty chats do not leave local files behind.
 	LazySession bool
+	// AgentRuntime reuses a process-lifetime resource and environment
+	// resolution owned by a long-running caller such as the Web server.
+	AgentRuntime *AgentRuntimeResolution
 }
 
 type SessionMode string
@@ -120,8 +124,18 @@ type App struct {
 
 	debug                    bool
 	logLevel                 string
+	runtimeEnvironment       environment.Snapshot
 	recorder                 *observability.Recorder
 	observabilityUnsubscribe func()
+}
+
+// RedactRuntimeJSON removes configured Agent environment values from a JSON
+// diagnostic using this App's immutable process-lifetime resolution.
+func (a *App) RedactRuntimeJSON(data []byte) ([]byte, bool, error) {
+	if a == nil {
+		return append([]byte(nil), data...), false, nil
+	}
+	return a.runtimeEnvironment.RedactConfiguredJSON(data)
 }
 
 type MCPStatus struct {
@@ -178,10 +192,17 @@ func New(opts Options) (*App, error) {
 	runtimePaths := cfg.RuntimePaths()
 	resourcePaths := cfg.ResourcePaths()
 	runtimeLimits := cfg.RuntimeLimits()
-	resourceGraph, err := ResolveRuntimeResourceGraph(cfg)
-	if err != nil {
-		return nil, err
+	var agentRuntime AgentRuntimeResolution
+	if opts.AgentRuntime != nil {
+		agentRuntime = *opts.AgentRuntime
+	} else {
+		var err error
+		agentRuntime, err = ResolveAgentRuntime(cfg)
+		if err != nil {
+			return nil, err
+		}
 	}
+	resourceGraph := agentRuntime.ResourceGraph()
 	stderr := opts.Stderr
 	if stderr == nil {
 		stderr = os.Stderr
@@ -257,17 +278,20 @@ func New(opts Options) (*App, error) {
 		DefaultTimeoutSeconds: toolTimeoutSeconds,
 	})
 	chunkedWrites := tools.NewChunkedWriteManager(runtimePaths.WorkDir, sandbox.NewPathGuard(runtimePaths.WorkDir, cfg.SandboxPolicy()))
-	runtimeEnvironment := cfg.EnvironmentSnapshot()
+	runtimeEnvironment := agentRuntime.Environment()
+	extensionsRuntime := agentRuntime.ExtensionsRuntime()
 	sandboxRunner := sandbox.DefaultRunner{LookPath: cfg.LaunchEnvironmentSnapshot().LookPath}
 	tools.RegisterBuiltins(reg, tools.BuiltinOptions{
-		WorkDir:            runtimePaths.WorkDir,
-		Environment:        runtimeEnvironment,
-		Shell:              toolsShellProfile(cfg.Shell),
-		ShellSessions:      shellSessions,
-		Sandbox:            cfg.SandboxPolicy(),
-		SandboxRunner:      sandboxRunner,
-		ToolTimeoutSeconds: toolTimeoutSeconds,
-		ChunkedWrites:      chunkedWrites,
+		WorkDir:                        runtimePaths.WorkDir,
+		Environment:                    runtimeEnvironment,
+		Shell:                          toolsShellProfile(cfg.Shell),
+		ShellSessions:                  shellSessions,
+		Sandbox:                        cfg.SandboxPolicy(),
+		SandboxRunner:                  sandboxRunner,
+		ToolTimeoutSeconds:             toolTimeoutSeconds,
+		ChunkedWrites:                  chunkedWrites,
+		AdditionalWritableRoots:        extensionsRuntime.AdditionalWritableRoots(),
+		PrepareAdditionalWritableRoots: extensionsRuntime.Prepare,
 	})
 
 	skillLoader := skills.NewLoaderFromDirsWithOptions(resourceGraph.SkillDirs(), skillLoaderOptions(cfg))
@@ -418,23 +442,24 @@ func New(opts Options) (*App, error) {
 	}
 
 	a := &App{
-		Engine:            eng,
-		Status:            status,
-		Bus:               bus,
-		Session:           sess,
-		ctx:               appCtx,
-		cancel:            appCancel,
-		cfg:               cfg,
-		stderr:            stderr,
-		skills:            skillLoader.All(),
-		chunkedWrites:     chunkedWrites,
-		sessionLock:       sessLock,
-		sessionResource:   sess,
-		eventSink:         eventSink,
-		eventUnsubscribe:  eventUnsubscribe,
-		statusUnsubscribe: statusUnsubscribe,
-		debug:             opts.Debug,
-		logLevel:          opts.LogLevel,
+		Engine:             eng,
+		Status:             status,
+		Bus:                bus,
+		Session:            sess,
+		ctx:                appCtx,
+		cancel:             appCancel,
+		cfg:                cfg,
+		stderr:             stderr,
+		skills:             skillLoader.All(),
+		chunkedWrites:      chunkedWrites,
+		sessionLock:        sessLock,
+		sessionResource:    sess,
+		eventSink:          eventSink,
+		eventUnsubscribe:   eventUnsubscribe,
+		statusUnsubscribe:  statusUnsubscribe,
+		debug:              opts.Debug,
+		logLevel:           opts.LogLevel,
+		runtimeEnvironment: runtimeEnvironment,
 	}
 	statusUnsubscribe = eventSink.AddProjection(turnAdmissionStatusProjection{
 		status:       status,
@@ -456,16 +481,18 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 	obsv, err := observable.NewManager(observable.ManagerOptions{
-		ConfigPath:            cfg.ObservablesConfigPath(),
-		ReadOnlyConfigSources: observableReadOnlyConfigSources(resourceGraph.ObservableConfigs()),
-		StateDir:              cfg.ObservablesStateDir(),
-		WorkDir:               runtimePaths.WorkDir,
-		Environment:           runtimeEnvironment,
-		Shell:                 cfg.Shell,
-		Sandbox:               cfg.SandboxPolicy(),
-		SandboxRunner:         sandboxRunner,
-		Bus:                   bus,
-		Deliver:               a.DeliverObservation,
+		ConfigPath:                 cfg.ObservablesConfigPath(),
+		ReadOnlyConfigSources:      observableReadOnlyConfigSources(resourceGraph.ObservableConfigs()),
+		StateDir:                   cfg.ObservablesStateDir(),
+		WorkDir:                    runtimePaths.WorkDir,
+		Environment:                runtimeEnvironment,
+		Shell:                      cfg.Shell,
+		Sandbox:                    cfg.SandboxPolicy(),
+		SandboxRunner:              sandboxRunner,
+		Bus:                        bus,
+		Deliver:                    a.DeliverObservation,
+		AgentExtensionsRoot:        extensionsRuntime.RootDir,
+		PrepareAgentExtensionsRoot: extensionsRuntime.Prepare,
 	})
 	if err != nil {
 		_ = a.detachObservability()
@@ -526,7 +553,7 @@ func New(opts Options) (*App, error) {
 		}
 		startupErrors := mgr.StartupErrors()
 		if !opts.SuppressMCPWarnings {
-			writeMCPStartupWarnings(stderr, startupErrors)
+			writeMCPStartupWarnings(stderr, startupErrors, runtimeEnvironment)
 		}
 		if err := mgr.RegisterTools(reg); err != nil {
 			if closeErr := mgr.Close(); closeErr != nil {
@@ -1274,7 +1301,7 @@ func buildMCPStatus(configured map[string]mcp.ServerSpec, toolCounts map[string]
 	return status
 }
 
-func writeMCPStartupWarnings(w io.Writer, startupErrors map[string]string) {
+func writeMCPStartupWarnings(w io.Writer, startupErrors map[string]string, runtimeEnvironment environment.Snapshot) {
 	if w == nil || len(startupErrors) == 0 {
 		return
 	}
@@ -1284,7 +1311,11 @@ func writeMCPStartupWarnings(w io.Writer, startupErrors map[string]string) {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		fmt.Fprintf(w, "juex: warning: optional MCP server %q is unavailable: %s\n", name, startupErrors[name])
+		message := startupErrors[name]
+		if redacted, changed := runtimeEnvironment.RedactConfiguredValues([]byte(message)); changed {
+			message = string(redacted)
+		}
+		fmt.Fprintf(w, "juex: warning: optional MCP server %q is unavailable: %s\n", name, message)
 	}
 }
 

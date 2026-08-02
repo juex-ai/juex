@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/juex-ai/juex/internal/environment"
 )
 
 const (
@@ -31,15 +33,24 @@ const (
 )
 
 type Manifest struct {
-	ManifestVersion int    `json:"manifest_version"`
-	Name            string `json:"name"`
-	Version         string `json:"version"`
-	Description     string `json:"description,omitempty"`
-	DisplayName     string `json:"display_name,omitempty"`
-	Author          string `json:"author,omitempty"`
-	Homepage        string `json:"homepage,omitempty"`
-	Repository      string `json:"repository,omitempty"`
-	License         string `json:"license,omitempty"`
+	ManifestVersion int           `json:"manifest_version"`
+	Name            string        `json:"name"`
+	Version         string        `json:"version"`
+	Description     string        `json:"description,omitempty"`
+	DisplayName     string        `json:"display_name,omitempty"`
+	Author          string        `json:"author,omitempty"`
+	Homepage        string        `json:"homepage,omitempty"`
+	Repository      string        `json:"repository,omitempty"`
+	License         string        `json:"license,omitempty"`
+	Agent           ManifestAgent `json:"agent,omitempty"`
+}
+
+type ManifestAgent struct {
+	Environment ManifestEnvironment `json:"environment,omitempty"`
+}
+
+type ManifestEnvironment struct {
+	Variables map[string]string `json:"variables,omitempty"`
 }
 
 type DiscoverOptions struct {
@@ -208,6 +219,7 @@ func loadManifest(ext Extension) (Manifest, error) {
 		"homepage":         {},
 		"repository":       {},
 		"license":          {},
+		"agent":            {},
 	}
 	for name := range fields {
 		if _, ok := allowed[name]; !ok {
@@ -267,7 +279,92 @@ func manifestFromFields(fields map[string]json.RawMessage) (Manifest, error) {
 			return Manifest{}, fmt.Errorf("%s %w", field.name, err)
 		}
 	}
+	if raw, ok := fields["agent"]; ok {
+		agent, err := manifestAgentFromRaw(raw)
+		if err != nil {
+			return Manifest{}, err
+		}
+		manifest.Agent = agent
+	}
 	return manifest, nil
+}
+
+func manifestAgentFromRaw(raw json.RawMessage) (ManifestAgent, error) {
+	fields, err := strictObjectFields(raw, "agent")
+	if err != nil {
+		return ManifestAgent{}, err
+	}
+	for name := range fields {
+		if name != "environment" {
+			return ManifestAgent{}, fmt.Errorf("agent: unknown field %q", name)
+		}
+	}
+	var agent ManifestAgent
+	if environmentRaw, ok := fields["environment"]; ok {
+		environmentManifest, err := manifestEnvironmentFromRaw(environmentRaw)
+		if err != nil {
+			return ManifestAgent{}, err
+		}
+		agent.Environment = environmentManifest
+	}
+	return agent, nil
+}
+
+func manifestEnvironmentFromRaw(raw json.RawMessage) (ManifestEnvironment, error) {
+	fields, err := strictObjectFields(raw, "agent.environment")
+	if err != nil {
+		return ManifestEnvironment{}, err
+	}
+	for name := range fields {
+		if name != "variables" {
+			return ManifestEnvironment{}, fmt.Errorf("agent.environment: unknown field %q", name)
+		}
+	}
+	var manifest ManifestEnvironment
+	variablesRaw, ok := fields["variables"]
+	if !ok {
+		return manifest, nil
+	}
+	if bytes.Equal(bytes.TrimSpace(variablesRaw), []byte("null")) {
+		return ManifestEnvironment{}, fmt.Errorf("agent.environment.variables must be an object")
+	}
+	var variables map[string]string
+	if err := json.Unmarshal(variablesRaw, &variables); err != nil {
+		return ManifestEnvironment{}, fmt.Errorf("agent.environment.variables values must be strings: %w", err)
+	}
+	if variables == nil {
+		return ManifestEnvironment{}, fmt.Errorf("agent.environment.variables must be an object")
+	}
+	for _, name := range sortedStringMapKeys(variables) {
+		if err := environment.ValidateExtensionDefault(name, variables[name]); err != nil {
+			return ManifestEnvironment{}, fmt.Errorf("agent.environment.variables: %w", err)
+		}
+	}
+	manifest.Variables = variables
+	return manifest, nil
+}
+
+func strictObjectFields(raw json.RawMessage, name string) (map[string]json.RawMessage, error) {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, fmt.Errorf("%s must be an object", name)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, fmt.Errorf("%s must be an object: %w", name, err)
+	}
+	if fields == nil {
+		return nil, fmt.Errorf("%s must be an object", name)
+	}
+	return fields, nil
+}
+
+func sortedStringMapKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func requiredManifestInt(fields map[string]json.RawMessage, name string) (int, error) {

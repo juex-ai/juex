@@ -934,7 +934,11 @@ providers:
 func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 	bin := buildJuex(t)
 
-	const marker = "JUEX_CLI_EXEC_E2E"
+	const (
+		marker          = "JUEX_CLI_EXEC_E2E"
+		extensionEnvKey = "CLI_EXTENSION_DEFAULT"
+		extensionName   = "cli-env"
+	)
 	var requestCount atomic.Int32
 	var mu sync.Mutex
 	var firstBody map[string]any
@@ -953,7 +957,7 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 			firstBody = body
 			mu.Unlock()
 			writeJSON(t, w, chatToolCallResponse("call_exec_cli", "exec_command", map[string]any{
-				"cmd": "echo " + marker,
+				"cmd": `printf '%s:%s\n' ` + marker + ` "$` + extensionEnvKey + `"`,
 			}))
 		case 2:
 			mu.Lock()
@@ -969,7 +973,7 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "model: local-chat:chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+	body := "model: local-chat:chat-test\nextensions:\n  allow: [" + extensionName + "]\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
@@ -979,6 +983,15 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
       - id: chat-test
 `, "BASE_URL", srv.URL)
 	if err := writeText(configPath, body); err != nil {
+		t.Fatal(err)
+	}
+	extensionDir := filepath.Join(work, ".juex", "extensions", extensionName)
+	if err := writeText(filepath.Join(extensionDir, "juex.extension.json"), `{
+  "manifest_version":1,
+  "name":"cli-env",
+  "version":"1.0.0",
+  "agent":{"environment":{"variables":{"CLI_EXTENSION_DEFAULT":"${JUEX_EXT_DATA_DIR}"}}}
+}`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1012,8 +1025,10 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 	if !requestHasTool(first, "exec_command") || !requestHasTool(first, "write_stdin") || !requestHasTool(first, "list_shell_sessions") {
 		t.Fatalf("first provider request missing shell tool family: %+v", first["tools"])
 	}
-	if !requestHasToolResult(second, "call_exec_cli", marker) {
-		t.Fatalf("second provider request missing exec_command result containing %q: %+v", marker, second["messages"])
+	wantExtensionDataDir := filepath.Join(filepath.Dir(filepath.Dir(result.SessionDir)), "extensions", extensionName)
+	wantToolResult := marker + ":" + wantExtensionDataDir
+	if !requestHasToolResult(second, "call_exec_cli", wantToolResult) {
+		t.Fatalf("second provider request missing Extension-backed exec_command result %q: %+v", wantToolResult, second["messages"])
 	}
 
 	conversationPath := filepath.Join(result.SessionDir, "conversation.jsonl")

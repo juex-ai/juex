@@ -66,6 +66,8 @@ test("runtime navigation consolidates operational views without duplicating page
   assert.match(runtimeLayoutSource, /flex min-h-0 flex-1 flex-col overflow-hidden/);
   assert.match(extensionsSource, /getRuntimeStatus/);
   assert.match(extensionsSource, /No Extensions are selected for this Agent\./);
+	assert.match(extensionsSource, /Agent environment/);
+	assert.match(extensionsSource, /shadowed by/);
   assert.doesNotMatch(extensionsSource, /<Button[\s\S]*(Install|Update|Delete|Enable|Disable)/);
   assert.equal((stageHeaderSource.match(/label: "Chat"/g) ?? []).length, 1);
   assert.equal((stageHeaderSource.match(/label: "Runtime"/g) ?? []).length, 1);

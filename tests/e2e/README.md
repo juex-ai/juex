@@ -31,7 +31,7 @@ go test ./tests/e2e -count=1
 | Provider protocols | `TestLiveBinary_ProviderProtocolAndThinkingMatrix` | The compiled binary routes config to OpenAI Responses, custom OpenAI Chat, and DeepSeek-compatible Chat, including thinking-effort capability gates. |
 | CLI image attachment | `TestLiveBinary_CLIRunAttachmentSendsImageAndPersistsArtifact` | The compiled binary ingests an absolute local image path, sends mixed text and image content through OpenAI Chat, persists a canonical session media reference, and remains replayable after the source file is removed. |
 | CLI non-vision attachment | `TestLiveBinary_CLIRunNonVisionAttachmentWarnsAndProjectsUnavailableText` | The compiled binary warns on stderr, keeps stdout usable, replaces image data with explicit unavailable/no-guess provider text, and still completes the turn. |
-| CLI exec tool | `TestLiveBinary_CLIRunExecCommandTool` | The compiled binary runs `juex run --debug --json`, receives an OpenAI Chat `exec_command` tool call from a fake provider, executes it, replays the tool result, and persists the transcript plus debug artifacts. |
+| CLI exec tool | `TestLiveBinary_CLIRunExecCommandTool` | The compiled binary runs `juex run --debug --json`, resolves an Extension default from `${JUEX_EXT_DATA_DIR}`, exposes it to an ordinary OpenAI Chat `exec_command` tool call, replays the tool result, and persists the transcript plus debug artifacts. |
 | Debug bundle CLI | `TestLiveBinary_BundleCreatesRedactedArchive` | The compiled binary runs `juex bundle --session ... --out ...`, writes a tar.gz archive, and verifies session/env secrets are redacted. |
 | Agent state isolation | `TestLiveBinary_IgnoresWorkspaceStateAndRebindsAgent` | The compiled binary keeps workspace runtime-state paths untouched and out of Agent state, preserves workspace config, rebinds after a move, and rejects a copied marker. |
 | Ephemeral identity isolation | `TestLiveBinary_EphemeralStateLifecycle` | Compiled `run` and `repl` use temporary state, support retained inspection, leave marked durable state byte-identical, and keep read-only commands from minting. |
@@ -42,6 +42,7 @@ go test ./tests/e2e -count=1
 | Web pending input | `TestWeb_PendingInputQueuesDuringActiveTurn` | A second web turn queues while a provider call is active, then drains into the next provider request. |
 | Web observables | `TestWeb_ObservablesStartAndSurfaceObservation` | Workspace observable config starts a real child process, records an Observation, delivers it to the active session, and exposes status through the Web API. |
 | Fleet workspace environment | `TestFleetChildrenLoadIndependentWorkspaceDotenvOnRestart` | Two compiled Fleet children load distinct workspace `.env` values into MCP, retain isolation, and apply a changed value only after that child restarts. |
+| Fleet Extension environment | `TestFleetChildrenLoadAgentScopedExtensionDefaultsOnRestart` | Two compiled Fleet children resolve one selected Extension default to distinct Agent data directories, retain process-lifetime snapshots, and apply a manifest edit only to the restarted child. |
 
 `TestLiveBinary_LoadsSkillsAndMCP` runs the Python fake MCP server through
 `uv run --project <repo> python ...`. The `mcp` SDK dependency is managed by
@@ -69,6 +70,11 @@ The live cases exercise:
 - plain completion;
 - read-tool use;
 - a multi-step write/edit/exec_command workflow.
+
+`TestIntegration_ExtensionObservableSandboxGrantsOnlyCurrentAgentExtensionsRoot`
+uses the platform sandbox to prove that an Extension Command Observable may
+write sibling Extension data for its current Agent but cannot write another
+Agent directory or unrelated paths in the current Agent home.
 
 Keep live prompts objective and self-grading: they should assert concrete
 strings or filesystem effects, not subjective answer quality.

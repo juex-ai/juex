@@ -124,6 +124,12 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: cfg.EnvironmentSnapshot()}
 	}
 	cfg.WorkDir = workDir
+	if resolution, resolveErr := agentstate.ResolveExisting(agentstate.Options{HomeDir: cfg.HomeJuexDir, WorkDir: workDir}); resolveErr == nil {
+		cfg.AgentID = resolution.Agent.ID
+		cfg.AgentName = resolution.Agent.Name
+		cfg.AgentStateDir = resolution.Address.StateDir()
+		cfg.AgentAddress = resolution.Address
+	}
 	if err := ensureSelectedRuntimeConfig(cfg); err != nil {
 		checks = append(checks, doctorCheck{
 			Name:       "config",
@@ -135,8 +141,9 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: cfg.EnvironmentSnapshot()}
 	}
 
+	agentRuntime, agentRuntimeErr := app.ResolveAgentRuntime(cfg)
 	checks = append(checks, doctorConfigCheck(cfg))
-	checks = append(checks, doctorEnvironmentCheck(cfg))
+	checks = append(checks, doctorEnvironmentCheck(cfg, agentRuntime, agentRuntimeErr))
 	checks = append(checks, doctorCredentialsCheck(cfg))
 	checks = append(checks, doctorConnectivityCheck(ctx, cfg, offline))
 	checks = append(checks, doctorShellCheck(cfg))
@@ -144,9 +151,13 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 		return toolruntime.ResolveRipgrepWithEnvironment(cfg.EnvironmentSnapshot())
 	}))
 	checks = append(checks, doctorWorkdirCheck(workDir))
-	checks = append(checks, doctorMCPCheck(ctx, cfg, offline))
+	checks = append(checks, doctorMCPCheck(ctx, cfg, agentRuntime, agentRuntimeErr, offline))
 	checks = append(checks, doctorSkillsCheck(cfg))
-	return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: cfg.EnvironmentSnapshot()}
+	redactionEnvironment := cfg.EnvironmentSnapshot()
+	if agentRuntimeErr == nil {
+		redactionEnvironment = agentRuntime.Environment()
+	}
+	return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: redactionEnvironment}
 }
 
 func doctorAgentCheck(workDir string) doctorCheck {
@@ -216,7 +227,7 @@ func doctorCredentialsCheck(cfg config.Config) doctorCheck {
 	return doctorCheckFromReadiness("credentials", providerreadiness.CheckCredentials(cfg.ProviderSelection()))
 }
 
-func doctorEnvironmentCheck(cfg config.Config) doctorCheck {
+func doctorEnvironmentCheck(cfg config.Config, agentRuntime app.AgentRuntimeResolution, runtimeErr error) doctorCheck {
 	status := cfg.EnvironmentStatus()
 	metadata := cfg.EnvironmentSnapshot().ConfiguredMetadata()
 	variables := make([]map[string]string, 0, len(metadata))
@@ -230,6 +241,24 @@ func doctorEnvironmentCheck(cfg config.Config) doctorCheck {
 		}
 		variables = append(variables, detail)
 	}
+	extensionVariables := make([]map[string]string, 0, len(agentRuntime.EnvironmentDeclarations()))
+	for _, item := range agentRuntime.EnvironmentDeclarations() {
+		detail := map[string]string{
+			"key":    item.Name,
+			"source": item.Source,
+			"status": string(item.Status),
+		}
+		if item.ManifestPath != "" {
+			detail["path"] = item.ManifestPath
+		}
+		if item.ShadowedBySource != "" {
+			detail["shadowed_by_source"] = item.ShadowedBySource
+		}
+		if item.ShadowedByPath != "" {
+			detail["shadowed_by_path"] = item.ShadowedByPath
+		}
+		extensionVariables = append(extensionVariables, detail)
+	}
 	message := fmt.Sprintf("%d configured environment variable(s)", len(metadata))
 	switch {
 	case !status.DotenvEnabled:
@@ -239,16 +268,27 @@ func doctorEnvironmentCheck(cfg config.Config) doctorCheck {
 	default:
 		message += "; no " + status.DotenvPath
 	}
+	message += fmt.Sprintf("; %d Extension default declaration(s)", len(extensionVariables))
+	checkStatus := doctorStatusOK
+	suggestion := ""
+	if runtimeErr != nil {
+		checkStatus = doctorStatusFail
+		message += "; " + runtimeErr.Error()
+		suggestion = "fix selected Extension environment declarations and retry"
+	}
 	return doctorCheck{
-		Name:    "environment",
-		Status:  doctorStatusOK,
-		Message: message,
+		Name:       "environment",
+		Status:     checkStatus,
+		Message:    message,
+		Suggestion: suggestion,
 		Details: map[string]any{
-			"dotenv_path":      status.DotenvPath,
-			"dotenv_enabled":   status.DotenvEnabled,
-			"dotenv_loaded":    status.DotenvLoaded,
-			"configured_count": status.ConfiguredVariables,
-			"variables":        variables,
+			"dotenv_path":                 status.DotenvPath,
+			"dotenv_enabled":              status.DotenvEnabled,
+			"dotenv_loaded":               status.DotenvLoaded,
+			"configured_count":            status.ConfiguredVariables,
+			"variables":                   variables,
+			"extension_default_count":     len(extensionVariables),
+			"extension_default_variables": extensionVariables,
 		},
 	}
 }
@@ -355,10 +395,13 @@ func doctorWorkdirCheck(workDir string) doctorCheck {
 	return doctorCheck{Name: "workdir", Status: doctorStatusOK, Message: "workdir and .juex are readable"}
 }
 
-func doctorMCPCheck(ctx context.Context, cfg config.Config, offline bool) doctorCheck {
+func doctorMCPCheck(ctx context.Context, cfg config.Config, agentRuntime app.AgentRuntimeResolution, runtimeErr error, offline bool) doctorCheck {
 	opts := mcp.RemoteReadinessOptions{Offline: offline}
+	if runtimeErr != nil {
+		return doctorCheck{Name: "mcp", Status: doctorStatusFail, Message: runtimeErr.Error(), Suggestion: "fix selected Extension environment declarations and retry"}
+	}
 	if offline {
-		return doctorMCPCheckWithOptions(ctx, cfg, opts)
+		return doctorMCPCheckWithAgentRuntimeOptions(ctx, cfg, agentRuntime, opts)
 	}
 	restore, err := cfg.EnvironmentSnapshot().Activate()
 	if err != nil {
@@ -369,7 +412,7 @@ func doctorMCPCheck(ctx context.Context, cfg config.Config, offline bool) doctor
 			Suggestion: "fix the configured runtime environment and retry",
 		}
 	}
-	check := doctorMCPCheckWithOptions(ctx, cfg, opts)
+	check := doctorMCPCheckWithAgentRuntimeOptions(ctx, cfg, agentRuntime, opts)
 	if err := restore(); err != nil {
 		check.Status = doctorStatusFail
 		check.Message += "; restore runtime environment: " + err.Error()
@@ -383,7 +426,20 @@ func doctorMCPCheckWithOptions(
 	cfg config.Config,
 	opts mcp.RemoteReadinessOptions,
 ) doctorCheck {
-	configs, err := app.LoadMCPConfigs(cfg, cfg.WorkDir)
+	agentRuntime, err := app.ResolveAgentRuntime(cfg)
+	if err != nil {
+		return doctorCheck{Name: "mcp", Status: doctorStatusFail, Message: err.Error(), Suggestion: "fix selected Extension environment declarations and retry"}
+	}
+	return doctorMCPCheckWithAgentRuntimeOptions(ctx, cfg, agentRuntime, opts)
+}
+
+func doctorMCPCheckWithAgentRuntimeOptions(
+	ctx context.Context,
+	cfg config.Config,
+	agentRuntime app.AgentRuntimeResolution,
+	opts mcp.RemoteReadinessOptions,
+) doctorCheck {
+	configs, err := app.LoadMCPConfigs(agentRuntime, cfg.WorkDir)
 	if err != nil {
 		if stage, ok := mcp.ErrorReadinessStage(err); ok {
 			suggestion := "configure exactly one valid command or url for the named MCP server"
@@ -410,7 +466,7 @@ func doctorMCPCheckWithOptions(
 	}
 	sort.Strings(names)
 
-	opts.ConnectOptions.Environment = cfg.EnvironmentSnapshot()
+	opts.ConnectOptions.Environment = agentRuntime.Environment()
 	var failures []string
 	var suggestions []string
 	var details []map[string]any

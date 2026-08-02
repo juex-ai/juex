@@ -217,7 +217,8 @@ func TestRuntimeStatusProjectsSelectedExtensionMetadata(t *testing.T) {
 	work := srv.opts.Cfg.WorkDir
 	extensionDir := filepath.Join(work, ".juex", "extensions", "demo")
 	srv.opts.Cfg.Extensions = config.ExtensionPolicy{Allow: []string{"demo"}, Configured: true}
-	mustWriteRuntimeFile(t, filepath.Join(extensionDir, "juex.extension.json"), `{"manifest_version":1,"name":"demo","version":"1.2.3","description":"Demo integration"}`)
+	const secretDefault = "runtime-extension-secret-sentinel"
+	mustWriteRuntimeFile(t, filepath.Join(extensionDir, "juex.extension.json"), `{"manifest_version":1,"name":"demo","version":"1.2.3","description":"Demo integration","agent":{"environment":{"variables":{"DEMO_RUNTIME_DEFAULT":"`+secretDefault+`"}}}}`)
 	mustWriteRuntimeFile(t, filepath.Join(extensionDir, "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: Demo\n---\nbody")
 
 	got, err := srv.runtimeStatus()
@@ -230,6 +231,16 @@ func TestRuntimeStatusProjectsSelectedExtensionMetadata(t *testing.T) {
 	ext := got.Extensions.Items[0]
 	if ext.Name != "demo" || ext.Version != "1.2.3" || ext.Description != "Demo integration" || ext.Scope != "project" || ext.Path != extensionDir || ext.ManifestVersion != 1 || ext.Resources.Skills != 1 {
 		t.Fatalf("extension = %+v", ext)
+	}
+	if len(ext.Environment) != 1 || ext.Environment[0].Name != "DEMO_RUNTIME_DEFAULT" || ext.Environment[0].Source != "ext:demo" || ext.Environment[0].Status != "effective" {
+		t.Fatalf("extension environment = %+v", ext.Environment)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), secretDefault) {
+		t.Fatalf("runtime status leaked Extension environment value: %s", encoded)
 	}
 }
 

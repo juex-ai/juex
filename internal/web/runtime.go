@@ -36,18 +36,27 @@ type extensionsStatus struct {
 }
 
 type extensionInfo struct {
-	ManifestVersion int                     `json:"manifest_version"`
-	Name            string                  `json:"name"`
-	Version         string                  `json:"version"`
-	Description     string                  `json:"description,omitempty"`
-	DisplayName     string                  `json:"display_name,omitempty"`
-	Author          string                  `json:"author,omitempty"`
-	Homepage        string                  `json:"homepage,omitempty"`
-	Repository      string                  `json:"repository,omitempty"`
-	License         string                  `json:"license,omitempty"`
-	Scope           string                  `json:"scope"`
-	Path            string                  `json:"path"`
-	Resources       extensionResourceCounts `json:"resources"`
+	ManifestVersion int                        `json:"manifest_version"`
+	Name            string                     `json:"name"`
+	Version         string                     `json:"version"`
+	Description     string                     `json:"description,omitempty"`
+	DisplayName     string                     `json:"display_name,omitempty"`
+	Author          string                     `json:"author,omitempty"`
+	Homepage        string                     `json:"homepage,omitempty"`
+	Repository      string                     `json:"repository,omitempty"`
+	License         string                     `json:"license,omitempty"`
+	Scope           string                     `json:"scope"`
+	Path            string                     `json:"path"`
+	Resources       extensionResourceCounts    `json:"resources"`
+	Environment     []extensionEnvironmentInfo `json:"environment"`
+}
+
+type extensionEnvironmentInfo struct {
+	Name             string `json:"name"`
+	Source           string `json:"source"`
+	Status           string `json:"status"`
+	ShadowedBySource string `json:"shadowed_by_source,omitempty"`
+	ShadowedByPath   string `json:"shadowed_by_path,omitempty"`
 }
 
 type extensionResourceCounts struct {
@@ -181,7 +190,11 @@ func (s *Server) handleRuntimeStatus(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	if err := writeEnvironmentSafeJSON(w, http.StatusOK, status, s.opts.Cfg.EnvironmentSnapshot()); err != nil {
+	runtimeEnvironment := s.opts.Cfg.EnvironmentSnapshot()
+	if agentRuntime, resolveErr := s.resolveAgentRuntime(); resolveErr == nil {
+		runtimeEnvironment = agentRuntime.Environment()
+	}
+	if err := writeEnvironmentSafeJSON(w, http.StatusOK, status, runtimeEnvironment); err != nil {
 		s.logVerbose("juex listen: write runtime status: %v", err)
 	}
 }
@@ -194,12 +207,17 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
+	agentRuntime, err := s.resolveAgentRuntime()
+	if err != nil {
+		return runtimeStatusResponse{}, err
+	}
 	status, err := app.NewRuntimeCatalogService(s.opts.Cfg).Snapshot(app.RuntimeStatusOptions{
 		MCPToolDescriptors: s.mcpToolDescriptors(),
 		MCPErrors:          s.mcpErrors(),
 		MCPConnectionSpecs: s.mcpConnectionSpecs(),
 		SkillCache:         s.runtimeSkills,
 		ScratchpadDir:      scratchpadDir,
+		AgentRuntime:       &agentRuntime,
 	})
 	if err != nil {
 		return runtimeStatusResponse{}, err
@@ -248,6 +266,13 @@ func runtimeStatusResponseFromApp(status app.RuntimeStatus) runtimeStatusRespons
 func extensionsStatusFromApp(status app.RuntimeExtensionsStatus) extensionsStatus {
 	items := make([]extensionInfo, 0, len(status.Items))
 	for _, item := range status.Items {
+		environmentItems := make([]extensionEnvironmentInfo, 0, len(item.Environment))
+		for _, declaration := range item.Environment {
+			environmentItems = append(environmentItems, extensionEnvironmentInfo{
+				Name: declaration.Name, Source: declaration.Source, Status: string(declaration.Status),
+				ShadowedBySource: declaration.ShadowedBySource, ShadowedByPath: declaration.ShadowedByPath,
+			})
+		}
 		items = append(items, extensionInfo{
 			ManifestVersion: item.ManifestVersion,
 			Name:            item.Name,
@@ -260,6 +285,7 @@ func extensionsStatusFromApp(status app.RuntimeExtensionsStatus) extensionsStatu
 			License:         item.License,
 			Scope:           item.Scope,
 			Path:            item.Path,
+			Environment:     environmentItems,
 			Resources: extensionResourceCounts{
 				Skills:      item.Resources.Skills,
 				MCPServers:  item.Resources.MCPServers,
@@ -412,6 +438,6 @@ func (s *Server) absoluteWorkDir() string {
 	return abs
 }
 
-func (s *Server) loadMCPConfigs() ([]mcp.Config, error) {
-	return app.LoadMCPConfigs(s.opts.Cfg, s.absoluteWorkDir())
+func (s *Server) loadMCPConfigs(runtime app.AgentRuntimeResolution) ([]mcp.Config, error) {
+	return app.LoadMCPConfigs(runtime, s.absoluteWorkDir())
 }

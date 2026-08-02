@@ -77,17 +77,18 @@ environment:
     NODE_ENV: production
 ```
 
-Environment precedence is default-home YAML, a distinct instance-home YAML,
-workspace `.env`, workspace YAML, explicit `--config` YAML, the environment
-inherited at launch, child-local MCP/Observable values, then Juex-owned runtime
-injection. Inherited values therefore preserve existing service and shell
-overrides. `--config` never changes the `.env` location. Keep non-secret
-defaults in YAML and secrets in a gitignored workspace `.env`: every
-configured value is intentionally granted to provider code and managed MCP,
-Observable, hook, shell, and grep processes. Juex rejects portable-name
-violations, NUL bytes, Windows case conflicts, and bootstrap/runtime names such
-as `JUEX_HOME`, `HOME`, `USERPROFILE`, `WORKDIR`, `JUEX_WORKDIR`, and
-`JUEX_EXT_DIR` and `JUEX_EXT_DATA_DIR`.
+Environment precedence is selected Extension manifest defaults, default-home
+YAML, a distinct instance-home YAML, workspace `.env`, workspace YAML,
+explicit `--config` YAML, the environment inherited at launch, child-local
+MCP/Observable values, then Juex-owned runtime injection. Existing Agent
+values, including empty values, therefore shadow Extension defaults and
+preserve service and shell overrides. `--config` never changes the `.env`
+location. Keep non-secret defaults in YAML and secrets in a gitignored
+workspace `.env`: every configured value is intentionally granted to provider
+code and managed MCP, Observable, hook, shell, and grep processes. Juex rejects
+portable-name violations, NUL bytes, Windows case conflicts, and
+bootstrap/runtime names such as `JUEX_HOME`, `HOME`, `USERPROFILE`, `WORKDIR`,
+`JUEX_WORKDIR`, `JUEX_EXT_DIR`, and `JUEX_EXT_DATA_DIR`.
 
 MCP servers are configured separately from `juex.yaml`. Personal servers live
 in `~/.agents/mcp.json`; project servers live in
@@ -385,9 +386,35 @@ optional:
   "author": "Example Author",
   "homepage": "https://example.com",
   "repository": "https://example.com/repository",
-  "license": "MIT"
+  "license": "MIT",
+  "agent": {
+    "environment": {
+      "variables": {
+        "EXAMPLE_CONFIG_DIR": "${JUEX_EXT_DATA_DIR}"
+      }
+    }
+  }
 }
 ```
+
+The Lark CLI Extension declares both of its Agent-local roots:
+
+```json
+{
+  "agent": {
+    "environment": {
+      "variables": {
+        "LARKSUITE_CLI_CONFIG_DIR": "${JUEX_EXT_DATA_DIR}",
+        "LARKSUITE_CLI_DATA_DIR": "${JUEX_EXT_DATA_DIR}"
+      }
+    }
+  }
+}
+```
+
+Current upstream Lark CLI builds use `CONFIG_DIR` for `config.json`; Linux
+builds also use `DATA_DIR` for the encrypted keychain. Juex injects both on all
+platforms so the Extension contract is stable.
 
 Juex chooses the winning directory before reading its manifest. Only selected
 winners are validated; an invalid winner fails startup and never falls back to
@@ -407,7 +434,10 @@ remains the process capability boundary for Command Observables.
 The Web Runtime stage exposes Overview, Extensions, Observables, Logs, and
 Config subsections. Its read-only Extensions view shows the selected manifest,
 installation scope and path, and effective Skill, MCP server, Hook, and
-Observable counts from the same runtime resource graph used at startup.
+Observable counts from the same runtime resource graph used at startup. It
+also lists only Extension-declared Agent environment variable names, sources,
+and effective, shadowed, or deduplicated status; values are never returned.
+`juex doctor` exposes the same value-free declaration diagnostics.
 Local extension MCP servers receive `JUEX_EXT_DIR`, the selected installation
 root, and `JUEX_EXT_DATA_DIR`, the private persistent directory at
 `$JUEX_HOME/agents/<id>/extensions/<name>`, alongside `WORKDIR` and
@@ -418,7 +448,13 @@ resource previews do not create it. Extension data survives runtime restarts,
 Workspace moves, allowlist changes, and Extension removal, and is removed with
 the owning Agent. Workspace artifacts and project-owned Observable definitions
 remain under `.juex/`; extension-owned definitions remain read-only in the
-selected Extension. Provider configuration uses the same
+selected Extension. Manifest `agent.environment.variables` values support only
+`${JUEX_EXT_DIR}`, `${JUEX_EXT_DATA_DIR}`, `${WORKDIR}`, and
+`${JUEX_WORKDIR}` deterministic replacement. They reach ordinary Agent child
+processes without changing the Juex process, Fleet supervisor, parent shell, or
+shell profiles. Same-valued defaults deduplicate; different unshadowed values,
+unknown placeholders, and dangerous process-control names fail startup without
+printing values. Provider configuration uses the same
 default-home then instance-home merge. A serving agent prefers
 `unix://$JUEX_HOME/agents/<id>/api.sock` and falls back loudly to an ephemeral
 `tcp://127.0.0.1:<port>` endpoint when AF_UNIX is unavailable.
@@ -521,10 +557,12 @@ temporary scratch paths needed by normal shell tools, but do not silently reopen
 arbitrary user paths outside the workspace. Unsupported platforms, missing
 helpers, permissions errors, or policies a backend cannot enforce fail closed
 instead of falling back to unsandboxed execution.
-Extension-aware sandbox requests may add only the owning extension's exact Agent
-data directory as a writable root. An overlap with `blocked_paths`, including
-through symlinks, fails before process startup; the Agent parent and sibling
-extension directories are not granted.
+Sandboxed `exec_command` and Command Observable processes receive the current
+Agent's complete `$JUEX_HOME/agents/<id>/extensions` directory as an additional
+writable root. Schedules do not spawn a child process. An overlap with
+`blocked_paths`, including through symlinks, fails before process startup; no
+other Agent directory or other part of the current Agent home is granted.
+Local Extension MCP servers retain their narrower owning-Extension data root.
 
 Observables are configured sources that emit durable Observations. Definitions
 come from writable `.juex/observables.json` with source `project`, plus
@@ -568,10 +606,10 @@ Command fields expand `WORKDIR`, `JUEX_WORKDIR`, and, for extension definitions,
 `JUEX_EXT_DIR` and `JUEX_EXT_DATA_DIR` across command, args, cwd, and env
 values without a shell. Project definitions cannot set or reference the two
 extension-only variables, and inherited values are removed from their child
-environment. An Extension Command receives only its exact Agent-owned data
-directory as an additional writable root; with Sandbox enabled and
-`outside_workspace: read_only`, sibling extension data and unrelated Agent-home
-paths remain read-only. Explicit `blocked_paths` still wins.
+environment. Every Command Observable receives the current Agent's complete
+Extension data root as an additional writable root; with Sandbox enabled and
+`outside_workspace: read_only`, another Agent's data and unrelated paths in the
+current Agent home remain read-only. Explicit `blocked_paths` still wins.
 
 Generated run, Observation, delivery, idempotency, and schedule state follow
 the resident agent in its agent home. Creation requests may omit `id` when
@@ -644,8 +682,9 @@ debugging one session. The archive includes a manifest, runtime snapshot,
 conversation, events, observability files, and logs when present. Redaction is
 enabled by default for secret-like values; use `--include-artifacts` or
 `--include-worktree-summary` to add optional context. Configured runtime
-environment values are always removed from every bundled payload, even with
-`--redact=false`; runtime metadata contains only key, source, and source path.
+environment values, including effective and shadowed Extension declarations,
+are always removed from every bundled payload, even with `--redact=false`;
+runtime metadata contains only key, source, and source path.
 
 `--debug` enables detailed session-local observability. `--log-level` accepts
 `debug`, `info`, `warn`, or `error`; the default is `info`, and `--debug`
