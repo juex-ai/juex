@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -49,7 +50,17 @@ type RuntimeResourceNode struct {
 	Precedence       int
 }
 
+type RuntimeExtensionDescriptor struct {
+	Name         string
+	Dir          string
+	Source       string
+	Scope        extensions.Scope
+	RequireTrust bool
+	Manifest     extensions.Manifest
+}
+
 type RuntimeResourceGraph struct {
+	extensions        []RuntimeExtensionDescriptor
 	skillDirs         []skills.Dir
 	mcpConfigs        []mcpConfigRef
 	observableConfigs []observableConfigRef
@@ -62,8 +73,8 @@ func ResolveRuntimeResourceGraph(cfg config.Config) (RuntimeResourceGraph, error
 	extensionPolicy := cfg.ExtensionPolicy()
 	extResources, err := extensions.Discover(extensions.DiscoverOptions{
 		Roots: []extensions.Root{
-			{Path: paths.DefaultHomeExtensionsDir, Scope: extensions.ScopeUser},
-			{Path: paths.HomeExtensionsDir, Scope: extensions.ScopeUser},
+			{Path: paths.DefaultHomeExtensionsDir, Scope: extensions.ScopeDefaultHome},
+			{Path: paths.HomeExtensionsDir, Scope: homeExtensionScope(paths)},
 			{Path: paths.ProjectExtensionsDir, Scope: extensions.ScopeProject, RequireTrust: true},
 		},
 		AllowedNames: extensionPolicy.Allow,
@@ -82,12 +93,38 @@ func ResolveRuntimeResourceGraph(cfg config.Config) (RuntimeResourceGraph, error
 	mcpConfigs := mcpConfigRefs(paths, extResources.MCPConfigs, runtimeContexts)
 	observableConfigs := observableConfigRefs(extResources.ObservableConfigs, runtimeContexts)
 	return RuntimeResourceGraph{
+		extensions:        runtimeExtensionDescriptors(extResources.Extensions),
 		skillDirs:         skillDirs,
 		mcpConfigs:        mcpConfigs,
 		observableConfigs: observableConfigs,
 		hooks:             hookConfig,
 		nodes:             runtimeResourceNodes(paths, extResources, runtimeContexts),
 	}, nil
+}
+
+func (g RuntimeResourceGraph) Extensions() []RuntimeExtensionDescriptor {
+	return append([]RuntimeExtensionDescriptor(nil), g.extensions...)
+}
+
+func homeExtensionScope(paths config.ResourcePaths) extensions.Scope {
+	if sameRuntimeResourcePath(paths.HomeExtensionsDir, paths.DefaultHomeExtensionsDir) {
+		return extensions.ScopeDefaultHome
+	}
+	return extensions.ScopeInstanceHome
+}
+
+func sameRuntimeResourcePath(left, right string) bool {
+	if left == "" || right == "" {
+		return false
+	}
+	leftAbs, leftErr := filepath.Abs(left)
+	rightAbs, rightErr := filepath.Abs(right)
+	if leftErr == nil && rightErr == nil && filepath.Clean(leftAbs) == filepath.Clean(rightAbs) {
+		return true
+	}
+	leftInfo, leftErr := os.Stat(left)
+	rightInfo, rightErr := os.Stat(right)
+	return leftErr == nil && rightErr == nil && os.SameFile(leftInfo, rightInfo)
 }
 
 func (g RuntimeResourceGraph) SkillDirs() []skills.Dir {
@@ -131,7 +168,7 @@ func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Re
 			ExtensionName:    ext.Name,
 			ExtensionDir:     ext.Dir,
 			ExtensionDataDir: runtimeContext.DataDir,
-			RequireTrust:     ext.Scope == extensions.ScopeProject,
+			RequireTrust:     ext.RequireTrust,
 			Precedence:       runtimeSourceRank(ext.Source),
 		})
 		for _, ref := range skillDirsByExt[ext.Name] {
@@ -154,6 +191,21 @@ func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Re
 		)
 	}
 	return nodes
+}
+
+func runtimeExtensionDescriptors(selected []extensions.Extension) []RuntimeExtensionDescriptor {
+	descriptors := make([]RuntimeExtensionDescriptor, 0, len(selected))
+	for _, ext := range selected {
+		descriptors = append(descriptors, RuntimeExtensionDescriptor{
+			Name:         ext.Name,
+			Dir:          ext.Dir,
+			Source:       ext.Source,
+			Scope:        ext.Scope,
+			RequireTrust: ext.RequireTrust,
+			Manifest:     ext.Manifest,
+		})
+	}
+	return descriptors
 }
 
 func resourceRefsByExtension(refs []extensions.ResourceRef) map[string][]extensions.ResourceRef {

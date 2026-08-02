@@ -23,7 +23,7 @@ import { StateBadge } from "@/pages/Observables";
 import { agentPathFromLocation } from "@/lib/fleet-routes";
 
 export function ObservableDetail() {
-  const { id = "" } = useParams<{ id: string }>();
+  const { observableId: id = "" } = useParams<{ observableId: string }>();
   const navigate = useNavigate();
   const [data, setData] = useState<ObservableDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -87,7 +87,7 @@ export function ObservableDetail() {
         await stopObservable(id);
       } else {
         await deleteObservable(id);
-        navigate(agentPathFromLocation("/observables"), { replace: true });
+        navigate(agentPathFromLocation("/runtime/observables"), { replace: true });
         return;
       }
       await refresh({ quiet: true });
@@ -116,7 +116,7 @@ export function ObservableDetail() {
           <div className="flex min-w-0 items-center gap-2">
             <Button asChild variant="ghost" size="icon-sm">
               <Link
-                to={agentPathFromLocation("/observables")}
+                to={agentPathFromLocation("/runtime/observables")}
                 aria-label="Back to observables"
               >
                 <ArrowLeft className="size-3.5" />

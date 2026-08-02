@@ -107,9 +107,12 @@ juex/
 │   │   │   ├── Sessions.tsx        # /agents/:agentId
 │   │   │   ├── Session.tsx         # /agents/:agentId/sessions/:id
 │   │   │   ├── History.tsx         # /agents/:agentId/history
-│   │   │   ├── Runtime.tsx         # /agents/:agentId/runtime
-│   │   │   ├── AgentLogs.tsx       # /agents/:agentId/logs
-│   │   │   └── AgentConfig.tsx     # /agents/:agentId/config
+│   │   │   ├── RuntimeLayout.tsx   # shared /agents/:agentId/runtime layout
+│   │   │   ├── Runtime.tsx         # /agents/:agentId/runtime overview
+│   │   │   ├── Extensions.tsx      # /agents/:agentId/runtime/extensions
+│   │   │   ├── Observables.tsx     # /agents/:agentId/runtime/observables
+│   │   │   ├── AgentLogs.tsx       # /agents/:agentId/runtime/logs
+│   │   │   └── AgentConfig.tsx     # /agents/:agentId/runtime/config
 │   │   └── components/
 │   │       ├── AppShell.tsx
 │   │       ├── session/             # composer, status panel, transcript registry
@@ -204,7 +207,8 @@ Edit React, see changes instantly.
 
 Every page renders inside a fleet-first shell. A persistent agent sidebar owns
 fleet selection and lifecycle actions, while a tabbed stage remounts the
-selected agent's existing Chat, Runtime, Observables, Logs, and Config routes.
+selected agent's Chat or Runtime route. Runtime contains Overview, Extensions,
+Observables, Logs, and Config subsections.
 The workspace browser docks on wide screens or becomes a right-side drawer on
 narrower screens. Session history is opened from the stage header as
 `/agents/<id>/history`; session titles are not repeated in the shell.
@@ -239,8 +243,8 @@ narrower screens. Session history is opened from the stage header as
   back to the first registered agent. Empty fleets show an Add agent action and
   the CLI registration hint.
 - The stage header contains the agent name, a compact status pill, and the
-  Chat/Runtime/Observables/Logs/Config tab strip. Existing route components and
-  canonical deep links remain the source of page behavior.
+  Chat/Runtime tab strip. Runtime places an accessible subsection selector at
+  the upper right. Canonical nested routes remain the source of page behavior.
 - The file browser docks as a right column at 1280px and wider. Below 1280px,
   the same header button opens it as a right-side `Sheet` so the conversation
   column keeps its readable width. On a concrete session route, an icon beside
@@ -399,9 +403,16 @@ of entry point. Active primary sessions keep the composer; inactive primary
 and side sessions are read-only. The history page owns deletion and a compact
 `New chat` button.
 
-### 6.5 Runtime detail (`/agents/:agentId/runtime`)
+### 6.5 Runtime (`/agents/:agentId/runtime`)
 
-Shows service runtime metadata first, including the process start time and the
+Runtime is a shared layout with an upper-right selector for Overview,
+Extensions, Observables, Logs, and Config. The selected subsection is derived
+from the URL, not component-local state. Switching Agents preserves the current
+subsection; switching from an Observable detail returns to the new Agent's
+Observable list. The layout keeps one full-height flex scroll boundary and
+renders each child through a nested outlet.
+
+Overview shows service runtime metadata first, including the process start time and the
 absolute cwd used by the selected agent process. The start time is stable
 for the server lifetime rather than changing on each refresh. The effective
 system prompt uses a semantic table for label, source, path, and approximate
@@ -438,7 +449,15 @@ expanded disclosure rather than inaccessible hover-only truncation. Runtime
 section surfaces use the shared radius scale and one visible boundary per
 section. This is operational metadata, not a conversational surface.
 
-### 6.6 Observables (`/agents/:agentId/observables`, `/agents/:agentId/observables/:id`)
+The read-only Extensions subsection at
+`/agents/:agentId/runtime/extensions` lists only selected winners. Each card
+shows display name, logical name, version, description, installation scope and
+absolute path, manifest version, and effective Skill, MCP server, Hook, and
+Observable counts. It exposes no install, enable, disable, or edit controls.
+An empty runtime uses the explicit `No Extensions are selected for this Agent.`
+state.
+
+### 6.6 Observables (`/agents/:agentId/runtime/observables`, `/agents/:agentId/runtime/observables/:observableId`)
 
 The list uses a compact five-column grid that fits inside the standard
 `max-w-5xl` content width on tablet and desktop. Observable, Source, and Last
@@ -463,8 +482,8 @@ existing page-level error region.
 
 ### 6.7 Agent logs and config
 
-`/agents/:agentId/logs` shows a refreshable bounded tail with an explicit line
-limit. `/agents/:agentId/config` edits the workspace `juex.yaml`; save validates
+`/agents/:agentId/runtime/logs` shows a refreshable bounded tail with an explicit line
+limit. `/agents/:agentId/runtime/config` edits the workspace `juex.yaml`; save validates
 before writing, restarts the selected agent, and renders validation or restart
 errors in a prominent alert.
 

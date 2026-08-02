@@ -95,7 +95,7 @@ export function Observables() {
       }
       await refresh({ quiet: true });
       if (action === "delete") {
-        navigate(agentPathFromLocation("/observables"), { replace: true });
+        navigate(agentPathFromLocation("/runtime/observables"), { replace: true });
       }
     } catch (e) {
       console.error(`${action}Observable failed`, e);
@@ -215,7 +215,7 @@ function ObservableRow({
 }) {
   const last = item.last_observation?.id ? item.last_observation : null;
   const detailHref = agentPathFromLocation(
-    `/observables/${encodeURIComponent(item.id)}`,
+    `/runtime/observables/${encodeURIComponent(item.id)}`,
   );
   const detailLabel = `Open observable ${item.name || item.id}`;
   const tooltipContentRef = useRef<HTMLDivElement>(null);

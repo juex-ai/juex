@@ -22,11 +22,39 @@ type runtimeStatusResponse struct {
 	Provider     providerStatus      `json:"provider"`
 	Shell        config.ShellProfile `json:"shell"`
 	Sandbox      sandbox.Policy      `json:"sandbox"`
+	Extensions   extensionsStatus    `json:"extensions"`
 	SystemPrompt systemPromptStatus  `json:"system_prompt"`
 	Tools        runtimeToolsStatus  `json:"tools"`
 	MCP          mcpStatus           `json:"mcp"`
 	Hooks        hooksStatus         `json:"hooks"`
 	Skills       skillsStatus        `json:"skills"`
+}
+
+type extensionsStatus struct {
+	Count int             `json:"count"`
+	Items []extensionInfo `json:"items"`
+}
+
+type extensionInfo struct {
+	ManifestVersion int                     `json:"manifest_version"`
+	Name            string                  `json:"name"`
+	Version         string                  `json:"version"`
+	Description     string                  `json:"description,omitempty"`
+	DisplayName     string                  `json:"display_name,omitempty"`
+	Author          string                  `json:"author,omitempty"`
+	Homepage        string                  `json:"homepage,omitempty"`
+	Repository      string                  `json:"repository,omitempty"`
+	License         string                  `json:"license,omitempty"`
+	Scope           string                  `json:"scope"`
+	Path            string                  `json:"path"`
+	Resources       extensionResourceCounts `json:"resources"`
+}
+
+type extensionResourceCounts struct {
+	Skills      int `json:"skills"`
+	MCPServers  int `json:"mcp_servers"`
+	Hooks       int `json:"hooks"`
+	Observables int `json:"observables"`
 }
 
 type runtimeToolsStatus struct {
@@ -208,12 +236,39 @@ func runtimeStatusResponseFromApp(status app.RuntimeStatus) runtimeStatusRespons
 		Provider:     providerStatusFromApp(status.Provider),
 		Shell:        status.Shell,
 		Sandbox:      status.Sandbox,
+		Extensions:   extensionsStatusFromApp(status.Extensions),
 		SystemPrompt: systemPromptStatusFromApp(status.SystemPrompt),
 		Tools:        runtimeToolsStatusFromApp(status.Tools),
 		MCP:          mcpStatusFromApp(status.MCP),
 		Hooks:        hooksStatusFromApp(status.Hooks),
 		Skills:       skillsStatusFromApp(status.Skills),
 	}
+}
+
+func extensionsStatusFromApp(status app.RuntimeExtensionsStatus) extensionsStatus {
+	items := make([]extensionInfo, 0, len(status.Items))
+	for _, item := range status.Items {
+		items = append(items, extensionInfo{
+			ManifestVersion: item.ManifestVersion,
+			Name:            item.Name,
+			Version:         item.Version,
+			Description:     item.Description,
+			DisplayName:     item.DisplayName,
+			Author:          item.Author,
+			Homepage:        item.Homepage,
+			Repository:      item.Repository,
+			License:         item.License,
+			Scope:           item.Scope,
+			Path:            item.Path,
+			Resources: extensionResourceCounts{
+				Skills:      item.Resources.Skills,
+				MCPServers:  item.Resources.MCPServers,
+				Hooks:       item.Resources.Hooks,
+				Observables: item.Resources.Observables,
+			},
+		})
+	}
+	return extensionsStatus{Count: len(items), Items: items}
 }
 
 func runtimeToolsStatusFromApp(status app.RuntimeToolsStatus) runtimeToolsStatus {

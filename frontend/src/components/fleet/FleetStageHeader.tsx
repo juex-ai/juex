@@ -26,9 +26,6 @@ import type { AgentStatus } from "@/types";
 const TABS: Array<{ id: AgentStageTab; label: string }> = [
   { id: "chat", label: "Chat" },
   { id: "runtime", label: "Runtime" },
-  { id: "observables", label: "Observables" },
-  { id: "logs", label: "Logs" },
-  { id: "config", label: "Config" },
 ];
 
 export function FleetStageHeader({

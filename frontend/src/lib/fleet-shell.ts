@@ -1,12 +1,7 @@
 import type { AgentActionResult, AgentStatus } from "../types.ts";
 
 export type AgentVisualState = "stopped" | "idle" | "working" | "failed";
-export type AgentStageTab =
-  | "chat"
-  | "runtime"
-  | "observables"
-  | "logs"
-  | "config";
+export type AgentStageTab = "chat" | "runtime";
 export type AgentLifecycleAction = "start" | "stop";
 export type AgentManagementAction = AgentLifecycleAction | "restart";
 
@@ -54,10 +49,7 @@ export function resolveAgentSelection(
 
 export function agentTabFromPath(pathname: string): AgentStageTab {
   const suffix = pathname.replace(/^\/agents\/[^/]+/, "");
-  if (suffix === "/runtime") return "runtime";
-  if (suffix.startsWith("/observables")) return "observables";
-  if (suffix === "/logs") return "logs";
-  if (suffix === "/config") return "config";
+  if (suffix === "/runtime" || suffix.startsWith("/runtime/")) return "runtime";
   return "chat";
 }
 
@@ -69,12 +61,6 @@ export function agentTabPath(
   switch (tab) {
     case "runtime":
       return `${base}/runtime`;
-    case "observables":
-      return `${base}/observables`;
-    case "logs":
-      return `${base}/logs`;
-    case "config":
-      return `${base}/config`;
     default:
       return base;
   }

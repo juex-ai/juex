@@ -123,6 +123,25 @@ func TestResolveRuntimeResourceGraphUsesLayeredExtensionPolicyAndWinningBundle(t
 	}
 }
 
+func TestHomeExtensionScopeDistinguishesDefaultAndInstanceHomes(t *testing.T) {
+	defaultDir := t.TempDir()
+	aliasDir := filepath.Join(filepath.Dir(defaultDir), ".", filepath.Base(defaultDir))
+
+	if got := homeExtensionScope(config.ResourcePaths{
+		DefaultHomeExtensionsDir: defaultDir,
+		HomeExtensionsDir:        aliasDir,
+	}); got != extensions.ScopeDefaultHome {
+		t.Fatalf("same home scope = %q, want %q", got, extensions.ScopeDefaultHome)
+	}
+
+	if got := homeExtensionScope(config.ResourcePaths{
+		DefaultHomeExtensionsDir: defaultDir,
+		HomeExtensionsDir:        t.TempDir(),
+	}); got != extensions.ScopeInstanceHome {
+		t.Fatalf("distinct home scope = %q, want %q", got, extensions.ScopeInstanceHome)
+	}
+}
+
 func TestResolveRuntimeResourceGraphExcludesUserResourcesWhenDisabled(t *testing.T) {
 	work := t.TempDir()
 	homeAgents := t.TempDir()

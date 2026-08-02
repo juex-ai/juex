@@ -19,10 +19,10 @@ test("agent route helpers encode ids and preserve agent-local paths", () => {
   );
   assert.equal(
     agentPathFromLocation(
-      "/observables/item%201",
+      "/runtime/observables/item%201",
       "/agents/agent%20one/history",
     ),
-    "/agents/agent%20one/observables/item%201",
+    "/agents/agent%20one/runtime/observables/item%201",
   );
 });
 
@@ -32,8 +32,12 @@ test("agent switcher preserves stable sections but not entity ids", () => {
     "/agents/beta/runtime",
   );
   assert.equal(
-    agentSwitchPath("beta", "/agents/alpha/observables/item"),
-    "/agents/beta/observables",
+    agentSwitchPath("beta", "/agents/alpha/runtime/extensions"),
+    "/agents/beta/runtime/extensions",
+  );
+  assert.equal(
+    agentSwitchPath("beta", "/agents/alpha/runtime/observables/item"),
+    "/agents/beta/runtime/observables",
   );
   assert.equal(
     agentSwitchPath("beta", "/agents/alpha/sessions/session-one"),

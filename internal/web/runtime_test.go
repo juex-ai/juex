@@ -183,6 +183,9 @@ func TestRuntimeStatusResponseSerializesEmptyCatalogCollectionsAsArrays(t *testi
 	writeJSON(recorder, http.StatusOK, response)
 
 	var got struct {
+		Extensions struct {
+			Items json.RawMessage `json:"items"`
+		} `json:"extensions"`
 		Tools struct {
 			Groups json.RawMessage `json:"groups"`
 		} `json:"tools"`
@@ -195,6 +198,9 @@ func TestRuntimeStatusResponseSerializesEmptyCatalogCollectionsAsArrays(t *testi
 	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
+	if string(got.Extensions.Items) != "[]" {
+		t.Fatalf("empty extensions JSON = %s, body=%s", got.Extensions.Items, recorder.Body.Bytes())
+	}
 	if string(got.Tools.Groups) != "[]" {
 		t.Fatalf("empty groups JSON = %s, body=%s", got.Tools.Groups, recorder.Body.Bytes())
 	}
@@ -203,6 +209,27 @@ func TestRuntimeStatusResponseSerializesEmptyCatalogCollectionsAsArrays(t *testi
 	}
 	if string(got.MCP.Servers[0].Tools) != "[]" {
 		t.Fatalf("empty MCP tools JSON = %s, body=%s", got.MCP.Servers[0].Tools, recorder.Body.Bytes())
+	}
+}
+
+func TestRuntimeStatusProjectsSelectedExtensionMetadata(t *testing.T) {
+	srv := newTestServer(t)
+	work := srv.opts.Cfg.WorkDir
+	extensionDir := filepath.Join(work, ".juex", "extensions", "demo")
+	srv.opts.Cfg.Extensions = config.ExtensionPolicy{Allow: []string{"demo"}, Configured: true}
+	mustWriteRuntimeFile(t, filepath.Join(extensionDir, "juex.extension.json"), `{"manifest_version":1,"name":"demo","version":"1.2.3","description":"Demo integration"}`)
+	mustWriteRuntimeFile(t, filepath.Join(extensionDir, "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: Demo\n---\nbody")
+
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Extensions.Count != 1 || len(got.Extensions.Items) != 1 {
+		t.Fatalf("extensions = %+v", got.Extensions)
+	}
+	ext := got.Extensions.Items[0]
+	if ext.Name != "demo" || ext.Version != "1.2.3" || ext.Description != "Demo integration" || ext.Scope != "project" || ext.Path != extensionDir || ext.ManifestVersion != 1 || ext.Resources.Skills != 1 {
+		t.Fatalf("extension = %+v", ext)
 	}
 }
 
@@ -597,6 +624,7 @@ func TestRuntimeStatusIncludesExtensionSources(t *testing.T) {
 	srv.opts.Cfg.Extensions = config.ExtensionPolicy{Allow: []string{"demo"}, Configured: true}
 	work := srv.opts.Cfg.WorkDir
 	extDir := filepath.Join(work, ".juex", "extensions", "demo")
+	mustWriteRuntimeFile(t, filepath.Join(extDir, "juex.extension.json"), `{"manifest_version":1,"name":"demo","version":"1.0.0"}`)
 	mustWriteRuntimeFile(t, filepath.Join(extDir, "mcp.json"), `{
   "mcpServers": {
     "extsrv": {

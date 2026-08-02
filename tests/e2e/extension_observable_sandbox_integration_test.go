@@ -93,6 +93,9 @@ func TestIntegration_ExtensionObservableSandboxScopesWritableData(t *testing.T) 
 	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(extensionDir, "juex.extension.json"), []byte(`{"manifest_version":1,"name":"demo","version":"1.0.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(extensionDir, "observables.json"), body, 0o644); err != nil {
 		t.Fatal(err)
 	}

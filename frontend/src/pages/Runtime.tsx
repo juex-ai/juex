@@ -85,9 +85,9 @@ export function Runtime() {
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-4 py-5 md:px-6 md:py-6">
         <section className="space-y-3">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-            <h1 className="font-serif text-2xl italic leading-none text-primary">
-              Runtime
-            </h1>
+            <h2 className="text-xl font-semibold text-foreground">
+              Overview
+            </h2>
             <Badge variant="secondary" className="font-mono text-[11px]">
               service
             </Badge>

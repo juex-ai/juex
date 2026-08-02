@@ -1208,6 +1208,7 @@ func TestApp_NewRunsExtensionSessionStartHook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mustWriteAppTestFile(t, filepath.Join(dir, ".juex", "extensions", "demo", "juex.extension.json"), `{"manifest_version":1,"name":"demo","version":"1.0.0"}`)
 	mustWriteAppTestFile(t, filepath.Join(dir, ".juex", "extensions", "demo", "hooks.yaml"), `trusted: true
 commands:
   - name: ext-startup
@@ -1245,6 +1246,7 @@ func TestApp_NewStartsAllowedExtensionObservableWithoutWritingProjectConfig(t *t
 		t.Fatal(err)
 	}
 	extensionDir := filepath.Join(home, "extensions", "demo")
+	mustWriteAppTestFile(t, filepath.Join(extensionDir, "juex.extension.json"), `{"manifest_version":1,"name":"demo","version":"1.0.0"}`)
 	configBody, err := json.Marshal(map[string]any{
 		"observables": []map[string]any{{
 			"id":   "extension-default-start",

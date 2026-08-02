@@ -517,6 +517,63 @@ func TestRuntimeCatalogServiceIncludesSandboxPolicy(t *testing.T) {
 	}
 }
 
+func TestRuntimeCatalogServiceIncludesSelectedExtensionMetadataAndDefinitionCounts(t *testing.T) {
+	work := t.TempDir()
+	extensionDir := filepath.Join(work, ".juex", "extensions", "demo")
+	mustWriteRuntimeStatusFile(t, filepath.Join(extensionDir, "juex.extension.json"), `{
+  "manifest_version": 1,
+  "name": "demo",
+  "version": "1.2.3",
+  "description": "Demo integration"
+}`)
+	for _, name := range []string{"alpha", "beta"} {
+		mustWriteRuntimeStatusFile(t, filepath.Join(extensionDir, "skills", name, "SKILL.md"), "---\nname: "+name+"\ndescription: "+name+"\n---\nbody")
+	}
+	mustWriteRuntimeStatusFile(t, filepath.Join(extensionDir, "mcp.json"), `{
+  "mcpServers": {
+    "alpha": {"command":"alpha"},
+    "beta": {"command":"beta"}
+  }
+}`)
+	mustWriteRuntimeStatusFile(t, filepath.Join(extensionDir, "hooks.yaml"), `trusted: true
+commands:
+  - name: alpha
+    events: [Stop]
+    command: ["alpha"]
+  - name: beta
+    events: [Stop]
+    command: ["beta"]
+`)
+	mustWriteRuntimeStatusFile(t, filepath.Join(extensionDir, "observables.json"), `{
+  "observables": [
+    {"id":"alpha","type":"command","command_config":{"command":"alpha"}},
+    {"id":"beta","type":"command","command_config":{"command":"beta"}}
+  ]
+}`)
+
+	status, err := NewRuntimeCatalogService(config.Config{
+		WorkDir:    work,
+		Extensions: allowExtensions("demo"),
+		Skills:     config.SkillsConfig{Include: []string{"alpha"}},
+	}).Snapshot(RuntimeStatusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Extensions.Count != 1 || len(status.Extensions.Items) != 1 {
+		t.Fatalf("extensions = %+v", status.Extensions)
+	}
+	ext := status.Extensions.Items[0]
+	if ext.Name != "demo" || ext.Version != "1.2.3" || ext.Description != "Demo integration" || ext.Scope != "project" || ext.Path != extensionDir || ext.ManifestVersion != 1 {
+		t.Fatalf("extension metadata = %+v", ext)
+	}
+	if ext.Resources.Skills != 1 || ext.Resources.MCPServers != 2 || ext.Resources.Hooks != 2 || ext.Resources.Observables != 2 {
+		t.Fatalf("extension resource counts = %+v", ext.Resources)
+	}
+	if len(status.Skills.Filtered) != 1 || status.Skills.Filtered[0].Name != "beta" {
+		t.Fatalf("filtered skills = %+v, want beta excluded from effective Extension count", status.Skills.Filtered)
+	}
+}
+
 func TestRuntimeCatalogServiceCachesSkillsWhenProvided(t *testing.T) {
 	work := t.TempDir()
 	skillPath := filepath.Join(work, ".agents", "skills", "review", "SKILL.md")
@@ -610,10 +667,42 @@ commands:
 
 func mustWriteRuntimeStatusFile(t *testing.T, path, body string) {
 	t.Helper()
+	ensureRuntimeStatusExtensionManifest(t, path)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func ensureRuntimeStatusExtensionManifest(t *testing.T, path string) {
+	t.Helper()
+	if filepath.Base(path) == "juex.extension.json" {
+		return
+	}
+	dir := filepath.Dir(path)
+	for {
+		if filepath.Base(filepath.Dir(dir)) == "extensions" {
+			manifestPath := filepath.Join(dir, "juex.extension.json")
+			if _, err := os.Stat(manifestPath); err == nil {
+				return
+			} else if !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			body := `{"manifest_version":1,"name":"` + filepath.Base(dir) + `","version":"1.0.0"}`
+			if err := os.WriteFile(manifestPath, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return
+		}
+		dir = parent
 	}
 }

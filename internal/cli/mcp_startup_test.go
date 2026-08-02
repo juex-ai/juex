@@ -152,6 +152,7 @@ func TestRunCmd_DryRunLoadsExtensionMCPAndSkills(t *testing.T) {
 	}
 	mustWriteCLITestFile(t, filepath.Join(dir, ".juex", "juex.yaml"), "extensions:\n  allow: [demo]\n")
 	extDir := filepath.Join(dir, ".juex", "extensions", "demo")
+	mustWriteCLITestFile(t, filepath.Join(extDir, "juex.extension.json"), `{"manifest_version":1,"name":"demo","version":"1.0.0"}`)
 	marker := filepath.Join(dir, "mcp-started")
 	body, err := json.MarshalIndent(map[string]any{
 		"mcpServers": map[string]any{

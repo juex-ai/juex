@@ -383,7 +383,7 @@ export function AppShell() {
                   {failedAgent.problem || "Agent runtime needs attention."}
                 </span>
                 <Button asChild variant="outline" size="sm">
-                  <Link to={agentTabPath(failedAgent.id, "logs")}>
+                  <Link to={agentTabPath(failedAgent.id, "runtime") + "/logs"}>
                     View logs
                   </Link>
                 </Button>

@@ -485,8 +485,8 @@ function AgentRow({
               )
             }
           />
-          <AgentLink label="View logs" to={`${base}/logs`} icon={<ScrollText className="size-3.5" />} />
-          <AgentLink label="Edit config" to={`${base}/config`} icon={<FileCog className="size-3.5" />} />
+          <AgentLink label="View logs" to={`${base}/runtime/logs`} icon={<ScrollText className="size-3.5" />} />
+          <AgentLink label="Edit config" to={`${base}/runtime/config`} icon={<FileCog className="size-3.5" />} />
           <AgentAction
             label="Remove agent"
             disabled={busy}

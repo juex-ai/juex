@@ -1566,10 +1566,11 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | GET | `/agents/<id>` | Selected agent sessions SPA route |
 | GET | `/agents/<id>/sessions/<session-id>` | Selected agent conversation SPA route |
 | GET | `/agents/<id>/history` | Selected agent history SPA route |
-| GET | `/agents/<id>/runtime` | Selected agent runtime SPA route |
-| GET | `/agents/<id>/observables[/<observable-id>]` | Selected agent Observables SPA routes |
-| GET | `/agents/<id>/logs` | Selected agent bounded logs SPA route |
-| GET | `/agents/<id>/config` | Selected agent config SPA route |
+| GET | `/agents/<id>/runtime` | Selected agent Runtime Overview SPA route |
+| GET | `/agents/<id>/runtime/extensions` | Selected agent Extensions SPA route |
+| GET | `/agents/<id>/runtime/observables[/<observable-id>]` | Selected agent Observables SPA routes |
+| GET | `/agents/<id>/runtime/logs` | Selected agent bounded logs SPA route |
+| GET | `/agents/<id>/runtime/config` | Selected agent config SPA route |
 | GET | `/settings` | Fleet settings SPA route |
 | GET | `/assets/*` | embedded JS/CSS/font assets |
 | GET | `/api/agents` | Fleet roster JSON with best-effort live activity for healthy agents |
@@ -2121,6 +2122,7 @@ effective JueX-home, agent-home, and work-local:
 $JUEX_HOME/
 ├── juex.yaml                     # instance override; also the shared base when this is ~/.juex
 ├── extensions/<name>/            # optional JueX-home Extension
+│   ├── juex.extension.json        # required selected-Extension manifest
 │   ├── hooks.yaml                # lifecycle command hooks, trusted by location
 │   ├── mcp.json                  # extension MCP servers
 │   ├── observables.json          # read-only extension Observables
@@ -2152,6 +2154,7 @@ $JUEX_HOME/
     ├── juex.local.json           # workspace-to-agent identity marker
     ├── artifacts/                # durable bytes managed by internal/artifact
     ├── extensions/<name>/        # work-local Extension; may include observables.json
+    │   └── juex.extension.json   # required selected-Extension manifest
     ├── juex.yaml                 # local runtime provider config
     └── observables.json          # workspace observable configuration
 ```
@@ -2216,16 +2219,24 @@ The personal `~/.agents` resources are read-only from Juex's view and are
 loaded only when user-agent resources are enabled. The Extension allowlist is
 resolved independently as default Home, distinct effective Home, then Workspace.
 Omitted `extensions.allow` inherits; an explicit list replaces; no final setting
-selects any Extension. `internal/app` projects the three Extension directories
-as low-to-high typed roots into `internal/extensions`. Discovery first filters
-logical names and selects one whole Extension, then inspects only the selected
-Extensions for Skills, MCP config, Hooks, and Observable config. A same-name
-Workspace Extension therefore replaces a Home Extension and carries Workspace
-trust requirements.
+selects any Extension. `internal/app` projects default Home, distinct instance
+Home, and Workspace Extension directories as low-to-high typed roots into
+`internal/extensions`. Discovery first filters logical names and selects one
+whole Extension. It then strictly validates only each winner's exact-case
+`juex.extension.json` before inspecting Skills, MCP config, Hooks, and Observable
+config. Invalid selected manifests fail startup without falling back to a lower
+copy, while unselected installation directories are inert. Manifest version 1
+requires a directory-matching name and SemVer version and rejects unknown,
+duplicate, or null fields. A same-name Workspace Extension therefore replaces a
+Home Extension and carries Workspace trust requirements.
 This logical-name policy is not publisher or source authentication.
 Extension-provided MCP server, Skill, Hook, or Observable names still must not
-collide with existing resources or another selected extension. Runtime status
-reports selected extension resources as `ext:<name>`.
+collide with existing resources or another selected extension. The runtime
+resource graph stores the selected typed descriptors directly. Runtime status
+projects their manifest metadata, installation scope/path, and effective Skill,
+MCP server, Hook, and Observable definition counts from that same graph and the
+normal resource parsers; it does not rescan winners independently. Resources
+remain labeled `ext:<name>`.
 Unlike project command hooks, extension `observables.json` has no separate
 `trusted` marker: an allowed work-local winner starts valid Command
 Observables with the Primary Session. A Workspace can therefore authorize its
@@ -2236,6 +2247,13 @@ from the resolved Agent Address. Its persistent data directory is
 `<AgentAddress.StateDir()>/extensions/<name>`; state-free resource projections
 carry no data directory. Discovery remains installation-only and never creates
 runtime state.
+
+The Web stage has only Chat and Runtime as primary tabs. Runtime is a nested
+layout with canonical Overview, Extensions, Observables, Logs, and Config
+routes. `RuntimeLayout` owns the subsection selector and an `Outlet`; each child
+page owns its data loading. Agent switches preserve the current Runtime
+subsection, except an Observable detail route intentionally returns to the
+Observable list for the newly selected Agent.
 
 The workspace marker is globally ignored through Git's user excludes file,
 never by editing project `.gitignore`. Read-only `existing` resolution never

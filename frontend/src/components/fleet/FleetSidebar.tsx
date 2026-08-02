@@ -8,7 +8,7 @@ import {
   SlidersHorizontal,
   Square,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 import { LogoMark } from "@/components/LogoMark";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ import {
   agentVisualState,
   nextAgentLifecycleAction,
 } from "@/lib/fleet-shell";
+import { agentSwitchPath } from "@/lib/fleet-routes";
 import { cn } from "@/lib/utils";
 import type { AgentStatus } from "@/types";
 
@@ -53,6 +54,7 @@ export function FleetSidebar({
   onNavigate,
   onToggleLifecycle,
 }: FleetSidebarProps) {
+  const location = useLocation();
   const compact = collapsed && !mobile;
   const version =
     agents.find((agent) => agent.binary_version)?.binary_version ?? "local";
@@ -154,6 +156,7 @@ export function FleetSidebar({
             compact={compact}
             mobile={mobile}
             busy={busyAgentID === agent.id}
+            currentPath={location.pathname}
             onNavigate={onNavigate}
             onToggleLifecycle={() => onToggleLifecycle(agent)}
           />
@@ -199,6 +202,7 @@ function AgentRailRow({
   compact,
   mobile,
   busy,
+  currentPath,
   onNavigate,
   onToggleLifecycle,
 }: {
@@ -207,6 +211,7 @@ function AgentRailRow({
   compact: boolean;
   mobile: boolean;
   busy: boolean;
+  currentPath: string;
   onNavigate?: () => void;
   onToggleLifecycle: () => void;
 }) {
@@ -225,7 +230,7 @@ function AgentRailRow({
       data-agent-state={state}
     >
       <Link
-        to={agentTabPath(agent.id, "chat")}
+        to={agentSwitchPath(agent.id, currentPath)}
         className={cn(
           "flex min-w-0 flex-1 items-center gap-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/35",
           compact
