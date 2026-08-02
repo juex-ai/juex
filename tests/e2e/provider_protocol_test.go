@@ -943,6 +943,10 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 	var mu sync.Mutex
 	var firstBody map[string]any
 	var secondBody map[string]any
+	execCommand := `printf '%s:%s\n' ` + marker + ` "$` + extensionEnvKey + `"`
+	if runtime.GOOS == "windows" {
+		execCommand = `Write-Output ("` + marker + `:" + $env:` + extensionEnvKey + `)`
+	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
@@ -957,7 +961,7 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 			firstBody = body
 			mu.Unlock()
 			writeJSON(t, w, chatToolCallResponse("call_exec_cli", "exec_command", map[string]any{
-				"cmd": `printf '%s:%s\n' ` + marker + ` "$` + extensionEnvKey + `"`,
+				"cmd": execCommand,
 			}))
 		case 2:
 			mu.Lock()

@@ -244,6 +244,47 @@ func TestRuntimeStatusProjectsSelectedExtensionMetadata(t *testing.T) {
 	}
 }
 
+func TestRuntimeAPIRedactsExtensionDefaultsWithoutHidingPublicPaths(t *testing.T) {
+	srv := newTestServer(t)
+	work := srv.opts.Cfg.WorkDir
+	extensionDir := filepath.Join(work, ".juex", "extensions", "demo")
+	srv.opts.Cfg.Extensions = config.ExtensionPolicy{Allow: []string{"demo"}, Configured: true}
+	const secretDefault = "runtime-extension-secret-sentinel"
+	mustWriteRuntimeFile(t, filepath.Join(extensionDir, "juex.extension.json"), `{
+  "manifest_version":1,
+  "name":"demo",
+  "version":"1.2.3",
+  "agent":{"environment":{"variables":{
+    "DEMO_SECRET":"`+secretDefault+`",
+    "DEMO_EXTENSION_DIR":"${JUEX_EXT_DIR}",
+    "DEMO_WORKDIR":"${WORKDIR}"
+  }}}
+}`)
+
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/runtime", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if strings.Contains(body, secretDefault) {
+		t.Fatalf("runtime API leaked Extension default: %s", body)
+	}
+	var got runtimeStatusResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.WorkDir != work {
+		t.Fatalf("work dir = %q, want public path %q", got.WorkDir, work)
+	}
+	if len(got.Extensions.Items) != 1 || got.Extensions.Items[0].Path != extensionDir {
+		t.Fatalf("Extension path was redacted: %+v", got.Extensions.Items)
+	}
+	if len(got.Extensions.Items[0].Environment) != 3 || got.Extensions.Items[0].Environment[0].Name == "" {
+		t.Fatalf("value-free environment metadata was redacted: %+v", got.Extensions.Items[0].Environment)
+	}
+}
+
 func TestRuntimeAPISerializesSafeMCPTransportMetadata(t *testing.T) {
 	const (
 		querySecret  = "runtime-query-secret"

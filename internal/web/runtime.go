@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/sandbox"
@@ -194,9 +196,33 @@ func (s *Server) handleRuntimeStatus(w http.ResponseWriter, r *http.Request) {
 	if agentRuntime, resolveErr := s.resolveAgentRuntime(); resolveErr == nil {
 		runtimeEnvironment = agentRuntime.Environment()
 	}
-	if err := writeEnvironmentSafeJSON(w, http.StatusOK, status, runtimeEnvironment); err != nil {
+	if err := writeRuntimeStatusJSON(w, http.StatusOK, status, runtimeEnvironment); err != nil {
 		s.logVerbose("juex listen: write runtime status: %v", err)
 	}
+}
+
+func writeRuntimeStatusJSON(w http.ResponseWriter, httpStatus int, status runtimeStatusResponse, snapshot environment.Snapshot) error {
+	publicWorkDir := status.WorkDir
+	publicExtensions := status.Extensions
+	data, err := json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	data, _, err = snapshot.RedactConfiguredJSON(data)
+	if err != nil {
+		return err
+	}
+	var redacted runtimeStatusResponse
+	if err := json.Unmarshal(data, &redacted); err != nil {
+		return err
+	}
+	// These fields are already public runtime metadata. A default such as
+	// ${WORKDIR} or ${JUEX_EXT_DIR} may equal them byte-for-byte, but that does
+	// not turn the public path into an environment-value disclosure.
+	redacted.WorkDir = publicWorkDir
+	redacted.Extensions = publicExtensions
+	writeJSON(w, httpStatus, redacted)
+	return nil
 }
 
 func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {

@@ -46,8 +46,8 @@ func TestResolveAgentRuntimeExpandsDefaultsAndKeepsSnapshotStable(t *testing.T) 
 	if got, _ := resolution.Environment().Lookup("LARKSUITE_CLI_CONFIG_DIR"); got != wantDataDir {
 		t.Fatalf("config dir = %q, want %q", got, wantDataDir)
 	}
-	if got, _ := resolution.Environment().Lookup("LARKSUITE_CLI_DATA_DIR"); got != filepath.Join(extensionDir, "data") {
-		t.Fatalf("data dir = %q", got)
+	if got, _ := resolution.Environment().Lookup("LARKSUITE_CLI_DATA_DIR"); got != extensionDir+"/data" {
+		t.Fatalf("literal placeholder expansion = %q, want %q", got, extensionDir+"/data")
 	}
 	if got, _ := resolution.Environment().Lookup("LARK_WORKDIR"); got != work+":"+work {
 		t.Fatalf("workdir = %q", got)
