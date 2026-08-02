@@ -16,14 +16,14 @@ import (
 
 func TestResolveSelectorUsesExactIDOrUniqueExactName(t *testing.T) {
 	entries := []agentstate.RegistryEntry{
-		registryEntry("aaaaaaaa", "shared"),
-		registryEntry("bbbbbbbb", "shared"),
-		registryEntry("cccccccc", "unique"),
+		registryEntry("aaaaaa", "shared"),
+		registryEntry("bbbbbb", "shared"),
+		registryEntry("cccccc", "unique"),
 	}
-	if got, err := resolveSelector(entries, "aaaaaaaa"); err != nil || got.ID != "aaaaaaaa" {
+	if got, err := resolveSelector(entries, "aaaaaa"); err != nil || got.ID != "aaaaaa" {
 		t.Fatalf("resolve id = %+v, %v", got, err)
 	}
-	if got, err := resolveSelector(entries, "unique"); err != nil || got.ID != "cccccccc" {
+	if got, err := resolveSelector(entries, "unique"); err != nil || got.ID != "cccccc" {
 		t.Fatalf("resolve name = %+v, %v", got, err)
 	}
 	var ambiguous *AmbiguousSelectorError
@@ -38,7 +38,7 @@ func TestResolveSelectorUsesExactIDOrUniqueExactName(t *testing.T) {
 
 func TestInspectStatusRuntimeMatrix(t *testing.T) {
 	runtimeState := endpoint.Runtime{
-		AgentID:       "aaaaaaaa",
+		AgentID:       "aaaaaa",
 		InstanceID:    "instance-one",
 		PID:           42,
 		Endpoint:      "tcp://127.0.0.1:43123",
@@ -94,7 +94,7 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 			probe: func(context.Context, endpoint.Runtime) error {
 				return &endpoint.IdentityMismatchError{
 					Expected: runtimeState,
-					Actual:   endpoint.Runtime{AgentID: "aaaaaaaa", InstanceID: "other"},
+					Actual:   endpoint.Runtime{AgentID: "aaaaaa", InstanceID: "other"},
 				}
 			},
 			want:        RuntimeAmbiguous,
@@ -125,7 +125,7 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 				return noopGuard{}, nil
 			}
 			manager := &Manager{homeDir: t.TempDir(), probeTimeout: time.Second, deps: deps}
-			status := manager.inspectStatus(context.Background(), registryEntry("aaaaaaaa", "agent"))
+			status := manager.inspectStatus(context.Background(), registryEntry("aaaaaa", "agent"))
 			if status.RuntimeHealth != test.want {
 				t.Fatalf("runtime health = %s, want %s; status=%+v", status.RuntimeHealth, test.want, status)
 			}
@@ -137,7 +137,7 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 }
 
 func TestStartRetriesTransientRuntimeReadErrors(t *testing.T) {
-	entry := registryEntry("aaaaaaaa", "agent")
+	entry := registryEntry("aaaaaa", "agent")
 	runtimeState := endpoint.Runtime{
 		AgentID:    entry.ID,
 		InstanceID: "instance-one",
@@ -195,7 +195,7 @@ func TestStartRetriesTransientRuntimeReadErrors(t *testing.T) {
 }
 
 func TestStopNeverRequestsShutdownForMismatchedIdentity(t *testing.T) {
-	entry := registryEntry("aaaaaaaa", "agent")
+	entry := registryEntry("aaaaaa", "agent")
 	runtimeState := endpoint.Runtime{
 		AgentID:    entry.ID,
 		InstanceID: "instance-one",
@@ -239,7 +239,7 @@ func TestStopNeverRequestsShutdownForMismatchedIdentity(t *testing.T) {
 }
 
 func TestStopRequestsExactIdentityAndWaitsForExit(t *testing.T) {
-	entry := registryEntry("aaaaaaaa", "agent")
+	entry := registryEntry("aaaaaa", "agent")
 	runtimeState := endpoint.Runtime{
 		AgentID:    entry.ID,
 		InstanceID: "instance-one",
@@ -300,7 +300,7 @@ func TestStartAndRestartRejectHealthyAgentsThatCannotBeStarted(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			entry := registryEntry("aaaaaaaa", "agent")
+			entry := registryEntry("aaaaaa", "agent")
 			entry.Agent.Enabled = test.enabled
 			runtimeState := endpoint.Runtime{
 				AgentID:    entry.ID,
@@ -430,7 +430,7 @@ func TestLogsExplainsUnavailableFleetOwnedLog(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			entry := registryEntryAtHome(t.TempDir(), "aaaaaaaa", "adopted")
+			entry := registryEntryAtHome(t.TempDir(), "aaaaaa", "adopted")
 			path := fleetLogPath(entry.Address.StateDir())
 			if test.prepare != nil {
 				test.prepare(t, path)
@@ -476,7 +476,7 @@ func TestLogsExplainsUnavailableFleetOwnedLog(t *testing.T) {
 }
 
 func TestLogsPreservesNonMissingIOErrors(t *testing.T) {
-	entry := registryEntryAtHome(t.TempDir(), "aaaaaaaa", "broken-log")
+	entry := registryEntryAtHome(t.TempDir(), "aaaaaa", "broken-log")
 	sentinel := &os.PathError{
 		Op:   "open",
 		Path: fleetLogPath(entry.Address.StateDir()),

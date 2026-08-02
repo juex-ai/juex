@@ -14,11 +14,11 @@ import (
 
 func TestExtensionRuntimeContextUsesAgentOwnedDataDirectory(t *testing.T) {
 	home := t.TempDir()
-	firstAddress, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	firstAddress, err := agentstate.NewAgentAddress(home, "abcdef")
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondAddress, err := agentstate.NewAgentAddress(home, "ijklmnop")
+	secondAddress, err := agentstate.NewAgentAddress(home, "ijklmn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestExtensionRuntimeContextUsesAgentOwnedDataDirectory(t *testing.T) {
 
 func TestExtensionRuntimeContextPrepareDataDirIsPrivateAndPersistent(t *testing.T) {
 	home := t.TempDir()
-	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	address, err := agentstate.NewAgentAddress(home, "abcdef")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestExtensionRuntimeContextPrepareDataDirIsPrivateAndPersistent(t *testing.
 
 func TestExtensionRuntimeContextPrepareDataDirIsConcurrent(t *testing.T) {
 	home := t.TempDir()
-	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	address, err := agentstate.NewAgentAddress(home, "abcdef")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestExtensionRuntimeContextRejectsSymlinkEscape(t *testing.T) {
 	for _, target := range []string{"extensions-root", "extension-dir"} {
 		t.Run(target, func(t *testing.T) {
 			home := t.TempDir()
-			address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+			address, err := agentstate.NewAgentAddress(home, "abcdef")
 			if err != nil {
 				t.Fatal(err)
 			}

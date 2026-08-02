@@ -51,7 +51,7 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 	writeFleetE2EJSON(
 		t,
 		filepath.Join(unknownWorkspace, ".juex", "juex.local.json"),
-		map[string]string{"agent_id": "aaaaaaaa"},
+		map[string]string{"agent_id": "aaaaaa"},
 	)
 	environment := fleetWebEnvironment(home)
 	supervisor := startFleetSupervisor(t, binary, environment)
@@ -278,10 +278,10 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	workspace := t.TempDir()
-	agentID := "aaaaaaaa"
+	agentID := "aaaaaa"
 	agentAddress := writeFleetE2EAgent(t, home, workspace, agentID)
 	secondWorkspace := t.TempDir()
-	secondAgentID := "bbbbbbbb"
+	secondAgentID := "bbbbbb"
 	secondAgentAddress := writeFleetE2EAgent(
 		t,
 		home,

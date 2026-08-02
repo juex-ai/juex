@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -117,6 +118,9 @@ func TestCreateEphemeralOwnsIsolatedRemovableState(t *testing.T) {
 	}
 	if state.Resolution.Agent.ID == "" || state.Resolution.Address.StateDir() == "" {
 		t.Fatalf("ephemeral resolution = %+v", state.Resolution)
+	}
+	if !regexp.MustCompile(`^[a-z2-7]{6}$`).MatchString(state.Resolution.Agent.ID) {
+		t.Fatalf("ephemeral agent id = %q, want 6-character lowercase base32", state.Resolution.Agent.ID)
 	}
 	if filepath.Dir(filepath.Dir(state.Resolution.Address.StateDir())) != state.RootDir {
 		t.Fatalf("agent dir = %q, root = %q", state.Resolution.Address.StateDir(), state.RootDir)

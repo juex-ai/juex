@@ -101,7 +101,7 @@ func TestAddRejectsRelativePathAndUnknownMarker(t *testing.T) {
 	writeFleetTestJSON(
 		t,
 		filepath.Join(workspace, ".juex", "juex.local.json"),
-		agentstate.Marker{AgentID: "aaaaaaaa"},
+		agentstate.Marker{AgentID: "aaaaaa"},
 	)
 	_, err = manager.Add(context.Background(), AddOptions{Workspace: workspace})
 	var conflict *ConflictError
@@ -142,7 +142,7 @@ func TestSetEnabledIsReversibleAndDoesNotStartOnEnable(t *testing.T) {
 }
 
 func TestSetEnabledPreservesEnabledFlagWhenStopFails(t *testing.T) {
-	entry := registryEntry("aaaaaaaa", "alpha")
+	entry := registryEntry("aaaaaa", "alpha")
 	runtimeState := endpoint.Runtime{
 		AgentID:    entry.ID,
 		InstanceID: "instance-one",
@@ -230,7 +230,7 @@ func TestRemoveRequiresConfirmationAndCleansMatchingMarker(t *testing.T) {
 }
 
 func TestRemoveUnnamedAgentRequiresIDConfirmation(t *testing.T) {
-	entry := registryEntry("aaaaaaaa", "")
+	entry := registryEntry("aaaaaa", "")
 	deps := defaultDependencies()
 	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
 		return []agentstate.RegistryEntry{entry}, nil
@@ -276,7 +276,7 @@ func TestRemoveUnnamedAgentRequiresIDConfirmation(t *testing.T) {
 }
 
 func TestRemoveStopsThenAcquiresMaintenanceBeforeDeleting(t *testing.T) {
-	entry := registryEntry("aaaaaaaa", "alpha")
+	entry := registryEntry("aaaaaa", "alpha")
 	runtimeState := endpoint.Runtime{
 		AgentID:    entry.ID,
 		InstanceID: "instance-one",

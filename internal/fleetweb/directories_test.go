@@ -205,7 +205,7 @@ func TestDirectoryAPIListsOnlySafeDirectoriesAndMarkers(t *testing.T) {
 	writeDirectoryTestJSON(
 		t,
 		filepath.Join(root, "registered", ".juex", "juex.local.json"),
-		agentstate.Marker{AgentID: "aaaaaaaa"},
+		agentstate.Marker{AgentID: "aaaaaa"},
 	)
 	restrictedJuex := filepath.Join(root, "restricted", ".juex")
 	if err := os.MkdirAll(restrictedJuex, 0o755); err != nil {

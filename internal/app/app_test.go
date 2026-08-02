@@ -1237,7 +1237,7 @@ commands:
 func TestApp_NewStartsAllowedExtensionObservableWithoutWritingProjectConfig(t *testing.T) {
 	work := t.TempDir()
 	home := t.TempDir()
-	address, err := agentstate.NewAgentAddress(home, "abcdefgh")
+	address, err := agentstate.NewAgentAddress(home, "abcdef")
 	if err != nil {
 		t.Fatal(err)
 	}

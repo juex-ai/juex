@@ -64,7 +64,7 @@ func TestFleetRestartResumesInterruptedTurnOnNewBinary(t *testing.T) {
 			t.Setenv("HOME", home)
 			t.Setenv("USERPROFILE", home)
 			workspace := t.TempDir()
-			agentID := "aaaaaaaa"
+			agentID := "aaaaaa"
 			agentAddress := writeFleetE2EAgent(t, home, workspace, agentID)
 			writeFleetProviderConfig(t, workspace, provider.URL)
 			environment := fleetE2EEnvironmentForProvider(
@@ -181,7 +181,7 @@ func TestFleetStatusReportsRunningBinaryVersionSkew(t *testing.T) {
 	binary := buildJuex(t)
 	home := t.TempDir()
 	workspace := t.TempDir()
-	agentAddress := writeFleetE2EAgent(t, home, workspace, "aaaaaaaa")
+	agentAddress := writeFleetE2EAgent(t, home, workspace, "aaaaaa")
 	environment := fleetE2EEnvironment(home)
 
 	binding, err := endpoint.Listen(context.Background(), agentAddress, "0.0.0-old")
@@ -272,7 +272,7 @@ func TestFleetLogsExplainsMissingLogForAdoptedAgent(t *testing.T) {
 	binary := buildJuex(t)
 	home := t.TempDir()
 	workspace := t.TempDir()
-	agentID := "aaaaaaaa"
+	agentID := "aaaaaa"
 	agentAddress := writeFleetE2EAgent(t, home, workspace, agentID)
 	environment := fleetE2EEnvironment(home)
 
@@ -359,7 +359,7 @@ func TestFleetLifecycleAndSupervisorAdoption(t *testing.T) {
 	binary := buildJuex(t)
 	home := t.TempDir()
 	workspace := t.TempDir()
-	agentID := "aaaaaaaa"
+	agentID := "aaaaaa"
 	agentAddress := writeFleetE2EAgent(t, home, workspace, agentID)
 	environment := fleetE2EEnvironment(home)
 
@@ -464,8 +464,8 @@ func TestFleetChildrenLoadIndependentWorkspaceDotenvOnRestart(t *testing.T) {
 		address   agentstate.AgentAddress
 	}
 	cases := []workspaceCase{
-		{id: "aaaaaaaa", workDir: t.TempDir(), wantValue: "workspace-alpha"},
-		{id: "bbbbbbbb", workDir: t.TempDir(), wantValue: "workspace-beta"},
+		{id: "aaaaaa", workDir: t.TempDir(), wantValue: "workspace-alpha"},
+		{id: "bbbbbb", workDir: t.TempDir(), wantValue: "workspace-beta"},
 	}
 	for i := range cases {
 		item := &cases[i]

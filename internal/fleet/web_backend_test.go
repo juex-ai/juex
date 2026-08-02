@@ -15,7 +15,7 @@ import (
 )
 
 func TestEndpointReturnsOnlyBoundHealthyRuntime(t *testing.T) {
-	entry := registryEntry("aaaaaaaa", "agent")
+	entry := registryEntry("aaaaaa", "agent")
 	runtimeState := endpoint.Runtime{
 		AgentID:    entry.ID,
 		InstanceID: "instance-one",
@@ -84,7 +84,7 @@ func TestEndpointReturnsOnlyBoundHealthyRuntime(t *testing.T) {
 }
 
 func TestReadOnlyStateRequiresBoundWorkspace(t *testing.T) {
-	entry := registryEntry("aaaaaaaa", "agent")
+	entry := registryEntry("aaaaaa", "agent")
 	tests := []struct {
 		name    string
 		binding agentstate.BindingKind
@@ -306,7 +306,7 @@ func prepareFleetConfigTest(t *testing.T) (string, string, agentstate.RegistryEn
 	if err := os.MkdirAll(filepath.Join(workspace, ".juex"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	entry := registryEntryAtHome(home, "aaaaaaaa", "agent")
+	entry := registryEntryAtHome(home, "aaaaaa", "agent")
 	entry.Agent.Workspace = workspace
 	entry.Agent.Autostart = false
 	return home, workspace, entry

@@ -112,7 +112,7 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			manager, events := restartTestManager(t, []agentstate.RegistryEntry{
-				registryEntry("aaaaaaaa", "alpha"),
+				registryEntry("aaaaaa", "alpha"),
 			})
 			activityReads := 0
 			manager.deps.readRestartActivity = func(context.Context, endpoint.Runtime) (restartActivity, error) {
@@ -171,7 +171,7 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 				return "turn-resume", nil
 			}
 
-			result, err := manager.Restart(context.Background(), "aaaaaaaa")
+			result, err := manager.Restart(context.Background(), "aaaaaa")
 			if err != nil {
 				t.Fatalf("Restart returned error: %v", err)
 			}
@@ -211,7 +211,7 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 
 func TestStopNeverDetectsOrPostsResume(t *testing.T) {
 	manager, _ := restartTestManager(t, []agentstate.RegistryEntry{
-		registryEntry("aaaaaaaa", "alpha"),
+		registryEntry("aaaaaa", "alpha"),
 	})
 	manager.deps.readRestartActivity = func(context.Context, endpoint.Runtime) (restartActivity, error) {
 		t.Fatal("Stop called readRestartActivity")
@@ -222,7 +222,7 @@ func TestStopNeverDetectsOrPostsResume(t *testing.T) {
 		return "", nil
 	}
 
-	status, err := manager.Stop(context.Background(), "aaaaaaaa")
+	status, err := manager.Stop(context.Background(), "aaaaaa")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestStopNeverDetectsOrPostsResume(t *testing.T) {
 
 func TestRestartWithoutIntentAcknowledgementDoesNotResume(t *testing.T) {
 	manager, _ := restartTestManager(t, []agentstate.RegistryEntry{
-		registryEntry("aaaaaaaa", "alpha"),
+		registryEntry("aaaaaa", "alpha"),
 	})
 	requestRestart := manager.deps.requestRestart
 	manager.deps.requestRestart = func(ctx context.Context, state endpoint.Runtime) (bool, error) {
@@ -264,7 +264,7 @@ func TestRestartWithoutIntentAcknowledgementDoesNotResume(t *testing.T) {
 		return "", nil
 	}
 
-	result, err := manager.Restart(context.Background(), "aaaaaaaa")
+	result, err := manager.Restart(context.Background(), "aaaaaa")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,13 +276,13 @@ func TestRestartWithoutIntentAcknowledgementDoesNotResume(t *testing.T) {
 
 func TestRestartRunningAgentsFiltersAndContinuesAfterFailure(t *testing.T) {
 	entries := []agentstate.RegistryEntry{
-		registryEntry("aaaaaaaa", "healthy-one"),
-		registryEntry("bbbbbbbb", "stopped"),
-		registryEntry("cccccccc", "disabled"),
-		registryEntry("dddddddd", "unbound"),
-		registryEntry("eeeeeeee", "ambiguous"),
-		registryEntry("ffffffff", "restart-fails"),
-		registryEntry("gggggggg", "healthy-after-failure"),
+		registryEntry("aaaaaa", "healthy-one"),
+		registryEntry("bbbbbb", "stopped"),
+		registryEntry("cccccc", "disabled"),
+		registryEntry("dddddd", "unbound"),
+		registryEntry("eeeeee", "ambiguous"),
+		registryEntry("ffffff", "restart-fails"),
+		registryEntry("gggggg", "healthy-after-failure"),
 	}
 	entries[2].Agent.Enabled = false
 
@@ -291,9 +291,9 @@ func TestRestartRunningAgentsFiltersAndContinuesAfterFailure(t *testing.T) {
 	manager.deps.readRuntime = func(address agentstate.AgentAddress) (endpoint.Runtime, error) {
 		id := address.ID()
 		switch id {
-		case "bbbbbbbb":
+		case "bbbbbb":
 			return endpoint.Runtime{}, os.ErrNotExist
-		case "eeeeeeee":
+		case "eeeeee":
 			return endpoint.Runtime{
 				AgentID: id, InstanceID: "instance-" + id, PID: 70,
 				Endpoint: "tcp://127.0.0.1:43123", StartedAt: time.Now().UTC(),
@@ -303,7 +303,7 @@ func TestRestartRunningAgentsFiltersAndContinuesAfterFailure(t *testing.T) {
 		}
 	}
 	manager.deps.inspectBinding = func(entry agentstate.RegistryEntry) agentstate.WorkspaceBinding {
-		if entry.ID == "dddddddd" {
+		if entry.ID == "dddddd" {
 			return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceOrphaned, Reason: "gone"}
 		}
 		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
@@ -317,21 +317,21 @@ func TestRestartRunningAgentsFiltersAndContinuesAfterFailure(t *testing.T) {
 	}
 	probe := manager.deps.probe
 	manager.deps.probe = func(ctx context.Context, state endpoint.Runtime) error {
-		if state.AgentID == "eeeeeeee" {
+		if state.AgentID == "eeeeee" {
 			return errors.New("unverified endpoint")
 		}
 		return probe(ctx, state)
 	}
 	manager.deps.readRestartActivity = func(_ context.Context, state endpoint.Runtime) (restartActivity, error) {
 		*events = append(*events, "restart:"+state.AgentID)
-		if state.AgentID == "ffffffff" {
+		if state.AgentID == "ffffff" {
 			return restartActivity{}, errors.New("old status unavailable")
 		}
 		return restartActivity{}, nil
 	}
 	requestRestart := manager.deps.requestRestart
 	manager.deps.requestRestart = func(ctx context.Context, state endpoint.Runtime) (bool, error) {
-		if state.AgentID == "ffffffff" {
+		if state.AgentID == "ffffff" {
 			return false, errors.New("shutdown failed")
 		}
 		*events = append(*events, "shutdown:"+state.AgentID)
@@ -347,19 +347,19 @@ func TestRestartRunningAgentsFiltersAndContinuesAfterFailure(t *testing.T) {
 	}
 	gotEvents := strings.Join(*events, ",")
 	for _, want := range []string{
-		"restart:aaaaaaaa",
-		"restart:ffffffff",
-		"restart:gggggggg",
+		"restart:aaaaaa",
+		"restart:ffffff",
+		"restart:gggggg",
 	} {
 		if !strings.Contains(gotEvents, want) {
 			t.Fatalf("events = %q, missing %q", gotEvents, want)
 		}
 	}
 	for _, unwanted := range []string{
-		"restart:bbbbbbbb",
-		"restart:cccccccc",
-		"restart:dddddddd",
-		"restart:eeeeeeee",
+		"restart:bbbbbb",
+		"restart:cccccc",
+		"restart:dddddd",
+		"restart:eeeeee",
 	} {
 		if strings.Contains(gotEvents, unwanted) {
 			t.Fatalf("events = %q, contains skipped %q", gotEvents, unwanted)
@@ -369,7 +369,7 @@ func TestRestartRunningAgentsFiltersAndContinuesAfterFailure(t *testing.T) {
 
 func TestRestartRunningAgentsReportsPostFailureStatus(t *testing.T) {
 	manager, _ := restartTestManager(t, []agentstate.RegistryEntry{
-		registryEntry("aaaaaaaa", "spawn-fails"),
+		registryEntry("aaaaaa", "spawn-fails"),
 	})
 	manager.deps.readRestartActivity = func(context.Context, endpoint.Runtime) (restartActivity, error) {
 		return restartActivity{}, nil
@@ -391,7 +391,7 @@ func TestRestartRunningAgentsReportsPostFailureStatus(t *testing.T) {
 
 func TestRestartRunningAgentsRechecksEligibilityUnderLifecycleLock(t *testing.T) {
 	manager, events := restartTestManager(t, []agentstate.RegistryEntry{
-		registryEntry("aaaaaaaa", "stops-after-snapshot"),
+		registryEntry("aaaaaa", "stops-after-snapshot"),
 	})
 	readRuntime := manager.deps.readRuntime
 	reads := 0

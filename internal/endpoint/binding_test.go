@@ -34,7 +34,7 @@ func TestEndpointUsesExplicitAgentAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	address := testAddress{
-		id:       "abcdefghijklmnop",
+		id:       "abcdef",
 		stateDir: stateDir,
 		lockPath: filepath.Join(root, "unrelated-guards", "resident.guard"),
 	}
@@ -90,7 +90,7 @@ func TestSnapshotAddressRequiresExplicitAbsolutePaths(t *testing.T) {
 		{
 			name: "relative state directory",
 			address: testAddress{
-				id:       "abcdefghijklmnop",
+				id:       "abcdef",
 				stateDir: "relative-state",
 				lockPath: filepath.Join(root, "guard"),
 			},
@@ -98,7 +98,7 @@ func TestSnapshotAddressRequiresExplicitAbsolutePaths(t *testing.T) {
 		{
 			name: "relative endpoint lock",
 			address: testAddress{
-				id:       "abcdefghijklmnop",
+				id:       "abcdef",
 				stateDir: filepath.Join(root, "state"),
 				lockPath: "relative-guard",
 			},
@@ -120,12 +120,12 @@ func TestReadRuntimeChecksExplicitAddressIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	address := testAddress{
-		id:       "abcdefghijklmnop",
+		id:       "abcdef",
 		stateDir: stateDir,
 		lockPath: filepath.Join(root, "guard"),
 	}
 	runtimeState := Runtime{
-		AgentID:    "ponmlkjihgfedcba",
+		AgentID:    "ponmlk",
 		InstanceID: "instance",
 		PID:        42,
 		Endpoint:   "tcp://127.0.0.1:43123",
@@ -236,7 +236,7 @@ func TestListenPublishesReachableRuntime(t *testing.T) {
 
 func TestRuntimeMatchesTreatsMissingVersionAsCompatible(t *testing.T) {
 	base := Runtime{
-		AgentID:    "aaaaaaaa",
+		AgentID:    "aaaaaa",
 		InstanceID: "instance",
 		PID:        42,
 		Endpoint:   "tcp://127.0.0.1:1234",
@@ -448,14 +448,14 @@ func TestRuntimeOwnershipIgnoresMonotonicClockRepresentation(t *testing.T) {
 		t.Fatal("test setup changed wall-clock instant")
 	}
 	owner := Runtime{
-		AgentID:    "abcdefghijklmnop",
+		AgentID:    "abcdef",
 		InstanceID: "instance-one",
 		PID:        42,
 		Endpoint:   "tcp://127.0.0.1:43123",
 		StartedAt:  startedAt,
 	}
 	current := Runtime{
-		AgentID:    "abcdefghijklmnop",
+		AgentID:    "abcdef",
 		InstanceID: "instance-one",
 		PID:        42,
 		Endpoint:   "tcp://127.0.0.1:43123",
@@ -529,7 +529,7 @@ func TestActiveBindingBlocksMaintenance(t *testing.T) {
 
 func newEndpointAgentDir(t *testing.T) string {
 	t.Helper()
-	agentDir := filepath.Join(t.TempDir(), "agents", "abcdefghijklmnop")
+	agentDir := filepath.Join(t.TempDir(), "agents", "abcdef")
 	if err := os.MkdirAll(agentDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
