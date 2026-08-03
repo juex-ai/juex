@@ -1030,6 +1030,13 @@ func TestPostSessionCompact(t *testing.T) {
 	id := "20260515T010203-webcompact"
 	seedSession(t, srv.opts.Cfg.WorkDir, id,
 		`{"id":"m1","role":"user","blocks":[{"type":"text","text":"`+strings.Repeat("old ", 200)+`"}]}`+"\n")
+	info, _, err := session.LoadInfo(filepath.Join(srv.opts.Cfg.SessionsDir(), id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SetActive(srv.opts.Cfg.HistoryPath(), info); err != nil {
+		t.Fatal(err)
+	}
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -1423,6 +1430,118 @@ func TestPostTurn_NewSlashCreatesActivePrimary(t *testing.T) {
 		return transcriptContainsRoleText(messages, "user", app.NewSessionGreetingPrompt()) &&
 			transcriptContainsRoleText(messages, "assistant", "ack")
 	})
+}
+
+func TestPostTurn_NewSlashRejectsStaleOldSessionEventReconnect(t *testing.T) {
+	provider := &blockingProvider{started: make(chan struct{}), release: make(chan struct{})}
+	srv := newTestServer(t)
+	srv.opts.Provider = provider
+	oldID := "20260803T075900-oldlive1"
+	seedSession(t, srv.opts.Cfg.WorkDir, oldID,
+		`{"role":"user","blocks":[{"type":"text","text":"old session"}]}`+"\n")
+	oldInfo, _, err := session.LoadInfo(filepath.Join(srv.opts.Cfg.SessionsDir(), oldID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SetActive(srv.opts.Cfg.HistoryPath(), oldInfo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.getActiveSession(t.Context(), oldID); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	released := false
+	defer func() {
+		if !released {
+			close(provider.release)
+		}
+	}()
+
+	resp, err := http.Post(ts.URL+"/api/sessions/"+oldID+"/turns", "application/json",
+		strings.NewReader(`{"prompt":"/new"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Command struct {
+			Status struct {
+				SessionID string `json:"session_id"`
+			} `json:"status"`
+		} `json:"command"`
+		TurnID string `json:"turn_id"`
+	}
+	decodeErr := json.NewDecoder(resp.Body).Decode(&parsed)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || decodeErr != nil {
+		t.Fatalf("new slash response = %d, decode=%v", resp.StatusCode, decodeErr)
+	}
+	newID := parsed.Command.Status.SessionID
+	if newID == "" || newID == oldID || parsed.TurnID == "" {
+		t.Fatalf("new slash response = %+v, old id = %s", parsed, oldID)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("new session greeting did not start")
+	}
+
+	staleCtx, cancelStale := context.WithCancel(t.Context())
+	staleReq, err := http.NewRequestWithContext(staleCtx, http.MethodGet,
+		ts.URL+"/api/sessions/"+oldID+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleResp, err := http.DefaultClient.Do(staleReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelStale()
+	staleResp.Body.Close()
+
+	history, err := session.LoadHistory(srv.opts.Cfg.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staleResp.StatusCode != http.StatusConflict {
+		t.Fatalf("stale event reconnect status = %d, want %d", staleResp.StatusCode, http.StatusConflict)
+	}
+	if history.Active == nil || history.Active.ID != newID {
+		t.Fatalf("history active = %+v, want new session %s", history.Active, newID)
+	}
+	for _, suffix := range []string{"", "/status", "/context"} {
+		historicalResp, err := http.Get(ts.URL + "/api/sessions/" + oldID + suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		historicalResp.Body.Close()
+		if historicalResp.StatusCode != http.StatusOK {
+			t.Fatalf("historical GET %q status = %d, want %d", suffix, historicalResp.StatusCode, http.StatusOK)
+		}
+	}
+
+	close(provider.release)
+	released = true
+	waitForHTTPTranscript(t, ts.URL, newID, parsed.TurnID, 5*time.Second, "uncancelled new-session greeting", func(messages []testTranscriptMessage) bool {
+		return transcriptContainsRoleText(messages, "assistant", "released")
+	})
+
+	activeCtx, cancelActive := context.WithCancel(t.Context())
+	activeReq, err := http.NewRequestWithContext(activeCtx, http.MethodGet,
+		ts.URL+"/api/sessions/"+newID+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeResp, err := http.DefaultClient.Do(activeReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelActive()
+	activeResp.Body.Close()
+	if activeResp.StatusCode != http.StatusOK {
+		t.Fatalf("active event stream status = %d, want %d", activeResp.StatusCode, http.StatusOK)
+	}
 }
 
 func TestPostTurn_NewSlashIsCoherentWithConcurrentSessionReaders(t *testing.T) {
