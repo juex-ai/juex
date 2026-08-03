@@ -92,6 +92,8 @@ type activeSession struct {
 	closeOnce         sync.Once
 }
 
+var errSessionInactive = errors.New("web: session is inactive")
+
 func NewServer(opts Options) *Server {
 	return &Server{
 		opts:          opts,
@@ -507,6 +509,10 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
+	return s.openSessionLocked(ctx, resumeDir, mode)
+}
+
+func (s *Server) openSessionLocked(ctx context.Context, resumeDir string, mode app.SessionMode) (*activeSession, error) {
 	if s.isClosed() {
 		return nil, context.Canceled
 	}
@@ -600,17 +606,13 @@ func (s *Server) resolveAgentRuntime() (app.AgentRuntimeResolution, error) {
 }
 
 func (s *Server) ensureActivePrimarySession(ctx context.Context) error {
-	id, ok, err := s.activePrimarySessionID()
-	if err != nil {
-		return err
-	}
-	if !ok || !s.hasSessionProvider() {
+	if !s.hasSessionProvider() {
 		return nil
 	}
-	if _, exists := s.sessions.Load(id); exists {
+	_, err := s.getCurrentActiveSession(ctx)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	_, err = s.getActiveSession(ctx, id)
 	return err
 }
 
@@ -762,15 +764,11 @@ func (s *Server) isClosed() bool {
 }
 
 func (s *Server) handleMCPNotification(ctx context.Context, n mcp.Notification) error {
-	id, ok, err := s.activePrimarySessionID()
-	if err != nil {
-		return err
-	}
-	if !ok {
+	as, err := s.getCurrentActiveSession(ctx)
+	if errors.Is(err, os.ErrNotExist) {
 		s.logVerbose("juex listen: MCP notification dropped: no active primary session")
 		return nil
 	}
-	as, err := s.getActiveSession(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -849,10 +847,51 @@ func (s *Server) mcpErrors() map[string]string {
 	return out
 }
 
-// getActiveSession returns the active session for id; opens it from
-// disk if not already in memory. Returns nil if the on-disk dir is
-// missing.
+// getActiveSession resolves only the currently selected primary session. The
+// active-id check and any disk restore share createMu with session switches so
+// a stale live request cannot reactivate an older primary session.
 func (s *Server) getActiveSession(ctx context.Context, id string) (*activeSession, error) {
+	if err := s.ensureMCPStarted(ctx); err != nil {
+		return nil, err
+	}
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	return s.getActiveSessionLocked(ctx, id)
+}
+
+func (s *Server) getCurrentActiveSession(ctx context.Context) (*activeSession, error) {
+	if err := s.ensureMCPStarted(ctx); err != nil {
+		return nil, err
+	}
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	id, ok, err := s.activePrimarySessionID()
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return s.getActiveSessionLocked(ctx, id)
+}
+
+func (s *Server) getActiveSessionLocked(ctx context.Context, id string) (*activeSession, error) {
+	if id == "" || filepath.Base(id) != id {
+		return nil, os.ErrNotExist
+	}
+	activeID, ok, err := s.activePrimarySessionID()
+	if err != nil {
+		return nil, err
+	}
+	if !ok || activeID != id {
+		if v, exists := s.sessions.Load(id); exists && activeSessionMatches(v.(*activeSession), id) {
+			return nil, errSessionInactive
+		}
+		if session.HasConversation(filepath.Join(s.opts.Cfg.SessionsDir(), id)) {
+			return nil, errSessionInactive
+		}
+		return nil, os.ErrNotExist
+	}
 	if v, ok := s.sessions.Load(id); ok {
 		as := v.(*activeSession)
 		if activeSessionMatches(as, id) {
@@ -864,7 +903,7 @@ func (s *Server) getActiveSession(ctx context.Context, id string) (*activeSessio
 	if !session.HasConversation(dir) {
 		return nil, os.ErrNotExist
 	}
-	return s.openSession(ctx, dir, app.SessionModeAttachActive)
+	return s.openSessionLocked(ctx, dir, app.SessionModeAttachActive)
 }
 
 func activeSessionMatches(as *activeSession, id string) bool {

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +42,18 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeErr(w http.ResponseWriter, status int, kind, msg string) {
 	writeJSON(w, status, errorJSON{Error: kind, Message: msg})
+}
+
+func writeActiveSessionLookupError(w http.ResponseWriter, id string, err error) {
+	if errors.Is(err, errSessionInactive) {
+		writeErr(w, http.StatusConflict, "conflict", "activate this primary session before continuing")
+		return
+	}
+	if os.IsNotExist(err) {
+		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		return
+	}
+	writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 }
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
@@ -296,7 +309,9 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id 
 }
 
 func (s *Server) handleActivateSession(w http.ResponseWriter, r *http.Request, id string) {
+	s.createMu.Lock()
 	info, err := session.Activate(s.opts.Cfg.SessionsDir(), s.opts.Cfg.HistoryPath(), id)
+	s.createMu.Unlock()
 	if err != nil {
 		if os.IsNotExist(err) {
 			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
@@ -320,7 +335,7 @@ type compactRequest struct {
 func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request, id string) {
 	as, err := s.getActiveSession(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		writeActiveSessionLookupError(w, id, err)
 		return
 	}
 	var req compactRequest
@@ -459,7 +474,7 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 	}
 	as, err := s.getActiveSession(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		writeActiveSessionLookupError(w, id, err)
 		return
 	}
 
@@ -487,14 +502,48 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 
-	result := as.app.AdmitTurn(r.Context(), app.TurnAdmissionRequest{
+	admission := app.TurnAdmissionRequest{
 		Prompt:      req.Prompt,
 		Kind:        req.Kind,
 		Attachments: req.Attachments,
 		IDs:         app.TurnIDFunc(s.nextTurnID),
-	})
-	s.applyTurnAdmissionResult(as, result)
+	}
+	var result app.TurnAdmissionResult
+	if isNewSessionCommand(req.Prompt) {
+		result, err = s.admitNewSessionTurn(r.Context(), as, id, admission)
+		if err != nil {
+			writeActiveSessionLookupError(w, id, err)
+			return
+		}
+	} else {
+		result = as.app.AdmitTurn(r.Context(), admission)
+		s.applyTurnAdmissionResult(as, result)
+	}
 	s.writeTurnAdmissionResult(w, result)
+}
+
+func isNewSessionCommand(prompt string) bool {
+	cmd, handled, err := app.ParseSlashCommand(prompt)
+	return err == nil && handled && cmd.Name == app.SlashNew
+}
+
+func (s *Server) admitNewSessionTurn(ctx context.Context, as *activeSession, id string, admission app.TurnAdmissionRequest) (app.TurnAdmissionResult, error) {
+	// SwitchToNewPrimarySession persists the new active id before the Web
+	// registry key changes. Keep both steps in the same critical section used
+	// by live-session restoration so stale EventSource reconnects cannot enter
+	// between them.
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	activeID, ok, err := s.activePrimarySessionID()
+	if err != nil {
+		return app.TurnAdmissionResult{}, err
+	}
+	if !ok || activeID != id || !activeSessionMatches(as, id) {
+		return app.TurnAdmissionResult{}, errSessionInactive
+	}
+	result := as.app.AdmitTurn(ctx, admission)
+	s.applyTurnAdmissionResult(as, result)
+	return result, nil
 }
 
 func (s *Server) handleSessionAttachmentUpload(w http.ResponseWriter, r *http.Request, id string) {
@@ -507,7 +556,7 @@ func (s *Server) handleSessionAttachmentUpload(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if _, err := s.getActiveSession(r.Context(), id); err != nil {
-		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		writeActiveSessionLookupError(w, id, err)
 		return
 	}
 
@@ -603,7 +652,7 @@ func (s *Server) writeTurnAdmissionResult(w http.ResponseWriter, result app.Turn
 func (s *Server) handleInterrupt(w http.ResponseWriter, r *http.Request, id string) {
 	as, err := s.getActiveSession(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		writeActiveSessionLookupError(w, id, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"cancelled": as.turns.interrupt()})
@@ -612,7 +661,7 @@ func (s *Server) handleInterrupt(w http.ResponseWriter, r *http.Request, id stri
 func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id string) {
 	as, err := s.getActiveSession(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		writeActiveSessionLookupError(w, id, err)
 		return
 	}
 	flusher, ok := w.(http.Flusher)

@@ -168,21 +168,12 @@ func (s *Server) observableManager(w http.ResponseWriter, r *http.Request) (*obs
 }
 
 func (s *Server) activeObservableSession(r *http.Request) (*activeSession, error) {
-	id, ok, err := s.activePrimarySessionID()
-	if err != nil {
-		return nil, err
+	as, err := s.getCurrentActiveSession(r.Context())
+	if err == nil {
+		return as, nil
 	}
-	if ok {
-		if v, exists := s.sessions.Load(id); exists {
-			return v.(*activeSession), nil
-		}
-		as, err := s.getActiveSession(r.Context(), id)
-		if err == nil {
-			return as, nil
-		}
-		if !os.IsNotExist(err) {
-			return nil, err
-		}
+	if !os.IsNotExist(err) {
+		return nil, err
 	}
 	return s.openSession(r.Context(), "", app.SessionModeAttachActive)
 }

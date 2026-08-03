@@ -1497,6 +1497,12 @@ Only the active primary session accepts `POST /turns`; inactive primary
 sessions must be activated first, and side sessions are read-only in the Web UI.
 The CLI continues a recorded side session through `juex sessions continue`
 without making it active.
+Live-only Web routes resolve an on-disk App only when the requested id still
+matches `history.active_id`. Active-id validation, disk restore, `/new` registry
+re-keying, and explicit activation share the server's session-creation critical
+section; a stale EventSource reconnect for an inactive primary returns a
+conflict without changing the active Session. Historical transcript, context,
+scratchpad, and status reads continue through their read-only disk projections.
 The web handler is a transport adapter over app-level turn admission: it
 validates HTTP/session access, decodes request JSON, renders admission results,
 updates its in-memory session cache when `/new` switches sessions, and owns
