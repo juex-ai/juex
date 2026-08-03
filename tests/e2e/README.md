@@ -41,6 +41,7 @@ go test ./tests/e2e -count=1
 | Web compaction cancellation | `TestWeb_InterruptCancelsCompactionWithoutPersistingMarker` | A manual compact advertises interruptibility, Web Stop cancels its provider request, reports `Compaction canceled`, and leaves no compact marker in the transcript. |
 | Web pending input | `TestWeb_PendingInputQueuesDuringActiveTurn` | A second web turn queues while a provider call is active, then drains into the next provider request. |
 | Web observables | `TestWeb_ObservablesStartAndSurfaceObservation` | Workspace observable config starts a real child process, records an Observation, delivers it to the active session, and exposes status through the Web API. |
+| Fleet Web session switch | `TestFleetWebNewSessionRejectsStaleEventReconnect` | The compiled binary, Agent listener, and Fleet proxy keep a `/new` Session active when the old EventSource reconnects, while preserving historical reads. |
 | Fleet workspace environment | `TestFleetChildrenLoadIndependentWorkspaceDotenvOnRestart` | Two compiled Fleet children load distinct workspace `.env` values into MCP, retain isolation, and apply a changed value only after that child restarts. |
 | Fleet Extension environment | `TestFleetChildrenLoadAgentScopedExtensionDefaultsOnRestart` | Two compiled Fleet children resolve one selected Extension default to distinct Agent data directories, retain process-lifetime snapshots, and apply a manifest edit only to the restarted child. |
 
