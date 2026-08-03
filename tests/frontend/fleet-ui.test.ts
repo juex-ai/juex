@@ -142,6 +142,19 @@ test("fleet rail exposes compact status and exactly two hover actions", () => {
   );
 });
 
+test("mobile fleet rail actions do not mount tooltip triggers", () => {
+  assert.match(
+    sidebarSource,
+    /function AgentActionTooltip\([\s\S]*if \(mobile\) return children;[\s\S]*<Tooltip>/,
+    "mobile actions should remain accessible buttons without Radix tooltip focus behavior",
+  );
+  assert.equal(
+    sidebarSource.match(/<AgentActionTooltip/g)?.length,
+    2,
+    "both lifecycle and Runtime actions should share the mobile-safe tooltip boundary",
+  );
+});
+
 test("fleet rail keeps its header controls lightweight and vertically stable", () => {
   assert.doesNotMatch(sidebarSource, /workingCount|onlineCount/);
   assert.doesNotMatch(sidebarSource, />\s*Fleet\s*</);

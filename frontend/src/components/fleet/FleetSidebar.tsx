@@ -8,6 +8,7 @@ import {
   SlidersHorizontal,
   Square,
 } from "lucide-react";
+import type { ReactElement } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import { LogoMark } from "@/components/LogoMark";
@@ -282,53 +283,67 @@ function AgentRailRow({
           )}
         >
           <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-8"
-                  disabled={busy || (!agent.enabled && lifecycleAction === "start")}
-                  onClick={onToggleLifecycle}
-                  aria-label={`${lifecycleAction === "stop" ? "Stop" : "Start"} ${name}`}
+            <AgentActionTooltip
+              mobile={mobile}
+              label={lifecycleAction === "stop" ? "Stop agent" : "Start agent"}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                disabled={busy || (!agent.enabled && lifecycleAction === "start")}
+                onClick={onToggleLifecycle}
+                aria-label={`${lifecycleAction === "stop" ? "Stop" : "Start"} ${name}`}
+              >
+                {busy ? (
+                  <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
+                ) : lifecycleAction === "stop" ? (
+                  <Square className="size-3.5" />
+                ) : (
+                  <Play className="size-3.5" />
+                )}
+              </Button>
+            </AgentActionTooltip>
+            <AgentActionTooltip mobile={mobile} label="Runtime">
+              <Button
+                asChild
+                variant="ghost"
+                size="icon"
+                className="size-8"
+              >
+                <Link
+                  to={agentTabPath(agent.id, "runtime")}
+                  onClick={onNavigate}
+                  aria-label={`Open ${name} runtime`}
                 >
-                  {busy ? (
-                    <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
-                  ) : lifecycleAction === "stop" ? (
-                    <Square className="size-3.5" />
-                  ) : (
-                    <Play className="size-3.5" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                {lifecycleAction === "stop" ? "Stop agent" : "Start agent"}
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  asChild
-                  variant="ghost"
-                  size="icon"
-                  className="size-8"
-                >
-                  <Link
-                    to={agentTabPath(agent.id, "runtime")}
-                    onClick={onNavigate}
-                    aria-label={`Open ${name} runtime`}
-                  >
-                    <Gauge className="size-3.5" />
-                  </Link>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Runtime</TooltipContent>
-            </Tooltip>
+                  <Gauge className="size-3.5" />
+                </Link>
+              </Button>
+            </AgentActionTooltip>
           </TooltipProvider>
         </div>
       ) : null}
     </div>
+  );
+}
+
+function AgentActionTooltip({
+  mobile,
+  label,
+  children,
+}: {
+  mobile: boolean;
+  label: string;
+  children: ReactElement;
+}) {
+  if (mobile) return children;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
