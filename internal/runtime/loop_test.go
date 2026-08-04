@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -534,6 +535,405 @@ func TestTurn_CompactionKeepsRecentRealInputInProviderContext(t *testing.T) {
 	}
 	if !strings.Contains(messagesText(second), "recent question") || !strings.Contains(messagesText(second), "latest") {
 		t.Fatalf("active context missing retained tail or latest: %+v", second)
+	}
+}
+
+func TestTurn_CompactionSummarizesRealInputThatExceedsRetentionBudget(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary of oversized request"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 4000
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 200
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 500
+	eng.Compaction.UserInputInlineMaxBytes = 1 << 20
+	oversized := "oversized-request " + strings.Repeat("private-detail ", 1200) + "TAIL-SAFETY-GUARD"
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, oversized)); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Turn(context.Background(), "latest"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider histories = %d, want summary and answer requests", len(prov.histories))
+	}
+	active := prov.histories[1]
+	if strings.Contains(messagesText(active), strings.Repeat("private-detail ", 20)) {
+		t.Fatalf("oversized retained input leaked past compact budget:\n%s", messagesText(active))
+	}
+	if !strings.Contains(messagesText(prov.histories[0]), "TAIL-SAFETY-GUARD") {
+		t.Fatalf("summary request lost the oversized input tail:\n%s", messagesText(prov.histories[0]))
+	}
+	if !strings.Contains(messagesText(active), "summary of oversized request") || !strings.Contains(messagesText(active), "TAIL-SAFETY-GUARD") || !strings.Contains(messagesText(active), "User input stored outside context.") || !strings.Contains(messagesText(active), "path:") || !strings.Contains(messagesText(active), "latest") {
+		t.Fatalf("active context missing summary or incoming request: %+v", active)
+	}
+	activeText := messagesText(active)
+	pathStart := strings.Index(activeText, "path: ")
+	if pathStart < 0 {
+		t.Fatalf("active context missing recoverable artifact path:\n%s", activeText)
+	}
+	pathEnd := strings.IndexByte(activeText[pathStart:], '\n')
+	if pathEnd < 0 {
+		t.Fatalf("active context has unterminated artifact path:\n%s", activeText)
+	}
+	artifactPath := strings.TrimSpace(activeText[pathStart+len("path: ") : pathStart+pathEnd])
+	artifactData, err := os.ReadFile(filepath.Join(eng.WorkDir, filepath.FromSlash(artifactPath)))
+	if err != nil {
+		t.Fatalf("read retained input artifact: %v", err)
+	}
+	if string(artifactData) != oversized {
+		t.Fatalf("retained input artifact length = %d, want original %d", len(artifactData), len(oversized))
+	}
+	compact := eng.Session.History[len(eng.Session.History)-3]
+	if compact.Kind != llm.MessageKindCompact || compact.Compaction == nil {
+		t.Fatalf("compaction marker = %+v", compact)
+	}
+	if len(compact.Compaction.RetainedMessageIDs) != 0 {
+		t.Fatalf("retained ids = %v, want oversized input summarized", compact.Compaction.RetainedMessageIDs)
+	}
+	if compact.Compaction.TokensAfter >= eng.ContextWindow-eng.Compaction.ReserveTokens {
+		t.Fatalf("tokens after = %d, want below trigger %d", compact.Compaction.TokensAfter, eng.ContextWindow-eng.Compaction.ReserveTokens)
+	}
+}
+
+func TestTurn_CompactionRetightensPreviouslyProjectedOversizedInput(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "working"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary of projected request"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 4000
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 200
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 500
+	eng.Compaction.UserInputInlineMaxBytes = 1
+	eng.Compaction.UserInputPreviewHeadBytes = 8192
+	eng.Compaction.UserInputPreviewTailBytes = 8192
+	oversized := "oversized-request " + strings.Repeat("private-detail ", 2000) + "TAIL-SAFETY-GUARD"
+
+	if _, err := eng.Turn(context.Background(), oversized); err != nil {
+		t.Fatal(err)
+	}
+	projected := eng.Session.History[0].Blocks[0]
+	if projected.Artifact == nil || projected.Artifact.HeadBytes+projected.Artifact.TailBytes <= eng.Compaction.KeepRecentTokens {
+		t.Fatalf("initial projection = %+v, want preview larger than compact retention budget", projected.Artifact)
+	}
+	if _, err := eng.Turn(context.Background(), "latest"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 3 {
+		t.Fatalf("provider histories = %d, want first answer, summary, and final answer requests", len(prov.histories))
+	}
+	activeText := messagesText(prov.histories[2])
+	if strings.Contains(activeText, strings.Repeat("private-detail ", 20)) {
+		t.Fatalf("active context kept the original large preview:\n%s", activeText)
+	}
+	for _, want := range []string{"summary of projected request", "TAIL-SAFETY-GUARD", projected.Artifact.StoredPath, "latest"} {
+		if !strings.Contains(activeText, want) {
+			t.Fatalf("active context missing %q:\n%s", want, activeText)
+		}
+	}
+	var compact llm.Message
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindCompact {
+			compact = msg
+		}
+	}
+	if compact.Compaction == nil {
+		t.Fatalf("missing compaction marker: %+v", eng.Session.History)
+	}
+	if compact.Compaction.TokensAfter >= eng.ContextWindow-eng.Compaction.ReserveTokens {
+		t.Fatalf("tokens after = %d, want below trigger %d", compact.Compaction.TokensAfter, eng.ContextWindow-eng.Compaction.ReserveTokens)
+	}
+	if got := string(readProjectedArtifact(t, eng, projected.Artifact)); got != oversized {
+		t.Fatalf("stored artifact changed: got %d bytes, want %d", len(got), len(oversized))
+	}
+}
+
+func TestTurn_CompactionBoundsSharedPreviewForMultipleProjectedBlocks(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary of multi-block request"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 4000
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 200
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 500
+	eng.Compaction.UserInputInlineMaxBytes = 1
+	eng.Compaction.UserInputPreviewHeadBytes = 2048
+	eng.Compaction.UserInputPreviewTailBytes = 2048
+	msg := llm.Message{ID: "multi-block", Role: llm.RoleUser, Kind: llm.MessageKindDirect}
+	for i := range 6 {
+		msg.Blocks = append(msg.Blocks, llm.Block{Type: llm.BlockText, Text: fmt.Sprintf("BLOCK-%d-HEAD ", i) + strings.Repeat(fmt.Sprintf("private-%d ", i), 600) + fmt.Sprintf(" BLOCK-%d-TAIL", i)})
+	}
+	projected, _, err := eng.projectMessageLocked(msg, effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(projected); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Turn(context.Background(), "latest"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider histories = %d, want summary and final answer requests", len(prov.histories))
+	}
+	activeText := messagesText(prov.histories[1])
+	if strings.Contains(activeText, strings.Repeat("private-0 ", 20)) {
+		t.Fatalf("active context kept a per-block full preview:\n%s", activeText)
+	}
+	for i, block := range projected.Blocks {
+		if block.Artifact == nil || !strings.Contains(activeText, block.Artifact.StoredPath) {
+			t.Fatalf("active context missing artifact path for block %d: %+v\n%s", i, block.Artifact, activeText)
+		}
+	}
+	var compact llm.Message
+	for _, history := range eng.Session.History {
+		if history.Kind == llm.MessageKindCompact {
+			compact = history
+		}
+	}
+	if compact.Compaction == nil || compact.Compaction.TokensAfter >= eng.ContextWindow-eng.Compaction.ReserveTokens {
+		t.Fatalf("compaction marker = %+v, want tokens after below trigger %d", compact.Compaction, eng.ContextWindow-eng.Compaction.ReserveTokens)
+	}
+}
+
+func TestTurn_CompactionCarriesRetainedInputReferencesAcrossCompactions(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "first summary without references"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "first answer"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "second summary without references"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "second answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 4000
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1000
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 500
+	eng.Compaction.UserInputInlineMaxBytes = 1 << 20
+	firstInput := "first-head " + strings.Repeat("first-private ", 1600) + " FIRST-TAIL"
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, firstInput)); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Turn(context.Background(), "first-latest"); err != nil {
+		t.Fatal(err)
+	}
+	var firstCompact llm.Message
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindCompact {
+			firstCompact = msg
+		}
+	}
+	if firstCompact.Compaction == nil || len(firstCompact.Compaction.RetainedInputReferences) != 1 {
+		t.Fatalf("first compact references = %+v", firstCompact.Compaction)
+	}
+	firstReference := firstCompact.Compaction.RetainedInputReferences[0]
+	firstArtifact := firstReference.Blocks[0].Artifact
+	if firstArtifact == nil {
+		t.Fatalf("first retained reference = %+v", firstReference)
+	}
+
+	secondInput := "second-head " + strings.Repeat("second-private ", 1600) + " SECOND-TAIL"
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, secondInput)); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "more work")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Turn(context.Background(), "second-latest"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 4 {
+		t.Fatalf("provider histories = %d, want two summary and two answer requests", len(prov.histories))
+	}
+	secondSummaryRequest := messagesText(prov.histories[2])
+	if strings.Contains(secondSummaryRequest, "Retained Input References") || strings.Contains(secondSummaryRequest, firstArtifact.StoredPath) {
+		t.Fatalf("second summary request replayed deterministic retained references:\n%s", secondSummaryRequest)
+	}
+	if !strings.Contains(secondSummaryRequest, "first summary without references") {
+		t.Fatalf("second summary request lost first model summary:\n%s", secondSummaryRequest)
+	}
+	var compacts []llm.Message
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindCompact {
+			compacts = append(compacts, msg)
+		}
+	}
+	if len(compacts) != 2 {
+		t.Fatalf("compact messages = %d, want 2", len(compacts))
+	}
+	latest := compacts[1]
+	if latest.Compaction == nil || len(latest.Compaction.RetainedInputReferences) != 2 {
+		t.Fatalf("latest compact references = %+v, want inherited and current", latest.Compaction)
+	}
+	activeText := messagesText(prov.histories[3])
+	for _, want := range []string{"second summary without references", firstArtifact.StoredPath, firstArtifact.SHA256, "FIRST-TAIL", "SECOND-TAIL", "second-latest"} {
+		if !strings.Contains(activeText, want) {
+			t.Fatalf("active context missing carried reference %q:\n%s", want, activeText)
+		}
+	}
+	previewBytes := 0
+	for _, reference := range latest.Compaction.RetainedInputReferences {
+		for _, block := range reference.Blocks {
+			if block.Artifact != nil {
+				previewBytes += block.Artifact.HeadBytes + block.Artifact.TailBytes
+			}
+		}
+	}
+	if previewBytes > eng.Compaction.KeepRecentTokens {
+		t.Fatalf("carried preview bytes = %d, want <= %d", previewBytes, eng.Compaction.KeepRecentTokens)
+	}
+	if latest.Compaction.TokensAfter >= eng.ContextWindow-eng.Compaction.ReserveTokens {
+		t.Fatalf("tokens after = %d, want below trigger %d", latest.Compaction.TokensAfter, eng.ContextWindow-eng.Compaction.ReserveTokens)
+	}
+	if got := string(readProjectedArtifact(t, eng, firstArtifact)); got != firstInput {
+		t.Fatalf("first retained artifact changed: got %d bytes, want %d", len(got), len(firstInput))
+	}
+}
+
+func TestTurn_CompactionProjectsOversizedInputInsideExecutionTail(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary without raw initiator"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 4000
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 200
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 500
+	eng.Compaction.UserInputInlineMaxBytes = 1 << 20
+	initiator := llm.TextMessage(llm.RoleUser, "tool-request-head "+strings.Repeat("private-tool-request ", 1600)+" TOOL-REQUEST-TAIL")
+	initiator.ID = "direct-1"
+	initiator.Kind = llm.MessageKindDirect
+	toolUse := llm.Message{ID: "tool-use-1", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "read"}}}
+	toolResult := llm.Message{ID: "tool-result-1", Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "call-1", Content: "contents"}}}
+	for _, msg := range []llm.Message{initiator, toolUse, toolResult} {
+		if err := eng.Session.Append(msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := eng.Turn(context.Background(), "latest"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider histories = %d, want summary and answer requests", len(prov.histories))
+	}
+	active := prov.histories[1]
+	activeText := messagesText(active)
+	if strings.Contains(activeText, strings.Repeat("private-tool-request ", 20)) {
+		t.Fatalf("active context retained oversized tool initiator verbatim:\n%s", activeText)
+	}
+	for _, want := range []string{"summary without raw initiator", "TOOL-REQUEST-TAIL", "latest"} {
+		if !strings.Contains(activeText, want) {
+			t.Fatalf("active context missing %q:\n%s", want, activeText)
+		}
+	}
+	var compact llm.Message
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindCompact {
+			compact = msg
+		}
+	}
+	if compact.Compaction == nil || len(compact.Compaction.RetainedInputReferences) != 1 {
+		t.Fatalf("compact metadata = %+v, want projected initiator reference", compact.Compaction)
+	}
+	if slices.Contains(compact.Compaction.RetainedMessageIDs, initiator.ID) || !slices.Contains(compact.Compaction.RetainedMessageIDs, toolUse.ID) || !slices.Contains(compact.Compaction.RetainedMessageIDs, toolResult.ID) {
+		t.Fatalf("retained ids = %v, want tool protocol without raw initiator", compact.Compaction.RetainedMessageIDs)
+	}
+	if compact.Compaction.TokensAfter >= eng.ContextWindow-eng.Compaction.ReserveTokens {
+		t.Fatalf("tokens after = %d, want below trigger %d", compact.Compaction.TokensAfter, eng.ContextWindow-eng.Compaction.ReserveTokens)
+	}
+	var sawUse, sawResult bool
+	for _, msg := range active {
+		for _, block := range msg.Blocks {
+			sawUse = sawUse || block.Type == llm.BlockToolUse && block.ToolUseID == "call-1"
+			sawResult = sawResult || block.Type == llm.BlockToolResult && block.ToolUseID == "call-1"
+		}
+	}
+	if !sawUse || !sawResult {
+		t.Fatalf("active tool protocol closed = use:%t result:%t; history=%+v", sawUse, sawResult, active)
+	}
+}
+
+func TestTurn_CompactionKeepsOversizedImageInputReferenceAndOneByteCaption(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary with image reference"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 4000
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 200
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 500
+	image := llm.Message{
+		Role: llm.RoleUser,
+		Kind: llm.MessageKindDirect,
+		Blocks: []llm.Block{
+			{Type: llm.BlockText, Text: "A"},
+			{Type: llm.BlockImage, Media: &llm.MediaRef{
+				ArtifactPath:  ".juex/artifacts/media/session/photo.png",
+				MediaType:     "image/png",
+				SHA256:        "image-sha",
+				OriginalBytes: 1234,
+				Width:         4000,
+				Height:        4000,
+			}},
+		},
+	}
+	if err := eng.Session.Append(image); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Turn(context.Background(), "latest"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider histories = %d, want summary and answer requests", len(prov.histories))
+	}
+	for index, history := range prov.histories {
+		text := messagesText(history)
+		caption := "text: A"
+		if index > 0 {
+			caption = "\nA\n"
+		}
+		for _, want := range []string{caption, ".juex/artifacts/media/session/photo.png", "image-sha", "size=4000x4000"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("provider history %d missing media reference %q:\n%s", index, want, text)
+			}
+		}
+	}
+	compact := eng.Session.History[len(eng.Session.History)-3]
+	if compact.Kind != llm.MessageKindCompact || compact.Compaction == nil || len(compact.Compaction.RetainedMessageIDs) != 0 {
+		t.Fatalf("compaction marker = %+v", compact)
+	}
+	if compact.Compaction.TokensAfter >= eng.ContextWindow-eng.Compaction.ReserveTokens {
+		t.Fatalf("tokens after = %d, want below trigger %d", compact.Compaction.TokensAfter, eng.ContextWindow-eng.Compaction.ReserveTokens)
 	}
 }
 

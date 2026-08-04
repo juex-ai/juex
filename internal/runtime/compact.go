@@ -152,6 +152,27 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	}
 	instructions = mergeCompactInstructions(policy.Instructions, instructions)
 	instructions = appendCompactHookInstructions(instructions, preResults)
+	summaryInput, retainedInputReferences, projection, err := e.projectOversizedCompactionInputsLocked(selection.SummaryInput, selection.OversizedInputIDs, policy)
+	if err != nil {
+		compactErr := newCompactionError(ctx, err)
+		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+			Reason: reason,
+			Auto:   auto,
+			Error:  compactErr.Error(),
+		}})
+		return CompactionResult{}, compactErr
+	}
+	e.emitProjectionApplied(turnID, projection)
+	retainedInputReferences, err = e.carryCompactionInputReferencesLocked(selection.PreviousSummary, retainedInputReferences, policy)
+	if err != nil {
+		compactErr := newCompactionError(ctx, err)
+		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+			Reason: reason,
+			Auto:   auto,
+			Error:  compactErr.Error(),
+		}})
+		return CompactionResult{}, compactErr
+	}
 
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
@@ -167,7 +188,8 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		KeepRecentTokens: policy.KeepRecentTokens,
 	}})
 
-	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, selection.PreviousSummary, selection.SummaryInput, summaryState, policy, instructions)
+	previousModelSummary := compactionModelSummary(selection.PreviousSummary)
+	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, previousModelSummary, summaryInput, summaryState, policy, instructions)
 	if err != nil {
 		sess.RecordResponseUsage(generation.Usage, nil)
 		compactErr := newCompactionError(ctx, err)
@@ -180,7 +202,8 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	}
 	resp := generation.Response
 	summaryProvider := generation.Provider
-	summary := generation.Summary
+	summaryChars := len(generation.Summary)
+	summary := appendCompactionInputReferences(generation.Summary, retainedInputReferences)
 	if contextErr := cancellation.ContextError(ctx); contextErr != nil {
 		compactErr := newCompactionError(ctx, contextErr)
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
@@ -198,14 +221,15 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	msg := llm.TextMessage(llm.RoleUser, compactMessageText(summary))
 	msg.Kind = llm.MessageKindCompact
 	msg.Compaction = &llm.CompactionMetadata{
-		Auto:               auto,
-		Reason:             reason,
-		FirstKeptMessageID: selection.FirstKeptMessageID,
-		TailStartMessageID: selection.TailStartMessageID,
-		RetainedMessageIDs: append([]string(nil), selection.RetainedMessageIDs...),
-		TokensBefore:       tokensBefore,
-		SummaryChars:       len(summary),
-		SummaryModel:       model,
+		Auto:                    auto,
+		Reason:                  reason,
+		FirstKeptMessageID:      selection.FirstKeptMessageID,
+		TailStartMessageID:      selection.TailStartMessageID,
+		RetainedMessageIDs:      append([]string(nil), selection.RetainedMessageIDs...),
+		RetainedInputReferences: append([]llm.Message(nil), retainedInputReferences...),
+		TokensBefore:            tokensBefore,
+		SummaryChars:            summaryChars,
+		SummaryModel:            model,
 	}
 	if selection.HasPreviousSummary {
 		msg.Compaction.PreviousSummaryID = selection.PreviousSummary.ID
@@ -238,7 +262,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		Auto:               auto,
 		TokensBefore:       tokensBefore,
 		TokensAfter:        tokensAfter,
-		SummaryChars:       len(summary),
+		SummaryChars:       summaryChars,
 		SummaryModel:       model,
 		TailStartMessageID: selection.TailStartMessageID,
 		FirstKeptMessageID: selection.FirstKeptMessageID,
@@ -303,8 +327,30 @@ func mergeCompactInstructions(parts ...string) string {
 	return strings.Join(merged, "\n\n")
 }
 
+const compactMessagePrefix = "Context compacted automatically because the provider context window is nearing its limit.\n\nSummary of earlier conversation:\n"
+
 func compactMessageText(summary string) string {
-	return "Context compacted automatically because the provider context window is nearing its limit.\n\nSummary of earlier conversation:\n" + summary
+	return compactMessagePrefix + summary
+}
+
+func compactionModelSummary(msg llm.Message) llm.Message {
+	if msg.Compaction == nil || msg.Compaction.SummaryChars <= 0 {
+		return msg
+	}
+	text := strings.TrimPrefix(msg.FirstText(), compactMessagePrefix)
+	if msg.Compaction.SummaryChars > len(text) {
+		return msg
+	}
+	text = text[:msg.Compaction.SummaryChars]
+	out := msg
+	out.Blocks = append([]llm.Block(nil), msg.Blocks...)
+	for i := range out.Blocks {
+		if out.Blocks[i].Type == llm.BlockText {
+			out.Blocks[i].Text = text
+			break
+		}
+	}
+	return out
 }
 
 func (e *Engine) compactionToolsLocked() []llm.ToolSpec {

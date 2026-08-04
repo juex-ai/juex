@@ -87,14 +87,14 @@ When a tool output exceeds `compaction.tool_result_inline_max_bytes`, Juex
 writes the full output to:
 
 ```text
-.juex/artifacts/tool-results/<session-id>/<tool-use-id>.txt
+.juex/artifacts/tool-results/<session-id>/<tool-use-id>-<block-index>.txt
 ```
 
 When a user input exceeds `compaction.user_input_inline_max_bytes`, Juex writes
 the full input to:
 
 ```text
-.juex/artifacts/user-inputs/<session-id>/<message-id>.txt
+.juex/artifacts/user-inputs/<session-id>/<message-id>-<block-index>.txt
 ```
 
 The provider-visible tool result becomes a stable text block:
@@ -169,10 +169,22 @@ Projection rules:
 1. Never change old projected text except at a compact boundary.
 2. Always preserve provider protocol validity: tool outputs must keep matching
    tool calls.
-3. Keep recent tail raw until it crosses a configured tail budget.
-4. Keep compact summaries short and structured; do not ask them to carry system
+3. Keep recent inputs verbatim only while they fit the configured token budget;
+   at a compact boundary, externalize an input that is itself larger than that
+   budget and keep its bounded head/tail artifact reference with the summary.
+   All text blocks in one input share that reference preview budget.
+   Image-only inputs keep their durable media path, type, digest, byte size, and
+   dimensions in the same retained-reference section.
+4. Persist retained input references in compaction metadata and inherit them
+   deterministically across later compactions; model summaries are not the
+   authority for artifact paths or digests. Keep the newest complete reference
+   suffix that fits the shared retention budget so metadata and compact text do
+   not grow without bound. Feed only the previous model-generated summary back
+   into later summarization; deterministic reference sections travel through
+   metadata instead of being re-summarized.
+5. Keep compact summaries short and structured; do not ask them to carry system
    instructions, AGENTS.md, tool schemas, or cwd. Those are rebuilt.
-5. Assistant text/reasoning projection is future work. Today, reasoning replay
+6. Assistant text/reasoning projection is future work. Today, reasoning replay
    is controlled by provider capabilities and existing block metadata.
 
 This remains a runtime responsibility, not a provider responsibility.

@@ -8,6 +8,7 @@ type Selection struct {
 	SummaryInput       []llm.Message
 	RetainedTail       []llm.Message
 	RetainedMessageIDs []string
+	OversizedInputIDs  []string
 	FirstKeptMessageID string
 	TailStartMessageID string
 	LatestCompactIndex int
@@ -45,7 +46,12 @@ func SelectInputWithEstimator(history []llm.Message, policy Policy, estimateMess
 	}
 
 	keep := chooseRetainedMessages(work, policy.KeepRecentTokens, estimateMessages)
+	oversizedInputID := newestOversizedInputID(work, policy.KeepRecentTokens, estimateMessages)
 	for _, msg := range work {
+		if msg.ID == oversizedInputID {
+			sel.SummaryInput = append(sel.SummaryInput, msg)
+			continue
+		}
 		if keep[msg.ID] {
 			sel.RetainedTail = append(sel.RetainedTail, msg)
 			if msg.ID != "" {
@@ -55,12 +61,17 @@ func SelectInputWithEstimator(history []llm.Message, policy Policy, estimateMess
 		}
 		sel.SummaryInput = append(sel.SummaryInput, msg)
 	}
+	if oversizedInputID != "" {
+		sel.OversizedInputIDs = append(sel.OversizedInputIDs, oversizedInputID)
+	}
 	if len(sel.RetainedTail) > 0 {
 		sel.FirstKeptMessageID = sel.RetainedTail[0].ID
+	} else if oversizedInputID != "" {
+		sel.FirstKeptMessageID = oversizedInputID
 	}
-	// A single oversized real input may be the entire transcript. Summarize it
-	// while retaining its exact projected form so manual and overflow recovery
-	// compaction still make progress without discarding the user's request.
+	// A single retained real input may be the entire transcript. Include it in
+	// the summary request as well so manual compaction still produces a useful
+	// compact marker without discarding the budgeted verbatim copy.
 	if len(sel.SummaryInput) == 0 && len(sel.RetainedTail) > 0 {
 		sel.SummaryInput = append([]llm.Message(nil), sel.RetainedTail...)
 	}
@@ -68,6 +79,34 @@ func SelectInputWithEstimator(history []llm.Message, policy Policy, estimateMess
 		sel.TailStartMessageID = work[start].ID
 	}
 	return sel
+}
+
+func newestOversizedInputID(work []llm.Message, budget int, estimateMessages func([]llm.Message) int) string {
+	if budget <= 0 {
+		return ""
+	}
+	for i := len(work) - 1; i >= 0; i-- {
+		if !isRealInput(work[i]) {
+			continue
+		}
+		if messageHasRetainableReference(work[i]) && estimateMessages(work[i:i+1]) > budget {
+			return work[i].ID
+		}
+		return ""
+	}
+	return ""
+}
+
+func messageHasRetainableReference(msg llm.Message) bool {
+	for _, block := range msg.Blocks {
+		if block.Type == llm.BlockText && block.Text != "" {
+			return true
+		}
+		if block.Type == llm.BlockImage && block.Media != nil && block.Media.ArtifactPath != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func compactionRelevantMessages(messages []llm.Message) []llm.Message {
@@ -86,18 +125,16 @@ func compactionRelevantMessages(messages []llm.Message) []llm.Message {
 func chooseRetainedMessages(work []llm.Message, budget int, estimateMessages func([]llm.Message) int) map[string]bool {
 	keep := make(map[string]bool)
 	tokens := 0
-	realInputs := 0
 	for i := len(work) - 1; i >= 0; i-- {
 		if !isRealInput(work[i]) {
 			continue
 		}
 		cost := estimateMessages(work[i : i+1])
-		if realInputs > 0 && budget > 0 && tokens+cost > budget {
+		if budget > 0 && tokens+cost > budget {
 			break
 		}
 		keep[work[i].ID] = true
 		tokens += cost
-		realInputs++
 	}
 	if start := executionTailStart(work); start >= 0 {
 		for i := start; i < len(work); i++ {

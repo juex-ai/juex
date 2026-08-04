@@ -136,10 +136,13 @@ type CompactionMetadata struct {
 	FirstKeptMessageID string   `json:"first_kept_message_id,omitempty"`
 	TailStartMessageID string   `json:"tail_start_message_id,omitempty"`
 	RetainedMessageIDs []string `json:"retained_message_ids,omitempty"`
-	TokensBefore       int      `json:"tokens_before"`
-	TokensAfter        int      `json:"tokens_after"`
-	SummaryChars       int      `json:"summary_chars"`
-	SummaryModel       string   `json:"summary_model,omitempty"`
+	// RetainedInputReferences persist bounded artifact/media references so a
+	// later compaction can carry them without relying on model-generated text.
+	RetainedInputReferences []Message `json:"retained_input_references,omitempty"`
+	TokensBefore            int       `json:"tokens_before"`
+	TokensAfter             int       `json:"tokens_after"`
+	SummaryChars            int       `json:"summary_chars"`
+	SummaryModel            string    `json:"summary_model,omitempty"`
 }
 
 // TextMessage is a convenience constructor for a single-text-block message.

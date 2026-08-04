@@ -339,6 +339,7 @@ type CompactionMetadata struct {
     PreviousSummaryID  string
     FirstKeptMessageID string
     RetainedMessageIDs []string
+    RetainedInputReferences []Message // structured artifact/media references inherited by later compactions
     TailStartMessageID string
     TokensBefore       int
     TokensAfter        int
@@ -1850,7 +1851,7 @@ compaction:
 | `compaction.enabled` | enables automatic and manual context compaction |
 | `compaction.instructions` | persistent summary focus applied before per-request instructions and successful `PreCompact` hook stdout |
 | `compaction.reserve_tokens` | token budget held back from the provider window |
-| `compaction.keep_recent_tokens` | approximate token budget for retaining recent direct, MCP, and Observable inputs verbatim |
+| `compaction.keep_recent_tokens` | approximate token budget for retaining recent direct, MCP, and Observable inputs verbatim; a single larger input becomes a bounded artifact reference at compaction |
 | `compaction.summary_model` | optional `provider:model` used only for compaction summary calls; if omitted or if the summary provider fails, compaction uses the active model |
 | `compaction.summary_max_tokens` | maximum output tokens for summary generation |
 | `compaction.tool_result_max_chars` | per-tool-result truncation limit in summary input |

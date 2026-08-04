@@ -8,6 +8,24 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 )
 
+func TestCompactionModelSummaryStripsDeterministicReferenceSuffix(t *testing.T) {
+	generated := "Goal\n保留当前状态"
+	msg := llm.TextMessage(llm.RoleUser, compactMessageText(generated+"\n\nRetained Input References\npath: stale"))
+	msg.Kind = llm.MessageKindCompact
+	msg.Compaction = &llm.CompactionMetadata{SummaryChars: len(generated)}
+
+	got := compactionModelSummary(msg)
+	if got.FirstText() != generated {
+		t.Fatalf("previous model summary = %q, want %q", got.FirstText(), generated)
+	}
+	if strings.Contains(got.FirstText(), "Retained Input References") {
+		t.Fatalf("previous model summary retained deterministic suffix: %q", got.FirstText())
+	}
+	if !strings.Contains(msg.FirstText(), "path: stale") {
+		t.Fatalf("source compact message was mutated: %q", msg.FirstText())
+	}
+}
+
 func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult(t *testing.T) {
 	prev := testMsg("compact-1", llm.RoleUser, "Summary of earlier conversation:\nGoal\nold")
 	prev.Kind = llm.MessageKindCompact
@@ -27,14 +45,14 @@ func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult
 func TestBuildCompactionSummaryRequest_TruncatesTextAndToolUseInput(t *testing.T) {
 	input := []llm.Message{
 		{ID: "large", Role: llm.RoleUser, Blocks: []llm.Block{
-			{Type: llm.BlockText, Text: strings.Repeat("t", 50)},
+			{Type: llm.BlockText, Text: "HEAD-" + strings.Repeat("t", 40) + "-TAIL"},
 			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "write", Input: map[string]any{"payload": strings.Repeat("x", 50)}},
 		}},
 	}
 	_, hist := buildCompactionSummaryRequest("", llm.Message{}, input, compactionSummaryState{}, compactionPolicy{ToolResultMaxChars: 10}, "")
 	body := hist[0].FirstText()
-	if !strings.Contains(body, "text: tttttttttt ...(truncated, total 50 bytes)") {
-		t.Fatalf("text was not truncated:\n%s", body)
+	if !strings.Contains(body, "HEAD-") || !strings.Contains(body, "-TAIL") || !strings.Contains(body, "omitted") {
+		t.Fatalf("text did not preserve a bounded head and tail:\n%s", body)
 	}
 	if !strings.Contains(body, "tool_use tu1 write:") || !strings.Contains(body, "truncated") {
 		t.Fatalf("tool use input was not truncated:\n%s", body)

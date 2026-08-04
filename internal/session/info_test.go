@@ -743,6 +743,16 @@ func TestLoadInfo_PreservesStoredIDsAndCompactionMetadata(t *testing.T) {
 		TokensAfter:        40,
 		SummaryChars:       12,
 		SummaryModel:       "mock",
+		RetainedInputReferences: []llm.Message{{
+			ID:   "input-ref",
+			Role: llm.RoleUser,
+			Kind: llm.MessageKindDirect,
+			Blocks: []llm.Block{{Type: llm.BlockText, Text: "bounded preview", Artifact: &llm.ContextArtifactProjection{
+				SourceKind: "user_input",
+				StoredPath: ".juex/artifacts/user-inputs/session/input-ref-0.txt",
+				SHA256:     "input-sha",
+			}}},
+		}},
 	}
 	dir := makeSession(t, root, "20260515T010203-meta0001",
 		[]llm.Message{user, compact},
@@ -757,6 +767,10 @@ func TestLoadInfo_PreservesStoredIDsAndCompactionMetadata(t *testing.T) {
 	}
 	if msgs[1].Compaction == nil || msgs[1].Compaction.TokensBefore != 100 || msgs[1].Compaction.TailStartMessageID != "m2" {
 		t.Fatalf("compaction metadata = %+v", msgs[1].Compaction)
+	}
+	refs := msgs[1].Compaction.RetainedInputReferences
+	if len(refs) != 1 || refs[0].ID != "input-ref" || refs[0].Blocks[0].Artifact == nil || refs[0].Blocks[0].Artifact.StoredPath != ".juex/artifacts/user-inputs/session/input-ref-0.txt" {
+		t.Fatalf("retained input references = %+v", refs)
 	}
 }
 

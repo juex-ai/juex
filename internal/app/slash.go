@@ -400,9 +400,6 @@ func compactionStatusFromHistory(history []llm.Message) StatusCompactionSnapshot
 }
 
 func compactMemoryTokens(msg llm.Message) int {
-	if msg.Compaction != nil && msg.Compaction.SummaryChars > 0 {
-		return runtime.EstimateCharsAsTokens(msg.Compaction.SummaryChars)
-	}
 	return runtime.EstimateTextTokens(msg.FirstText())
 }
 

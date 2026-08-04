@@ -26,6 +26,14 @@ func (s projectionStats) empty() bool {
 }
 
 func (e *Engine) projectMessageLocked(msg llm.Message, policy compactionPolicy) (llm.Message, projectionStats, error) {
+	return e.projectMessageWithRetentionLocked(msg, policy, false)
+}
+
+func (e *Engine) projectCompactionRetentionMessageLocked(msg llm.Message, policy compactionPolicy) (llm.Message, projectionStats, error) {
+	return e.projectMessageWithRetentionLocked(msg, policy, true)
+}
+
+func (e *Engine) projectMessageWithRetentionLocked(msg llm.Message, policy compactionPolicy, tightenRetainedInput bool) (llm.Message, projectionStats, error) {
 	if e == nil || e.currentSession() == nil || !policy.Enabled {
 		return msg, projectionStats{}, nil
 	}
@@ -37,6 +45,19 @@ func (e *Engine) projectMessageLocked(msg llm.Message, policy compactionPolicy) 
 	for i := range msg.Blocks {
 		block := msg.Blocks[i]
 		if block.Artifact != nil {
+			if tightenRetainedInput {
+				projected, changed, err := e.tightenProjectedUserInput(block, policy)
+				if err != nil {
+					return msg, stats, err
+				}
+				if changed {
+					if clonedBlocks == nil {
+						clonedBlocks = make([]llm.Block, i, len(msg.Blocks))
+						copy(clonedBlocks, msg.Blocks[:i])
+					}
+					block = projected
+				}
+			}
 			if clonedBlocks != nil {
 				clonedBlocks = append(clonedBlocks, block)
 			}
@@ -48,7 +69,7 @@ func (e *Engine) projectMessageLocked(msg llm.Message, policy compactionPolicy) 
 				clonedBlocks = make([]llm.Block, i, len(msg.Blocks))
 				copy(clonedBlocks, msg.Blocks[:i])
 			}
-			artifact, text, err := e.writeProjectedArtifact("user_input", msg.ID, block, block.Text, policy.UserInputPreviewHeadBytes, policy.UserInputPreviewTailBytes)
+			artifact, text, err := e.writeProjectedArtifact("user_input", msg.ID, i, block, block.Text, policy.UserInputPreviewHeadBytes, policy.UserInputPreviewTailBytes)
 			if err != nil {
 				return msg, stats, err
 			}
@@ -61,7 +82,7 @@ func (e *Engine) projectMessageLocked(msg llm.Message, policy compactionPolicy) 
 				clonedBlocks = make([]llm.Block, i, len(msg.Blocks))
 				copy(clonedBlocks, msg.Blocks[:i])
 			}
-			artifact, text, err := e.writeProjectedArtifact("tool_result", msg.ID, block, block.Content, policy.ToolResultPreviewHeadBytes, policy.ToolResultPreviewTailBytes)
+			artifact, text, err := e.writeProjectedArtifact("tool_result", msg.ID, i, block, block.Content, policy.ToolResultPreviewHeadBytes, policy.ToolResultPreviewTailBytes)
 			if err != nil {
 				return msg, stats, err
 			}
@@ -95,6 +116,185 @@ func (e *Engine) projectMessagesForProviderLocked(msgs []llm.Message, policy com
 		total.BytesExternalized += stats.BytesExternalized
 	}
 	return llm.FoldChunkedWriteHistoryForProvider(out), total, nil
+}
+
+func (e *Engine) projectOversizedCompactionInputsLocked(msgs []llm.Message, ids []string, policy compactionPolicy) ([]llm.Message, []llm.Message, projectionStats, error) {
+	if len(ids) == 0 {
+		return msgs, nil, projectionStats{}, nil
+	}
+	wanted := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	out := append([]llm.Message(nil), msgs...)
+	var retained []llm.Message
+	var total projectionStats
+	for i, msg := range out {
+		if !wanted[msg.ID] {
+			continue
+		}
+		projectionPolicy := compactionRetentionProjectionPolicy(policy, msg)
+		projected, stats, err := e.projectCompactionRetentionMessageLocked(msg, projectionPolicy)
+		if err != nil {
+			return nil, nil, total, err
+		}
+		out[i] = projected
+		if hasRetainedInputReference(projected) {
+			retained = append(retained, projected)
+		}
+		total.UserInputsExternalized += stats.UserInputsExternalized
+		total.ToolResultsExternalized += stats.ToolResultsExternalized
+		total.BytesExternalized += stats.BytesExternalized
+	}
+	return out, retained, total, nil
+}
+
+func compactionRetentionProjectionPolicy(policy compactionPolicy, msg llm.Message) compactionPolicy {
+	return compactionRetentionProjectionPolicyForBlockCount(policy, compactionProjectedTextBlockCount(msg))
+}
+
+func compactionRetentionProjectionPolicyForBlockCount(policy compactionPolicy, textBlocks int) compactionPolicy {
+	policy.UserInputInlineMaxBytes = 1
+	previewBytes := policy.KeepRecentTokens
+	if previewBytes < 0 {
+		previewBytes = 0
+	}
+	if configured := policy.UserInputPreviewHeadBytes + policy.UserInputPreviewTailBytes; configured < previewBytes {
+		previewBytes = configured
+	}
+	if textBlocks > 0 {
+		previewBytes /= textBlocks
+	}
+	policy.UserInputPreviewHeadBytes = previewBytes / 2
+	policy.UserInputPreviewTailBytes = previewBytes - policy.UserInputPreviewHeadBytes
+	return policy
+}
+
+func compactionProjectedTextBlockCount(msg llm.Message) int {
+	if msg.Kind == llm.MessageKindCompact || msg.Role != llm.RoleUser {
+		return 0
+	}
+	count := 0
+	for _, block := range msg.Blocks {
+		if block.Type != llm.BlockText {
+			continue
+		}
+		if (block.Artifact != nil && block.Artifact.SourceKind == "user_input") || (block.Artifact == nil && block.Text != "") {
+			count++
+		}
+	}
+	return count
+}
+
+func (e *Engine) carryCompactionInputReferencesLocked(previous llm.Message, current []llm.Message, policy compactionPolicy) ([]llm.Message, error) {
+	var references []llm.Message
+	positions := map[string]int{}
+	add := func(msg llm.Message) {
+		if !hasRetainedInputReference(msg) {
+			return
+		}
+		if msg.ID != "" {
+			if index, ok := positions[msg.ID]; ok {
+				references[index] = msg
+				return
+			}
+			positions[msg.ID] = len(references)
+		}
+		references = append(references, msg)
+	}
+	if previous.Compaction != nil {
+		for _, msg := range previous.Compaction.RetainedInputReferences {
+			add(msg)
+		}
+	}
+	for _, msg := range current {
+		add(msg)
+	}
+	if len(references) == 0 {
+		return nil, nil
+	}
+	var selected []llm.Message
+	for i := len(references) - 1; i >= 0; i-- {
+		candidate, err := e.projectCompactionInputReferencesLocked(references[i:], policy)
+		if err != nil {
+			return nil, err
+		}
+		if len(selected) == 0 || e.compactionInputReferenceTokens(candidate) <= policy.KeepRecentTokens {
+			selected = candidate
+			continue
+		}
+		break
+	}
+	return selected, nil
+}
+
+func (e *Engine) projectCompactionInputReferencesLocked(references []llm.Message, policy compactionPolicy) ([]llm.Message, error) {
+	textBlocks := 0
+	for _, msg := range references {
+		textBlocks += compactionProjectedTextBlockCount(msg)
+	}
+	projectionPolicy := compactionRetentionProjectionPolicyForBlockCount(policy, textBlocks)
+	projectedReferences := make([]llm.Message, len(references))
+	for i, msg := range references {
+		projected, _, err := e.projectCompactionRetentionMessageLocked(msg, projectionPolicy)
+		if err != nil {
+			return nil, fmt.Errorf("carry compaction input reference: %w", err)
+		}
+		projectedReferences[i] = projected
+	}
+	return projectedReferences, nil
+}
+
+func (e *Engine) compactionInputReferenceTokens(references []llm.Message) int {
+	text := appendCompactionInputReferences("", references)
+	if text == "" {
+		return 0
+	}
+	return e.estimateMessageTokens([]llm.Message{llm.TextMessage(llm.RoleUser, text)})
+}
+
+func hasRetainedInputReference(msg llm.Message) bool {
+	for _, block := range msg.Blocks {
+		if block.Artifact != nil && block.Artifact.SourceKind == "user_input" {
+			return true
+		}
+		if block.Type == llm.BlockImage && block.Media != nil && block.Media.ArtifactPath != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func appendCompactionInputReferences(summary string, messages []llm.Message) string {
+	if len(messages) == 0 {
+		return summary
+	}
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(summary))
+	b.WriteString("\n\nRetained Input References\n")
+	for _, msg := range messages {
+		fmt.Fprintf(&b, "\nMessage %s", msg.ID)
+		if msg.Kind != "" {
+			fmt.Fprintf(&b, " (%s)", msg.Kind)
+		}
+		b.WriteString(":\n")
+		for _, block := range msg.Blocks {
+			if block.Type == llm.BlockText && block.Text != "" && (block.Artifact == nil || block.Artifact.SourceKind == "user_input") {
+				b.WriteString(block.Text)
+				if !strings.HasSuffix(block.Text, "\n") {
+					b.WriteByte('\n')
+				}
+			}
+			if block.Type == llm.BlockImage && block.Media != nil {
+				fmt.Fprintf(&b, "Image: path=%s type=%s sha256=%s bytes=%d", block.Media.ArtifactPath, block.Media.MediaType, block.Media.SHA256, block.Media.OriginalBytes)
+				if block.Media.Width > 0 && block.Media.Height > 0 {
+					fmt.Fprintf(&b, " size=%dx%d", block.Media.Width, block.Media.Height)
+				}
+				b.WriteByte('\n')
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func projectToolUseInputsForProvider(msg llm.Message) llm.Message {
@@ -158,12 +358,43 @@ func stripRedactedReasoningForProviderBudget(systemPrompt string, tools []llm.To
 	return out, total
 }
 
-func (e *Engine) writeProjectedArtifact(sourceKind, messageID string, block llm.Block, content string, headBytes, tailBytes int) (llm.ContextArtifactProjection, string, error) {
+func (e *Engine) tightenProjectedUserInput(block llm.Block, policy compactionPolicy) (llm.Block, bool, error) {
+	projection := block.Artifact
+	if block.Type != llm.BlockText || projection == nil || projection.SourceKind != "user_input" {
+		return block, false, nil
+	}
+	headBytes := min(policy.UserInputPreviewHeadBytes, projection.HeadBytes)
+	tailBytes := min(policy.UserInputPreviewTailBytes, projection.TailBytes)
+	if headBytes == projection.HeadBytes && tailBytes == projection.TailBytes {
+		return block, false, nil
+	}
+	store, err := e.projectedArtifactStore()
+	if err != nil {
+		return block, false, err
+	}
+	content, err := store.Read(artifact.Ref{
+		Path:   projection.StoredPath,
+		SHA256: projection.SHA256,
+		Bytes:  projection.OriginalBytes,
+	})
+	if err != nil {
+		return block, false, fmt.Errorf("context artifact: rebuild preview: %w", err)
+	}
+	head, tail := previewParts(string(content), headBytes, tailBytes)
+	updated := *projection
+	updated.HeadBytes = len(head)
+	updated.TailBytes = len(tail)
+	block.Text = providerVisibleArtifactText(updated, head, tail)
+	block.Artifact = &updated
+	return block, true, nil
+}
+
+func (e *Engine) writeProjectedArtifact(sourceKind, messageID string, blockIndex int, block llm.Block, content string, headBytes, tailBytes int) (llm.ContextArtifactProjection, string, error) {
 	store, err := e.projectedArtifactStore()
 	if err != nil {
 		return llm.ContextArtifactProjection{}, "", err
 	}
-	relativePath, err := e.projectedArtifactPath(sourceKind, messageID, block)
+	relativePath, err := e.projectedArtifactPath(sourceKind, messageID, blockIndex, block)
 	if err != nil {
 		return llm.ContextArtifactProjection{}, "", err
 	}
@@ -198,7 +429,7 @@ func (e *Engine) projectedArtifactStore() (artifact.Store, error) {
 	return store, nil
 }
 
-func (e *Engine) projectedArtifactPath(sourceKind, messageID string, block llm.Block) (string, error) {
+func (e *Engine) projectedArtifactPath(sourceKind, messageID string, blockIndex int, block llm.Block) (string, error) {
 	if e == nil {
 		return "", fmt.Errorf("context artifact: missing session identity")
 	}
@@ -224,6 +455,7 @@ func (e *Engine) projectedArtifactPath(sourceKind, messageID string, block llm.B
 	if name == "" {
 		name = "item-" + newID()
 	}
+	name = fmt.Sprintf("%s-%d", name, blockIndex)
 	return path.Join(dir, safeArtifactName(name)+".txt"), nil
 }
 

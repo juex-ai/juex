@@ -29,14 +29,14 @@ func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult
 func TestBuildCompactionSummaryRequest_TruncatesTextAndToolUseInput(t *testing.T) {
 	input := []llm.Message{
 		{ID: "large", Role: llm.RoleUser, Blocks: []llm.Block{
-			{Type: llm.BlockText, Text: strings.Repeat("t", 50)},
+			{Type: llm.BlockText, Text: "HEAD-" + strings.Repeat("t", 40) + "-TAIL"},
 			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "write", Input: map[string]any{"payload": strings.Repeat("x", 50)}},
 		}},
 	}
 	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 10}, "")
 	body := hist[0].FirstText()
-	if !strings.Contains(body, "text: tttttttttt ...(truncated, total 50 bytes)") {
-		t.Fatalf("text was not truncated:\n%s", body)
+	if !strings.Contains(body, "HEAD-") || !strings.Contains(body, "-TAIL") || !strings.Contains(body, "omitted") {
+		t.Fatalf("text did not preserve a bounded head and tail:\n%s", body)
 	}
 	if !strings.Contains(body, "tool_use tu1 write:") || !strings.Contains(body, "truncated") {
 		t.Fatalf("tool use input was not truncated:\n%s", body)
@@ -81,6 +81,29 @@ func TestBuildCompactionSummaryRequest_OmitsRedactedReasoningContent(t *testing.
 	}
 	if !strings.Contains(body, "plain reasoning content") {
 		t.Fatalf("non-redacted reasoning content should remain available:\n%s", body)
+	}
+}
+
+func TestBuildCompactionSummaryRequestPreservesImageMediaReference(t *testing.T) {
+	input := []llm.Message{{
+		ID:   "image-1",
+		Role: llm.RoleUser,
+		Blocks: []llm.Block{{Type: llm.BlockImage, Media: &llm.MediaRef{
+			ArtifactPath:  ".juex/artifacts/media/session/photo.png",
+			MediaType:     "image/png",
+			SHA256:        "image-sha",
+			OriginalBytes: 1234,
+			Width:         800,
+			Height:        600,
+		}}},
+	}}
+
+	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 100}, "")
+	body := hist[0].FirstText()
+	for _, want := range []string{"path=.juex/artifacts/media/session/photo.png", "type=image/png", "sha256=image-sha", "bytes=1234", "size=800x600"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("summary input missing media field %q:\n%s", want, body)
+		}
 	}
 }
 
@@ -292,5 +315,15 @@ func TestTruncateForSummaryPreservesUTF8(t *testing.T) {
 	}
 	if got != "界" {
 		t.Fatalf("truncated string = %q, want one full rune", got)
+	}
+}
+
+func TestTruncateTextForSummaryPreservesUTF8HeadAndTail(t *testing.T) {
+	got := truncateTextForSummary("开头界界界结尾", 7)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated text is invalid UTF-8: %q", got)
+	}
+	if !strings.Contains(got, "开") || !strings.Contains(got, "尾") || !strings.Contains(got, "omitted") {
+		t.Fatalf("truncated text lost head or tail: %q", got)
 	}
 }
