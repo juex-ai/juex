@@ -658,6 +658,61 @@ func TestTurn_CompactionRetightensPreviouslyProjectedOversizedInput(t *testing.T
 	}
 }
 
+func TestTurn_CompactionBoundsSharedPreviewForMultipleProjectedBlocks(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary of multi-block request"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 4000
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 200
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 500
+	eng.Compaction.UserInputInlineMaxBytes = 1
+	eng.Compaction.UserInputPreviewHeadBytes = 2048
+	eng.Compaction.UserInputPreviewTailBytes = 2048
+	msg := llm.Message{ID: "multi-block", Role: llm.RoleUser, Kind: llm.MessageKindDirect}
+	for i := range 6 {
+		msg.Blocks = append(msg.Blocks, llm.Block{Type: llm.BlockText, Text: fmt.Sprintf("BLOCK-%d-HEAD ", i) + strings.Repeat(fmt.Sprintf("private-%d ", i), 600) + fmt.Sprintf(" BLOCK-%d-TAIL", i)})
+	}
+	projected, _, err := eng.projectMessageLocked(msg, effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(projected); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Turn(context.Background(), "latest"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider histories = %d, want summary and final answer requests", len(prov.histories))
+	}
+	activeText := messagesText(prov.histories[1])
+	if strings.Contains(activeText, strings.Repeat("private-0 ", 20)) {
+		t.Fatalf("active context kept a per-block full preview:\n%s", activeText)
+	}
+	for i, block := range projected.Blocks {
+		if block.Artifact == nil || !strings.Contains(activeText, block.Artifact.StoredPath) {
+			t.Fatalf("active context missing artifact path for block %d: %+v\n%s", i, block.Artifact, activeText)
+		}
+	}
+	var compact llm.Message
+	for _, history := range eng.Session.History {
+		if history.Kind == llm.MessageKindCompact {
+			compact = history
+		}
+	}
+	if compact.Compaction == nil || compact.Compaction.TokensAfter >= eng.ContextWindow-eng.Compaction.ReserveTokens {
+		t.Fatalf("compaction marker = %+v, want tokens after below trigger %d", compact.Compaction, eng.ContextWindow-eng.Compaction.ReserveTokens)
+	}
+}
+
 func TestTurn_CompactionKeepsOversizedImageOnlyInputReference(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "summary with image reference"), StopReason: llm.StopEndTurn},

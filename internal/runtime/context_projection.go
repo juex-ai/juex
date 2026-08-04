@@ -117,13 +117,13 @@ func (e *Engine) projectOversizedCompactionInputsLocked(msgs []llm.Message, ids 
 		wanted[id] = true
 	}
 	out := append([]llm.Message(nil), msgs...)
-	projectionPolicy := compactionRetentionProjectionPolicy(policy)
 	var retained []llm.Message
 	var total projectionStats
 	for i, msg := range out {
 		if !wanted[msg.ID] {
 			continue
 		}
+		projectionPolicy := compactionRetentionProjectionPolicy(policy, msg)
 		projected, stats, err := e.projectMessageLocked(msg, projectionPolicy)
 		if err != nil {
 			return nil, nil, total, err
@@ -139,17 +139,38 @@ func (e *Engine) projectOversizedCompactionInputsLocked(msgs []llm.Message, ids 
 	return out, retained, total, nil
 }
 
-func compactionRetentionProjectionPolicy(policy compactionPolicy) compactionPolicy {
+func compactionRetentionProjectionPolicy(policy compactionPolicy, msg llm.Message) compactionPolicy {
 	policy.UserInputInlineMaxBytes = 1
 	previewBytes := policy.KeepRecentTokens
 	if previewBytes < 0 {
 		previewBytes = 0
 	}
-	if policy.UserInputPreviewHeadBytes+policy.UserInputPreviewTailBytes > previewBytes {
-		policy.UserInputPreviewHeadBytes = previewBytes / 2
-		policy.UserInputPreviewTailBytes = previewBytes - policy.UserInputPreviewHeadBytes
+	if configured := policy.UserInputPreviewHeadBytes + policy.UserInputPreviewTailBytes; configured < previewBytes {
+		previewBytes = configured
 	}
+	textBlocks := compactionProjectedTextBlockCount(msg)
+	if textBlocks > 0 {
+		previewBytes /= textBlocks
+	}
+	policy.UserInputPreviewHeadBytes = previewBytes / 2
+	policy.UserInputPreviewTailBytes = previewBytes - policy.UserInputPreviewHeadBytes
 	return policy
+}
+
+func compactionProjectedTextBlockCount(msg llm.Message) int {
+	if msg.Kind == llm.MessageKindCompact || msg.Role != llm.RoleUser {
+		return 0
+	}
+	count := 0
+	for _, block := range msg.Blocks {
+		if block.Type != llm.BlockText {
+			continue
+		}
+		if (block.Artifact != nil && block.Artifact.SourceKind == "user_input") || (block.Artifact == nil && len(block.Text) > 1) {
+			count++
+		}
+	}
+	return count
 }
 
 func hasRetainedInputReference(msg llm.Message) bool {

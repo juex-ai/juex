@@ -89,7 +89,7 @@ func TestProjectMessageLockedTightensExistingUserInputPreview(t *testing.T) {
 		KeepRecentTokens:          200,
 		UserInputPreviewHeadBytes: 1024,
 		UserInputPreviewTailBytes: 1024,
-	})
+	}, projected)
 
 	tightened, stats, err := eng.projectMessageLocked(projected, retention)
 	if err != nil {
@@ -149,6 +149,47 @@ func TestProjectMessageLockedUsesDistinctPathsForMultipleTextBlocks(t *testing.T
 	}
 	if got := string(readProjectedArtifact(t, eng, secondRef)); got != second {
 		t.Fatalf("second artifact = %q, want %q", got, second)
+	}
+}
+
+func TestProjectOversizedCompactionInputsSharesPreviewAcrossTextBlocks(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	msg := llm.Message{
+		ID:   "message-1",
+		Role: llm.RoleUser,
+		Kind: llm.MessageKindDirect,
+		Blocks: []llm.Block{
+			{Type: llm.BlockText, Text: "first-" + strings.Repeat("a", 1000)},
+			{Type: llm.BlockText, Text: "second-" + strings.Repeat("b", 1000)},
+			{Type: llm.BlockText, Text: "third-" + strings.Repeat("c", 1000)},
+		},
+	}
+	policy := DefaultCompactionPolicy()
+	policy.KeepRecentTokens = 200
+	policy.UserInputPreviewHeadBytes = 1024
+	policy.UserInputPreviewTailBytes = 1024
+
+	_, retained, stats, err := eng.projectOversizedCompactionInputsLocked([]llm.Message{msg}, []string{msg.ID}, effectiveCompactionPolicy(policy, DefaultContextWindowTokens))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.UserInputsExternalized != len(msg.Blocks) || len(retained) != 1 {
+		t.Fatalf("stats/retained = %+v / %+v, want all text blocks externalized", stats, retained)
+	}
+	previewBytes := 0
+	paths := map[string]bool{}
+	for _, block := range retained[0].Blocks {
+		if block.Artifact == nil {
+			t.Fatalf("retained block missing artifact: %+v", block)
+		}
+		previewBytes += block.Artifact.HeadBytes + block.Artifact.TailBytes
+		paths[block.Artifact.StoredPath] = true
+	}
+	if previewBytes > policy.KeepRecentTokens {
+		t.Fatalf("aggregate preview bytes = %d, want <= %d", previewBytes, policy.KeepRecentTokens)
+	}
+	if len(paths) != len(msg.Blocks) {
+		t.Fatalf("artifact paths = %v, want %d distinct paths", paths, len(msg.Blocks))
 	}
 }
 
