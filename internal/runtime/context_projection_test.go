@@ -65,6 +65,93 @@ func TestProjectMessageLockedDoesNotMutateOriginalBlocks(t *testing.T) {
 	}
 }
 
+func TestProjectMessageLockedTightensExistingUserInputPreview(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	original := "HEAD-" + strings.Repeat("middle ", 1000) + "-TAIL"
+	initial := DefaultCompactionPolicy()
+	initial.UserInputInlineMaxBytes = 1
+	initial.UserInputPreviewHeadBytes = 1024
+	initial.UserInputPreviewTailBytes = 1024
+	projected, _, err := eng.projectMessageLocked(llm.Message{
+		ID:   "message-1",
+		Role: llm.RoleUser,
+		Blocks: []llm.Block{{
+			Type: llm.BlockText,
+			Text: original,
+		}},
+	}, effectiveCompactionPolicy(initial, DefaultContextWindowTokens))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := *projected.Blocks[0].Artifact
+	retention := compactionRetentionProjectionPolicy(compactionPolicy{
+		Enabled:                   true,
+		KeepRecentTokens:          200,
+		UserInputPreviewHeadBytes: 1024,
+		UserInputPreviewTailBytes: 1024,
+	})
+
+	tightened, stats, err := eng.projectMessageLocked(projected, retention)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stats.empty() {
+		t.Fatalf("tightening stats = %+v, want no new externalization", stats)
+	}
+	after := tightened.Blocks[0].Artifact
+	if after == nil || after.StoredPath != before.StoredPath || after.SHA256 != before.SHA256 || after.OriginalBytes != before.OriginalBytes {
+		t.Fatalf("tightened artifact = %+v, want same durable reference %+v", after, before)
+	}
+	if after.HeadBytes+after.TailBytes > retention.KeepRecentTokens {
+		t.Fatalf("tightened preview bytes = %d, want <= %d", after.HeadBytes+after.TailBytes, retention.KeepRecentTokens)
+	}
+	if len(tightened.Blocks[0].Text) >= len(projected.Blocks[0].Text) {
+		t.Fatalf("tightened text bytes = %d, want less than original projection %d", len(tightened.Blocks[0].Text), len(projected.Blocks[0].Text))
+	}
+	if projected.Blocks[0].Artifact.HeadBytes != before.HeadBytes || projected.Blocks[0].Artifact.TailBytes != before.TailBytes {
+		t.Fatalf("original projection was mutated: %+v", projected.Blocks[0].Artifact)
+	}
+	if got := string(readProjectedArtifact(t, eng, after)); got != original {
+		t.Fatalf("stored artifact changed: got %d bytes, want %d", len(got), len(original))
+	}
+}
+
+func TestProjectMessageLockedUsesDistinctPathsForMultipleTextBlocks(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	first := "first-" + strings.Repeat("a", 100)
+	second := "second-" + strings.Repeat("b", 100)
+	policy := DefaultCompactionPolicy()
+	policy.UserInputInlineMaxBytes = 1
+	policy.UserInputPreviewHeadBytes = 4
+	policy.UserInputPreviewTailBytes = 4
+
+	projected, stats, err := eng.projectMessageLocked(llm.Message{
+		ID:   "message-1",
+		Role: llm.RoleUser,
+		Blocks: []llm.Block{
+			{Type: llm.BlockText, Text: first},
+			{Type: llm.BlockText, Text: second},
+		},
+	}, effectiveCompactionPolicy(policy, DefaultContextWindowTokens))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.UserInputsExternalized != 2 {
+		t.Fatalf("stats = %+v, want two externalized inputs", stats)
+	}
+	firstRef := projected.Blocks[0].Artifact
+	secondRef := projected.Blocks[1].Artifact
+	if firstRef == nil || secondRef == nil || firstRef.StoredPath == secondRef.StoredPath {
+		t.Fatalf("artifact paths = %v / %v, want distinct paths", firstRef, secondRef)
+	}
+	if got := string(readProjectedArtifact(t, eng, firstRef)); got != first {
+		t.Fatalf("first artifact = %q, want %q", got, first)
+	}
+	if got := string(readProjectedArtifact(t, eng, secondRef)); got != second {
+		t.Fatalf("second artifact = %q, want %q", got, second)
+	}
+}
+
 func TestStripRedactedReasoningForProviderBudgetOnlyWhenOverTrigger(t *testing.T) {
 	secret := "enc_" + strings.Repeat("secret ", 100)
 	msgs := []llm.Message{{

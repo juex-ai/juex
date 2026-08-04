@@ -37,6 +37,17 @@ func (e *Engine) projectMessageLocked(msg llm.Message, policy compactionPolicy) 
 	for i := range msg.Blocks {
 		block := msg.Blocks[i]
 		if block.Artifact != nil {
+			projected, changed, err := e.tightenProjectedUserInput(block, policy)
+			if err != nil {
+				return msg, stats, err
+			}
+			if changed {
+				if clonedBlocks == nil {
+					clonedBlocks = make([]llm.Block, i, len(msg.Blocks))
+					copy(clonedBlocks, msg.Blocks[:i])
+				}
+				block = projected
+			}
 			if clonedBlocks != nil {
 				clonedBlocks = append(clonedBlocks, block)
 			}
@@ -48,7 +59,7 @@ func (e *Engine) projectMessageLocked(msg llm.Message, policy compactionPolicy) 
 				clonedBlocks = make([]llm.Block, i, len(msg.Blocks))
 				copy(clonedBlocks, msg.Blocks[:i])
 			}
-			artifact, text, err := e.writeProjectedArtifact("user_input", msg.ID, block, block.Text, policy.UserInputPreviewHeadBytes, policy.UserInputPreviewTailBytes)
+			artifact, text, err := e.writeProjectedArtifact("user_input", msg.ID, i, block, block.Text, policy.UserInputPreviewHeadBytes, policy.UserInputPreviewTailBytes)
 			if err != nil {
 				return msg, stats, err
 			}
@@ -61,7 +72,7 @@ func (e *Engine) projectMessageLocked(msg llm.Message, policy compactionPolicy) 
 				clonedBlocks = make([]llm.Block, i, len(msg.Blocks))
 				copy(clonedBlocks, msg.Blocks[:i])
 			}
-			artifact, text, err := e.writeProjectedArtifact("tool_result", msg.ID, block, block.Content, policy.ToolResultPreviewHeadBytes, policy.ToolResultPreviewTailBytes)
+			artifact, text, err := e.writeProjectedArtifact("tool_result", msg.ID, i, block, block.Content, policy.ToolResultPreviewHeadBytes, policy.ToolResultPreviewTailBytes)
 			if err != nil {
 				return msg, stats, err
 			}
@@ -246,12 +257,43 @@ func stripRedactedReasoningForProviderBudget(systemPrompt string, tools []llm.To
 	return out, total
 }
 
-func (e *Engine) writeProjectedArtifact(sourceKind, messageID string, block llm.Block, content string, headBytes, tailBytes int) (llm.ContextArtifactProjection, string, error) {
+func (e *Engine) tightenProjectedUserInput(block llm.Block, policy compactionPolicy) (llm.Block, bool, error) {
+	projection := block.Artifact
+	if block.Type != llm.BlockText || projection == nil || projection.SourceKind != "user_input" {
+		return block, false, nil
+	}
+	headBytes := min(policy.UserInputPreviewHeadBytes, projection.HeadBytes)
+	tailBytes := min(policy.UserInputPreviewTailBytes, projection.TailBytes)
+	if headBytes == projection.HeadBytes && tailBytes == projection.TailBytes {
+		return block, false, nil
+	}
+	store, err := e.projectedArtifactStore()
+	if err != nil {
+		return block, false, err
+	}
+	content, err := store.Read(artifact.Ref{
+		Path:   projection.StoredPath,
+		SHA256: projection.SHA256,
+		Bytes:  projection.OriginalBytes,
+	})
+	if err != nil {
+		return block, false, fmt.Errorf("context artifact: rebuild preview: %w", err)
+	}
+	head, tail := previewParts(string(content), headBytes, tailBytes)
+	updated := *projection
+	updated.HeadBytes = len(head)
+	updated.TailBytes = len(tail)
+	block.Text = providerVisibleArtifactText(updated, head, tail)
+	block.Artifact = &updated
+	return block, true, nil
+}
+
+func (e *Engine) writeProjectedArtifact(sourceKind, messageID string, blockIndex int, block llm.Block, content string, headBytes, tailBytes int) (llm.ContextArtifactProjection, string, error) {
 	store, err := e.projectedArtifactStore()
 	if err != nil {
 		return llm.ContextArtifactProjection{}, "", err
 	}
-	relativePath, err := e.projectedArtifactPath(sourceKind, messageID, block)
+	relativePath, err := e.projectedArtifactPath(sourceKind, messageID, blockIndex, block)
 	if err != nil {
 		return llm.ContextArtifactProjection{}, "", err
 	}
@@ -286,7 +328,7 @@ func (e *Engine) projectedArtifactStore() (artifact.Store, error) {
 	return store, nil
 }
 
-func (e *Engine) projectedArtifactPath(sourceKind, messageID string, block llm.Block) (string, error) {
+func (e *Engine) projectedArtifactPath(sourceKind, messageID string, blockIndex int, block llm.Block) (string, error) {
 	if e == nil {
 		return "", fmt.Errorf("context artifact: missing session identity")
 	}
@@ -312,6 +354,7 @@ func (e *Engine) projectedArtifactPath(sourceKind, messageID string, block llm.B
 	if name == "" {
 		name = "item-" + newID()
 	}
+	name = fmt.Sprintf("%s-%d", name, blockIndex)
 	return path.Join(dir, safeArtifactName(name)+".txt"), nil
 }
 

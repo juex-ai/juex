@@ -602,6 +602,62 @@ func TestTurn_CompactionSummarizesRealInputThatExceedsRetentionBudget(t *testing
 	}
 }
 
+func TestTurn_CompactionRetightensPreviouslyProjectedOversizedInput(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "working"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary of projected request"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 4000
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 200
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 500
+	eng.Compaction.UserInputInlineMaxBytes = 1
+	eng.Compaction.UserInputPreviewHeadBytes = 8192
+	eng.Compaction.UserInputPreviewTailBytes = 8192
+	oversized := "oversized-request " + strings.Repeat("private-detail ", 2000) + "TAIL-SAFETY-GUARD"
+
+	if _, err := eng.Turn(context.Background(), oversized); err != nil {
+		t.Fatal(err)
+	}
+	projected := eng.Session.History[0].Blocks[0]
+	if projected.Artifact == nil || projected.Artifact.HeadBytes+projected.Artifact.TailBytes <= eng.Compaction.KeepRecentTokens {
+		t.Fatalf("initial projection = %+v, want preview larger than compact retention budget", projected.Artifact)
+	}
+	if _, err := eng.Turn(context.Background(), "latest"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 3 {
+		t.Fatalf("provider histories = %d, want first answer, summary, and final answer requests", len(prov.histories))
+	}
+	activeText := messagesText(prov.histories[2])
+	if strings.Contains(activeText, strings.Repeat("private-detail ", 20)) {
+		t.Fatalf("active context kept the original large preview:\n%s", activeText)
+	}
+	for _, want := range []string{"summary of projected request", "TAIL-SAFETY-GUARD", projected.Artifact.StoredPath, "latest"} {
+		if !strings.Contains(activeText, want) {
+			t.Fatalf("active context missing %q:\n%s", want, activeText)
+		}
+	}
+	var compact llm.Message
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindCompact {
+			compact = msg
+		}
+	}
+	if compact.Compaction == nil {
+		t.Fatalf("missing compaction marker: %+v", eng.Session.History)
+	}
+	if compact.Compaction.TokensAfter >= eng.ContextWindow-eng.Compaction.ReserveTokens {
+		t.Fatalf("tokens after = %d, want below trigger %d", compact.Compaction.TokensAfter, eng.ContextWindow-eng.Compaction.ReserveTokens)
+	}
+	if got := string(readProjectedArtifact(t, eng, projected.Artifact)); got != oversized {
+		t.Fatalf("stored artifact changed: got %d bytes, want %d", len(got), len(oversized))
+	}
+}
+
 func TestTurn_CompactionKeepsOversizedImageOnlyInputReference(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "summary with image reference"), StopReason: llm.StopEndTurn},

@@ -87,14 +87,14 @@ When a tool output exceeds `compaction.tool_result_inline_max_bytes`, Juex
 writes the full output to:
 
 ```text
-.juex/artifacts/tool-results/<session-id>/<tool-use-id>.txt
+.juex/artifacts/tool-results/<session-id>/<tool-use-id>-<block-index>.txt
 ```
 
 When a user input exceeds `compaction.user_input_inline_max_bytes`, Juex writes
 the full input to:
 
 ```text
-.juex/artifacts/user-inputs/<session-id>/<message-id>.txt
+.juex/artifacts/user-inputs/<session-id>/<message-id>-<block-index>.txt
 ```
 
 The provider-visible tool result becomes a stable text block:
