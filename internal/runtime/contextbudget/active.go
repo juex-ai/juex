@@ -25,7 +25,17 @@ func AssembleActiveContext(history []llm.Message, incoming []llm.Message) Active
 
 	compact := history[latestCompact]
 	out = append(out, compact)
-	if compact.Compaction != nil && compact.Compaction.TailStartMessageID != "" {
+	if compact.Compaction != nil && len(compact.Compaction.RetainedMessageIDs) > 0 {
+		wanted := make(map[string]bool, len(compact.Compaction.RetainedMessageIDs))
+		for _, id := range compact.Compaction.RetainedMessageIDs {
+			wanted[id] = true
+		}
+		for _, msg := range history[:latestCompact] {
+			if wanted[msg.ID] {
+				out = append(out, msg)
+			}
+		}
+	} else if compact.Compaction != nil && compact.Compaction.TailStartMessageID != "" {
 		if tailStart := indexMessageID(history[:latestCompact], compact.Compaction.TailStartMessageID); tailStart >= 0 {
 			out = append(out, history[tailStart:latestCompact]...)
 		}

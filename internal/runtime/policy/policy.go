@@ -7,7 +7,6 @@ type CompactionPolicy struct {
 	Instructions               string
 	ReserveTokens              int
 	KeepRecentTokens           int
-	TailTurns                  int
 	SummaryModel               string
 	SummaryMaxTokens           int
 	ToolResultMaxChars         int
@@ -25,7 +24,6 @@ func DefaultCompactionPolicy() CompactionPolicy {
 		Enabled:                    true,
 		ReserveTokens:              16384,
 		KeepRecentTokens:           20000,
-		TailTurns:                  2,
 		SummaryModel:               "",
 		SummaryMaxTokens:           2048,
 		ToolResultMaxChars:         2000,

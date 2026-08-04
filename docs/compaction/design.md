@@ -151,7 +151,6 @@ type compactionPolicy struct {
     Enabled                    bool
     ReserveTokens              int
     KeepRecentTokens           int
-    TailTurns                  int
     SummaryMaxTokens           int
     ToolResultMaxChars         int
     UserInputInlineMaxBytes    int
@@ -331,7 +330,7 @@ Currently emitted events:
   - `bytes_externalized`
 - `context.compact.started`
   - `reason`, `auto`, `estimated_tokens`, `tokens_before`
-  - `context_window`, `reserve_tokens`, `keep_recent_tokens`, `tail_turns`
+  - `context_window`, `reserve_tokens`, `keep_recent_tokens`
 - `context.compact.completed`
   - `message_id`, `reason`, `auto`
   - `estimated_tokens`, `tokens_before`, `tokens_after`, `summary_chars`,

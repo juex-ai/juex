@@ -18,7 +18,6 @@ DEFAULT_COMPACTION = {
     "enabled": True,
     "reserve_tokens": 8000,
     "keep_recent_tokens": 6000,
-    "tail_turns": 1,
     "summary_max_tokens": 2048,
     "tool_result_max_chars": 1200,
     "user_input_inline_max_bytes": 524288,

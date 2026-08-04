@@ -57,7 +57,7 @@ func TestTurnMultiLevelFallbackUsesRealTransitionsAndFinalServingNotice(t *testi
 	history := eng.Session.History
 	notices := 0
 	for _, message := range history {
-		if message.Kind == llm.MessageKindModelFallback {
+		if message.Kind == llm.MessageKindModelChange {
 			notices++
 			if strings.Contains(message.FirstText(), "b:model") || !strings.Contains(message.FirstText(), "a:model") || !strings.Contains(message.FirstText(), "c:model") {
 				t.Fatalf("final notice = %q", message.FirstText())
@@ -127,7 +127,7 @@ func TestTurnRecoversHigherPriorityModelWithPersistedNotice(t *testing.T) {
 	}
 	history := eng.Session.History
 	notice := history[len(history)-2]
-	if notice.Kind != llm.MessageKindModelFallback || !strings.Contains(notice.FirstText(), "healthy again") {
+	if notice.Kind != llm.MessageKindModelChange || !strings.Contains(notice.FirstText(), "healthy again") {
 		t.Fatalf("recovery notice = %+v", notice)
 	}
 	if backup.calls != 0 || history[len(history)-1].Model != "primary:model" {
@@ -166,7 +166,7 @@ func TestTurnFailedRecoveryProbeDoesNotPersistFalseNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, message := range eng.Session.History {
-		if message.Kind == llm.MessageKindModelFallback {
+		if message.Kind == llm.MessageKindModelChange {
 			t.Fatalf("false recovery notice persisted: %+v", message)
 		}
 	}
@@ -202,7 +202,7 @@ func TestTurnFallbackBatchFailureLeavesNoNoticeUsageOrRespondedEvent(t *testing.
 		t.Fatal("Turn err = nil, want batch marshal failure")
 	}
 	for _, message := range eng.Session.History {
-		if message.Kind == llm.MessageKindModelFallback {
+		if message.Kind == llm.MessageKindModelChange {
 			t.Fatalf("orphan notice = %+v", message)
 		}
 	}
@@ -317,7 +317,7 @@ func TestTurnReportsBreakerSkipOnlyOnceWhileContinuingChain(t *testing.T) {
 	}
 	var notices []llm.Message
 	for _, message := range eng.Session.History {
-		if message.Kind == llm.MessageKindModelFallback {
+		if message.Kind == llm.MessageKindModelChange {
 			notices = append(notices, message)
 		}
 	}
@@ -563,7 +563,7 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 		t.Fatalf("backup histories = %+v", backup.histories)
 	}
 	ephemeral := backup.histories[0][len(backup.histories[0])-1]
-	if ephemeral.Kind != llm.MessageKindModelFallback || !strings.Contains(ephemeral.FirstText(), "primary:model") || !strings.Contains(ephemeral.FirstText(), "backup:model") {
+	if ephemeral.Kind != llm.MessageKindModelChange || !strings.Contains(ephemeral.FirstText(), "primary:model") || !strings.Contains(ephemeral.FirstText(), "backup:model") {
 		t.Fatalf("ephemeral notice = %+v", ephemeral)
 	}
 	history := eng.Session.History
@@ -571,7 +571,7 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 		t.Fatalf("history = %+v", history)
 	}
 	notice, assistant := history[len(history)-2], history[len(history)-1]
-	if notice.Kind != llm.MessageKindModelFallback || assistant.Model != "backup:model" {
+	if notice.Kind != llm.MessageKindModelChange || assistant.Model != "backup:model" {
 		t.Fatalf("persisted tail = %+v / %+v", notice, assistant)
 	}
 	if len(fallbackEvents) != 1 || fallbackEvents[0].From != "primary:model" || fallbackEvents[0].To != "backup:model" || fallbackEvents[0].Reason != "transient" {

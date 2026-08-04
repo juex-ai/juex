@@ -495,7 +495,7 @@ func newEngineForSession(t *testing.T, sess *session.Session, prov llm.Provider)
 	}
 }
 
-func TestTurn_CompactionKeepsRecentTailInProviderContext(t *testing.T) {
+func TestTurn_CompactionKeepsRecentRealInputInProviderContext(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "summary"), StopReason: llm.StopEndTurn, Usage: llm.Usage{InputTokens: 10, OutputTokens: 2}},
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn, Usage: llm.Usage{InputTokens: 20, OutputTokens: 3}},
@@ -504,7 +504,6 @@ func TestTurn_CompactionKeepsRecentTailInProviderContext(t *testing.T) {
 	eng.ContextWindow = 200
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 80
-	eng.Compaction.TailTurns = 1
 	eng.Compaction.ReserveTokens = 50
 	for _, item := range []struct {
 		role llm.Role
@@ -527,7 +526,7 @@ func TestTurn_CompactionKeepsRecentTailInProviderContext(t *testing.T) {
 		t.Fatalf("out = %q", out)
 	}
 	second := prov.histories[1]
-	if len(second) < 4 {
+	if len(second) < 3 {
 		t.Fatalf("second provider history too short: %+v", second)
 	}
 	if second[0].Kind != llm.MessageKindCompact {
@@ -1497,7 +1496,6 @@ func TestCompactRunsPreAndPostHooks(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Compaction.TailTurns = 0
 	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact:  {{}},
 		hooks.EventPostCompact: {{}},
@@ -1536,7 +1534,6 @@ func TestCompactPreHookStdoutExtendsSummaryInstructions(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Compaction.TailTurns = 0
 	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact: {{Stdout: "Preserve deployment command exactly."}},
 	}}
@@ -1565,7 +1562,6 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Compaction.TailTurns = 0
 	eng.Compaction.Instructions = "Preserve configured release criteria."
 	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
 	if _, err := eng.GoalState.CreateWithContract(GoalStateCreate{
@@ -1644,7 +1640,6 @@ func TestCompactExitTwoEmitsHookErrorWithoutVeto(t *testing.T) {
 	eng, bus := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Compaction.TailTurns = 0
 	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
 		Name:    "compact-guard",
 		Events:  []hooks.EventName{hooks.EventPreCompact},
@@ -1689,7 +1684,6 @@ func TestCompactPostHookStdoutQueuesRuntimeContextForNextProviderRequest(t *test
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Compaction.TailTurns = 0
 	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPostCompact: {{Stdout: "Recheck the release branch on the next turn."}},
 	}}
@@ -1733,7 +1727,6 @@ func TestCompactStartedIncludesToolSchemaBudget(t *testing.T) {
 	eng, bus := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Compaction.TailTurns = 0
 	eng.Tools.MustRegister(tools.Tool{
 		Name:        "large_schema_tool",
 		Description: strings.Repeat("tool schema description ", 80),
@@ -1774,7 +1767,6 @@ func TestCompactUsesSummaryProviderWhenConfigured(t *testing.T) {
 	eng.SummaryProvider = summary
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Compaction.TailTurns = 0
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -1802,7 +1794,6 @@ func TestCompactFallsBackToMainProviderWhenSummaryProviderFails(t *testing.T) {
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.SummaryModel = "summary:model"
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Compaction.TailTurns = 0
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2227,7 +2218,6 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 			defer unsub()
 			eng.Compaction = DefaultCompactionPolicy()
 			eng.Compaction.KeepRecentTokens = 1
-			eng.Compaction.TailTurns = 0
 			eng.Hooks = tc.runner
 			if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 				t.Fatal(err)
@@ -2396,7 +2386,6 @@ func configureCompactionRetryTest(t *testing.T, eng *Engine, messageCount, messa
 	t.Helper()
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Compaction.TailTurns = 0
 	for i := 0; i < messageCount; i++ {
 		msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", messageChars)))
 		if err := eng.Session.Append(msg); err != nil {
@@ -4242,7 +4231,6 @@ func TestCompact_EmitsLLMRetryDiagnostics(t *testing.T) {
 	eng, bus := newEngine(t, retryDiagnosticProvider{}, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Compaction.TailTurns = 0
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}

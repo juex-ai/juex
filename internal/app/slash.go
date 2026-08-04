@@ -66,7 +66,9 @@ func NewSessionGreetingPrompt() string {
 }
 
 func NewSessionGreetingMessage() llm.Message {
-	return llm.TextMessage(llm.RoleUser, newSessionGreetingPrompt)
+	msg := llm.TextMessage(llm.RoleUser, newSessionGreetingPrompt)
+	msg.Kind = llm.MessageKindSystemNotice
+	return msg
 }
 
 func GoalInstructionPrompt(args string) string {

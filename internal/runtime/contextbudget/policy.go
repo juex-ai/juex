@@ -9,7 +9,6 @@ type Policy struct {
 	Instructions               string
 	ReserveTokens              int
 	KeepRecentTokens           int
-	TailTurns                  int
 	SummaryModel               string
 	SummaryMaxTokens           int
 	ToolResultMaxChars         int
@@ -32,7 +31,7 @@ func EffectivePolicy(policy CompactionPolicy, contextWindow int, defaultContextW
 		contextWindow = defaultContextWindow
 	}
 	defaults := DefaultCompactionPolicy()
-	if policy.ReserveTokens <= 0 && policy.KeepRecentTokens <= 0 && policy.TailTurns <= 0 && policy.SummaryMaxTokens <= 0 && policy.ToolResultMaxChars <= 0 {
+	if policy.ReserveTokens <= 0 && policy.KeepRecentTokens <= 0 && policy.SummaryMaxTokens <= 0 && policy.ToolResultMaxChars <= 0 {
 		enabled := policy.Enabled
 		instructions := policy.Instructions
 		policy = defaults
@@ -54,10 +53,6 @@ func EffectivePolicy(policy CompactionPolicy, contextWindow int, defaultContextW
 	maxKeep := maxInt(512, contextWindow/3)
 	if keep > maxKeep {
 		keep = maxKeep
-	}
-	tailTurns := policy.TailTurns
-	if tailTurns <= 0 {
-		tailTurns = defaults.TailTurns
 	}
 	summaryMax := policy.SummaryMaxTokens
 	if summaryMax <= 0 {
@@ -104,7 +99,6 @@ func EffectivePolicy(policy CompactionPolicy, contextWindow int, defaultContextW
 		Instructions:               policy.Instructions,
 		ReserveTokens:              reserve,
 		KeepRecentTokens:           keep,
-		TailTurns:                  tailTurns,
 		SummaryModel:               policy.SummaryModel,
 		SummaryMaxTokens:           summaryMax,
 		ToolResultMaxChars:         toolMax,

@@ -7,6 +7,7 @@ type Selection struct {
 	HasPreviousSummary bool
 	SummaryInput       []llm.Message
 	RetainedTail       []llm.Message
+	RetainedMessageIDs []string
 	FirstKeptMessageID string
 	TailStartMessageID string
 	LatestCompactIndex int
@@ -28,124 +29,155 @@ func SelectInputWithEstimator(history []llm.Message, policy Policy, estimateMess
 			latestCompact = i
 		}
 	}
-	start := 0
-	sel := Selection{LatestCompactIndex: latestCompact}
+	sel := Selection{LatestCompactIndex: latestCompact, RetainedTailStart: len(history), SummaryInputEnd: len(history)}
+	var work []llm.Message
 	if latestCompact >= 0 {
 		sel.PreviousSummary = history[latestCompact]
 		sel.HasPreviousSummary = true
-		start = latestCompact + 1
+		work = append(work, retainedMessagesForCompact(history[:latestCompact], history[latestCompact])...)
+		work = append(work, history[latestCompact+1:]...)
+	} else {
+		work = append(work, history...)
 	}
-	work := history[start:]
+	work = compactionRelevantMessages(work)
 	if len(work) == 0 {
-		sel.RetainedTailStart = len(history)
-		sel.SummaryInputEnd = len(history)
 		return sel
 	}
 
-	cut := chooseTailCut(work, policy, estimateMessages)
-	cut = protectToolPairCut(work, cut)
-	summaryEnd := start + cut
-	tailStart := start + cut
-	sel.SummaryInput = append([]llm.Message(nil), history[start:summaryEnd]...)
-	sel.RetainedTail = append([]llm.Message(nil), history[tailStart:]...)
-	sel.RetainedTailStart = tailStart
-	sel.SummaryInputEnd = summaryEnd
+	keep := chooseRetainedMessages(work, policy.KeepRecentTokens, estimateMessages)
+	for _, msg := range work {
+		if keep[msg.ID] {
+			sel.RetainedTail = append(sel.RetainedTail, msg)
+			if msg.ID != "" {
+				sel.RetainedMessageIDs = append(sel.RetainedMessageIDs, msg.ID)
+			}
+			continue
+		}
+		sel.SummaryInput = append(sel.SummaryInput, msg)
+	}
 	if len(sel.RetainedTail) > 0 {
-		sel.TailStartMessageID = sel.RetainedTail[0].ID
 		sel.FirstKeptMessageID = sel.RetainedTail[0].ID
+	}
+	// A single oversized real input may be the entire transcript. Summarize it
+	// while retaining its exact projected form so manual and overflow recovery
+	// compaction still make progress without discarding the user's request.
+	if len(sel.SummaryInput) == 0 && len(sel.RetainedTail) > 0 {
+		sel.SummaryInput = append([]llm.Message(nil), sel.RetainedTail...)
+	}
+	if start := executionTailStart(work); start >= 0 {
+		sel.TailStartMessageID = work[start].ID
 	}
 	return sel
 }
 
-func chooseTailCut(work []llm.Message, policy Policy, estimateMessages func([]llm.Message) int) int {
-	cut := len(work)
-	turns := 0
+func compactionRelevantMessages(messages []llm.Message) []llm.Message {
+	out := make([]llm.Message, 0, len(messages))
+	for _, msg := range messages {
+		switch msg.Kind {
+		case llm.MessageKindHookEvent, llm.MessageKindRuntimeContext, llm.MessageKindModelChange, llm.MessageKindSystemNotice, llm.MessageKindCompact:
+			continue
+		default:
+			out = append(out, msg)
+		}
+	}
+	return out
+}
+
+func chooseRetainedMessages(work []llm.Message, budget int, estimateMessages func([]llm.Message) int) map[string]bool {
+	keep := make(map[string]bool)
 	tokens := 0
+	realInputs := 0
 	for i := len(work) - 1; i >= 0; i-- {
-		tokens += estimateMessages(work[i : i+1])
-		if isUserTurnStart(work[i]) {
-			turns++
+		if !isRealInput(work[i]) {
+			continue
 		}
-		if turns >= policy.TailTurns {
-			cut = i
+		cost := estimateMessages(work[i : i+1])
+		if realInputs > 0 && budget > 0 && tokens+cost > budget {
 			break
 		}
-		if policy.KeepRecentTokens > 0 && tokens >= policy.KeepRecentTokens {
-			cut = i
-			break
+		keep[work[i].ID] = true
+		tokens += cost
+		realInputs++
+	}
+	if start := executionTailStart(work); start >= 0 {
+		for i := start; i < len(work); i++ {
+			keep[work[i].ID] = true
 		}
 	}
-	if cut == len(work) && len(work) > 0 {
-		cut = len(work) - 1
-	}
-	return cut
+	return keep
 }
 
-func protectToolPairCut(work []llm.Message, cut int) int {
-	if cut < 0 {
-		return 0
+func executionTailStart(work []llm.Message) int {
+	if len(work) == 0 || !requiresExecutionTail(work[len(work)-1]) {
+		return -1
 	}
-	if cut > len(work) {
-		return len(work)
-	}
-	for cut > 0 && StartsWithToolResult(work[cut]) {
-		cut--
-	}
-	for {
-		missingID := firstToolResultWithoutUse(work[cut:])
-		if missingID == "" {
-			break
-		}
-		idx := findToolUseBefore(work[:cut], missingID)
-		if idx < 0 {
-			break
-		}
-		cut = idx
-		for cut > 0 && StartsWithToolResult(work[cut]) {
-			cut--
+	for i := len(work) - 1; i >= 0; i-- {
+		if isRealInput(work[i]) {
+			return i
 		}
 	}
-	return cut
+	for i := len(work) - 1; i >= 0; i-- {
+		if work[i].Kind == llm.MessageKindContinuation {
+			return i
+		}
+	}
+	return 0
 }
 
-func isUserTurnStart(m llm.Message) bool {
-	if m.Role != llm.RoleUser || m.Kind == llm.MessageKindCompact || m.Kind == llm.MessageKindRuntimeContext {
-		return false
+func requiresExecutionTail(msg llm.Message) bool {
+	if msg.Kind == llm.MessageKindContinuation || msg.Kind == llm.MessageKindToolResult {
+		return true
 	}
-	for _, b := range m.Blocks {
-		if b.Type != llm.BlockToolResult {
+	for _, block := range msg.Blocks {
+		if block.Type == llm.BlockToolUse || block.Type == llm.BlockToolResult {
 			return true
 		}
 	}
 	return false
 }
 
+func isRealInput(msg llm.Message) bool {
+	if msg.Role != llm.RoleUser {
+		return false
+	}
+	switch msg.Kind {
+	case llm.MessageKindDirect, llm.MessageKindMCPEvent, llm.MessageKindObservation:
+		return true
+	case "":
+		return llm.ClassifyUserMessage(msg).Kind == llm.MessageKindDirect
+	default:
+		return false
+	}
+}
+
+func retainedMessagesForCompact(history []llm.Message, compact llm.Message) []llm.Message {
+	if compact.Compaction == nil {
+		return nil
+	}
+	if len(compact.Compaction.RetainedMessageIDs) > 0 {
+		wanted := make(map[string]bool, len(compact.Compaction.RetainedMessageIDs))
+		for _, id := range compact.Compaction.RetainedMessageIDs {
+			wanted[id] = true
+		}
+		out := make([]llm.Message, 0, len(wanted))
+		for _, msg := range history {
+			if wanted[msg.ID] {
+				out = append(out, msg)
+			}
+		}
+		return out
+	}
+	if compact.Compaction.TailStartMessageID == "" {
+		return nil
+	}
+	for i, msg := range history {
+		if msg.ID == compact.Compaction.TailStartMessageID {
+			return append([]llm.Message(nil), history[i:]...)
+		}
+	}
+	return nil
+}
+
 func StartsWithToolResult(m llm.Message) bool {
 	return len(m.Blocks) > 0 && m.Blocks[0].Type == llm.BlockToolResult
-}
-
-func firstToolResultWithoutUse(msgs []llm.Message) string {
-	seenUses := map[string]bool{}
-	for _, m := range msgs {
-		for _, b := range m.Blocks {
-			if b.Type == llm.BlockToolUse && b.ToolUseID != "" {
-				seenUses[b.ToolUseID] = true
-			}
-			if b.Type == llm.BlockToolResult && b.ToolUseID != "" && !seenUses[b.ToolUseID] {
-				return b.ToolUseID
-			}
-		}
-	}
-	return ""
-}
-
-func findToolUseBefore(msgs []llm.Message, id string) int {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		for _, b := range msgs[i].Blocks {
-			if b.Type == llm.BlockToolUse && b.ToolUseID == id {
-				return i
-			}
-		}
-	}
-	return -1
 }

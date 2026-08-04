@@ -24,12 +24,15 @@ func TestBrowserEventTypesMatchGolden(t *testing.T) {
 
 func TestMessageKindsMatchGolden(t *testing.T) {
 	assertGoldenJSON(t, "message-kinds.golden.json", []string{
+		llm.MessageKindDirect,
+		llm.MessageKindContinuation,
+		llm.MessageKindToolResult,
 		llm.MessageKindMCPEvent,
 		llm.MessageKindObservation,
 		llm.MessageKindHookEvent,
 		llm.MessageKindCompact,
 		llm.MessageKindRuntimeContext,
-		llm.MessageKindModelFallback,
+		llm.MessageKindModelChange,
 		llm.MessageKindSystemNotice,
 	})
 }
@@ -651,7 +654,6 @@ func browserEventFixtureEvents() []events.Event {
 				ContextWindow:    1000,
 				ReserveTokens:    100,
 				KeepRecentTokens: 100,
-				TailTurns:        2,
 			},
 		},
 		{

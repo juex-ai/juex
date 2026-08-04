@@ -854,7 +854,6 @@ func TestEndToEnd_ToolFailureLedgerWithUserAgentsDisabledDoesNotHardBlock(t *tes
 func TestEndToEnd_NotesSurviveCompaction(t *testing.T) {
 	work := t.TempDir()
 	compaction := config.DefaultCompactionConfig()
-	compaction.TailTurns = 0
 	compaction.KeepRecentTokens = 0
 	prov := &recordingProvider{
 		steps: []llm.Response{
@@ -1787,7 +1786,6 @@ func TestEndToEnd_DebugObservabilityArtifacts(t *testing.T) {
 		},
 	}
 	compaction := config.DefaultCompactionConfig()
-	compaction.TailTurns = 0
 	compaction.KeepRecentTokens = 0
 	a, err := app.New(app.Options{
 		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work, Compaction: compaction},

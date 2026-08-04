@@ -180,7 +180,6 @@ compaction:
   # instructions: Preserve exact release gates and unfinished Notes items.
   reserve_tokens: 16384
   keep_recent_tokens: 20000
-  tail_turns: 2
   summary_max_tokens: 2048
   tool_result_max_chars: 2000
   user_input_inline_max_bytes: 65536

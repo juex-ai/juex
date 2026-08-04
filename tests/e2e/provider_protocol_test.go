@@ -589,7 +589,7 @@ providers:
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &assistant); err != nil {
 		t.Fatal(err)
 	}
-	if notice.Kind != llm.MessageKindModelFallback || assistant.Model != "backup:backup-model" {
+	if notice.Kind != llm.MessageKindModelChange || assistant.Model != "backup:backup-model" {
 		t.Fatalf("fallback tail = %+v / %+v", notice, assistant)
 	}
 	eventsText := strings.Join(readLines(t, filepath.Join(second.SessionDir, "events.jsonl")), "\n")

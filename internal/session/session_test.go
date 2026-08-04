@@ -261,14 +261,14 @@ func TestSessionAppendBatchPersistsAdjacentMessages(t *testing.T) {
 	defer s.Close()
 
 	notice := llm.TextMessage(llm.RoleUser, "model switched")
-	notice.Kind = llm.MessageKindModelFallback
+	notice.Kind = llm.MessageKindModelChange
 	assistant := llm.TextMessage(llm.RoleAssistant, "continuing")
 	assistant.Model = "fallback:model"
 	if err := s.AppendBatch([]llm.Message{notice, assistant}); err != nil {
 		t.Fatal(err)
 	}
 
-	if len(s.History) != 2 || s.History[0].Kind != llm.MessageKindModelFallback || s.History[1].Model != "fallback:model" {
+	if len(s.History) != 2 || s.History[0].Kind != llm.MessageKindModelChange || s.History[1].Model != "fallback:model" {
 		t.Fatalf("history = %+v", s.History)
 	}
 	data, err := os.ReadFile(filepath.Join(s.Dir, conversationFile))
@@ -342,7 +342,7 @@ func TestSessionAppendBatchRollsBackWhenSecondMessageCannotMarshal(t *testing.T)
 	}
 
 	notice := llm.TextMessage(llm.RoleUser, "model switched")
-	notice.Kind = llm.MessageKindModelFallback
+	notice.Kind = llm.MessageKindModelChange
 	invalid := llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
 		Type:  llm.BlockToolUse,
 		Input: map[string]any{"not_json": func() {}},

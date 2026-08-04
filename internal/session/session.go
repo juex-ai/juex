@@ -489,6 +489,7 @@ func writeJSONL(w *os.File, v any) error {
 }
 
 func prepareNewMessage(m llm.Message) llm.Message {
+	m = llm.ClassifyUserMessage(m)
 	if m.ID == "" {
 		m.ID = newMessageID()
 	}
@@ -509,6 +510,7 @@ func normalizeLoadedMessage(path string, line int, m llm.Message) (llm.Message, 
 	if m.Blocks == nil {
 		m.Blocks = []llm.Block{}
 	}
+	m = llm.ClassifyUserMessage(m)
 	return m, nil
 }
 

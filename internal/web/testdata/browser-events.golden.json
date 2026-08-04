@@ -1089,8 +1089,7 @@
       "tokens_before": 100,
       "context_window": 1000,
       "reserve_tokens": 100,
-      "keep_recent_tokens": 100,
-      "tail_turns": 2
+      "keep_recent_tokens": 100
     },
     "status": {
       "cursor": "evt-compact-started",

@@ -357,7 +357,6 @@ func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {
 	}
 	compaction := config.DefaultCompactionConfig()
 	compaction.KeepRecentTokens = 0
-	compaction.TailTurns = 0
 	srv := web.NewServer(web.Options{
 		Cfg: config.Config{
 			ProviderID: "openai",

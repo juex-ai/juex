@@ -328,7 +328,7 @@ type Message struct {
     ID         string
     Role       Role
     Blocks     []Block
-    Kind       string // "" | "mcp_event" | "observation" | "model_fallback" | "compact"
+    Kind       string // direct | continuation | tool_result | mcp_event | observation | model_change | system_notice | compact | runtime_context | hook_event
     Model      string
     Compaction *CompactionMetadata
 }
@@ -338,6 +338,7 @@ type CompactionMetadata struct {
     Reason             string
     PreviousSummaryID  string
     FirstKeptMessageID string
+    RetainedMessageIDs []string
     TailStartMessageID string
     TokensBefore       int
     TokensAfter        int
@@ -1080,7 +1081,7 @@ Normal provider requests use the ordered model candidates. `internal/llm`
 owns a mutex-guarded process-local circuit breaker with a 30s, 1m, 2m, and 5m
 cooldown ladder and single-request half-open reservations. `internal/runtime`
 owns request replay, candidate-specific context preflight, `llm.fallback`
-events, and `model_fallback` notices. A successful switch atomically appends
+events, and `model_change` notices. A successful switch atomically appends
 the notice and assistant response; failed attempts never persist a notice.
 Eligible failures may switch candidates after provisional output because
 `CompleteOptions.OnDelta` is restricted to discardable text and reasoning
@@ -1113,6 +1114,11 @@ and environment input; `internal/app` passes the resolved value into
 summary request shaping, active-context assembly, token estimation, and context
 usage breakdowns. `internal/runtime` keeps the Engine locks, provider calls,
 events, online token-calibration glue, and compatibility wrappers.
+Compaction retains recent `direct`, `mcp_event`, and `observation` messages by
+token budget, independently of pending-delivery state. It excludes
+`model_change` and `system_notice` noise from the new summary and retained set,
+while preserving an active Tool Call/Tool Result protocol suffix as a closed
+unit. The durable transcript remains unchanged for audit and UI history.
 
 Tool and provider adapters keep their own safeguards. Hooks and MCP
 startup/tool calls retain adapter-level timeouts, and provider transports may
@@ -1785,7 +1791,6 @@ compaction:
   instructions: ""
   reserve_tokens: 16384
   keep_recent_tokens: 20000
-  tail_turns: 2
   summary_model: ""
   summary_max_tokens: 2048
   tool_result_max_chars: 2000
@@ -1845,8 +1850,7 @@ compaction:
 | `compaction.enabled` | enables automatic and manual context compaction |
 | `compaction.instructions` | persistent summary focus applied before per-request instructions and successful `PreCompact` hook stdout |
 | `compaction.reserve_tokens` | token budget held back from the provider window |
-| `compaction.keep_recent_tokens` | approximate recent-message budget retained verbatim |
-| `compaction.tail_turns` | minimum recent user turns retained verbatim |
+| `compaction.keep_recent_tokens` | approximate token budget for retaining recent direct, MCP, and Observable inputs verbatim |
 | `compaction.summary_model` | optional `provider:model` used only for compaction summary calls; if omitted or if the summary provider fails, compaction uses the active model |
 | `compaction.summary_max_tokens` | maximum output tokens for summary generation |
 | `compaction.tool_result_max_chars` | per-tool-result truncation limit in summary input |

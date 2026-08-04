@@ -152,7 +152,7 @@ func modelSwitchNotice(previous, selected string, chain []string, selection llm.
 		return nil
 	}
 	notice := llm.TextMessage(llm.RoleUser, text)
-	notice.Kind = llm.MessageKindModelFallback
+	notice.Kind = llm.MessageKindModelChange
 	return &notice
 }
 

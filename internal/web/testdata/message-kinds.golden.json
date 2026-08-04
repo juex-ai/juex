@@ -1,9 +1,12 @@
 [
+  "direct",
+  "continuation",
+  "tool_result",
   "mcp_event",
   "observation",
   "hook_event",
   "compact",
   "runtime_context",
-  "model_fallback",
+  "model_change",
   "system_notice"
 ]

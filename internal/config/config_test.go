@@ -1981,7 +1981,6 @@ compaction:
   instructions: Preserve the current release gate and exact verification command.
   reserve_tokens: 1000
   keep_recent_tokens: 2000
-  tail_turns: 3
   summary_model: compact:gpt-4-mini
   summary_max_tokens: 777
   tool_result_max_chars: 888
@@ -1992,7 +1991,7 @@ compaction:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Compaction.Enabled || cfg.Compaction.Instructions != "Preserve the current release gate and exact verification command." || cfg.Compaction.ReserveTokens != 1000 || cfg.Compaction.KeepRecentTokens != 2000 || cfg.Compaction.TailTurns != 3 || cfg.Compaction.SummaryModel != "compact:gpt-4-mini" || cfg.Compaction.SummaryMaxTokens != 777 || cfg.Compaction.ToolResultMaxChars != 888 {
+	if cfg.Compaction.Enabled || cfg.Compaction.Instructions != "Preserve the current release gate and exact verification command." || cfg.Compaction.ReserveTokens != 1000 || cfg.Compaction.KeepRecentTokens != 2000 || cfg.Compaction.SummaryModel != "compact:gpt-4-mini" || cfg.Compaction.SummaryMaxTokens != 777 || cfg.Compaction.ToolResultMaxChars != 888 {
 		t.Fatalf("Compaction = %+v", cfg.Compaction)
 	}
 }
@@ -2090,7 +2089,7 @@ func TestLoadFromFile_CompactionDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Compaction.Enabled || cfg.Compaction.ReserveTokens != 16384 || cfg.Compaction.KeepRecentTokens != 20000 || cfg.Compaction.TailTurns != 2 || cfg.Compaction.SummaryMaxTokens != 2048 || cfg.Compaction.ToolResultMaxChars != 2000 {
+	if !cfg.Compaction.Enabled || cfg.Compaction.ReserveTokens != 16384 || cfg.Compaction.KeepRecentTokens != 20000 || cfg.Compaction.SummaryMaxTokens != 2048 || cfg.Compaction.ToolResultMaxChars != 2000 {
 		t.Fatalf("Compaction defaults = %+v", cfg.Compaction)
 	}
 }

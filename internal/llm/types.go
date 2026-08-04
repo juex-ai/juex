@@ -30,6 +30,13 @@ const (
 )
 
 const (
+	// MessageKindDirect marks input authored directly by the user.
+	MessageKindDirect = "direct"
+	// MessageKindContinuation marks runtime-generated input that continues an
+	// already active turn.
+	MessageKindContinuation = "continuation"
+	// MessageKindToolResult marks provider-protocol tool results.
+	MessageKindToolResult = "tool_result"
 	// MessageKindMCPEvent marks user-visible MCP notification turns.
 	MessageKindMCPEvent = "mcp_event"
 	// MessageKindObservation marks user-visible Observable observations.
@@ -45,9 +52,9 @@ const (
 	// advisory context. It is assembled per request and should not be treated as
 	// durable user input for cache breakpoints or compaction turn boundaries.
 	MessageKindRuntimeContext = "runtime_context"
-	// MessageKindModelFallback marks a provider-visible notice that explains a
-	// circuit-breaker-driven serving model change.
-	MessageKindModelFallback = "model_fallback"
+	// MessageKindModelChange marks a provider-visible notice that explains a
+	// serving model change.
+	MessageKindModelChange = "model_change"
 	// MessageKindSystemNotice marks an automated, provider-visible turn. It is
 	// still a user-role message and must not be presented as user-authored.
 	MessageKindSystemNotice = "system_notice"
@@ -123,20 +130,44 @@ type Message struct {
 }
 
 type CompactionMetadata struct {
-	Auto               bool   `json:"auto"`
-	Reason             string `json:"reason"`
-	PreviousSummaryID  string `json:"previous_summary_id,omitempty"`
-	FirstKeptMessageID string `json:"first_kept_message_id,omitempty"`
-	TailStartMessageID string `json:"tail_start_message_id,omitempty"`
-	TokensBefore       int    `json:"tokens_before"`
-	TokensAfter        int    `json:"tokens_after"`
-	SummaryChars       int    `json:"summary_chars"`
-	SummaryModel       string `json:"summary_model,omitempty"`
+	Auto               bool     `json:"auto"`
+	Reason             string   `json:"reason"`
+	PreviousSummaryID  string   `json:"previous_summary_id,omitempty"`
+	FirstKeptMessageID string   `json:"first_kept_message_id,omitempty"`
+	TailStartMessageID string   `json:"tail_start_message_id,omitempty"`
+	RetainedMessageIDs []string `json:"retained_message_ids,omitempty"`
+	TokensBefore       int      `json:"tokens_before"`
+	TokensAfter        int      `json:"tokens_after"`
+	SummaryChars       int      `json:"summary_chars"`
+	SummaryModel       string   `json:"summary_model,omitempty"`
 }
 
 // TextMessage is a convenience constructor for a single-text-block message.
 func TextMessage(role Role, text string) Message {
 	return Message{Role: role, Blocks: []Block{{Type: BlockText, Text: text}}}
+}
+
+// ClassifyUserMessage assigns the default semantic kind at a user-message
+// boundary while preserving an explicit source kind.
+func ClassifyUserMessage(m Message) Message {
+	if m.Role != RoleUser || m.Kind != "" {
+		return m
+	}
+	if len(m.Blocks) > 0 {
+		toolResultsOnly := true
+		for _, block := range m.Blocks {
+			if block.Type != BlockToolResult {
+				toolResultsOnly = false
+				break
+			}
+		}
+		if toolResultsOnly {
+			m.Kind = MessageKindToolResult
+			return m
+		}
+	}
+	m.Kind = MessageKindDirect
+	return m
 }
 
 // FirstText returns the first text block in the message, or "".

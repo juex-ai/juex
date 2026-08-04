@@ -1196,7 +1196,7 @@ func TestPostTurnKindWhitelist(t *testing.T) {
 	for _, kind := range []string{
 		"runtime_context",
 		"compact",
-		"model_fallback",
+		"model_change",
 		"observation",
 		"mcp_event",
 		"hook_event",

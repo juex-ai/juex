@@ -24,12 +24,15 @@ test("frontend message kinds match the backend contract fixture", () => {
 
 test("every backend message kind resolves through the renderer registry", () => {
   const expectedUserRenderers = {
+    direct: "default",
+    continuation: "default",
+    tool_result: "default",
     mcp_event: "mcp_event",
     observation: "observation",
     hook_event: "hook_event",
     compact: "compact",
     runtime_context: "default",
-    model_fallback: "model_fallback",
+    model_change: "model_fallback",
     system_notice: "system_notice",
   } as const;
 
@@ -45,7 +48,7 @@ test("automated user renderers retain their role guards", () => {
   for (const kind of [
     "mcp_event",
     "observation",
-    "model_fallback",
+    "model_change",
     "system_notice",
   ] as const) {
     assert.equal(messageGroupRendererKey({ kind, role: "assistant" }), "default");

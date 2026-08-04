@@ -2,12 +2,15 @@ import { LOCAL_COMPACT_PENDING_KIND } from "./compact-ui.ts";
 import type { MessageGroup } from "./display-units.ts";
 
 export const MESSAGE_KINDS = [
+  "direct",
+  "continuation",
+  "tool_result",
   "mcp_event",
   "observation",
   "hook_event",
   "compact",
   "runtime_context",
-  "model_fallback",
+  "model_change",
   "system_notice",
 ] as const;
 
@@ -28,12 +31,15 @@ export type MessageGroupRendererKey =
   (typeof MESSAGE_GROUP_RENDERER_KEYS)[number];
 
 const messageKindRendererKeys: Record<MessageKind, MessageGroupRendererKey> = {
+  direct: "default",
+  continuation: "default",
+  tool_result: "default",
   mcp_event: "mcp_event",
   observation: "observation",
   hook_event: "hook_event",
   compact: "compact",
   runtime_context: "default",
-  model_fallback: "model_fallback",
+  model_change: "model_fallback",
   system_notice: "system_notice",
 };
 

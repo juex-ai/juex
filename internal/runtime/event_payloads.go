@@ -295,7 +295,6 @@ type ContextCompactStartedPayload struct {
 	ContextWindow    int    `json:"context_window"`
 	ReserveTokens    int    `json:"reserve_tokens"`
 	KeepRecentTokens int    `json:"keep_recent_tokens"`
-	TailTurns        int    `json:"tail_turns"`
 }
 
 type ContextCompactErroredPayload struct {

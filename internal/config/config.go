@@ -219,7 +219,6 @@ type compactionConfig struct {
 	Instructions               *string `yaml:"instructions"`
 	ReserveTokens              int     `yaml:"reserve_tokens"`
 	KeepRecentTokens           int     `yaml:"keep_recent_tokens"`
-	TailTurns                  int     `yaml:"tail_turns"`
 	SummaryModel               string  `yaml:"summary_model"`
 	SummaryMaxTokens           int     `yaml:"summary_max_tokens"`
 	ToolResultMaxChars         int     `yaml:"tool_result_max_chars"`
@@ -1314,9 +1313,6 @@ func applyCompactionConfig(cfg *Config, c compactionConfig) {
 	}
 	if c.KeepRecentTokens > 0 {
 		cfg.Compaction.KeepRecentTokens = c.KeepRecentTokens
-	}
-	if c.TailTurns > 0 {
-		cfg.Compaction.TailTurns = c.TailTurns
 	}
 	if strings.TrimSpace(c.SummaryModel) != "" {
 		cfg.Compaction.SummaryModel = strings.TrimSpace(c.SummaryModel)
