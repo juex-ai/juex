@@ -602,6 +602,59 @@ func TestTurn_CompactionSummarizesRealInputThatExceedsRetentionBudget(t *testing
 	}
 }
 
+func TestTurn_CompactionKeepsOversizedImageOnlyInputReference(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary with image reference"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 4000
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 200
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 500
+	image := llm.Message{
+		Role: llm.RoleUser,
+		Kind: llm.MessageKindDirect,
+		Blocks: []llm.Block{{Type: llm.BlockImage, Media: &llm.MediaRef{
+			ArtifactPath:  ".juex/artifacts/media/session/photo.png",
+			MediaType:     "image/png",
+			SHA256:        "image-sha",
+			OriginalBytes: 1234,
+			Width:         4000,
+			Height:        4000,
+		}}},
+	}
+	if err := eng.Session.Append(image); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Turn(context.Background(), "latest"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider histories = %d, want summary and answer requests", len(prov.histories))
+	}
+	for index, history := range prov.histories {
+		text := messagesText(history)
+		for _, want := range []string{".juex/artifacts/media/session/photo.png", "image-sha", "size=4000x4000"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("provider history %d missing media reference %q:\n%s", index, want, text)
+			}
+		}
+	}
+	compact := eng.Session.History[len(eng.Session.History)-3]
+	if compact.Kind != llm.MessageKindCompact || compact.Compaction == nil || len(compact.Compaction.RetainedMessageIDs) != 0 {
+		t.Fatalf("compaction marker = %+v", compact)
+	}
+	if compact.Compaction.TokensAfter >= eng.ContextWindow-eng.Compaction.ReserveTokens {
+		t.Fatalf("tokens after = %d, want below trigger %d", compact.Compaction.TokensAfter, eng.ContextWindow-eng.Compaction.ReserveTokens)
+	}
+}
+
 func TestTurn_ExternalizesLargeUserInputBeforeProviderRequest(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},

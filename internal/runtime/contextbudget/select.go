@@ -85,7 +85,7 @@ func newestOversizedInputID(work []llm.Message, keep map[string]bool, budget int
 		if !isRealInput(work[i]) || keep[work[i].ID] {
 			continue
 		}
-		if messageHasText(work[i]) && estimateMessages(work[i:i+1]) > budget {
+		if messageHasRetainableReference(work[i]) && estimateMessages(work[i:i+1]) > budget {
 			return work[i].ID
 		}
 		return ""
@@ -93,9 +93,12 @@ func newestOversizedInputID(work []llm.Message, keep map[string]bool, budget int
 	return ""
 }
 
-func messageHasText(msg llm.Message) bool {
+func messageHasRetainableReference(msg llm.Message) bool {
 	for _, block := range msg.Blocks {
 		if block.Type == llm.BlockText && block.Text != "" {
+			return true
+		}
+		if block.Type == llm.BlockImage && block.Media != nil && block.Media.ArtifactPath != "" {
 			return true
 		}
 	}

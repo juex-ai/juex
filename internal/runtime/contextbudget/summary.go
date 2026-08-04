@@ -183,6 +183,8 @@ func serializeMessageForSummary(msg llm.Message, toolResultMaxChars int) string 
 		switch block.Type {
 		case llm.BlockText:
 			writeSummaryField(&sb, "text", block.Text, toolResultMaxChars)
+		case llm.BlockImage:
+			writeMediaReferenceForSummary(&sb, block.Media)
 		case llm.BlockReasoning:
 			if block.Redacted {
 				if block.Text != "" {
@@ -220,6 +222,18 @@ func serializeMessageForSummary(msg llm.Message, toolResultMaxChars int) string 
 		}
 	}
 	return sb.String()
+}
+
+func writeMediaReferenceForSummary(sb *strings.Builder, media *llm.MediaRef) {
+	if media == nil {
+		sb.WriteString("image: missing media reference\n")
+		return
+	}
+	fmt.Fprintf(sb, "image: path=%s type=%s sha256=%s bytes=%d", media.ArtifactPath, media.MediaType, media.SHA256, media.OriginalBytes)
+	if media.Width > 0 && media.Height > 0 {
+		fmt.Fprintf(sb, " size=%dx%d", media.Width, media.Height)
+	}
+	sb.WriteByte('\n')
 }
 
 func writeRedactedReasoningMetadata(sb *strings.Builder, block llm.Block) {

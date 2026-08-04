@@ -84,6 +84,29 @@ func TestBuildCompactionSummaryRequest_OmitsRedactedReasoningContent(t *testing.
 	}
 }
 
+func TestBuildCompactionSummaryRequestPreservesImageMediaReference(t *testing.T) {
+	input := []llm.Message{{
+		ID:   "image-1",
+		Role: llm.RoleUser,
+		Blocks: []llm.Block{{Type: llm.BlockImage, Media: &llm.MediaRef{
+			ArtifactPath:  ".juex/artifacts/media/session/photo.png",
+			MediaType:     "image/png",
+			SHA256:        "image-sha",
+			OriginalBytes: 1234,
+			Width:         800,
+			Height:        600,
+		}}},
+	}}
+
+	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 100}, "")
+	body := hist[0].FirstText()
+	for _, want := range []string{"path=.juex/artifacts/media/session/photo.png", "type=image/png", "sha256=image-sha", "bytes=1234", "size=800x600"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("summary input missing media field %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) {
 	input := []llm.Message{
 		testMsg("facts", llm.RoleUser, strings.Join([]string{

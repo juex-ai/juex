@@ -172,6 +172,8 @@ Projection rules:
 3. Keep recent inputs verbatim only while they fit the configured token budget;
    at a compact boundary, externalize an input that is itself larger than that
    budget and keep its bounded head/tail artifact reference with the summary.
+   Image-only inputs keep their durable media path, type, digest, byte size, and
+   dimensions in the same retained-reference section.
 4. Keep compact summaries short and structured; do not ask them to carry system
    instructions, AGENTS.md, tool schemas, or cwd. Those are rebuilt.
 5. Assistant text/reasoning projection is future work. Today, reasoning replay

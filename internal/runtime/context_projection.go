@@ -118,7 +118,7 @@ func (e *Engine) projectOversizedCompactionInputsLocked(msgs []llm.Message, ids 
 			return nil, nil, total, err
 		}
 		out[i] = projected
-		if hasUserInputArtifact(projected) {
+		if hasRetainedInputReference(projected) {
 			retained = append(retained, projected)
 		}
 		total.UserInputsExternalized += stats.UserInputsExternalized
@@ -141,9 +141,12 @@ func compactionRetentionProjectionPolicy(policy compactionPolicy) compactionPoli
 	return policy
 }
 
-func hasUserInputArtifact(msg llm.Message) bool {
+func hasRetainedInputReference(msg llm.Message) bool {
 	for _, block := range msg.Blocks {
 		if block.Artifact != nil && block.Artifact.SourceKind == "user_input" {
+			return true
+		}
+		if block.Type == llm.BlockImage && block.Media != nil && block.Media.ArtifactPath != "" {
 			return true
 		}
 	}
@@ -169,6 +172,13 @@ func appendCompactionInputReferences(summary string, messages []llm.Message) str
 				if !strings.HasSuffix(block.Text, "\n") {
 					b.WriteByte('\n')
 				}
+			}
+			if block.Type == llm.BlockImage && block.Media != nil {
+				fmt.Fprintf(&b, "Image: path=%s type=%s sha256=%s bytes=%d", block.Media.ArtifactPath, block.Media.MediaType, block.Media.SHA256, block.Media.OriginalBytes)
+				if block.Media.Width > 0 && block.Media.Height > 0 {
+					fmt.Fprintf(&b, " size=%dx%d", block.Media.Width, block.Media.Height)
+				}
+				b.WriteByte('\n')
 			}
 		}
 	}

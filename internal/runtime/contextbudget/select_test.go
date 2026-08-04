@@ -93,6 +93,30 @@ func TestSelectCompactionInputSummarizesNewestRealInputWhenItExceedsBudget(t *te
 	}
 }
 
+func TestSelectCompactionInputReferencesOversizedImageOnlyInput(t *testing.T) {
+	image := llm.Message{
+		ID:   "image-1",
+		Role: llm.RoleUser,
+		Kind: llm.MessageKindDirect,
+		Blocks: []llm.Block{{Type: llm.BlockImage, Media: &llm.MediaRef{
+			ArtifactPath: ".juex/artifacts/media/session/photo.png",
+			MediaType:    "image/png",
+			SHA256:       "image-sha",
+			Width:        4000,
+			Height:       4000,
+		}}},
+	}
+
+	sel := SelectInput([]llm.Message{image}, Policy{KeepRecentTokens: 200})
+
+	if len(sel.RetainedMessageIDs) != 0 || len(sel.OversizedInputIDs) != 1 || sel.OversizedInputIDs[0] != "image-1" {
+		t.Fatalf("selection = %+v, want oversized image reference", sel)
+	}
+	if len(sel.SummaryInput) != 1 || sel.SummaryInput[0].ID != "image-1" {
+		t.Fatalf("summary input = %+v, want image-1", sel.SummaryInput)
+	}
+}
+
 func TestSelectCompactionInputNoticesDoNotDisplaceRealInputs(t *testing.T) {
 	first := testMsg("direct-1", llm.RoleUser, "original request")
 	first.Kind = llm.MessageKindDirect
