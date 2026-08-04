@@ -169,7 +169,7 @@ func compactionProjectedTextBlockCount(msg llm.Message) int {
 		if block.Type != llm.BlockText {
 			continue
 		}
-		if (block.Artifact != nil && block.Artifact.SourceKind == "user_input") || (block.Artifact == nil && len(block.Text) > 1) {
+		if (block.Artifact != nil && block.Artifact.SourceKind == "user_input") || (block.Artifact == nil && block.Text != "") {
 			count++
 		}
 	}
@@ -269,7 +269,7 @@ func appendCompactionInputReferences(summary string, messages []llm.Message) str
 		}
 		b.WriteString(":\n")
 		for _, block := range msg.Blocks {
-			if block.Type == llm.BlockText && block.Artifact != nil && block.Artifact.SourceKind == "user_input" {
+			if block.Type == llm.BlockText && block.Text != "" && (block.Artifact == nil || block.Artifact.SourceKind == "user_input") {
 				b.WriteString(block.Text)
 				if !strings.HasSuffix(block.Text, "\n") {
 					b.WriteByte('\n')

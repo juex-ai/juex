@@ -877,7 +877,7 @@ func TestTurn_CompactionProjectsOversizedInputInsideExecutionTail(t *testing.T) 
 	}
 }
 
-func TestTurn_CompactionKeepsOversizedImageOnlyInputReference(t *testing.T) {
+func TestTurn_CompactionKeepsOversizedImageInputReferenceAndOneByteCaption(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "summary with image reference"), StopReason: llm.StopEndTurn},
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
@@ -891,14 +891,17 @@ func TestTurn_CompactionKeepsOversizedImageOnlyInputReference(t *testing.T) {
 	image := llm.Message{
 		Role: llm.RoleUser,
 		Kind: llm.MessageKindDirect,
-		Blocks: []llm.Block{{Type: llm.BlockImage, Media: &llm.MediaRef{
-			ArtifactPath:  ".juex/artifacts/media/session/photo.png",
-			MediaType:     "image/png",
-			SHA256:        "image-sha",
-			OriginalBytes: 1234,
-			Width:         4000,
-			Height:        4000,
-		}}},
+		Blocks: []llm.Block{
+			{Type: llm.BlockText, Text: "A"},
+			{Type: llm.BlockImage, Media: &llm.MediaRef{
+				ArtifactPath:  ".juex/artifacts/media/session/photo.png",
+				MediaType:     "image/png",
+				SHA256:        "image-sha",
+				OriginalBytes: 1234,
+				Width:         4000,
+				Height:        4000,
+			}},
+		},
 	}
 	if err := eng.Session.Append(image); err != nil {
 		t.Fatal(err)
@@ -915,7 +918,11 @@ func TestTurn_CompactionKeepsOversizedImageOnlyInputReference(t *testing.T) {
 	}
 	for index, history := range prov.histories {
 		text := messagesText(history)
-		for _, want := range []string{".juex/artifacts/media/session/photo.png", "image-sha", "size=4000x4000"} {
+		caption := "text: A"
+		if index > 0 {
+			caption = "\nA\n"
+		}
+		for _, want := range []string{caption, ".juex/artifacts/media/session/photo.png", "image-sha", "size=4000x4000"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("provider history %d missing media reference %q:\n%s", index, want, text)
 			}

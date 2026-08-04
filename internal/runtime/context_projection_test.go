@@ -194,6 +194,43 @@ func TestProjectOversizedCompactionInputsSharesPreviewAcrossTextBlocks(t *testin
 	}
 }
 
+func TestProjectOversizedCompactionInputsKeepsOneByteCaptionAlongsideImage(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	msg := llm.Message{
+		ID:   "message-1",
+		Role: llm.RoleUser,
+		Kind: llm.MessageKindDirect,
+		Blocks: []llm.Block{
+			{Type: llm.BlockText, Text: "A"},
+			{Type: llm.BlockImage, Media: &llm.MediaRef{
+				ArtifactPath:  ".juex/artifacts/media/session/photo.png",
+				MediaType:     "image/png",
+				SHA256:        "image-sha",
+				OriginalBytes: 1234,
+			}},
+		},
+	}
+	policy := DefaultCompactionPolicy()
+	policy.KeepRecentTokens = 200
+
+	_, retained, _, err := eng.projectOversizedCompactionInputsLocked([]llm.Message{msg}, []string{msg.ID}, effectiveCompactionPolicy(policy, DefaultContextWindowTokens))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retained) != 1 {
+		t.Fatalf("retained messages = %d, want 1", len(retained))
+	}
+	if got := compactionProjectedTextBlockCount(retained[0]); got != 1 {
+		t.Fatalf("projected text block count = %d, want 1", got)
+	}
+	reference := appendCompactionInputReferences("summary", retained)
+	for _, want := range []string{"\nA\n", "Image: path=.juex/artifacts/media/session/photo.png"} {
+		if !strings.Contains(reference, want) {
+			t.Fatalf("retained reference missing %q:\n%s", want, reference)
+		}
+	}
+}
+
 func TestCarryCompactionInputReferencesPrunesOldestToCompleteBudget(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	var old []llm.Message
