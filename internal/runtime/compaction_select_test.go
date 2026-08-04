@@ -66,7 +66,7 @@ func TestSelectCompactionInputUsesEstimatorForTailBudget(t *testing.T) {
 		return estimateMessageTokens(msgs)
 	}
 
-	sel := selectCompactionInputWithEstimator(h, compactionPolicy{KeepRecentTokens: baseRecentTokens + 1}, estimator)
+	sel := selectCompactionInputWithEstimator(h, compactionPolicy{KeepRecentTokens: baseRecentTokens + 2}, estimator)
 
 	if len(sel.RetainedTail) != 1 || sel.RetainedTail[0].ID != "m3" {
 		t.Fatalf("tail = %+v, want estimator-limited recent message only", sel.RetainedTail)

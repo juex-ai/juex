@@ -537,6 +537,50 @@ func TestTurn_CompactionKeepsRecentRealInputInProviderContext(t *testing.T) {
 	}
 }
 
+func TestTurn_CompactionSummarizesRealInputThatExceedsRetentionBudget(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary of oversized request"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 400
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 30
+	eng.Compaction.ReserveTokens = 100
+	eng.Compaction.UserInputInlineMaxBytes = 1 << 20
+	oversized := "oversized-request " + strings.Repeat("private-detail ", 300)
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, oversized)); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Turn(context.Background(), "latest"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider histories = %d, want summary and answer requests", len(prov.histories))
+	}
+	active := prov.histories[1]
+	if strings.Contains(messagesText(active), "private-detail private-detail") {
+		t.Fatalf("oversized retained input leaked past compact budget:\n%s", messagesText(active))
+	}
+	if !strings.Contains(messagesText(active), "summary of oversized request") || !strings.Contains(messagesText(active), "latest") {
+		t.Fatalf("active context missing summary or incoming request: %+v", active)
+	}
+	compact := eng.Session.History[len(eng.Session.History)-3]
+	if compact.Kind != llm.MessageKindCompact || compact.Compaction == nil {
+		t.Fatalf("compaction marker = %+v", compact)
+	}
+	if len(compact.Compaction.RetainedMessageIDs) != 0 {
+		t.Fatalf("retained ids = %v, want oversized input summarized", compact.Compaction.RetainedMessageIDs)
+	}
+	if compact.Compaction.TokensAfter >= eng.ContextWindow-eng.Compaction.ReserveTokens {
+		t.Fatalf("tokens after = %d, want below trigger %d", compact.Compaction.TokensAfter, eng.ContextWindow-eng.Compaction.ReserveTokens)
+	}
+}
+
 func TestTurn_ExternalizesLargeUserInputBeforeProviderRequest(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},

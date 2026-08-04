@@ -58,9 +58,9 @@ func SelectInputWithEstimator(history []llm.Message, policy Policy, estimateMess
 	if len(sel.RetainedTail) > 0 {
 		sel.FirstKeptMessageID = sel.RetainedTail[0].ID
 	}
-	// A single oversized real input may be the entire transcript. Summarize it
-	// while retaining its exact projected form so manual and overflow recovery
-	// compaction still make progress without discarding the user's request.
+	// A single retained real input may be the entire transcript. Include it in
+	// the summary request as well so manual compaction still produces a useful
+	// compact marker without discarding the budgeted verbatim copy.
 	if len(sel.SummaryInput) == 0 && len(sel.RetainedTail) > 0 {
 		sel.SummaryInput = append([]llm.Message(nil), sel.RetainedTail...)
 	}
@@ -86,18 +86,16 @@ func compactionRelevantMessages(messages []llm.Message) []llm.Message {
 func chooseRetainedMessages(work []llm.Message, budget int, estimateMessages func([]llm.Message) int) map[string]bool {
 	keep := make(map[string]bool)
 	tokens := 0
-	realInputs := 0
 	for i := len(work) - 1; i >= 0; i-- {
 		if !isRealInput(work[i]) {
 			continue
 		}
 		cost := estimateMessages(work[i : i+1])
-		if realInputs > 0 && budget > 0 && tokens+cost > budget {
+		if budget > 0 && tokens+cost > budget {
 			break
 		}
 		keep[work[i].ID] = true
 		tokens += cost
-		realInputs++
 	}
 	if start := executionTailStart(work); start >= 0 {
 		for i := start; i < len(work); i++ {

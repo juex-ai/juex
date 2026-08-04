@@ -66,10 +66,27 @@ func TestSelectCompactionInputUsesEstimatorForTailBudget(t *testing.T) {
 		return EstimateMessageTokens(msgs)
 	}
 
-	sel := SelectInputWithEstimator(h, Policy{KeepRecentTokens: baseRecentTokens + 1}, estimator)
+	sel := SelectInputWithEstimator(h, Policy{KeepRecentTokens: baseRecentTokens + 2}, estimator)
 
 	if len(sel.RetainedTail) != 1 || sel.RetainedTail[0].ID != "m3" {
 		t.Fatalf("tail = %+v, want estimator-limited recent message only", sel.RetainedTail)
+	}
+}
+
+func TestSelectCompactionInputSummarizesNewestRealInputWhenItExceedsBudget(t *testing.T) {
+	h := []llm.Message{
+		testMsg("direct-1", llm.RoleUser, strings.Repeat("important context ", 200)),
+	}
+	h[0].Kind = llm.MessageKindDirect
+	budget := EstimateMessageTokens(h) - 1
+
+	sel := SelectInput(h, Policy{KeepRecentTokens: budget})
+
+	if len(sel.RetainedTail) != 0 || len(sel.RetainedMessageIDs) != 0 {
+		t.Fatalf("oversized input retained outside budget: tail=%+v ids=%v", sel.RetainedTail, sel.RetainedMessageIDs)
+	}
+	if len(sel.SummaryInput) != 1 || sel.SummaryInput[0].ID != "direct-1" {
+		t.Fatalf("summary input = %+v, want oversized direct input", sel.SummaryInput)
 	}
 }
 
