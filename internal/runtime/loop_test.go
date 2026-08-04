@@ -766,6 +766,13 @@ func TestTurn_CompactionCarriesRetainedInputReferencesAcrossCompactions(t *testi
 	if len(prov.histories) != 4 {
 		t.Fatalf("provider histories = %d, want two summary and two answer requests", len(prov.histories))
 	}
+	secondSummaryRequest := messagesText(prov.histories[2])
+	if strings.Contains(secondSummaryRequest, "Retained Input References") || strings.Contains(secondSummaryRequest, firstArtifact.StoredPath) {
+		t.Fatalf("second summary request replayed deterministic retained references:\n%s", secondSummaryRequest)
+	}
+	if !strings.Contains(secondSummaryRequest, "first summary without references") {
+		t.Fatalf("second summary request lost first model summary:\n%s", secondSummaryRequest)
+	}
 	var compacts []llm.Message
 	for _, msg := range eng.Session.History {
 		if msg.Kind == llm.MessageKindCompact {

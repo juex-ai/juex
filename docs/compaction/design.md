@@ -179,7 +179,9 @@ Projection rules:
    deterministically across later compactions; model summaries are not the
    authority for artifact paths or digests. Keep the newest complete reference
    suffix that fits the shared retention budget so metadata and compact text do
-   not grow without bound.
+   not grow without bound. Feed only the previous model-generated summary back
+   into later summarization; deterministic reference sections travel through
+   metadata instead of being re-summarized.
 5. Keep compact summaries short and structured; do not ask them to carry system
    instructions, AGENTS.md, tool schemas, or cwd. Those are rebuilt.
 6. Assistant text/reasoning projection is future work. Today, reasoning replay

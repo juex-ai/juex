@@ -188,7 +188,8 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		KeepRecentTokens: policy.KeepRecentTokens,
 	}})
 
-	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, selection.PreviousSummary, summaryInput, summaryState, policy, instructions)
+	previousModelSummary := compactionModelSummary(selection.PreviousSummary)
+	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, previousModelSummary, summaryInput, summaryState, policy, instructions)
 	if err != nil {
 		sess.RecordResponseUsage(generation.Usage, nil)
 		compactErr := newCompactionError(ctx, err)
@@ -326,8 +327,30 @@ func mergeCompactInstructions(parts ...string) string {
 	return strings.Join(merged, "\n\n")
 }
 
+const compactMessagePrefix = "Context compacted automatically because the provider context window is nearing its limit.\n\nSummary of earlier conversation:\n"
+
 func compactMessageText(summary string) string {
-	return "Context compacted automatically because the provider context window is nearing its limit.\n\nSummary of earlier conversation:\n" + summary
+	return compactMessagePrefix + summary
+}
+
+func compactionModelSummary(msg llm.Message) llm.Message {
+	if msg.Compaction == nil || msg.Compaction.SummaryChars <= 0 {
+		return msg
+	}
+	text := strings.TrimPrefix(msg.FirstText(), compactMessagePrefix)
+	if msg.Compaction.SummaryChars > len(text) {
+		return msg
+	}
+	text = text[:msg.Compaction.SummaryChars]
+	out := msg
+	out.Blocks = append([]llm.Block(nil), msg.Blocks...)
+	for i := range out.Blocks {
+		if out.Blocks[i].Type == llm.BlockText {
+			out.Blocks[i].Text = text
+			break
+		}
+	}
+	return out
 }
 
 func (e *Engine) compactionToolsLocked() []llm.ToolSpec {

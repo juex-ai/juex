@@ -8,6 +8,24 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 )
 
+func TestCompactionModelSummaryStripsDeterministicReferenceSuffix(t *testing.T) {
+	generated := "Goal\n保留当前状态"
+	msg := llm.TextMessage(llm.RoleUser, compactMessageText(generated+"\n\nRetained Input References\npath: stale"))
+	msg.Kind = llm.MessageKindCompact
+	msg.Compaction = &llm.CompactionMetadata{SummaryChars: len(generated)}
+
+	got := compactionModelSummary(msg)
+	if got.FirstText() != generated {
+		t.Fatalf("previous model summary = %q, want %q", got.FirstText(), generated)
+	}
+	if strings.Contains(got.FirstText(), "Retained Input References") {
+		t.Fatalf("previous model summary retained deterministic suffix: %q", got.FirstText())
+	}
+	if !strings.Contains(msg.FirstText(), "path: stale") {
+		t.Fatalf("source compact message was mutated: %q", msg.FirstText())
+	}
+}
+
 func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult(t *testing.T) {
 	prev := testMsg("compact-1", llm.RoleUser, "Summary of earlier conversation:\nGoal\nold")
 	prev.Kind = llm.MessageKindCompact
