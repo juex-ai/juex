@@ -674,7 +674,6 @@ export interface ContextCompactStartedPayload {
   context_window: number;
   reserve_tokens: number;
   keep_recent_tokens: number;
-  tail_turns: number;
 }
 
 export interface ContextCompactErroredPayload {

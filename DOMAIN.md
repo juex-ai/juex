@@ -126,6 +126,9 @@ domain boundary.
 5. Turn failure does not silently discard accepted input: retryable Provider
    failures may continue with it, while terminal failures preserve it in
    conversation history before ending the Turn.
+6. Pending is a delivery state, not an input kind. A queued message keeps its
+   semantic source classification, including direct input, MCP notification,
+   Observation, or runtime continuation.
 
 ### Observable And Observation
 
@@ -142,7 +145,8 @@ domain boundary.
 ### Compaction
 
 1. Policy or an explicit request selects older provider-visible context while
-   retaining a recent tail.
+   retaining recent direct, MCP, and Observable inputs by token budget plus any
+   Tool Call/Tool Result suffix required for a valid in-progress execution.
 2. The summary request includes the current Goal and Notes as authoritative
    working state.
 3. A successful summary is appended as a compact message with selection and
@@ -151,6 +155,8 @@ domain boundary.
    messages; the persisted original transcript remains inspectable.
 5. Cancellation stops summary work before a compact marker is committed, so
    future active context remains unchanged.
+6. Model-change and one-shot system notices remain in the durable transcript
+   but do not enter the new summary or retained input set.
 
 ## Domain Invariants
 

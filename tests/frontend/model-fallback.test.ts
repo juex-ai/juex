@@ -27,7 +27,7 @@ test("model fallback process notices are not copied as user chat", () => {
     messageGroupCanCopy({
       key: "fallback",
       role: "user",
-      kind: "model_fallback",
+      kind: "model_change",
       pending: false,
       units: [{ kind: "text", block: { type: "text", text: "switched" } }],
     }),

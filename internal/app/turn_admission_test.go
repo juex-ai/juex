@@ -114,7 +114,7 @@ func TestAdmitTurnRejectsUnsupportedKindsAndSystemNoticeAttachments(t *testing.T
 	for _, kind := range []string{
 		llm.MessageKindRuntimeContext,
 		llm.MessageKindCompact,
-		llm.MessageKindModelFallback,
+		llm.MessageKindModelChange,
 		llm.MessageKindObservation,
 		llm.MessageKindMCPEvent,
 		llm.MessageKindHookEvent,

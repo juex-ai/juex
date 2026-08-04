@@ -10,7 +10,6 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/runtime/contextbudget"
 	runtimepolicy "github.com/juex-ai/juex/internal/runtime/policy"
 )
 
@@ -124,7 +123,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	if sess == nil {
 		return CompactionResult{}, fmt.Errorf("compact context: missing session runtime")
 	}
-	selection := ensureCompactionProgress(selectCompactionInputWithEstimator(providerVisibleMessages(sess.History), policy, e.estimateMessageTokens))
+	selection := selectCompactionInputWithEstimator(providerVisibleMessages(sess.History), policy, e.estimateMessageTokens)
 	if len(selection.SummaryInput) == 0 && !selection.HasPreviousSummary {
 		return CompactionResult{}, nil
 	}
@@ -166,7 +165,6 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		ContextWindow:    contextWindow,
 		ReserveTokens:    policy.ReserveTokens,
 		KeepRecentTokens: policy.KeepRecentTokens,
-		TailTurns:        policy.TailTurns,
 	}})
 
 	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, selection.PreviousSummary, selection.SummaryInput, summaryState, policy, instructions)
@@ -204,6 +202,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		Reason:             reason,
 		FirstKeptMessageID: selection.FirstKeptMessageID,
 		TailStartMessageID: selection.TailStartMessageID,
+		RetainedMessageIDs: append([]string(nil), selection.RetainedMessageIDs...),
 		TokensBefore:       tokensBefore,
 		SummaryChars:       len(summary),
 		SummaryModel:       model,
@@ -323,29 +322,4 @@ func (e *Engine) compactionSummaryProviderLocked() llm.Provider {
 		return e.Provider
 	}
 	return nil
-}
-
-func ensureCompactionProgress(sel compactionSelection) compactionSelection {
-	if len(sel.SummaryInput) > 0 || len(sel.RetainedTail) == 0 {
-		return sel
-	}
-	keepStart := len(sel.RetainedTail) - 1
-	if keepStart < 0 {
-		keepStart = 0
-	}
-	for keepStart > 0 && contextbudget.StartsWithToolResult(sel.RetainedTail[keepStart]) {
-		keepStart--
-	}
-	sel.SummaryInput = append(sel.SummaryInput, sel.RetainedTail[:keepStart]...)
-	if keepStart == 0 {
-		sel.SummaryInput = append(sel.SummaryInput, sel.RetainedTail...)
-		sel.RetainedTail = nil
-		sel.FirstKeptMessageID = ""
-		sel.TailStartMessageID = ""
-		return sel
-	}
-	sel.RetainedTail = append([]llm.Message(nil), sel.RetainedTail[keepStart:]...)
-	sel.FirstKeptMessageID = sel.RetainedTail[0].ID
-	sel.TailStartMessageID = sel.RetainedTail[0].ID
-	return sel
 }

@@ -102,7 +102,7 @@ func (idx *transcriptIndex) appendMessage(msg llm.Message, offset int64, length 
 }
 
 func (idx *transcriptIndex) addSummary(msg llm.Message) {
-	if msg.Role != llm.RoleUser || msg.Kind == llm.MessageKindCompact || msg.Kind == llm.MessageKindModelFallback {
+	if msg.Role != llm.RoleUser || msg.Kind == llm.MessageKindCompact || msg.Kind == llm.MessageKindModelChange {
 		return
 	}
 	idx.turns++

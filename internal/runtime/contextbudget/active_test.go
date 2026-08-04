@@ -24,6 +24,23 @@ func TestActiveContext_AssemblesSummaryBeforeRetainedTail(t *testing.T) {
 	}
 }
 
+func TestActiveContext_AssemblesExplicitRetainedMessages(t *testing.T) {
+	h := []llm.Message{
+		testMsg("direct-1", llm.RoleUser, "first"),
+		testMsg("assistant-1", llm.RoleAssistant, "answer"),
+		testMsg("event-1", llm.RoleUser, "follow-up"),
+	}
+	compact := testMsg("compact-1", llm.RoleUser, "summary")
+	compact.Kind = llm.MessageKindCompact
+	compact.Compaction = &llm.CompactionMetadata{RetainedMessageIDs: []string{"direct-1", "event-1"}}
+	h = append(h, compact)
+
+	got := AssembleActiveContext(h, nil)
+	if len(got.Messages) != 3 || got.Messages[0].ID != "compact-1" || got.Messages[1].ID != "direct-1" || got.Messages[2].ID != "event-1" {
+		t.Fatalf("active messages = %+v", got.Messages)
+	}
+}
+
 func TestActiveContext_SkipsHookEventMessages(t *testing.T) {
 	hookTrace := testMsg("hook-1", llm.RoleSystem, "hook check allow UserPromptSubmit in 1ms")
 	hookTrace.Kind = llm.MessageKindHookEvent

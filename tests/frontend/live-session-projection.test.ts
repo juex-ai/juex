@@ -310,14 +310,14 @@ test("projectLiveSessionEvent inserts a fallback notice before its assistant", (
       model: "backup:model",
       notice: {
         role: "user",
-        kind: "model_fallback",
+        kind: "model_change",
         blocks: [{ type: "text", text: "model switched" }],
       },
     },
   });
 
   assert.equal(state.messages.length, 3);
-  assert.equal(state.messages[1].kind, "model_fallback");
+  assert.equal(state.messages[1].kind, "model_change");
   assert.equal(state.messages[2].role, "assistant");
   assert.equal(state.messages[2].model, "backup:model");
 });
@@ -503,7 +503,6 @@ test("projectLiveSessionEvent preserves queued attachments across compact termin
       context_window: 1000,
       reserve_tokens: 100,
       keep_recent_tokens: 100,
-      tail_turns: 2,
     },
   });
   assert.equal(state.compactAdmissionTurnID, "compact-1");
@@ -761,7 +760,6 @@ test("projectLiveSessionEvent projects compact start and completion", () => {
       context_window: 1000,
       reserve_tokens: 100,
       keep_recent_tokens: 100,
-      tail_turns: 2,
     },
   });
   assert.equal(state.messages.length, 1);

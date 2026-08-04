@@ -159,14 +159,16 @@ func (a *App) admitSlashTurn(ctx context.Context, cmd SlashCommand, ids TurnIDAl
 	case SlashCompact:
 		return a.admitCompactSlash(ctx, cmd, ids)
 	case SlashGoal:
-		return a.admitUserTurn(ctx, llm.TextMessage(llm.RoleUser, GoalInstructionPrompt(cmd.Args)), ids)
+		msg := llm.TextMessage(llm.RoleUser, GoalInstructionPrompt(cmd.Args))
+		msg.Kind = llm.MessageKindDirect
+		return a.admitUserTurn(ctx, msg, ids)
 	default:
 		return errorResult(&UnknownSlashCommandError{Input: cmd.Name}, nil)
 	}
 }
 
 func userTurnMessage(prompt string, attachments []llm.MediaRef) llm.Message {
-	return userTurnMessageWithKind(prompt, attachments, "")
+	return userTurnMessageWithKind(prompt, attachments, llm.MessageKindDirect)
 }
 
 func userTurnMessageWithKind(prompt string, attachments []llm.MediaRef, kind string) llm.Message {

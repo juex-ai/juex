@@ -192,7 +192,9 @@ func (l *turnLifecycle) runStopHooksLocked(ctx context.Context) ([]hooks.Result,
 }
 
 func (l *turnLifecycle) enqueueContinuationLocked(ctx context.Context, prompt string) error {
-	_, err := l.engine.EnqueuePendingInput(ctx, prompt)
+	msg := llm.TextMessage(llm.RoleUser, prompt)
+	msg.Kind = llm.MessageKindContinuation
+	_, err := l.engine.EnqueuePendingMessage(ctx, msg)
 	return err
 }
 

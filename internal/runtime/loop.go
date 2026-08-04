@@ -157,7 +157,7 @@ type queuedPendingInput struct {
 // assistant text response (concatenated text blocks). Returns an error when
 // cancellation or provider/tool/context failure stops the turn.
 func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
-	return e.TurnMessage(ctx, llm.TextMessage(llm.RoleUser, userInput))
+	return e.TurnMessage(ctx, llm.ClassifyUserMessage(llm.TextMessage(llm.RoleUser, userInput)))
 }
 
 func (e *Engine) ReserveTurnID(turnID string) error {
@@ -192,7 +192,7 @@ func (e *Engine) reserveTurnID(turnID string, payload TurnAdmittedPayload) error
 }
 
 func (e *Engine) EnqueuePendingInput(ctx context.Context, userInput string) (PendingInputStatus, error) {
-	return e.EnqueuePendingMessage(ctx, llm.TextMessage(llm.RoleUser, userInput))
+	return e.EnqueuePendingMessage(ctx, llm.ClassifyUserMessage(llm.TextMessage(llm.RoleUser, userInput)))
 }
 
 func (e *Engine) EnqueuePendingMessage(ctx context.Context, userMsg llm.Message) (PendingInputStatus, error) {
@@ -200,6 +200,7 @@ func (e *Engine) EnqueuePendingMessage(ctx context.Context, userMsg llm.Message)
 }
 
 func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg llm.Message, opts PendingInputOptions) (PendingInputStatus, error) {
+	userMsg = llm.ClassifyUserMessage(userMsg)
 	if e == nil {
 		return PendingInputStatus{}, ErrNoActiveTurn
 	}
@@ -732,7 +733,7 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, polic
 	toolResults = e.normalizeGuidedToolFailureResults(toolResults)
 	results := toolResultBlocks(toolResults)
 	e.recordToolFailureBatch(turnID, toolCalls, toolResults)
-	toolResultMsg := llm.Message{Role: llm.RoleUser, Blocks: results}
+	toolResultMsg := llm.Message{Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: results}
 	projectedToolResultMsg, projection, err := e.projectMessageLocked(toolResultMsg, policy)
 	if err != nil {
 		return err
