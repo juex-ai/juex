@@ -177,7 +177,9 @@ Projection rules:
    dimensions in the same retained-reference section.
 4. Persist retained input references in compaction metadata and inherit them
    deterministically across later compactions; model summaries are not the
-   authority for artifact paths or digests.
+   authority for artifact paths or digests. Keep the newest complete reference
+   suffix that fits the shared retention budget so metadata and compact text do
+   not grow without bound.
 5. Keep compact summaries short and structured; do not ask them to carry system
    instructions, AGENTS.md, tool schemas, or cwd. Those are rebuilt.
 6. Assistant text/reasoning projection is future work. Today, reasoning replay

@@ -238,7 +238,7 @@ func TestFormatCompactTokenCountPromotesRoundedThresholds(t *testing.T) {
 func TestStatusSnapshotIncludesSessionCompactionAndSuccessRates(t *testing.T) {
 	a, _ := newStubApp(t)
 	appendCompactMessage(t, a.Session, "first compact summary", 80)
-	appendCompactMessage(t, a.Session, "latest compact summary", 480)
+	appendCompactMessage(t, a.Session, strings.Repeat("x", 480), 20)
 	for i := 0; i < 4; i++ {
 		if err := a.Session.AppendEvent(events.Event{Type: "llm.requested"}); err != nil {
 			t.Fatal(err)

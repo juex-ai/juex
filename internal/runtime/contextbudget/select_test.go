@@ -157,6 +157,27 @@ func TestSelectCompactionInputKeepsActiveToolProtocolClosed(t *testing.T) {
 	}
 }
 
+func TestSelectCompactionInputProjectsOversizedInitiatorButKeepsToolProtocol(t *testing.T) {
+	direct := testMsg("direct-1", llm.RoleUser, strings.Repeat("oversized ", 200))
+	direct.Kind = llm.MessageKindDirect
+	h := []llm.Message{
+		direct,
+		{ID: "tool-use-1", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "read"}}},
+		{ID: "tool-result-1", Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "call-1", Content: "contents"}}},
+	}
+
+	sel := SelectInput(h, Policy{KeepRecentTokens: 20})
+	if got := sel.OversizedInputIDs; len(got) != 1 || got[0] != "direct-1" {
+		t.Fatalf("oversized ids = %v, want direct-1", got)
+	}
+	if len(sel.SummaryInput) != 1 || sel.SummaryInput[0].ID != "direct-1" {
+		t.Fatalf("summary input = %+v, want projected direct initiator", sel.SummaryInput)
+	}
+	if got := sel.RetainedMessageIDs; len(got) != 2 || got[0] != "tool-use-1" || got[1] != "tool-result-1" {
+		t.Fatalf("retained protocol ids = %v, want tool use/result only", got)
+	}
+}
+
 func testMsg(id string, role llm.Role, text string) llm.Message {
 	m := llm.TextMessage(role, text)
 	m.ID = id

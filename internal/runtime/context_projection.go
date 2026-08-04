@@ -203,19 +203,44 @@ func (e *Engine) carryCompactionInputReferencesLocked(previous llm.Message, curr
 	if len(references) == 0 {
 		return nil, nil
 	}
+	var selected []llm.Message
+	for i := len(references) - 1; i >= 0; i-- {
+		candidate, err := e.projectCompactionInputReferencesLocked(references[i:], policy)
+		if err != nil {
+			return nil, err
+		}
+		if len(selected) == 0 || e.compactionInputReferenceTokens(candidate) <= policy.KeepRecentTokens {
+			selected = candidate
+			continue
+		}
+		break
+	}
+	return selected, nil
+}
+
+func (e *Engine) projectCompactionInputReferencesLocked(references []llm.Message, policy compactionPolicy) ([]llm.Message, error) {
 	textBlocks := 0
 	for _, msg := range references {
 		textBlocks += compactionProjectedTextBlockCount(msg)
 	}
 	projectionPolicy := compactionRetentionProjectionPolicyForBlockCount(policy, textBlocks)
+	projectedReferences := make([]llm.Message, len(references))
 	for i, msg := range references {
 		projected, _, err := e.projectMessageLocked(msg, projectionPolicy)
 		if err != nil {
 			return nil, fmt.Errorf("carry compaction input reference: %w", err)
 		}
-		references[i] = projected
+		projectedReferences[i] = projected
 	}
-	return references, nil
+	return projectedReferences, nil
+}
+
+func (e *Engine) compactionInputReferenceTokens(references []llm.Message) int {
+	text := appendCompactionInputReferences("", references)
+	if text == "" {
+		return 0
+	}
+	return e.estimateMessageTokens([]llm.Message{llm.TextMessage(llm.RoleUser, text)})
 }
 
 func hasRetainedInputReference(msg llm.Message) bool {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -723,7 +724,7 @@ func TestTurn_CompactionCarriesRetainedInputReferencesAcrossCompactions(t *testi
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 4000
 	eng.Compaction = DefaultCompactionPolicy()
-	eng.Compaction.KeepRecentTokens = 200
+	eng.Compaction.KeepRecentTokens = 1000
 	eng.Compaction.ReserveTokens = 1000
 	eng.Compaction.SummaryMaxTokens = 500
 	eng.Compaction.UserInputInlineMaxBytes = 1 << 20
@@ -800,6 +801,72 @@ func TestTurn_CompactionCarriesRetainedInputReferencesAcrossCompactions(t *testi
 	}
 	if got := string(readProjectedArtifact(t, eng, firstArtifact)); got != firstInput {
 		t.Fatalf("first retained artifact changed: got %d bytes, want %d", len(got), len(firstInput))
+	}
+}
+
+func TestTurn_CompactionProjectsOversizedInputInsideExecutionTail(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary without raw initiator"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 4000
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 200
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 500
+	eng.Compaction.UserInputInlineMaxBytes = 1 << 20
+	initiator := llm.TextMessage(llm.RoleUser, "tool-request-head "+strings.Repeat("private-tool-request ", 1600)+" TOOL-REQUEST-TAIL")
+	initiator.ID = "direct-1"
+	initiator.Kind = llm.MessageKindDirect
+	toolUse := llm.Message{ID: "tool-use-1", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "read"}}}
+	toolResult := llm.Message{ID: "tool-result-1", Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "call-1", Content: "contents"}}}
+	for _, msg := range []llm.Message{initiator, toolUse, toolResult} {
+		if err := eng.Session.Append(msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := eng.Turn(context.Background(), "latest"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider histories = %d, want summary and answer requests", len(prov.histories))
+	}
+	active := prov.histories[1]
+	activeText := messagesText(active)
+	if strings.Contains(activeText, strings.Repeat("private-tool-request ", 20)) {
+		t.Fatalf("active context retained oversized tool initiator verbatim:\n%s", activeText)
+	}
+	for _, want := range []string{"summary without raw initiator", "TOOL-REQUEST-TAIL", "latest"} {
+		if !strings.Contains(activeText, want) {
+			t.Fatalf("active context missing %q:\n%s", want, activeText)
+		}
+	}
+	var compact llm.Message
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindCompact {
+			compact = msg
+		}
+	}
+	if compact.Compaction == nil || len(compact.Compaction.RetainedInputReferences) != 1 {
+		t.Fatalf("compact metadata = %+v, want projected initiator reference", compact.Compaction)
+	}
+	if slices.Contains(compact.Compaction.RetainedMessageIDs, initiator.ID) || !slices.Contains(compact.Compaction.RetainedMessageIDs, toolUse.ID) || !slices.Contains(compact.Compaction.RetainedMessageIDs, toolResult.ID) {
+		t.Fatalf("retained ids = %v, want tool protocol without raw initiator", compact.Compaction.RetainedMessageIDs)
+	}
+	if compact.Compaction.TokensAfter >= eng.ContextWindow-eng.Compaction.ReserveTokens {
+		t.Fatalf("tokens after = %d, want below trigger %d", compact.Compaction.TokensAfter, eng.ContextWindow-eng.Compaction.ReserveTokens)
+	}
+	var sawUse, sawResult bool
+	for _, msg := range active {
+		for _, block := range msg.Blocks {
+			sawUse = sawUse || block.Type == llm.BlockToolUse && block.ToolUseID == "call-1"
+			sawResult = sawResult || block.Type == llm.BlockToolResult && block.ToolUseID == "call-1"
+		}
+	}
+	if !sawUse || !sawResult {
+		t.Fatalf("active tool protocol closed = use:%t result:%t; history=%+v", sawUse, sawResult, active)
 	}
 }
 

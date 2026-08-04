@@ -46,8 +46,12 @@ func SelectInputWithEstimator(history []llm.Message, policy Policy, estimateMess
 	}
 
 	keep := chooseRetainedMessages(work, policy.KeepRecentTokens, estimateMessages)
-	oversizedInputID := newestOversizedInputID(work, keep, policy.KeepRecentTokens, estimateMessages)
+	oversizedInputID := newestOversizedInputID(work, policy.KeepRecentTokens, estimateMessages)
 	for _, msg := range work {
+		if msg.ID == oversizedInputID {
+			sel.SummaryInput = append(sel.SummaryInput, msg)
+			continue
+		}
 		if keep[msg.ID] {
 			sel.RetainedTail = append(sel.RetainedTail, msg)
 			if msg.ID != "" {
@@ -77,12 +81,12 @@ func SelectInputWithEstimator(history []llm.Message, policy Policy, estimateMess
 	return sel
 }
 
-func newestOversizedInputID(work []llm.Message, keep map[string]bool, budget int, estimateMessages func([]llm.Message) int) string {
+func newestOversizedInputID(work []llm.Message, budget int, estimateMessages func([]llm.Message) int) string {
 	if budget <= 0 {
 		return ""
 	}
 	for i := len(work) - 1; i >= 0; i-- {
-		if !isRealInput(work[i]) || keep[work[i].ID] {
+		if !isRealInput(work[i]) {
 			continue
 		}
 		if messageHasRetainableReference(work[i]) && estimateMessages(work[i:i+1]) > budget {

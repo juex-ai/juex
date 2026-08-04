@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,6 +191,43 @@ func TestProjectOversizedCompactionInputsSharesPreviewAcrossTextBlocks(t *testin
 	}
 	if len(paths) != len(msg.Blocks) {
 		t.Fatalf("artifact paths = %v, want %d distinct paths", paths, len(msg.Blocks))
+	}
+}
+
+func TestCarryCompactionInputReferencesPrunesOldestToCompleteBudget(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	var old []llm.Message
+	for i := range 40 {
+		old = append(old, llm.Message{
+			ID:   fmt.Sprintf("image-%02d", i),
+			Role: llm.RoleUser,
+			Kind: llm.MessageKindDirect,
+			Blocks: []llm.Block{{Type: llm.BlockImage, Media: &llm.MediaRef{
+				ArtifactPath:  fmt.Sprintf(".juex/artifacts/media/session/image-%02d.png", i),
+				MediaType:     "image/png",
+				SHA256:        strings.Repeat(fmt.Sprintf("%x", i%16), 64),
+				OriginalBytes: 1234 + i,
+				Width:         800,
+				Height:        600,
+			}}},
+		})
+	}
+	previous := llm.Message{Compaction: &llm.CompactionMetadata{RetainedInputReferences: old}}
+	policy := effectiveCompactionPolicy(DefaultCompactionPolicy(), DefaultContextWindowTokens)
+	policy.KeepRecentTokens = 200
+
+	got, err := eng.carryCompactionInputReferencesLocked(previous, nil, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 || len(got) >= len(old) {
+		t.Fatalf("retained references = %d, want bounded non-empty suffix below %d", len(got), len(old))
+	}
+	if got[len(got)-1].ID != old[len(old)-1].ID {
+		t.Fatalf("newest retained id = %q, want %q", got[len(got)-1].ID, old[len(old)-1].ID)
+	}
+	if tokens := eng.compactionInputReferenceTokens(got); tokens > policy.KeepRecentTokens && len(got) > 1 {
+		t.Fatalf("retained reference tokens = %d, want <= %d", tokens, policy.KeepRecentTokens)
 	}
 }
 
