@@ -66,7 +66,7 @@ func TestProjectMessageLockedDoesNotMutateOriginalBlocks(t *testing.T) {
 	}
 }
 
-func TestProjectMessageLockedTightensExistingUserInputPreview(t *testing.T) {
+func TestProjectCompactionRetentionMessageLockedTightensExistingUserInputPreview(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	original := "HEAD-" + strings.Repeat("middle ", 1000) + "-TAIL"
 	initial := DefaultCompactionPolicy()
@@ -92,7 +92,7 @@ func TestProjectMessageLockedTightensExistingUserInputPreview(t *testing.T) {
 		UserInputPreviewTailBytes: 1024,
 	}, projected)
 
-	tightened, stats, err := eng.projectMessageLocked(projected, retention)
+	tightened, stats, err := eng.projectCompactionRetentionMessageLocked(projected, retention)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +114,40 @@ func TestProjectMessageLockedTightensExistingUserInputPreview(t *testing.T) {
 	}
 	if got := string(readProjectedArtifact(t, eng, after)); got != original {
 		t.Fatalf("stored artifact changed: got %d bytes, want %d", len(got), len(original))
+	}
+}
+
+func TestProjectMessagesForProviderLockedPreservesExistingUserInputPreview(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	original := "HEAD-" + strings.Repeat("middle ", 1000) + "-TAIL"
+	initial := DefaultCompactionPolicy()
+	initial.UserInputInlineMaxBytes = 1
+	initial.UserInputPreviewHeadBytes = 1024
+	initial.UserInputPreviewTailBytes = 1024
+	projected, _, err := eng.projectMessageLocked(llm.Message{
+		ID:   "message-1",
+		Role: llm.RoleUser,
+		Blocks: []llm.Block{{
+			Type: llm.BlockText,
+			Text: original,
+		}},
+	}, effectiveCompactionPolicy(initial, DefaultContextWindowTokens))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tighter := effectiveCompactionPolicy(initial, DefaultContextWindowTokens)
+	tighter.UserInputPreviewHeadBytes = 8
+	tighter.UserInputPreviewTailBytes = 8
+
+	got, stats, err := eng.projectMessagesForProviderLocked([]llm.Message{projected}, tighter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stats.empty() {
+		t.Fatalf("projection stats = %+v, want empty", stats)
+	}
+	if got[0].Blocks[0].Text != projected.Blocks[0].Text || got[0].Blocks[0].Artifact.HeadBytes != projected.Blocks[0].Artifact.HeadBytes || got[0].Blocks[0].Artifact.TailBytes != projected.Blocks[0].Artifact.TailBytes {
+		t.Fatalf("ordinary provider projection tightened existing preview: got %+v, want %+v", got[0].Blocks[0], projected.Blocks[0])
 	}
 }
 

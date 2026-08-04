@@ -26,6 +26,14 @@ func (s projectionStats) empty() bool {
 }
 
 func (e *Engine) projectMessageLocked(msg llm.Message, policy compactionPolicy) (llm.Message, projectionStats, error) {
+	return e.projectMessageWithRetentionLocked(msg, policy, false)
+}
+
+func (e *Engine) projectCompactionRetentionMessageLocked(msg llm.Message, policy compactionPolicy) (llm.Message, projectionStats, error) {
+	return e.projectMessageWithRetentionLocked(msg, policy, true)
+}
+
+func (e *Engine) projectMessageWithRetentionLocked(msg llm.Message, policy compactionPolicy, tightenRetainedInput bool) (llm.Message, projectionStats, error) {
 	if e == nil || e.currentSession() == nil || !policy.Enabled {
 		return msg, projectionStats{}, nil
 	}
@@ -37,16 +45,18 @@ func (e *Engine) projectMessageLocked(msg llm.Message, policy compactionPolicy) 
 	for i := range msg.Blocks {
 		block := msg.Blocks[i]
 		if block.Artifact != nil {
-			projected, changed, err := e.tightenProjectedUserInput(block, policy)
-			if err != nil {
-				return msg, stats, err
-			}
-			if changed {
-				if clonedBlocks == nil {
-					clonedBlocks = make([]llm.Block, i, len(msg.Blocks))
-					copy(clonedBlocks, msg.Blocks[:i])
+			if tightenRetainedInput {
+				projected, changed, err := e.tightenProjectedUserInput(block, policy)
+				if err != nil {
+					return msg, stats, err
 				}
-				block = projected
+				if changed {
+					if clonedBlocks == nil {
+						clonedBlocks = make([]llm.Block, i, len(msg.Blocks))
+						copy(clonedBlocks, msg.Blocks[:i])
+					}
+					block = projected
+				}
 			}
 			if clonedBlocks != nil {
 				clonedBlocks = append(clonedBlocks, block)
@@ -124,7 +134,7 @@ func (e *Engine) projectOversizedCompactionInputsLocked(msgs []llm.Message, ids 
 			continue
 		}
 		projectionPolicy := compactionRetentionProjectionPolicy(policy, msg)
-		projected, stats, err := e.projectMessageLocked(msg, projectionPolicy)
+		projected, stats, err := e.projectCompactionRetentionMessageLocked(msg, projectionPolicy)
 		if err != nil {
 			return nil, nil, total, err
 		}
@@ -226,7 +236,7 @@ func (e *Engine) projectCompactionInputReferencesLocked(references []llm.Message
 	projectionPolicy := compactionRetentionProjectionPolicyForBlockCount(policy, textBlocks)
 	projectedReferences := make([]llm.Message, len(references))
 	for i, msg := range references {
-		projected, _, err := e.projectMessageLocked(msg, projectionPolicy)
+		projected, _, err := e.projectCompactionRetentionMessageLocked(msg, projectionPolicy)
 		if err != nil {
 			return nil, fmt.Errorf("carry compaction input reference: %w", err)
 		}
