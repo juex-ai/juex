@@ -85,6 +85,9 @@ func TestSelectCompactionInputSummarizesNewestRealInputWhenItExceedsBudget(t *te
 	if len(sel.RetainedTail) != 0 || len(sel.RetainedMessageIDs) != 0 {
 		t.Fatalf("oversized input retained outside budget: tail=%+v ids=%v", sel.RetainedTail, sel.RetainedMessageIDs)
 	}
+	if len(sel.OversizedInputIDs) != 1 || sel.OversizedInputIDs[0] != "direct-1" {
+		t.Fatalf("oversized input ids = %v, want direct-1", sel.OversizedInputIDs)
+	}
 	if len(sel.SummaryInput) != 1 || sel.SummaryInput[0].ID != "direct-1" {
 		t.Fatalf("summary input = %+v, want oversized direct input", sel.SummaryInput)
 	}

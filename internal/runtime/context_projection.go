@@ -97,6 +97,84 @@ func (e *Engine) projectMessagesForProviderLocked(msgs []llm.Message, policy com
 	return llm.FoldChunkedWriteHistoryForProvider(out), total, nil
 }
 
+func (e *Engine) projectOversizedCompactionInputsLocked(msgs []llm.Message, ids []string, policy compactionPolicy) ([]llm.Message, []llm.Message, projectionStats, error) {
+	if len(ids) == 0 {
+		return msgs, nil, projectionStats{}, nil
+	}
+	wanted := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	out := append([]llm.Message(nil), msgs...)
+	projectionPolicy := compactionRetentionProjectionPolicy(policy)
+	var retained []llm.Message
+	var total projectionStats
+	for i, msg := range out {
+		if !wanted[msg.ID] {
+			continue
+		}
+		projected, stats, err := e.projectMessageLocked(msg, projectionPolicy)
+		if err != nil {
+			return nil, nil, total, err
+		}
+		out[i] = projected
+		if hasUserInputArtifact(projected) {
+			retained = append(retained, projected)
+		}
+		total.UserInputsExternalized += stats.UserInputsExternalized
+		total.ToolResultsExternalized += stats.ToolResultsExternalized
+		total.BytesExternalized += stats.BytesExternalized
+	}
+	return out, retained, total, nil
+}
+
+func compactionRetentionProjectionPolicy(policy compactionPolicy) compactionPolicy {
+	policy.UserInputInlineMaxBytes = 1
+	previewBytes := policy.KeepRecentTokens
+	if previewBytes < 0 {
+		previewBytes = 0
+	}
+	if policy.UserInputPreviewHeadBytes+policy.UserInputPreviewTailBytes > previewBytes {
+		policy.UserInputPreviewHeadBytes = previewBytes / 2
+		policy.UserInputPreviewTailBytes = previewBytes - policy.UserInputPreviewHeadBytes
+	}
+	return policy
+}
+
+func hasUserInputArtifact(msg llm.Message) bool {
+	for _, block := range msg.Blocks {
+		if block.Artifact != nil && block.Artifact.SourceKind == "user_input" {
+			return true
+		}
+	}
+	return false
+}
+
+func appendCompactionInputReferences(summary string, messages []llm.Message) string {
+	if len(messages) == 0 {
+		return summary
+	}
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(summary))
+	b.WriteString("\n\nRetained Input References\n")
+	for _, msg := range messages {
+		fmt.Fprintf(&b, "\nMessage %s", msg.ID)
+		if msg.Kind != "" {
+			fmt.Fprintf(&b, " (%s)", msg.Kind)
+		}
+		b.WriteString(":\n")
+		for _, block := range msg.Blocks {
+			if block.Type == llm.BlockText && block.Artifact != nil && block.Artifact.SourceKind == "user_input" {
+				b.WriteString(block.Text)
+				if !strings.HasSuffix(block.Text, "\n") {
+					b.WriteByte('\n')
+				}
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
 func projectToolUseInputsForProvider(msg llm.Message) llm.Message {
 	var cloned []llm.Block
 	for i, block := range msg.Blocks {

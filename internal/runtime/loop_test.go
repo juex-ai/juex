@@ -543,12 +543,13 @@ func TestTurn_CompactionSummarizesRealInputThatExceedsRetentionBudget(t *testing
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.ContextWindow = 400
+	eng.ContextWindow = 4000
 	eng.Compaction = DefaultCompactionPolicy()
-	eng.Compaction.KeepRecentTokens = 30
-	eng.Compaction.ReserveTokens = 100
+	eng.Compaction.KeepRecentTokens = 200
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 500
 	eng.Compaction.UserInputInlineMaxBytes = 1 << 20
-	oversized := "oversized-request " + strings.Repeat("private-detail ", 300)
+	oversized := "oversized-request " + strings.Repeat("private-detail ", 1200) + "TAIL-SAFETY-GUARD"
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, oversized)); err != nil {
 		t.Fatal(err)
 	}
@@ -563,11 +564,31 @@ func TestTurn_CompactionSummarizesRealInputThatExceedsRetentionBudget(t *testing
 		t.Fatalf("provider histories = %d, want summary and answer requests", len(prov.histories))
 	}
 	active := prov.histories[1]
-	if strings.Contains(messagesText(active), "private-detail private-detail") {
+	if strings.Contains(messagesText(active), strings.Repeat("private-detail ", 20)) {
 		t.Fatalf("oversized retained input leaked past compact budget:\n%s", messagesText(active))
 	}
-	if !strings.Contains(messagesText(active), "summary of oversized request") || !strings.Contains(messagesText(active), "latest") {
+	if !strings.Contains(messagesText(prov.histories[0]), "TAIL-SAFETY-GUARD") {
+		t.Fatalf("summary request lost the oversized input tail:\n%s", messagesText(prov.histories[0]))
+	}
+	if !strings.Contains(messagesText(active), "summary of oversized request") || !strings.Contains(messagesText(active), "TAIL-SAFETY-GUARD") || !strings.Contains(messagesText(active), "User input stored outside context.") || !strings.Contains(messagesText(active), "path:") || !strings.Contains(messagesText(active), "latest") {
 		t.Fatalf("active context missing summary or incoming request: %+v", active)
+	}
+	activeText := messagesText(active)
+	pathStart := strings.Index(activeText, "path: ")
+	if pathStart < 0 {
+		t.Fatalf("active context missing recoverable artifact path:\n%s", activeText)
+	}
+	pathEnd := strings.IndexByte(activeText[pathStart:], '\n')
+	if pathEnd < 0 {
+		t.Fatalf("active context has unterminated artifact path:\n%s", activeText)
+	}
+	artifactPath := strings.TrimSpace(activeText[pathStart+len("path: ") : pathStart+pathEnd])
+	artifactData, err := os.ReadFile(filepath.Join(eng.WorkDir, filepath.FromSlash(artifactPath)))
+	if err != nil {
+		t.Fatalf("read retained input artifact: %v", err)
+	}
+	if string(artifactData) != oversized {
+		t.Fatalf("retained input artifact length = %d, want original %d", len(artifactData), len(oversized))
 	}
 	compact := eng.Session.History[len(eng.Session.History)-3]
 	if compact.Kind != llm.MessageKindCompact || compact.Compaction == nil {

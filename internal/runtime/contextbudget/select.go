@@ -8,6 +8,7 @@ type Selection struct {
 	SummaryInput       []llm.Message
 	RetainedTail       []llm.Message
 	RetainedMessageIDs []string
+	OversizedInputIDs  []string
 	FirstKeptMessageID string
 	TailStartMessageID string
 	LatestCompactIndex int
@@ -45,6 +46,7 @@ func SelectInputWithEstimator(history []llm.Message, policy Policy, estimateMess
 	}
 
 	keep := chooseRetainedMessages(work, policy.KeepRecentTokens, estimateMessages)
+	oversizedInputID := newestOversizedInputID(work, keep, policy.KeepRecentTokens, estimateMessages)
 	for _, msg := range work {
 		if keep[msg.ID] {
 			sel.RetainedTail = append(sel.RetainedTail, msg)
@@ -55,8 +57,13 @@ func SelectInputWithEstimator(history []llm.Message, policy Policy, estimateMess
 		}
 		sel.SummaryInput = append(sel.SummaryInput, msg)
 	}
+	if oversizedInputID != "" {
+		sel.OversizedInputIDs = append(sel.OversizedInputIDs, oversizedInputID)
+	}
 	if len(sel.RetainedTail) > 0 {
 		sel.FirstKeptMessageID = sel.RetainedTail[0].ID
+	} else if oversizedInputID != "" {
+		sel.FirstKeptMessageID = oversizedInputID
 	}
 	// A single retained real input may be the entire transcript. Include it in
 	// the summary request as well so manual compaction still produces a useful
@@ -68,6 +75,31 @@ func SelectInputWithEstimator(history []llm.Message, policy Policy, estimateMess
 		sel.TailStartMessageID = work[start].ID
 	}
 	return sel
+}
+
+func newestOversizedInputID(work []llm.Message, keep map[string]bool, budget int, estimateMessages func([]llm.Message) int) string {
+	if budget <= 0 {
+		return ""
+	}
+	for i := len(work) - 1; i >= 0; i-- {
+		if !isRealInput(work[i]) || keep[work[i].ID] {
+			continue
+		}
+		if messageHasText(work[i]) && estimateMessages(work[i:i+1]) > budget {
+			return work[i].ID
+		}
+		return ""
+	}
+	return ""
+}
+
+func messageHasText(msg llm.Message) bool {
+	for _, block := range msg.Blocks {
+		if block.Type == llm.BlockText && block.Text != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func compactionRelevantMessages(messages []llm.Message) []llm.Message {

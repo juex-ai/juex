@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/llm"
 )
@@ -233,12 +234,26 @@ func writeRedactedReasoningMetadata(sb *strings.Builder, block llm.Block) {
 }
 
 func writeSummaryField(sb *strings.Builder, label, value string, maxChars int) {
-	truncated := truncateForSummary(value, maxChars)
+	truncated := truncateTextForSummary(value, maxChars)
 	if truncated != value {
-		fmt.Fprintf(sb, "%s: %s ...(truncated, total %d bytes)\n", label, truncated, len(value))
+		fmt.Fprintf(sb, "%s: %s\n", label, truncated)
 		return
 	}
 	fmt.Fprintf(sb, "%s: %s\n", label, value)
+}
+
+func truncateTextForSummary(s string, n int) string {
+	if n <= 0 || len(s) <= n {
+		return s
+	}
+	headBytes := n / 2
+	tailBytes := n - headBytes
+	headEnd := utf8PrefixEnd(s, headBytes)
+	tailStart := utf8SuffixStart(s, len(s)-tailBytes)
+	if tailStart < headEnd {
+		tailStart = headEnd
+	}
+	return fmt.Sprintf("%s\n...(%d bytes omitted; total %d bytes)...\n%s", s[:headEnd], tailStart-headEnd, len(s), s[tailStart:])
 }
 
 func truncateForSummary(s string, n int) string {
@@ -253,4 +268,30 @@ func truncateForSummary(s string, n int) string {
 		limit = i
 	}
 	return s[:limit]
+}
+
+func utf8PrefixEnd(s string, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if n >= len(s) {
+		return len(s)
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return n
+}
+
+func utf8SuffixStart(s string, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if n >= len(s) {
+		return len(s)
+	}
+	for n < len(s) && !utf8.RuneStart(s[n]) {
+		n++
+	}
+	return n
 }

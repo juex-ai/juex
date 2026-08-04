@@ -152,6 +152,17 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	}
 	instructions = mergeCompactInstructions(policy.Instructions, instructions)
 	instructions = appendCompactHookInstructions(instructions, preResults)
+	summaryInput, retainedInputReferences, projection, err := e.projectOversizedCompactionInputsLocked(selection.SummaryInput, selection.OversizedInputIDs, policy)
+	if err != nil {
+		compactErr := newCompactionError(ctx, err)
+		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+			Reason: reason,
+			Auto:   auto,
+			Error:  compactErr.Error(),
+		}})
+		return CompactionResult{}, compactErr
+	}
+	e.emitProjectionApplied(turnID, projection)
 
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
@@ -167,7 +178,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		KeepRecentTokens: policy.KeepRecentTokens,
 	}})
 
-	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, selection.PreviousSummary, selection.SummaryInput, summaryState, policy, instructions)
+	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, selection.PreviousSummary, summaryInput, summaryState, policy, instructions)
 	if err != nil {
 		sess.RecordResponseUsage(generation.Usage, nil)
 		compactErr := newCompactionError(ctx, err)
@@ -180,7 +191,8 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	}
 	resp := generation.Response
 	summaryProvider := generation.Provider
-	summary := generation.Summary
+	summaryChars := len(generation.Summary)
+	summary := appendCompactionInputReferences(generation.Summary, retainedInputReferences)
 	if contextErr := cancellation.ContextError(ctx); contextErr != nil {
 		compactErr := newCompactionError(ctx, contextErr)
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
@@ -204,7 +216,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		TailStartMessageID: selection.TailStartMessageID,
 		RetainedMessageIDs: append([]string(nil), selection.RetainedMessageIDs...),
 		TokensBefore:       tokensBefore,
-		SummaryChars:       len(summary),
+		SummaryChars:       summaryChars,
 		SummaryModel:       model,
 	}
 	if selection.HasPreviousSummary {
@@ -238,7 +250,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		Auto:               auto,
 		TokensBefore:       tokensBefore,
 		TokensAfter:        tokensAfter,
-		SummaryChars:       len(summary),
+		SummaryChars:       summaryChars,
 		SummaryModel:       model,
 		TailStartMessageID: selection.TailStartMessageID,
 		FirstKeptMessageID: selection.FirstKeptMessageID,

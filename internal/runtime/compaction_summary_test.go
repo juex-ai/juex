@@ -27,14 +27,14 @@ func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult
 func TestBuildCompactionSummaryRequest_TruncatesTextAndToolUseInput(t *testing.T) {
 	input := []llm.Message{
 		{ID: "large", Role: llm.RoleUser, Blocks: []llm.Block{
-			{Type: llm.BlockText, Text: strings.Repeat("t", 50)},
+			{Type: llm.BlockText, Text: "HEAD-" + strings.Repeat("t", 40) + "-TAIL"},
 			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "write", Input: map[string]any{"payload": strings.Repeat("x", 50)}},
 		}},
 	}
 	_, hist := buildCompactionSummaryRequest("", llm.Message{}, input, compactionSummaryState{}, compactionPolicy{ToolResultMaxChars: 10}, "")
 	body := hist[0].FirstText()
-	if !strings.Contains(body, "text: tttttttttt ...(truncated, total 50 bytes)") {
-		t.Fatalf("text was not truncated:\n%s", body)
+	if !strings.Contains(body, "HEAD-") || !strings.Contains(body, "-TAIL") || !strings.Contains(body, "omitted") {
+		t.Fatalf("text did not preserve a bounded head and tail:\n%s", body)
 	}
 	if !strings.Contains(body, "tool_use tu1 write:") || !strings.Contains(body, "truncated") {
 		t.Fatalf("tool use input was not truncated:\n%s", body)
