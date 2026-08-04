@@ -339,6 +339,7 @@ type CompactionMetadata struct {
     PreviousSummaryID  string
     FirstKeptMessageID string
     RetainedMessageIDs []string
+    RetainedInputReferences []Message // structured artifact/media references inherited by later compactions
     TailStartMessageID string
     TokensBefore       int
     TokensAfter        int

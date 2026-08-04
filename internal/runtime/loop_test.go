@@ -713,6 +713,96 @@ func TestTurn_CompactionBoundsSharedPreviewForMultipleProjectedBlocks(t *testing
 	}
 }
 
+func TestTurn_CompactionCarriesRetainedInputReferencesAcrossCompactions(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "first summary without references"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "first answer"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "second summary without references"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "second answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 4000
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 200
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 500
+	eng.Compaction.UserInputInlineMaxBytes = 1 << 20
+	firstInput := "first-head " + strings.Repeat("first-private ", 1600) + " FIRST-TAIL"
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, firstInput)); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "working")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Turn(context.Background(), "first-latest"); err != nil {
+		t.Fatal(err)
+	}
+	var firstCompact llm.Message
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindCompact {
+			firstCompact = msg
+		}
+	}
+	if firstCompact.Compaction == nil || len(firstCompact.Compaction.RetainedInputReferences) != 1 {
+		t.Fatalf("first compact references = %+v", firstCompact.Compaction)
+	}
+	firstReference := firstCompact.Compaction.RetainedInputReferences[0]
+	firstArtifact := firstReference.Blocks[0].Artifact
+	if firstArtifact == nil {
+		t.Fatalf("first retained reference = %+v", firstReference)
+	}
+
+	secondInput := "second-head " + strings.Repeat("second-private ", 1600) + " SECOND-TAIL"
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, secondInput)); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "more work")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Turn(context.Background(), "second-latest"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 4 {
+		t.Fatalf("provider histories = %d, want two summary and two answer requests", len(prov.histories))
+	}
+	var compacts []llm.Message
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindCompact {
+			compacts = append(compacts, msg)
+		}
+	}
+	if len(compacts) != 2 {
+		t.Fatalf("compact messages = %d, want 2", len(compacts))
+	}
+	latest := compacts[1]
+	if latest.Compaction == nil || len(latest.Compaction.RetainedInputReferences) != 2 {
+		t.Fatalf("latest compact references = %+v, want inherited and current", latest.Compaction)
+	}
+	activeText := messagesText(prov.histories[3])
+	for _, want := range []string{"second summary without references", firstArtifact.StoredPath, firstArtifact.SHA256, "FIRST-TAIL", "SECOND-TAIL", "second-latest"} {
+		if !strings.Contains(activeText, want) {
+			t.Fatalf("active context missing carried reference %q:\n%s", want, activeText)
+		}
+	}
+	previewBytes := 0
+	for _, reference := range latest.Compaction.RetainedInputReferences {
+		for _, block := range reference.Blocks {
+			if block.Artifact != nil {
+				previewBytes += block.Artifact.HeadBytes + block.Artifact.TailBytes
+			}
+		}
+	}
+	if previewBytes > eng.Compaction.KeepRecentTokens {
+		t.Fatalf("carried preview bytes = %d, want <= %d", previewBytes, eng.Compaction.KeepRecentTokens)
+	}
+	if latest.Compaction.TokensAfter >= eng.ContextWindow-eng.Compaction.ReserveTokens {
+		t.Fatalf("tokens after = %d, want below trigger %d", latest.Compaction.TokensAfter, eng.ContextWindow-eng.Compaction.ReserveTokens)
+	}
+	if got := string(readProjectedArtifact(t, eng, firstArtifact)); got != firstInput {
+		t.Fatalf("first retained artifact changed: got %d bytes, want %d", len(got), len(firstInput))
+	}
+}
+
 func TestTurn_CompactionKeepsOversizedImageOnlyInputReference(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "summary with image reference"), StopReason: llm.StopEndTurn},

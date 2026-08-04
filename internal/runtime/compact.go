@@ -163,6 +163,16 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		return CompactionResult{}, compactErr
 	}
 	e.emitProjectionApplied(turnID, projection)
+	retainedInputReferences, err = e.carryCompactionInputReferencesLocked(selection.PreviousSummary, retainedInputReferences, policy)
+	if err != nil {
+		compactErr := newCompactionError(ctx, err)
+		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+			Reason: reason,
+			Auto:   auto,
+			Error:  compactErr.Error(),
+		}})
+		return CompactionResult{}, compactErr
+	}
 
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
@@ -210,14 +220,15 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	msg := llm.TextMessage(llm.RoleUser, compactMessageText(summary))
 	msg.Kind = llm.MessageKindCompact
 	msg.Compaction = &llm.CompactionMetadata{
-		Auto:               auto,
-		Reason:             reason,
-		FirstKeptMessageID: selection.FirstKeptMessageID,
-		TailStartMessageID: selection.TailStartMessageID,
-		RetainedMessageIDs: append([]string(nil), selection.RetainedMessageIDs...),
-		TokensBefore:       tokensBefore,
-		SummaryChars:       summaryChars,
-		SummaryModel:       model,
+		Auto:                    auto,
+		Reason:                  reason,
+		FirstKeptMessageID:      selection.FirstKeptMessageID,
+		TailStartMessageID:      selection.TailStartMessageID,
+		RetainedMessageIDs:      append([]string(nil), selection.RetainedMessageIDs...),
+		RetainedInputReferences: append([]llm.Message(nil), retainedInputReferences...),
+		TokensBefore:            tokensBefore,
+		SummaryChars:            summaryChars,
+		SummaryModel:            model,
 	}
 	if selection.HasPreviousSummary {
 		msg.Compaction.PreviousSummaryID = selection.PreviousSummary.ID

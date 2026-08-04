@@ -175,9 +175,12 @@ Projection rules:
    All text blocks in one input share that reference preview budget.
    Image-only inputs keep their durable media path, type, digest, byte size, and
    dimensions in the same retained-reference section.
-4. Keep compact summaries short and structured; do not ask them to carry system
+4. Persist retained input references in compaction metadata and inherit them
+   deterministically across later compactions; model summaries are not the
+   authority for artifact paths or digests.
+5. Keep compact summaries short and structured; do not ask them to carry system
    instructions, AGENTS.md, tool schemas, or cwd. Those are rebuilt.
-5. Assistant text/reasoning projection is future work. Today, reasoning replay
+6. Assistant text/reasoning projection is future work. Today, reasoning replay
    is controlled by provider capabilities and existing block metadata.
 
 This remains a runtime responsibility, not a provider responsibility.

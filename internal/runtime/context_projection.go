@@ -140,6 +140,10 @@ func (e *Engine) projectOversizedCompactionInputsLocked(msgs []llm.Message, ids 
 }
 
 func compactionRetentionProjectionPolicy(policy compactionPolicy, msg llm.Message) compactionPolicy {
+	return compactionRetentionProjectionPolicyForBlockCount(policy, compactionProjectedTextBlockCount(msg))
+}
+
+func compactionRetentionProjectionPolicyForBlockCount(policy compactionPolicy, textBlocks int) compactionPolicy {
 	policy.UserInputInlineMaxBytes = 1
 	previewBytes := policy.KeepRecentTokens
 	if previewBytes < 0 {
@@ -148,7 +152,6 @@ func compactionRetentionProjectionPolicy(policy compactionPolicy, msg llm.Messag
 	if configured := policy.UserInputPreviewHeadBytes + policy.UserInputPreviewTailBytes; configured < previewBytes {
 		previewBytes = configured
 	}
-	textBlocks := compactionProjectedTextBlockCount(msg)
 	if textBlocks > 0 {
 		previewBytes /= textBlocks
 	}
@@ -171,6 +174,48 @@ func compactionProjectedTextBlockCount(msg llm.Message) int {
 		}
 	}
 	return count
+}
+
+func (e *Engine) carryCompactionInputReferencesLocked(previous llm.Message, current []llm.Message, policy compactionPolicy) ([]llm.Message, error) {
+	var references []llm.Message
+	positions := map[string]int{}
+	add := func(msg llm.Message) {
+		if !hasRetainedInputReference(msg) {
+			return
+		}
+		if msg.ID != "" {
+			if index, ok := positions[msg.ID]; ok {
+				references[index] = msg
+				return
+			}
+			positions[msg.ID] = len(references)
+		}
+		references = append(references, msg)
+	}
+	if previous.Compaction != nil {
+		for _, msg := range previous.Compaction.RetainedInputReferences {
+			add(msg)
+		}
+	}
+	for _, msg := range current {
+		add(msg)
+	}
+	if len(references) == 0 {
+		return nil, nil
+	}
+	textBlocks := 0
+	for _, msg := range references {
+		textBlocks += compactionProjectedTextBlockCount(msg)
+	}
+	projectionPolicy := compactionRetentionProjectionPolicyForBlockCount(policy, textBlocks)
+	for i, msg := range references {
+		projected, _, err := e.projectMessageLocked(msg, projectionPolicy)
+		if err != nil {
+			return nil, fmt.Errorf("carry compaction input reference: %w", err)
+		}
+		references[i] = projected
+	}
+	return references, nil
 }
 
 func hasRetainedInputReference(msg llm.Message) bool {
