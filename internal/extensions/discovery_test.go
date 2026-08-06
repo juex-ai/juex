@@ -171,6 +171,8 @@ func TestDiscoverRejectsInvalidRequirements(t *testing.T) {
 		{name: "empty description", requirements: `[{"name":"CLI","description":"","url":"https://example.com"}]`, want: "requirements[0].description must not be empty"},
 		{name: "missing url", requirements: `[{"name":"CLI","description":"Install it."}]`, want: "requirements[0].url is required"},
 		{name: "empty url", requirements: `[{"name":"CLI","description":"Install it.","url":""}]`, want: "requirements[0].url must not be empty"},
+		{name: "leading URL whitespace", requirements: `[{"name":"CLI","description":"Install it.","url":" https://example.com/install"}]`, want: "must not have leading or trailing whitespace"},
+		{name: "trailing URL whitespace", requirements: `[{"name":"CLI","description":"Install it.","url":"https://example.com/install "}]`, want: "must not have leading or trailing whitespace"},
 		{name: "relative url", requirements: `[{"name":"CLI","description":"Install it.","url":"/install"}]`, want: "absolute HTTP or HTTPS URL"},
 		{name: "unsupported scheme", requirements: `[{"name":"CLI","description":"Install it.","url":"file:///tmp/install"}]`, want: "absolute HTTP or HTTPS URL"},
 		{name: "missing host", requirements: `[{"name":"CLI","description":"Install it.","url":"https:///install"}]`, want: "absolute HTTP or HTTPS URL"},

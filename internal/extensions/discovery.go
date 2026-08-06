@@ -362,6 +362,9 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 		if err != nil {
 			return nil, err
 		}
+		if strings.TrimSpace(requirementURL) != requirementURL {
+			return nil, fmt.Errorf("%s.url must not have leading or trailing whitespace", prefix)
+		}
 		parsedURL, err := url.Parse(requirementURL)
 		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Hostname() == "" {
 			return nil, fmt.Errorf("%s.url must be an absolute HTTP or HTTPS URL", prefix)
