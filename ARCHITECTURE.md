@@ -2248,9 +2248,11 @@ copy, while unselected installation directories are inert. Manifest version 1
 requires a directory-matching name and SemVer version. Duplicate JSON keys and
 invalid known fields are rejected; unknown fields are ignored at every
 supported manifest object boundary. Its optional flat `requirements` array
-contains ordered informational `name`, `description`, and absolute HTTP or
-HTTPS `url` entries. Requirements are projected to Runtime status without
-detection, command execution, installation, or startup gating. The optional
+contains ordered informational non-empty `name`, `description`, and `url`
+strings. Requirements are projected unchanged to Runtime status without URL
+parsing, detection, command execution, installation, or startup gating. The
+Web boundary alone decides whether a value is a safe absolute HTTP or HTTPS
+link; other values remain plain text. The optional
 `agent.environment.variables` map
 declares Agent-scoped defaults. `internal/app` resolves its four Juex-owned
 placeholders in the declaring Extension context, merges defaults below every

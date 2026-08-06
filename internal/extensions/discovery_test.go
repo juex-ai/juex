@@ -171,28 +171,6 @@ func TestDiscoverRejectsInvalidRequirements(t *testing.T) {
 		{name: "empty description", requirements: `[{"name":"CLI","description":"","url":"https://example.com"}]`, want: "requirements[0].description must not be empty"},
 		{name: "missing url", requirements: `[{"name":"CLI","description":"Install it."}]`, want: "requirements[0].url is required"},
 		{name: "empty url", requirements: `[{"name":"CLI","description":"Install it.","url":""}]`, want: "requirements[0].url must not be empty"},
-		{name: "leading URL whitespace", requirements: `[{"name":"CLI","description":"Install it.","url":" https://example.com/install"}]`, want: "must not have leading or trailing whitespace"},
-		{name: "trailing URL whitespace", requirements: `[{"name":"CLI","description":"Install it.","url":"https://example.com/install "}]`, want: "must not have leading or trailing whitespace"},
-		{name: "relative url", requirements: `[{"name":"CLI","description":"Install it.","url":"/install"}]`, want: "absolute HTTP or HTTPS URL"},
-		{name: "unsupported scheme", requirements: `[{"name":"CLI","description":"Install it.","url":"file:///tmp/install"}]`, want: "absolute HTTP or HTTPS URL"},
-		{name: "missing host", requirements: `[{"name":"CLI","description":"Install it.","url":"https:///install"}]`, want: "absolute HTTP or HTTPS URL"},
-		{name: "empty hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://user@:80/install"}]`, want: "absolute HTTP or HTTPS URL"},
-		{name: "invalid numeric hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://999.999.999.999/install"}]`, want: "valid hostname"},
-		{name: "invalid hexadecimal IPv4 hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://0x100.0x100.0x100.0x100/install"}]`, want: "valid hostname"},
-		{name: "invalid octal IPv4 hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://0400.0400.0400.0400/install"}]`, want: "valid hostname"},
-		{name: "invalid octal digit IPv4 hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://09/install"}]`, want: "valid hostname"},
-		{name: "invalid numeric top-level label", requirements: `[{"name":"CLI","description":"Install it.","url":"https://example.123/install"}]`, want: "valid hostname"},
-		{name: "invalid Unicode hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://\u200d.com/install"}]`, want: "valid hostname"},
-		{name: "IDNA mapped empty hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://\u00ad/install"}]`, want: "valid hostname"},
-		{name: "less-than hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://exa<mple.com/install"}]`, want: "valid hostname"},
-		{name: "greater-than hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://exa>mple.com/install"}]`, want: "valid hostname"},
-		{name: "caret hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://exa^mple.com/install"}]`, want: "absolute HTTP or HTTPS URL"},
-		{name: "pipe hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://exa|mple.com/install"}]`, want: "absolute HTTP or HTTPS URL"},
-		{name: "percent hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://exa%25mple.com/install"}]`, want: "valid hostname"},
-		{name: "bracketed domain hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://[example.com]/install"}]`, want: "absolute HTTP or HTTPS URL"},
-		{name: "bracketed IPv4 hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://[127.0.0.1]/install"}]`, want: "absolute HTTP or HTTPS URL"},
-		{name: "out of range port", requirements: `[{"name":"CLI","description":"Install it.","url":"https://example.com:99999/install"}]`, want: "valid port"},
-		{name: "zero padded out of range port", requirements: `[{"name":"CLI","description":"Install it.","url":"https://example.com:00000000000065536/install"}]`, want: "valid port"},
 		{name: "duplicate item key", requirements: `[{"name":"CLI","name":"Other","description":"Install it.","url":"https://example.com"}]`, want: "duplicate JSON key"},
 	}
 	for _, tt := range tests {
@@ -212,15 +190,11 @@ func TestDiscoverRejectsInvalidRequirements(t *testing.T) {
 	}
 }
 
-func TestDiscoverAcceptsBrowserCompatibleNumericRequirementURLs(t *testing.T) {
+func TestDiscoverPreservesInformationalRequirementURLs(t *testing.T) {
 	for _, requirementURL := range []string{
-		"https://[2001:db8::1]:443/install",
-		"https://0x7f.0.0.1/install",
-		"https://0177.0.0.1/install",
-		"https://127.1/install",
-		"https://example.com:00000000000000000000000000000080/install",
-		"https://foo_bar.example/install",
-		"https://-internal.example/install",
+		"https://%65xample.com/install",
+		"extension-docs",
+		"https://example.com/docs ",
 	} {
 		t.Run(requirementURL, func(t *testing.T) {
 			root := t.TempDir()

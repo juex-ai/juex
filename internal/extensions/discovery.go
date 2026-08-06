@@ -7,17 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/juex-ai/juex/internal/environment"
-	"golang.org/x/net/idna"
 )
 
 const (
@@ -26,20 +22,7 @@ const (
 	manifestFilename = "juex.extension.json"
 )
 
-var (
-	semVerPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`)
-	// Match WHATWG's non-strict UTS #46 host mapping rather than DNS
-	// registration rules; the resulting URL is consumed by the browser.
-	browserURLIDNAProfile = idna.New(
-		idna.MapForLookup(),
-		idna.StrictDomainName(false),
-		idna.CheckHyphens(false),
-		idna.CheckJoiners(true),
-		idna.BidiRule(),
-		idna.Transitional(false),
-		idna.VerifyDNSLength(false),
-	)
-)
+var semVerPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`)
 
 type Scope string
 
@@ -375,29 +358,6 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 		if err != nil {
 			return nil, err
 		}
-		if strings.TrimSpace(requirementURL) != requirementURL {
-			return nil, fmt.Errorf("%s.url must not have leading or trailing whitespace", prefix)
-		}
-		parsedURL, err := url.Parse(requirementURL)
-		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Hostname() == "" {
-			return nil, fmt.Errorf("%s.url must be an absolute HTTP or HTTPS URL", prefix)
-		}
-		hostname := parsedURL.Hostname()
-		hostIP := net.ParseIP(hostname)
-		if strings.HasPrefix(parsedURL.Host, "[") && (hostIP == nil || !strings.Contains(hostname, ":")) {
-			return nil, fmt.Errorf("%s.url must use a valid hostname", prefix)
-		}
-		if hostIP == nil {
-			asciiHostname, err := browserURLIDNAProfile.ToASCII(hostname)
-			if err != nil || asciiHostname == "" || containsForbiddenWHATWGDomainCodePoint(asciiHostname) || isInvalidWHATWGIPv4Hostname(asciiHostname) {
-				return nil, fmt.Errorf("%s.url must use a valid hostname", prefix)
-			}
-		}
-		if port := parsedURL.Port(); port != "" {
-			if !isValidURLPort(port) {
-				return nil, fmt.Errorf("%s.url must use a valid port", prefix)
-			}
-		}
 		requirements = append(requirements, ManifestRequirement{
 			Name:        name,
 			Description: description,
@@ -405,111 +365,6 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 		})
 	}
 	return requirements, nil
-}
-
-func containsForbiddenWHATWGDomainCodePoint(hostname string) bool {
-	for _, char := range hostname {
-		if char <= 0x20 || char == 0x7f || strings.ContainsRune("%#/:<>?@[\\]^|", char) {
-			return true
-		}
-	}
-	return false
-}
-
-func isValidURLPort(port string) bool {
-	if !isASCIIDigits(port) {
-		return false
-	}
-	normalized := strings.TrimLeft(port, "0")
-	if normalized == "" || len(normalized) < 5 {
-		return true
-	}
-	return len(normalized) == 5 && normalized <= "65535"
-}
-
-// isInvalidWHATWGIPv4Hostname mirrors the browser's numeric-host rules so a
-// manifest URL accepted here remains usable by the frontend URL parser.
-func isInvalidWHATWGIPv4Hostname(hostname string) bool {
-	parts := strings.Split(hostname, ".")
-	if len(parts) > 1 && parts[len(parts)-1] == "" {
-		parts = parts[:len(parts)-1]
-	}
-	if len(parts) == 0 {
-		return false
-	}
-	last := parts[len(parts)-1]
-	_, lastHasNumericSyntax, _ := parseWHATWGIPv4Number(last)
-	if !isASCIIDigits(last) && !lastHasNumericSyntax {
-		return false
-	}
-	if len(parts) > 4 {
-		return true
-	}
-	numbers := make([]uint64, 0, len(parts))
-	for _, part := range parts {
-		number, hasNumericSyntax, inRange := parseWHATWGIPv4Number(part)
-		if !hasNumericSyntax || !inRange {
-			return true
-		}
-		numbers = append(numbers, number)
-	}
-	for _, number := range numbers[:len(numbers)-1] {
-		if number > 255 {
-			return true
-		}
-	}
-	lastLimit := uint64(1) << (8 * (5 - len(numbers)))
-	return numbers[len(numbers)-1] >= lastLimit
-}
-
-func parseWHATWGIPv4Number(input string) (value uint64, hasNumericSyntax, inRange bool) {
-	if input == "" {
-		return 0, false, false
-	}
-	base := 10
-	digits := input
-	if len(input) >= 2 && input[0] == '0' && (input[1] == 'x' || input[1] == 'X') {
-		base = 16
-		digits = input[2:]
-	} else if len(input) >= 2 && input[0] == '0' {
-		base = 8
-		digits = input[1:]
-	}
-	if digits == "" {
-		return 0, true, true
-	}
-	for _, char := range digits {
-		if !isDigitForBase(char, base) {
-			return 0, false, false
-		}
-	}
-	value, err := strconv.ParseUint(digits, base, 64)
-	if err != nil {
-		return 0, true, false
-	}
-	return value, true, true
-}
-
-func isDigitForBase(char rune, base int) bool {
-	if char >= '0' && char <= '9' {
-		return int(char-'0') < base
-	}
-	if base == 16 && char >= 'a' && char <= 'f' {
-		return true
-	}
-	return base == 16 && char >= 'A' && char <= 'F'
-}
-
-func isASCIIDigits(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, char := range value {
-		if char < '0' || char > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func objectFields(raw json.RawMessage, name string) (map[string]json.RawMessage, error) {

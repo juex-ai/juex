@@ -432,9 +432,11 @@ add its own metadata without preventing Juex from loading the Extension.
 Unselected installed directories remain inert.
 
 The optional flat `requirements` array is informational. Each item requires a
-non-empty `name`, `description`, and absolute HTTP or HTTPS `url`; order is
-preserved. Juex exposes these entries in Runtime status but does not detect,
-check, install, execute, or gate startup on them.
+non-empty `name`, `description`, and `url`; order and field values are
+preserved. Juex exposes these entries in Runtime status but does not parse,
+detect, check, install, execute, or gate startup on them. The Web UI turns only
+safe absolute HTTP or HTTPS values into links and otherwise keeps the
+requirement readable as plain text.
 
 Extensions may provide `skills/`, `mcp.json`, `hooks.yaml`, and
 `observables.json`; runtime status reports selected resources with source
