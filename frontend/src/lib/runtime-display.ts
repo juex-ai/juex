@@ -19,6 +19,21 @@ export function runtimeMCPConnectionLabel(server: MCPServerInfo): string {
   return "-";
 }
 
+export function safeRuntimeExternalURL(value: unknown): string | null {
+  if (typeof value !== "string" || value === "" || value.trim() !== value) {
+    return null;
+  }
+  try {
+    const parsed = new URL(value);
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.host) {
+      return null;
+    }
+    return value;
+  } catch {
+    return null;
+  }
+}
+
 export function formatRuntimeTokenCount(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return "0";
   if (value < 1000) return String(value);

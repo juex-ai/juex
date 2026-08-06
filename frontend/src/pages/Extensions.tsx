@@ -4,6 +4,7 @@ import { getRuntimeStatus } from "@/api";
 import { useShellTitle } from "@/components/AppShell";
 import { LoadingState } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
+import { safeRuntimeExternalURL } from "@/lib/runtime-display";
 import type {
   ExtensionEnvironmentVariable,
   ExtensionInfo,
@@ -162,16 +163,21 @@ function ExtensionCard({ extension }: { extension: ExtensionInfo }) {
 }
 
 function Requirement({ requirement }: { requirement: ExtensionRequirement }) {
+  const href = safeRuntimeExternalURL(requirement.url);
   return (
     <div className="min-w-0 rounded-md bg-muted/50 px-3 py-2 text-xs">
-      <a
-        href={requirement.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="break-words font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:text-primary focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        {requirement.name}
-      </a>
+      {href ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="break-words font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:text-primary focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {requirement.name}
+        </a>
+      ) : (
+        <span className="break-words font-medium text-foreground">{requirement.name}</span>
+      )}
       <p className="mt-1 break-words text-muted-foreground">{requirement.description}</p>
     </div>
   );
