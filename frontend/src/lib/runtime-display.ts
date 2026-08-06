@@ -20,7 +20,12 @@ export function runtimeMCPConnectionLabel(server: MCPServerInfo): string {
 }
 
 export function safeRuntimeExternalURL(value: unknown): string | null {
-  if (typeof value !== "string" || value === "" || value.trim() !== value) {
+  if (
+    typeof value !== "string" ||
+    value === "" ||
+    value.trim() !== value ||
+    value.includes("[REDACTED_ENV]")
+  ) {
     return null;
   }
   try {

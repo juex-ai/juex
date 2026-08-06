@@ -26,6 +26,8 @@ test("safeRuntimeExternalURL rejects redacted and unsafe requirement links", () 
   assert.equal(safeRuntimeExternalURL("http://localhost:8080/install"), "http://localhost:8080/install");
   for (const value of [
     "[REDACTED_ENV]/docs",
+    "https://example.com/[REDACTED_ENV]",
+    "https://example.com/docs?token=[REDACTED_ENV]",
     "/relative",
     "javascript:alert(1)",
     "file:///tmp/install",
