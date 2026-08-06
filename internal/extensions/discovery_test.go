@@ -214,6 +214,8 @@ func TestDiscoverAcceptsBrowserCompatibleNumericRequirementURLs(t *testing.T) {
 		"https://0177.0.0.1/install",
 		"https://127.1/install",
 		"https://example.com:00000000000000000000000000000080/install",
+		"https://foo_bar.example/install",
+		"https://-internal.example/install",
 	} {
 		t.Run(requirementURL, func(t *testing.T) {
 			root := t.TempDir()

@@ -26,7 +26,20 @@ const (
 	manifestFilename = "juex.extension.json"
 )
 
-var semVerPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`)
+var (
+	semVerPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`)
+	// Match WHATWG's non-strict UTS #46 host mapping rather than DNS
+	// registration rules; the resulting URL is consumed by the browser.
+	browserURLIDNAProfile = idna.New(
+		idna.MapForLookup(),
+		idna.StrictDomainName(false),
+		idna.CheckHyphens(false),
+		idna.CheckJoiners(true),
+		idna.BidiRule(),
+		idna.Transitional(false),
+		idna.VerifyDNSLength(false),
+	)
+)
 
 type Scope string
 
@@ -375,7 +388,7 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 			return nil, fmt.Errorf("%s.url must use a valid hostname", prefix)
 		}
 		if hostIP == nil {
-			asciiHostname, err := idna.Lookup.ToASCII(hostname)
+			asciiHostname, err := browserURLIDNAProfile.ToASCII(hostname)
 			if err != nil || asciiHostname == "" || isInvalidWHATWGIPv4Hostname(asciiHostname) {
 				return nil, fmt.Errorf("%s.url must use a valid hostname", prefix)
 			}
