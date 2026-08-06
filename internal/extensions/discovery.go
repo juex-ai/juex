@@ -366,8 +366,15 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Hostname() == "" {
 			return nil, fmt.Errorf("%s.url must be an absolute HTTP or HTTPS URL", prefix)
 		}
-		if _, err := idna.Lookup.ToASCII(parsedURL.Hostname()); err != nil || isInvalidNumericHostname(parsedURL.Hostname()) {
+		hostname := parsedURL.Hostname()
+		hostIP := net.ParseIP(hostname)
+		if strings.HasPrefix(parsedURL.Host, "[") && (hostIP == nil || !strings.Contains(hostname, ":")) {
 			return nil, fmt.Errorf("%s.url must use a valid hostname", prefix)
+		}
+		if hostIP == nil {
+			if _, err := idna.Lookup.ToASCII(hostname); err != nil || isInvalidNumericHostname(hostname) {
+				return nil, fmt.Errorf("%s.url must use a valid hostname", prefix)
+			}
 		}
 		if port := parsedURL.Port(); port != "" {
 			portNumber, err := strconv.Atoi(port)

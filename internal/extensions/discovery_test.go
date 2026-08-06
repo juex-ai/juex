@@ -177,6 +177,8 @@ func TestDiscoverRejectsInvalidRequirements(t *testing.T) {
 		{name: "empty hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://user@:80/install"}]`, want: "absolute HTTP or HTTPS URL"},
 		{name: "invalid numeric hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://999.999.999.999/install"}]`, want: "valid hostname"},
 		{name: "invalid Unicode hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://\u200d.com/install"}]`, want: "valid hostname"},
+		{name: "bracketed domain hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://[example.com]/install"}]`, want: "absolute HTTP or HTTPS URL"},
+		{name: "bracketed IPv4 hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://[127.0.0.1]/install"}]`, want: "absolute HTTP or HTTPS URL"},
 		{name: "out of range port", requirements: `[{"name":"CLI","description":"Install it.","url":"https://example.com:99999/install"}]`, want: "valid port"},
 		{name: "duplicate item key", requirements: `[{"name":"CLI","name":"Other","description":"Install it.","url":"https://example.com"}]`, want: "duplicate JSON key"},
 	}
@@ -194,6 +196,23 @@ func TestDiscoverRejectsInvalidRequirements(t *testing.T) {
 				t.Fatalf("err = %v, want %q and manifest path", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestDiscoverAcceptsBracketedIPv6RequirementURL(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "demo")
+	writeRawExtensionFile(t, filepath.Join(dir, manifestFilename), `{"manifest_version":1,"name":"demo","version":"1.0.0","requirements":[{"name":"CLI","description":"Install it.","url":"https://[2001:db8::1]:443/install"}]}`)
+
+	resources, err := Discover(DiscoverOptions{
+		Roots:        []Root{{Path: root, Scope: ScopeDefaultHome}},
+		AllowedNames: []string{"demo"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resources.Extensions[0].Manifest.Requirements[0].URL; got != "https://[2001:db8::1]:443/install" {
+		t.Fatalf("requirement URL = %q", got)
 	}
 }
 
