@@ -54,6 +54,11 @@ func TestDiscoverLoadsSelectedExtensionManifest(t *testing.T) {
       "name": "Demo account",
       "description": "Create an account and authenticate the CLI.",
       "url": "https://example.com/demo/signup"
+    },
+    {
+      "name": "Localized docs",
+      "description": "Read the localized documentation.",
+      "url": "https://例子.测试/install"
     }
   ],
   "future_root_metadata": {"enabled": true},
@@ -80,6 +85,7 @@ func TestDiscoverLoadsSelectedExtensionManifest(t *testing.T) {
 	wantRequirements := []ManifestRequirement{
 		{Name: "Demo CLI", Description: "Install the Demo CLI before using this extension.", URL: "https://example.com/demo/install"},
 		{Name: "Demo account", Description: "Create an account and authenticate the CLI.", URL: "https://example.com/demo/signup"},
+		{Name: "Localized docs", Description: "Read the localized documentation.", URL: "https://例子.测试/install"},
 	}
 	if fmt.Sprint(ext.Manifest.Requirements) != fmt.Sprint(wantRequirements) {
 		t.Fatalf("requirements = %#v, want %#v", ext.Manifest.Requirements, wantRequirements)
@@ -170,6 +176,7 @@ func TestDiscoverRejectsInvalidRequirements(t *testing.T) {
 		{name: "missing host", requirements: `[{"name":"CLI","description":"Install it.","url":"https:///install"}]`, want: "absolute HTTP or HTTPS URL"},
 		{name: "empty hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://user@:80/install"}]`, want: "absolute HTTP or HTTPS URL"},
 		{name: "invalid numeric hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://999.999.999.999/install"}]`, want: "valid hostname"},
+		{name: "invalid Unicode hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://\u200d.com/install"}]`, want: "valid hostname"},
 		{name: "out of range port", requirements: `[{"name":"CLI","description":"Install it.","url":"https://example.com:99999/install"}]`, want: "valid port"},
 		{name: "duplicate item key", requirements: `[{"name":"CLI","name":"Other","description":"Install it.","url":"https://example.com"}]`, want: "duplicate JSON key"},
 	}

@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/environment"
+	"golang.org/x/net/idna"
 )
 
 const (
@@ -365,7 +366,7 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Hostname() == "" {
 			return nil, fmt.Errorf("%s.url must be an absolute HTTP or HTTPS URL", prefix)
 		}
-		if isInvalidNumericHostname(parsedURL.Hostname()) {
+		if _, err := idna.Lookup.ToASCII(parsedURL.Hostname()); err != nil || isInvalidNumericHostname(parsedURL.Hostname()) {
 			return nil, fmt.Errorf("%s.url must use a valid hostname", prefix)
 		}
 		if port := parsedURL.Port(); port != "" {
