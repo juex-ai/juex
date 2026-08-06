@@ -819,7 +819,10 @@ append fails, projection and live delivery are skipped. Events marked
 `llm.output_delta` uses this path and its SSE frame omits an `id` so the browser
 retains the last durable replay cursor. The public SSE cursor remains the
 durable event ID; replay rebuilds status in JSONL line order before filtering
-events after that ID.
+events after that ID. Tool Call terminal states are absorbing. A durable
+`tool.output_delta` that arrives after its Tool Call completed or errored stays
+in the journal for diagnostics, while the web projection omits it because the
+resulting authoritative Tool Call status is not streaming.
 Replay opens the journal and captures its byte length through
 `DurableSink.ReadCommitted`, which waits for every earlier synchronous
 projection and briefly blocks new commits. Reading and JSON decoding use that

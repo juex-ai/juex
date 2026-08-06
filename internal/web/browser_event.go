@@ -119,6 +119,10 @@ func browserEventFromRuntime(
 	if err != nil {
 		return BrowserEvent{}, true, err
 	}
+	if e.Type == toolevents.OutputDeltaType &&
+		!browserToolOutputDeltaVisible(e.TurnID, payload, status) {
+		return BrowserEvent{}, false, nil
+	}
 	return BrowserEvent{
 		ID:        e.ID,
 		Type:      e.Type,
@@ -128,6 +132,22 @@ func browserEventFromRuntime(
 		Status:    status,
 		transient: e.Transient,
 	}, true, nil
+}
+
+func browserToolOutputDeltaVisible(turnID string, payload json.RawMessage, status statusapi.Snapshot) bool {
+	if status.Turn == nil || status.Turn.ID != turnID {
+		return false
+	}
+	var delta toolevents.OutputDeltaPayload
+	if err := json.Unmarshal(payload, &delta); err != nil {
+		return false
+	}
+	for _, tool := range status.Tools {
+		if tool.ToolUseID == delta.ToolUseID {
+			return tool.State == statusapi.ToolCallStreaming
+		}
+	}
+	return false
 }
 
 type browserEventProjection struct {

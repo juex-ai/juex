@@ -516,6 +516,11 @@ func upsertToolStatus(snapshot *StatusSnapshot, event events.Event, toolUseID, n
 	if !turnAcceptsToolEvent(snapshot, event) {
 		return
 	}
+	for i := range snapshot.Tools {
+		if snapshot.Tools[i].ToolUseID == toolUseID && toolCallStateIsTerminal(snapshot.Tools[i].State) {
+			return
+		}
+	}
 	turn := ensureTurnStatus(snapshot, event)
 	turn.State = TurnLifecycleActive
 	turn.Phase = TurnPhaseToolBatch
@@ -537,6 +542,10 @@ func upsertToolStatus(snapshot *StatusSnapshot, event events.Event, toolUseID, n
 		UpdatedAt: event.Timestamp,
 		Error:     cloneStatusError(statusErr),
 	})
+}
+
+func toolCallStateIsTerminal(state ToolCallState) bool {
+	return state == ToolCallCompleted || state == ToolCallErrored
 }
 
 func turnAcceptsToolEvent(snapshot *StatusSnapshot, event events.Event) bool {

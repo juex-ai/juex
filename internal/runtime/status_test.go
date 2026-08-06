@@ -562,6 +562,68 @@ func TestStatusIgnoresLateToolOutputForTerminalOrSupersededTurn(t *testing.T) {
 	}
 }
 
+func TestStatusToolTerminalStateIsAbsorbing(t *testing.T) {
+	tool := toolevents.ToolCallPayload{ToolUseID: "tool-1", Name: "exec_command"}
+	terminalEvents := []struct {
+		name         string
+		event        events.Event
+		state        ToolCallState
+		errorMessage string
+	}{
+		{
+			name:  "completed",
+			event: statusEvent("3", toolevents.CompletedType, "turn-1", toolevents.Completed(tool, 30, 2, "ok", nil)),
+			state: ToolCallCompleted,
+		},
+		{
+			name: "errored",
+			event: statusEvent("3", toolevents.ErroredType, "turn-1", toolevents.Errored(tool, toolevents.ErroredOptions{
+				Error: "failed",
+			})),
+			state:        ToolCallErrored,
+			errorMessage: "failed",
+		},
+	}
+	lateEvents := []struct {
+		name  string
+		event events.Event
+	}{
+		{name: "requested", event: statusEvent("4", toolevents.RequestedType, "turn-1", toolevents.Requested(tool))},
+		{name: "running", event: statusEvent("4", toolevents.RunningType, "turn-1", toolevents.Running(tool))},
+		{name: "output delta", event: statusEvent("4", toolevents.OutputDeltaType, "turn-1", toolevents.Delta(tool, toolevents.OutputDelta{Text: "late"}))},
+		{name: "completed", event: statusEvent("4", toolevents.CompletedType, "turn-1", toolevents.Completed(tool, 30, 4, "late", nil))},
+		{name: "errored", event: statusEvent("4", toolevents.ErroredType, "turn-1", toolevents.Errored(tool, toolevents.ErroredOptions{Error: "late failure"}))},
+	}
+
+	for _, terminal := range terminalEvents {
+		for _, late := range lateEvents {
+			t.Run(terminal.name+"/late "+late.name, func(t *testing.T) {
+				store := NewStatusStore(StatusSeed{SessionID: "session-1"})
+				store.Publish(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
+				store.Publish(statusEvent("2", toolevents.RequestedType, "turn-1", toolevents.Requested(tool)))
+				store.Publish(terminal.event)
+				store.Publish(late.event)
+
+				snapshot := store.Snapshot()
+				if len(snapshot.Tools) != 1 {
+					t.Fatalf("tools = %+v, want one terminal tool", snapshot.Tools)
+				}
+				got := snapshot.Tools[0]
+				if got.State != terminal.state || !got.UpdatedAt.Equal(terminal.event.Timestamp) {
+					t.Fatalf("tool = %+v, want state %q updated at %s", got, terminal.state, terminal.event.Timestamp)
+				}
+				if terminal.errorMessage == "" {
+					if got.Error != nil {
+						t.Fatalf("completed tool error = %+v, want nil", got.Error)
+					}
+				} else if got.Error == nil || got.Error.Message != terminal.errorMessage {
+					t.Fatalf("errored tool error = %+v, want %q", got.Error, terminal.errorMessage)
+				}
+			})
+		}
+	}
+}
+
 func TestStatusAutoCompactionRestoresAdmittedTurnUntilPhase(t *testing.T) {
 	store := NewStatusStore(StatusSeed{SessionID: "session-1"})
 	store.Publish(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
