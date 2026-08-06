@@ -2245,8 +2245,15 @@ whole Extension. It then strictly validates only each winner's exact-case
 `juex.extension.json` before inspecting Skills, MCP config, Hooks, and Observable
 config. Invalid selected manifests fail startup without falling back to a lower
 copy, while unselected installation directories are inert. Manifest version 1
-requires a directory-matching name and SemVer version and rejects unknown,
-duplicate, or null fields. Its optional `agent.environment.variables` map
+requires a directory-matching name and SemVer version. Duplicate JSON keys and
+invalid known fields are rejected; unknown fields are ignored at every
+supported manifest object boundary. Its optional flat `requirements` array
+contains ordered informational non-empty `name`, `description`, and `url`
+strings. Requirements are projected unchanged to Runtime status without URL
+parsing, detection, command execution, installation, or startup gating. The
+Web boundary alone decides whether a value is a safe absolute HTTP or HTTPS
+link; other values remain plain text. The optional
+`agent.environment.variables` map
 declares Agent-scoped defaults. `internal/app` resolves its four Juex-owned
 placeholders in the declaring Extension context, merges defaults below every
 existing Agent environment source, rejects dangerous names and unresolved
@@ -2258,8 +2265,9 @@ Extension-provided MCP server, Skill, Hook, or Observable names still must not
 collide with existing resources or another selected extension. The runtime
 resource graph stores the selected typed descriptors directly. Runtime status
 projects their manifest metadata, installation scope/path, effective Skill,
-MCP server, Hook, and Observable definition counts, plus value-free Extension
-environment declaration status from that same resolution; it does not rescan
+MCP server, Hook, and Observable definition counts, informational requirements,
+plus value-free Extension environment declaration status from that same
+resolution; it does not rescan
 winners independently. Resources remain labeled `ext:<name>`.
 Unlike project command hooks, extension `observables.json` has no separate
 `trusted` marker: an allowed work-local winner starts valid Command

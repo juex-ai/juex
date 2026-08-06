@@ -539,6 +539,11 @@ func TestRuntimeCatalogServiceIncludesSelectedExtensionMetadataAndDefinitionCoun
   "name":"demo",
   "version":"1.2.3",
   "description":"Demo integration",
+	"future_metadata":{"ignored":true},
+	"requirements":[
+		{"name":"Demo CLI","description":"Install the Demo CLI.","url":"https://example.com/demo-cli","future_metadata":true},
+		{"name":"Demo account","description":"Create a Demo account.","url":"https://example.com/signup"}
+	],
   "agent":{"environment":{"variables":{"DEMO_RUNTIME_DEFAULT":"${JUEX_EXT_DATA_DIR}"}}}
 }`)
 	mustWriteRuntimeStatusFile(t, filepath.Join(extensionDir, "mcp.json"), `{
@@ -578,6 +583,9 @@ commands:
 	ext := status.Extensions.Items[0]
 	if ext.Name != "demo" || ext.Version != "1.2.3" || ext.Description != "Demo integration" || ext.Scope != "project" || ext.Path != extensionDir || ext.ManifestVersion != 1 {
 		t.Fatalf("extension metadata = %+v", ext)
+	}
+	if len(ext.Requirements) != 2 || ext.Requirements[0].Name != "Demo CLI" || ext.Requirements[0].Description != "Install the Demo CLI." || ext.Requirements[0].URL != "https://example.com/demo-cli" || ext.Requirements[1].Name != "Demo account" {
+		t.Fatalf("extension requirements = %+v", ext.Requirements)
 	}
 	if ext.Resources.Skills != 1 || ext.Resources.MCPServers != 2 || ext.Resources.Hooks != 2 || ext.Resources.Observables != 2 {
 		t.Fatalf("extension resource counts = %+v", ext.Resources)

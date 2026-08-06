@@ -33,16 +33,23 @@ const (
 )
 
 type Manifest struct {
-	ManifestVersion int           `json:"manifest_version"`
-	Name            string        `json:"name"`
-	Version         string        `json:"version"`
-	Description     string        `json:"description,omitempty"`
-	DisplayName     string        `json:"display_name,omitempty"`
-	Author          string        `json:"author,omitempty"`
-	Homepage        string        `json:"homepage,omitempty"`
-	Repository      string        `json:"repository,omitempty"`
-	License         string        `json:"license,omitempty"`
-	Agent           ManifestAgent `json:"agent,omitempty"`
+	ManifestVersion int                   `json:"manifest_version"`
+	Name            string                `json:"name"`
+	Version         string                `json:"version"`
+	Description     string                `json:"description,omitempty"`
+	DisplayName     string                `json:"display_name,omitempty"`
+	Author          string                `json:"author,omitempty"`
+	Homepage        string                `json:"homepage,omitempty"`
+	Repository      string                `json:"repository,omitempty"`
+	License         string                `json:"license,omitempty"`
+	Requirements    []ManifestRequirement `json:"requirements,omitempty"`
+	Agent           ManifestAgent         `json:"agent,omitempty"`
+}
+
+type ManifestRequirement struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	URL         string `json:"url"`
 }
 
 type ManifestAgent struct {
@@ -209,23 +216,6 @@ func loadManifest(ext Extension) (Manifest, error) {
 	if fields == nil {
 		return Manifest{}, manifestError(ext.Name, path, "parse", fmt.Errorf("manifest must be a JSON object"))
 	}
-	allowed := map[string]struct{}{
-		"manifest_version": {},
-		"name":             {},
-		"version":          {},
-		"description":      {},
-		"display_name":     {},
-		"author":           {},
-		"homepage":         {},
-		"repository":       {},
-		"license":          {},
-		"agent":            {},
-	}
-	for name := range fields {
-		if _, ok := allowed[name]; !ok {
-			return Manifest{}, manifestError(ext.Name, path, "parse", fmt.Errorf("unknown field %q", name))
-		}
-	}
 	manifest, err := manifestFromFields(fields)
 	if err != nil {
 		return Manifest{}, manifestError(ext.Name, path, "validate", err)
@@ -286,18 +276,20 @@ func manifestFromFields(fields map[string]json.RawMessage) (Manifest, error) {
 		}
 		manifest.Agent = agent
 	}
+	if raw, ok := fields["requirements"]; ok {
+		requirements, err := manifestRequirementsFromRaw(raw)
+		if err != nil {
+			return Manifest{}, err
+		}
+		manifest.Requirements = requirements
+	}
 	return manifest, nil
 }
 
 func manifestAgentFromRaw(raw json.RawMessage) (ManifestAgent, error) {
-	fields, err := strictObjectFields(raw, "agent")
+	fields, err := objectFields(raw, "agent")
 	if err != nil {
 		return ManifestAgent{}, err
-	}
-	for name := range fields {
-		if name != "environment" {
-			return ManifestAgent{}, fmt.Errorf("agent: unknown field %q", name)
-		}
 	}
 	var agent ManifestAgent
 	if environmentRaw, ok := fields["environment"]; ok {
@@ -311,14 +303,9 @@ func manifestAgentFromRaw(raw json.RawMessage) (ManifestAgent, error) {
 }
 
 func manifestEnvironmentFromRaw(raw json.RawMessage) (ManifestEnvironment, error) {
-	fields, err := strictObjectFields(raw, "agent.environment")
+	fields, err := objectFields(raw, "agent.environment")
 	if err != nil {
 		return ManifestEnvironment{}, err
-	}
-	for name := range fields {
-		if name != "variables" {
-			return ManifestEnvironment{}, fmt.Errorf("agent.environment: unknown field %q", name)
-		}
 	}
 	var manifest ManifestEnvironment
 	variablesRaw, ok := fields["variables"]
@@ -344,7 +331,43 @@ func manifestEnvironmentFromRaw(raw json.RawMessage) (ManifestEnvironment, error
 	return manifest, nil
 }
 
-func strictObjectFields(raw json.RawMessage, name string) (map[string]json.RawMessage, error) {
+func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, error) {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, fmt.Errorf("requirements must be an array")
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil || items == nil {
+		return nil, fmt.Errorf("requirements must be an array")
+	}
+	requirements := make([]ManifestRequirement, 0, len(items))
+	for index, item := range items {
+		prefix := fmt.Sprintf("requirements[%d]", index)
+		fields, err := objectFields(item, prefix)
+		if err != nil {
+			return nil, err
+		}
+		name, err := requiredNonEmptyManifestString(fields, "name", prefix+".name")
+		if err != nil {
+			return nil, err
+		}
+		description, err := requiredNonEmptyManifestString(fields, "description", prefix+".description")
+		if err != nil {
+			return nil, err
+		}
+		requirementURL, err := requiredNonEmptyManifestString(fields, "url", prefix+".url")
+		if err != nil {
+			return nil, err
+		}
+		requirements = append(requirements, ManifestRequirement{
+			Name:        name,
+			Description: description,
+			URL:         requirementURL,
+		})
+	}
+	return requirements, nil
+}
+
+func objectFields(raw json.RawMessage, name string) (map[string]json.RawMessage, error) {
 	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return nil, fmt.Errorf("%s must be an object", name)
 	}
@@ -356,6 +379,21 @@ func strictObjectFields(raw json.RawMessage, name string) (map[string]json.RawMe
 		return nil, fmt.Errorf("%s must be an object", name)
 	}
 	return fields, nil
+}
+
+func requiredNonEmptyManifestString(fields map[string]json.RawMessage, fieldName, displayName string) (string, error) {
+	raw, ok := fields[fieldName]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", fmt.Errorf("%s is required", displayName)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", fmt.Errorf("%s must be a string: %w", displayName, err)
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("%s must not be empty", displayName)
+	}
+	return value, nil
 }
 
 func sortedStringMapKeys(values map[string]string) []string {
@@ -393,6 +431,7 @@ func requiredManifestString(fields map[string]json.RawMessage, name string) (str
 
 func validateUniqueJSONKeys(data []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
 	if err := validateJSONValue(decoder); err != nil {
 		return err
 	}

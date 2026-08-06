@@ -218,7 +218,7 @@ func TestRuntimeStatusProjectsSelectedExtensionMetadata(t *testing.T) {
 	extensionDir := filepath.Join(work, ".juex", "extensions", "demo")
 	srv.opts.Cfg.Extensions = config.ExtensionPolicy{Allow: []string{"demo"}, Configured: true}
 	const secretDefault = "runtime-extension-secret-sentinel"
-	mustWriteRuntimeFile(t, filepath.Join(extensionDir, "juex.extension.json"), `{"manifest_version":1,"name":"demo","version":"1.2.3","description":"Demo integration","agent":{"environment":{"variables":{"DEMO_RUNTIME_DEFAULT":"`+secretDefault+`"}}}}`)
+	mustWriteRuntimeFile(t, filepath.Join(extensionDir, "juex.extension.json"), `{"manifest_version":1,"name":"demo","version":"1.2.3","description":"Demo integration","requirements":[{"name":"Demo CLI","description":"Install the Demo CLI.","url":"https://example.com/demo-cli","future_metadata":true}],"future_metadata":{"ignored":true},"agent":{"environment":{"variables":{"DEMO_RUNTIME_DEFAULT":"`+secretDefault+`"}}}}`)
 	mustWriteRuntimeFile(t, filepath.Join(extensionDir, "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: Demo\n---\nbody")
 
 	got, err := srv.runtimeStatus()
@@ -232,6 +232,9 @@ func TestRuntimeStatusProjectsSelectedExtensionMetadata(t *testing.T) {
 	if ext.Name != "demo" || ext.Version != "1.2.3" || ext.Description != "Demo integration" || ext.Scope != "project" || ext.Path != extensionDir || ext.ManifestVersion != 1 || ext.Resources.Skills != 1 {
 		t.Fatalf("extension = %+v", ext)
 	}
+	if len(ext.Requirements) != 1 || ext.Requirements[0].Name != "Demo CLI" || ext.Requirements[0].Description != "Install the Demo CLI." || ext.Requirements[0].URL != "https://example.com/demo-cli" {
+		t.Fatalf("extension requirements = %+v", ext.Requirements)
+	}
 	if len(ext.Environment) != 1 || ext.Environment[0].Name != "DEMO_RUNTIME_DEFAULT" || ext.Environment[0].Source != "ext:demo" || ext.Environment[0].Status != "effective" {
 		t.Fatalf("extension environment = %+v", ext.Environment)
 	}
@@ -241,6 +244,18 @@ func TestRuntimeStatusProjectsSelectedExtensionMetadata(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), secretDefault) {
 		t.Fatalf("runtime status leaked Extension environment value: %s", encoded)
+	}
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/runtime", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("runtime API status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var apiStatus runtimeStatusResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &apiStatus); err != nil {
+		t.Fatal(err)
+	}
+	if len(apiStatus.Extensions.Items) != 1 || len(apiStatus.Extensions.Items[0].Requirements) != 1 || apiStatus.Extensions.Items[0].Requirements[0].URL != "https://example.com/demo-cli" {
+		t.Fatalf("runtime API requirements = %+v", apiStatus.Extensions.Items)
 	}
 }
 

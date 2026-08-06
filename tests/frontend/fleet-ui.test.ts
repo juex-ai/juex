@@ -69,6 +69,12 @@ test("runtime navigation consolidates operational views without duplicating page
   assert.match(extensionsSource, /getRuntimeStatus/);
   assert.match(extensionsSource, /No Extensions are selected for this Agent\./);
 	assert.match(extensionsSource, /Agent environment/);
+	assert.match(extensionsSource, /Requirements/);
+	assert.match(extensionsSource, /extension\.requirements \?\? \[\]/);
+	assert.match(extensionsSource, /safeRuntimeExternalURL\(requirement\.url\)/);
+	assert.match(extensionsSource, /key=\{`\$\{index\}:/);
+	assert.match(extensionsSource, /target="_blank"/);
+	assert.match(extensionsSource, /rel="noopener noreferrer"/);
 	assert.match(extensionsSource, /shadowed by/);
   assert.doesNotMatch(extensionsSource, /<Button[\s\S]*(Install|Update|Delete|Enable|Disable)/);
   assert.equal((stageHeaderSource.match(/label: "Chat"/g) ?? []).length, 1);

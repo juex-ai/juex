@@ -15,10 +15,29 @@ import {
   runtimeHookCommandLabel,
   runtimeHooksSummaryLabel,
   runtimeMCPConnectionLabel,
+  safeRuntimeExternalURL,
   runtimeSessionStateBadgeLabel,
   runtimeSessionStateIsActive,
   runtimeTokenUsageDetailLabel,
 } from "../../frontend/src/lib/runtime-display.ts";
+
+test("safeRuntimeExternalURL rejects redacted and unsafe requirement links", () => {
+  assert.equal(safeRuntimeExternalURL("https://example.com/docs"), "https://example.com/docs");
+  assert.equal(safeRuntimeExternalURL("http://localhost:8080/install"), "http://localhost:8080/install");
+  for (const value of [
+    "[REDACTED_ENV]/docs",
+    "https://example.com/[REDACTED_ENV]",
+    "https://example.com/docs?token=[REDACTED_ENV]",
+    "/relative",
+    "javascript:alert(1)",
+    "file:///tmp/install",
+    " https://example.com/docs",
+    "",
+    null,
+  ]) {
+    assert.equal(safeRuntimeExternalURL(value), null);
+  }
+});
 
 test("runtimeMCPConnectionLabel uses explicit transport metadata", () => {
   const base: MCPServerInfo = {
