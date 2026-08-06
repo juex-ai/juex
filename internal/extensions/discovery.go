@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -364,6 +365,9 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Hostname() == "" {
 			return nil, fmt.Errorf("%s.url must be an absolute HTTP or HTTPS URL", prefix)
 		}
+		if isInvalidNumericHostname(parsedURL.Hostname()) {
+			return nil, fmt.Errorf("%s.url must use a valid hostname", prefix)
+		}
 		if port := parsedURL.Port(); port != "" {
 			portNumber, err := strconv.Atoi(port)
 			if err != nil || portNumber > 65535 {
@@ -377,6 +381,18 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 		})
 	}
 	return requirements, nil
+}
+
+func isInvalidNumericHostname(hostname string) bool {
+	if net.ParseIP(hostname) != nil {
+		return false
+	}
+	for _, char := range hostname {
+		if (char < '0' || char > '9') && char != '.' {
+			return false
+		}
+	}
+	return true
 }
 
 func objectFields(raw json.RawMessage, name string) (map[string]json.RawMessage, error) {

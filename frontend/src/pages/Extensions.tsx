@@ -137,9 +137,9 @@ function ExtensionCard({ extension }: { extension: ExtensionInfo }) {
             Requirements
           </h4>
           <div className="mt-2 space-y-2">
-            {requirements.map((requirement) => (
+            {requirements.map((requirement, index) => (
               <Requirement
-                key={`${requirement.name}:${requirement.url}`}
+                key={`${index}:${requirement.name}:${requirement.url}`}
                 requirement={requirement}
               />
             ))}

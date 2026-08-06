@@ -72,6 +72,7 @@ test("runtime navigation consolidates operational views without duplicating page
 	assert.match(extensionsSource, /Requirements/);
 	assert.match(extensionsSource, /extension\.requirements \?\? \[\]/);
 	assert.match(extensionsSource, /safeRuntimeExternalURL\(requirement\.url\)/);
+	assert.match(extensionsSource, /key=\{`\$\{index\}:/);
 	assert.match(extensionsSource, /target="_blank"/);
 	assert.match(extensionsSource, /rel="noopener noreferrer"/);
 	assert.match(extensionsSource, /shadowed by/);
