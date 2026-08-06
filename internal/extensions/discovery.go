@@ -372,7 +372,8 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 			return nil, fmt.Errorf("%s.url must use a valid hostname", prefix)
 		}
 		if hostIP == nil {
-			if _, err := idna.Lookup.ToASCII(hostname); err != nil || isInvalidNumericHostname(hostname) {
+			asciiHostname, err := idna.Lookup.ToASCII(hostname)
+			if err != nil || isInvalidWHATWGIPv4Hostname(asciiHostname) {
 				return nil, fmt.Errorf("%s.url must use a valid hostname", prefix)
 			}
 		}
@@ -391,12 +392,85 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 	return requirements, nil
 }
 
-func isInvalidNumericHostname(hostname string) bool {
-	if net.ParseIP(hostname) != nil {
+// isInvalidWHATWGIPv4Hostname mirrors the browser's numeric-host rules so a
+// manifest URL accepted here remains usable by the frontend URL parser.
+func isInvalidWHATWGIPv4Hostname(hostname string) bool {
+	parts := strings.Split(hostname, ".")
+	if len(parts) > 1 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) == 0 {
 		return false
 	}
-	for _, char := range hostname {
-		if (char < '0' || char > '9') && char != '.' {
+	last := parts[len(parts)-1]
+	_, lastHasNumericSyntax, _ := parseWHATWGIPv4Number(last)
+	if !isASCIIDigits(last) && !lastHasNumericSyntax {
+		return false
+	}
+	if len(parts) > 4 {
+		return true
+	}
+	numbers := make([]uint64, 0, len(parts))
+	for _, part := range parts {
+		number, hasNumericSyntax, inRange := parseWHATWGIPv4Number(part)
+		if !hasNumericSyntax || !inRange {
+			return true
+		}
+		numbers = append(numbers, number)
+	}
+	for _, number := range numbers[:len(numbers)-1] {
+		if number > 255 {
+			return true
+		}
+	}
+	lastLimit := uint64(1) << (8 * (5 - len(numbers)))
+	return numbers[len(numbers)-1] >= lastLimit
+}
+
+func parseWHATWGIPv4Number(input string) (value uint64, hasNumericSyntax, inRange bool) {
+	if input == "" {
+		return 0, false, false
+	}
+	base := 10
+	digits := input
+	if len(input) >= 2 && input[0] == '0' && (input[1] == 'x' || input[1] == 'X') {
+		base = 16
+		digits = input[2:]
+	} else if len(input) >= 2 && input[0] == '0' {
+		base = 8
+		digits = input[1:]
+	}
+	if digits == "" {
+		return 0, true, true
+	}
+	for _, char := range digits {
+		if !isDigitForBase(char, base) {
+			return 0, false, false
+		}
+	}
+	value, err := strconv.ParseUint(digits, base, 64)
+	if err != nil {
+		return 0, true, false
+	}
+	return value, true, true
+}
+
+func isDigitForBase(char rune, base int) bool {
+	if char >= '0' && char <= '9' {
+		return int(char-'0') < base
+	}
+	if base == 16 && char >= 'a' && char <= 'f' {
+		return true
+	}
+	return base == 16 && char >= 'A' && char <= 'F'
+}
+
+func isASCIIDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
 			return false
 		}
 	}

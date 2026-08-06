@@ -176,6 +176,10 @@ func TestDiscoverRejectsInvalidRequirements(t *testing.T) {
 		{name: "missing host", requirements: `[{"name":"CLI","description":"Install it.","url":"https:///install"}]`, want: "absolute HTTP or HTTPS URL"},
 		{name: "empty hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://user@:80/install"}]`, want: "absolute HTTP or HTTPS URL"},
 		{name: "invalid numeric hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://999.999.999.999/install"}]`, want: "valid hostname"},
+		{name: "invalid hexadecimal IPv4 hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://0x100.0x100.0x100.0x100/install"}]`, want: "valid hostname"},
+		{name: "invalid octal IPv4 hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://0400.0400.0400.0400/install"}]`, want: "valid hostname"},
+		{name: "invalid octal digit IPv4 hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://09/install"}]`, want: "valid hostname"},
+		{name: "invalid numeric top-level label", requirements: `[{"name":"CLI","description":"Install it.","url":"https://example.123/install"}]`, want: "valid hostname"},
 		{name: "invalid Unicode hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://\u200d.com/install"}]`, want: "valid hostname"},
 		{name: "bracketed domain hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://[example.com]/install"}]`, want: "absolute HTTP or HTTPS URL"},
 		{name: "bracketed IPv4 hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://[127.0.0.1]/install"}]`, want: "absolute HTTP or HTTPS URL"},
@@ -199,20 +203,30 @@ func TestDiscoverRejectsInvalidRequirements(t *testing.T) {
 	}
 }
 
-func TestDiscoverAcceptsBracketedIPv6RequirementURL(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "demo")
-	writeRawExtensionFile(t, filepath.Join(dir, manifestFilename), `{"manifest_version":1,"name":"demo","version":"1.0.0","requirements":[{"name":"CLI","description":"Install it.","url":"https://[2001:db8::1]:443/install"}]}`)
+func TestDiscoverAcceptsBrowserCompatibleNumericRequirementURLs(t *testing.T) {
+	for _, requirementURL := range []string{
+		"https://[2001:db8::1]:443/install",
+		"https://0x7f.0.0.1/install",
+		"https://0177.0.0.1/install",
+		"https://127.1/install",
+	} {
+		t.Run(requirementURL, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "demo")
+			manifest := fmt.Sprintf(`{"manifest_version":1,"name":"demo","version":"1.0.0","requirements":[{"name":"CLI","description":"Install it.","url":%q}]}`, requirementURL)
+			writeRawExtensionFile(t, filepath.Join(dir, manifestFilename), manifest)
 
-	resources, err := Discover(DiscoverOptions{
-		Roots:        []Root{{Path: root, Scope: ScopeDefaultHome}},
-		AllowedNames: []string{"demo"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := resources.Extensions[0].Manifest.Requirements[0].URL; got != "https://[2001:db8::1]:443/install" {
-		t.Fatalf("requirement URL = %q", got)
+			resources, err := Discover(DiscoverOptions{
+				Roots:        []Root{{Path: root, Scope: ScopeDefaultHome}},
+				AllowedNames: []string{"demo"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := resources.Extensions[0].Manifest.Requirements[0].URL; got != requirementURL {
+				t.Fatalf("requirement URL = %q, want %q", got, requirementURL)
+			}
+		})
 	}
 }
 
