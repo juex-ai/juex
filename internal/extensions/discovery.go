@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/juex-ai/juex/internal/environment"
@@ -360,8 +361,14 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 			return nil, err
 		}
 		parsedURL, err := url.Parse(requirementURL)
-		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Hostname() == "" {
 			return nil, fmt.Errorf("%s.url must be an absolute HTTP or HTTPS URL", prefix)
+		}
+		if port := parsedURL.Port(); port != "" {
+			portNumber, err := strconv.Atoi(port)
+			if err != nil || portNumber > 65535 {
+				return nil, fmt.Errorf("%s.url must use a valid port", prefix)
+			}
 		}
 		requirements = append(requirements, ManifestRequirement{
 			Name:        name,

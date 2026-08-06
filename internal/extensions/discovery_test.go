@@ -168,6 +168,8 @@ func TestDiscoverRejectsInvalidRequirements(t *testing.T) {
 		{name: "relative url", requirements: `[{"name":"CLI","description":"Install it.","url":"/install"}]`, want: "absolute HTTP or HTTPS URL"},
 		{name: "unsupported scheme", requirements: `[{"name":"CLI","description":"Install it.","url":"file:///tmp/install"}]`, want: "absolute HTTP or HTTPS URL"},
 		{name: "missing host", requirements: `[{"name":"CLI","description":"Install it.","url":"https:///install"}]`, want: "absolute HTTP or HTTPS URL"},
+		{name: "empty hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://user@:80/install"}]`, want: "absolute HTTP or HTTPS URL"},
+		{name: "out of range port", requirements: `[{"name":"CLI","description":"Install it.","url":"https://example.com:99999/install"}]`, want: "valid port"},
 		{name: "duplicate item key", requirements: `[{"name":"CLI","name":"Other","description":"Install it.","url":"https://example.com"}]`, want: "duplicate JSON key"},
 	}
 	for _, tt := range tests {
