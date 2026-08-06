@@ -389,7 +389,7 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 		}
 		if hostIP == nil {
 			asciiHostname, err := browserURLIDNAProfile.ToASCII(hostname)
-			if err != nil || asciiHostname == "" || isInvalidWHATWGIPv4Hostname(asciiHostname) {
+			if err != nil || asciiHostname == "" || containsForbiddenWHATWGDomainCodePoint(asciiHostname) || isInvalidWHATWGIPv4Hostname(asciiHostname) {
 				return nil, fmt.Errorf("%s.url must use a valid hostname", prefix)
 			}
 		}
@@ -405,6 +405,15 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 		})
 	}
 	return requirements, nil
+}
+
+func containsForbiddenWHATWGDomainCodePoint(hostname string) bool {
+	for _, char := range hostname {
+		if char <= 0x20 || char == 0x7f || strings.ContainsRune("%#/:<>?@[\\]^|", char) {
+			return true
+		}
+	}
+	return false
 }
 
 func isValidURLPort(port string) bool {
