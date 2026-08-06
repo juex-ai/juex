@@ -373,13 +373,12 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 		}
 		if hostIP == nil {
 			asciiHostname, err := idna.Lookup.ToASCII(hostname)
-			if err != nil || isInvalidWHATWGIPv4Hostname(asciiHostname) {
+			if err != nil || asciiHostname == "" || isInvalidWHATWGIPv4Hostname(asciiHostname) {
 				return nil, fmt.Errorf("%s.url must use a valid hostname", prefix)
 			}
 		}
 		if port := parsedURL.Port(); port != "" {
-			portNumber, err := strconv.Atoi(port)
-			if err != nil || portNumber > 65535 {
+			if !isValidURLPort(port) {
 				return nil, fmt.Errorf("%s.url must use a valid port", prefix)
 			}
 		}
@@ -390,6 +389,17 @@ func manifestRequirementsFromRaw(raw json.RawMessage) ([]ManifestRequirement, er
 		})
 	}
 	return requirements, nil
+}
+
+func isValidURLPort(port string) bool {
+	if !isASCIIDigits(port) {
+		return false
+	}
+	normalized := strings.TrimLeft(port, "0")
+	if normalized == "" || len(normalized) < 5 {
+		return true
+	}
+	return len(normalized) == 5 && normalized <= "65535"
 }
 
 // isInvalidWHATWGIPv4Hostname mirrors the browser's numeric-host rules so a

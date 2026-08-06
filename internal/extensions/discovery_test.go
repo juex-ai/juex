@@ -181,9 +181,11 @@ func TestDiscoverRejectsInvalidRequirements(t *testing.T) {
 		{name: "invalid octal digit IPv4 hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://09/install"}]`, want: "valid hostname"},
 		{name: "invalid numeric top-level label", requirements: `[{"name":"CLI","description":"Install it.","url":"https://example.123/install"}]`, want: "valid hostname"},
 		{name: "invalid Unicode hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://\u200d.com/install"}]`, want: "valid hostname"},
+		{name: "IDNA mapped empty hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://\u00ad/install"}]`, want: "valid hostname"},
 		{name: "bracketed domain hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://[example.com]/install"}]`, want: "absolute HTTP or HTTPS URL"},
 		{name: "bracketed IPv4 hostname", requirements: `[{"name":"CLI","description":"Install it.","url":"https://[127.0.0.1]/install"}]`, want: "absolute HTTP or HTTPS URL"},
 		{name: "out of range port", requirements: `[{"name":"CLI","description":"Install it.","url":"https://example.com:99999/install"}]`, want: "valid port"},
+		{name: "zero padded out of range port", requirements: `[{"name":"CLI","description":"Install it.","url":"https://example.com:00000000000065536/install"}]`, want: "valid port"},
 		{name: "duplicate item key", requirements: `[{"name":"CLI","name":"Other","description":"Install it.","url":"https://example.com"}]`, want: "duplicate JSON key"},
 	}
 	for _, tt := range tests {
@@ -209,6 +211,7 @@ func TestDiscoverAcceptsBrowserCompatibleNumericRequirementURLs(t *testing.T) {
 		"https://0x7f.0.0.1/install",
 		"https://0177.0.0.1/install",
 		"https://127.1/install",
+		"https://example.com:00000000000000000000000000000080/install",
 	} {
 		t.Run(requirementURL, func(t *testing.T) {
 			root := t.TempDir()
