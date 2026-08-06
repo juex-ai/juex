@@ -85,10 +85,17 @@ type RuntimeExtensionStatus struct {
 	Homepage        string
 	Repository      string
 	License         string
+	Requirements    []RuntimeExtensionRequirement
 	Scope           string
 	Path            string
 	Resources       RuntimeExtensionResourceCounts
 	Environment     []RuntimeExtensionEnvironmentDeclaration
+}
+
+type RuntimeExtensionRequirement struct {
+	Name        string
+	Description string
+	URL         string
 }
 
 type RuntimeExtensionResourceCounts struct {
@@ -265,6 +272,12 @@ func runtimeExtensionsStatus(graph RuntimeResourceGraph, skills RuntimeSkillsSta
 	indexes := make(map[string]int, len(descriptors))
 	for _, descriptor := range descriptors {
 		manifest := descriptor.Manifest
+		requirements := make([]RuntimeExtensionRequirement, 0, len(manifest.Requirements))
+		for _, requirement := range manifest.Requirements {
+			requirements = append(requirements, RuntimeExtensionRequirement{
+				Name: requirement.Name, Description: requirement.Description, URL: requirement.URL,
+			})
+		}
 		indexes[descriptor.Source] = len(items)
 		items = append(items, RuntimeExtensionStatus{
 			ManifestVersion: manifest.ManifestVersion,
@@ -276,6 +289,7 @@ func runtimeExtensionsStatus(graph RuntimeResourceGraph, skills RuntimeSkillsSta
 			Homepage:        manifest.Homepage,
 			Repository:      manifest.Repository,
 			License:         manifest.License,
+			Requirements:    requirements,
 			Scope:           string(descriptor.Scope),
 			Path:            descriptor.Dir,
 		})

@@ -820,6 +820,12 @@ export interface ExtensionEnvironmentVariable {
   shadowed_by_path?: string;
 }
 
+export interface ExtensionRequirement {
+  name: string;
+  description: string;
+  url: string;
+}
+
 export interface ExtensionInfo {
   manifest_version: number;
   name: string;
@@ -830,6 +836,7 @@ export interface ExtensionInfo {
   homepage?: string;
   repository?: string;
   license?: string;
+  requirements?: ExtensionRequirement[];
   scope: "default_home" | "instance_home" | "project" | string;
   path: string;
   resources: ExtensionResourceCounts;

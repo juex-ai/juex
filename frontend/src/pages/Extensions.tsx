@@ -4,7 +4,12 @@ import { getRuntimeStatus } from "@/api";
 import { useShellTitle } from "@/components/AppShell";
 import { LoadingState } from "@/components/LoadingState";
 import { Badge } from "@/components/ui/badge";
-import type { ExtensionEnvironmentVariable, ExtensionInfo, RuntimeStatusResponse } from "@/types";
+import type {
+  ExtensionEnvironmentVariable,
+  ExtensionInfo,
+  ExtensionRequirement,
+  RuntimeStatusResponse,
+} from "@/types";
 
 export function Extensions() {
   const [data, setData] = useState<RuntimeStatusResponse | null>(null);
@@ -93,6 +98,7 @@ export function Extensions() {
 
 function ExtensionCard({ extension }: { extension: ExtensionInfo }) {
   const resources = extension.resources;
+  const requirements = extension.requirements ?? [];
   const environment = extension.environment ?? [];
   return (
     <section className="overflow-hidden rounded-lg border bg-card shadow-[var(--shadow-sm)]">
@@ -124,6 +130,21 @@ function ExtensionCard({ extension }: { extension: ExtensionInfo }) {
           <ResourceBadge label="Observables" count={resources.observables} />
         </dd>
       </dl>
+      {requirements.length > 0 ? (
+        <div className="border-t px-4 py-3">
+          <h4 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            Requirements
+          </h4>
+          <div className="mt-2 space-y-2">
+            {requirements.map((requirement) => (
+              <Requirement
+                key={`${requirement.name}:${requirement.url}`}
+                requirement={requirement}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
       {environment.length > 0 ? (
         <div className="border-t px-4 py-3">
           <h4 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
@@ -137,6 +158,22 @@ function ExtensionCard({ extension }: { extension: ExtensionInfo }) {
         </div>
       ) : null}
     </section>
+  );
+}
+
+function Requirement({ requirement }: { requirement: ExtensionRequirement }) {
+  return (
+    <div className="min-w-0 rounded-md bg-muted/50 px-3 py-2 text-xs">
+      <a
+        href={requirement.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="break-words font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:text-primary focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {requirement.name}
+      </a>
+      <p className="mt-1 break-words text-muted-foreground">{requirement.description}</p>
+    </div>
   );
 }
 

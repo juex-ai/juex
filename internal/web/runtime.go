@@ -47,10 +47,17 @@ type extensionInfo struct {
 	Homepage        string                     `json:"homepage,omitempty"`
 	Repository      string                     `json:"repository,omitempty"`
 	License         string                     `json:"license,omitempty"`
+	Requirements    []extensionRequirementInfo `json:"requirements,omitempty"`
 	Scope           string                     `json:"scope"`
 	Path            string                     `json:"path"`
 	Resources       extensionResourceCounts    `json:"resources"`
 	Environment     []extensionEnvironmentInfo `json:"environment"`
+}
+
+type extensionRequirementInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	URL         string `json:"url"`
 }
 
 type extensionEnvironmentInfo struct {
@@ -307,6 +314,12 @@ func runtimeStatusResponseFromApp(status app.RuntimeStatus) runtimeStatusRespons
 func extensionsStatusFromApp(status app.RuntimeExtensionsStatus) extensionsStatus {
 	items := make([]extensionInfo, 0, len(status.Items))
 	for _, item := range status.Items {
+		requirements := make([]extensionRequirementInfo, 0, len(item.Requirements))
+		for _, requirement := range item.Requirements {
+			requirements = append(requirements, extensionRequirementInfo{
+				Name: requirement.Name, Description: requirement.Description, URL: requirement.URL,
+			})
+		}
 		environmentItems := make([]extensionEnvironmentInfo, 0, len(item.Environment))
 		for _, declaration := range item.Environment {
 			environmentItems = append(environmentItems, extensionEnvironmentInfo{
@@ -324,6 +337,7 @@ func extensionsStatusFromApp(status app.RuntimeExtensionsStatus) extensionsStatu
 			Homepage:        item.Homepage,
 			Repository:      item.Repository,
 			License:         item.License,
+			Requirements:    requirements,
 			Scope:           item.Scope,
 			Path:            item.Path,
 			Environment:     environmentItems,

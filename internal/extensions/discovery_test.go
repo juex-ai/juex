@@ -42,7 +42,25 @@ func TestDiscoverLoadsSelectedExtensionManifest(t *testing.T) {
   "author": "JueX",
   "homepage": "https://example.com/demo",
   "repository": "https://example.com/demo.git",
-  "license": "MIT"
+  "license": "MIT",
+  "requirements": [
+    {
+      "name": "Demo CLI",
+      "description": "Install the Demo CLI before using this extension.",
+      "url": "https://example.com/demo/install",
+      "future_metadata": true
+    },
+    {
+      "name": "Demo account",
+      "description": "Create an account and authenticate the CLI.",
+      "url": "https://example.com/demo/signup"
+    }
+  ],
+  "future_root_metadata": {"enabled": true},
+  "agent": {
+    "future_agent_metadata": true,
+    "environment": {"future_environment_metadata": true}
+  }
 }`)
 
 	resources, err := Discover(DiscoverOptions{
@@ -58,6 +76,13 @@ func TestDiscoverLoadsSelectedExtensionManifest(t *testing.T) {
 	ext := resources.Extensions[0]
 	if ext.Scope != ScopeInstanceHome || ext.Manifest.Name != "demo" || ext.Manifest.Version != "1.2.3-beta.1+build.7" || ext.Manifest.Description != "Demo integration" || ext.Manifest.DisplayName != "Demo" || ext.Manifest.Author != "JueX" || ext.Manifest.Homepage != "https://example.com/demo" || ext.Manifest.Repository != "https://example.com/demo.git" || ext.Manifest.License != "MIT" {
 		t.Fatalf("extension = %+v", ext)
+	}
+	wantRequirements := []ManifestRequirement{
+		{Name: "Demo CLI", Description: "Install the Demo CLI before using this extension.", URL: "https://example.com/demo/install"},
+		{Name: "Demo account", Description: "Create an account and authenticate the CLI.", URL: "https://example.com/demo/signup"},
+	}
+	if fmt.Sprint(ext.Manifest.Requirements) != fmt.Sprint(wantRequirements) {
+		t.Fatalf("requirements = %#v, want %#v", ext.Manifest.Requirements, wantRequirements)
 	}
 }
 
@@ -99,9 +124,7 @@ func TestDiscoverRejectsInvalidAgentEnvironmentManifestShapes(t *testing.T) {
 	}{
 		{name: "null agent", agent: `null`, want: "agent"},
 		{name: "non object agent", agent: `[]`, want: "agent"},
-		{name: "unknown agent field", agent: `{"environmnt":{}}`, want: "unknown field"},
 		{name: "null environment", agent: `{"environment":null}`, want: "environment"},
-		{name: "unknown environment field", agent: `{"environment":{"variable":{}}}`, want: "unknown field"},
 		{name: "null variables", agent: `{"environment":{"variables":null}}`, want: "variables"},
 		{name: "non string value", agent: `{"environment":{"variables":{"SAFE":42}}}`, want: "string"},
 		{name: "duplicate variable", agent: `{"environment":{"variables":{"SAFE":"one","SAFE":"two"}}}`, want: "duplicate"},
@@ -114,6 +137,44 @@ func TestDiscoverRejectsInvalidAgentEnvironmentManifestShapes(t *testing.T) {
 			root := t.TempDir()
 			dir := filepath.Join(root, "demo")
 			manifest := fmt.Sprintf(`{"manifest_version":1,"name":"demo","version":"1.0.0","agent":%s}`, tt.agent)
+			writeRawExtensionFile(t, filepath.Join(dir, manifestFilename), manifest)
+			_, err := Discover(DiscoverOptions{
+				Roots:        []Root{{Path: root, Scope: ScopeDefaultHome}},
+				AllowedNames: []string{"demo"},
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), filepath.Join(dir, manifestFilename)) {
+				t.Fatalf("err = %v, want %q and manifest path", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestDiscoverRejectsInvalidRequirements(t *testing.T) {
+	tests := []struct {
+		name         string
+		requirements string
+		want         string
+	}{
+		{name: "null", requirements: `null`, want: "must be an array"},
+		{name: "object", requirements: `{}`, want: "must be an array"},
+		{name: "null item", requirements: `[null]`, want: "requirements[0] must be an object"},
+		{name: "non object item", requirements: `["cli"]`, want: "requirements[0] must be an object"},
+		{name: "missing name", requirements: `[{"description":"Install it.","url":"https://example.com"}]`, want: "requirements[0].name is required"},
+		{name: "empty name", requirements: `[{"name":"  ","description":"Install it.","url":"https://example.com"}]`, want: "requirements[0].name must not be empty"},
+		{name: "missing description", requirements: `[{"name":"CLI","url":"https://example.com"}]`, want: "requirements[0].description is required"},
+		{name: "empty description", requirements: `[{"name":"CLI","description":"","url":"https://example.com"}]`, want: "requirements[0].description must not be empty"},
+		{name: "missing url", requirements: `[{"name":"CLI","description":"Install it."}]`, want: "requirements[0].url is required"},
+		{name: "empty url", requirements: `[{"name":"CLI","description":"Install it.","url":""}]`, want: "requirements[0].url must not be empty"},
+		{name: "relative url", requirements: `[{"name":"CLI","description":"Install it.","url":"/install"}]`, want: "absolute HTTP or HTTPS URL"},
+		{name: "unsupported scheme", requirements: `[{"name":"CLI","description":"Install it.","url":"file:///tmp/install"}]`, want: "absolute HTTP or HTTPS URL"},
+		{name: "missing host", requirements: `[{"name":"CLI","description":"Install it.","url":"https:///install"}]`, want: "absolute HTTP or HTTPS URL"},
+		{name: "duplicate item key", requirements: `[{"name":"CLI","name":"Other","description":"Install it.","url":"https://example.com"}]`, want: "duplicate JSON key"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "demo")
+			manifest := fmt.Sprintf(`{"manifest_version":1,"name":"demo","version":"1.0.0","requirements":%s}`, tt.requirements)
 			writeRawExtensionFile(t, filepath.Join(dir, manifestFilename), manifest)
 			_, err := Discover(DiscoverOptions{
 				Roots:        []Root{{Path: root, Scope: ScopeDefaultHome}},
@@ -181,7 +242,6 @@ func TestDiscoverRejectsInvalidSelectedManifests(t *testing.T) {
 		{name: "invalid semver", dirName: "demo", manifest: `{"manifest_version":1,"name":"demo","version":"01.2.3"}`, want: "SemVer"},
 		{name: "null metadata", dirName: "demo", manifest: `{"manifest_version":1,"name":"demo","version":"1.0.0","description":null}`, want: "description"},
 		{name: "duplicate key", dirName: "demo", manifest: `{"manifest_version":1,"name":"demo","name":"other","version":"1.0.0"}`, want: "duplicate"},
-		{name: "unknown field", dirName: "demo", manifest: `{"manifest_version":1,"name":"demo","version":"1.0.0","descripton":"typo"}`, want: "unknown field"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

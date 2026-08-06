@@ -453,9 +453,12 @@ The read-only Extensions subsection at
 `/agents/:agentId/runtime/extensions` lists only selected winners. Each card
 shows display name, logical name, version, description, installation scope and
 absolute path, manifest version, and effective Skill, MCP server, Hook, and
-Observable counts. Extension-declared Agent environment variables appear by
+Observable counts. Declared requirements appear in manifest order with their
+name, description, and a keyboard-focusable external HTTP or HTTPS link opened
+in a new tab. Extension-declared Agent environment variables appear by
 name, source, and effective, shadowed, or deduplicated status; values never
-appear. It exposes no install, enable, disable, or edit controls.
+appear. Requirements are informational: the page exposes no check, install,
+enable, disable, or edit controls.
 An empty runtime uses the explicit `No Extensions are selected for this Agent.`
 state.
 

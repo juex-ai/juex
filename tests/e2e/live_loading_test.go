@@ -161,7 +161,11 @@ func TestLiveBinary_LoadsExtensionSkillsAndMCP(t *testing.T) {
 
 	work := t.TempDir()
 	extDir := filepath.Join(work, ".juex", "extensions", "demo")
-	if err := writeExtensionManifestFile(extDir, "demo"); err != nil {
+	if err := os.MkdirAll(extDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"manifest_version":1,"name":"demo","version":"1.0.0","requirements":[{"name":"Demo CLI","description":"Install the Demo CLI.","url":"https://example.com/demo-cli","future_metadata":true}],"future_metadata":{"ignored":true},"agent":{"future_metadata":true,"environment":{"future_metadata":true}}}`
+	if err := os.WriteFile(filepath.Join(extDir, "juex.extension.json"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeExtensionSkillFile(extDir, "ext-skill", "extension provided skill"); err != nil {

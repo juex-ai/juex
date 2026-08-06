@@ -387,6 +387,13 @@ optional:
   "homepage": "https://example.com",
   "repository": "https://example.com/repository",
   "license": "MIT",
+  "requirements": [
+    {
+      "name": "Example CLI",
+      "description": "Install and authenticate the Example CLI.",
+      "url": "https://example.com/cli"
+    }
+  ],
   "agent": {
     "environment": {
       "variables": {
@@ -418,9 +425,16 @@ platforms so the Extension contract is stable.
 
 Juex chooses the winning directory before reading its manifest. Only selected
 winners are validated; an invalid winner fails startup and never falls back to
-a lower-precedence copy. Validation rejects malformed JSON, duplicate or
-unknown fields, `null` values, unsupported manifest versions, name mismatch,
-and invalid SemVer. Unselected installed directories remain inert.
+a lower-precedence copy. Validation rejects malformed JSON, duplicate JSON
+keys, invalid values for known fields, unsupported manifest versions, name
+mismatch, and invalid SemVer. Unknown fields are ignored so another host can
+add its own metadata without preventing Juex from loading the Extension.
+Unselected installed directories remain inert.
+
+The optional flat `requirements` array is informational. Each item requires a
+non-empty `name`, `description`, and absolute HTTP or HTTPS `url`; order is
+preserved. Juex exposes these entries in Runtime status but does not detect,
+check, install, execute, or gate startup on them.
 
 Extensions may provide `skills/`, `mcp.json`, `hooks.yaml`, and
 `observables.json`; runtime status reports selected resources with source
@@ -435,7 +449,8 @@ The Web Runtime stage exposes Overview, Extensions, Observables, Logs, and
 Config subsections. Its read-only Extensions view shows the selected manifest,
 installation scope and path, and effective Skill, MCP server, Hook, and
 Observable counts from the same runtime resource graph used at startup. It
-also lists only Extension-declared Agent environment variable names, sources,
+lists declared requirements with their names, descriptions, and external
+links. It also lists only Extension-declared Agent environment variable names, sources,
 and effective, shadowed, or deduplicated status; values are never returned.
 `juex doctor` exposes the same value-free declaration diagnostics.
 Local extension MCP servers receive `JUEX_EXT_DIR`, the selected installation
