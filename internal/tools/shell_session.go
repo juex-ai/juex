@@ -170,6 +170,9 @@ type shellSession struct {
 	outputDone    <-chan struct{}
 	doneChan      chan struct{}
 
+	// deliveryMu keeps unread output snapshots from overtaking the matching
+	// output-delta delivery after the bytes have been appended under mu.
+	deliveryMu      sync.Mutex
 	mu              sync.Mutex
 	transcript      []byte
 	unread          []byte
@@ -490,6 +493,8 @@ func (s *shellSession) appendOutput(p []byte) {
 	data := append([]byte(nil), p...)
 	sanitized := SanitizeOutputBytes(data)
 	deltas := make([]OutputDelta, 0, (len(data)/maxShellDeltaBytes)+1)
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
 	s.mu.Lock()
 	s.transcript = appendCappedBytes(s.transcript, data, s.maxTranscript)
 	beforeUnread := len(s.unread)
@@ -561,6 +566,8 @@ func (s *shellSession) waitFor(ctx context.Context, yield time.Duration, minYiel
 }
 
 func (s *shellSession) snapshot(clearUnread bool, maxOutputTokens int) ShellSessionResult {
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastAccess = time.Now()
