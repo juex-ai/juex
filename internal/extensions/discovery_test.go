@@ -61,9 +61,9 @@ func TestDiscoverLoadsSelectedExtensionManifest(t *testing.T) {
       "url": "https://例子.测试/install"
     }
   ],
-  "future_root_metadata": {"enabled": true},
+  "future_root_metadata": {"enabled": true, "limit": 1e400},
   "agent": {
-    "future_agent_metadata": true,
+    "future_agent_metadata": {"limit": -1e400},
     "environment": {"future_environment_metadata": true}
   }
 }`)

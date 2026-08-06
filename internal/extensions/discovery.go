@@ -431,6 +431,7 @@ func requiredManifestString(fields map[string]json.RawMessage, name string) (str
 
 func validateUniqueJSONKeys(data []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
 	if err := validateJSONValue(decoder); err != nil {
 		return err
 	}
