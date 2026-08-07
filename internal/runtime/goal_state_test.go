@@ -103,6 +103,7 @@ func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 	}
 	if !decision.BlockStop || decision.Reason != "goal_in_progress" ||
 		!strings.Contains(decision.ContinuePrompt, "Current goal contract") ||
+		!strings.Contains(decision.ContinuePrompt, "wait_for_user") ||
 		!strings.Contains(decision.ContinuePrompt, "artifact.txt") ||
 		!strings.Contains(decision.ContinuePrompt, "go test ./... passes") {
 		t.Fatalf("in-progress decision = %+v", decision)

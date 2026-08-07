@@ -186,10 +186,10 @@ func (s *GoalStateStore) CompletionGateDecision() (GoalGateDecision, error) {
 	if state.Status != GoalStatusInProgress {
 		return GoalGateDecision{Status: state.Status, ContinuationCount: state.ContinuationCount}, nil
 	}
-	prompt := "The current session goal is still in progress. Continue working toward the goal, or call update_goal with status success or failure when the goal is complete or cannot be completed."
+	prompt := "The current session goal is still in progress. Continue working toward the goal, call update_goal with status wait_for_user when useful progress requires new user or external input, or call update_goal with status success or failure when the goal is complete or cannot be completed."
 	if contract, ok := state.RenderProviderContext(); ok {
 		prompt = "The current session goal is still in progress.\n\n" + contract +
-			"\n\nContinue working, or call update_goal with status success or failure when the goal is complete or cannot be completed."
+			"\n\nContinue working, call update_goal with status wait_for_user when useful progress requires new user or external input, or call update_goal with status success or failure when the goal is complete or cannot be completed."
 	}
 	return GoalGateDecision{
 		Status:            state.Status,
