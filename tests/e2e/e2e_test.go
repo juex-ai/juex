@@ -1761,6 +1761,95 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 	}
 }
 
+func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
+	work := t.TempDir()
+	prov := &recordingProvider{
+		steps: []llm.Response{
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockToolUse, ToolUseID: "goal-create-wait", ToolName: runtime.GoalToolCreate, Input: map[string]any{
+						"description": "deploy after user approval",
+						"acceptance":  "the approved deployment is healthy",
+					}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockToolUse, ToolUseID: "goal-wait", ToolName: runtime.GoalToolUpdate, Input: map[string]any{
+						"status":        string(runtime.GoalStatusWaitForUser),
+						"status_reason": "waiting for deployment approval",
+					}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "Which deployment do you approve?"),
+				StopReason: llm.StopEndTurn,
+			},
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockToolUse, ToolUseID: "goal-success-after-input", ToolName: runtime.GoalToolUpdate, Input: map[string]any{
+						"status":        string(runtime.GoalStatusSuccess),
+						"status_reason": "user approved the healthy deployment",
+					}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "Deployment approved and complete."),
+				StopReason: llm.StopEndTurn,
+			},
+		},
+	}
+	a, err := app.New(app.Options{
+		Config: config.Config{
+			ProviderProtocol: "openai/chat",
+			WorkDir:          work,
+		},
+		Provider: prov,
+		WorkDir:  work,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	first, err := a.Run(context.Background(), "deploy the service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != "Which deployment do you approve?" || len(prov.history) != 3 {
+		t.Fatalf("first output = %q, provider calls = %d", first, len(prov.history))
+	}
+
+	second, err := a.Run(context.Background(), "Use the blue deployment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != "Deployment approved and complete." || len(prov.history) != 5 {
+		t.Fatalf("second output = %q, provider calls = %d", second, len(prov.history))
+	}
+	if got := messagesText(prov.history[3]); !strings.Contains(got, "status: wait_for_user") || !strings.Contains(got, "waiting for deployment approval") {
+		t.Fatalf("new input should reach the model with unchanged waiting goal:\n%s", got)
+	}
+
+	goalData, err := os.ReadFile(filepath.Join(a.Session.Dir, "goal_state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(goalData), `"status": "success"`) || !strings.Contains(string(goalData), `"status_reason": "user approved the healthy deployment"`) {
+		t.Fatalf("goal_state.json = %s", goalData)
+	}
+	eventsData, err := os.ReadFile(filepath.Join(a.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(eventsData), `"type":"goal.continued"`) {
+		t.Fatalf("wait_for_user should not force a continuation:\n%s", eventsData)
+	}
+}
+
 func TestEndToEnd_DebugObservabilityArtifacts(t *testing.T) {
 	work := t.TempDir()
 	if err := os.WriteFile(filepath.Join(work, "ok.txt"), []byte("visible\n"), 0o644); err != nil {

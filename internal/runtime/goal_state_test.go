@@ -118,6 +118,28 @@ func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 		t.Fatalf("continuation_count = %d", state.ContinuationCount)
 	}
 
+	waitReason := "waiting for the user to approve the release"
+	if _, err := store.Update(GoalStateUpdate{Status: GoalStatusWaitForUser, StatusReason: &waitReason}); err != nil {
+		t.Fatal(err)
+	}
+	decision, err = store.CompletionGateDecision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.BlockStop || decision.Status != GoalStatusWaitForUser {
+		t.Fatalf("wait-for-user should allow finish: %+v", decision)
+	}
+	if err := store.RecordContinuation(decision); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ContinuationCount != 1 {
+		t.Fatalf("wait-for-user changed continuation_count = %d", state.ContinuationCount)
+	}
+
 	if _, err := store.Update(GoalStateUpdate{Status: GoalStatusFailure}); err != nil {
 		t.Fatal(err)
 	}

@@ -16,9 +16,10 @@ const goalStateFile = "goal_state.json"
 type GoalStatus string
 
 const (
-	GoalStatusInProgress GoalStatus = "in_progress"
-	GoalStatusSuccess    GoalStatus = "success"
-	GoalStatusFailure    GoalStatus = "failure"
+	GoalStatusInProgress  GoalStatus = "in_progress"
+	GoalStatusWaitForUser GoalStatus = "wait_for_user"
+	GoalStatusSuccess     GoalStatus = "success"
+	GoalStatusFailure     GoalStatus = "failure"
 
 	maxGoalAcceptanceBytes = 32 * 1024
 )
@@ -330,7 +331,7 @@ func normalizeGoalState(state GoalState) GoalState {
 
 func validateGoalStatus(status GoalStatus) error {
 	switch status {
-	case GoalStatusInProgress, GoalStatusSuccess, GoalStatusFailure:
+	case GoalStatusInProgress, GoalStatusWaitForUser, GoalStatusSuccess, GoalStatusFailure:
 		return nil
 	default:
 		return fmt.Errorf("invalid goal status %q", status)

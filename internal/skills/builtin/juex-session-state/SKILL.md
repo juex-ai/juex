@@ -18,7 +18,13 @@ constraints, or examples. Correct tool calls do not require a prior guide load.
   criteria, required artifacts, constraints, and verification. Use
   `status_reason` for concise evidence about the current state.
 - Use `update_goal` to change contract fields or status. Allowed statuses are
-  `in_progress`, `success`, and `failure`.
+  `in_progress`, `wait_for_user`, `success`, and `failure`.
+- Use `wait_for_user` only when the unfinished goal cannot make useful progress
+  until new external input arrives. Include a concise `status_reason` that says
+  what input is needed. This status allows the current turn to finish without a
+  forced continuation. When new input arrives, evaluate it and explicitly
+  change the status to `in_progress`, `success`, or `failure`, or leave it as
+  `wait_for_user` when the required input is still missing.
 - Mark `success` only after every acceptance condition is verified. Mark
   `failure` only when the goal truly cannot be completed, and include an
   evidence-backed `status_reason`. Difficulty, delay, or incomplete work is

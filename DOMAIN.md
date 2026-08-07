@@ -130,6 +130,22 @@ domain boundary.
    semantic source classification, including direct input, MCP notification,
    Observation, or runtime continuation.
 
+### Goal Lifecycle
+
+1. A Goal is absent until the model explicitly creates its Session completion
+   contract. Ordinary input does not create a Goal.
+2. `in_progress` means work can continue now. A finish attempt records a Goal
+   continuation and starts another Provider iteration.
+3. `wait_for_user` means the Goal is unfinished but useful progress requires
+   new external input. It allows the current Turn to finish without recording
+   a continuation.
+4. New input does not mutate a waiting Goal. The model sees the persisted
+   contract in its next Provider request and explicitly chooses whether to set
+   `in_progress`, a terminal status, or remain `wait_for_user`.
+5. `success` and `failure` are terminal Goal statuses and allow the Turn to
+   finish. Status changes preserve the Goal contract and its accumulated
+   continuation count.
+
 ### Observable And Observation
 
 1. A Workspace or selected extension defines a tagged Command Observable or
