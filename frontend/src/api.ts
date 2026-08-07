@@ -7,6 +7,7 @@ import type {
   InterruptResponse,
   SessionShowResponse,
   SessionsListResponse,
+  ActiveSessionResponse,
   StartTurnResponse,
   MediaRef,
   FileContentResponse,
@@ -72,6 +73,10 @@ async function jsonOrThrow<T>(r: Response): Promise<T> {
 
 export async function listSessions(): Promise<SessionsListResponse> {
   return jsonOrThrow(await fetch(agentAPIPath("/api/sessions")));
+}
+
+export async function getActiveSession(): Promise<ActiveSessionResponse> {
+  return jsonOrThrow(await fetch(agentAPIPath("/api/sessions/active")));
 }
 
 export async function createSession(): Promise<CreateSessionResponse> {

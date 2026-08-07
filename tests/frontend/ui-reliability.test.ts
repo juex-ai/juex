@@ -28,12 +28,15 @@ test("runtime and sessions expose initial request failures", () => {
   );
   assert.match(sessionsSource, /setError\(/);
   assert.match(sessionsSource, /role="alert"/);
-  assert.match(sessionsSource, /if \(error && !data\)/);
+  assert.match(sessionsSource, /if \(error\)/);
+  assert.match(sessionsSource, /getActiveSession\(\)/);
+  assert.doesNotMatch(sessionsSource, /\blistSessions\b/);
   assert.match(
     sessionsSource,
-    /setCheckingSession\(true\);\s*setData\(null\);\s*setError\(null\)/,
-    "switching agents must discard the previous agent's session-list authority",
+    /setCheckingSession\(true\);\s*setError\(null\);\s*getActiveSession\(\)/,
+    "switching agents must discard the previous active-session lookup state",
   );
+  assert.match(sessionsSource, /if \(!live\) return/);
 });
 
 test("failed uncontrolled prompt submission preserves text for retry", () => {

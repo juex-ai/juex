@@ -1,7 +1,7 @@
 import { LogoMark } from "@/components/LogoMark";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { createSession, listSessions, startTurn } from "@/api";
+import { createSession, getActiveSession, startTurn } from "@/api";
 import {
   PromptInput,
   PromptInputFooter,
@@ -14,14 +14,12 @@ import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import { Button } from "@/components/ui/button";
 import { homeActiveSessionHref } from "@/lib/home-route";
 import { agentPathFromLocation } from "@/lib/fleet-routes";
-import type { SessionInfo } from "@/types";
 
 export function Sessions() {
   const navigate = useNavigate();
   const location = useLocation();
   const { agent, agentsLoaded } = useFleetAgent();
   const [checkingSession, setCheckingSession] = useState(true);
-  const [data, setData] = useState<SessionInfo[] | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,20 +28,18 @@ export function Sessions() {
   useEffect(() => {
     let live = true;
     setCheckingSession(true);
-    setData(null);
     setError(null);
-    listSessions()
-      .then(({ sessions }) => {
+    getActiveSession()
+      .then(({ session_id }) => {
         if (!live) return;
-        setData(sessions);
-        const href = homeActiveSessionHref(sessions, location.pathname);
+        const href = homeActiveSessionHref(session_id, location.pathname);
         if (href) {
           navigate(href, { replace: true });
         }
       })
       .catch((e) => {
         if (!live) return;
-        console.error("listSessions failed", e);
+        console.error("getActiveSession failed", e);
         setError(
           e instanceof Error ? e.message : "Failed to load existing chats.",
         );
@@ -56,7 +52,7 @@ export function Sessions() {
     };
   }, [loadAttempt, location.pathname, navigate]);
 
-  if (error && !data) {
+  if (error) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-8">
         <div className="flex max-w-md flex-col items-center gap-3 text-center">
@@ -79,7 +75,7 @@ export function Sessions() {
     );
   }
 
-  if (!data || checkingSession) {
+  if (checkingSession) {
     return null;
   }
 

@@ -82,6 +82,58 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": infos})
 }
 
+type activeSessionResponse struct {
+	SessionID string `json:"session_id,omitempty"`
+}
+
+func (s *Server) handleActiveSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
+		return
+	}
+	id, ok, err := s.webActiveSessionID()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusOK, activeSessionResponse{})
+		return
+	}
+	writeJSON(w, http.StatusOK, activeSessionResponse{SessionID: id})
+}
+
+func (s *Server) webActiveSessionID() (string, bool, error) {
+	id, ok, err := s.activePrimarySessionID()
+	if err != nil || !ok {
+		return "", ok, err
+	}
+	if v, live := s.sessions.Load(id); live {
+		as := v.(*activeSession)
+		if info, available := as.app.SessionInfo(); available && info.Kind == session.KindPrimary {
+			return id, true, nil
+		}
+	}
+	if !session.ValidID(id) {
+		return "", false, nil
+	}
+	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
+	if !session.HasConversation(dir) {
+		return "", false, nil
+	}
+	kind, err := session.LoadKind(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, session.ErrSessionTimeUnavailable) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	if session.NormalizeKind(kind) != session.KindPrimary {
+		return "", false, nil
+	}
+	return id, true, nil
+}
+
 type createSessionRequest struct {
 	Kind string `json:"kind"`
 }

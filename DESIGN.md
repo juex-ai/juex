@@ -321,7 +321,9 @@ behind optimistic status.
 
 The center column shows a warm paper empty state with the logo mark, the line
 `Aware, action`, and the normal prompt input. Submitting creates a new active
-primary session and navigates to `/agents/<id>/sessions/<new-id>`.
+primary session and navigates to `/agents/<id>/sessions/<new-id>`. On entry,
+the page uses the lightweight active-session lookup to redirect to an existing
+active primary session; it does not load the full session history.
 
 ### 6.3 Session detail (`/agents/:agentId/sessions/:id`)
 
