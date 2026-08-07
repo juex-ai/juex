@@ -27,9 +27,9 @@ func TestWorkspacePathResolverNormalizesEquivalentPaths(t *testing.T) {
 	}
 }
 
-func TestWorkspacePathResolverCanonicalizesWindowsCaseIdentity(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows paths are case-insensitive")
+func TestWorkspacePathResolverCanonicalizesCaseInsensitiveIdentity(t *testing.T) {
+	if !caseInsensitiveWorkspacePaths() {
+		t.Skip("platform paths are case-sensitive")
 	}
 	root := t.TempDir()
 	resolver, err := newWorkspacePathResolver(root)

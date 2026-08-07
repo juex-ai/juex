@@ -1602,9 +1602,9 @@ func TestBuiltins_ApplyPatchCanonicalizesAbsolutePathsBeforeValidation(t *testin
 	}
 }
 
-func TestBuiltins_ApplyPatchRejectsWindowsCaseVariantDuplicate(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows paths are case-insensitive")
+func TestBuiltins_ApplyPatchRejectsCaseVariantDuplicate(t *testing.T) {
+	if !caseInsensitiveWorkspacePaths() {
+		t.Skip("platform paths are case-sensitive")
 	}
 	workDir := t.TempDir()
 	r := NewRegistry()
@@ -2376,9 +2376,9 @@ func TestBuiltins_ChunkedWriteCanonicalizesAbsoluteTargetForActiveSession(t *tes
 	}
 }
 
-func TestBuiltins_ChunkedWriteRejectsWindowsCaseVariantActiveSession(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows paths are case-insensitive")
+func TestBuiltins_ChunkedWriteRejectsCaseVariantActiveSession(t *testing.T) {
+	if !caseInsensitiveWorkspacePaths() {
+		t.Skip("platform paths are case-sensitive")
 	}
 	workDir := t.TempDir()
 	r := NewRegistry()
