@@ -94,7 +94,7 @@ func applyPatchToolDefinition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "apply_patch",
 		Group:       ToolGroupFile,
-		Description: "Apply a Codex-style patch inside the workspace. Supports add, update, delete, and move operations. Input is {patch_text: \"*** Begin Patch\\n...\\n*** End Patch\"}.",
+		Description: "Apply a Codex-style patch inside the workspace. File and move paths may be workspace-relative or absolute paths inside the workspace. Supports add, update, delete, and move operations. Input is {patch_text: \"*** Begin Patch\\n...\\n*** End Patch\"}.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

@@ -622,8 +622,8 @@ error rather than mixing guidance into diagnostics.
 | `read` | read file (offset/limit) |
 | `write` | overwrite file |
 | `edit` | old -> new in-place replace; unique by default, optional replace_all / expected_replacements |
-| `apply_patch` | structured patch edits with add / update / delete / move, whole-patch validation, workspace path checks, and compact results |
-| `write_begin` / `write_chunk` / `write_commit` / `write_abort` | chunked full-file writes for long generated files, with bounded chunks, idempotent chunk replay, optional SHA-256 validation, abort, and temporary-file commit |
+| `apply_patch` | structured patch edits with add / update / delete / move, whole-patch validation, shared workspace path normalization, and compact results |
+| `write_begin` / `write_chunk` / `write_commit` / `write_abort` | chunked full-file writes for long generated files, with shared workspace path normalization, bounded chunks, idempotent chunk replay, optional SHA-256 validation, abort, and temporary-file commit |
 | `exec_command` | run a command through the resolved workspace shell (workdir defaults to WorkDir; optional bounded yield and `tty: true` for long-running or interactive sessions) |
 | `write_stdin` | poll a running command session, write `chars` to a TTY session, or send Ctrl-C (`\x03`) to interrupt a non-TTY session using the numeric `session_id` returned by `exec_command` |
 | `list_shell_sessions` | recover Juex-managed shell session ids and status after forgotten state, compaction, or background commands; defaults to running sessions |
@@ -641,10 +641,13 @@ registers a declarative list of builtin providers for file, chunked write,
 shell, and search tool families. Callers that need custom composition can
 append to `tools.DefaultBuiltinProviders()` and pass the result through
 `BuiltinOptions.Providers`.
-`WorkDir` injects the default workspace so `read`, `write`, `edit`, and
-`apply_patch` resolve relative paths against the agent workspace, and
-`exec_command` / `grep` fall back to it when the model does not pass an
-explicit `workdir` / `path`.
+`WorkDir` injects the default workspace so `read`, `write`, and `edit` resolve
+relative paths against the agent workspace. `apply_patch` and `write_begin`
+share a stricter workspace resolver: they accept relative paths or absolute
+paths lexically contained by the workspace, reject symlink escapes, and retain
+one normalized workspace-relative identity. `PathGuard` separately enforces
+configured blocked paths after resolution. `exec_command` / `grep` fall back to
+`WorkDir` when the model does not pass an explicit `workdir` / `path`.
 Directory `grep` searches do not follow file or directory symlinks, keeping
 recursive traversal inside the selected tree. Passing a symlinked file as the
 explicit `path` still searches its target and preserves the single-file output
@@ -657,6 +660,10 @@ operations return compact acknowledgements and a structured
 `tool_result` block and tool event. Provider-visible history keeps recent
 active chunks available so a model can continue writing, then folds committed
 or aborted chunked write sessions into compact summaries from those facts.
+Begin and commit both resolve workspace and symlink boundaries, so a delayed
+commit fails closed if a parent was replaced with an escaping symlink. Events
+persist only the normalized relative path, independent of the caller's input
+spelling.
 Human-readable tool result text is presentation only and is not parsed as a
 machine interface. Transcripts without lifecycle facts remain unfolded
 rather than inventing active or committed state. The durable conversation log

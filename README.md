@@ -512,10 +512,13 @@ letting it guess. Enable `providers[].models[].capabilities.vision` only for a
 model that actually accepts image input.
 `apply_patch` accepts a compact patch envelope in `patch_text`
 with `*** Begin Patch` / `*** End Patch` markers and supports add, update,
-delete, and move operations. It validates the whole patch before writing,
+delete, and move operations. Patch paths may be workspace-relative or absolute
+paths inside the workspace; equivalent spellings are normalized to one
+workspace-relative identity. It validates the whole patch before writing,
 rejects paths outside the workspace, and returns a short changed-file summary
 instead of echoing the patch text back into the provider transcript. For long
-generated files, chunked write sessions accept bounded chunks, validate
+generated files, `write_begin` accepts the same path forms, and chunked write
+sessions accept bounded chunks, validate
 optional chunk/full-file SHA-256 digests, and commit with a temporary file plus
 rename so failed validation does not overwrite the target. Each chunk is capped
 at the provider-safe limit of about 2,000 characters or 4,000 bytes so tool
@@ -523,10 +526,13 @@ argument JSON stays within model output limits. Successful chunked write tool
 results also persist a machine-readable lifecycle fact; provider-visible
 history uses those facts, not human-readable result strings, to keep recent
 active chunks available for continuation and fold committed chunked write
-sessions into a compact summary. When a session is resumed, Juex reconstructs
-active chunked write state from the persisted lifecycle facts plus the original
-tool-use inputs when enough transcript data remains. The durable conversation
-log still preserves the original tool-use inputs for replay and debugging.
+sessions into a compact summary. Begin and commit revalidate workspace,
+symlink, and configured blocked-path boundaries; persisted lifecycle facts
+always use the normalized relative path. When a session is resumed, Juex
+reconstructs active chunked write state from the persisted lifecycle facts plus
+the original tool-use inputs when enough transcript data remains. The durable
+conversation log still preserves the original tool-use inputs for replay and
+debugging.
 
 The builtin command tools are `exec_command`, `write_stdin`, and
 `list_shell_sessions`. Juex resolves a

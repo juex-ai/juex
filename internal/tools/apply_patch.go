@@ -54,11 +54,6 @@ type patchChange struct {
 	deletions int
 }
 
-type patchWorkspace struct {
-	root     string
-	evalRoot string
-}
-
 type patchSummary struct {
 	changes   []patchChange
 	adds      int
@@ -95,15 +90,18 @@ func applyPatch(ctx context.Context, workDir, patchText string, guard sandbox.Pa
 	if err != nil {
 		return patchSummary{}, err
 	}
-	ws, err := newPatchWorkspace(workDir)
+	paths, err := newWorkspacePathResolver(workDir)
 	if err != nil {
 		return patchSummary{}, err
 	}
-	summary, err := planPatch(ws, ops, guard)
+	summary, err := planPatch(paths, ops, guard)
 	if err != nil {
 		return patchSummary{}, err
 	}
 	if err := ctx.Err(); err != nil {
+		return patchSummary{}, err
+	}
+	if err := validatePatchChanges(paths, summary.changes, guard); err != nil {
 		return patchSummary{}, err
 	}
 	if err := applyPatchChanges(summary.changes); err != nil {
@@ -179,99 +177,22 @@ func parsePatch(patchText string) ([]patchOperation, error) {
 	return ops, nil
 }
 
-func newPatchWorkspace(workDir string) (patchWorkspace, error) {
-	root := workDir
-	if root == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return patchWorkspace{}, err
-		}
-		root = cwd
-	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return patchWorkspace{}, err
-	}
-	evalRoot, err := filepath.EvalSymlinks(absRoot)
-	if err != nil {
-		return patchWorkspace{}, err
-	}
-	return patchWorkspace{root: absRoot, evalRoot: evalRoot}, nil
-}
-
-func (w patchWorkspace) resolve(path string) (string, string, error) {
-	if strings.TrimSpace(path) == "" {
-		return "", "", fmt.Errorf("apply_patch: unsafe path %q", path)
-	}
-	if strings.Contains(path, ":") || strings.HasPrefix(path, `\\`) || strings.HasPrefix(path, "//") {
-		return "", "", fmt.Errorf("apply_patch: unsafe path %q: colons and UNC paths are not allowed", path)
-	}
-	path = filepath.FromSlash(path)
-	if filepath.IsAbs(path) {
-		return "", "", fmt.Errorf("apply_patch: unsafe path %q: absolute paths are not allowed", path)
-	}
-	rel := filepath.Clean(path)
-	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", "", fmt.Errorf("apply_patch: unsafe path %q: path escapes workspace", path)
-	}
-	abs := filepath.Join(w.root, rel)
-	if !pathWithin(w.root, abs) {
-		return "", "", fmt.Errorf("apply_patch: unsafe path %q: path escapes workspace", path)
-	}
-	if err := w.checkSymlinkBoundary(abs, rel); err != nil {
-		return "", "", err
-	}
-	return filepath.ToSlash(rel), abs, nil
-}
-
-func (w patchWorkspace) checkSymlinkBoundary(abs, rel string) error {
-	checkPath := abs
-	if _, err := os.Lstat(checkPath); err != nil {
-		for {
-			parent := filepath.Dir(checkPath)
-			if parent == checkPath {
-				return nil
-			}
-			if _, statErr := os.Lstat(parent); statErr == nil {
-				checkPath = parent
-				break
-			}
-			checkPath = parent
-		}
-	}
-	evaluated, err := filepath.EvalSymlinks(checkPath)
-	if err != nil {
-		return err
-	}
-	if !pathWithin(w.evalRoot, evaluated) {
-		return fmt.Errorf("apply_patch: unsafe path %q: symlink escapes workspace", filepath.ToSlash(rel))
-	}
-	return nil
-}
-
-func pathWithin(root, target string) bool {
-	rel, err := filepath.Rel(root, target)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-func planPatch(ws patchWorkspace, ops []patchOperation, guard sandbox.PathGuard) (patchSummary, error) {
+func planPatch(paths workspacePathResolver, ops []patchOperation, guard sandbox.PathGuard) (patchSummary, error) {
 	var summary patchSummary
 	touched := map[string]bool{}
 	for _, op := range ops {
-		rel, abs, err := ws.resolve(op.path)
+		resolved, err := paths.Resolve(op.path)
 		if err != nil {
-			return patchSummary{}, err
+			return patchSummary{}, fmt.Errorf("apply_patch: %w", err)
 		}
+		rel, abs, identity := resolved.Relative, resolved.Absolute, resolved.Identity
 		if err := guard.Check(abs); err != nil {
 			return patchSummary{}, fmt.Errorf("apply_patch: %w", err)
 		}
-		if touched[rel] {
+		if touched[identity] {
 			return patchSummary{}, fmt.Errorf("apply_patch: duplicate operation for %s", rel)
 		}
-		touched[rel] = true
+		touched[identity] = true
 		switch op.kind {
 		case patchAdd:
 			change, err := planPatchAdd(rel, abs, op)
@@ -284,20 +205,21 @@ func planPatch(ws patchWorkspace, ops []patchOperation, guard sandbox.PathGuard)
 		case patchUpdate:
 			moveRel, moveAbs := "", ""
 			if op.moveTo != "" {
-				moveRel, moveAbs, err = ws.resolve(op.moveTo)
+				move, err := paths.Resolve(op.moveTo)
 				if err != nil {
-					return patchSummary{}, err
+					return patchSummary{}, fmt.Errorf("apply_patch: %w", err)
 				}
+				moveRel, moveAbs = move.Relative, move.Absolute
 				if err := guard.Check(moveAbs); err != nil {
 					return patchSummary{}, fmt.Errorf("apply_patch: %w", err)
 				}
-				if moveRel == rel {
+				if move.Identity == identity {
 					return patchSummary{}, fmt.Errorf("apply_patch: move target matches source for %s", rel)
 				}
-				if touched[moveRel] {
+				if touched[move.Identity] {
 					return patchSummary{}, fmt.Errorf("apply_patch: duplicate operation for %s", moveRel)
 				}
-				touched[moveRel] = true
+				touched[move.Identity] = true
 			}
 			change, err := planPatchUpdate(rel, abs, moveRel, moveAbs, op)
 			if err != nil {
@@ -320,6 +242,30 @@ func planPatch(ws patchWorkspace, ops []patchOperation, guard sandbox.PathGuard)
 		}
 	}
 	return summary, nil
+}
+
+func validatePatchChanges(paths workspacePathResolver, changes []patchChange, guard sandbox.PathGuard) error {
+	for _, change := range changes {
+		for _, target := range []struct {
+			rel string
+			abs string
+		}{{change.rel, change.abs}, {change.moveRel, change.moveAbs}} {
+			if target.rel == "" {
+				continue
+			}
+			resolved, err := paths.Resolve(target.rel)
+			if err != nil {
+				return fmt.Errorf("apply_patch: %w", err)
+			}
+			if resolved.Identity != paths.identity(target.rel) || !paths.sameAbsolute(resolved.Absolute, target.abs) {
+				return fmt.Errorf("apply_patch: unsafe path %q: path identity changed before write", target.rel)
+			}
+			if err := guard.Check(resolved.Absolute); err != nil {
+				return fmt.Errorf("apply_patch: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 func planPatchAdd(rel, abs string, op patchOperation) (patchChange, error) {

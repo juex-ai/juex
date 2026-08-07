@@ -1438,6 +1438,9 @@ func TestRegisterBuiltinsApplyPatchSchemaAndDisable(t *testing.T) {
 	if _, ok := props["patch_text"]; !ok {
 		t.Fatalf("patch_text property missing from schema: %+v", props)
 	}
+	if !strings.Contains(tool.Description, "absolute paths inside the workspace") {
+		t.Fatalf("apply_patch description missing accepted absolute path contract: %q", tool.Description)
+	}
 	required, ok := tool.Schema["required"].([]string)
 	if !ok || len(required) != 1 || required[0] != "patch_text" {
 		t.Fatalf("required = %+v, want [patch_text]", tool.Schema["required"])
@@ -1505,6 +1508,178 @@ func TestBuiltins_ApplyPatchAddUpdateDeleteMove(t *testing.T) {
 	}
 	if data := mustReadFile(t, filepath.Join(workDir, "moved", "renamed.txt")); string(data) != "new name\n" {
 		t.Fatalf("moved file = %q", data)
+	}
+}
+
+func TestBuiltins_ApplyPatchAcceptsAbsoluteWorkspacePaths(t *testing.T) {
+	workDir := t.TempDir()
+	for name, content := range map[string]string{
+		"src.txt":    "alpha\nbeta\n",
+		"move.txt":   "old name\n",
+		"delete.txt": "remove me\n",
+	} {
+		if err := os.WriteFile(filepath.Join(workDir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	out, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: " + filepath.Join(workDir, "nested", "new.txt"),
+		"+new file",
+		"*** Update File: " + filepath.Join(workDir, "src.txt"),
+		"@@",
+		" alpha",
+		"-beta",
+		"+BETA",
+		"*** Update File: " + filepath.Join(workDir, "move.txt"),
+		"*** Move to: " + filepath.Join(workDir, "moved", "renamed.txt"),
+		"@@",
+		"-old name",
+		"+new name",
+		"*** Delete File: " + filepath.Join(workDir, "delete.txt"),
+		"*** End Patch",
+	}, "\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"nested/new.txt", "src.txt", "moved/renamed.txt"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output = %q, want normalized path %q", out, want)
+		}
+	}
+	if strings.Contains(out, workDir) {
+		t.Fatalf("output leaked absolute workspace path: %q", out)
+	}
+	if got := string(mustReadFile(t, filepath.Join(workDir, "nested", "new.txt"))); got != "new file\n" {
+		t.Fatalf("new file = %q", got)
+	}
+	if got := string(mustReadFile(t, filepath.Join(workDir, "src.txt"))); got != "alpha\nBETA\n" {
+		t.Fatalf("updated file = %q", got)
+	}
+	if got := string(mustReadFile(t, filepath.Join(workDir, "moved", "renamed.txt"))); got != "new name\n" {
+		t.Fatalf("moved file = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "delete.txt")); !os.IsNotExist(err) {
+		t.Fatalf("delete target still exists: %v", err)
+	}
+}
+
+func TestBuiltins_ApplyPatchCanonicalizesAbsolutePathsBeforeValidation(t *testing.T) {
+	workDir := t.TempDir()
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+	target := filepath.Join(workDir, "same.txt")
+
+	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: same.txt",
+		"+first",
+		"*** Add File: " + target,
+		"+second",
+		"*** End Patch",
+	}, "\n")})
+	if err == nil || !strings.Contains(err.Error(), "duplicate operation") {
+		t.Fatalf("mixed-spelling duplicate err = %v", err)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("duplicate patch wrote target: %v", statErr)
+	}
+
+	if err := os.WriteFile(target, []byte("same\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Update File: same.txt",
+		"*** Move to: " + target,
+		"*** End Patch",
+	}, "\n")})
+	if err == nil || !strings.Contains(err.Error(), "move target matches source") {
+		t.Fatalf("mixed-spelling same move err = %v", err)
+	}
+}
+
+func TestBuiltins_ApplyPatchRejectsCaseVariantDuplicate(t *testing.T) {
+	workDir := t.TempDir()
+	paths, err := newWorkspacePathResolver(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !paths.caseInsensitive {
+		t.Skip("workspace volume is case-sensitive")
+	}
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+	target := filepath.Join(workDir, "same.txt")
+	_, err = r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: same.txt",
+		"+first",
+		"*** Add File: SAME.TXT",
+		"+second",
+		"*** End Patch",
+	}, "\n")})
+	if err == nil || !strings.Contains(err.Error(), "duplicate operation") {
+		t.Fatalf("case-variant duplicate err = %v", err)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("duplicate patch wrote target: %v", statErr)
+	}
+}
+
+func TestBuiltins_ApplyPatchRejectsOutsideAbsolutePathBeforeWriting(t *testing.T) {
+	workDir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: valid.txt",
+		"+must not be written",
+		"*** Add File: " + outside,
+		"+outside",
+		"*** End Patch",
+	}, "\n")})
+	if err == nil || !strings.Contains(err.Error(), "path escapes workspace") {
+		t.Fatalf("outside absolute err = %v", err)
+	}
+	for _, path := range []string{filepath.Join(workDir, "valid.txt"), outside} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("failed patch wrote %s: %v", path, statErr)
+		}
+	}
+}
+
+func TestBuiltins_ApplyPatchAbsolutePathRespectsSandboxBlockedPaths(t *testing.T) {
+	workDir := t.TempDir()
+	blockedDir := filepath.Join(workDir, "private")
+	if err := os.MkdirAll(blockedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(blockedDir, "secret.txt")
+	if err := os.WriteFile(target, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerSandboxedTestBuiltins(r, workDir, []string{"private"})
+
+	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Update File: " + target,
+		"@@",
+		"-secret",
+		"+open",
+		"*** End Patch",
+	}, "\n")})
+	if err == nil || !strings.Contains(err.Error(), "blocked path") {
+		t.Fatalf("absolute blocked path err = %v", err)
+	}
+	if got := string(mustReadFile(t, target)); got != "secret\n" {
+		t.Fatalf("blocked file changed: %q", got)
 	}
 }
 
@@ -1931,6 +2106,43 @@ func TestBuiltins_ChunkedWriteCommitOverwrite(t *testing.T) {
 	}
 }
 
+func TestBuiltins_ChunkedWriteAcceptsAbsoluteWorkspacePath(t *testing.T) {
+	workDir := t.TempDir()
+	target := filepath.Join(workDir, "nested", "absolute.md")
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	beginOut, beginInfo, err := r.CallWithInfo(context.Background(), "write_begin", map[string]any{"path": target, "mode": "create"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(beginOut, workDir) || !strings.Contains(beginOut, "path=nested/absolute.md") {
+		t.Fatalf("begin output = %q, want normalized relative path", beginOut)
+	}
+	beginEvent, ok := beginInfo.StructuredResult.(chunkedwrite.Event)
+	if !ok || beginEvent.Path != "nested/absolute.md" {
+		t.Fatalf("begin event = %#v, want relative path", beginInfo.StructuredResult)
+	}
+	writeID := chunkWriteIDFromResult(t, beginOut)
+	if _, err := r.Call(context.Background(), "write_chunk", map[string]any{"write_id": writeID, "index": 0, "content": "absolute\n"}); err != nil {
+		t.Fatal(err)
+	}
+	commitOut, commitInfo, err := r.CallWithInfo(context.Background(), "write_commit", map[string]any{"write_id": writeID, "expected_chunks": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(commitOut, workDir) || !strings.Contains(commitOut, "path=nested/absolute.md") {
+		t.Fatalf("commit output = %q, want normalized relative path", commitOut)
+	}
+	commitEvent, ok := commitInfo.StructuredResult.(chunkedwrite.Event)
+	if !ok || commitEvent.Path != "nested/absolute.md" {
+		t.Fatalf("commit event = %#v, want relative path", commitInfo.StructuredResult)
+	}
+	if got := string(mustReadFile(t, target)); got != "absolute\n" {
+		t.Fatalf("target = %q", got)
+	}
+}
+
 func TestBuiltins_ChunkedWriteCreateMode(t *testing.T) {
 	workDir := t.TempDir()
 	r := NewRegistry()
@@ -2151,6 +2363,47 @@ func TestBuiltins_ChunkedWriteRejectsConcurrentTargetSession(t *testing.T) {
 	}
 }
 
+func TestBuiltins_ChunkedWriteCanonicalizesAbsoluteTargetForActiveSession(t *testing.T) {
+	workDir := t.TempDir()
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+	beginOut, err := r.Call(context.Background(), "write_begin", map[string]any{"path": filepath.Join(workDir, "same.txt")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeID := chunkWriteIDFromResult(t, beginOut)
+	if _, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "same.txt"}); err == nil || !strings.Contains(err.Error(), "already active") {
+		t.Fatalf("relative duplicate begin err = %v", err)
+	}
+	if _, err := r.Call(context.Background(), "write_abort", map[string]any{"write_id": writeID}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBuiltins_ChunkedWriteRejectsCaseVariantActiveSession(t *testing.T) {
+	workDir := t.TempDir()
+	paths, err := newWorkspacePathResolver(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !paths.caseInsensitive {
+		t.Skip("workspace volume is case-sensitive")
+	}
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+	beginOut, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "same.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeID := chunkWriteIDFromResult(t, beginOut)
+	if _, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "SAME.TXT"}); err == nil || !strings.Contains(err.Error(), "already active") {
+		t.Fatalf("case-variant duplicate begin err = %v", err)
+	}
+	if _, err := r.Call(context.Background(), "write_abort", map[string]any{"write_id": writeID}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestBuiltins_ChunkedWriteRejectsUnsafePath(t *testing.T) {
 	workDir := t.TempDir()
 	r := NewRegistry()
@@ -2182,6 +2435,58 @@ func TestBuiltins_ChunkedWriteRespectsSandboxBlockedPaths(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workDir, "private", "long.md")); !os.IsNotExist(err) {
 		t.Fatalf("blocked chunked write created file, stat err=%v", err)
+	}
+}
+
+func TestBuiltins_ChunkedWriteAbsolutePathRespectsSandboxBlockedPaths(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, "private"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerSandboxedTestBuiltins(r, workDir, []string{"private"})
+	target := filepath.Join(workDir, "private", "long.md")
+
+	if _, err := r.Call(context.Background(), "write_begin", map[string]any{"path": target}); err == nil || !strings.Contains(err.Error(), "blocked path") {
+		t.Fatalf("absolute write_begin err = %v, want blocked path", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("blocked chunked write created file, stat err=%v", err)
+	}
+}
+
+func TestBuiltins_ChunkedWriteCommitRejectsSymlinkSwap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink privileges vary on Windows")
+	}
+	workDir := t.TempDir()
+	dir := filepath.Join(workDir, "swap")
+	outside := t.TempDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+	beginOut, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "swap/escaped.txt", "mode": "create"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeID := chunkWriteIDFromResult(t, beginOut)
+	if _, err := r.Call(context.Background(), "write_chunk", map[string]any{"write_id": writeID, "index": 0, "content": "must stay inside\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, dir); err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.Call(context.Background(), "write_commit", map[string]any{"write_id": writeID, "expected_chunks": 1})
+	if err == nil || !strings.Contains(err.Error(), "symlink escapes workspace") {
+		t.Fatalf("commit after symlink swap err = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "escaped.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("commit wrote outside workspace: %v", statErr)
 	}
 }
 

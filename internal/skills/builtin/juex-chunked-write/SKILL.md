@@ -12,8 +12,10 @@ workflow for longer files.
 
 ## Workflow
 
-1. Call `write_begin` with the working-directory-relative `path`. `mode` is
-   `overwrite` by default or `create` when the destination must not exist.
+1. Call `write_begin` with a workspace-relative `path` or an absolute path
+   inside the workspace. `mode` is `overwrite` by default or `create` when the
+   destination must not exist. Results and lifecycle state use the normalized
+   workspace-relative path.
 2. Keep the returned `write_id` and call `write_chunk` with zero-based,
    contiguous `index` values. `content` must be the actual file text. Each
    chunk is at most 2000 characters and 4000 bytes. An optional `sha256` is the

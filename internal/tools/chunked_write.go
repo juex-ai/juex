@@ -118,18 +118,18 @@ func (m *chunkWriteManager) restoreSessionFromBeginEvent(event chunkedwrite.Even
 	if mode != chunkWriteOverwriteMode && mode != chunkWriteCreateMode {
 		return nil, false
 	}
-	rel, abs, err := resolveChunkWritePath(m.workDir, event.Path)
+	resolved, err := m.resolvePath(event.Path)
 	if err != nil {
 		return nil, false
 	}
-	if err := m.guard.Check(abs); err != nil {
+	if err := m.guard.Check(resolved.Absolute); err != nil {
 		return nil, false
 	}
 	fileMode := os.FileMode(event.FileMode).Perm()
 	if fileMode == 0 {
 		fileMode = 0o644
 	}
-	if info, statErr := os.Stat(abs); statErr == nil {
+	if info, statErr := os.Stat(resolved.Absolute); statErr == nil {
 		if info.IsDir() || mode == chunkWriteCreateMode {
 			return nil, false
 		}
@@ -141,8 +141,9 @@ func (m *chunkWriteManager) restoreSessionFromBeginEvent(event chunkedwrite.Even
 	}
 	return &chunkWriteSession{
 		id:        event.WriteID,
-		rel:       rel,
-		abs:       abs,
+		rel:       resolved.Relative,
+		abs:       resolved.Absolute,
+		identity:  resolved.Identity,
 		mode:      mode,
 		fileMode:  fileMode,
 		createdAt: now,
@@ -160,17 +161,19 @@ func chunkContentFromToolUse(block llm.Block) (string, bool) {
 }
 
 type chunkWriteManager struct {
-	mu       sync.Mutex
-	workDir  string
-	guard    sandbox.PathGuard
-	sessions map[string]*chunkWriteSession
-	now      func() time.Time
+	mu          sync.Mutex
+	paths       workspacePathResolver
+	resolverErr error
+	guard       sandbox.PathGuard
+	sessions    map[string]*chunkWriteSession
+	now         func() time.Time
 }
 
 type chunkWriteSession struct {
 	id        string
 	rel       string
 	abs       string
+	identity  string
 	mode      string
 	fileMode  os.FileMode
 	createdAt time.Time
@@ -186,21 +189,25 @@ type chunkWriteChunk struct {
 }
 
 func newChunkWriteManager(workDir string, guards ...sandbox.PathGuard) *chunkWriteManager {
-	if workDir != "" {
-		if abs, err := filepath.Abs(workDir); err == nil {
-			workDir = abs
-		}
-	}
+	paths, resolverErr := newWorkspacePathResolver(workDir)
 	var guard sandbox.PathGuard
 	if len(guards) > 0 {
 		guard = guards[0]
 	}
 	return &chunkWriteManager{
-		workDir:  workDir,
-		guard:    guard,
-		sessions: map[string]*chunkWriteSession{},
-		now:      func() time.Time { return time.Now().UTC() },
+		paths:       paths,
+		resolverErr: resolverErr,
+		guard:       guard,
+		sessions:    map[string]*chunkWriteSession{},
+		now:         func() time.Time { return time.Now().UTC() },
 	}
+}
+
+func (m *chunkWriteManager) resolvePath(path string) (workspacePath, error) {
+	if m.resolverErr != nil {
+		return workspacePath{}, m.resolverErr
+	}
+	return m.paths.Resolve(path)
 }
 
 func writeBeginTool(manager *chunkWriteManager) Tool {
@@ -320,10 +327,11 @@ func (m *chunkWriteManager) begin(path, mode string) (*chunkWriteSession, error)
 	if mode != chunkWriteOverwriteMode && mode != chunkWriteCreateMode {
 		return nil, fmt.Errorf("write_begin: unsupported mode %q (expected overwrite or create)", mode)
 	}
-	rel, abs, err := resolveChunkWritePath(m.workDir, path)
+	resolved, err := m.resolvePath(path)
 	if err != nil {
 		return nil, fmt.Errorf("write_begin: %w", err)
 	}
+	rel, abs := resolved.Relative, resolved.Absolute
 	if err := m.guard.Check(abs); err != nil {
 		return nil, fmt.Errorf("write_begin: %w", err)
 	}
@@ -348,6 +356,7 @@ func (m *chunkWriteManager) begin(path, mode string) (*chunkWriteSession, error)
 		id:        id,
 		rel:       rel,
 		abs:       abs,
+		identity:  resolved.Identity,
 		mode:      mode,
 		fileMode:  fileMode,
 		createdAt: now,
@@ -358,7 +367,7 @@ func (m *chunkWriteManager) begin(path, mode string) (*chunkWriteSession, error)
 	defer m.mu.Unlock()
 	m.cleanupExpiredLocked(now)
 	for _, active := range m.sessions {
-		if active.abs == abs {
+		if active.identity == resolved.Identity {
 			return nil, fmt.Errorf("write_begin: a write session is already active for %s", rel)
 		}
 	}
@@ -430,13 +439,26 @@ func (m *chunkWriteManager) commit(writeID string, expectedChunks int, expectedH
 	}
 	delete(m.sessions, writeID)
 	m.mu.Unlock()
-	if err := m.guard.Check(session.abs); err != nil {
+	resolved, err := m.resolvePath(session.rel)
+	if err != nil {
 		m.mu.Lock()
 		m.sessions[writeID] = session
 		m.mu.Unlock()
 		return chunkWriteCommitResult{}, fmt.Errorf("write_commit: %w", err)
 	}
-	if err := commitChunkWriteFile(session.abs, content, session.fileMode); err != nil {
+	if resolved.Identity != session.identity || !m.paths.sameAbsolute(resolved.Absolute, session.abs) {
+		m.mu.Lock()
+		m.sessions[writeID] = session
+		m.mu.Unlock()
+		return chunkWriteCommitResult{}, fmt.Errorf("write_commit: unsafe path %q: path identity changed before commit", session.rel)
+	}
+	if err := m.guard.Check(resolved.Absolute); err != nil {
+		m.mu.Lock()
+		m.sessions[writeID] = session
+		m.mu.Unlock()
+		return chunkWriteCommitResult{}, fmt.Errorf("write_commit: %w", err)
+	}
+	if err := commitChunkWriteFile(resolved.Absolute, content, session.fileMode); err != nil {
 		m.mu.Lock()
 		m.sessions[writeID] = session
 		m.mu.Unlock()
@@ -552,72 +574,6 @@ func commitChunkWriteFile(path string, content string, mode os.FileMode) error {
 		return err
 	}
 	cleanup = false
-	return nil
-}
-
-func resolveChunkWritePath(workDir, path string) (string, string, error) {
-	if strings.TrimSpace(path) == "" {
-		return "", "", fmt.Errorf("unsafe path %q", path)
-	}
-	if strings.Contains(path, ":") || strings.HasPrefix(path, `\\`) || strings.HasPrefix(path, "//") {
-		return "", "", fmt.Errorf("unsafe path %q: colons and UNC paths are not allowed", path)
-	}
-	path = filepath.FromSlash(path)
-	if filepath.IsAbs(path) {
-		return "", "", fmt.Errorf("unsafe path %q: absolute paths are not allowed", path)
-	}
-	rel := filepath.Clean(path)
-	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", "", fmt.Errorf("unsafe path %q: path escapes workspace", path)
-	}
-	root := workDir
-	if root == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", "", err
-		}
-		root = cwd
-	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return "", "", err
-	}
-	evalRoot, err := filepath.EvalSymlinks(absRoot)
-	if err != nil {
-		return "", "", err
-	}
-	abs := filepath.Join(absRoot, rel)
-	if !pathWithin(absRoot, abs) {
-		return "", "", fmt.Errorf("unsafe path %q: path escapes workspace", path)
-	}
-	if err := checkChunkWriteSymlinkBoundary(evalRoot, abs, rel); err != nil {
-		return "", "", err
-	}
-	return filepath.ToSlash(rel), abs, nil
-}
-
-func checkChunkWriteSymlinkBoundary(evalRoot, abs, rel string) error {
-	checkPath := abs
-	if _, err := os.Lstat(checkPath); err != nil {
-		for {
-			parent := filepath.Dir(checkPath)
-			if parent == checkPath {
-				return nil
-			}
-			if _, statErr := os.Lstat(parent); statErr == nil {
-				checkPath = parent
-				break
-			}
-			checkPath = parent
-		}
-	}
-	evaluated, err := filepath.EvalSymlinks(checkPath)
-	if err != nil {
-		return err
-	}
-	if !pathWithin(evalRoot, evaluated) {
-		return fmt.Errorf("unsafe path %q: symlink escapes workspace", filepath.ToSlash(rel))
-	}
 	return nil
 }
 
