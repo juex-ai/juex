@@ -1614,7 +1614,7 @@ func TestBuiltins_ApplyPatchRejectsCaseVariantDuplicate(t *testing.T) {
 		"*** Begin Patch",
 		"*** Add File: same.txt",
 		"+first",
-		"*** Add File: " + strings.ToUpper(target),
+		"*** Add File: SAME.TXT",
 		"+second",
 		"*** End Patch",
 	}, "\n")})
@@ -2388,7 +2388,7 @@ func TestBuiltins_ChunkedWriteRejectsCaseVariantActiveSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeID := chunkWriteIDFromResult(t, beginOut)
-	if _, err := r.Call(context.Background(), "write_begin", map[string]any{"path": strings.ToUpper(filepath.Join(workDir, "same.txt"))}); err == nil || !strings.Contains(err.Error(), "already active") {
+	if _, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "SAME.TXT"}); err == nil || !strings.Contains(err.Error(), "already active") {
 		t.Fatalf("case-variant duplicate begin err = %v", err)
 	}
 	if _, err := r.Call(context.Background(), "write_abort", map[string]any{"write_id": writeID}); err != nil {

@@ -40,12 +40,31 @@ func TestWorkspacePathResolverCanonicalizesCaseInsensitiveIdentity(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	absolute, err := resolver.Resolve(strings.ToUpper(filepath.Join(root, "nested", "file.txt")))
+	absolute, err := resolver.Resolve("NESTED/FILE.TXT")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if relative.Identity != absolute.Identity {
 		t.Fatalf("case-variant identities differ: %q != %q", relative.Identity, absolute.Identity)
+	}
+}
+
+func TestWorkspacePathResolverDoesNotFoldAbsoluteContainment(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("regression covers case-sensitive Darwin volumes")
+	}
+	parent := t.TempDir()
+	root := filepath.Join(parent, "Work")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := newWorkspacePathResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling := filepath.Join(parent, "work", "file.txt")
+	if _, err := resolver.Resolve(sibling); err == nil || !strings.Contains(err.Error(), "path escapes workspace") {
+		t.Fatalf("case-variant absolute sibling err = %v, want workspace escape", err)
 	}
 }
 

@@ -69,7 +69,7 @@ func (r workspacePathResolver) Resolve(input string) (workspacePath, error) {
 		}
 		abs = filepath.Join(r.root, rel)
 	}
-	rel, err := workspaceRelative(r.root, abs)
+	rel, err := filepath.Rel(r.root, abs)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return workspacePath{}, fmt.Errorf("unsafe path %q: path escapes workspace", input)
 	}
@@ -99,30 +99,6 @@ func caseInsensitiveWorkspacePaths() bool {
 	return runtime.GOOS == "darwin" || runtime.GOOS == "windows"
 }
 
-func workspaceRelative(root, target string) (string, error) {
-	comparisonRoot, comparisonTarget := root, target
-	if caseInsensitiveWorkspacePaths() {
-		comparisonRoot = strings.ToLower(comparisonRoot)
-		comparisonTarget = strings.ToLower(comparisonTarget)
-	}
-	rel, err := filepath.Rel(comparisonRoot, comparisonTarget)
-	if err != nil || !caseInsensitiveWorkspacePaths() || rel == "." {
-		return rel, err
-	}
-
-	// Preserve the target's spelling for tool output when the folded paths have
-	// the same byte-length prefix, which covers native Darwin and Windows paths.
-	if len(target) > len(root) && strings.EqualFold(target[:len(root)], root) {
-		if strings.HasSuffix(root, string(filepath.Separator)) {
-			return target[len(root):], nil
-		}
-		if os.IsPathSeparator(target[len(root)]) {
-			return target[len(root)+1:], nil
-		}
-	}
-	return rel, nil
-}
-
 func (r workspacePathResolver) checkSymlinkBoundary(abs, input string) error {
 	checkPath := abs
 	for {
@@ -150,7 +126,7 @@ func (r workspacePathResolver) checkSymlinkBoundary(abs, input string) error {
 }
 
 func pathWithin(root, target string) bool {
-	rel, err := workspaceRelative(root, target)
+	rel, err := filepath.Rel(root, target)
 	if err != nil {
 		return false
 	}
