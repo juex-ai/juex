@@ -73,7 +73,7 @@ func (r workspacePathResolver) Resolve(input string) (workspacePath, error) {
 		}
 		abs = filepath.Join(r.root, rel)
 	}
-	rel, err := filepath.Rel(r.root, abs)
+	rel, err := r.relative(r.root, abs)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return workspacePath{}, fmt.Errorf("unsafe path %q: path escapes workspace", input)
 	}
@@ -99,6 +99,27 @@ func (r workspacePathResolver) sameAbsolute(left, right string) bool {
 	return filepath.Clean(left) == filepath.Clean(right)
 }
 
+func (r workspacePathResolver) relative(root, target string) (string, error) {
+	comparisonRoot, comparisonTarget := root, target
+	if r.caseInsensitive {
+		comparisonRoot = strings.ToLower(comparisonRoot)
+		comparisonTarget = strings.ToLower(comparisonTarget)
+	}
+	rel, err := filepath.Rel(comparisonRoot, comparisonTarget)
+	if err != nil || !r.caseInsensitive || rel == "." {
+		return rel, err
+	}
+	if len(target) > len(root) && strings.EqualFold(target[:len(root)], root) {
+		if strings.HasSuffix(root, string(filepath.Separator)) {
+			return target[len(root):], nil
+		}
+		if os.IsPathSeparator(target[len(root)]) {
+			return target[len(root)+1:], nil
+		}
+	}
+	return rel, nil
+}
+
 func (r workspacePathResolver) checkSymlinkBoundary(abs, input string) error {
 	checkPath := abs
 	for {
@@ -119,14 +140,14 @@ func (r workspacePathResolver) checkSymlinkBoundary(abs, input string) error {
 	if err != nil {
 		return fmt.Errorf("unsafe path %q: %w", input, err)
 	}
-	if !pathWithin(r.evalRoot, evaluated) {
+	if !r.pathWithin(r.evalRoot, evaluated) {
 		return fmt.Errorf("unsafe path %q: symlink escapes workspace", input)
 	}
 	return nil
 }
 
-func pathWithin(root, target string) bool {
-	rel, err := filepath.Rel(root, target)
+func (r workspacePathResolver) pathWithin(root, target string) bool {
+	rel, err := r.relative(root, target)
 	if err != nil {
 		return false
 	}

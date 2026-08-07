@@ -75,6 +75,18 @@ func TestWorkspacePathResolverDetectsWorkspaceCaseSensitivity(t *testing.T) {
 	}
 }
 
+func TestWorkspaceCaseProbeCleansEmptyWorkspace(t *testing.T) {
+	root := t.TempDir()
+	_ = workspaceCaseInsensitive(root)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("case probe left workspace entries: %v", entries)
+	}
+}
+
 func TestWorkspacePathResolverDoesNotFoldAbsoluteContainment(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("regression covers case-sensitive Darwin volumes")
@@ -88,9 +100,29 @@ func TestWorkspacePathResolverDoesNotFoldAbsoluteContainment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	resolver.caseInsensitive = false
 	sibling := filepath.Join(parent, "work", "file.txt")
 	if _, err := resolver.Resolve(sibling); err == nil || !strings.Contains(err.Error(), "path escapes workspace") {
 		t.Fatalf("case-variant absolute sibling err = %v, want workspace escape", err)
+	}
+}
+
+func TestWorkspacePathResolverAcceptsCaseVariantAbsolutePathOnInsensitiveVolume(t *testing.T) {
+	root := t.TempDir()
+	resolver, err := newWorkspacePathResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resolver.caseInsensitive {
+		t.Skip("workspace volume is case-sensitive")
+	}
+	input := filepath.Join(strings.ToUpper(root), "Nested", "File.txt")
+	resolved, err := resolver.Resolve(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Relative != "Nested/File.txt" || resolved.Identity != "nested/file.txt" {
+		t.Fatalf("resolved = %+v", resolved)
 	}
 }
 
