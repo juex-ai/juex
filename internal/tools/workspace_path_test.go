@@ -21,9 +21,31 @@ func TestWorkspacePathResolverNormalizesEquivalentPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Resolve(%q): %v", input, err)
 		}
-		if got.Relative != "nested/file.txt" || got.Absolute != wantAbs {
-			t.Fatalf("Resolve(%q) = %+v, want relative nested/file.txt and absolute %s", input, got, wantAbs)
+		if got.Relative != "nested/file.txt" || got.Absolute != wantAbs || got.Identity != "nested/file.txt" {
+			t.Fatalf("Resolve(%q) = %+v, want relative/identity nested/file.txt and absolute %s", input, got, wantAbs)
 		}
+	}
+}
+
+func TestWorkspacePathResolverCanonicalizesWindowsCaseIdentity(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows paths are case-insensitive")
+	}
+	root := t.TempDir()
+	resolver, err := newWorkspacePathResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := resolver.Resolve("nested/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	absolute, err := resolver.Resolve(strings.ToUpper(filepath.Join(root, "nested", "file.txt")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relative.Identity != absolute.Identity {
+		t.Fatalf("case-variant identities differ: %q != %q", relative.Identity, absolute.Identity)
 	}
 }
 

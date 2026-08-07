@@ -1602,6 +1602,30 @@ func TestBuiltins_ApplyPatchCanonicalizesAbsolutePathsBeforeValidation(t *testin
 	}
 }
 
+func TestBuiltins_ApplyPatchRejectsWindowsCaseVariantDuplicate(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows paths are case-insensitive")
+	}
+	workDir := t.TempDir()
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+	target := filepath.Join(workDir, "same.txt")
+	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: same.txt",
+		"+first",
+		"*** Add File: " + strings.ToUpper(target),
+		"+second",
+		"*** End Patch",
+	}, "\n")})
+	if err == nil || !strings.Contains(err.Error(), "duplicate operation") {
+		t.Fatalf("case-variant duplicate err = %v", err)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("duplicate patch wrote target: %v", statErr)
+	}
+}
+
 func TestBuiltins_ApplyPatchRejectsOutsideAbsolutePathBeforeWriting(t *testing.T) {
 	workDir := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.txt")
@@ -2346,6 +2370,26 @@ func TestBuiltins_ChunkedWriteCanonicalizesAbsoluteTargetForActiveSession(t *tes
 	writeID := chunkWriteIDFromResult(t, beginOut)
 	if _, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "same.txt"}); err == nil || !strings.Contains(err.Error(), "already active") {
 		t.Fatalf("relative duplicate begin err = %v", err)
+	}
+	if _, err := r.Call(context.Background(), "write_abort", map[string]any{"write_id": writeID}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBuiltins_ChunkedWriteRejectsWindowsCaseVariantActiveSession(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows paths are case-insensitive")
+	}
+	workDir := t.TempDir()
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+	beginOut, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "same.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeID := chunkWriteIDFromResult(t, beginOut)
+	if _, err := r.Call(context.Background(), "write_begin", map[string]any{"path": strings.ToUpper(filepath.Join(workDir, "same.txt"))}); err == nil || !strings.Contains(err.Error(), "already active") {
+		t.Fatalf("case-variant duplicate begin err = %v", err)
 	}
 	if _, err := r.Call(context.Background(), "write_abort", map[string]any{"write_id": writeID}); err != nil {
 		t.Fatal(err)

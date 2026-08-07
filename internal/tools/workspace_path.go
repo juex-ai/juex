@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 type workspacePath struct {
 	Relative string
 	Absolute string
+	Identity string
 }
 
 type workspacePathResolver struct {
@@ -74,7 +76,23 @@ func (r workspacePathResolver) Resolve(input string) (workspacePath, error) {
 	if err := r.checkSymlinkBoundary(abs, input); err != nil {
 		return workspacePath{}, err
 	}
-	return workspacePath{Relative: filepath.ToSlash(rel), Absolute: abs}, nil
+	rel = filepath.ToSlash(rel)
+	return workspacePath{Relative: rel, Absolute: abs, Identity: workspacePathIdentity(rel)}, nil
+}
+
+func workspacePathIdentity(rel string) string {
+	rel = filepath.ToSlash(rel)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(rel)
+	}
+	return rel
+}
+
+func sameWorkspaceAbsolute(left, right string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
+	}
+	return filepath.Clean(left) == filepath.Clean(right)
 }
 
 func (r workspacePathResolver) checkSymlinkBoundary(abs, input string) error {

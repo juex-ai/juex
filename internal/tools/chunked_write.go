@@ -143,6 +143,7 @@ func (m *chunkWriteManager) restoreSessionFromBeginEvent(event chunkedwrite.Even
 		id:        event.WriteID,
 		rel:       resolved.Relative,
 		abs:       resolved.Absolute,
+		identity:  resolved.Identity,
 		mode:      mode,
 		fileMode:  fileMode,
 		createdAt: now,
@@ -172,6 +173,7 @@ type chunkWriteSession struct {
 	id        string
 	rel       string
 	abs       string
+	identity  string
 	mode      string
 	fileMode  os.FileMode
 	createdAt time.Time
@@ -354,6 +356,7 @@ func (m *chunkWriteManager) begin(path, mode string) (*chunkWriteSession, error)
 		id:        id,
 		rel:       rel,
 		abs:       abs,
+		identity:  resolved.Identity,
 		mode:      mode,
 		fileMode:  fileMode,
 		createdAt: now,
@@ -364,7 +367,7 @@ func (m *chunkWriteManager) begin(path, mode string) (*chunkWriteSession, error)
 	defer m.mu.Unlock()
 	m.cleanupExpiredLocked(now)
 	for _, active := range m.sessions {
-		if active.abs == abs {
+		if active.identity == resolved.Identity {
 			return nil, fmt.Errorf("write_begin: a write session is already active for %s", rel)
 		}
 	}
@@ -443,7 +446,7 @@ func (m *chunkWriteManager) commit(writeID string, expectedChunks int, expectedH
 		m.mu.Unlock()
 		return chunkWriteCommitResult{}, fmt.Errorf("write_commit: %w", err)
 	}
-	if resolved.Relative != session.rel || resolved.Absolute != session.abs {
+	if resolved.Identity != session.identity || !sameWorkspaceAbsolute(resolved.Absolute, session.abs) {
 		m.mu.Lock()
 		m.sessions[writeID] = session
 		m.mu.Unlock()

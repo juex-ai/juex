@@ -185,14 +185,14 @@ func planPatch(paths workspacePathResolver, ops []patchOperation, guard sandbox.
 		if err != nil {
 			return patchSummary{}, fmt.Errorf("apply_patch: %w", err)
 		}
-		rel, abs := resolved.Relative, resolved.Absolute
+		rel, abs, identity := resolved.Relative, resolved.Absolute, resolved.Identity
 		if err := guard.Check(abs); err != nil {
 			return patchSummary{}, fmt.Errorf("apply_patch: %w", err)
 		}
-		if touched[rel] {
+		if touched[identity] {
 			return patchSummary{}, fmt.Errorf("apply_patch: duplicate operation for %s", rel)
 		}
-		touched[rel] = true
+		touched[identity] = true
 		switch op.kind {
 		case patchAdd:
 			change, err := planPatchAdd(rel, abs, op)
@@ -213,13 +213,13 @@ func planPatch(paths workspacePathResolver, ops []patchOperation, guard sandbox.
 				if err := guard.Check(moveAbs); err != nil {
 					return patchSummary{}, fmt.Errorf("apply_patch: %w", err)
 				}
-				if moveRel == rel {
+				if move.Identity == identity {
 					return patchSummary{}, fmt.Errorf("apply_patch: move target matches source for %s", rel)
 				}
-				if touched[moveRel] {
+				if touched[move.Identity] {
 					return patchSummary{}, fmt.Errorf("apply_patch: duplicate operation for %s", moveRel)
 				}
-				touched[moveRel] = true
+				touched[move.Identity] = true
 			}
 			change, err := planPatchUpdate(rel, abs, moveRel, moveAbs, op)
 			if err != nil {
@@ -257,7 +257,7 @@ func validatePatchChanges(paths workspacePathResolver, changes []patchChange, gu
 			if err != nil {
 				return fmt.Errorf("apply_patch: %w", err)
 			}
-			if resolved.Relative != target.rel || resolved.Absolute != target.abs {
+			if resolved.Identity != workspacePathIdentity(target.rel) || !sameWorkspaceAbsolute(resolved.Absolute, target.abs) {
 				return fmt.Errorf("apply_patch: unsafe path %q: path identity changed before write", target.rel)
 			}
 			if err := guard.Check(resolved.Absolute); err != nil {
