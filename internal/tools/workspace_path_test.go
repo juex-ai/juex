@@ -75,7 +75,7 @@ func TestWorkspacePathResolverDetectsWorkspaceCaseSensitivity(t *testing.T) {
 	}
 }
 
-func TestWorkspaceCaseProbeCleansEmptyWorkspace(t *testing.T) {
+func TestWorkspaceCaseProbeCleansWorkspace(t *testing.T) {
 	root := t.TempDir()
 	_ = workspaceCaseInsensitive(root)
 	entries, err := os.ReadDir(root)
@@ -84,6 +84,20 @@ func TestWorkspaceCaseProbeCleansEmptyWorkspace(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("case probe left workspace entries: %v", entries)
+	}
+}
+
+func TestWorkspaceCaseProbeIgnoresCaseVariantHardLinks(t *testing.T) {
+	root := t.TempDir()
+	original := filepath.Join(root, "Probe")
+	if err := os.WriteFile(original, []byte("probe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(original, filepath.Join(root, "probe")); err != nil {
+		t.Skipf("workspace does not allow distinct case-variant hard links: %v", err)
+	}
+	if workspaceCaseInsensitive(root) {
+		t.Fatal("case-variant hard links must not make a case-sensitive workspace appear insensitive")
 	}
 }
 

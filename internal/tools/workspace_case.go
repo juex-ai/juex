@@ -6,28 +6,6 @@ import (
 )
 
 func workspaceCaseInsensitive(root string) bool {
-	entries, err := os.ReadDir(root)
-	if err == nil {
-		for _, entry := range entries {
-			alternateName, ok := toggleASCIIPathCase(entry.Name())
-			if !ok {
-				continue
-			}
-			original, originalErr := os.Lstat(filepath.Join(root, entry.Name()))
-			if originalErr != nil {
-				continue
-			}
-			alternate, alternateErr := os.Lstat(filepath.Join(root, alternateName))
-			if alternateErr != nil {
-				return false
-			}
-			return os.SameFile(original, alternate)
-		}
-	}
-	return probeEmptyWorkspaceCase(root)
-}
-
-func probeEmptyWorkspaceCase(root string) bool {
 	probe, err := os.CreateTemp(root, ".juex-case-probe-")
 	if err != nil {
 		return false
