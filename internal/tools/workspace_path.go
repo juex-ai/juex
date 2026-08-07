@@ -42,12 +42,19 @@ func (r workspacePathResolver) Resolve(input string) (workspacePath, error) {
 	if strings.TrimSpace(input) == "" {
 		return workspacePath{}, fmt.Errorf("unsafe path %q", input)
 	}
-	if strings.Contains(input, ":") || strings.HasPrefix(input, "//") || strings.HasPrefix(input, `\`) {
-		return workspacePath{}, fmt.Errorf("unsafe path %q: colons, volume paths, and rooted backslash paths are not allowed", input)
+	if strings.HasPrefix(input, "//") || strings.HasPrefix(input, `\`) {
+		return workspacePath{}, fmt.Errorf("unsafe path %q: UNC, device, and rooted backslash paths are not allowed", input)
 	}
 	hostPath := filepath.FromSlash(input)
-	if filepath.VolumeName(hostPath) != "" {
-		return workspacePath{}, fmt.Errorf("unsafe path %q: volume paths are not allowed", input)
+	volume := filepath.VolumeName(hostPath)
+	if strings.Contains(hostPath[len(volume):], ":") {
+		return workspacePath{}, fmt.Errorf("unsafe path %q: colons outside an absolute volume prefix are not allowed", input)
+	}
+	if volume != "" && !filepath.IsAbs(hostPath) {
+		return workspacePath{}, fmt.Errorf("unsafe path %q: volume-relative paths are not allowed", input)
+	}
+	if len(hostPath) > 0 && os.IsPathSeparator(hostPath[0]) && !filepath.IsAbs(hostPath) {
+		return workspacePath{}, fmt.Errorf("unsafe path %q: rooted paths without an absolute volume are not allowed", input)
 	}
 
 	var abs string

@@ -1512,9 +1512,6 @@ func TestBuiltins_ApplyPatchAddUpdateDeleteMove(t *testing.T) {
 }
 
 func TestBuiltins_ApplyPatchAcceptsAbsoluteWorkspacePaths(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("drive-qualified absolute tool inputs remain rejected")
-	}
 	workDir := t.TempDir()
 	for name, content := range map[string]string{
 		"src.txt":    "alpha\nbeta\n",
@@ -1571,9 +1568,6 @@ func TestBuiltins_ApplyPatchAcceptsAbsoluteWorkspacePaths(t *testing.T) {
 }
 
 func TestBuiltins_ApplyPatchCanonicalizesAbsolutePathsBeforeValidation(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("drive-qualified absolute tool inputs remain rejected")
-	}
 	workDir := t.TempDir()
 	r := NewRegistry()
 	registerTestBuiltins(r, workDir)
@@ -1609,9 +1603,6 @@ func TestBuiltins_ApplyPatchCanonicalizesAbsolutePathsBeforeValidation(t *testin
 }
 
 func TestBuiltins_ApplyPatchRejectsOutsideAbsolutePathBeforeWriting(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("drive-qualified absolute tool inputs remain rejected")
-	}
 	workDir := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.txt")
 	r := NewRegistry()
@@ -1636,9 +1627,6 @@ func TestBuiltins_ApplyPatchRejectsOutsideAbsolutePathBeforeWriting(t *testing.T
 }
 
 func TestBuiltins_ApplyPatchAbsolutePathRespectsSandboxBlockedPaths(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("drive-qualified absolute tool inputs remain rejected")
-	}
 	workDir := t.TempDir()
 	blockedDir := filepath.Join(workDir, "private")
 	if err := os.MkdirAll(blockedDir, 0o755); err != nil {
@@ -2091,9 +2079,6 @@ func TestBuiltins_ChunkedWriteCommitOverwrite(t *testing.T) {
 }
 
 func TestBuiltins_ChunkedWriteAcceptsAbsoluteWorkspacePath(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("drive-qualified absolute tool inputs remain rejected")
-	}
 	workDir := t.TempDir()
 	target := filepath.Join(workDir, "nested", "absolute.md")
 	r := NewRegistry()
@@ -2351,9 +2336,6 @@ func TestBuiltins_ChunkedWriteRejectsConcurrentTargetSession(t *testing.T) {
 }
 
 func TestBuiltins_ChunkedWriteCanonicalizesAbsoluteTargetForActiveSession(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("drive-qualified absolute tool inputs remain rejected")
-	}
 	workDir := t.TempDir()
 	r := NewRegistry()
 	registerTestBuiltins(r, workDir)
@@ -2405,9 +2387,6 @@ func TestBuiltins_ChunkedWriteRespectsSandboxBlockedPaths(t *testing.T) {
 }
 
 func TestBuiltins_ChunkedWriteAbsolutePathRespectsSandboxBlockedPaths(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("drive-qualified absolute tool inputs remain rejected")
-	}
 	workDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(workDir, "private"), 0o755); err != nil {
 		t.Fatal(err)

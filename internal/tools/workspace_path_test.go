@@ -15,10 +15,7 @@ func TestWorkspacePathResolverNormalizesEquivalentPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantAbs := filepath.Join(root, "nested", "file.txt")
-	inputs := []string{"nested/file.txt", "./nested/file.txt"}
-	if runtime.GOOS != "windows" {
-		inputs = append(inputs, wantAbs)
-	}
+	inputs := []string{"nested/file.txt", "./nested/file.txt", wantAbs}
 	for _, input := range inputs {
 		got, err := resolver.Resolve(input)
 		if err != nil {
@@ -48,9 +45,7 @@ func TestWorkspacePathResolverRejectsUnsafeSyntaxAndEscapes(t *testing.T) {
 		"device path":    `\\?\C:\file.txt`,
 		"rooted slash":   `\rooted\file.txt`,
 	}
-	if runtime.GOOS != "windows" {
-		cases["absolute sibling"] = filepath.Join(filepath.Dir(root), filepath.Base(root)+"-sibling", "file.txt")
-	}
+	cases["absolute sibling"] = filepath.Join(filepath.Dir(root), filepath.Base(root)+"-sibling", "file.txt")
 	for name, input := range cases {
 		t.Run(name, func(t *testing.T) {
 			if _, err := resolver.Resolve(input); err == nil || !strings.Contains(err.Error(), "unsafe path") {
