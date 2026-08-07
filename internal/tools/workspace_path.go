@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -15,8 +14,9 @@ type workspacePath struct {
 }
 
 type workspacePathResolver struct {
-	root     string
-	evalRoot string
+	root            string
+	evalRoot        string
+	caseInsensitive bool
 }
 
 func newWorkspacePathResolver(workDir string) (workspacePathResolver, error) {
@@ -37,7 +37,11 @@ func newWorkspacePathResolver(workDir string) (workspacePathResolver, error) {
 	if err != nil {
 		return workspacePathResolver{}, err
 	}
-	return workspacePathResolver{root: absRoot, evalRoot: filepath.Clean(evalRoot)}, nil
+	return workspacePathResolver{
+		root:            absRoot,
+		evalRoot:        filepath.Clean(evalRoot),
+		caseInsensitive: workspaceCaseInsensitive(absRoot),
+	}, nil
 }
 
 func (r workspacePathResolver) Resolve(input string) (workspacePath, error) {
@@ -77,26 +81,22 @@ func (r workspacePathResolver) Resolve(input string) (workspacePath, error) {
 		return workspacePath{}, err
 	}
 	rel = filepath.ToSlash(rel)
-	return workspacePath{Relative: rel, Absolute: abs, Identity: workspacePathIdentity(rel)}, nil
+	return workspacePath{Relative: rel, Absolute: abs, Identity: r.identity(rel)}, nil
 }
 
-func workspacePathIdentity(rel string) string {
+func (r workspacePathResolver) identity(rel string) string {
 	rel = filepath.ToSlash(rel)
-	if caseInsensitiveWorkspacePaths() {
+	if r.caseInsensitive {
 		return strings.ToLower(rel)
 	}
 	return rel
 }
 
-func sameWorkspaceAbsolute(left, right string) bool {
-	if caseInsensitiveWorkspacePaths() {
+func (r workspacePathResolver) sameAbsolute(left, right string) bool {
+	if r.caseInsensitive {
 		return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
 	}
 	return filepath.Clean(left) == filepath.Clean(right)
-}
-
-func caseInsensitiveWorkspacePaths() bool {
-	return runtime.GOOS == "darwin" || runtime.GOOS == "windows"
 }
 
 func (r workspacePathResolver) checkSymlinkBoundary(abs, input string) error {

@@ -1603,14 +1603,18 @@ func TestBuiltins_ApplyPatchCanonicalizesAbsolutePathsBeforeValidation(t *testin
 }
 
 func TestBuiltins_ApplyPatchRejectsCaseVariantDuplicate(t *testing.T) {
-	if !caseInsensitiveWorkspacePaths() {
-		t.Skip("platform paths are case-sensitive")
-	}
 	workDir := t.TempDir()
+	paths, err := newWorkspacePathResolver(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !paths.caseInsensitive {
+		t.Skip("workspace volume is case-sensitive")
+	}
 	r := NewRegistry()
 	registerTestBuiltins(r, workDir)
 	target := filepath.Join(workDir, "same.txt")
-	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+	_, err = r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
 		"*** Begin Patch",
 		"*** Add File: same.txt",
 		"+first",
@@ -2377,10 +2381,14 @@ func TestBuiltins_ChunkedWriteCanonicalizesAbsoluteTargetForActiveSession(t *tes
 }
 
 func TestBuiltins_ChunkedWriteRejectsCaseVariantActiveSession(t *testing.T) {
-	if !caseInsensitiveWorkspacePaths() {
-		t.Skip("platform paths are case-sensitive")
-	}
 	workDir := t.TempDir()
+	paths, err := newWorkspacePathResolver(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !paths.caseInsensitive {
+		t.Skip("workspace volume is case-sensitive")
+	}
 	r := NewRegistry()
 	registerTestBuiltins(r, workDir)
 	beginOut, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "same.txt"})

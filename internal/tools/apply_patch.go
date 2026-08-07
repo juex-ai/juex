@@ -257,7 +257,7 @@ func validatePatchChanges(paths workspacePathResolver, changes []patchChange, gu
 			if err != nil {
 				return fmt.Errorf("apply_patch: %w", err)
 			}
-			if resolved.Identity != workspacePathIdentity(target.rel) || !sameWorkspaceAbsolute(resolved.Absolute, target.abs) {
+			if resolved.Identity != paths.identity(target.rel) || !paths.sameAbsolute(resolved.Absolute, target.abs) {
 				return fmt.Errorf("apply_patch: unsafe path %q: path identity changed before write", target.rel)
 			}
 			if err := guard.Check(resolved.Absolute); err != nil {

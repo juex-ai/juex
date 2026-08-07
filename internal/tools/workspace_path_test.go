@@ -28,13 +28,13 @@ func TestWorkspacePathResolverNormalizesEquivalentPaths(t *testing.T) {
 }
 
 func TestWorkspacePathResolverCanonicalizesCaseInsensitiveIdentity(t *testing.T) {
-	if !caseInsensitiveWorkspacePaths() {
-		t.Skip("platform paths are case-sensitive")
-	}
 	root := t.TempDir()
 	resolver, err := newWorkspacePathResolver(root)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !resolver.caseInsensitive {
+		t.Skip("workspace volume is case-sensitive")
 	}
 	relative, err := resolver.Resolve("nested/file.txt")
 	if err != nil {
@@ -46,6 +46,32 @@ func TestWorkspacePathResolverCanonicalizesCaseInsensitiveIdentity(t *testing.T)
 	}
 	if relative.Identity != absolute.Identity {
 		t.Fatalf("case-variant identities differ: %q != %q", relative.Identity, absolute.Identity)
+	}
+}
+
+func TestWorkspacePathResolverPreservesCaseSensitiveIdentity(t *testing.T) {
+	resolver := workspacePathResolver{caseInsensitive: false}
+	if resolver.identity("Report.txt") == resolver.identity("report.txt") {
+		t.Fatal("case-sensitive workspace identities should remain distinct")
+	}
+}
+
+func TestWorkspacePathResolverDetectsWorkspaceCaseSensitivity(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "CaseProbe"), []byte("probe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, lookupErr := os.Stat(filepath.Join(root, "caseprobe"))
+	wantInsensitive := lookupErr == nil
+	if lookupErr != nil && !os.IsNotExist(lookupErr) {
+		t.Fatal(lookupErr)
+	}
+	resolver, err := newWorkspacePathResolver(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolver.caseInsensitive != wantInsensitive {
+		t.Fatalf("caseInsensitive = %v, observed filesystem behavior = %v", resolver.caseInsensitive, wantInsensitive)
 	}
 }
 

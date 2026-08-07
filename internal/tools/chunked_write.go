@@ -446,7 +446,7 @@ func (m *chunkWriteManager) commit(writeID string, expectedChunks int, expectedH
 		m.mu.Unlock()
 		return chunkWriteCommitResult{}, fmt.Errorf("write_commit: %w", err)
 	}
-	if resolved.Identity != session.identity || !sameWorkspaceAbsolute(resolved.Absolute, session.abs) {
+	if resolved.Identity != session.identity || !m.paths.sameAbsolute(resolved.Absolute, session.abs) {
 		m.mu.Lock()
 		m.sessions[writeID] = session
 		m.mu.Unlock()
