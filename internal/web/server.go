@@ -126,6 +126,7 @@ func (s *Server) APIHandler() http.Handler {
 func NewReadOnlyAPIHandler(cfg config.Config) http.Handler {
 	server := NewServer(Options{Cfg: cfg})
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/sessions/active", server.handleActiveSession)
 	mux.HandleFunc("/api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
@@ -151,6 +152,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("/api/identity", s.handleEndpointIdentity)
 	mux.HandleFunc("/api/control/shutdown", s.handleEndpointShutdown)
+	mux.HandleFunc("/api/sessions/active", s.handleActiveSession)
 	mux.HandleFunc("/api/sessions", s.handleListSessions)
 	mux.HandleFunc("/api/sessions/", s.dispatchSession)
 	mux.HandleFunc("/api/files/tree", s.handleFilesTree)

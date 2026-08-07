@@ -377,7 +377,7 @@ func TestLateStaleHistoryRecordCannotCreateFalseCacheHit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := RecordSession(historyPath, latest); err != nil {
+	if err := SetActive(historyPath, latest); err != nil {
 		t.Fatal(err)
 	}
 	if err := RecordSession(historyPath, stale); err != nil {
@@ -396,6 +396,103 @@ func TestLateStaleHistoryRecordCannotCreateFalseCacheHit(t *testing.T) {
 	}
 	if len(infos) != 1 || infos[0].Turns != 2 || infos[0].Preview != "first" {
 		t.Fatalf("sessions = %+v, want freshly scanned two-turn summary", infos)
+	}
+	infos, err = listWithHistoryLoader(root, historyPath, func(dir string) (Info, transcriptIndex, error) {
+		scans++
+		return loadInfoSummary(dir)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scans != 1 {
+		t.Fatalf("journal scans after cache repair = %d, want 1", scans)
+	}
+	if len(infos) != 1 || infos[0].Turns != 2 || infos[0].Preview != "first" {
+		t.Fatalf("cached sessions = %+v, want repaired two-turn summary", infos)
+	}
+	history, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Sessions) != 1 || history.Sessions[0].transcript != latest.transcript {
+		t.Fatalf("history sessions = %+v, want repaired current fingerprint %+v", history.Sessions, latest.transcript)
+	}
+	if history.Active == nil || history.Active.ID != latest.ID {
+		t.Fatalf("history active = %+v, want %q preserved", history.Active, latest.ID)
+	}
+}
+
+func TestListWithHistoryDoesNotRepairSummaryWhenTranscriptChangesDuringScan(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(t.TempDir(), "history.json")
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(llm.TextMessage(llm.RoleUser, "first")); err != nil {
+		t.Fatal(err)
+	}
+	stale := s.Info()
+	if err := s.Append(llm.TextMessage(llm.RoleUser, "second")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordSession(historyPath, stale); err != nil {
+		t.Fatal(err)
+	}
+
+	scans := 0
+	infos, err := listWithHistoryLoader(root, historyPath, func(dir string) (Info, transcriptIndex, error) {
+		scans++
+		info, idx, err := loadInfoSummary(dir)
+		if err != nil {
+			return Info{}, transcriptIndex{}, err
+		}
+		if scans == 1 {
+			file, err := os.OpenFile(filepath.Join(dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
+			if err != nil {
+				return Info{}, transcriptIndex{}, err
+			}
+			message := llm.TextMessage(llm.RoleUser, "third")
+			message.ID = "m3"
+			line, err := json.Marshal(message)
+			if err == nil {
+				_, err = file.Write(append(line, '\n'))
+			}
+			closeErr := file.Close()
+			if err != nil {
+				return Info{}, transcriptIndex{}, err
+			}
+			if closeErr != nil {
+				return Info{}, transcriptIndex{}, closeErr
+			}
+		}
+		return info, idx, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 || infos[0].Turns != 2 {
+		t.Fatalf("first sessions = %+v, want scan snapshot before concurrent append", infos)
+	}
+
+	if _, err := listWithHistoryLoader(root, historyPath, func(dir string) (Info, transcriptIndex, error) {
+		scans++
+		return loadInfoSummary(dir)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if scans != 2 {
+		t.Fatalf("journal scans = %d, want second scan after skipped stale repair", scans)
+	}
+	history, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Sessions) != 1 || history.Sessions[0].transcript == infos[0].transcript {
+		t.Fatalf("history sessions = %+v, stale scan fingerprint was recorded", history.Sessions)
 	}
 }
 
@@ -470,6 +567,13 @@ func TestListWithHistoryScansDiskOnlyAndOmitsStaleHistory(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ID != id || got[0].Preview != "disk only" {
 		t.Fatalf("sessions = %+v, want only disk session %s", got, id)
+	}
+	history, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Sessions) != 2 {
+		t.Fatalf("history sessions = %+v, want repaired disk session plus unrelated cache entry", history.Sessions)
 	}
 }
 

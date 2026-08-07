@@ -243,6 +243,60 @@ func RecordSession(path string, info Info) error {
 	})
 }
 
+// repairHistorySummaries records summaries produced by strict transcript scans
+// only while their canonical transcript fingerprint is still current. It keeps
+// history a derived cache and prevents a late scan from replacing newer state.
+func repairHistorySummaries(root, path string, infos []Info) error {
+	if path == "" || len(infos) == 0 {
+		return nil
+	}
+	return withHistoryLock(path, func() error {
+		h, err := loadHistoryFile(path)
+		if err != nil {
+			return err
+		}
+		changed := false
+		for _, info := range infos {
+			dir, ok := sessionDir(root, info.ID)
+			if !ok {
+				continue
+			}
+			st, err := os.Stat(filepath.Join(dir, conversationFile))
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				return err
+			}
+			if fingerprintFromFileInfo(st) != info.transcript {
+				continue
+			}
+			info.Dir = dir
+			info = normalizeInfo(info)
+			if historyHasSummary(h, info) {
+				continue
+			}
+			upsertHistorySession(&h, info)
+			changed = true
+		}
+		if !changed {
+			return nil
+		}
+		return writeHistory(path, h)
+	})
+}
+
+func historyHasSummary(h History, info Info) bool {
+	for _, recorded := range h.Sessions {
+		if recorded.ID == info.ID {
+			return recorded.Turns == info.Turns &&
+				recorded.Preview == info.Preview &&
+				recorded.transcript == info.transcript
+		}
+	}
+	return false
+}
+
 func SetActive(path string, info Info) error {
 	if path == "" {
 		return nil

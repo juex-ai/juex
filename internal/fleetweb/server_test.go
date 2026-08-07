@@ -218,6 +218,7 @@ func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
 
 	for _, path := range []string{
 		"/agents/aaaaaa/api/sessions",
+		"/agents/aaaaaa/api/sessions/active",
 		"/agents/aaaaaa/api/sessions/" + sessionID,
 	} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
@@ -267,6 +268,7 @@ func TestReadOnlyAgentPathsStayNarrow(t *testing.T) {
 		want bool
 	}{
 		{path: "/api/sessions", want: true},
+		{path: "/api/sessions/active", want: true},
 		{path: "/api/sessions/" + sessionID, want: true},
 		{path: "/api/sessions/" + sessionID + "/context", want: true},
 		{path: "/api/sessions/" + sessionID + "/scratchpad", want: true},

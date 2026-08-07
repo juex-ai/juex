@@ -53,7 +53,7 @@ into `internal/web/dist/` for Go embedding.
 
 | Path | Purpose |
 | --- | --- |
-| `src/api.ts` | typed fleet and selected-agent fetch helpers, including lifecycle/config/log operations, Schedule manual Run, session message pagination, composer image upload, workspace/media preview URLs, and SSE subscription |
+| `src/api.ts` | typed fleet and selected-agent fetch helpers, including lifecycle/config/log operations, lightweight active-session lookup, Schedule manual Run, session message pagination, composer image upload, workspace/media preview URLs, and SSE subscription |
 | `src/types.ts` | TypeScript mirror of fleet, agent, session, and message API shapes, including the tagged Command Observable/Schedule create union, transcript paging and replay-cursor metadata, and the browser event contract from `internal/web` |
 | `src/lib/agent-config.ts` | pure config-save reconciliation for distinguishing persisted updates from restart failures |
 | `src/lib/fleet-directories.ts` | pure Add agent directory validation, stale-request isolation, listing merge, keyboard, and path-tail behavior |

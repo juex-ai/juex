@@ -91,61 +91,76 @@ func listWithHistoryLoader(root, historyPath string, loadSummary summaryLoader) 
 			recorded[info.ID] = info
 		}
 	}
-	return listWithSummaryLoader(root, recorded, loadSummary)
+	infos, refreshed, err := listWithSummaryLoader(root, recorded, loadSummary)
+	if err != nil {
+		return nil, err
+	}
+	if err := repairHistorySummaries(root, historyPath, refreshed); err != nil {
+		return nil, err
+	}
+	return infos, nil
 }
 
 func list(root string, recorded map[string]Info) ([]Info, error) {
-	return listWithSummaryLoader(root, recorded, loadInfoSummary)
+	infos, _, err := listWithSummaryLoader(root, recorded, loadInfoSummary)
+	return infos, err
 }
 
 type summaryLoader func(string) (Info, transcriptIndex, error)
 
-func listWithSummaryLoader(root string, recorded map[string]Info, loadSummary summaryLoader) ([]Info, error) {
+func listWithSummaryLoader(root string, recorded map[string]Info, loadSummary summaryLoader) ([]Info, []Info, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	var out []Info
+	var refreshed []Info
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
-		info, err := cachedOrScannedInfo(dir, e.Name(), recorded, loadSummary)
+		info, scanned, err := cachedOrScannedInfo(dir, e.Name(), recorded, loadSummary)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrSessionTimeUnavailable) {
 				continue
 			}
-			return nil, err
+			return nil, nil, err
 		}
 		out = append(out, info)
+		if scanned {
+			refreshed = append(refreshed, info)
+		}
 	}
 	sortInfos(out)
-	return out, nil
+	return out, refreshed, nil
 }
 
 func cachedOrScannedInfo(
 	dir, id string,
 	recorded map[string]Info,
 	loadSummary summaryLoader,
-) (Info, error) {
+) (Info, bool, error) {
 	convPath := filepath.Join(dir, conversationFile)
 	st, err := os.Stat(convPath)
 	if err != nil {
-		return Info{}, err
+		return Info{}, false, err
 	}
 	cached, ok := recorded[id]
 	fingerprint := fingerprintFromFileInfo(st)
 	if !ok || cached.transcript != fingerprint {
 		info, _, err := loadSummary(dir)
-		return info, err
+		if err != nil {
+			return Info{}, false, err
+		}
+		return info, true, nil
 	}
 	meta, err := loadMetadata(dir)
 	if err != nil {
-		return Info{}, err
+		return Info{}, false, err
 	}
 	info := Info{
 		ID:           id,
@@ -159,7 +174,7 @@ func cachedOrScannedInfo(
 		transcript:   fingerprint,
 	}
 	info.TokenUsage, info.ContextUsage, _ = loadLatestSessionUsageWithin(dir, maxSessionUsageScanBytes)
-	return info, nil
+	return info, false, nil
 }
 
 func sortInfos(infos []Info) {

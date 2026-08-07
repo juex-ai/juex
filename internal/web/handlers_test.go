@@ -331,6 +331,140 @@ func TestGetSessionsList_ReturnsKindAndActive(t *testing.T) {
 	}
 }
 
+func TestGetActiveSessionReturnsPersistedPrimaryWithoutScanningTranscript(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260808T101010-a1c71e01"
+	seedSession(t, srv.opts.Cfg.WorkDir, id,
+		`{"role":"user","blocks":[{"type":"text","text":"hello"}]}`+"\n")
+	dir := filepath.Join(srv.opts.Cfg.SessionsDir(), id)
+	info, _, err := session.LoadInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SetActive(srv.opts.Cfg.HistoryPath(), info); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte("not-json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/sessions/active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, body=%s", resp.StatusCode, body)
+	}
+	var parsed struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.SessionID != id {
+		t.Fatalf("session_id = %q, want %q", parsed.SessionID, id)
+	}
+}
+
+func TestGetActiveSessionOmitsMissingPersistedSession(t *testing.T) {
+	srv := newTestServer(t)
+	if err := session.SetActive(srv.opts.Cfg.HistoryPath(), session.Info{
+		ID:   "20260808T101010-a1155101",
+		Kind: session.KindPrimary,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/sessions/active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, body=%s", resp.StatusCode, body)
+	}
+	var parsed map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := parsed["session_id"]; ok {
+		t.Fatalf("response = %+v, want no active session id", parsed)
+	}
+}
+
+func TestGetActiveSessionReturnsLiveLazyPrimary(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Body.Close()
+	if created.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(created.Body)
+		t.Fatalf("create status = %d, body=%s", created.StatusCode, body)
+	}
+	var info session.Info
+	if err := json.NewDecoder(created.Body).Decode(&info); err != nil {
+		t.Fatal(err)
+	}
+	if session.HasConversation(filepath.Join(srv.opts.Cfg.SessionsDir(), info.ID)) {
+		t.Fatalf("lazy session %q unexpectedly has a transcript", info.ID)
+	}
+
+	resp, err := http.Get(ts.URL + "/api/sessions/active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.SessionID != info.ID {
+		t.Fatalf("session_id = %q, want lazy %q", parsed.SessionID, info.ID)
+	}
+}
+
+func TestGetActiveSessionSerializesWithSessionChanges(t *testing.T) {
+	srv := newTestServer(t)
+	srv.createMu.Lock()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		_, _, err := srv.webActiveSessionID()
+		done <- err
+	}()
+	<-started
+	select {
+	case err := <-done:
+		srv.createMu.Unlock()
+		t.Fatalf("active lookup completed outside session-change lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	srv.createMu.Unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active lookup did not resume after session-change lock released")
+	}
+}
+
 func TestObservablesAPI_CreateDetailObservationsDelete(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())

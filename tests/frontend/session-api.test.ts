@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   APIError,
+  getActiveSession,
   getAgentConfig,
   getSession,
   listSessions,
@@ -57,6 +58,7 @@ test("agent API calls use the selected fleet route prefix", async () => {
 
   try {
     await listSessions();
+    await getActiveSession();
   } finally {
     globalThis.fetch = originalFetch;
     if (originalWindow) {
@@ -66,7 +68,10 @@ test("agent API calls use the selected fleet route prefix", async () => {
     }
   }
 
-  assert.deepEqual(calls, ["/agents/agent%20one/api/sessions"]);
+  assert.deepEqual(calls, [
+    "/agents/agent%20one/api/sessions",
+    "/agents/agent%20one/api/sessions/active",
+  ]);
 });
 
 test("getSession encodes optional transcript pagination params", async () => {

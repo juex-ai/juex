@@ -153,6 +153,10 @@ export interface SessionsListResponse {
   sessions: SessionInfo[];
 }
 
+export interface ActiveSessionResponse {
+  session_id?: string;
+}
+
 export type CreateSessionResponse = SessionInfo;
 
 export interface DeleteSessionResponse {

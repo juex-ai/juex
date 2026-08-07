@@ -986,8 +986,10 @@ its recorded fingerprint, reloads small session metadata directly, and reads
 cumulative usage backward from at most the latest 4 MiB of the event-journal
 tail. Usage fields that are absent from that bounded tail remain unset instead
 of forcing a full legacy-journal scan. Missing or stale transcript summaries
-fall back to the same strict disk scan as `List`. All three operations are
-read-only.
+fall back to the same strict disk scan as `List`; after a successful scan,
+`ListWithHistory` rechecks the canonical fingerprint under the history lock and
+repairs the derived summary cache without changing `active_id`. `List` and
+`LoadInfo` remain read-only, and canonical session files remain authoritative.
 
 ### 3.6 App + Runtime
 
@@ -1436,7 +1438,8 @@ The proxy strips the fleet prefix, preserves query and upstream responses, does
 not retry requests, and flushes SSE immediately. Dial failures return 502.
 When no healthy endpoint exists, `internal/fleetweb` may instead obtain a
 workspace-bound `ReadOnlyAgentState` from `internal/fleet` and serve only
-persisted session list/detail, context, scratchpad, and media GET requests
+persisted active-session lookup, session list/detail, context, scratchpad, and
+media GET requests
 through `internal/web`'s read-only handler. Turn, event-stream, runtime,
 workspace, and mutation routes never use this fallback.
 Other GET routes use the embedded SPA handler exported by `internal/web`;
@@ -1487,6 +1490,12 @@ the app's durable event sink, so SSE clients only receive events after
 Slow clients are dropped after a 5s buffer-full timeout.
 `make web` builds the React SPA in `frontend/`, copies the bundle to
 `internal/web/dist`, and the Go binary embeds that directory with `go:embed`.
+
+The lightweight `GET /api/sessions/active` route reads the recorded active id,
+accepts an in-memory lazy primary session, and otherwise validates only the
+persisted conversation and small metadata file. It never scans a transcript.
+The Chat root uses this route for its canonical-session redirect instead of
+loading the complete history list.
 
 The server merges active in-memory sessions into `GET /api/sessions` and
 `GET /api/sessions/<id>` so a newly created empty chat is visible in the web
@@ -1603,6 +1612,7 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | GET | `/api/agents/<id>/logs?lines=N` | Bounded combined log tail |
 | GET, PUT | `/api/agents/<id>/config` | Read or validate, write, and restart config |
 | GET | `/api/sessions` | JSON list |
+| GET | `/api/sessions/active` | lightweight active primary session id lookup |
 | GET | `/api/status` | Authoritative selected-agent runtime-status snapshot |
 | GET | `/api/status/events` | Resumable selected-agent runtime-status SSE stream |
 | POST | `/api/sessions` | create active primary session |
