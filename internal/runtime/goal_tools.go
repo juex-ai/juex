@@ -44,7 +44,7 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:        GoalToolUpdate,
 			Group:       tools.ToolGroupSessionState,
-			Description: "Update goal fields or evidence-backed status; success requires acceptance. " + goalGuide,
+			Description: "Update goal fields or status (in_progress, wait_for_user, success, or failure). Use wait_for_user only when progress requires new external input; success requires acceptance. " + goalGuide,
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

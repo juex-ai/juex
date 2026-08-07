@@ -16,9 +16,10 @@ const goalStateFile = "goal_state.json"
 type GoalStatus string
 
 const (
-	GoalStatusInProgress GoalStatus = "in_progress"
-	GoalStatusSuccess    GoalStatus = "success"
-	GoalStatusFailure    GoalStatus = "failure"
+	GoalStatusInProgress  GoalStatus = "in_progress"
+	GoalStatusWaitForUser GoalStatus = "wait_for_user"
+	GoalStatusSuccess     GoalStatus = "success"
+	GoalStatusFailure     GoalStatus = "failure"
 
 	maxGoalAcceptanceBytes = 32 * 1024
 )
@@ -185,10 +186,10 @@ func (s *GoalStateStore) CompletionGateDecision() (GoalGateDecision, error) {
 	if state.Status != GoalStatusInProgress {
 		return GoalGateDecision{Status: state.Status, ContinuationCount: state.ContinuationCount}, nil
 	}
-	prompt := "The current session goal is still in progress. Continue working toward the goal, or call update_goal with status success or failure when the goal is complete or cannot be completed."
+	prompt := "The current session goal is still in progress. Continue working toward the goal, call update_goal with status wait_for_user when useful progress requires new user or external input, or call update_goal with status success or failure when the goal is complete or cannot be completed."
 	if contract, ok := state.RenderProviderContext(); ok {
 		prompt = "The current session goal is still in progress.\n\n" + contract +
-			"\n\nContinue working, or call update_goal with status success or failure when the goal is complete or cannot be completed."
+			"\n\nContinue working, call update_goal with status wait_for_user when useful progress requires new user or external input, or call update_goal with status success or failure when the goal is complete or cannot be completed."
 	}
 	return GoalGateDecision{
 		Status:            state.Status,
@@ -330,7 +331,7 @@ func normalizeGoalState(state GoalState) GoalState {
 
 func validateGoalStatus(status GoalStatus) error {
 	switch status {
-	case GoalStatusInProgress, GoalStatusSuccess, GoalStatusFailure:
+	case GoalStatusInProgress, GoalStatusWaitForUser, GoalStatusSuccess, GoalStatusFailure:
 		return nil
 	default:
 		return fmt.Errorf("invalid goal status %q", status)

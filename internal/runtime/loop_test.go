@@ -3330,6 +3330,46 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	}
 }
 
+func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "goal_wait_1", ToolName: GoalToolUpdate, Input: map[string]any{
+				"status":        string(GoalStatusWaitForUser),
+				"status_reason": "waiting for the deployment choice",
+			}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "Which deployment should I use?"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	if _, err := eng.GoalState.Create("deploy the service", "the chosen deployment is healthy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RegisterGoalTools(eng.Tools, eng); err != nil {
+		t.Fatal(err)
+	}
+	var continued int32
+	bus.Subscribe("goal.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })
+
+	out, err := eng.Turn(context.Background(), "deploy it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "Which deployment should I use?" || len(prov.histories) != 2 {
+		t.Fatalf("out = %q, provider calls = %d", out, len(prov.histories))
+	}
+	if atomic.LoadInt32(&continued) != 0 {
+		t.Fatalf("goal.continued events = %d", continued)
+	}
+	state, err := eng.GoalState.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != GoalStatusWaitForUser || state.ContinuationCount != 0 {
+		t.Fatalf("goal state = %+v", state)
+	}
+}
+
 func TestTurn_UserMessageDoesNotCreateGoalState(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},

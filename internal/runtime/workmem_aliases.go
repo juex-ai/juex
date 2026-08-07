@@ -5,9 +5,10 @@ import "github.com/juex-ai/juex/internal/runtime/workmem"
 type GoalStatus = workmem.GoalStatus
 
 const (
-	GoalStatusInProgress = workmem.GoalStatusInProgress
-	GoalStatusSuccess    = workmem.GoalStatusSuccess
-	GoalStatusFailure    = workmem.GoalStatusFailure
+	GoalStatusInProgress  = workmem.GoalStatusInProgress
+	GoalStatusWaitForUser = workmem.GoalStatusWaitForUser
+	GoalStatusSuccess     = workmem.GoalStatusSuccess
+	GoalStatusFailure     = workmem.GoalStatusFailure
 )
 
 type GoalState = workmem.GoalState

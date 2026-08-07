@@ -2001,16 +2001,19 @@ Finish attempts also pass through the built-in `goal-completion-gate` after
 user-configured Stop command hooks. The runtime stores a session-local
 `goal_state.json` owned by model-facing goal tools. Its public contract is
 `description`, `acceptance`, `status`, optional `status_reason`,
-`continuation_count`, and `updated_at`; statuses are `in_progress`, `success`,
-and `failure`. `acceptance` is one free-text field for completion criteria,
-required artifacts, constraints, and verification requirements. Ordinary
-user messages do not create or overwrite goals. Command hooks cannot return
-goal patches; project-specific hooks can report tests, PRs, tracker docs, or
-other workflow requirements as plain-text context or use Stop exit `2` to
-request continuation. The runtime gate reads only the persisted
-goal status: `success` and `failure` allow finish, while `in_progress` records a
-continuation and asks the model to keep working or call `update_goal` with a
-terminal status. Goal state is exposed through `/status` and
+`continuation_count`, and `updated_at`; statuses are `in_progress`,
+`wait_for_user`, `success`, and `failure`. `acceptance` is one free-text field
+for completion criteria, required artifacts, constraints, and verification
+requirements. Ordinary input does not create or replace goals. Command hooks
+cannot return goal patches; project-specific hooks can report tests, PRs,
+tracker docs, or other workflow requirements as plain-text context or use Stop
+exit `2` to request continuation. The runtime gate reads only the persisted
+goal status: `success`, `failure`, and `wait_for_user` allow finish, while
+`in_progress` records a continuation and asks the model to keep working or call
+`update_goal`. Input admission never changes Goal status. The persisted waiting
+contract remains in runtime context on the next Provider request, where the
+model decides whether to resume it as `in_progress`, complete it, fail it, or
+keep waiting. Goal state is exposed through `/status` and
 `/api/sessions/<id>` and rendered as a bounded runtime-context contract.
 
 Only command hooks are supported in the MVP. Hooks cannot mutate tool input,
