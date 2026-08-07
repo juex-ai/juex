@@ -104,6 +104,9 @@ func (s *Server) handleActiveSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) webActiveSessionID() (string, bool, error) {
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+
 	id, ok, err := s.activePrimarySessionID()
 	if err != nil || !ok {
 		return "", ok, err

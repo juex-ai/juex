@@ -22,13 +22,14 @@ export function Sessions() {
   const [checkingSession, setCheckingSession] = useState(true);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   useShellTitle(null);
 
   useEffect(() => {
     let live = true;
     setCheckingSession(true);
-    setError(null);
+    setLookupError(null);
     getActiveSession()
       .then(({ session_id }) => {
         if (!live) return;
@@ -40,7 +41,7 @@ export function Sessions() {
       .catch((e) => {
         if (!live) return;
         console.error("getActiveSession failed", e);
-        setError(
+        setLookupError(
           e instanceof Error ? e.message : "Failed to load existing chats.",
         );
       })
@@ -52,7 +53,7 @@ export function Sessions() {
     };
   }, [loadAttempt, location.pathname, navigate]);
 
-  if (error) {
+  if (lookupError) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-8">
         <div className="flex max-w-md flex-col items-center gap-3 text-center">
@@ -60,7 +61,7 @@ export function Sessions() {
             role="alert"
             className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
           >
-            {error}
+            {lookupError}
           </div>
           <Button
             type="button"
@@ -95,7 +96,7 @@ export function Sessions() {
                 const text = msg.text?.trim();
                 if (!text) return;
                 setSending(true);
-                setError(null);
+                setSubmitError(null);
                 try {
                   const session = await createSession();
                   const turn = await startTurn(session.id, text);
@@ -119,7 +120,7 @@ export function Sessions() {
                 } catch (e) {
                   const message =
                     e instanceof Error ? e.message : "Failed to start chat.";
-                  setError(message);
+                  setSubmitError(message);
                   throw e;
                 } finally {
                   setSending(false);
@@ -132,12 +133,12 @@ export function Sessions() {
               </PromptInputFooter>
             </PromptInput>
           )}
-          {error ? (
+          {submitError ? (
             <div
               role="alert"
               className="mt-2 text-left text-xs text-destructive"
             >
-              {error}
+              {submitError}
             </div>
           ) : null}
         </div>

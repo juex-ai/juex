@@ -437,6 +437,34 @@ func TestGetActiveSessionReturnsLiveLazyPrimary(t *testing.T) {
 	}
 }
 
+func TestGetActiveSessionSerializesWithSessionChanges(t *testing.T) {
+	srv := newTestServer(t)
+	srv.createMu.Lock()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		_, _, err := srv.webActiveSessionID()
+		done <- err
+	}()
+	<-started
+	select {
+	case err := <-done:
+		srv.createMu.Unlock()
+		t.Fatalf("active lookup completed outside session-change lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	srv.createMu.Unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active lookup did not resume after session-change lock released")
+	}
+}
+
 func TestObservablesAPI_CreateDetailObservationsDelete(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
