@@ -19,11 +19,12 @@ func workspaceCaseInsensitive(root string) bool {
 		return false
 	}
 	alternateInfo, alternateErr := os.Stat(filepath.Join(root, alternateName))
+	sameFile := alternateErr == nil && os.SameFile(probeInfo, alternateInfo)
 	removeErr := os.Remove(probePath)
 	if alternateErr != nil || removeErr != nil {
 		return false
 	}
-	return os.SameFile(probeInfo, alternateInfo)
+	return sameFile
 }
 
 func toggleASCIIPathCase(name string) (string, bool) {
