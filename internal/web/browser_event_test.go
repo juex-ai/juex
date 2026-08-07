@@ -238,6 +238,82 @@ func TestProjectBrowserEventsReplayMatchesUninterruptedProjection(t *testing.T) 
 	}
 }
 
+func TestBrowserProjectionKeepsLateToolOutputInJournalOnly(t *testing.T) {
+	seed := juexruntime.StatusSeed{
+		SessionID:        "session-1",
+		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
+	}
+	tool := toolevents.ToolCallPayload{
+		ToolUseID: "tool-1",
+		Name:      "exec_command",
+		Input:     map[string]any{"cmd": "sleep 1; printf late"},
+	}
+	journalEvents := []events.Event{
+		{ID: "evt-admitted", Type: juexruntime.TurnAdmittedType, TurnID: "turn-1", Payload: juexruntime.TurnAdmittedPayload{}},
+		{ID: "evt-requested", Type: toolevents.RequestedType, TurnID: "turn-1", Payload: toolevents.Requested(tool)},
+		{ID: "evt-delta", Type: toolevents.OutputDeltaType, TurnID: "turn-1", Payload: toolevents.Delta(tool, toolevents.OutputDelta{Text: "started"})},
+		{ID: "evt-completed", Type: toolevents.CompletedType, TurnID: "turn-1", Payload: toolevents.Completed(tool, 30, 7, "started", map[string]any{"running": true})},
+		{ID: "evt-late-active", Type: toolevents.OutputDeltaType, TurnID: "turn-1", Payload: toolevents.Delta(tool, toolevents.OutputDelta{Text: "late while turn active"})},
+		{ID: "evt-turn-completed", Type: "turn.completed", TurnID: "turn-1", Payload: juexruntime.TurnCompletedPayload{}},
+		{ID: "evt-late-terminal", Type: toolevents.OutputDeltaType, TurnID: "turn-1", Payload: toolevents.Delta(tool, toolevents.OutputDelta{Text: "late after turn completed"})},
+	}
+
+	status := juexruntime.NewStatusStore(seed)
+	stream := newBroadcaster()
+	t.Cleanup(stream.close)
+	sub := stream.subscribe()
+	t.Cleanup(sub.unsubscribe)
+	journal := &recordingBrowserProjectionJournal{}
+	sink := events.NewDurableSink(journal)
+	t.Cleanup(sink.Close)
+	sink.AddProjection(status)
+	sink.AddProjection(browserEventProjection{status: status, stream: stream})
+	for _, event := range journalEvents {
+		if _, err := sink.Commit(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	wantVisible := []string{
+		"evt-admitted",
+		"evt-requested",
+		"evt-delta",
+		"evt-completed",
+		"evt-turn-completed",
+	}
+	for _, want := range wantVisible {
+		if got := receiveBrowserEvent(t, sub); got.ID != want {
+			t.Fatalf("live browser event = %q, want %q", got.ID, want)
+		}
+	}
+	select {
+	case event := <-sub.ch:
+		t.Fatalf("late tool output reached live browser projection: %+v", event)
+	default:
+	}
+	gotJournal := journal.Events()
+	if len(gotJournal) != len(journalEvents) {
+		t.Fatalf("durable journal events = %d, want %d including late output", len(gotJournal), len(journalEvents))
+	}
+	for index, want := range journalEvents {
+		if gotJournal[index].ID != want.ID || gotJournal[index].Type != want.Type {
+			t.Fatalf("durable journal event %d = %+v, want ID %q type %q", index, gotJournal[index], want.ID, want.Type)
+		}
+	}
+
+	replayed, err := projectBrowserEvents(seed, journalEvents, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotVisible := make([]string, 0, len(replayed))
+	for _, event := range replayed {
+		gotVisible = append(gotVisible, event.ID)
+	}
+	if !reflect.DeepEqual(gotVisible, wantVisible) {
+		t.Fatalf("replayed browser event IDs = %v, want %v", gotVisible, wantVisible)
+	}
+}
+
 func TestProjectBrowserEventsReplayEndsWithAuthoritativeRestartRecovery(t *testing.T) {
 	seed := juexruntime.StatusSeed{
 		SessionID:        "session-1",
@@ -743,6 +819,19 @@ type browserProjectionJournal struct{}
 
 func (browserProjectionJournal) AppendEvent(events.Event) error {
 	return nil
+}
+
+type recordingBrowserProjectionJournal struct {
+	events []events.Event
+}
+
+func (j *recordingBrowserProjectionJournal) AppendEvent(event events.Event) error {
+	j.events = append(j.events, event)
+	return nil
+}
+
+func (j *recordingBrowserProjectionJournal) Events() []events.Event {
+	return append([]events.Event(nil), j.events...)
 }
 
 func receiveBrowserEvent(t *testing.T, sub *subscriber) BrowserEvent {

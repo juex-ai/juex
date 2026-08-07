@@ -115,10 +115,15 @@ requested -> running -> streaming -> completed
 `tool_use_id` is the identity key. `tool.requested`, `tool.running`,
 `tool.output_delta`, `tool.completed`, and `tool.errored` drive the
 transitions. Timeout is an error kind, not a separate lifecycle state.
-Completed and errored calls remain visible until the turn becomes terminal.
+Completed and errored are absorbing states: later events for the same Tool Call
+cannot regress or replace its terminal state. Terminal calls remain visible
+until the turn becomes terminal.
 
 Tool events update only the current admitted or active turn. Late output from
-a completed or superseded turn cannot reactivate runtime status.
+a completed or superseded turn cannot reactivate runtime status. Managed shell
+output that arrives after its Tool Call became terminal remains in the durable
+journal for diagnostics, but the browser transcript stream omits the delta
+because its resulting Tool Call status is no longer streaming.
 
 ## Turns
 

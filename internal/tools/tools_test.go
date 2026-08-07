@@ -3035,6 +3035,61 @@ func TestShellSessionWaitsForOutputPumpBeforeCompletion(t *testing.T) {
 	}
 }
 
+func TestShellSessionSnapshotWaitsForPendingOutputDelta(t *testing.T) {
+	emitStarted := make(chan struct{})
+	releaseEmit := make(chan struct{})
+	session := &shellSession{
+		id:            1,
+		started:       time.Now(),
+		maxTranscript: defaultShellTranscriptBytes,
+		events: ToolCallEvents{
+			Name:      "exec_command",
+			ToolUseID: "tool-1",
+			Emit: func(OutputDelta) {
+				close(emitStarted)
+				<-releaseEmit
+			},
+		},
+	}
+	appendDone := make(chan struct{})
+	go func() {
+		session.appendOutput([]byte("tail output\n"))
+		close(appendDone)
+	}()
+
+	select {
+	case <-emitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("output delta emission did not start")
+	}
+	snapshotDone := make(chan ShellSessionResult, 1)
+	go func() {
+		snapshotDone <- session.snapshot(true, defaultShellMaxOutputTokens)
+	}()
+
+	select {
+	case result := <-snapshotDone:
+		close(releaseEmit)
+		<-appendDone
+		t.Fatalf("snapshot returned before the pending output delta: %+v", result)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseEmit)
+	select {
+	case <-appendDone:
+	case <-time.After(time.Second):
+		t.Fatal("output append did not finish after delta emission")
+	}
+	select {
+	case result := <-snapshotDone:
+		if result.Output != "tail output\n" {
+			t.Fatalf("snapshot output = %q, want emitted tail output", result.Output)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("snapshot did not finish after delta emission")
+	}
+}
+
 type timedOutStructuredTestResult struct{}
 
 func (timedOutStructuredTestResult) ToolCallTimedOut() bool {
