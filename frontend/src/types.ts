@@ -1135,7 +1135,7 @@ export interface AgentConfig {
 
 export interface AgentConfigUpdateResponse {
   config: AgentConfig;
-  agent: AgentStatus;
+  agent: AgentActionResult;
 }
 
 export interface AddAgentRequest {

@@ -399,6 +399,8 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
   );
   assert.match(configSource, /persistedConfig = await getAgentConfig\(agentId\)/);
   assert.match(configSource, /resolveConfigSaveFailure/);
+  assert.match(configSource, /agentActionWarning\("restart", result\.agent\)/);
+  assert.match(configSource, /setWarning\(restartWarning\)/);
   assert.match(configSource, /Save and restart/);
 });
 

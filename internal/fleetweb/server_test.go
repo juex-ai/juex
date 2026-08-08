@@ -42,7 +42,7 @@ type fakeBackend struct {
 	config       fleet.AgentConfig
 	configErr    error
 	updated      fleet.AgentConfig
-	updateStatus fleet.AgentStatus
+	updateStatus fleet.RestartResult
 	updateErr    error
 	runtime      endpoint.Runtime
 	endpointErr  error
@@ -158,7 +158,7 @@ func (f *fakeBackend) UpdateConfig(
 	_ context.Context,
 	selector string,
 	content []byte,
-) (fleet.AgentConfig, fleet.AgentStatus, error) {
+) (fleet.AgentConfig, fleet.RestartResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.selector = selector
@@ -316,10 +316,18 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 			Name:      status.Name,
 			Workspace: "/workspace",
 		},
-		logs:         []byte("one\ntwo\n"),
-		config:       configState,
-		updated:      configState,
-		updateStatus: status,
+		logs:    []byte("one\ntwo\n"),
+		config:  configState,
+		updated: configState,
+		updateStatus: fleet.RestartResult{
+			AgentStatus: status,
+			Resume: fleet.RestartResume{
+				Required:  true,
+				Sent:      true,
+				SessionID: "session-one",
+				TurnID:    "turn-resume",
+			},
+		},
 	}
 	metrics := &fakeProcessMetrics{
 		usage: processmetrics.Usage{RSSBytes: 64_000_000},
@@ -498,11 +506,13 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 			wantStatus: http.StatusOK,
 			assert: func(t *testing.T, body []byte) {
 				var got struct {
-					Config fleet.AgentConfig `json:"config"`
-					Agent  fleet.AgentStatus `json:"agent"`
+					Config fleet.AgentConfig   `json:"config"`
+					Agent  fleet.RestartResult `json:"agent"`
 				}
 				decodeJSON(t, body, &got)
-				if got.Config != configState || got.Agent.ID != status.ID {
+				if got.Config != configState || got.Agent.ID != status.ID ||
+					!got.Agent.Resume.Required || !got.Agent.Resume.Sent ||
+					got.Agent.Resume.TurnID != "turn-resume" {
 					t.Fatalf("update response = %+v", got)
 				}
 				if string(backend.updateContent) != configState.Content {

@@ -493,7 +493,9 @@ existing page-level error region.
 `/agents/:agentId/runtime/logs` shows a refreshable bounded tail with an explicit line
 limit. `/agents/:agentId/runtime/config` edits the workspace `juex.yaml`; save validates
 before writing, restarts the selected agent, and renders validation or restart
-errors in a prominent alert.
+errors in a prominent alert. An active Turn follows the Fleet restart continuation
+contract; a non-fatal continuation failure is shown beside the successful save and
+restart notice instead of being hidden by an unqualified success.
 
 ---
 

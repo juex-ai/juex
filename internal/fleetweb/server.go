@@ -47,7 +47,7 @@ type backend interface {
 	Remove(context.Context, string, fleet.RemoveOptions) (fleet.RemovedAgent, error)
 	Logs(string, int) ([]byte, error)
 	Config(string) (fleet.AgentConfig, error)
-	UpdateConfig(context.Context, string, []byte) (fleet.AgentConfig, fleet.AgentStatus, error)
+	UpdateConfig(context.Context, string, []byte) (fleet.AgentConfig, fleet.RestartResult, error)
 	Endpoint(context.Context, string) (endpoint.Runtime, error)
 }
 
@@ -388,7 +388,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request, selector s
 			writeError(w, http.StatusBadRequest, "bad_request", "request body must contain one JSON object")
 			return
 		}
-		configState, status, err := s.manager.UpdateConfig(
+		configState, restarted, err := s.manager.UpdateConfig(
 			r.Context(),
 			selector,
 			[]byte(*body.Content),
@@ -403,9 +403,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request, selector s
 			return
 		}
 		writeJSON(w, http.StatusOK, struct {
-			Config fleet.AgentConfig `json:"config"`
-			Agent  fleet.AgentStatus `json:"agent"`
-		}{Config: configState, Agent: status})
+			Config fleet.AgentConfig   `json:"config"`
+			Agent  fleet.RestartResult `json:"agent"`
+		}{Config: configState, Agent: restarted})
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or PUT required")
 	}
