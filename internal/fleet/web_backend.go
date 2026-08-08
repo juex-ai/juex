@@ -111,58 +111,51 @@ func (m *Manager) UpdateConfig(
 	ctx context.Context,
 	selector string,
 	content []byte,
-) (AgentConfig, AgentStatus, error) {
+) (AgentConfig, RestartResult, error) {
 	entry, err := m.resolve(selector)
 	if err != nil {
-		return AgentConfig{}, AgentStatus{}, err
+		return AgentConfig{}, RestartResult{}, err
 	}
 	guard, err := acquireLifecycleLock(m.store(), entry.ID)
 	if err != nil {
-		return AgentConfig{}, AgentStatus{}, err
+		return AgentConfig{}, RestartResult{}, err
 	}
 	defer func() { _ = guard.Close() }()
 
 	entry, err = m.reload(entry.ID)
 	if err != nil {
-		return AgentConfig{}, AgentStatus{}, err
+		return AgentConfig{}, RestartResult{}, err
 	}
 	status := m.inspectStatus(ctx, entry)
 	if err := startableConflict(entry, status); err != nil {
-		return AgentConfig{}, status, err
+		return AgentConfig{}, RestartResult{AgentStatus: status}, err
 	}
 	if status.RuntimeHealth == RuntimeAmbiguous {
-		return AgentConfig{}, status, &ConflictError{
+		return AgentConfig{}, RestartResult{AgentStatus: status}, &ConflictError{
 			AgentID: entry.ID,
 			Reason:  "runtime ownership is ambiguous; refusing config update",
 		}
 	}
 	currentConfig, err := readAgentConfig(entry)
 	if err != nil {
-		return AgentConfig{}, status, err
+		return AgentConfig{}, RestartResult{AgentStatus: status}, err
 	}
 	content, err = mergeRedactedEnvironmentValues(content, currentConfig)
 	if err != nil {
-		return AgentConfig{}, status, &ConfigValidationError{Err: err}
+		return AgentConfig{}, RestartResult{AgentStatus: status}, &ConfigValidationError{Err: err}
 	}
 	if _, err := config.ValidateWorkspaceConfig(content, entry.Agent.Workspace); err != nil {
-		return AgentConfig{}, status, &ConfigValidationError{Err: err}
+		return AgentConfig{}, RestartResult{AgentStatus: status}, &ConfigValidationError{Err: err}
 	}
 	if _, err := config.WriteWorkspaceConfig(content, entry.Agent.Workspace); err != nil {
-		return AgentConfig{}, status, err
+		return AgentConfig{}, RestartResult{AgentStatus: status}, err
 	}
 	configState, err := readAgentConfig(entry)
 	if err != nil {
-		return AgentConfig{}, status, err
+		return AgentConfig{}, RestartResult{AgentStatus: status}, err
 	}
-	if _, err := m.stopEntry(ctx, entry); err != nil {
-		return configState, status, err
-	}
-	entry, err = m.reload(entry.ID)
-	if err != nil {
-		return configState, status, err
-	}
-	status, err = m.startEntry(ctx, entry)
-	return configState, status, err
+	restarted, err := m.restartEntry(ctx, entry, false)
+	return configState, restarted, err
 }
 
 func readAgentConfig(entry agentstate.RegistryEntry) (AgentConfig, error) {

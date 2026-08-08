@@ -37,7 +37,8 @@ This package owns registry-wide resident-agent health and lifecycle policy.
   process and exact endpoint identity for an immediate proxy request.
 - `Config` reads the bound workspace config without creating identity.
   `UpdateConfig` validates and atomically writes a replacement config, then
-  restarts under the same lifecycle lock. Fleet HTTP responses replace every
+  restarts under the same lifecycle lock and the same active-Turn continuation
+  policy as `Restart`. Fleet HTTP responses replace every
   `environment.variables` value with `[REDACTED_ENV]`; PUT merges unchanged
   placeholders with the existing file before validation so browser edits
   neither expose nor erase secrets. To intentionally write that exact literal

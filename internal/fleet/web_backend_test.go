@@ -12,6 +12,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/endpoint"
+	"github.com/juex-ai/juex/internal/statusapi"
 )
 
 func TestEndpointReturnsOnlyBoundHealthyRuntime(t *testing.T) {
@@ -211,8 +212,93 @@ func TestUpdateConfigRejectsAmbiguousRuntimeBeforeWriting(t *testing.T) {
 	}
 }
 
-func TestUpdateConfigWritesThenRestartsAgent(t *testing.T) {
-	home, workspace, entry := prepareFleetConfigTest(t)
+func TestUpdateConfigUsesRestartContinuationPolicy(t *testing.T) {
+	tests := []struct {
+		name           string
+		activity       statusapi.ActivityState
+		resumeErr      error
+		wantRequired   bool
+		wantSent       bool
+		wantResumeCall int32
+		wantDiagnostic string
+	}{
+		{
+			name:           "active turn resumes",
+			activity:       statusapi.ActivityWorking,
+			wantRequired:   true,
+			wantSent:       true,
+			wantResumeCall: 1,
+		},
+		{
+			name:     "idle restart does not resume",
+			activity: statusapi.ActivityIdle,
+		},
+		{
+			name:           "resume failure remains non fatal",
+			activity:       statusapi.ActivityWorking,
+			resumeErr:      errors.New("resume rejected"),
+			wantRequired:   true,
+			wantResumeCall: 1,
+			wantDiagnostic: "resume rejected",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			home, workspace, entry := prepareFleetConfigTest(t)
+			manager, newRuntime, resumeCalls := configRestartTestManager(
+				t,
+				home,
+				entry,
+				test.activity,
+				test.resumeErr,
+			)
+
+			configState, restarted, err := manager.UpdateConfig(
+				context.Background(),
+				entry.ID,
+				validFleetConfig("new-model"),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !configState.Exists || !strings.Contains(configState.Content, "new-model") {
+				t.Fatalf("config state = %+v", configState)
+			}
+			if restarted.RuntimeHealth != RuntimeHealthy || restarted.PID != newRuntime.PID {
+				t.Fatalf("status = %+v", restarted.AgentStatus)
+			}
+			if restarted.Resume.Required != test.wantRequired ||
+				restarted.Resume.Sent != test.wantSent ||
+				resumeCalls.Load() != test.wantResumeCall {
+				t.Fatalf("resume = %+v, calls = %d", restarted.Resume, resumeCalls.Load())
+			}
+			if test.wantSent && (restarted.Resume.SessionID != "session-one" ||
+				restarted.Resume.TurnID != "turn-resume") {
+				t.Fatalf("resume = %+v", restarted.Resume)
+			}
+			if !strings.Contains(restarted.Resume.Error, test.wantDiagnostic) {
+				t.Fatalf("resume diagnostic = %q, want %q", restarted.Resume.Error, test.wantDiagnostic)
+			}
+			body, err := os.ReadFile(filepath.Join(workspace, ".juex", "juex.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(body) != string(validFleetConfig("new-model")) {
+				t.Fatalf("written config:\n%s", body)
+			}
+		})
+	}
+}
+
+func configRestartTestManager(
+	t *testing.T,
+	home string,
+	entry agentstate.RegistryEntry,
+	activity statusapi.ActivityState,
+	resumeErr error,
+) (*Manager, endpoint.Runtime, *atomic.Int32) {
+	t.Helper()
 	oldRuntime := endpoint.Runtime{
 		AgentID:    entry.ID,
 		InstanceID: "instance-one",
@@ -228,6 +314,8 @@ func TestUpdateConfigWritesThenRestartsAgent(t *testing.T) {
 		StartedAt:  time.Now().UTC().Add(time.Second),
 	}
 	var state atomic.Int32
+	var activityReads atomic.Int32
+	var resumeCalls atomic.Int32
 	deps := configTestDependencies(entry, oldRuntime)
 	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
 		switch state.Load() {
@@ -243,46 +331,66 @@ func TestUpdateConfigWritesThenRestartsAgent(t *testing.T) {
 		return (state.Load() == 0 && pid == oldRuntime.PID) ||
 			(state.Load() == 2 && pid == newRuntime.PID), nil
 	}
-	deps.requestShutdown = func(_ context.Context, got endpoint.Runtime) error {
+	deps.requestRestart = func(_ context.Context, got endpoint.Runtime) (bool, error) {
 		if !got.Matches(oldRuntime) {
 			t.Fatalf("shutdown runtime = %+v", got)
 		}
 		state.Store(1)
-		return nil
+		return true, nil
 	}
 	deps.spawn = func(string, string, agentstate.RegistryEntry) (spawnedProcess, error) {
 		state.Store(2)
 		return spawnedProcess{PID: newRuntime.PID, Done: make(chan error), LogPath: "fleet.log"}, nil
 	}
-	manager := &Manager{
+	deps.readRestartActivity = func(_ context.Context, got endpoint.Runtime) (restartActivity, error) {
+		if call := activityReads.Add(1); call == 1 {
+			if !got.Matches(oldRuntime) {
+				t.Fatalf("detect runtime = %+v", got)
+			}
+			if activity == statusapi.ActivityIdle {
+				return restartActivity{State: statusapi.ActivityIdle}, nil
+			}
+			return restartActivity{
+				SessionID: "session-one",
+				TurnID:    "turn-original",
+				State:     activity,
+				TurnState: statusapi.TurnActive,
+			}, nil
+		}
+		if !got.Matches(newRuntime) {
+			t.Fatalf("confirm runtime = %+v", got)
+		}
+		return restartActivity{
+			SessionID:     "session-one",
+			TurnID:        "turn-original",
+			State:         statusapi.ActivityIdle,
+			TurnState:     statusapi.TurnCancelled,
+			TurnErrorKind: statusapi.StatusErrorRuntimeRestart,
+		}, nil
+	}
+	deps.postRestartResume = func(
+		_ context.Context,
+		got endpoint.Runtime,
+		sessionID string,
+		prompt string,
+	) (string, error) {
+		resumeCalls.Add(1)
+		if !got.Matches(newRuntime) || sessionID != "session-one" ||
+			!strings.Contains(prompt, "System notice") {
+			t.Fatalf("resume runtime/session/prompt = %+v/%q/%q", got, sessionID, prompt)
+		}
+		if resumeErr != nil {
+			return "", resumeErr
+		}
+		return "turn-resume", nil
+	}
+	return &Manager{
 		homeDir:      home,
 		probeTimeout: time.Second,
 		stopTimeout:  time.Second,
 		startTimeout: time.Second,
 		deps:         deps,
-	}
-
-	configState, status, err := manager.UpdateConfig(
-		context.Background(),
-		entry.ID,
-		validFleetConfig("new-model"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !configState.Exists || !strings.Contains(configState.Content, "new-model") {
-		t.Fatalf("config state = %+v", configState)
-	}
-	if status.RuntimeHealth != RuntimeHealthy || status.PID != newRuntime.PID {
-		t.Fatalf("status = %+v", status)
-	}
-	body, err := os.ReadFile(filepath.Join(workspace, ".juex", "juex.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(body) != string(validFleetConfig("new-model")) {
-		t.Fatalf("written config:\n%s", body)
-	}
+	}, newRuntime, &resumeCalls
 }
 
 func prepareFleetConfigTest(t *testing.T) (string, string, agentstate.RegistryEntry) {

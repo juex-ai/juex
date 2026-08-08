@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { resolveConfigSaveFailure } from "@/lib/agent-config";
+import { agentActionWarning } from "@/lib/fleet-shell";
 import { cn } from "@/lib/utils";
 import type { AgentConfig as AgentConfigState } from "@/types";
 
@@ -18,6 +19,7 @@ export function AgentConfig() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const dirty = config !== null && content !== config.content;
   const blocker = useBlocker(dirty);
@@ -27,6 +29,7 @@ export function AgentConfig() {
     if (!agentId) return;
     setLoading(true);
     setError(null);
+    setWarning(null);
     setNotice(null);
     try {
       const next = await getAgentConfig(agentId);
@@ -79,14 +82,17 @@ export function AgentConfig() {
     const submittedContent = content;
     setSaving(true);
     setError(null);
+    setWarning(null);
     setNotice(null);
     try {
       const result = await updateAgentConfig(agentId, submittedContent);
       setConfig(result.config);
       setContent(result.config.content);
+      const restartWarning = agentActionWarning("restart", result.agent);
       setNotice(
         `Saved and restarted ${result.agent.name || result.agent.id}.`,
       );
+      setWarning(restartWarning);
     } catch (cause) {
       const detail =
         cause instanceof Error ? cause.message : "Unknown configuration error.";
@@ -169,6 +175,14 @@ export function AgentConfig() {
             className="rounded-md border border-destructive/45 bg-destructive/10 px-3 py-2 text-sm font-medium text-destructive"
           >
             {error}
+          </div>
+        ) : null}
+        {warning ? (
+          <div
+            role="status"
+            className="rounded-md border border-status-warning-border bg-status-warning-bg px-3 py-2 text-sm font-medium text-status-warning"
+          >
+            {warning}
           </div>
         ) : null}
         {notice ? (

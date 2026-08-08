@@ -602,6 +602,137 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	}
 }
 
+func TestFleetWebConfigRestartResumesInterruptedTurn(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiled-binary fleet web config restart resume is slow")
+	}
+	binary := buildJuex(t)
+	firstRequestStarted := make(chan struct{})
+	continuationRequests := make(chan map[string]any, 1)
+	providerErrors := make(chan error, 2)
+	var providerCalls atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			providerErrors <- err
+			return
+		}
+		if providerCalls.Add(1) == 1 {
+			close(firstRequestStarted)
+			<-r.Context().Done()
+			return
+		}
+		select {
+		case continuationRequests <- body:
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, chatCompletionResponse("continued after config restart"))
+	}))
+	t.Cleanup(provider.Close)
+
+	home := t.TempDir()
+	workspace := t.TempDir()
+	agentID := "aaaaaa"
+	agentAddress := writeFleetE2EAgent(t, home, workspace, agentID)
+	writeFleetProviderConfig(t, workspace, provider.URL)
+	environment := fleetE2EEnvironmentForProvider(
+		home,
+		"local-chat",
+		"openai/chat",
+		provider.URL,
+		"chat-test",
+	)
+	supervisor := startFleetSupervisor(t, binary, environment)
+	t.Cleanup(func() {
+		shutdownFleetAgent(t, agentAddress)
+		if supervisor.cmd.ProcessState == nil {
+			_ = supervisor.cmd.Process.Kill()
+			_ = supervisor.cmd.Wait()
+		}
+	})
+	baseURL := "http://" + waitFleetWebReady(t, supervisor)
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	var started fleet.AgentStatus
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/agents/"+agentID+"/start",
+		"",
+		http.StatusOK,
+		&started,
+	)
+	if started.RuntimeHealth != fleet.RuntimeHealthy {
+		t.Fatalf("started agent = %+v", started)
+	}
+	oldRuntime := waitFleetRuntime(t, agentAddress)
+	sessionID, originalTurnID := startFleetBlockingTurn(t, oldRuntime)
+	select {
+	case <-firstRequestStarted:
+	case err := <-providerErrors:
+		t.Fatalf("provider request: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("original provider request did not start")
+	}
+
+	configPath := filepath.Join(workspace, ".juex", "juex.yaml")
+	configBody, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedContent := string(configBody) + "\n# saved through Runtime Config\n"
+	requestBody, err := json.Marshal(map[string]string{"content": updatedContent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var updated struct {
+		Config fleet.AgentConfig   `json:"config"`
+		Agent  fleet.RestartResult `json:"agent"`
+	}
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodPut,
+		baseURL+"/api/agents/"+agentID+"/config",
+		string(requestBody),
+		http.StatusOK,
+		&updated,
+	)
+	if updated.Config.Content != updatedContent ||
+		!updated.Agent.Resume.Required ||
+		!updated.Agent.Resume.Sent ||
+		updated.Agent.Resume.SessionID != sessionID {
+		t.Fatalf("config restart response = %+v", updated)
+	}
+	newRuntime := waitFleetRuntimeVersion(
+		t,
+		agentAddress,
+		oldRuntime.InstanceID,
+		oldRuntime.BinaryVersion,
+	)
+	if newRuntime.PID == oldRuntime.PID {
+		t.Fatalf("config restart reused pid %d", newRuntime.PID)
+	}
+	select {
+	case request := <-continuationRequests:
+		encoded, _ := json.Marshal(request)
+		if !strings.Contains(string(encoded), "System notice") {
+			t.Fatalf("continuation request missing system notice: %s", encoded)
+		}
+	case err := <-providerErrors:
+		t.Fatalf("provider request: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("config restart continuation did not reach provider")
+	}
+	waitFleetInterruptedAndContinuationEvents(
+		t,
+		filepath.Join(agentAddress.StateDir(), "sessions", sessionID, "events.jsonl"),
+		originalTurnID,
+	)
+}
+
 func TestFleetWebNewSessionRejectsStaleEventReconnect(t *testing.T) {
 	if testing.Short() {
 		t.Skip("compiled-binary fleet web session test is slow")

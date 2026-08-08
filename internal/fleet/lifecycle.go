@@ -248,6 +248,17 @@ func (m *Manager) restart(
 	if err != nil {
 		return RestartResult{}, err
 	}
+	return m.restartEntry(ctx, entry, requireEligible)
+}
+
+// restartEntry performs a restart while the caller holds the Agent lifecycle
+// lock. Config replacement uses the same path so active Turns keep the Fleet
+// restart interruption and continuation contract.
+func (m *Manager) restartEntry(
+	ctx context.Context,
+	entry agentstate.RegistryEntry,
+	requireEligible bool,
+) (RestartResult, error) {
 	status := m.inspectStatus(ctx, entry)
 	result := RestartResult{AgentStatus: status}
 	if requireEligible {
