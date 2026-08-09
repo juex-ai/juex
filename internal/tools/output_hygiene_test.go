@@ -71,6 +71,40 @@ func TestSanitizeOutputPreservesPrefixAndTailBinaryDetectionCoverage(t *testing.
 	}
 }
 
+func TestSanitizeOutputDetectsInvalidUTF8AcrossLargeSamples(t *testing.T) {
+	const size = 3 * binaryOutputDetectionBytes
+	for _, test := range []struct {
+		name  string
+		index int
+	}{
+		{name: "head interior", index: 100},
+		{name: "head boundary", index: binaryOutputDetectionBytes - 1},
+		{name: "tail boundary", index: size - binaryOutputDetectionBytes},
+		{name: "tail interior", index: size - 100},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data := []byte(strings.Repeat("a", size))
+			data[test.index] = 0xff
+			if got := SanitizeOutputBytes(data); !got.Binary.Omitted {
+				t.Fatalf("byte output exposed invalid UTF-8 at %d", test.index)
+			}
+			if got := SanitizeOutputText(string(data)); !got.Binary.Omitted {
+				t.Fatalf("text output exposed invalid UTF-8 at %d", test.index)
+			}
+		})
+	}
+}
+
+func TestSanitizeOutputPreservesTextWhenSampleCutsUTF8Rune(t *testing.T) {
+	data := []byte(strings.Repeat("a", binaryOutputDetectionBytes-1) + "中文" + strings.Repeat("z", 2*binaryOutputDetectionBytes))
+	if got := SanitizeOutputBytes(data); got.Binary.Omitted || got.Text != string(data) {
+		t.Fatalf("byte output was not preserved: %+v", got.Binary)
+	}
+	if got := SanitizeOutputText(string(data)); got.Binary.Omitted || got.Text != string(data) {
+		t.Fatalf("text output was not preserved: %+v", got.Binary)
+	}
+}
+
 func TestRegistryCallWithInfoSanitizesHandlerBinaryOutput(t *testing.T) {
 	r := NewRegistry()
 	payload := []byte{0x00, 0x01, 'P', 'N', 'G'}

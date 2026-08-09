@@ -128,22 +128,43 @@ func textDetectionSample(text string) string {
 }
 
 func validUTF8SamplePrefix(data []byte, length int) int {
-	for candidate, attempts := min(length, len(data)), 0; candidate > 0 && attempts < utf8.UTFMax; candidate, attempts = candidate-1, attempts+1 {
-		if utf8.Valid(data[:candidate]) {
-			return candidate
-		}
+	end := min(max(length, 0), len(data))
+	if end == 0 || end == len(data) {
+		return end
 	}
-	return 0
+	runeStart := end - 1
+	lower := max(0, end-utf8.UTFMax)
+	for runeStart > lower && !utf8.RuneStart(data[runeStart]) {
+		runeStart--
+	}
+	if !utf8.RuneStart(data[runeStart]) {
+		return end
+	}
+	_, size := utf8.DecodeRune(data[runeStart:])
+	if size > 1 && runeStart+size > end {
+		return runeStart
+	}
+	return end
 }
 
 func validUTF8SampleSuffix(data []byte, start int) int {
-	start = max(0, start)
-	for candidate, attempts := start, 0; candidate < len(data) && attempts < utf8.UTFMax; candidate, attempts = candidate+1, attempts+1 {
-		if utf8.Valid(data[candidate:]) {
-			return candidate
-		}
+	start = min(max(start, 0), len(data))
+	if start == 0 || start == len(data) || utf8.RuneStart(data[start]) {
+		return start
 	}
-	return len(data)
+	runeStart := start - 1
+	lower := max(0, start-(utf8.UTFMax-1))
+	for runeStart > lower && !utf8.RuneStart(data[runeStart]) {
+		runeStart--
+	}
+	if !utf8.RuneStart(data[runeStart]) {
+		return start
+	}
+	_, size := utf8.DecodeRune(data[runeStart:])
+	if size > 1 && runeStart+size > start {
+		return runeStart + size
+	}
+	return start
 }
 
 func isTextRune(r rune) bool {
