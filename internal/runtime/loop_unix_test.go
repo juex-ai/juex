@@ -78,7 +78,7 @@ func TestTurn_BuiltinShellErroredEventCarriesAuthoritativeContent(t *testing.T) 
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "exec_fail", ToolName: "exec_command", Input: map[string]any{
-				"cmd": "printf 'before failure\\n'; exit 7",
+				"cmd": "awk 'BEGIN { printf \"HEAD-FAILURE-SENTINEL\\n\"; for (i = 0; i < 1100000; i++) printf \"x\"; printf \"\\nTAIL-FAILURE-SENTINEL\\n\"; exit 7 }'",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "failure handled"), StopReason: llm.StopEndTurn},
@@ -96,8 +96,22 @@ func TestTurn_BuiltinShellErroredEventCarriesAuthoritativeContent(t *testing.T) 
 	if _, err := eng.Turn(context.Background(), "run failing shell"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(errored.Content, "before failure") || !strings.Contains(errored.Content, "Process exited with code 7") {
-		t.Fatalf("errored content = %q, want authoritative bounded shell result", errored.Content)
+	for _, want := range []string{"HEAD-FAILURE-SENTINEL", "TAIL-FAILURE-SENTINEL", "[output truncated:", "Process exited with code 7"} {
+		if !strings.Contains(errored.Content, want) {
+			t.Fatalf("errored content missing %q", want)
+		}
+	}
+	if strings.Contains(errored.Content, "remaining output truncated") {
+		t.Fatalf("errored content was truncated a second time")
+	}
+	if len(eng.Session.History) < 3 || len(eng.Session.History[2].Blocks) != 1 {
+		t.Fatalf("session history missing shell result: %+v", eng.Session.History)
+	}
+	conversation := eng.Session.History[2].Blocks[0].Content
+	for _, want := range []string{"HEAD-FAILURE-SENTINEL", "TAIL-FAILURE-SENTINEL", "[output truncated:"} {
+		if !strings.Contains(conversation, want) {
+			t.Fatalf("conversation shell result missing %q", want)
+		}
 	}
 	if errored.Preview != "" {
 		t.Fatalf("errored preview = %q, want no duplicate shell output", errored.Preview)

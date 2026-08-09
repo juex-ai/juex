@@ -881,7 +881,11 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 	block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.ToolName}
 	var toolErr error
 	if err != nil {
-		block.Content = toolErrorContent(out, err)
+		if isShellStructuredResult(info.StructuredResult) {
+			block.Content = boundedToolErrorContent(out, err)
+		} else {
+			block.Content = toolErrorContent(out, err)
+		}
 		block.IsError = true
 		toolErr = err
 	} else {
@@ -897,7 +901,11 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 	postResults, postErr := e.runHooks(ctx, postReq)
 	postErr = cancellation.NormalizeError(postErr)
 	if postErr != nil {
-		block.Content = toolErrorContent(block.Content, postErr)
+		if isShellStructuredResult(info.StructuredResult) {
+			block.Content = boundedToolErrorContent(block.Content, postErr)
+		} else {
+			block.Content = toolErrorContent(block.Content, postErr)
+		}
 		block.IsError = true
 		toolErr = postErr
 	}
@@ -1406,6 +1414,23 @@ func toolErrorContent(out string, err error) string {
 		out = out[:limit] + "\n... (remaining output truncated) ..."
 	}
 	return strings.TrimRight(out, "\n") + "\n\n[tool error]\n" + publicErr
+}
+
+func boundedToolErrorContent(out string, err error) string {
+	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
+	if out == "" {
+		return publicErr
+	}
+	return strings.TrimRight(out, "\n") + "\n\n[tool error]\n" + publicErr
+}
+
+func isShellStructuredResult(result any) bool {
+	switch result.(type) {
+	case tools.ShellResult, *tools.ShellResult:
+		return true
+	default:
+		return false
+	}
 }
 
 func rawCauseIfDifferent(rawCause, public string) string {

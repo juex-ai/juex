@@ -15,7 +15,7 @@ func TestShellOutputBufferPreservesHeadAndTailWithExactMarker(t *testing.T) {
 	input := []byte(strings.Repeat("H", 32) + strings.Repeat("M", 36) + strings.Repeat("T", 32))
 	buffer.Append(input, 64)
 
-	snapshot := buffer.Snapshot(64)
+	snapshot := buffer.Snapshot(64, true)
 	if snapshot.TotalBytes != int64(len(input)) {
 		t.Fatalf("total bytes = %d, want %d", snapshot.TotalBytes, len(input))
 	}
@@ -37,7 +37,7 @@ func TestShellOutputBufferBoundsDefaultTextOutputOverOneMiB(t *testing.T) {
 	input := []byte(head + strings.Repeat("m", middleSize) + tail)
 	buffer.Append(input, defaultShellTranscriptBytes)
 
-	snapshot := buffer.Snapshot(defaultShellTranscriptBytes)
+	snapshot := buffer.Snapshot(defaultShellTranscriptBytes, true)
 	text := string(snapshot.Bytes)
 	if !strings.HasPrefix(text, head) || !strings.HasSuffix(text, tail) {
 		t.Fatalf("bounded output lost sentinels: prefix=%t suffix=%t", strings.HasPrefix(text, head), strings.HasSuffix(text, tail))
@@ -56,7 +56,7 @@ func TestShellOutputBufferAppliesSmallerProjectionToBothEnds(t *testing.T) {
 	input := []byte("HEAD-" + strings.Repeat("middle", 20) + "-TAIL")
 	buffer.Append(input, 128)
 
-	snapshot := buffer.Snapshot(32)
+	snapshot := buffer.Snapshot(32, true)
 	if !snapshot.Truncated {
 		t.Fatal("snapshot should be truncated by projection limit")
 	}
@@ -74,7 +74,7 @@ func TestShellOutputBufferKeepsUTF8Boundaries(t *testing.T) {
 	input := []byte(strings.Repeat("开", 30) + strings.Repeat("中", 40) + strings.Repeat("结", 30))
 	buffer.Append(input, 127)
 
-	snapshot := buffer.Snapshot(61)
+	snapshot := buffer.Snapshot(61, true)
 	if !utf8.Valid(snapshot.Bytes) {
 		t.Fatalf("snapshot is not valid UTF-8: %x", snapshot.Bytes)
 	}
@@ -92,7 +92,7 @@ func TestShellOutputBufferReportsFullBinaryMetadataAfterTruncation(t *testing.T)
 	input[0] = 0
 	buffer.Append(input, defaultShellTranscriptBytes)
 
-	snapshot := buffer.Snapshot(defaultShellTranscriptBytes)
+	snapshot := buffer.Snapshot(defaultShellTranscriptBytes, true)
 	wantSum := sha256.Sum256(input)
 	if !snapshot.Binary.Omitted || snapshot.Binary.Bytes != len(input) {
 		t.Fatalf("binary metadata = %+v", snapshot.Binary)
@@ -102,6 +102,24 @@ func TestShellOutputBufferReportsFullBinaryMetadataAfterTruncation(t *testing.T)
 	}
 	if strings.Contains(string(snapshot.Bytes), string(input[:16])) {
 		t.Fatalf("binary snapshot exposed raw bytes: %q", snapshot.Bytes)
+	}
+}
+
+func TestShellOutputBufferDetectsBinaryOnlyInOmittedMiddle(t *testing.T) {
+	var buffer shellOutputBuffer
+	input := []byte(strings.Repeat("h", defaultShellTranscriptBytes/2+1024) + "\x00" + strings.Repeat("t", defaultShellTranscriptBytes/2+1024))
+	buffer.Append(input, defaultShellTranscriptBytes)
+
+	snapshot := buffer.Snapshot(defaultShellTranscriptBytes, true)
+	wantSum := sha256.Sum256(input)
+	if !snapshot.Binary.Omitted || snapshot.Binary.Bytes != len(input) {
+		t.Fatalf("binary metadata = %+v", snapshot.Binary)
+	}
+	if snapshot.Binary.SHA256 != hex.EncodeToString(wantSum[:]) {
+		t.Fatalf("binary sha = %q, want full logical output hash", snapshot.Binary.SHA256)
+	}
+	if strings.Contains(string(snapshot.Bytes), strings.Repeat("h", 32)) {
+		t.Fatalf("binary snapshot exposed retained text: %q", snapshot.Bytes)
 	}
 }
 
@@ -186,5 +204,34 @@ func TestShellSessionCarriesUTF8RuneAcrossWriterCalls(t *testing.T) {
 	}
 	if streamed.String() != "开始" {
 		t.Fatalf("streamed text = %q, want localized output", streamed.String())
+	}
+}
+
+func TestShellSessionCarriesUTF8RuneAcrossObservationSnapshots(t *testing.T) {
+	session := &shellSession{
+		id:            1,
+		started:       time.Now(),
+		maxTranscript: defaultShellTranscriptBytes,
+		events:        ToolCallEvents{Emit: func(OutputDelta) {}},
+	}
+	encoded := []byte("开始")
+	session.appendOutput(encoded[:len(encoded)-1])
+
+	first := session.snapshot(true, defaultShellMaxOutputTokens)
+	if first.BinaryOmitted || first.Output != "开" {
+		t.Fatalf("first observation = %+v, want complete prefix only", first)
+	}
+	if first.OriginalBytes != len([]byte("开")) {
+		t.Fatalf("first original bytes = %d, want complete prefix bytes", first.OriginalBytes)
+	}
+
+	session.setInvocationEvents(ToolCallEvents{})
+	session.appendOutput(encoded[len(encoded)-1:])
+	second := session.snapshot(true, defaultShellMaxOutputTokens)
+	if second.BinaryOmitted || second.Output != "始" {
+		t.Fatalf("second observation = %+v, want reconstructed rune", second)
+	}
+	if second.OriginalBytes != len([]byte("始")) {
+		t.Fatalf("second original bytes = %d, want reconstructed rune bytes", second.OriginalBytes)
 	}
 }
