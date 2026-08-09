@@ -1002,7 +1002,7 @@ historyPath)` is the cached form used by Web and `juex sessions list`: it reuses
 transcript-derived summaries from the Agent history index only while both the
 canonical transcript size and millisecond-truncated modification time match
 its recorded fingerprint, reloads small session metadata directly, and reads
-cumulative usage backward from at most the latest 4 MiB of the event-journal
+cumulative usage backward from at most the latest 8 MiB of the event-journal
 tail. Usage fields that are absent from that bounded tail remain unset instead
 of forcing a full legacy-journal scan. Missing or stale transcript summaries
 fall back to the same strict disk scan as `List`; after a successful scan,

@@ -180,17 +180,18 @@ type shellSession struct {
 
 	// deliveryMu keeps unread output snapshots from overtaking the matching
 	// output-delta delivery after the bytes have been appended under mu.
-	deliveryMu   sync.Mutex
-	invocationMu sync.Mutex
-	mu           sync.Mutex
-	transcript   shellOutputBuffer
-	unread       shellOutputBuffer
-	deltaPending []byte
-	chunkID      int
-	deltaCount   int
-	done         bool
-	timedOut     bool
-	exitCode     *int
+	deliveryMu          sync.Mutex
+	invocationMu        sync.Mutex
+	mu                  sync.Mutex
+	transcript          shellOutputBuffer
+	unread              shellOutputBuffer
+	deltaPending        []byte
+	unownedDeltaPending []byte
+	chunkID             int
+	deltaCount          int
+	done                bool
+	timedOut            bool
+	exitCode            *int
 }
 
 type shellOutputBuffer struct {
@@ -211,11 +212,12 @@ type shellOutputSnapshot struct {
 }
 
 type shellOutputClassifier struct {
-	binary      bool
-	pendingUTF8 []byte
-	ansiState   uint8
-	runes       int64
-	controls    int64
+	binary          bool
+	rawPendingUTF8  []byte
+	textPendingUTF8 []byte
+	ansiState       uint8
+	runes           int64
+	controls        int64
 }
 
 const (
@@ -546,13 +548,23 @@ func (s *shellSession) appendOutput(p []byte) {
 	remainingDeltas := maxShellDeltaCount - s.deltaCount
 	var deltas []OutputDelta
 	if emit == nil {
-		// Once output continues without an active invocation, any live-only
-		// UTF-8 carry belongs to that unobserved interval rather than a future
-		// write_stdin call. The unread accumulator retains the raw bytes.
+		// Completed bytes produced without an active invocation are not emitted
+		// later under another tool call. Keep only an incomplete UTF-8 suffix so
+		// a rune that crosses into the next invocation is not misclassified.
+		unowned := make([]byte, 0, len(s.unownedDeltaPending)+len(s.deltaPending)+len(data))
+		unowned = append(unowned, s.unownedDeltaPending...)
+		unowned = append(unowned, s.deltaPending...)
+		unowned = append(unowned, data...)
+		_, s.unownedDeltaPending = completeUTF8Output(unowned)
 		s.deltaPending = nil
 		s.chunkID += shellOutputChunkCount(data)
 	} else if remainingDeltas > 0 {
-		data = append(append([]byte(nil), s.deltaPending...), data...)
+		live := make([]byte, 0, len(s.unownedDeltaPending)+len(s.deltaPending)+len(data))
+		live = append(live, s.unownedDeltaPending...)
+		live = append(live, s.deltaPending...)
+		live = append(live, data...)
+		s.unownedDeltaPending = nil
+		data = live
 		data, s.deltaPending = completeUTF8Output(data)
 		if len(data) == 0 {
 			s.mu.Unlock()
@@ -591,6 +603,9 @@ func (s *shellSession) appendOutput(p []byte) {
 				data = data[n:]
 			}
 		}
+	} else {
+		s.unownedDeltaPending = nil
+		s.deltaPending = nil
 	}
 	s.mu.Unlock()
 	if emit == nil {
@@ -650,6 +665,7 @@ func (s *shellSession) snapshot(clearUnread bool, maxOutputTokens int) ShellSess
 	s.events = ToolCallEvents{}
 	if final {
 		s.deltaPending = nil
+		s.unownedDeltaPending = nil
 	}
 	text := string(snapshot.Bytes)
 	sessionID := 0
@@ -831,9 +847,9 @@ func (b *shellOutputBuffer) Snapshot(limit int, final bool) shellOutputSnapshot 
 	head := b.head
 	tail := b.tail
 	totalBytes := b.totalBytes
-	if !final && !b.classifier.binary && len(b.classifier.pendingUTF8) > 0 {
-		head, tail = trimShellOutputSuffix(head, tail, len(b.classifier.pendingUTF8))
-		totalBytes -= int64(len(b.classifier.pendingUTF8))
+	if !final && !b.classifier.binary && len(b.classifier.rawPendingUTF8) > 0 {
+		head, tail = trimShellOutputSuffix(head, tail, len(b.classifier.rawPendingUTF8))
+		totalBytes -= int64(len(b.classifier.rawPendingUTF8))
 	}
 	if totalBytes == 0 {
 		return shellOutputSnapshot{}
@@ -884,10 +900,10 @@ func (b *shellOutputBuffer) Snapshot(limit int, final bool) shellOutputSnapshot 
 }
 
 func (b *shellOutputBuffer) PendingUTF8() []byte {
-	if b == nil || b.classifier.binary || len(b.classifier.pendingUTF8) == 0 {
+	if b == nil || b.classifier.binary || len(b.classifier.rawPendingUTF8) == 0 {
 		return nil
 	}
-	return append([]byte(nil), b.classifier.pendingUTF8...)
+	return append([]byte(nil), b.classifier.rawPendingUTF8...)
 }
 
 func (b *shellOutputBuffer) Reset() {
@@ -905,6 +921,10 @@ func (b *shellOutputBuffer) TotalBytes() int64 {
 }
 
 func (c *shellOutputClassifier) Append(data []byte) {
+	c.appendRaw(data)
+	if c.binary {
+		return
+	}
 	for len(data) > 0 && !c.binary {
 		switch c.ansiState {
 		case shellANSIEscape:
@@ -954,24 +974,39 @@ func (c *shellOutputClassifier) Append(data []byte) {
 		if c.binary {
 			return
 		}
-		if len(c.pendingUTF8) > 0 {
-			c.binary = true
-			c.pendingUTF8 = nil
-			return
-		}
 		c.ansiState = shellANSIEscape
 		data = data[escape+1:]
 	}
 }
 
-func (c *shellOutputClassifier) appendText(data []byte) {
-	if len(c.pendingUTF8) > 0 {
-		data = append(append([]byte(nil), c.pendingUTF8...), data...)
-		c.pendingUTF8 = nil
+func (c *shellOutputClassifier) appendRaw(data []byte) {
+	if len(c.rawPendingUTF8) > 0 {
+		data = append(append([]byte(nil), c.rawPendingUTF8...), data...)
+		c.rawPendingUTF8 = nil
 	}
 	for len(data) > 0 {
 		if !utf8.FullRune(data) {
-			c.pendingUTF8 = append([]byte(nil), data...)
+			c.rawPendingUTF8 = append([]byte(nil), data...)
+			return
+		}
+		r, size := utf8.DecodeRune(data)
+		if r == 0 || (r == utf8.RuneError && size == 1) {
+			c.binary = true
+			c.rawPendingUTF8 = nil
+			return
+		}
+		data = data[size:]
+	}
+}
+
+func (c *shellOutputClassifier) appendText(data []byte) {
+	if len(c.textPendingUTF8) > 0 {
+		data = append(append([]byte(nil), c.textPendingUTF8...), data...)
+		c.textPendingUTF8 = nil
+	}
+	for len(data) > 0 {
+		if !utf8.FullRune(data) {
+			c.textPendingUTF8 = append([]byte(nil), data...)
 			return
 		}
 		r, size := utf8.DecodeRune(data)
@@ -995,7 +1030,7 @@ func (c *shellOutputClassifier) IsBinary(final bool) bool {
 	if c == nil {
 		return false
 	}
-	if c.binary || (final && len(c.pendingUTF8) > 0) {
+	if c.binary || (final && len(c.rawPendingUTF8) > 0) {
 		return true
 	}
 	return c.runes >= 16 && float64(c.controls)/float64(c.runes) > 0.30

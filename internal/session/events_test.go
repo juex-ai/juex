@@ -187,6 +187,56 @@ func TestReadEventsMissingJournal(t *testing.T) {
 	}
 }
 
+func TestReadEventsAcceptsWorstCaseEscapedTerminalContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, eventsFile)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Repeat("<", 1<<20)
+	if err := writeJSONL(file, events.Event{
+		ID:     "1",
+		Type:   "tool.completed",
+		TurnID: "turn-1",
+		Payload: map[string]any{
+			"name":        "exec_command",
+			"tool_use_id": "call-1",
+			"content":     content,
+		},
+	}); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := writeJSONL(file, events.Event{ID: "2", Type: "turn.completed", TurnID: "turn-1"}); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() <= 4<<20 || info.Size() >= int64(maxEventLineBytes) {
+		t.Fatalf("encoded journal size = %d, want between old and current line limits", info.Size())
+	}
+
+	got, err := ReadEvents(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "1" || got[1].ID != "2" {
+		t.Fatalf("events = %+v, want terminal event followed by completion", got)
+	}
+	payload, ok := got[0].Payload.(map[string]any)
+	if !ok || payload["content"] != content {
+		t.Fatalf("terminal content did not round trip")
+	}
+}
+
 func TestReadEventsRejectsMalformedJournal(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, eventsFile), []byte(

@@ -123,6 +123,60 @@ func TestShellOutputBufferDetectsBinaryOnlyInOmittedMiddle(t *testing.T) {
 	}
 }
 
+func TestShellOutputBufferClassifiesANSIAndLocalizedTextAcrossAppends(t *testing.T) {
+	var buffer shellOutputBuffer
+	parts := [][]byte{
+		[]byte("\x1b[31"),
+		[]byte("m中文\x1b[0m\x1b]0;标"),
+		[]byte("题\x07正文"),
+	}
+	var input []byte
+	for _, part := range parts {
+		input = append(input, part...)
+		buffer.Append(part, defaultShellTranscriptBytes)
+	}
+
+	snapshot := buffer.Snapshot(defaultShellTranscriptBytes, true)
+	if snapshot.Binary.Omitted {
+		t.Fatalf("ANSI text was classified as binary: %+v", snapshot.Binary)
+	}
+	if string(snapshot.Bytes) != string(input) {
+		t.Fatalf("snapshot = %q, want %q", snapshot.Bytes, input)
+	}
+}
+
+func TestShellOutputBufferDetectsBinaryInsideANSIEscape(t *testing.T) {
+	tests := []struct {
+		name  string
+		parts [][]byte
+	}{
+		{
+			name:  "OSC NUL",
+			parts: [][]byte{[]byte("\x1b]0;title"), {0, 'r', 'e', 's', 't', 0x07}},
+		},
+		{
+			name:  "OSC invalid UTF-8",
+			parts: [][]byte{[]byte("\x1b]0;title"), {0xff, 0x07}},
+		},
+		{
+			name:  "CSI invalid UTF-8",
+			parts: [][]byte{[]byte("\x1b[3"), {0xff, 'm'}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var buffer shellOutputBuffer
+			for _, part := range test.parts {
+				buffer.Append(part, defaultShellTranscriptBytes)
+			}
+			snapshot := buffer.Snapshot(defaultShellTranscriptBytes, true)
+			if !snapshot.Binary.Omitted {
+				t.Fatalf("ANSI payload binary was exposed as text: %q", snapshot.Bytes)
+			}
+		})
+	}
+}
+
 func TestShellSessionCapsLiveDeltasButKeepsDrainingIntoTerminalResult(t *testing.T) {
 	var deltas []OutputDelta
 	session := &shellSession{
@@ -233,5 +287,38 @@ func TestShellSessionCarriesUTF8RuneAcrossObservationSnapshots(t *testing.T) {
 	}
 	if second.OriginalBytes != len([]byte("始")) {
 		t.Fatalf("second original bytes = %d, want reconstructed rune bytes", second.OriginalBytes)
+	}
+}
+
+func TestShellSessionCarriesUnownedUTF8PrefixIntoActiveInvocation(t *testing.T) {
+	var deltas []OutputDelta
+	session := &shellSession{
+		id:            1,
+		started:       time.Now(),
+		maxTranscript: defaultShellTranscriptBytes,
+	}
+	encoded := []byte("始")
+	session.appendOutput(encoded[:len(encoded)-1])
+	session.setInvocationEvents(ToolCallEvents{
+		Name:      "write_stdin",
+		ToolUseID: "write-1",
+		Emit: func(delta OutputDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	session.appendOutput(encoded[len(encoded)-1:])
+
+	if len(deltas) != 1 {
+		t.Fatalf("delta count = %d, want 1", len(deltas))
+	}
+	if deltas[0].BinaryOmitted || deltas[0].Text != "始" {
+		t.Fatalf("delta = %+v, want reconstructed text rune", deltas[0])
+	}
+	if deltas[0].ToolUseID != "write-1" {
+		t.Fatalf("tool_use_id = %q, want write-1", deltas[0].ToolUseID)
+	}
+	result := session.snapshot(true, defaultShellMaxOutputTokens)
+	if result.BinaryOmitted || result.Output != "始" {
+		t.Fatalf("terminal result = %+v, want reconstructed text rune", result)
 	}
 }

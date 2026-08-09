@@ -12,7 +12,10 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 )
 
-const maxEventLineBytes = 4 * 1024 * 1024
+// A terminal Shell event may contain 1 MiB of retained text. encoding/json
+// expands HTML-sensitive runes such as '<' to six-byte escapes, so the journal
+// reader needs bounded headroom above the raw output contract.
+const maxEventLineBytes = 8 * 1024 * 1024
 
 // ReadEvents loads the durable event journal for status and replay projections.
 // A corrupt suffix is truncated after the valid prefix before the error is
@@ -92,7 +95,7 @@ func ReplayEvents(dir string, visit func(events.Event)) error {
 	}
 }
 
-var errEventLineTooLong = errors.New("event line exceeds 4 MiB")
+var errEventLineTooLong = errors.New("event line exceeds 8 MiB")
 
 func readEventLine(reader *bufio.Reader) ([]byte, bool, error) {
 	var line []byte
