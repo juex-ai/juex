@@ -76,15 +76,18 @@ func TestSanitizeOutputDetectsInvalidUTF8AcrossLargeSamples(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		index int
+		value byte
 	}{
-		{name: "head interior", index: 100},
-		{name: "head boundary", index: binaryOutputDetectionBytes - 1},
-		{name: "tail boundary", index: size - binaryOutputDetectionBytes},
-		{name: "tail interior", index: size - 100},
+		{name: "head interior", index: 100, value: 0xff},
+		{name: "head boundary", index: binaryOutputDetectionBytes - 1, value: 0xff},
+		{name: "head boundary continuation", index: binaryOutputDetectionBytes - 1, value: 0x80},
+		{name: "tail boundary", index: size - binaryOutputDetectionBytes, value: 0xff},
+		{name: "tail boundary continuation", index: size - binaryOutputDetectionBytes, value: 0x80},
+		{name: "tail interior", index: size - 100, value: 0xff},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			data := []byte(strings.Repeat("a", size))
-			data[test.index] = 0xff
+			data[test.index] = test.value
 			if got := SanitizeOutputBytes(data); !got.Binary.Omitted {
 				t.Fatalf("byte output exposed invalid UTF-8 at %d", test.index)
 			}
@@ -96,12 +99,28 @@ func TestSanitizeOutputDetectsInvalidUTF8AcrossLargeSamples(t *testing.T) {
 }
 
 func TestSanitizeOutputPreservesTextWhenSampleCutsUTF8Rune(t *testing.T) {
-	data := []byte(strings.Repeat("a", binaryOutputDetectionBytes-1) + "中文" + strings.Repeat("z", 2*binaryOutputDetectionBytes))
-	if got := SanitizeOutputBytes(data); got.Binary.Omitted || got.Text != string(data) {
-		t.Fatalf("byte output was not preserved: %+v", got.Binary)
-	}
-	if got := SanitizeOutputText(string(data)); got.Binary.Omitted || got.Text != string(data) {
-		t.Fatalf("text output was not preserved: %+v", got.Binary)
+	for _, test := range []struct {
+		name string
+		data string
+	}{
+		{
+			name: "head cut",
+			data: strings.Repeat("a", binaryOutputDetectionBytes-1) + "中文" + strings.Repeat("z", 2*binaryOutputDetectionBytes),
+		},
+		{
+			name: "tail cut",
+			data: strings.Repeat("a", 2*binaryOutputDetectionBytes-1) + "中文" + strings.Repeat("z", binaryOutputDetectionBytes-1),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data := []byte(test.data)
+			if got := SanitizeOutputBytes(data); got.Binary.Omitted || got.Text != test.data {
+				t.Fatalf("byte output was not preserved: %+v", got.Binary)
+			}
+			if got := SanitizeOutputText(test.data); got.Binary.Omitted || got.Text != test.data {
+				t.Fatalf("text output was not preserved: %+v", got.Binary)
+			}
+		})
 	}
 }
 
