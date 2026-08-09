@@ -81,6 +81,7 @@ type ScheduleSourceSpec struct {
 	Timezone    string                  `json:"timezone,omitempty"`
 	Once        *OnceSchedule           `json:"once,omitempty"`
 	Daily       *DailySchedule          `json:"daily,omitempty"`
+	Monthly     *MonthlySchedule        `json:"monthly,omitempty"`
 	Interval    *IntervalSchedule       `json:"interval,omitempty"`
 	CatchUp     CatchUpSpec             `json:"catch_up,omitempty"`
 	Observation ScheduleObservationSpec `json:"observation"`
@@ -107,6 +108,11 @@ type OnceSchedule struct {
 type DailySchedule struct {
 	Times    []string `json:"times"`
 	Weekdays []string `json:"weekdays,omitempty"`
+}
+
+type MonthlySchedule struct {
+	Days  []int    `json:"days"`
+	Times []string `json:"times"`
 }
 
 type IntervalSchedule struct {
@@ -591,6 +597,32 @@ func validateScheduleSpec(id, name string, source ScheduleSourceSpec) (Spec, err
 			}
 		}
 	}
+	if source.Monthly != nil {
+		enabled++
+		source.Timezone = strings.TrimSpace(source.Timezone)
+		if source.Timezone == "" {
+			return Spec{}, fmt.Errorf("schedule_config.timezone is required for monthly schedules")
+		}
+		if _, err := time.LoadLocation(source.Timezone); err != nil {
+			return Spec{}, fmt.Errorf("schedule_config.timezone must be a valid IANA timezone: %w", err)
+		}
+		if len(source.Monthly.Days) == 0 {
+			return Spec{}, fmt.Errorf("schedule_config.monthly.days is required")
+		}
+		for _, day := range source.Monthly.Days {
+			if day < 1 || day > 31 {
+				return Spec{}, fmt.Errorf("schedule_config.monthly.days values must be between 1 and 31, got %d", day)
+			}
+		}
+		if len(source.Monthly.Times) == 0 {
+			return Spec{}, fmt.Errorf("schedule_config.monthly.times is required")
+		}
+		for _, value := range source.Monthly.Times {
+			if _, err := parseScheduleClock("schedule_config.monthly.times", value); err != nil {
+				return Spec{}, err
+			}
+		}
+	}
 	if source.Interval != nil {
 		enabled++
 		if source.Interval.EverySeconds < MinIntervalScheduleSecond {
@@ -598,7 +630,7 @@ func validateScheduleSpec(id, name string, source ScheduleSourceSpec) (Spec, err
 		}
 	}
 	if enabled != 1 {
-		return Spec{}, fmt.Errorf("schedule source must set exactly one of once, daily, or interval")
+		return Spec{}, fmt.Errorf("schedule source must set exactly one of once, daily, monthly, or interval")
 	}
 	if source.CatchUp.Mode == "" {
 		source.CatchUp.Mode = ScheduleCatchUpNone
@@ -679,6 +711,12 @@ func cloneScheduleSourceSpec(in ScheduleSourceSpec) ScheduleSourceSpec {
 		daily.Times = append([]string(nil), in.Daily.Times...)
 		daily.Weekdays = append([]string(nil), in.Daily.Weekdays...)
 		out.Daily = &daily
+	}
+	if in.Monthly != nil {
+		monthly := *in.Monthly
+		monthly.Days = append([]int(nil), in.Monthly.Days...)
+		monthly.Times = append([]string(nil), in.Monthly.Times...)
+		out.Monthly = &monthly
 	}
 	if in.Interval != nil {
 		interval := *in.Interval

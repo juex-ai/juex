@@ -98,6 +98,40 @@ func TestTaggedSpecsRoundTripAndDefensivelyCopy(t *testing.T) {
 	}
 }
 
+func TestMonthlyScheduleRoundTripAndDefensivelyCopy(t *testing.T) {
+	input := observable.ScheduleSourceSpec{
+		Timezone:    "Asia/Shanghai",
+		Monthly:     &observable.MonthlySchedule{Days: []int{1, 15}, Times: []string{"09:00", "17:30"}},
+		Observation: observable.ScheduleObservationSpec{Content: "Prepare monthly brief"},
+	}
+	spec, err := observable.NewScheduleSpec("monthly", "Monthly", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Monthly.Days[0] = 31
+	input.Monthly.Times[0] = "10:00"
+	got, ok := spec.ScheduleConfig()
+	if !ok || !reflect.DeepEqual(got.Monthly.Days, []int{1, 15}) || !reflect.DeepEqual(got.Monthly.Times, []string{"09:00", "17:30"}) {
+		t.Fatalf("monthly config = %+v, ok = %v", got, ok)
+	}
+	got.Monthly.Days[0] = 30
+	if again, _ := spec.ScheduleConfig(); again.Monthly.Days[0] != 1 {
+		t.Fatalf("ScheduleConfig leaked monthly mutable state: %+v", again)
+	}
+
+	path := filepath.Join(t.TempDir(), "observables.json")
+	if err := observable.SaveConfig(path, observable.FileConfig{Observables: []observable.Spec{spec}}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := observable.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Observables, []observable.Spec{spec}) {
+		t.Fatalf("monthly round trip = %#v, want %#v", loaded.Observables, []observable.Spec{spec})
+	}
+}
+
 func TestLoadConfigLenientReportsInvalidEntriesAndKeepsValidSibling(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "observables.json")
 	body := `{"observables":[` +
@@ -211,8 +245,15 @@ func TestValidateSpecSourceLocalFailures(t *testing.T) {
 		{name: "daily missing times", config: observable.ScheduleSourceSpec{Timezone: "UTC", Daily: &observable.DailySchedule{}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "daily.times"},
 		{name: "invalid daily clock", config: observable.ScheduleSourceSpec{Timezone: "UTC", Daily: &observable.DailySchedule{Times: []string{"25:00"}}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "HH:MM"},
 		{name: "invalid weekday", config: observable.ScheduleSourceSpec{Timezone: "UTC", Daily: &observable.DailySchedule{Times: []string{"09:00"}, Weekdays: []string{"funday"}}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "weekday"},
+		{name: "monthly missing timezone", config: observable.ScheduleSourceSpec{Monthly: &observable.MonthlySchedule{Days: []int{1}, Times: []string{"09:00"}}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "timezone"},
+		{name: "monthly missing days", config: observable.ScheduleSourceSpec{Timezone: "UTC", Monthly: &observable.MonthlySchedule{Times: []string{"09:00"}}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "monthly.days"},
+		{name: "monthly day below range", config: observable.ScheduleSourceSpec{Timezone: "UTC", Monthly: &observable.MonthlySchedule{Days: []int{0}, Times: []string{"09:00"}}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "between 1 and 31"},
+		{name: "monthly day above range", config: observable.ScheduleSourceSpec{Timezone: "UTC", Monthly: &observable.MonthlySchedule{Days: []int{32}, Times: []string{"09:00"}}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "between 1 and 31"},
+		{name: "monthly missing times", config: observable.ScheduleSourceSpec{Timezone: "UTC", Monthly: &observable.MonthlySchedule{Days: []int{1}}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "monthly.times"},
+		{name: "invalid monthly clock", config: observable.ScheduleSourceSpec{Timezone: "UTC", Monthly: &observable.MonthlySchedule{Days: []int{1}, Times: []string{"9:00"}}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "HH:MM"},
 		{name: "interval too small", config: observable.ScheduleSourceSpec{Interval: &observable.IntervalSchedule{EverySeconds: 59}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "every_seconds"},
 		{name: "multiple schedules", config: observable.ScheduleSourceSpec{Once: &observable.OnceSchedule{At: "2030-01-01T00:00:00Z"}, Interval: &observable.IntervalSchedule{EverySeconds: 60}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "exactly one"},
+		{name: "mixed monthly schedule", config: observable.ScheduleSourceSpec{Timezone: "UTC", Daily: &observable.DailySchedule{Times: []string{"09:00"}}, Monthly: &observable.MonthlySchedule{Days: []int{1}, Times: []string{"09:00"}}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "exactly one"},
 		{name: "invalid once", config: observable.ScheduleSourceSpec{Once: &observable.OnceSchedule{At: "tomorrow"}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "once.at"},
 		{name: "invalid catch up mode", config: observable.ScheduleSourceSpec{Interval: &observable.IntervalSchedule{EverySeconds: 60}, CatchUp: observable.CatchUpSpec{Mode: "all"}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "catch_up.mode"},
 		{name: "invalid catch up window", config: observable.ScheduleSourceSpec{Interval: &observable.IntervalSchedule{EverySeconds: 60}, CatchUp: observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest}, Observation: observable.ScheduleObservationSpec{Content: "x"}}, want: "max_lateness_minutes"},

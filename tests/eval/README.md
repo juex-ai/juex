@@ -181,6 +181,11 @@ and competing scheduler commands. Its variant-specific contract is:
 whether the guide is omitted, loaded in parallel with listing, or loaded later.
 Incidental inspection commands also do not fail an otherwise correct result;
 the exact persisted Schedule shape is the authoritative routing outcome.
+The contract validator supports both interval cadence and monthly calendar
+cadence (`timezone`, `monthly.days`, and `monthly.times`). The default live
+provider sweep remains the six-hour interval scenario; deterministic evaluation
+tests cover the monthly prompt, tool input, seeded equivalence, and persisted
+configuration contract.
 Shell loops, detached interval sleeps, `watch`, `crontab`, and `systemd-run`
 remain rejected because they create a competing recurring side effect.
 Additional `observable_list` calls, including post-create verification, are

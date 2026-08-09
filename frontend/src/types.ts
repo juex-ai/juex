@@ -947,6 +947,7 @@ export interface ObservableScheduleConfig {
   timezone?: string;
   once?: { at: string };
   daily?: { times: string[]; weekdays?: string[] };
+  monthly?: { days: number[]; times: string[] };
   interval?: { every_seconds: number };
   catch_up?: {
     mode?: "none" | "latest" | string;

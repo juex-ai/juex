@@ -953,6 +953,69 @@ func TestScheduleRoutingEvalContract(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
+func TestScheduleRoutingEvalMonthlyContract(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import copy",
+		"import json",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import schedule_routing",
+		"expect = schedule_routing.ScheduleRoutingExpectation.monthly(",
+		"    schedule_id='monthly-routing-eval',",
+		"    timezone='Asia/Shanghai',",
+		"    days=(1, 15, 31),",
+		"    times=('09:00', '17:30'),",
+		"    content='monthly routing token',",
+		"    completion_token='SCHEDULE_ROUTING_PASS monthly',",
+		")",
+		"prompt = schedule_routing.build_prompt(expect)",
+		"assert 'every month' in prompt and 'Asia/Shanghai' in prompt, prompt",
+		"assert 'calendar day(s) 1, 15, 31' in prompt and '09:00, 17:30' in prompt, prompt",
+		"create_input = {'id': expect.schedule_id, 'timezone': expect.timezone, 'monthly': {'days': list(expect.monthly_days), 'times': list(expect.monthly_times)}, 'observation': {'content': expect.content}}",
+		"rows = [",
+		"    {'role': 'assistant', 'blocks': [{'type': 'tool_use', 'tool_use_id': 'list-1', 'tool_name': 'observable_list', 'input': {}}]},",
+		"    {'role': 'user', 'blocks': [{'type': 'tool_result', 'tool_use_id': 'list-1', 'content': '{\"observables\": []}'}]},",
+		"    {'role': 'assistant', 'blocks': [{'type': 'tool_use', 'tool_use_id': 'create-1', 'tool_name': 'schedule_create', 'input': create_input}]},",
+		"    {'role': 'user', 'blocks': [{'type': 'tool_result', 'tool_use_id': 'create-1', 'content': '{}'}]},",
+		"    {'role': 'assistant', 'blocks': [{'type': 'text', 'text': expect.completion_token}]},",
+		"]",
+		"config = {'observables': [{'id': expect.schedule_id, 'type': 'schedule', 'schedule_config': {'timezone': expect.timezone, 'monthly': {'days': list(expect.monthly_days), 'times': list(expect.monthly_times)}, 'observation': {'content': expect.content}}}]} ",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    work = Path(tmp)",
+		"    conversation = work / 'conversation.jsonl'",
+		"    observables = work / 'observables.json'",
+		"    conversation.write_text('\\n'.join(json.dumps(row) for row in rows) + '\\n', encoding='utf-8')",
+		"    observables.write_text(json.dumps(config), encoding='utf-8')",
+		"    report = schedule_routing.validate_contract(conversation, observables, expect)",
+		"    assert report.passed, report.message()",
+		"    assert schedule_routing._create_input_matches(create_input, expect)",
+		"    for invalid in [",
+		"        {**create_input, 'timezone': 'UTC'},",
+		"        {**create_input, 'interval': {'every_seconds': 21600}},",
+		"        {**create_input, 'monthly': {'days': [1, 15], 'times': list(expect.monthly_times)}},",
+		"        {**create_input, 'monthly': {'days': list(expect.monthly_days), 'times': ['9:00']}},",
+		"    ]:",
+		"        assert not schedule_routing._create_input_matches(invalid, expect), invalid",
+		"    wrong = copy.deepcopy(config)",
+		"    wrong['observables'][0]['schedule_config']['monthly']['days'] = [1]",
+		"    observables.write_text(json.dumps(wrong), encoding='utf-8')",
+		"    report = schedule_routing.validate_contract(conversation, observables, expect)",
+		"    assert not report.passed and 'monthly.days' in report.message(), report.message()",
+		"seeded = schedule_routing.ScheduleRoutingExpectation.monthly(schedule_id='requested', timezone='Asia/Shanghai', days=(1,), times=('09:00',), content='seeded', completion_token='done', existing_schedule_id='existing')",
+		"seed = schedule_routing.seeded_observables_config(seeded)",
+		"assert seed['observables'][0]['schedule_config']['monthly'] == {'days': [1], 'times': ['09:00']}, seed",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func TestScheduleRoutingFailureClassification(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
@@ -978,6 +1041,7 @@ func TestScheduleRoutingFailureClassification(t *testing.T) {
 		"config = {'observables': [{'id': expect.schedule_id, 'type': 'schedule', 'schedule_config': {'interval': {'every_seconds': expect.every_seconds}, 'observation': {'content': expect.content}}}]}",
 		"valid_input = rows[2]['blocks'][0]['input']",
 		"assert schedule_routing._create_input_matches(valid_input, expect)",
+		"assert not schedule_routing._schedule_config_matches({'interval': {'every_seconds': 60}, 'observation': {'content': expect.content}}, expect)",
 		"for invalid_input in [",
 		"    {**valid_input, 'unexpected': True},",
 		"    {**valid_input, 'once': {'at': '2026-07-20T12:00:00Z'}},",

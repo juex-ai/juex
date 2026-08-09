@@ -193,6 +193,7 @@ type scheduleCreateInput struct {
 	Timezone    string                  `json:"timezone,omitempty"`
 	Once        *OnceSchedule           `json:"once,omitempty"`
 	Daily       *DailySchedule          `json:"daily,omitempty"`
+	Monthly     *MonthlySchedule        `json:"monthly,omitempty"`
 	Interval    *IntervalSchedule       `json:"interval,omitempty"`
 	CatchUp     CatchUpSpec             `json:"catch_up,omitempty"`
 	Observation ScheduleObservationSpec `json:"observation"`
@@ -226,6 +227,7 @@ func scheduleSpecFromCreateInput(in map[string]any) (Spec, error) {
 		Timezone:    input.Timezone,
 		Once:        input.Once,
 		Daily:       input.Daily,
+		Monthly:     input.Monthly,
 		Interval:    input.Interval,
 		CatchUp:     input.CatchUp,
 		Observation: input.Observation,
@@ -282,26 +284,17 @@ func scheduleCreateSchema() map[string]any {
 			"timezone":    map[string]any{"type": "string"},
 			"once":        onceScheduleSchema(),
 			"daily":       dailyScheduleSchema(),
+			"monthly":     monthlyScheduleSchema(),
 			"interval":    intervalScheduleSchema(),
 			"catch_up":    catchUpSchema(),
 			"observation": scheduleObservationSchema(),
 		},
 		"oneOf": []any{
-			exclusiveScheduleBranch([]any{"once"}, "daily", "interval"),
-			exclusiveScheduleBranch([]any{"daily", "timezone"}, "once", "interval"),
-			exclusiveScheduleBranch([]any{"interval"}, "once", "daily"),
+			map[string]any{"required": []any{"once"}},
+			map[string]any{"required": []any{"daily"}},
+			map[string]any{"required": []any{"monthly"}},
+			map[string]any{"required": []any{"interval"}},
 		},
-	}
-}
-
-func exclusiveScheduleBranch(required []any, forbidden ...string) map[string]any {
-	forbiddenBranches := make([]any, 0, len(forbidden))
-	for _, field := range forbidden {
-		forbiddenBranches = append(forbiddenBranches, map[string]any{"required": []any{field}})
-	}
-	return map[string]any{
-		"required": required,
-		"not":      map[string]any{"anyOf": forbiddenBranches},
 	}
 }
 
@@ -418,6 +411,18 @@ func dailyScheduleSchema() map[string]any {
 		"properties": map[string]any{
 			"times":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"weekdays": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		},
+	}
+}
+
+func monthlyScheduleSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"days", "times"},
+		"properties": map[string]any{
+			"days":  map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
+			"times": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 		},
 	}
 }

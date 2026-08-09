@@ -31,6 +31,8 @@ func nextScheduledOccurrence(spec scheduleRuntimeSpec, state ScheduleStateRecord
 		return occurrenceFor(spec, at), true, nil
 	case spec.Daily != nil:
 		return nextDailyOccurrence(spec, now)
+	case spec.Monthly != nil:
+		return nextMonthlyOccurrence(spec, now)
 	case spec.Interval != nil:
 		every := time.Duration(spec.Interval.EverySeconds) * time.Second
 		anchor := state.LastEmittedScheduledAt
@@ -46,7 +48,7 @@ func nextScheduledOccurrence(spec scheduleRuntimeSpec, state ScheduleStateRecord
 		}
 		return occurrenceFor(spec, next), true, nil
 	default:
-		return ScheduledOccurrence{}, false, fmt.Errorf("schedule source must set once, daily, or interval")
+		return ScheduledOccurrence{}, false, fmt.Errorf("schedule source must set once, daily, monthly, or interval")
 	}
 }
 
@@ -68,6 +70,8 @@ func latestMissedScheduledOccurrence(spec scheduleRuntimeSpec, state ScheduleSta
 		return ScheduledOccurrence{}, false, nil
 	case spec.Daily != nil:
 		return latestDailyOccurrence(spec, last, now)
+	case spec.Monthly != nil:
+		return latestMonthlyOccurrence(spec, last, now)
 	case spec.Interval != nil:
 		every := time.Duration(spec.Interval.EverySeconds) * time.Second
 		anchor := state.LastEmittedScheduledAt
@@ -85,7 +89,7 @@ func latestMissedScheduledOccurrence(spec scheduleRuntimeSpec, state ScheduleSta
 		}
 		return occurrenceFor(spec, latest), true, nil
 	default:
-		return ScheduledOccurrence{}, false, fmt.Errorf("schedule source must set once, daily, or interval")
+		return ScheduledOccurrence{}, false, fmt.Errorf("schedule source must set once, daily, monthly, or interval")
 	}
 }
 
@@ -155,6 +159,100 @@ func latestDailyOccurrence(spec scheduleRuntimeSpec, last, now time.Time) (Sched
 	return occurrenceFor(spec, latest), true, nil
 }
 
+func nextMonthlyOccurrence(spec scheduleRuntimeSpec, now time.Time) (ScheduledOccurrence, bool, error) {
+	loc, err := time.LoadLocation(spec.Timezone)
+	if err != nil {
+		return ScheduledOccurrence{}, false, err
+	}
+	start := now.In(loc)
+	for monthOffset := 0; monthOffset <= 24; monthOffset++ {
+		year, month := shiftedMonth(start.Year(), start.Month(), monthOffset)
+		for _, candidate := range monthlyCandidates(spec.Monthly, loc, year, month) {
+			if candidate.After(now) {
+				return occurrenceFor(spec, candidate), true, nil
+			}
+		}
+	}
+	return ScheduledOccurrence{}, false, nil
+}
+
+func latestMonthlyOccurrence(spec scheduleRuntimeSpec, last, now time.Time) (ScheduledOccurrence, bool, error) {
+	loc, err := time.LoadLocation(spec.Timezone)
+	if err != nil {
+		return ScheduledOccurrence{}, false, err
+	}
+	start := last.In(loc)
+	end := now.In(loc)
+	monthCount := (end.Year()-start.Year())*12 + int(end.Month()-start.Month())
+	var latest time.Time
+	for monthOffset := 0; monthOffset <= monthCount; monthOffset++ {
+		year, month := shiftedMonth(start.Year(), start.Month(), monthOffset)
+		for _, candidate := range monthlyCandidates(spec.Monthly, loc, year, month) {
+			if candidate.After(last) && !candidate.After(now) && (latest.IsZero() || candidate.After(latest)) {
+				latest = candidate
+			}
+		}
+	}
+	if latest.IsZero() {
+		return ScheduledOccurrence{}, false, nil
+	}
+	return occurrenceFor(spec, latest), true, nil
+}
+
+func monthlyCandidates(spec *MonthlySchedule, loc *time.Location, year int, month time.Month) []time.Time {
+	if spec == nil {
+		return nil
+	}
+	days := sortedUniqueMonthlyDays(spec.Days)
+	clocks, err := sortedScheduleClocks("schedule_config.monthly.times", spec.Times)
+	if err != nil {
+		return nil
+	}
+	lastDay := time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
+	candidates := make([]time.Time, 0, len(days)*len(clocks))
+	for _, day := range days {
+		if day > lastDay {
+			continue
+		}
+		for _, clock := range clocks {
+			candidate, ok := exactLocalWallClock(loc, year, month, day, clock)
+			if ok {
+				candidates = append(candidates, candidate)
+			}
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Before(candidates[j]) })
+	return candidates
+}
+
+func shiftedMonth(year int, month time.Month, offset int) (int, time.Month) {
+	shifted := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC).AddDate(0, offset, 0)
+	return shifted.Year(), shifted.Month()
+}
+
+func exactLocalWallClock(loc *time.Location, year int, month time.Month, day int, clock dailyClock) (time.Time, bool) {
+	wallUTC := time.Date(year, month, day, clock.hour, clock.minute, 0, 0, time.UTC)
+	offsets := make(map[int]struct{})
+	for hour := -36; hour <= 36; hour++ {
+		_, offset := wallUTC.Add(time.Duration(hour) * time.Hour).In(loc).Zone()
+		offsets[offset] = struct{}{}
+	}
+	var candidates []time.Time
+	for offset := range offsets {
+		candidate := wallUTC.Add(-time.Duration(offset) * time.Second)
+		local := candidate.In(loc)
+		if local.Year() == year && local.Month() == month && local.Day() == day &&
+			local.Hour() == clock.hour && local.Minute() == clock.minute {
+			candidates = append(candidates, candidate)
+		}
+	}
+	if len(candidates) == 0 {
+		return time.Time{}, false
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Before(candidates[j]) })
+	return candidates[0], true
+}
+
 func occurrenceFor(spec scheduleRuntimeSpec, scheduledAt time.Time) ScheduledOccurrence {
 	scheduledAt = scheduledAt.UTC()
 	return ScheduledOccurrence{
@@ -191,6 +289,18 @@ func scheduleSummary(spec scheduleRuntimeSpec) string {
 			weekdays = strings.Join(spec.Daily.Weekdays, ",")
 		}
 		return fmt.Sprintf("daily %s %s %s", strings.Join(spec.Daily.Times, ","), weekdays, spec.Timezone)
+	case spec.Monthly != nil:
+		days := sortedUniqueMonthlyDays(spec.Monthly.Days)
+		dayValues := make([]string, 0, len(days))
+		for _, day := range days {
+			dayValues = append(dayValues, strconv.Itoa(day))
+		}
+		clocks, _ := sortedScheduleClocks("schedule_config.monthly.times", spec.Monthly.Times)
+		clockValues := make([]string, 0, len(clocks))
+		for _, clock := range clocks {
+			clockValues = append(clockValues, fmt.Sprintf("%02d:%02d", clock.hour, clock.minute))
+		}
+		return fmt.Sprintf("monthly days %s at %s %s", strings.Join(dayValues, ","), strings.Join(clockValues, ","), spec.Timezone)
 	case spec.Interval != nil:
 		return fmt.Sprintf("every %ds", spec.Interval.EverySeconds)
 	default:
@@ -204,12 +314,24 @@ type dailyClock struct {
 }
 
 func sortedDailyClocks(values []string) ([]dailyClock, error) {
-	out := make([]dailyClock, 0, len(values))
+	return sortedScheduleClocks("source.daily.times", values)
+}
+
+func parseDailyClock(value string) (dailyClock, error) {
+	return parseScheduleClock("source.daily.times", value)
+}
+
+func sortedScheduleClocks(field string, values []string) ([]dailyClock, error) {
+	unique := make(map[dailyClock]struct{}, len(values))
 	for _, value := range values {
-		clock, err := parseDailyClock(value)
+		clock, err := parseScheduleClock(field, value)
 		if err != nil {
 			return nil, err
 		}
+		unique[clock] = struct{}{}
+	}
+	out := make([]dailyClock, 0, len(unique))
+	for clock := range unique {
 		out = append(out, clock)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -221,24 +343,37 @@ func sortedDailyClocks(values []string) ([]dailyClock, error) {
 	return out, nil
 }
 
-func parseDailyClock(value string) (dailyClock, error) {
+func parseScheduleClock(field, value string) (dailyClock, error) {
 	value = strings.TrimSpace(value)
 	parts := strings.Split(value, ":")
 	if len(parts) != 2 || len(parts[0]) != 2 || len(parts[1]) != 2 {
-		return dailyClock{}, fmt.Errorf("source.daily.times must use HH:MM, got %q", value)
+		return dailyClock{}, fmt.Errorf("%s must use HH:MM, got %q", field, value)
 	}
 	hour, err := strconv.Atoi(parts[0])
 	if err != nil {
-		return dailyClock{}, fmt.Errorf("source.daily.times must use HH:MM, got %q", value)
+		return dailyClock{}, fmt.Errorf("%s must use HH:MM, got %q", field, value)
 	}
 	minute, err := strconv.Atoi(parts[1])
 	if err != nil {
-		return dailyClock{}, fmt.Errorf("source.daily.times must use HH:MM, got %q", value)
+		return dailyClock{}, fmt.Errorf("%s must use HH:MM, got %q", field, value)
 	}
 	if hour < 0 || hour > 23 || minute < 0 || minute > 59 {
-		return dailyClock{}, fmt.Errorf("source.daily.times must use HH:MM, got %q", value)
+		return dailyClock{}, fmt.Errorf("%s must use HH:MM, got %q", field, value)
 	}
 	return dailyClock{hour: hour, minute: minute}, nil
+}
+
+func sortedUniqueMonthlyDays(values []int) []int {
+	unique := make(map[int]struct{}, len(values))
+	for _, value := range values {
+		unique[value] = struct{}{}
+	}
+	out := make([]int, 0, len(unique))
+	for value := range unique {
+		out = append(out, value)
+	}
+	sort.Ints(out)
+	return out
 }
 
 func parseOnceAt(value string) (time.Time, error) {

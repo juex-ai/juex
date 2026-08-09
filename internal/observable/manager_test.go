@@ -1562,6 +1562,83 @@ func TestManager_ScheduleCatchUpDeduplicatesAfterRestart(t *testing.T) {
 	}
 }
 
+func TestManager_MonthlyScheduleCatchUpDeduplicatesAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Minute).Add(30 * time.Second)
+	scheduledAt := now.Add(-time.Minute).Truncate(time.Minute)
+	currentNow := func() time.Time { return now }
+	spec := scheduleIntervalSpec("monthly-catch-up", observable.ScheduleSourceSpec{
+		Timezone: "UTC",
+		Monthly: &observable.MonthlySchedule{
+			Days:  []int{scheduledAt.Day()},
+			Times: []string{scheduledAt.Format("15:04")},
+		},
+		CatchUp:     observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 10},
+		Observation: observable.ScheduleObservationSpec{Content: "Monthly catch-up."},
+	})
+	writeObservableConfig(t, dir, spec)
+	store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: currentNow})
+	if err := store.RecordScheduleState(observable.ScheduleStateRecord{
+		ObservableID:    spec.ID,
+		LastEvaluatedAt: now.Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var firstMu sync.Mutex
+	var firstDelivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir), StateDir: stateDir(dir), WorkDir: dir, Now: currentNow,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
+			firstMu.Lock()
+			defer firstMu.Unlock()
+			firstDelivered = append(firstDelivered, record)
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, asyncWaitTimeout, func() bool {
+		firstMu.Lock()
+		defer firstMu.Unlock()
+		return len(firstDelivered) == 1
+	})
+	firstMu.Lock()
+	if got, want := firstDelivered[0].SourceEventID, "schedule:"+spec.ID+":"+scheduledAt.Format(time.RFC3339Nano); got != want {
+		firstMu.Unlock()
+		t.Fatalf("source event id = %q, want %q", got, want)
+	}
+	firstMu.Unlock()
+	if err := mgr.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var secondDeliveries atomic.Int64
+	mgr2, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir), StateDir: stateDir(dir), WorkDir: dir, Now: currentNow,
+		Deliver: func(context.Context, observable.ObservationRecord) (observable.DeliveryOutcome, error) {
+			secondDeliveries.Add(1)
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr2.Close() }()
+	if err := mgr2.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := secondDeliveries.Load(); got != 0 {
+		t.Fatalf("second startup delivered %d monthly observations, want 0", got)
+	}
+}
+
 func TestManager_DeleteClearsScheduleStateBeforeRecreate(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now().UTC().Add(5 * time.Second)

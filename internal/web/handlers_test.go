@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -639,6 +640,57 @@ func TestObservablesAPI_CreateDetailObservationsDelete(t *testing.T) {
 	}
 	if len(after.Observables) != 0 {
 		t.Fatalf("after delete = %+v", after.Observables)
+	}
+}
+
+func TestObservablesAPI_CreateMonthlyScheduleAndExposeStatus(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	body := strings.NewReader(`{
+  "id": "monthly-web",
+  "type": "schedule",
+  "schedule_config": {
+    "timezone": "Asia/Shanghai",
+    "monthly": {"days": [1, 15, 31], "times": ["09:00", "17:30"]},
+    "observation": {"content": "Prepare a monthly web brief."}
+  }
+}`)
+	resp, err := http.Post(ts.URL+"/api/observables", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var created observable.ObservableStatus
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated || created.ScheduleConfig == nil ||
+		created.ScheduleConfig.Monthly == nil || created.Schedule == nil {
+		t.Fatalf("create monthly status=%d body=%+v", resp.StatusCode, created)
+	}
+	if got, want := created.Schedule.Summary, "monthly days 1,15,31 at 09:00,17:30 Asia/Shanghai"; got != want {
+		t.Fatalf("monthly summary = %q, want %q", got, want)
+	}
+	if created.Schedule.NextOccurrence == nil {
+		t.Fatalf("monthly status missing next occurrence: %+v", created.Schedule)
+	}
+
+	resp, err = http.Get(ts.URL + "/api/observables/monthly-web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var detail struct {
+		Observable observable.ObservableStatus `json:"observable"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Observable.ScheduleConfig == nil || detail.Observable.ScheduleConfig.Monthly == nil ||
+		!reflect.DeepEqual(detail.Observable.ScheduleConfig.Monthly.Days, []int{1, 15, 31}) {
+		t.Fatalf("monthly detail = %+v", detail.Observable)
 	}
 }
 
