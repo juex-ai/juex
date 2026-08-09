@@ -1662,6 +1662,15 @@ adapters use the kernel for run transitions, durable Observation state,
 source-event idempotency, tracked delivery, events, and the shared
 list/start/stop/delete/history lifecycle.
 
+Schedule configuration is a strict recurrence union of `once`, `daily`,
+`monthly`, and `interval`. `monthly` contains calendar `days` from 1 through 31
+and local `times` in a required IANA `timezone`. Its adapter checks calendar
+month length before constructing a candidate and resolves wall-clock values
+against timezone transitions: absent days and DST gaps produce no occurrence,
+while a DST fold produces one occurrence at the earlier UTC instant. The
+resulting UTC timestamp continues through the existing durable source-event id,
+cursor, catch-up, restart recovery, and delivery paths.
+
 Persisted entries and `POST /api/observables` use a strict tagged union:
 `type: "command"` requires `command_config`, while `type: "schedule"` requires
 `schedule_config`. The loader reports entries outside this tagged union as

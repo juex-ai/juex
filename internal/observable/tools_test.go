@@ -104,7 +104,7 @@ func TestCreateToolSchemasAreClosedAndSourceSpecific(t *testing.T) {
 			t.Fatalf("observable_create missing command field %q", required)
 		}
 	}
-	for _, forbidden := range []string{"source", "type", "timezone", "once", "daily", "interval", "catch_up", "content", "attachments", "command_config", "schedule_config"} {
+	for _, forbidden := range []string{"source", "type", "timezone", "once", "daily", "monthly", "interval", "catch_up", "content", "attachments", "command_config", "schedule_config"} {
 		if _, ok := commandProps[forbidden]; ok {
 			t.Fatalf("observable_create exposes cross-source field %q", forbidden)
 		}
@@ -147,7 +147,7 @@ func TestCreateToolSchemasAreClosedAndSourceSpecific(t *testing.T) {
 		t.Fatalf("schedule schema should move prose to builtin guide: %#v", schedule.Schema)
 	}
 	scheduleProps := schemaMap(t, schedule.Schema, "properties")
-	for _, required := range []string{"id", "timezone", "once", "daily", "interval", "catch_up", "observation"} {
+	for _, required := range []string{"id", "timezone", "once", "daily", "monthly", "interval", "catch_up", "observation"} {
 		if _, ok := scheduleProps[required]; !ok {
 			t.Fatalf("schedule_create missing schedule field %q", required)
 		}
@@ -157,46 +157,49 @@ func TestCreateToolSchemasAreClosedAndSourceSpecific(t *testing.T) {
 			t.Fatalf("schedule_create exposes command field %q", forbidden)
 		}
 	}
-	if oneOf, ok := schedule.Schema["oneOf"].([]any); !ok || len(oneOf) != 3 {
-		t.Fatalf("schedule_create oneOf = %#v, want once/daily/interval alternatives", schedule.Schema["oneOf"])
+	if oneOf, ok := schedule.Schema["oneOf"].([]any); !ok || len(oneOf) != 4 {
+		t.Fatalf("schedule_create oneOf = %#v, want once/daily/monthly/interval alternatives", schedule.Schema["oneOf"])
 	} else {
 		wantBranches := []struct {
-			required  []string
-			forbidden []string
+			required []string
 		}{
-			{required: []string{"once"}, forbidden: []string{"daily", "interval"}},
-			{required: []string{"daily", "timezone"}, forbidden: []string{"once", "interval"}},
-			{required: []string{"interval"}, forbidden: []string{"once", "daily"}},
+			{required: []string{"once"}},
+			{required: []string{"daily"}},
+			{required: []string{"monthly"}},
+			{required: []string{"interval"}},
 		}
 		for i, want := range wantBranches {
 			branch := schemaMapFromValue(t, oneOf[i])
 			if got := schemaRequiredStrings(t, branch); !reflect.DeepEqual(got, want.required) {
 				t.Fatalf("schedule branch %d required = %v, want %v", i, got, want.required)
 			}
-			if got := schemaForbiddenRequiredStrings(t, branch); !reflect.DeepEqual(got, want.forbidden) {
-				t.Fatalf("schedule branch %d forbidden recurrence fields = %v, want %v", i, got, want.forbidden)
-			}
 		}
 		cases := []struct {
-			name string
-			keys []string
-			want int
+			name      string
+			keys      []string
+			wantValid bool
 		}{
-			{name: "once", keys: []string{"once"}, want: 1},
-			{name: "daily", keys: []string{"daily", "timezone"}, want: 1},
-			{name: "interval", keys: []string{"interval"}, want: 1},
-			{name: "once and daily without timezone", keys: []string{"once", "daily"}, want: 0},
-			{name: "once and daily", keys: []string{"once", "daily", "timezone"}, want: 0},
-			{name: "once and interval", keys: []string{"once", "interval"}, want: 0},
-			{name: "daily and interval without timezone", keys: []string{"daily", "interval"}, want: 0},
-			{name: "daily and interval", keys: []string{"daily", "interval", "timezone"}, want: 0},
-			{name: "all recurrences without timezone", keys: []string{"once", "daily", "interval"}, want: 0},
-			{name: "all recurrences", keys: []string{"once", "daily", "interval", "timezone"}, want: 0},
+			{name: "once", keys: []string{"once"}, wantValid: true},
+			{name: "daily", keys: []string{"daily", "timezone"}, wantValid: true},
+			{name: "daily without timezone", keys: []string{"daily"}, wantValid: true},
+			{name: "monthly", keys: []string{"monthly", "timezone"}, wantValid: true},
+			{name: "monthly without timezone", keys: []string{"monthly"}, wantValid: true},
+			{name: "interval", keys: []string{"interval"}, wantValid: true},
+			{name: "once and daily without timezone", keys: []string{"once", "daily"}},
+			{name: "once and daily", keys: []string{"once", "daily", "timezone"}},
+			{name: "once and interval", keys: []string{"once", "interval"}},
+			{name: "daily and interval without timezone", keys: []string{"daily", "interval"}},
+			{name: "daily and interval", keys: []string{"daily", "interval", "timezone"}},
+			{name: "monthly and interval", keys: []string{"monthly", "interval", "timezone"}},
+			{name: "daily and monthly", keys: []string{"daily", "monthly", "timezone"}},
+			{name: "all recurrences without timezone", keys: []string{"once", "daily", "monthly", "interval"}},
+			{name: "all recurrences", keys: []string{"once", "daily", "monthly", "interval", "timezone"}},
 		}
 		for _, tt := range cases {
 			t.Run("schedule schema "+tt.name, func(t *testing.T) {
-				if got := schemaMatchingBranches(t, oneOf, tt.keys); got != tt.want {
-					t.Fatalf("matching recurrence branches = %d, want %d for keys %v", got, tt.want, tt.keys)
+				matches := schemaMatchingBranches(t, oneOf, tt.keys)
+				if gotValid := matches == 1; gotValid != tt.wantValid {
+					t.Fatalf("matching recurrence branches = %d, valid=%v, want valid=%v for keys %v", matches, gotValid, tt.wantValid, tt.keys)
 				}
 			})
 		}
@@ -211,11 +214,16 @@ func TestCreateToolSchemasAreClosedAndSourceSpecific(t *testing.T) {
 			t.Fatalf("%s required = %#v, want %q", name, req, required)
 		}
 	}
+	monthlyRequired, ok := schemaMapFromValue(t, scheduleProps["monthly"])["required"].([]any)
+	if !ok || !reflect.DeepEqual(monthlyRequired, []any{"days", "times"}) {
+		t.Fatalf("monthly required = %#v, want days and times", monthlyRequired)
+	}
 	if schemaMapFromValue(t, scheduleProps["interval"])["additionalProperties"] != false {
 		t.Fatalf("interval schema is open: %#v", scheduleProps["interval"])
 	}
 	if schemaMapFromValue(t, scheduleProps["once"])["additionalProperties"] != false ||
 		schemaMapFromValue(t, scheduleProps["daily"])["additionalProperties"] != false ||
+		schemaMapFromValue(t, scheduleProps["monthly"])["additionalProperties"] != false ||
 		schemaMapFromValue(t, scheduleProps["catch_up"])["additionalProperties"] != false {
 		t.Fatal("schedule recurrence sub-schemas must be closed")
 	}
@@ -341,6 +349,48 @@ func TestScheduleCreatePersistsTaggedSpecAndStartsSchedule(t *testing.T) {
 	}
 	if strings.Contains(text, `"command_config"`) || strings.Contains(text, `"source"`) {
 		t.Fatalf("persisted schedule contains cross-source shape: %s", text)
+	}
+}
+
+func TestScheduleCreatePersistsMonthlySpecAndListsStatus(t *testing.T) {
+	mgr, config := newToolTestManagerWithConfigPath(t)
+	reg := tools.NewRegistry()
+	if err := observable.RegisterTools(reg, mgr); err != nil {
+		t.Fatal(err)
+	}
+	input := map[string]any{
+		"id":       "monthly-brief",
+		"timezone": "Asia/Shanghai",
+		"monthly": map[string]any{
+			"days":  []any{float64(1), float64(15), float64(31)},
+			"times": []any{"09:00", "17:30"},
+		},
+		"observation": map[string]any{"content": "Prepare a monthly brief."},
+	}
+	out, _, err := reg.CallWithInfo(context.Background(), "schedule_create", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"summary": "monthly days 1,15,31 at 09:00,17:30 Asia/Shanghai"`) {
+		t.Fatalf("monthly create output = %s", out)
+	}
+	listed, _, err := reg.CallWithInfo(context.Background(), "observable_list", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"monthly"`, `"days": [`, `"timezone": "Asia/Shanghai"`, `"Prepare a monthly brief."`} {
+		if !strings.Contains(listed, want) {
+			t.Fatalf("observable_list monthly schedule missing %s: %s", want, listed)
+		}
+	}
+	body, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"type": "schedule"`, `"monthly": {`, `"days": [`, `"times": [`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("persisted monthly schedule missing %s: %s", want, body)
+		}
 	}
 }
 
@@ -599,24 +649,6 @@ func schemaRequiredStrings(t *testing.T, schema map[string]any) []string {
 	return result
 }
 
-func schemaForbiddenRequiredStrings(t *testing.T, schema map[string]any) []string {
-	t.Helper()
-	notSchema := schemaMapFromValue(t, schema["not"])
-	branches, ok := notSchema["anyOf"].([]any)
-	if !ok {
-		t.Fatalf("schema not.anyOf = %#v, want []any", notSchema["anyOf"])
-	}
-	result := make([]string, 0, len(branches))
-	for _, value := range branches {
-		required := schemaRequiredStrings(t, schemaMapFromValue(t, value))
-		if len(required) != 1 {
-			t.Fatalf("forbidden branch required = %v, want one field", required)
-		}
-		result = append(result, required[0])
-	}
-	return result
-}
-
 func schemaMatchingBranches(t *testing.T, branches []any, keys []string) int {
 	t.Helper()
 	present := make(map[string]bool, len(keys))
@@ -629,11 +661,6 @@ func schemaMatchingBranches(t *testing.T, branches []any, keys []string) int {
 		matched := true
 		for _, required := range schemaRequiredStrings(t, branch) {
 			matched = matched && present[required]
-		}
-		if forbidden, ok := branch["not"]; ok {
-			for _, field := range schemaForbiddenRequiredStrings(t, map[string]any{"not": forbidden}) {
-				matched = matched && !present[field]
-			}
 		}
 		if matched {
 			matches++

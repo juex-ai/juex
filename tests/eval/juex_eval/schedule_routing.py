@@ -41,6 +41,8 @@ SHELL_COMMAND_PREFIXES = {"!", "(", "{"}
 
 SHELL_CONTROL_PREFIXES = {"do", "elif", "else", "if", "then", "until", "while"}
 
+RECURRENCE_FIELDS = {"once", "daily", "monthly", "interval"}
+
 WRAPPER_OPTIONS_WITH_VALUE = {
     "builtin": set(),
     "command": set(),
@@ -81,8 +83,31 @@ class ScheduleRoutingExpectation:
     content: str
     completion_token: str
     existing_schedule_id: str | None = None
+    recurrence: str = "interval"
+    timezone: str = ""
+    monthly_days: tuple[int, ...] = ()
+    monthly_times: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if self.recurrence not in {"interval", "monthly"}:
+            raise ValueError("recurrence must be interval or monthly")
+        if self.recurrence == "interval":
+            if isinstance(self.every_seconds, bool) or self.every_seconds < 60:
+                raise ValueError("every_seconds must be at least 60 for interval recurrence")
+        else:
+            if self.every_seconds != 0:
+                raise ValueError("every_seconds must be 0 for monthly recurrence")
+            if not self.timezone.strip():
+                raise ValueError("timezone cannot be empty for monthly recurrence")
+            if not self.monthly_days or any(
+                isinstance(day, bool) or day < 1 or day > 31 for day in self.monthly_days
+            ):
+                raise ValueError("monthly_days must contain calendar days from 1 through 31")
+            if not self.monthly_times or any(
+                re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value) is None
+                for value in self.monthly_times
+            ):
+                raise ValueError("monthly_times must contain HH:MM values")
         if self.existing_schedule_id is None:
             return
         if not self.existing_schedule_id.strip():
@@ -93,6 +118,30 @@ class ScheduleRoutingExpectation:
     @property
     def variant(self) -> str:
         return SEEDED_EQUIVALENT_VARIANT if self.existing_schedule_id is not None else EMPTY_VARIANT
+
+    @classmethod
+    def monthly(
+        cls,
+        *,
+        schedule_id: str,
+        timezone: str,
+        days: tuple[int, ...],
+        times: tuple[str, ...],
+        content: str,
+        completion_token: str,
+        existing_schedule_id: str | None = None,
+    ) -> ScheduleRoutingExpectation:
+        return cls(
+            schedule_id=schedule_id,
+            every_seconds=0,
+            content=content,
+            completion_token=completion_token,
+            existing_schedule_id=existing_schedule_id,
+            recurrence="monthly",
+            timezone=timezone,
+            monthly_days=days,
+            monthly_times=times,
+        )
 
 
 @dataclass(frozen=True)
@@ -134,26 +183,49 @@ def seeded_observables_config(expectation: ScheduleRoutingExpectation) -> dict[s
             {
                 "id": expectation.existing_schedule_id,
                 "type": "schedule",
-                "schedule_config": {
-                    "interval": {"every_seconds": expectation.every_seconds},
-                    "observation": {"content": expectation.content},
-                },
+                "schedule_config": _expected_schedule_config(expectation),
             }
         ]
     }
 
 
+def _expected_schedule_config(expectation: ScheduleRoutingExpectation) -> dict[str, Any]:
+    config: dict[str, Any] = {
+        "observation": {"content": expectation.content},
+    }
+    if expectation.recurrence == "monthly":
+        config["timezone"] = expectation.timezone
+        config["monthly"] = {
+            "days": list(expectation.monthly_days),
+            "times": list(expectation.monthly_times),
+        }
+    else:
+        config["interval"] = {"every_seconds": expectation.every_seconds}
+    return config
+
+
 def build_prompt(expectation: ScheduleRoutingExpectation) -> str:
-    hours = expectation.every_seconds / 3600
-    hours_text = str(int(hours)) if hours.is_integer() else f"{hours:g}"
+    if expectation.recurrence == "monthly":
+        days = ", ".join(str(day) for day in expectation.monthly_days)
+        times = ", ".join(expectation.monthly_times)
+        cadence = (
+            f"on calendar day(s) {days} at local time(s) {times} "
+            f"in timezone {expectation.timezone} every month"
+        )
+        equivalent = "same monthly calendar cadence and observation content"
+    else:
+        hours = expectation.every_seconds / 3600
+        hours_text = str(int(hours)) if hours.is_integer() else f"{hours:g}"
+        cadence = f"every {hours_text} hours"
+        equivalent = "same cadence and observation content"
     if expectation.variant == SEEDED_EQUIVALENT_VARIANT:
         return "\n".join(
             [
                 "Ensure recurring timed work is available using JueX native scheduling.",
-                f"The requested work must run every {hours_text} hours; if creation is necessary, use the fixed id {expectation.schedule_id}.",
+                f"The requested work must run {cadence}; if creation is necessary, use the fixed id {expectation.schedule_id}.",
                 f"Each activation must emit observation content exactly: {expectation.content}",
                 "Inspect all currently configured timed sources first.",
-                "Treat an existing Schedule with the same cadence and observation content as equivalent even if its id differs.",
+                f"Treat an existing Schedule with the {equivalent} as equivalent even if its id differs.",
                 "Create the requested fixed id only if no equivalent timed source is already configured.",
                 "Use native scheduling for recurrence; do not implement it with shell polling, background loops, or a managed command source.",
                 "You may briefly reference an equivalent existing source, but after the timed work is available, "
@@ -163,7 +235,7 @@ def build_prompt(expectation: ScheduleRoutingExpectation) -> str:
     return "\n".join(
         [
             "Create recurring timed work using JueX native scheduling.",
-            f"Use the fixed id {expectation.schedule_id} and run it every {hours_text} hours.",
+            f"Use the fixed id {expectation.schedule_id} and run it {cadence}.",
             f"Each activation must emit observation content exactly: {expectation.content}",
             "Inspect all currently configured timed sources first, then create this one only if it is absent.",
             "Use native scheduling for recurrence; do not implement it with shell polling, background loops, or a managed command source.",
@@ -1093,9 +1165,7 @@ def _validate_create_input(value: Any, expectation: ScheduleRoutingExpectation, 
         return
     if value.get("id") != expectation.schedule_id:
         issues.append(f"schedule_create id must equal {expectation.schedule_id!r}")
-    interval = value.get("interval")
-    if not isinstance(interval, dict) or interval.get("every_seconds") != expectation.every_seconds:
-        issues.append(f"schedule_create interval.every_seconds must equal {expectation.every_seconds}")
+    _validate_recurrence(value, expectation, "schedule_create", issues)
     observation = value.get("observation")
     if not isinstance(observation, dict) or observation.get("content") != expectation.content:
         issues.append(f"schedule_create observation.content must equal {expectation.content!r}")
@@ -1106,28 +1176,69 @@ def _create_input_matches(value: Any, expectation: ScheduleRoutingExpectation) -
     _validate_create_input(value, expectation, issues)
     if issues or not isinstance(value, dict):
         return False
-    if set(value) - {
-        "id",
-        "name",
-        "timezone",
-        "interval",
-        "catch_up",
-        "observation",
-    }:
+    if set(value) - {"id", "name", "timezone", *RECURRENCE_FIELDS, "catch_up", "observation"}:
         return False
     if "name" in value and not isinstance(value["name"], str):
         return False
     if "timezone" in value and not isinstance(value["timezone"], str):
         return False
-    interval = value["interval"]
-    if not isinstance(interval, dict) or set(interval) != {"every_seconds"}:
-        return False
-    every_seconds = interval["every_seconds"]
-    if isinstance(every_seconds, bool) or not isinstance(every_seconds, int):
+    if not _recurrence_input_matches(value, expectation):
         return False
     if "catch_up" in value and not _catch_up_input_valid(value["catch_up"]):
         return False
     return _observation_input_valid(value["observation"], expectation.content)
+
+
+def _validate_recurrence(
+    value: dict[str, Any],
+    expectation: ScheduleRoutingExpectation,
+    prefix: str,
+    issues: list[str],
+) -> None:
+    present = sorted(RECURRENCE_FIELDS.intersection(value))
+    if present != [expectation.recurrence]:
+        issues.append(
+            f"{prefix} must set exactly the {expectation.recurrence} recurrence, saw {present}"
+        )
+        return
+    if expectation.recurrence == "monthly":
+        if value.get("timezone") != expectation.timezone:
+            issues.append(f"{prefix} timezone must equal {expectation.timezone!r}")
+        monthly = value.get("monthly")
+        if not isinstance(monthly, dict):
+            issues.append(f"{prefix} monthly must be an object")
+            return
+        if monthly.get("days") != list(expectation.monthly_days):
+            issues.append(f"{prefix} monthly.days must equal {list(expectation.monthly_days)!r}")
+        if monthly.get("times") != list(expectation.monthly_times):
+            issues.append(f"{prefix} monthly.times must equal {list(expectation.monthly_times)!r}")
+        return
+    interval = value.get("interval")
+    if not isinstance(interval, dict) or interval.get("every_seconds") != expectation.every_seconds:
+        issues.append(f"{prefix} interval.every_seconds must equal {expectation.every_seconds}")
+
+
+def _recurrence_input_matches(value: dict[str, Any], expectation: ScheduleRoutingExpectation) -> bool:
+    if RECURRENCE_FIELDS.intersection(value) != {expectation.recurrence}:
+        return False
+    if expectation.recurrence == "monthly":
+        monthly = value.get("monthly")
+        return (
+            value.get("timezone") == expectation.timezone
+            and isinstance(monthly, dict)
+            and set(monthly) == {"days", "times"}
+            and monthly.get("days") == list(expectation.monthly_days)
+            and monthly.get("times") == list(expectation.monthly_times)
+        )
+    interval = value.get("interval")
+    if not isinstance(interval, dict) or set(interval) != {"every_seconds"}:
+        return False
+    every_seconds = interval["every_seconds"]
+    return (
+        not isinstance(every_seconds, bool)
+        and isinstance(every_seconds, int)
+        and every_seconds == expectation.every_seconds
+    )
 
 
 def _catch_up_input_valid(value: Any) -> bool:
@@ -1290,9 +1401,7 @@ def _validate_persisted_config(
     if not isinstance(schedule_config, dict):
         issues.append("persisted entry must contain schedule_config")
         return
-    interval = schedule_config.get("interval")
-    if not isinstance(interval, dict) or interval.get("every_seconds") != expectation.every_seconds:
-        issues.append(f"persisted schedule_config.interval.every_seconds must equal {expectation.every_seconds}")
+    _validate_recurrence(schedule_config, expectation, "persisted schedule_config", issues)
     observation = schedule_config.get("observation")
     if not isinstance(observation, dict) or observation.get("content") != expectation.content:
         issues.append(f"persisted schedule_config.observation.content must equal {expectation.content!r}")
@@ -1301,11 +1410,9 @@ def _validate_persisted_config(
 def _schedule_config_matches(value: Any, expectation: ScheduleRoutingExpectation) -> bool:
     if not isinstance(value, dict):
         return False
-    interval = value.get("interval")
     observation = value.get("observation")
     return (
-        isinstance(interval, dict)
-        and interval.get("every_seconds") == expectation.every_seconds
+        _recurrence_input_matches(value, expectation)
         and isinstance(observation, dict)
         and observation.get("content") == expectation.content
     )

@@ -1017,7 +1017,7 @@ func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
 	}
 }
 
-func TestWeb_RunScheduleObservableOnce(t *testing.T) {
+func TestWeb_RunMonthlyScheduleObservableOnce(t *testing.T) {
 	work := t.TempDir()
 	prov := &webProvider{steps: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "manual schedule handled"), StopReason: llm.StopEndTurn},
@@ -1041,13 +1041,14 @@ func TestWeb_RunScheduleObservableOnce(t *testing.T) {
 	}
 	created.Body.Close()
 
-	scheduledAt := time.Now().UTC().Add(time.Hour)
 	body, err := json.Marshal(map[string]any{
 		"id":   "manual-schedule-e2e",
 		"type": "schedule",
 		"schedule_config": map[string]any{
-			"once": map[string]any{
-				"at": scheduledAt.Format(time.RFC3339Nano),
+			"timezone": "Asia/Shanghai",
+			"monthly": map[string]any{
+				"days":  []int{1, 15, 31},
+				"times": []string{"09:00", "17:30"},
 			},
 			"observation": map[string]any{
 				"kind":     "heartbeat",
@@ -1134,6 +1135,11 @@ func TestWeb_RunScheduleObservableOnce(t *testing.T) {
 	status := observableStatusByID(list.Observables, "manual-schedule-e2e")
 	if status == nil || status.State != observable.RunStateStopped {
 		t.Fatalf("schedule status after run = %+v, want stopped", status)
+	}
+	if status.ScheduleConfig == nil || status.ScheduleConfig.Monthly == nil ||
+		status.Schedule == nil || status.Schedule.Summary != "monthly days 1,15,31 at 09:00,17:30 Asia/Shanghai" ||
+		status.Schedule.NextOccurrence == nil {
+		t.Fatalf("monthly schedule status = %+v", status)
 	}
 	if status.LastObservation.SourceEventID != record.SourceEventID {
 		t.Fatalf("last observation = %+v, want %q", status.LastObservation, record.SourceEventID)

@@ -598,8 +598,11 @@ start/stop/run lifecycle but cannot be deleted or persisted into the project
 file.
 A Command Observable captures bounded stdout/stderr batches from a managed
 command; a Schedule emits a pre-authored Observation from a one-shot, daily,
-or interval timetable. Both use the shared list/start/stop/delete/history
-lifecycle, store generated state under the resident agent's
+monthly, or interval timetable. Monthly recurrence selects calendar days 1
+through 31 plus local `HH:MM` times in an IANA timezone. A missing day is
+skipped for that month; DST gaps are skipped, and repeated DST wall-clock times
+run once at their earlier UTC instant. Both source types use the shared
+list/start/stop/delete/history lifecycle, store generated state under the resident agent's
 `$JUEX_HOME/agents/<id>/observables/`, deliver external pending input to the
 active primary session, emit `observable.*` and `observation.*` events, and
 appear in the Web UI.

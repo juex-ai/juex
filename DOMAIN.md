@@ -78,7 +78,7 @@ domain boundary.
 | --- | --- |
 | Observable | A project-owned external signal source or one defined by a selected Extension, with a shared lifecycle, globally unique logical id, resource source, and durable generated state. Extension definitions are read-only. |
 | Command Observable | An Observable backed by a managed command whose parsed, filtered, and bounded output batches become Observations. |
-| Schedule | An Observable backed by a one-shot, daily, or interval timetable and a pre-authored Observation payload. |
+| Schedule | An Observable backed by a one-shot, daily, monthly-calendar, or interval timetable and a pre-authored Observation payload. Monthly recurrence preserves local wall-clock intent, skips absent month days and DST gaps, and emits a repeated DST wall-clock time once at its earlier UTC instant. |
 | Observation | A durable normalized signal emitted by an Observable, with source identity, content, attachments, delivery state, and target Session when admitted. |
 | Event | A stable fact about runtime activity. Durable Events are committed to the Session journal before live delivery; explicitly transient Events exist only for current subscribers. |
 | Artifact | Durable Workspace-local bytes addressed by a safe relative path plus integrity metadata. An Artifact reference is portable with the Workspace and does not imply that the bytes are model-visible. Observable-private oversized payload files in Agent state are generated implementation state, not Workspace Artifacts. |

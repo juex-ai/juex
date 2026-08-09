@@ -51,6 +51,13 @@ test("ObservableCreateRequest is a tagged command or schedule union", () => {
   assert.match(schedule, /command_config\?:\s*never/);
 });
 
+test("ObservableScheduleConfig includes monthly calendar recurrence", () => {
+  assert.match(
+    typesSource,
+    /monthly\?:\s*\{\s*days:\s*number\[\];\s*times:\s*string\[\];?\s*\}/,
+  );
+});
+
 test("createObservable posts tagged command and schedule bodies unchanged", async () => {
   const originalFetch = globalThis.fetch;
   const bodies: unknown[] = [];
@@ -77,7 +84,7 @@ test("createObservable posts tagged command and schedule bodies unchanged", asyn
       type: "schedule",
       schedule_config: {
         timezone: "Asia/Shanghai",
-        interval: { every_seconds: 60 },
+        monthly: { days: [1, 15], times: ["09:00"] },
         observation: { content: "Prepare a work brief." },
       },
     });
@@ -100,7 +107,7 @@ test("createObservable posts tagged command and schedule bodies unchanged", asyn
       type: "schedule",
       schedule_config: {
         timezone: "Asia/Shanghai",
-        interval: { every_seconds: 60 },
+        monthly: { days: [1, 15], times: ["09:00"] },
         observation: { content: "Prepare a work brief." },
       },
     },
