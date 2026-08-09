@@ -105,7 +105,9 @@ is deleted after success unless `--keep` is passed.
 Each case runs one live agent workflow that must use `read`, `write`, `edit`,
 `grep`, `exec_command`, and `write_stdin`, including a `tty:true` command with
 incremental output and a mid-command stdin reply. The result line reports tool
-use, `exec_command`, TTY, stdin, filesystem, event-delta, and thinking coverage.
+use, `exec_command`, TTY, stdin, filesystem, terminal-event, and thinking
+coverage; transient output deltas are verified by deterministic live-stream
+tests rather than persisted smoke artifacts.
 A redacted report is written under `.tmp/reports/provider-model-smoke/<run-id>/`
 unless `--report-dir` is passed.
 

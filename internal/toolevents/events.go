@@ -1,6 +1,9 @@
 package toolevents
 
-import "github.com/juex-ai/juex/internal/llm"
+import (
+	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/llm"
+)
 
 const (
 	RequestedType   = "tool.requested"
@@ -66,6 +69,7 @@ type CompletedPayload struct {
 	Preview        string        `json:"preview"`
 	Result         any           `json:"result,omitempty"`
 	Media          *llm.MediaRef `json:"media,omitempty"`
+	Content        string        `json:"content,omitempty"`
 }
 
 type ErroredPayload struct {
@@ -81,6 +85,7 @@ type ErroredPayload struct {
 	ExitCode       *int          `json:"exit_code,omitempty"`
 	Result         any           `json:"result,omitempty"`
 	Media          *llm.MediaRef `json:"media,omitempty"`
+	Content        string        `json:"content,omitempty"`
 }
 
 type ErroredOptions struct {
@@ -94,6 +99,7 @@ type ErroredOptions struct {
 	ExitCode       *int
 	Result         any
 	Media          *llm.MediaRef
+	Content        string
 }
 
 func Requested(call ToolCallPayload) RequestedPayload {
@@ -137,6 +143,17 @@ func Delta(call ToolCallPayload, delta OutputDelta) OutputDeltaPayload {
 	}
 }
 
+// OutputDeltaEvent is the only supported runtime event envelope for streamed
+// Tool output. Deltas are live projections, never durable Session facts.
+func OutputDeltaEvent(turnID string, call ToolCallPayload, delta OutputDelta) events.Event {
+	return events.Event{
+		Type:      OutputDeltaType,
+		TurnID:    turnID,
+		Payload:   Delta(call, delta),
+		Transient: true,
+	}
+}
+
 func Completed(call ToolCallPayload, timeoutSeconds int, outputLen int, preview string, result any) CompletedPayload {
 	return CompletedPayload{
 		Name:           call.Name,
@@ -162,5 +179,6 @@ func Errored(call ToolCallPayload, opts ErroredOptions) ErroredPayload {
 		ExitCode:       opts.ExitCode,
 		Result:         opts.Result,
 		Media:          opts.Media,
+		Content:        opts.Content,
 	}
 }

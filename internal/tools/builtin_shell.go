@@ -198,6 +198,7 @@ func writeStdinTool(sessions *ShellSessionManager) Tool {
 			Yield:           yield,
 			MaxOutputTokens: maxOutputTokens,
 			CallContext:     ctx,
+			Events:          ToolCallEventsFromContext(ctx),
 		})
 		out := shellToolResult(result)
 		if err != nil {

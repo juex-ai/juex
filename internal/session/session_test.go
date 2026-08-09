@@ -770,6 +770,26 @@ func TestSession_AppendEventToJSONL(t *testing.T) {
 	}
 }
 
+func TestSession_AppendEventSkipsTransientEvent(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.AppendEvent(events.Event{Type: "tool.output_delta", Payload: "live", Transient: true}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(s.Dir, eventsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("transient event persisted: %s", data)
+	}
+}
+
 func TestSession_LazyCreatesNoFilesUntilAppend(t *testing.T) {
 	root := t.TempDir()
 	s, err := NewWithOptions(root, Options{Lazy: true})

@@ -49,6 +49,8 @@ const (
 	DefaultPendingInputTTL  = 15 * time.Minute
 	DefaultExternalEventTTL = 24 * time.Hour
 	maxToolErrorOutput      = 32 * 1024
+	maxShellHookContent     = 128 * 1024
+	maxShellEventDiagnostic = 4 * 1024
 )
 
 type Engine struct {
@@ -873,7 +875,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		Name:      call.ToolName,
 		ToolUseID: call.ToolUseID,
 		Emit: func(delta tools.OutputDelta) {
-			e.emit(events.Event{Type: toolevents.OutputDeltaType, TurnID: turnID, Payload: toolevents.Delta(callPayload, delta)})
+			e.emit(toolevents.OutputDeltaEvent(turnID, callPayload, delta))
 		},
 	})
 	out, info, err := e.Tools.CallWithInfo(toolCtx, call.ToolName, call.Input)
@@ -881,7 +883,11 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 	block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.ToolName}
 	var toolErr error
 	if err != nil {
-		block.Content = toolErrorContent(out, err)
+		if isShellStructuredResult(info.StructuredResult) {
+			block.Content = boundedToolErrorContent(out, err)
+		} else {
+			block.Content = toolErrorContent(out, err)
+		}
 		block.IsError = true
 		toolErr = err
 	} else {
@@ -890,6 +896,11 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 			block.ChunkedWrite = &event
 		}
 	}
+	shellBaseContent := ""
+	isShellCall := isShellStructuredResult(info.StructuredResult)
+	if isShellCall {
+		shellBaseContent = block.Content
+	}
 	postReq := e.newHookRequest(hooks.EventPostToolUse, turnID)
 	postReq.ToolName = call.ToolName
 	postReq.ToolInput = call.Input
@@ -897,12 +908,19 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 	postResults, postErr := e.runHooks(ctx, postReq)
 	postErr = cancellation.NormalizeError(postErr)
 	if postErr != nil {
-		block.Content = toolErrorContent(block.Content, postErr)
+		if isShellStructuredResult(info.StructuredResult) {
+			block.Content = appendShellRuntimeErrorContent(block.Content, postErr)
+		} else {
+			block.Content = toolErrorContent(block.Content, postErr)
+		}
 		block.IsError = true
 		toolErr = postErr
 	}
 	appendToolHookContext(&block, preResults, false)
 	appendToolHookContext(&block, postResults, true)
+	if isShellCall {
+		block.Content = finalizedShellContent(shellBaseContent, block.Content)
+	}
 	if !block.IsError {
 		if media, ok := tools.MediaRefFromStructuredResult(info.StructuredResult); ok {
 			block.Media = media
@@ -939,6 +957,24 @@ func toolObservationForResult(call llm.Block, block llm.Block, info tools.CallIn
 }
 
 func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block, observation tools.Observation, info tools.CallInfo) {
+	eventResult := observation.StructuredResult
+	terminalContent := ""
+	isShellResult := false
+	switch shellResult := eventResult.(type) {
+	case tools.ShellResult:
+		isShellResult = true
+		shellResult.Output = ""
+		eventResult = shellResult
+		terminalContent = block.Content
+	case *tools.ShellResult:
+		if shellResult != nil {
+			isShellResult = true
+			metadata := *shellResult
+			metadata.Output = ""
+			eventResult = &metadata
+			terminalContent = block.Content
+		}
+	}
 	if block.IsError {
 		opts := toolevents.ErroredOptions{
 			Error:          "tool errored",
@@ -949,21 +985,34 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 		}
 		opts.ErrorKind = observation.ErrorKind
 		opts.RawCause = observation.RawCause
-		if observation.Content != "" {
+		if observation.Content != "" && !isShellResult {
 			opts.Len = len(observation.Content)
 			opts.Preview = truncate(observation.Content, 200)
+		}
+		if isShellResult {
+			opts.Error = boundedRuntimeDiagnostic(opts.Error, maxShellEventDiagnostic)
+			opts.RawCause = boundedRuntimeDiagnostic(opts.RawCause, maxShellEventDiagnostic)
+			opts.Len = len(terminalContent)
+			opts.Content = terminalContent
 		}
 		if observation.TimedOut {
 			opts.TimedOut = true
 		}
 		opts.ExitCode = cloneIntPtr(observation.ExitCode)
-		opts.Result = observation.StructuredResult
+		opts.Result = eventResult
 		opts.Media = block.Media
 		e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), opts)})
 		return
 	}
-	payload := toolevents.Completed(toolCallPayload(call), info.TimeoutSeconds, len(observation.Content), truncate(observation.Content, 200), observation.StructuredResult)
+	outputLen := len(observation.Content)
+	preview := truncate(observation.Content, 200)
+	if isShellResult {
+		outputLen = len(terminalContent)
+		preview = ""
+	}
+	payload := toolevents.Completed(toolCallPayload(call), info.TimeoutSeconds, outputLen, preview, eventResult)
 	payload.Media = block.Media
+	payload.Content = terminalContent
 	e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: payload})
 }
 
@@ -1390,6 +1439,69 @@ func toolErrorContent(out string, err error) string {
 		out = out[:limit] + "\n... (remaining output truncated) ..."
 	}
 	return strings.TrimRight(out, "\n") + "\n\n[tool error]\n" + publicErr
+}
+
+func boundedToolErrorContent(out string, err error) string {
+	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
+	if out == "" {
+		return publicErr
+	}
+	return strings.TrimRight(out, "\n") + "\n\n[tool error]\n" + publicErr
+}
+
+func appendShellRuntimeErrorContent(base string, err error) string {
+	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
+	if base == "" {
+		return publicErr
+	}
+	separator := "\n\n"
+	if strings.HasSuffix(base, "\n\n") {
+		separator = ""
+	} else if strings.HasSuffix(base, "\n") {
+		separator = "\n"
+	}
+	return base + separator + "[tool error]\n" + publicErr
+}
+
+func finalizedShellContent(base, finalized string) string {
+	if finalized == base {
+		return base
+	}
+	suffix, ok := strings.CutPrefix(finalized, base)
+	if !ok {
+		return tools.BoundShellContent(finalized, maxShellHookContent)
+	}
+	return base + tools.BoundShellContent(suffix, maxShellHookContent)
+}
+
+func boundedRuntimeDiagnostic(value string, maxBytes int) string {
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+	limit := validUTF8Cut(value, maxBytes)
+	return value[:limit] + "...(truncated, total " + strconv.Itoa(len(value)) + " bytes)"
+}
+
+func validUTF8Cut(value string, limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+	if limit >= len(value) {
+		return len(value)
+	}
+	for limit > 0 && (value[limit]&0xC0) == 0x80 {
+		limit--
+	}
+	return limit
+}
+
+func isShellStructuredResult(result any) bool {
+	switch result.(type) {
+	case tools.ShellResult, *tools.ShellResult:
+		return true
+	default:
+		return false
+	}
 }
 
 func rawCauseIfDifferent(rawCause, public string) string {

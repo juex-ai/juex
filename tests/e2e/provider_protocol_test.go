@@ -1335,10 +1335,16 @@ func main() {
 	assertBinaryOutputSanitized(t, conversationText)
 	eventsText := strings.Join(readLines(t, filepath.Join(result.SessionDir, "events.jsonl")), "\n")
 	assertBinaryOutputSanitized(t, eventsText)
-	for _, want := range []string{`"type":"tool.output_delta"`, `"binary_omitted":true`, `"binary_sha256":`, `"first_bytes_hex":"0001504e47`} {
+	if strings.Contains(eventsText, `"type":"tool.output_delta"`) {
+		t.Fatalf("events persisted transient tool output delta:\n%s", eventsText)
+	}
+	for _, want := range []string{`"type":"tool.completed"`, `"content":"`, `"binary_omitted":true`, `"binary_sha256":`, `"first_bytes_hex":"0001504e47`} {
 		if !strings.Contains(eventsText, want) {
 			t.Fatalf("events missing %q:\n%s", want, eventsText)
 		}
+	}
+	if strings.Contains(eventsText, `"output":"[binary output omitted:`) {
+		t.Fatalf("events duplicated binary placeholder in structured result:\n%s", eventsText)
 	}
 }
 

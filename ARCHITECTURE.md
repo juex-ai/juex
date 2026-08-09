@@ -742,9 +742,18 @@ a pseudo-terminal on supported platforms so interactive programs can prompt and
 receive follow-up input. TTY sessions publish completion only after both the
 command process and the PTY/ConPTY output pump finish, so output written just
 before exit is included in the completing tool result and event stream.
-Session transcripts and SSE deltas are bounded,
-completed sessions are pruned, and sessions are not durable across Juex
-process restart.
+Each shell process keeps bounded lifetime and unread-window accumulators. The
+default retained raw output limit is 1 MiB: approximately 512 KiB from the
+beginning and 512 KiB from the end, separated by one exact omitted-byte marker.
+`max_output_tokens` may lower the result projection while preserving both ends.
+Output pipes continue draining after retention fills. Live output fragments
+are at most 8 KiB and at most 10,000 are emitted across one shell process;
+reaching either live limit does not stop collection or command execution.
+Only the active `exec_command` or `write_stdin` observation window owns a delta
+emitter, so every fragment uses that invocation's Tool Use ID. Output produced
+between polls accumulates in unread state without being attributed to an
+already completed call. Completed sessions are pruned, and sessions are not
+durable across Juex process restart.
 
 Shell tools also return a structured `tools.ShellResult` through
 `CallInfo.StructuredResult`. The provider-facing text remains the model-reading
@@ -753,11 +762,18 @@ adapter, but runtime events expose the same shell result under
 can read `session_id`, `running`, `exit_code`, `chunk_id`, truncation, and
 output sizing without scraping prose. Shell output is sanitized at the tool
 output seam before text enters conversation history, runtime events, provider
-context, or Web DTOs. Binary or binary-like bytes are omitted from the visible
-text and replaced with a deterministic placeholder carrying byte count, SHA-256,
-and first-bytes hex metadata; normal UTF-8 logs, ANSI-colored output, and
-localized text remain unchanged and still pass through the usual truncation
-budgets.
+context, or Web DTOs. Terminal events carry the authoritative bounded text in
+`payload.content`; their structured `ShellResult` is metadata-only so output is
+not repeated inside the same event. Binary or binary-like bytes are omitted
+from visible text and replaced with a deterministic placeholder carrying the
+full logical window's byte count, SHA-256, and first-bytes hex metadata. Normal
+UTF-8 logs, ANSI-colored output, and localized text remain unchanged, and
+head/tail and live fragment boundaries do not split UTF-8 runes.
+After pre/post Tool hook context is appended, the runtime preserves the
+already-bounded Shell base and applies a separate 128 KiB head/tail and
+binary-hygiene bound to the appended hook/error suffix. Finalized provider and
+terminal event content therefore stays bounded without replacing the original
+Shell stream's exact omitted-byte marker.
 
 Provider adapters should normally return structured tool input. The registry
 still normalizes leaked OpenAI-compatible `_raw_arguments` payloads, including
@@ -801,10 +817,13 @@ Standard event families include `turn.started/completed/errored`,
 `tool.requested/output_delta/completed/errored`,
 `transcript.repaired`, `pending_input.*`, `context.compact.*`, and
 `context.projection.applied`.
-`llm.output_delta` is a live-only projection event and is not appended to the
-session journal. CLI and browser subscribers may render it provisionally; the
-following durable `llm.responded` event is authoritative and replaces any
-provisional text or reasoning blocks.
+`llm.output_delta` and `tool.output_delta` are live-only projection events and
+are not appended to the session journal, trace, or logs. CLI and browser
+subscribers may render them provisionally; the following durable
+`llm.responded`, `tool.completed`, or `tool.errored` event is authoritative and
+replaces the matching provisional content. The `internal/toolevents`
+constructor fixes `tool.output_delta` as transient, while persistence
+boundaries reject every event carrying the transient property.
 `llm.responded` includes the assistant message's ordered `blocks` plus summary
 fields (`text`, `thinking`, `tool_calls`) for older consumers.
 The live tool event family is owned by `internal/toolevents`: event name
@@ -822,14 +841,12 @@ handing their results to asynchronous delivery adapters. The runtime-status
 projection runs first; the web projection then combines the committed event
 with that exact resulting status snapshot in a `BrowserEvent`. If journal
 append fails, projection and live delivery are skipped. Events marked
-`Transient` bypass the journal and are delivered only to current subscribers;
-`llm.output_delta` uses this path and its SSE frame omits an `id` so the browser
-retains the last durable replay cursor. The public SSE cursor remains the
-durable event ID; replay rebuilds status in JSONL line order before filtering
-events after that ID. Tool Call terminal states are absorbing. A durable
-`tool.output_delta` that arrives after its Tool Call completed or errored stays
-in the journal for diagnostics, while the web projection omits it because the
-resulting authoritative Tool Call status is not streaming.
+`Transient` bypass the journal and are delivered only to current subscribers.
+Their SSE frames omit an `id` so the browser retains the last durable replay
+cursor. The public SSE cursor remains the durable event ID; replay rebuilds
+status in JSONL line order before filtering events after that ID. Tool Call
+terminal states are absorbing, and late Tool output is excluded from the
+browser once the corresponding Tool Call is terminal.
 Replay opens the journal and captures its byte length through
 `DurableSink.ReadCommitted`, which waits for every earlier synchronous
 projection and briefly blocks new commits. Reading and JSON decoding use that
@@ -990,7 +1007,7 @@ historyPath)` is the cached form used by Web and `juex sessions list`: it reuses
 transcript-derived summaries from the Agent history index only while both the
 canonical transcript size and millisecond-truncated modification time match
 its recorded fingerprint, reloads small session metadata directly, and reads
-cumulative usage backward from at most the latest 4 MiB of the event-journal
+cumulative usage backward from at most the latest 8 MiB of the event-journal
 tail. Usage fields that are absent from that bounded tail remain unset instead
 of forcing a full legacy-journal scan. Missing or stale transcript summaries
 fall back to the same strict disk scan as `List`; after a successful scan,

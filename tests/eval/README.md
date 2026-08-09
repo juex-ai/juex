@@ -153,9 +153,9 @@ passing run requires:
 - all required tool-use blocks to be present;
 - no legacy `shell` or `shell_input` tool use;
 - an `exec_command` call with `tty:true`;
-- incremental `tool.output_delta` events, including carriage-return progress;
-  the event names and payload fields are the live tool event contract owned by
-  `internal/toolevents`;
+- no transient `tool.output_delta` records in `events.jsonl`;
+- bounded authoritative terminal content on `tool.completed`, including the
+  carriage-return progress, interactive prompt, and completion token;
 - structured shell results on `tool.completed.payload.result` for both the
   running `exec_command` and the completing `write_stdin`;
 - a mid-command `write_stdin` interaction that resumes the running process;

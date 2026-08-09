@@ -70,28 +70,33 @@ func TestRecorderCreatesStableFilesAndFiltersDebug(t *testing.T) {
 	}
 }
 
-func TestRecorderDebugRecordsDebugEvents(t *testing.T) {
+func TestRecorderSkipsTransientEventsEvenInDebug(t *testing.T) {
 	dir := t.TempDir()
 	rec, err := NewRecorder(Options{SessionID: "s1", SessionDir: dir, Debug: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Record(event(toolevents.OutputDeltaType, "t1", map[string]any{"name": "exec_command", "text": "chunk"})); err != nil {
+	delta := event(toolevents.OutputDeltaType, "t1", map[string]any{"name": "exec_command", "text": "chunk"})
+	delta.Transient = true
+	if err := rec.Record(delta); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Record(event("turn.started", "t1", map[string]any{"input": "hello"})); err != nil {
 		t.Fatal(err)
 	}
 	if err := rec.Close(); err != nil {
 		t.Fatal(err)
 	}
 	trace := readJSONLines[TraceRecord](t, filepath.Join(dir, "trace.jsonl"))
-	if len(trace) != 1 || trace[0].Event != toolevents.OutputDeltaType || trace[0].Level != "debug" {
-		t.Fatalf("trace = %+v", trace)
+	if len(trace) != 1 || trace[0].Event != "turn.started" {
+		t.Fatalf("trace = %+v, want only durable event", trace)
 	}
 	debugData, err := os.ReadFile(filepath.Join(dir, "logs", "debug.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(debugData), "tool.output_delta") {
-		t.Fatalf("debug log missing event: %s", debugData)
+	if strings.Contains(string(debugData), "tool.output_delta") || strings.Contains(string(debugData), "chunk") {
+		t.Fatalf("debug log persisted transient event: %s", debugData)
 	}
 }
 

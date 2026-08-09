@@ -4989,7 +4989,9 @@ func TestTurn_ToolOutputDeltaEvent(t *testing.T) {
 	})
 
 	var deltaPayload toolevents.OutputDeltaPayload
+	var deltaEvent events.Event
 	bus.Subscribe(toolevents.OutputDeltaType, func(e events.Event) {
+		deltaEvent = e
 		deltaPayload, _ = e.Payload.(toolevents.OutputDeltaPayload)
 	})
 
@@ -5006,9 +5008,58 @@ func TestTurn_ToolOutputDeltaEvent(t *testing.T) {
 	if deltaPayload.SessionID != "sh_test" || deltaPayload.ChunkID != 7 || deltaPayload.Text != "live bytes" {
 		t.Fatalf("delta payload = %+v", deltaPayload)
 	}
+	if !deltaEvent.Transient {
+		t.Fatalf("tool output delta event = %+v, want transient", deltaEvent)
+	}
+	data, err := os.ReadFile(filepath.Join(eng.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), toolevents.OutputDeltaType) || strings.Contains(string(data), "live bytes") {
+		t.Fatalf("transient tool output persisted in events.jsonl:\n%s", data)
+	}
 }
 
-func TestTurn_BuiltinShellCompletedEventIncludesStructuredResult(t *testing.T) {
+func TestTurn_ToolOutputDeltaCannotAmplifyActiveJournal(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "journal_1", ToolName: "read_journal", Input: map[string]any{}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "read_journal",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			path := filepath.Join(eng.Session.Dir, "events.jsonl")
+			for range 20 {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return "", err
+				}
+				tools.ToolCallEventsFromContext(ctx).Emit(tools.OutputDelta{Text: string(data)})
+			}
+			return "journal inspected", nil
+		},
+	})
+
+	if _, err := eng.Turn(context.Background(), "inspect the active journal"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(eng.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), toolevents.OutputDeltaType) {
+		t.Fatalf("journal contains recursive output deltas:\n%s", data)
+	}
+	if len(data) > 64<<10 {
+		t.Fatalf("journal grew to %d bytes, want bounded metadata-only events", len(data))
+	}
+}
+
+func TestTurn_BuiltinShellCompletedEventCarriesAuthoritativeContentWithoutStructuredOutputDuplication(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "exec_1", ToolName: "exec_command", Input: map[string]any{
@@ -5041,8 +5092,47 @@ func TestTurn_BuiltinShellCompletedEventIncludesStructuredResult(t *testing.T) {
 	if result.Running || result.ExitCode == nil || *result.ExitCode != 0 {
 		t.Fatalf("shell event result = %+v, want completed exit 0", result)
 	}
-	if !strings.Contains(result.Output, "structured-shell") {
-		t.Fatalf("shell event result output = %q, want structured-shell", result.Output)
+	if result.Output != "" {
+		t.Fatalf("shell event result output = %q, want metadata-only structured result", result.Output)
+	}
+	if !strings.Contains(completedPayload.Content, "structured-shell") {
+		t.Fatalf("shell event content = %q, want authoritative output", completedPayload.Content)
+	}
+	data, err := os.ReadFile(filepath.Join(eng.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"content":"Chunk ID:`) || !strings.Contains(string(data), `structured-shell`) {
+		t.Fatalf("shell output missing from durable completion payload:\n%s", data)
+	}
+	if strings.Contains(string(data), `"output":"structured-shell`) {
+		t.Fatalf("shell output duplicated in structured event result:\n%s", data)
+	}
+}
+
+func TestEmitToolFinishedHandlesPointerShellResult(t *testing.T) {
+	bus := events.NewBus()
+	eng := &Engine{Bus: bus}
+	var completed toolevents.CompletedPayload
+	bus.Subscribe(toolevents.CompletedType, func(event events.Event) {
+		completed, _ = event.Payload.(toolevents.CompletedPayload)
+	})
+	original := &tools.ShellResult{Output: "duplicate raw output", OriginalBytes: 20}
+	call := llm.Block{Type: llm.BlockToolUse, ToolUseID: "pointer-shell", ToolName: "exec_command"}
+	block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.ToolName, Content: "finalized bounded output"}
+	observation := tools.NewObservation(tools.ObservationOptions{Content: "earlier output", StructuredResult: original})
+
+	eng.emitToolFinished("turn-1", call, block, observation, tools.CallInfo{})
+
+	result, ok := completed.Result.(*tools.ShellResult)
+	if !ok {
+		t.Fatalf("completed result = %#v, want *tools.ShellResult", completed.Result)
+	}
+	if completed.Content != block.Content || completed.Preview != "" || result.Output != "" {
+		t.Fatalf("completed event = %+v result=%+v", completed, result)
+	}
+	if original.Output != "duplicate raw output" {
+		t.Fatalf("source pointer was mutated: %+v", original)
 	}
 }
 

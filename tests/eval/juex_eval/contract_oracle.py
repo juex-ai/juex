@@ -22,7 +22,7 @@ def validate_agent_smoke_contract(conversation: pathlib.Path, events: pathlib.Pa
     ok, detail = conversation_has_agent_smoke_tools(conversation, token)
     if not ok:
         issues.append(detail)
-    ok, detail = events_have_agent_smoke_deltas(events, token)
+    ok, detail = events_have_agent_smoke_terminal_results(events, token)
     if not ok:
         issues.append(detail)
     return ContractReport(passed=not issues, issues=issues)
@@ -91,7 +91,7 @@ def conversation_has_agent_smoke_tools(path: pathlib.Path, token: str) -> tuple[
     return True, ""
 
 
-def events_have_agent_smoke_deltas(path: pathlib.Path, token: str) -> tuple[bool, str]:
+def events_have_agent_smoke_terminal_results(path: pathlib.Path, token: str) -> tuple[bool, str]:
     if not path.is_file():
         return False, "missing events log"
     delta_count = 0
@@ -119,14 +119,14 @@ def events_have_agent_smoke_deltas(path: pathlib.Path, token: str) -> tuple[bool
         if not isinstance(payload, dict):
             continue
         if event.get("type") == "tool.output_delta":
-            text = str(payload.get("text") or "")
             delta_count += 1
-            saw_install = saw_install or "INSTALL" in text
-            saw_prompt = saw_prompt or "PROMPT approve install" in text
-            saw_done = saw_done or f"TTY-DONE {token}" in text
-            saw_carriage_return = saw_carriage_return or "\r" in text
         if event.get("type") == "tool.completed":
             result = payload.get("result")
+            content = str(payload.get("content") or "")
+            saw_install = saw_install or "INSTALL" in content
+            saw_prompt = saw_prompt or "PROMPT approve install" in content
+            saw_done = saw_done or f"TTY-DONE {token}" in content
+            saw_carriage_return = saw_carriage_return or "\r" in content
             if payload.get("name") == "exec_command" and isinstance(result, dict):
                 session_id = result.get("session_id")
                 saw_structured_exec_running = saw_structured_exec_running or (
@@ -140,10 +140,10 @@ def events_have_agent_smoke_deltas(path: pathlib.Path, token: str) -> tuple[bool
                         result.get("running") is False
                         and _number_not_bool(exit_code)
                         and exit_code == 0
-                        and f"TTY-DONE {token}" in str(result.get("output") or "")
+                        and f"TTY-DONE {token}" in content
                     )
-    if delta_count < 3:
-        return False, f"expected at least 3 tool.output_delta events, saw {delta_count}"
+    if delta_count != 0:
+        return False, f"events persisted {delta_count} transient tool.output_delta records"
     missing = []
     if not saw_install:
         missing.append("INSTALL progress")
@@ -160,7 +160,7 @@ def events_have_agent_smoke_deltas(path: pathlib.Path, token: str) -> tuple[bool
     if not saw_structured_write_stdin_result:
         missing.append("structured write_stdin result")
     if missing:
-        return False, "events missing " + ", ".join(missing)
+        return False, "terminal events missing " + ", ".join(missing)
     return True, ""
 
 

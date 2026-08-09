@@ -115,6 +115,9 @@ func (r *Recorder) Record(ev events.Event) error {
 	if r == nil || r.sessionDir == "" {
 		return nil
 	}
+	if ev.Transient {
+		return nil
+	}
 	if ev.Type == toolevents.OutputDeltaType && !r.shouldRecord(LevelDebug) {
 		return nil
 	}

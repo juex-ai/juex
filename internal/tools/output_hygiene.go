@@ -109,25 +109,62 @@ func isBinaryOutputText(text string) bool {
 }
 
 func binaryDetectionSample(data []byte) []byte {
-	if len(data) <= binaryOutputDetectionBytes {
+	if len(data) <= 2*binaryOutputDetectionBytes {
 		return data
 	}
-	end := binaryOutputDetectionBytes
-	for end > binaryOutputDetectionBytes-utf8.UTFMax && !utf8.Valid(data[:end]) {
-		end--
-	}
-	return data[:end]
+	headEnd := validUTF8SamplePrefix(data, binaryOutputDetectionBytes)
+	tailStart := validUTF8SampleSuffix(data, len(data)-binaryOutputDetectionBytes)
+	sample := make([]byte, 0, 2*binaryOutputDetectionBytes)
+	sample = append(sample, data[:headEnd]...)
+	sample = append(sample, data[tailStart:]...)
+	return sample
 }
 
 func textDetectionSample(text string) string {
 	if len(text) <= binaryOutputDetectionBytes {
 		return text
 	}
-	end := binaryOutputDetectionBytes
-	for end > binaryOutputDetectionBytes-utf8.UTFMax && !utf8.ValidString(text[:end]) {
-		end--
+	return string(binaryDetectionSample([]byte(text)))
+}
+
+func validUTF8SamplePrefix(data []byte, length int) int {
+	end := min(max(length, 0), len(data))
+	if end == 0 || end == len(data) {
+		return end
 	}
-	return text[:end]
+	runeStart := end - 1
+	lower := max(0, end-utf8.UTFMax)
+	for runeStart > lower && !utf8.RuneStart(data[runeStart]) {
+		runeStart--
+	}
+	if !utf8.RuneStart(data[runeStart]) {
+		return end
+	}
+	_, size := utf8.DecodeRune(data[runeStart:])
+	if size > 1 && runeStart+size > end {
+		return runeStart
+	}
+	return end
+}
+
+func validUTF8SampleSuffix(data []byte, start int) int {
+	start = min(max(start, 0), len(data))
+	if start == 0 || start == len(data) || utf8.RuneStart(data[start]) {
+		return start
+	}
+	runeStart := start - 1
+	lower := max(0, start-(utf8.UTFMax-1))
+	for runeStart > lower && !utf8.RuneStart(data[runeStart]) {
+		runeStart--
+	}
+	if !utf8.RuneStart(data[runeStart]) {
+		return start
+	}
+	_, size := utf8.DecodeRune(data[runeStart:])
+	if size > 1 && runeStart+size > start {
+		return runeStart + size
+	}
+	return start
 }
 
 func isTextRune(r rune) bool {

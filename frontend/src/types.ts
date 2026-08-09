@@ -475,6 +475,7 @@ export interface ToolCompletedPayload {
   timeout_seconds: number;
   len: number;
   preview: string;
+  content?: string;
   result?: Record<string, unknown>;
   media?: MediaRef;
 }
@@ -502,6 +503,7 @@ export interface ToolErroredPayload {
   timeout_seconds: number;
   len?: number;
   preview?: string;
+  content?: string;
   timed_out?: boolean;
   exit_code?: number;
   result?: Record<string, unknown>;

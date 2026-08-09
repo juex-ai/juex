@@ -911,6 +911,7 @@ test("projectLiveSessionEvent accepts errored tool contract fields", () => {
       name: "exec_command",
       tool_use_id: "tool-1",
       error: "exit status 7",
+      content: "partial output\nexit status 7",
       timeout_seconds: 5,
       len: 14,
       preview: "partial output",
@@ -922,7 +923,7 @@ test("projectLiveSessionEvent accepts errored tool contract fields", () => {
   const result = state.messages.at(-1)?.blocks?.at(-1);
   assert.equal(result?.type, "tool_result");
   assert.equal(result?.tool_use_id, "tool-1");
-  assert.equal(result?.content, "exit status 7");
+  assert.equal(result?.content, "partial output\nexit status 7");
   assert.equal(result?.is_error, true);
 });
 
