@@ -4,12 +4,15 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -122,5 +125,146 @@ func TestTurn_BuiltinShellErroredEventCarriesAuthoritativeContent(t *testing.T) 
 	}
 	if result.Output != "" || result.ExitCode == nil || *result.ExitCode != 7 {
 		t.Fatalf("errored result = %+v, want metadata-only exit 7", result)
+	}
+}
+
+func TestTurn_BuiltinShellCompletedEventUsesFinalizedHookContent(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "exec_hook_context", ToolName: "exec_command", Input: map[string]any{
+				"cmd": "printf 'shell output'",
+			}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "hook handled"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, true)
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventPostToolUse: {{ExitCode: 2, Stdout: "redaction required"}},
+	}}
+
+	var completed toolevents.CompletedPayload
+	bus.Subscribe(toolevents.CompletedType, func(event events.Event) {
+		payload, _ := event.Payload.(toolevents.CompletedPayload)
+		if payload.ToolUseID == "exec_hook_context" {
+			completed = payload
+		}
+	})
+
+	if _, err := eng.Turn(context.Background(), "run shell with hook context"); err != nil {
+		t.Fatal(err)
+	}
+	conversation := eng.Session.History[2].Blocks[0].Content
+	for _, want := range []string{"shell output", "redaction required"} {
+		if !strings.Contains(conversation, want) {
+			t.Fatalf("conversation content missing %q: %q", want, conversation)
+		}
+	}
+	if completed.Content != conversation || completed.Len != len(conversation) {
+		t.Fatalf("completed event = %+v, want finalized conversation %q", completed, conversation)
+	}
+	if completed.Preview != "" {
+		t.Fatalf("completed preview = %q, want no duplicate shell output", completed.Preview)
+	}
+}
+
+func TestTurn_BuiltinShellErroredEventUsesFinalizedHookErrorContent(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "exec_hook_error", ToolName: "exec_command", Input: map[string]any{
+				"cmd": "printf 'shell output'",
+			}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "hook failure handled"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, true)
+	eng.Hooks = &fakeHookRunner{errors: map[hooks.EventName]error{
+		hooks.EventPostToolUse: errors.New("post hook failed"),
+	}}
+
+	var errored toolevents.ErroredPayload
+	bus.Subscribe(toolevents.ErroredType, func(event events.Event) {
+		payload, _ := event.Payload.(toolevents.ErroredPayload)
+		if payload.ToolUseID == "exec_hook_error" {
+			errored = payload
+		}
+	})
+
+	if _, err := eng.Turn(context.Background(), "run shell with failing hook"); err != nil {
+		t.Fatal(err)
+	}
+	conversation := eng.Session.History[2].Blocks[0].Content
+	for _, want := range []string{"shell output", "post hook failed"} {
+		if !strings.Contains(conversation, want) {
+			t.Fatalf("conversation content missing %q: %q", want, conversation)
+		}
+	}
+	if errored.Content != conversation || errored.Len != len(conversation) {
+		t.Fatalf("errored event = %+v, want finalized conversation %q", errored, conversation)
+	}
+	if errored.Preview != "" {
+		t.Fatalf("errored preview = %q, want no duplicate shell output", errored.Preview)
+	}
+}
+
+func TestTurn_BuiltinShellFinalContentBoundsMultipleEscapedHooksAndReplays(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "exec_large_hooks", ToolName: "exec_command", Input: map[string]any{
+				"cmd": "awk 'BEGIN { for (i = 0; i < 1100000; i++) printf \"<\" }'",
+			}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "large hooks handled"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, true)
+	eng.Hooks = hookRunnerFunc(func(_ context.Context, request hooks.Request) ([]hooks.Result, error) {
+		if request.EventName != hooks.EventPostToolUse {
+			return nil, nil
+		}
+		results := make([]hooks.Result, 4)
+		for index := range results {
+			results[index] = hooks.Result{
+				Hook:      hooks.CommandHook{Name: "large", Events: []hooks.EventName{hooks.EventPostToolUse}},
+				EventName: hooks.EventPostToolUse,
+				ToolName:  "exec_command",
+				ExitCode:  2,
+				Stdout:    strings.Repeat("<", 384<<10),
+			}
+		}
+		return results, nil
+	})
+
+	if _, err := eng.Turn(context.Background(), "run large shell and hooks"); err != nil {
+		t.Fatal(err)
+	}
+	conversation := eng.Session.History[2].Blocks[0].Content
+	if len(conversation) > (1<<20)+64 {
+		t.Fatalf("finalized shell content bytes = %d, want hard bound", len(conversation))
+	}
+	if !strings.Contains(conversation, "[output truncated:") || !strings.HasSuffix(conversation, "<") {
+		t.Fatalf("finalized shell content lost marker/tail: len=%d tail=%q", len(conversation), conversation[len(conversation)-64:])
+	}
+
+	journal, err := session.ReadEvents(eng.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalIndex := -1
+	completionIndex := -1
+	for index, event := range journal {
+		switch event.Type {
+		case toolevents.CompletedType:
+			payload, _ := event.Payload.(map[string]any)
+			if payload["tool_use_id"] == "exec_large_hooks" {
+				terminalIndex = index
+				if payload["content"] != conversation {
+					t.Fatalf("replayed terminal content does not match finalized conversation")
+				}
+			}
+		case "turn.completed":
+			completionIndex = index
+		}
+	}
+	if terminalIndex < 0 || completionIndex <= terminalIndex {
+		t.Fatalf("journal lost terminal or later completion: terminal=%d completion=%d", terminalIndex, completionIndex)
 	}
 }

@@ -769,6 +769,9 @@ from visible text and replaced with a deterministic placeholder carrying the
 full logical window's byte count, SHA-256, and first-bytes hex metadata. Normal
 UTF-8 logs, ANSI-colored output, and localized text remain unchanged, and
 head/tail and live fragment boundaries do not split UTF-8 runes.
+After pre/post Tool hook context is appended, the runtime reapplies the same
+Shell head/tail and binary-hygiene contract so finalized provider and terminal
+event content stays bounded regardless of hook count or per-hook output limit.
 
 Provider adapters should normally return structured tool input. The registry
 still normalizes leaked OpenAI-compatible `_raw_arguments` payloads, including

@@ -177,6 +177,35 @@ func TestShellOutputBufferDetectsBinaryInsideANSIEscape(t *testing.T) {
 	}
 }
 
+func TestShellOutputBufferConsumesPendingUTF8WhenControlRatioIsBinary(t *testing.T) {
+	var buffer shellOutputBuffer
+	input := append([]byte(strings.Repeat("\x01", 16)), []byte("中")[:2]...)
+	buffer.Append(input, defaultShellTranscriptBytes)
+
+	snapshot := buffer.Snapshot(defaultShellTranscriptBytes, false)
+	wantSum := sha256.Sum256(input)
+	if !snapshot.Binary.Omitted || snapshot.Binary.Bytes != len(input) {
+		t.Fatalf("binary metadata = %+v, want all %d bytes", snapshot.Binary, len(input))
+	}
+	if snapshot.Binary.SHA256 != hex.EncodeToString(wantSum[:]) {
+		t.Fatalf("binary sha = %q, want full window hash", snapshot.Binary.SHA256)
+	}
+	if carry := buffer.PendingUTF8(); len(carry) != 0 {
+		t.Fatalf("binary window retained UTF-8 carry: %x", carry)
+	}
+}
+
+func TestBoundShellContentReboundsFinalizedHookOutput(t *testing.T) {
+	content := strings.Repeat("<", defaultShellTranscriptBytes+4096)
+	bounded := BoundShellContent(content)
+	if len(bounded) > defaultShellTranscriptBytes+64 {
+		t.Fatalf("bounded content bytes = %d, want hard bound", len(bounded))
+	}
+	if !strings.HasPrefix(bounded, "<") || !strings.HasSuffix(bounded, "<") || !strings.Contains(bounded, "[output truncated:") {
+		t.Fatalf("bounded content lost head/marker/tail: %q", bounded)
+	}
+}
+
 func TestShellSessionCapsLiveDeltasButKeepsDrainingIntoTerminalResult(t *testing.T) {
 	var deltas []OutputDelta
 	session := &shellSession{

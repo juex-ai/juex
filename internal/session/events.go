@@ -12,9 +12,9 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 )
 
-// A terminal Shell event may contain 1 MiB of retained text. encoding/json
-// expands HTML-sensitive runes such as '<' to six-byte escapes, so the journal
-// reader needs bounded headroom above the raw output contract.
+// Finalized Shell content is re-bounded to about 1 MiB after hooks.
+// encoding/json expands HTML-sensitive runes such as '<' to six-byte escapes,
+// so the journal reader needs bounded headroom above that hard content bound.
 const maxEventLineBytes = 8 * 1024 * 1024
 
 // ReadEvents loads the durable event journal for status and replay projections.

@@ -911,6 +911,9 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 	}
 	appendToolHookContext(&block, preResults, false)
 	appendToolHookContext(&block, postResults, true)
+	if isShellStructuredResult(info.StructuredResult) {
+		block.Content = tools.BoundShellContent(block.Content)
+	}
 	if !block.IsError {
 		if media, ok := tools.MediaRefFromStructuredResult(info.StructuredResult); ok {
 			block.Media = media
@@ -949,10 +952,12 @@ func toolObservationForResult(call llm.Block, block llm.Block, info tools.CallIn
 func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block, observation tools.Observation, info tools.CallInfo) {
 	eventResult := observation.StructuredResult
 	terminalContent := ""
+	isShellResult := false
 	if shellResult, ok := eventResult.(tools.ShellResult); ok {
+		isShellResult = true
 		shellResult.Output = ""
 		eventResult = shellResult
-		terminalContent = observation.Content
+		terminalContent = block.Content
 	}
 	if block.IsError {
 		opts := toolevents.ErroredOptions{
@@ -964,11 +969,11 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 		}
 		opts.ErrorKind = observation.ErrorKind
 		opts.RawCause = observation.RawCause
-		if observation.Content != "" && terminalContent == "" {
+		if observation.Content != "" && !isShellResult {
 			opts.Len = len(observation.Content)
 			opts.Preview = truncate(observation.Content, 200)
 		}
-		if terminalContent != "" {
+		if isShellResult {
 			opts.Len = len(terminalContent)
 			opts.Content = terminalContent
 		}
@@ -981,11 +986,13 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 		e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), opts)})
 		return
 	}
+	outputLen := len(observation.Content)
 	preview := truncate(observation.Content, 200)
-	if terminalContent != "" {
+	if isShellResult {
+		outputLen = len(terminalContent)
 		preview = ""
 	}
-	payload := toolevents.Completed(toolCallPayload(call), info.TimeoutSeconds, len(observation.Content), preview, eventResult)
+	payload := toolevents.Completed(toolCallPayload(call), info.TimeoutSeconds, outputLen, preview, eventResult)
 	payload.Media = block.Media
 	payload.Content = terminalContent
 	e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: payload})

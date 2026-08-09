@@ -847,7 +847,8 @@ func (b *shellOutputBuffer) Snapshot(limit int, final bool) shellOutputSnapshot 
 	head := b.head
 	tail := b.tail
 	totalBytes := b.totalBytes
-	if !final && !b.classifier.binary && len(b.classifier.rawPendingUTF8) > 0 {
+	binary := b.classifier.IsBinary(final)
+	if !final && !binary && len(b.classifier.rawPendingUTF8) > 0 {
 		head, tail = trimShellOutputSuffix(head, tail, len(b.classifier.rawPendingUTF8))
 		totalBytes -= int64(len(b.classifier.rawPendingUTF8))
 	}
@@ -876,7 +877,7 @@ func (b *shellOutputBuffer) Snapshot(limit int, final bool) shellOutputSnapshot 
 		retained = append(retained, tail[tailStart:]...)
 	}
 
-	if !b.classifier.IsBinary(final) {
+	if !binary {
 		return shellOutputSnapshot{
 			Bytes:      retained,
 			TotalBytes: totalBytes,
@@ -900,7 +901,7 @@ func (b *shellOutputBuffer) Snapshot(limit int, final bool) shellOutputSnapshot 
 }
 
 func (b *shellOutputBuffer) PendingUTF8() []byte {
-	if b == nil || b.classifier.binary || len(b.classifier.rawPendingUTF8) == 0 {
+	if b == nil || b.classifier.IsBinary(false) || len(b.classifier.rawPendingUTF8) == 0 {
 		return nil
 	}
 	return append([]byte(nil), b.classifier.rawPendingUTF8...)
@@ -1044,6 +1045,18 @@ func sanitizeShellOutputBytes(data []byte) SanitizedOutput {
 	}
 	info := newBinaryOutputInfo(data)
 	return SanitizedOutput{Text: info.Placeholder(), Binary: info}
+}
+
+// BoundShellContent reapplies the Shell result retention and binary hygiene
+// contract after runtime hooks have finalized the provider-facing content.
+func BoundShellContent(content string) string {
+	const markerHeadroom = 64
+	if len(content) <= defaultShellTranscriptBytes+markerHeadroom {
+		return sanitizeShellOutputBytes([]byte(content)).Text
+	}
+	var buffer shellOutputBuffer
+	buffer.Append([]byte(content), defaultShellTranscriptBytes)
+	return string(buffer.Snapshot(defaultShellTranscriptBytes, true).Bytes)
 }
 
 func trimShellOutputSuffix(head, tail []byte, count int) ([]byte, []byte) {

@@ -560,6 +560,8 @@ a smaller size. Live output uses transient fragments of at most 8 KiB and at
 most 10,000 fragments per shell process. Those fragments are visible only to
 current subscribers and never enter `events.jsonl`; `tool.completed` or
 `tool.errored` carries the bounded authoritative result used after refresh.
+The same bound is reapplied after Tool hook context is appended, so the
+provider-facing result and terminal event stay aligned and bounded.
 `exec_command` and `write_stdin` are not governed by the generic
 `runtime.tool_timeout`; their observation windows and process lifecycles are
 managed explicitly. `list_shell_sessions` remains subject to the ordinary
