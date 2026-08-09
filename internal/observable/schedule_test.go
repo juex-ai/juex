@@ -101,6 +101,22 @@ func TestNextScheduledOccurrenceMonthlyUsesCalendarDaysAndTimezone(t *testing.T)
 	}
 }
 
+func TestNextScheduledOccurrenceMonthlySkipsMissingFebruaryDays(t *testing.T) {
+	spec := monthlyScheduleSpec("missing-february-days", "UTC", []int{29, 30, 31}, []string{"09:00"})
+	now := time.Date(2027, 2, 1, 0, 0, 0, 0, time.UTC)
+	next, ok, err := nextScheduledOccurrence(spec, ScheduleStateRecord{}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("nextScheduledOccurrence ok = false, want true")
+	}
+	want := time.Date(2027, 3, 29, 9, 0, 0, 0, time.UTC)
+	if !next.ScheduledAt.Equal(want) {
+		t.Fatalf("next scheduled = %s, want %s after skipping missing February days 29, 30, and 31", next.ScheduledAt, want)
+	}
+}
+
 func TestNextScheduledOccurrenceMonthlyHandlesLeapDay(t *testing.T) {
 	spec := monthlyScheduleSpec("leap-day", "UTC", []int{29}, []string{"09:00"})
 	now := time.Date(2028, 1, 29, 10, 0, 0, 0, time.UTC)
