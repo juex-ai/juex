@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -3891,6 +3892,60 @@ func TestBuiltins_ExecCommandYieldEmitsOutputDeltas(t *testing.T) {
 	}
 	if !strings.Contains(delta.Text, "first chunk") {
 		t.Fatalf("delta text = %q, want first chunk", delta.Text)
+	}
+}
+
+func TestBuiltins_WriteStdinOwnsItsLiveOutputDeltas(t *testing.T) {
+	r := NewRegistry()
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "delayed")
+	RegisterBuiltins(r, BuiltinOptions{Shell: fakeShellProfile()})
+
+	var mu sync.Mutex
+	var deltas []OutputDelta
+	emit := func(delta OutputDelta) {
+		mu.Lock()
+		defer mu.Unlock()
+		deltas = append(deltas, delta)
+	}
+	execCtx := WithToolCallEvents(context.Background(), ToolCallEvents{
+		Name: "exec_command", ToolUseID: "exec-call", Emit: emit,
+	})
+	_, info, err := r.CallWithInfo(execCtx, "exec_command", map[string]any{
+		"cmd": "delayed", "yield_time_ms": 250,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := shellResultFromInfo(t, info)
+	if !initial.Running {
+		t.Fatalf("initial shell result = %+v, want running", initial)
+	}
+
+	stdinCtx := WithToolCallEvents(context.Background(), ToolCallEvents{
+		Name: "write_stdin", ToolUseID: "stdin-call", Emit: emit,
+	})
+	if _, _, err := r.CallWithInfo(stdinCtx, "write_stdin", map[string]any{
+		"session_id": initial.SessionID, "yield_time_ms": 800,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var sawExec, sawStdin bool
+	for _, delta := range deltas {
+		switch delta.ToolUseID {
+		case "exec-call":
+			sawExec = sawExec || strings.Contains(delta.Text, "first chunk")
+		case "stdin-call":
+			sawStdin = sawStdin || strings.Contains(delta.Text, "second chunk")
+		default:
+			t.Fatalf("delta used stale tool identity: %+v", delta)
+		}
+	}
+	if !sawExec || !sawStdin {
+		t.Fatalf("deltas = %+v, want output bound to both invocations", deltas)
 	}
 }
 

@@ -237,6 +237,9 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 // AppendEvent persists e to events.jsonl. Unlike Append, the event itself
 // is not retained in memory.
 func (s *Session) AppendEvent(e events.Event) error {
+	if e.Transient {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.ensureFilesLocked(); err != nil {

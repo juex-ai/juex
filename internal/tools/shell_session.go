@@ -2,8 +2,11 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"os/exec"
@@ -11,16 +14,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 const (
 	defaultShellMaxSessions      = 64
-	defaultShellMaxOutputTokens  = 10000
+	defaultShellMaxOutputTokens  = defaultShellTranscriptBytes / 4
 	defaultShellTranscriptBytes  = 1 << 20
 	defaultShellCompletedSession = 30 * time.Minute
 	maxShellDeltaBytes           = 8 << 10
+	maxShellDeltaCount           = 10_000
 	minShellYield                = 250 * time.Millisecond
 	defaultShellExecYield        = 10 * time.Second
 	defaultShellInputWriteYield  = 250 * time.Millisecond
@@ -67,6 +72,7 @@ type ShellContinueRequest struct {
 	Yield           time.Duration
 	MaxOutputTokens int
 	CallContext     context.Context
+	Events          ToolCallEvents
 }
 
 type ShellSessionResult struct {
@@ -88,7 +94,7 @@ type ShellSessionResult struct {
 
 type ShellResult struct {
 	SessionID          int    `json:"session_id,omitempty"`
-	Output             string `json:"output"`
+	Output             string `json:"output,omitempty"`
 	ExitCode           *int   `json:"exit_code,omitempty"`
 	Running            bool   `json:"running"`
 	TimedOut           bool   `json:"timed_out,omitempty"`
@@ -172,15 +178,33 @@ type shellSession struct {
 
 	// deliveryMu keeps unread output snapshots from overtaking the matching
 	// output-delta delivery after the bytes have been appended under mu.
-	deliveryMu      sync.Mutex
-	mu              sync.Mutex
-	transcript      []byte
-	unread          []byte
-	unreadTruncated bool
-	chunkID         int
-	done            bool
-	timedOut        bool
-	exitCode        *int
+	deliveryMu   sync.Mutex
+	invocationMu sync.Mutex
+	mu           sync.Mutex
+	transcript   shellOutputBuffer
+	unread       shellOutputBuffer
+	deltaPending []byte
+	chunkID      int
+	deltaCount   int
+	done         bool
+	timedOut     bool
+	exitCode     *int
+}
+
+type shellOutputBuffer struct {
+	limit      int
+	head       []byte
+	tail       []byte
+	totalBytes int64
+	digest     hash.Hash
+	firstBytes []byte
+}
+
+type shellOutputSnapshot struct {
+	Bytes      []byte
+	TotalBytes int64
+	Truncated  bool
+	Binary     BinaryOutputInfo
 }
 
 type shellSessionWriter struct {
@@ -362,6 +386,9 @@ func (m *ShellSessionManager) Continue(req ShellContinueRequest) (ShellSessionRe
 	if session == nil {
 		return ShellSessionResult{}, fmt.Errorf("write_stdin: unknown session_id %d", req.SessionID)
 	}
+	session.invocationMu.Lock()
+	defer session.invocationMu.Unlock()
+	session.setInvocationEvents(req.Events)
 	if req.Stdin != "" {
 		if err := session.writeStdin(req.Stdin); err != nil {
 			return session.snapshot(false, req.MaxOutputTokens), err
@@ -491,52 +518,57 @@ func (s *shellSession) appendOutput(p []byte) {
 		return
 	}
 	data := append([]byte(nil), p...)
-	sanitized := SanitizeOutputBytes(data)
-	deltas := make([]OutputDelta, 0, (len(data)/maxShellDeltaBytes)+1)
 	s.deliveryMu.Lock()
 	defer s.deliveryMu.Unlock()
 	s.mu.Lock()
-	s.transcript = appendCappedBytes(s.transcript, data, s.maxTranscript)
-	beforeUnread := len(s.unread)
-	s.unread = appendCappedBytes(s.unread, data, s.maxTranscript)
-	if beforeUnread+len(data) > s.maxTranscript {
-		s.unreadTruncated = true
-	}
-	if sanitized.Binary.Omitted {
-		s.chunkID++
-		deltas = append(deltas, OutputDelta{
-			Name:          eventToolName(s.events),
-			ToolUseID:     s.events.ToolUseID,
-			SessionID:     fmt.Sprint(s.id),
-			ChunkID:       s.chunkID,
-			Stream:        "combined",
-			Text:          sanitized.Text,
-			BinaryOmitted: true,
-			BinaryBytes:   sanitized.Binary.Bytes,
-			BinarySHA256:  sanitized.Binary.SHA256,
-			FirstBytesHex: sanitized.Binary.FirstBytesHex,
-			Truncated:     false,
-		})
-	} else {
-		for len(data) > 0 {
-			n := len(data)
-			if n > maxShellDeltaBytes {
-				n = maxShellDeltaBytes
-			}
+	s.transcript.Append(data, s.maxTranscript)
+	s.unread.Append(data, s.maxTranscript)
+	emit := s.events.Emit
+	remainingDeltas := maxShellDeltaCount - s.deltaCount
+	var deltas []OutputDelta
+	if emit == nil {
+		s.chunkID += shellOutputChunkCount(data)
+	} else if remainingDeltas > 0 {
+		data = append(append([]byte(nil), s.deltaPending...), data...)
+		data, s.deltaPending = completeUTF8Output(data)
+		if len(data) == 0 {
+			s.mu.Unlock()
+			return
+		}
+		sanitized := SanitizeOutputBytes(data)
+		if sanitized.Binary.Omitted {
 			s.chunkID++
+			s.deltaCount++
 			deltas = append(deltas, OutputDelta{
-				Name:      eventToolName(s.events),
-				ToolUseID: s.events.ToolUseID,
-				SessionID: fmt.Sprint(s.id),
-				ChunkID:   s.chunkID,
-				Stream:    "combined",
-				Text:      string(data[:n]),
-				Truncated: false,
+				Name:          eventToolName(s.events),
+				ToolUseID:     s.events.ToolUseID,
+				SessionID:     fmt.Sprint(s.id),
+				ChunkID:       s.chunkID,
+				Stream:        "combined",
+				Text:          sanitized.Text,
+				BinaryOmitted: true,
+				BinaryBytes:   sanitized.Binary.Bytes,
+				BinarySHA256:  sanitized.Binary.SHA256,
+				FirstBytesHex: sanitized.Binary.FirstBytesHex,
 			})
-			data = data[n:]
+		} else {
+			for len(data) > 0 && remainingDeltas > 0 {
+				n := shellDeltaChunkSize(data, maxShellDeltaBytes)
+				s.chunkID++
+				s.deltaCount++
+				remainingDeltas--
+				deltas = append(deltas, OutputDelta{
+					Name:      eventToolName(s.events),
+					ToolUseID: s.events.ToolUseID,
+					SessionID: fmt.Sprint(s.id),
+					ChunkID:   s.chunkID,
+					Stream:    "combined",
+					Text:      string(data[:n]),
+				})
+				data = data[n:]
+			}
 		}
 	}
-	emit := s.events.Emit
 	s.mu.Unlock()
 	if emit == nil {
 		return
@@ -571,30 +603,31 @@ func (s *shellSession) snapshot(clearUnread bool, maxOutputTokens int) ShellSess
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastAccess = time.Now()
-	output := append([]byte(nil), s.unread...)
-	truncated := s.unreadTruncated
-	if clearUnread {
-		s.unread = nil
-		s.unreadTruncated = false
+	outputLimit := s.maxTranscript
+	if outputLimit <= 0 {
+		outputLimit = defaultShellTranscriptBytes
 	}
-	if len(output) == 0 && !clearUnread {
-		output = append([]byte(nil), s.transcript...)
-	}
-	sanitized := SanitizeOutputBytes(output)
-	text := sanitized.Text
-	if !sanitized.Binary.Omitted {
-		var capped bool
-		text, capped = capOutputText(text, maxOutputTokens)
-		if capped {
-			truncated = true
+	if maxOutputTokens > 0 && maxOutputTokens <= int(^uint(0)>>1)/4 {
+		if requested := maxOutputTokens * 4; requested > 0 && requested < outputLimit {
+			outputLimit = requested
 		}
 	}
+	snapshot := s.unread.Snapshot(outputLimit)
+	if clearUnread {
+		s.unread.Reset()
+	}
+	if snapshot.TotalBytes == 0 && !clearUnread {
+		snapshot = s.transcript.Snapshot(outputLimit)
+	}
+	s.events = ToolCallEvents{}
+	s.deltaPending = nil
+	text := string(snapshot.Bytes)
 	sessionID := 0
 	if !s.done {
 		sessionID = s.id
 	}
-	originalTokenCount := approxTokenCountBytes(output)
-	if sanitized.Binary.Omitted {
+	originalTokenCount := approxTokenCount(snapshot.TotalBytes)
+	if snapshot.Binary.Omitted {
 		originalTokenCount = approxTokenCountBytes([]byte(text))
 	}
 	return ShellSessionResult{
@@ -605,13 +638,13 @@ func (s *shellSession) snapshot(clearUnread bool, maxOutputTokens int) ShellSess
 		TimedOut:           s.timedOut,
 		WallTime:           time.Since(s.started),
 		ChunkID:            s.chunkID,
-		OriginalBytes:      len(output),
+		OriginalBytes:      saturatingInt(snapshot.TotalBytes),
 		OriginalTokenCount: originalTokenCount,
-		Truncated:          truncated,
-		BinaryOmitted:      sanitized.Binary.Omitted,
-		BinaryBytes:        sanitized.Binary.Bytes,
-		BinarySHA256:       sanitized.Binary.SHA256,
-		FirstBytesHex:      sanitized.Binary.FirstBytesHex,
+		Truncated:          snapshot.Truncated,
+		BinaryOmitted:      snapshot.Binary.Omitted,
+		BinaryBytes:        snapshot.Binary.Bytes,
+		BinarySHA256:       snapshot.Binary.SHA256,
+		FirstBytesHex:      snapshot.Binary.FirstBytesHex,
 	}
 }
 
@@ -697,40 +730,221 @@ func (s *shellSession) info(now time.Time) ShellSessionInfo {
 		LastAccessAt: s.lastAccess,
 		IdleMS:       durationMillis(now.Sub(s.lastAccess)),
 		ChunkID:      s.chunkID,
-		UnreadBytes:  len(s.unread),
+		UnreadBytes:  saturatingInt(s.unread.TotalBytes()),
 		ExitCode:     cloneIntPtr(s.exitCode),
 		TimedOut:     s.timedOut,
 	}
 }
 
-func appendCappedBytes(dst, src []byte, limit int) []byte {
+func (s *shellSession) setInvocationEvents(toolEvents ToolCallEvents) {
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+	s.mu.Lock()
+	s.events = toolEvents
+	s.deltaPending = nil
+	s.mu.Unlock()
+}
+
+func (b *shellOutputBuffer) Append(data []byte, limit int) {
+	if len(data) == 0 {
+		return
+	}
 	if limit <= 0 {
-		return append(dst, src...)
+		limit = defaultShellTranscriptBytes
 	}
-	dst = append(dst, src...)
-	if len(dst) <= limit {
-		return dst
+	if b.limit == 0 {
+		b.limit = limit
 	}
-	return append([]byte(nil), dst[len(dst)-limit:]...)
+	if b.digest == nil {
+		b.digest = sha256.New()
+	}
+	_, _ = b.digest.Write(data)
+	if len(b.firstBytes) < binaryOutputFirstBytes {
+		needed := binaryOutputFirstBytes - len(b.firstBytes)
+		if needed > len(data) {
+			needed = len(data)
+		}
+		b.firstBytes = append(b.firstBytes, data[:needed]...)
+	}
+	b.totalBytes += int64(len(data))
+
+	headLimit := (b.limit + 1) / 2
+	tailLimit := b.limit - headLimit
+	if len(b.head) < headLimit {
+		needed := headLimit - len(b.head)
+		if needed > len(data) {
+			needed = len(data)
+		}
+		b.head = append(b.head, data[:needed]...)
+		data = data[needed:]
+	}
+	if tailLimit == 0 || len(data) == 0 {
+		return
+	}
+	b.tail = append(b.tail, data...)
+	if len(b.tail) > tailLimit {
+		b.tail = append([]byte(nil), b.tail[len(b.tail)-tailLimit:]...)
+	}
 }
 
-func capOutputText(text string, maxOutputTokens int) (string, bool) {
-	if maxOutputTokens <= 0 {
-		return text, false
+func (b *shellOutputBuffer) Snapshot(limit int) shellOutputSnapshot {
+	if b == nil || b.totalBytes == 0 {
+		return shellOutputSnapshot{}
 	}
-	limit := maxOutputTokens * 4
-	if limit < 1 || len(text) <= limit {
-		return text, false
+	if limit <= 0 || limit > b.limit {
+		limit = b.limit
 	}
-	omitted := len(text) - limit
-	return fmt.Sprintf("[output truncated: %d earlier bytes omitted]\n%s", omitted, text[len(text)-limit:]), true
+	if limit <= 0 {
+		limit = defaultShellTranscriptBytes
+	}
+
+	var retained []byte
+	truncated := b.totalBytes > int64(limit)
+	if !truncated {
+		retained = make([]byte, 0, len(b.head)+len(b.tail))
+		retained = append(retained, b.head...)
+		retained = append(retained, b.tail...)
+	} else {
+		headLimit := (limit + 1) / 2
+		tailLimit := limit - headLimit
+		headLen := min(headLimit, len(b.head))
+		tailLen := min(tailLimit, len(b.tail))
+		headLen = validUTF8PrefixLength(b.head, headLen)
+		tailStart := validUTF8SuffixStart(b.tail, len(b.tail)-tailLen)
+		tailLen = len(b.tail) - tailStart
+		omitted := b.totalBytes - int64(headLen) - int64(tailLen)
+		retained = make([]byte, 0, headLen+tailLen+64)
+		retained = append(retained, b.head[:headLen]...)
+		retained = fmt.Appendf(retained, "[output truncated: %d bytes omitted]\n", omitted)
+		retained = append(retained, b.tail[tailStart:]...)
+	}
+
+	sanitized := SanitizeOutputBytes(retained)
+	if !sanitized.Binary.Omitted {
+		return shellOutputSnapshot{
+			Bytes:      []byte(sanitized.Text),
+			TotalBytes: b.totalBytes,
+			Truncated:  truncated,
+		}
+	}
+	info := BinaryOutputInfo{
+		Omitted:       true,
+		Bytes:         saturatingInt(b.totalBytes),
+		FirstBytesHex: hex.EncodeToString(b.firstBytes),
+	}
+	if b.digest != nil {
+		info.SHA256 = hex.EncodeToString(b.digest.Sum(nil))
+	}
+	return shellOutputSnapshot{
+		Bytes:      []byte(info.Placeholder()),
+		TotalBytes: b.totalBytes,
+		Truncated:  truncated,
+		Binary:     info,
+	}
 }
 
-func approxTokenCountBytes(data []byte) int {
+func (b *shellOutputBuffer) Reset() {
+	if b == nil {
+		return
+	}
+	*b = shellOutputBuffer{}
+}
+
+func (b *shellOutputBuffer) TotalBytes() int64 {
+	if b == nil {
+		return 0
+	}
+	return b.totalBytes
+}
+
+func validUTF8PrefixLength(data []byte, length int) int {
+	if length <= 0 || length > len(data) {
+		return max(0, min(length, len(data)))
+	}
+	for candidate, attempts := length, 0; candidate > 0 && attempts < utf8.UTFMax; candidate, attempts = candidate-1, attempts+1 {
+		if utf8.Valid(data[:candidate]) {
+			return candidate
+		}
+	}
+	return length
+}
+
+func validUTF8SuffixStart(data []byte, start int) int {
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(data) {
+		return len(data)
+	}
+	for candidate, attempts := start, 0; candidate < len(data) && attempts < utf8.UTFMax; candidate, attempts = candidate+1, attempts+1 {
+		if utf8.Valid(data[candidate:]) {
+			return candidate
+		}
+	}
+	return start
+}
+
+func shellDeltaChunkSize(data []byte, limit int) int {
+	if len(data) <= limit {
+		return len(data)
+	}
+	n := validUTF8PrefixLength(data, limit)
+	if n <= 0 || n > limit {
+		return limit
+	}
+	return n
+}
+
+func shellOutputChunkCount(data []byte) int {
 	if len(data) == 0 {
 		return 0
 	}
-	return (len(data) + 3) / 4
+	if SanitizeOutputBytes(data).Binary.Omitted {
+		return 1
+	}
+	count := 0
+	for len(data) > 0 {
+		n := shellDeltaChunkSize(data, maxShellDeltaBytes)
+		data = data[n:]
+		count++
+	}
+	return count
+}
+
+func completeUTF8Output(data []byte) ([]byte, []byte) {
+	for index := 0; index < len(data); {
+		if !utf8.FullRune(data[index:]) {
+			return data[:index], append([]byte(nil), data[index:]...)
+		}
+		r, size := utf8.DecodeRune(data[index:])
+		if r == utf8.RuneError && size == 1 {
+			return data, nil
+		}
+		index += size
+	}
+	return data, nil
+}
+
+func approxTokenCountBytes(data []byte) int {
+	return approxTokenCount(int64(len(data)))
+}
+
+func approxTokenCount(byteCount int64) int {
+	if byteCount == 0 {
+		return 0
+	}
+	return saturatingInt((byteCount + 3) / 4)
+}
+
+func saturatingInt(value int64) int {
+	if value <= 0 {
+		return 0
+	}
+	maxInt := int64(^uint(0) >> 1)
+	if value > maxInt {
+		return int(maxInt)
+	}
+	return int(value)
 }
 
 func durationMillis(d time.Duration) int64 {

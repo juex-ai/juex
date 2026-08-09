@@ -734,8 +734,8 @@ function appendToolResult(
   if (!event.turn_id) return state;
   const content =
     event.type === "tool.errored"
-      ? event.payload.error || event.payload.preview || ""
-      : event.payload.preview || "";
+      ? event.payload.content || event.payload.error || event.payload.preview || ""
+      : event.payload.content || event.payload.preview || "";
   return {
     ...state,
     messages: applyToolResultToMessages(state.messages, {

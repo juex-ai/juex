@@ -256,6 +256,7 @@ test("applyToolResultToMessages finalizes an existing live result without duplic
           type: "tool_result",
           tool_use_id: "tool-1",
           content: "first\nsecond\n",
+          streaming: true,
         },
       ],
     },
@@ -273,9 +274,50 @@ test("applyToolResultToMessages finalizes an existing live result without duplic
     {
       type: "tool_result",
       tool_use_id: "tool-1",
-      content: "first\nsecond\n",
+      content: "first\n",
     },
   ]);
+});
+
+test("applyToolResultToMessages does not replace a finalized transcript block", () => {
+  const messages: Message[] = [
+    {
+      role: "assistant",
+      turn_id: "t1",
+      blocks: [
+        {
+          type: "tool_use",
+          tool_use_id: "tool-1",
+          tool_name: "exec_command",
+        },
+      ],
+    },
+    {
+      role: "user",
+      turn_id: "t1",
+      blocks: [
+        {
+          type: "tool_result",
+          tool_use_id: "tool-1",
+          content: "authoritative transcript content",
+        },
+      ],
+    },
+  ];
+
+  const next = applyToolResultToMessages(messages, {
+    turnID: "t1",
+    toolUseID: "tool-1",
+    toolName: "exec_command",
+    content: "replayed preview",
+  });
+
+  assert.equal(
+    next[1].blocks?.[0]?.type === "tool_result"
+      ? next[1].blocks[0].content
+      : "",
+    "authoritative transcript content",
+  );
 });
 
 test("applyToolResultToMessages enriches a streamed placeholder with timeout metadata", () => {
@@ -562,7 +604,7 @@ test("applyToolResultToMessages finalizes a streamed tool result", () => {
   unit = groups[0].units[0];
   assert.equal(unit?.kind, "tool");
   if (unit?.kind === "tool") {
-    assert.equal(unit.result?.content, "live output\n");
+    assert.equal(unit.result?.content, "final output\n");
     assert.equal(toolState(unit.use, unit.result), "output-available");
   }
 });

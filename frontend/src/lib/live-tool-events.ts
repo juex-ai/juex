@@ -361,10 +361,11 @@ function mergeToolResultBlock(
     setToolResultMedia(next, incoming.media ?? current.media);
     return next;
   }
+  const replaceProvisional = current.streaming === true;
   if (incoming.is_error) {
     const next = {
       ...current,
-      content: incoming.content,
+      content: replaceProvisional ? incoming.content : current.content || incoming.content,
       is_error: true,
     };
     setToolResultMedia(next, incoming.media ?? current.media);
@@ -373,7 +374,7 @@ function mergeToolResultBlock(
   }
   const next = {
     ...current,
-    content: current.content || incoming.content,
+    content: replaceProvisional ? incoming.content : current.content || incoming.content,
   };
   setToolResultMedia(next, incoming.media ?? current.media);
   delete next.is_error;

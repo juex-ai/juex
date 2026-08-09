@@ -286,7 +286,7 @@ def provider_smoke(argv: list[str]) -> int:
                 "tty_recorded": sum(1 for result in results if result.tty_status == "yes"),
                 "stdin_recorded": sum(1 for result in results if result.stdin_status == "yes"),
                 "filesystem_verified": sum(1 for result in results if result.filesystem_status == "yes"),
-                "event_delta_recorded": sum(1 for result in results if result.event_delta_status == "yes"),
+                "terminal_event_verified": sum(1 for result in results if result.event_contract_status == "yes"),
                 "thinking_observed": sum(1 for result in results if result.thinking_status == "observed"),
                 "schedule_routing_verified": sum(
                     1 for result in results if result.schedule_routing_status == "passed"
@@ -356,7 +356,7 @@ class SmokeResult:
     tty_status: str = "no"
     stdin_status: str = "no"
     filesystem_status: str = "no"
-    event_delta_status: str = "no"
+    event_contract_status: str = "no"
     thinking_status: str = "not_observed"
     schedule_routing_expectation: str = "expected"
     schedule_routing_status: str = "not_run"
@@ -535,7 +535,7 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
     result.exec_command_status = "yes"
     result.tty_status = "yes"
     result.stdin_status = "yes"
-    result.event_delta_status = "yes"
+    result.event_contract_status = "yes"
     result.thinking_status = "observed" if file_contains(conversation, '"type":"reasoning"') else "not_exposed"
     copy_case_artifacts(case_dir, artifact_dir)
     schedule_key = f"{int(time.time())}-{random.randrange(0x1000000):06x}"
@@ -571,7 +571,7 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
     print(
         f"ok  {row.ref} session={session_id} toolcall={result.tool_status} "
         f"exec_command={result.exec_command_status} tty={result.tty_status} "
-        f"stdin={result.stdin_status} events={result.event_delta_status} "
+        f"stdin={result.stdin_status} events={result.event_contract_status} "
         f"thinking={result.thinking_status} schedule_routing={result.schedule_routing_status} "
         f"schedule_variant={result.schedule_routing_variant} "
         f"schedule_session={schedule_outcome.session_id} artifacts={artifact_dir}"
@@ -649,8 +649,8 @@ def conversation_has_agent_smoke_tools(path: pathlib.Path, token: str) -> tuple[
     return contract_oracle.conversation_has_agent_smoke_tools(path, token)
 
 
-def events_have_agent_smoke_deltas(path: pathlib.Path, token: str) -> tuple[bool, str]:
-    return contract_oracle.events_have_agent_smoke_deltas(path, token)
+def events_have_agent_smoke_terminal_results(path: pathlib.Path, token: str) -> tuple[bool, str]:
+    return contract_oracle.events_have_agent_smoke_terminal_results(path, token)
 
 
 def run_turn_with_retries(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pathlib.Path, label: str, args: list[str]) -> int:
@@ -956,7 +956,7 @@ def write_smoke_summary(summary_json: pathlib.Path, summary_md: pathlib.Path, su
         f"- TTY recorded: {summary['tty_recorded']}",
         f"- Stdin recorded: {summary['stdin_recorded']}",
         f"- Filesystem verified: {summary['filesystem_verified']}",
-        f"- Event delta recorded: {summary['event_delta_recorded']}",
+        f"- Terminal event verified: {summary['terminal_event_verified']}",
         f"- Thinking observed: {summary['thinking_observed']}",
         f"- Schedule routing verified: {summary['schedule_routing_verified']}",
         f"- Schedule routing expected failures: {summary['schedule_routing_expected_failures']}",
@@ -964,7 +964,7 @@ def write_smoke_summary(summary_json: pathlib.Path, summary_md: pathlib.Path, su
         f"- Schedule routing hard failures: {summary['schedule_routing_hard_failures']}",
         f"- Schedule routing variant: `{summary['schedule_routing_variant']}`",
         "",
-        "| Provider/model | Protocol | Thinking effort | Status | Tool use | Exec command | TTY | Stdin | Filesystem | Deltas | Thinking | Schedule expectation | Schedule routing | Variant | Error stage |",
+        "| Provider/model | Protocol | Thinking effort | Status | Tool use | Exec command | TTY | Stdin | Filesystem | Terminal events | Thinking | Schedule expectation | Schedule routing | Variant | Error stage |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for result in results:
@@ -972,7 +972,7 @@ def write_smoke_summary(summary_json: pathlib.Path, summary_md: pathlib.Path, su
             f"| `{result.ref}` | `{result.protocol}` | `{result.thinking_effort}` | "
             f"{result.status} | {result.tool_status} | {result.exec_command_status} | "
             f"{result.tty_status} | {result.stdin_status} | {result.filesystem_status} | "
-            f"{result.event_delta_status} | {result.thinking_status} | "
+            f"{result.event_contract_status} | {result.thinking_status} | "
             f"{result.schedule_routing_expectation} | "
             f"{schedule_routing_status_label(result.schedule_routing_status)} | "
             f"{result.schedule_routing_variant} | {result.error_stage} |"
@@ -1227,7 +1227,7 @@ def write_development_record(
             ("tty_recorded", "TTY recorded"),
             ("stdin_recorded", "Stdin recorded"),
             ("filesystem_verified", "Filesystem verified"),
-            ("event_delta_recorded", "Event delta recorded"),
+            ("terminal_event_verified", "Terminal event verified"),
             ("thinking_observed", "Thinking observed"),
             ("schedule_routing_verified", "Schedule routing verified"),
             ("schedule_routing_expected_failures", "Schedule routing expected failures"),

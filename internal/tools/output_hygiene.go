@@ -112,22 +112,39 @@ func binaryDetectionSample(data []byte) []byte {
 	if len(data) <= binaryOutputDetectionBytes {
 		return data
 	}
-	end := binaryOutputDetectionBytes
-	for end > binaryOutputDetectionBytes-utf8.UTFMax && !utf8.Valid(data[:end]) {
-		end--
-	}
-	return data[:end]
+	half := binaryOutputDetectionBytes / 2
+	headEnd := validUTF8SamplePrefix(data, half)
+	tailStart := validUTF8SampleSuffix(data, len(data)-half)
+	sample := make([]byte, 0, binaryOutputDetectionBytes)
+	sample = append(sample, data[:headEnd]...)
+	sample = append(sample, data[tailStart:]...)
+	return sample
 }
 
 func textDetectionSample(text string) string {
 	if len(text) <= binaryOutputDetectionBytes {
 		return text
 	}
-	end := binaryOutputDetectionBytes
-	for end > binaryOutputDetectionBytes-utf8.UTFMax && !utf8.ValidString(text[:end]) {
-		end--
+	return string(binaryDetectionSample([]byte(text)))
+}
+
+func validUTF8SamplePrefix(data []byte, length int) int {
+	for candidate, attempts := min(length, len(data)), 0; candidate > 0 && attempts < utf8.UTFMax; candidate, attempts = candidate-1, attempts+1 {
+		if utf8.Valid(data[:candidate]) {
+			return candidate
+		}
 	}
-	return text[:end]
+	return min(length, len(data))
+}
+
+func validUTF8SampleSuffix(data []byte, start int) int {
+	start = max(0, start)
+	for candidate, attempts := start, 0; candidate < len(data) && attempts < utf8.UTFMax; candidate, attempts = candidate+1, attempts+1 {
+		if utf8.Valid(data[candidate:]) {
+			return candidate
+		}
+	}
+	return start
 }
 
 func isTextRune(r rune) bool {

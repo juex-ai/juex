@@ -28,22 +28,20 @@ func TestContractOracleValidatesAgentSmokeArtifacts(t *testing.T) {
 		}},
 	)
 	writeContractJSONL(t, events,
-		map[string]any{"type": "tool.output_delta", "payload": map[string]any{"name": "exec_command", "text": "INSTALL 10%\r"}},
-		map[string]any{"type": "tool.output_delta", "payload": map[string]any{"name": "exec_command", "text": "PROMPT approve install?"}},
-		map[string]any{"type": "tool.output_delta", "payload": map[string]any{"name": "exec_command", "text": "TTY-DONE contract-token"}},
 		map[string]any{"type": "tool.completed", "payload": map[string]any{
-			"name": "exec_command",
+			"name":    "exec_command",
+			"content": "INSTALL 10%\r\nPROMPT approve install?",
 			"result": map[string]any{
 				"session_id": 4,
 				"running":    true,
 			},
 		}},
 		map[string]any{"type": "tool.completed", "payload": map[string]any{
-			"name": "write_stdin",
+			"name":    "write_stdin",
+			"content": "TTY-DONE contract-token",
 			"result": map[string]any{
 				"running":   false,
 				"exit_code": 0,
-				"output":    "TTY-DONE contract-token",
 			},
 		}},
 	)
@@ -56,11 +54,11 @@ func TestContractOracleValidatesAgentSmokeArtifacts(t *testing.T) {
 		RequireTTYExec:  true,
 		ExecResultToken: "contract-token",
 		Events: EventContractExpectations{
-			MinOutputDeltas:                   3,
-			RequireInstallProgress:            true,
-			RequireInteractivePrompt:          true,
+			RejectOutputDeltas:                true,
+			RequireTerminalInstallProgress:    true,
+			RequireTerminalInteractivePrompt:  true,
 			DoneToken:                         "contract-token",
-			RequireCarriageReturn:             true,
+			RequireTerminalCarriageReturn:     true,
 			RequireWriteStdinCompleted:        true,
 			RequireStructuredExecRunning:      true,
 			RequireStructuredWriteStdinResult: true,
@@ -81,7 +79,6 @@ func TestContractOracleReportsMissingStructuredShellResult(t *testing.T) {
 		}},
 	)
 	writeContractJSONL(t, events,
-		map[string]any{"type": "tool.output_delta", "payload": map[string]any{"text": "TTY-DONE contract-token"}},
 		map[string]any{"type": "tool.completed", "payload": map[string]any{"name": "write_stdin"}},
 	)
 

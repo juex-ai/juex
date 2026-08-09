@@ -553,6 +553,13 @@ runtime system-prompt section on later turns and compaction requests so the
 model can keep polling by `session_id` without replaying command output.
 `yield_time_ms` only bounds the current observation window; it does not kill a
 still-running command.
+Shell output is drained continuously and retained with a 1 MiB head/tail
+budget. Truncated results preserve both the beginning and end with an exact
+omitted-byte marker; a lower `max_output_tokens` applies the same projection at
+a smaller size. Live output uses transient fragments of at most 8 KiB and at
+most 10,000 fragments per shell process. Those fragments are visible only to
+current subscribers and never enter `events.jsonl`; `tool.completed` or
+`tool.errored` carries the bounded authoritative result used after refresh.
 `exec_command` and `write_stdin` are not governed by the generic
 `runtime.tool_timeout`; their observation windows and process lifecycles are
 managed explicitly. `list_shell_sessions` remains subject to the ordinary

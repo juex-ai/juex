@@ -23,11 +23,11 @@ type ContractExpectations struct {
 }
 
 type EventContractExpectations struct {
-	MinOutputDeltas                   int
-	RequireInstallProgress            bool
-	RequireInteractivePrompt          bool
+	RejectOutputDeltas                bool
+	RequireTerminalInstallProgress    bool
+	RequireTerminalInteractivePrompt  bool
 	DoneToken                         string
-	RequireCarriageReturn             bool
+	RequireTerminalCarriageReturn     bool
 	RequireWriteStdinCompleted        bool
 	RequireStructuredExecRunning      bool
 	RequireStructuredExecCompleted    bool
@@ -185,19 +185,15 @@ func inspectEventArtifact(path string, doneToken string) eventContractSummary {
 		}
 		switch event["type"] {
 		case "tool.output_delta":
-			text, _ := payload["text"].(string)
 			summary.outputDeltas++
-			summary.sawInstallProgress = summary.sawInstallProgress || strings.Contains(text, "INSTALL")
-			summary.sawInteractivePrompt = summary.sawInteractivePrompt || strings.Contains(text, "PROMPT approve install")
-			if doneToken != "" {
-				summary.sawDone = summary.sawDone || strings.Contains(text, "TTY-DONE "+doneToken)
-			} else {
-				summary.sawDone = summary.sawDone || strings.Contains(text, "TTY-DONE")
-			}
-			summary.sawCarriageReturn = summary.sawCarriageReturn || strings.Contains(text, "\r")
 		case "tool.completed":
 			name, _ := payload["name"].(string)
 			result, _ := payload["result"].(map[string]any)
+			content := fmt.Sprint(payload["content"])
+			summary.sawInstallProgress = summary.sawInstallProgress || strings.Contains(content, "INSTALL")
+			summary.sawInteractivePrompt = summary.sawInteractivePrompt || strings.Contains(content, "PROMPT approve install")
+			summary.sawDone = summary.sawDone || outputHasDoneToken(content, doneToken)
+			summary.sawCarriageReturn = summary.sawCarriageReturn || strings.Contains(content, "\r")
 			if name == "exec_command" && result != nil {
 				sessionID := numberValue(result["session_id"])
 				if result["running"] == true && sessionID > 0 {
@@ -212,7 +208,7 @@ func inspectEventArtifact(path string, doneToken string) eventContractSummary {
 				if result != nil &&
 					result["running"] == false &&
 					numberValue(result["exit_code"]) == 0 &&
-					outputHasDoneToken(fmt.Sprint(result["output"]), doneToken) {
+					outputHasDoneToken(content, doneToken) {
 					summary.sawStructuredWriteStdinResult = true
 				}
 			}
@@ -230,23 +226,23 @@ func outputHasDoneToken(output string, doneToken string) bool {
 
 func validateEventExpectations(summary eventContractSummary, expect EventContractExpectations) []ContractIssue {
 	var issues []ContractIssue
-	if expect.MinOutputDeltas > 0 && summary.outputDeltas < expect.MinOutputDeltas {
+	if expect.RejectOutputDeltas && summary.outputDeltas != 0 {
 		issues = append(issues, ContractIssue{
-			Code:    "events.delta.count",
-			Message: fmt.Sprintf("expected at least %d tool.output_delta events, saw %d", expect.MinOutputDeltas, summary.outputDeltas),
+			Code:    "events.delta.persisted",
+			Message: fmt.Sprintf("events persisted %d transient tool.output_delta records", summary.outputDeltas),
 		})
 	}
-	if expect.RequireInstallProgress && !summary.sawInstallProgress {
-		issues = append(issues, ContractIssue{Code: "events.delta.install", Message: "events missing INSTALL progress"})
+	if expect.RequireTerminalInstallProgress && !summary.sawInstallProgress {
+		issues = append(issues, ContractIssue{Code: "events.terminal.install", Message: "terminal events missing INSTALL progress"})
 	}
-	if expect.RequireInteractivePrompt && !summary.sawInteractivePrompt {
-		issues = append(issues, ContractIssue{Code: "events.delta.prompt", Message: "events missing interactive prompt"})
+	if expect.RequireTerminalInteractivePrompt && !summary.sawInteractivePrompt {
+		issues = append(issues, ContractIssue{Code: "events.terminal.prompt", Message: "terminal events missing interactive prompt"})
 	}
 	if expect.DoneToken != "" && !summary.sawDone {
-		issues = append(issues, ContractIssue{Code: "events.delta.done", Message: "events missing TTY-DONE token"})
+		issues = append(issues, ContractIssue{Code: "events.terminal.done", Message: "terminal events missing TTY-DONE token"})
 	}
-	if expect.RequireCarriageReturn && !summary.sawCarriageReturn {
-		issues = append(issues, ContractIssue{Code: "events.delta.carriage_return", Message: "events missing carriage-return progress update"})
+	if expect.RequireTerminalCarriageReturn && !summary.sawCarriageReturn {
+		issues = append(issues, ContractIssue{Code: "events.terminal.carriage_return", Message: "terminal events missing carriage-return progress update"})
 	}
 	if expect.RequireWriteStdinCompleted && !summary.sawWriteStdinCompleted {
 		issues = append(issues, ContractIssue{Code: "events.write_stdin.completed", Message: "events missing write_stdin completion"})

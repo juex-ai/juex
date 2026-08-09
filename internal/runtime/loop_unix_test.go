@@ -73,3 +73,40 @@ func TestTurn_BuiltinExecCommandYieldDoesNotWaitForChildPipe(t *testing.T) {
 		t.Logf("cleanup interrupt result: %v", err)
 	}
 }
+
+func TestTurn_BuiltinShellErroredEventCarriesAuthoritativeContent(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "exec_fail", ToolName: "exec_command", Input: map[string]any{
+				"cmd": "printf 'before failure\\n'; exit 7",
+			}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "failure handled"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, true)
+
+	var errored toolevents.ErroredPayload
+	bus.Subscribe(toolevents.ErroredType, func(event events.Event) {
+		payload, _ := event.Payload.(toolevents.ErroredPayload)
+		if payload.ToolUseID == "exec_fail" {
+			errored = payload
+		}
+	})
+
+	if _, err := eng.Turn(context.Background(), "run failing shell"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errored.Content, "before failure") || !strings.Contains(errored.Content, "Process exited with code 7") {
+		t.Fatalf("errored content = %q, want authoritative bounded shell result", errored.Content)
+	}
+	if errored.Preview != "" {
+		t.Fatalf("errored preview = %q, want no duplicate shell output", errored.Preview)
+	}
+	result, ok := errored.Result.(tools.ShellResult)
+	if !ok {
+		t.Fatalf("errored result = %#v, want tools.ShellResult", errored.Result)
+	}
+	if result.Output != "" || result.ExitCode == nil || *result.ExitCode != 7 {
+		t.Fatalf("errored result = %+v, want metadata-only exit 7", result)
+	}
+}
