@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -111,6 +112,11 @@ func TestTurn_BuiltinShellErroredEventCarriesAuthoritativeContent(t *testing.T) 
 		t.Fatalf("session history missing shell result: %+v", eng.Session.History)
 	}
 	conversation := eng.Session.History[2].Blocks[0].Content
+	rawBytes := len("HEAD-FAILURE-SENTINEL\n") + 1100000 + len("\nTAIL-FAILURE-SENTINEL\n")
+	wantMarker := fmt.Sprintf("[output truncated: %d bytes omitted]\n", rawBytes-(1<<20))
+	if strings.Count(conversation, wantMarker) != 1 || strings.Count(errored.Content, wantMarker) != 1 {
+		t.Fatalf("exact raw-output marker missing: want %q", wantMarker)
+	}
 	for _, want := range []string{"HEAD-FAILURE-SENTINEL", "TAIL-FAILURE-SENTINEL", "[output truncated:"} {
 		if !strings.Contains(conversation, want) {
 			t.Fatalf("conversation shell result missing %q", want)
@@ -237,7 +243,7 @@ func TestTurn_BuiltinShellFinalContentBoundsMultipleEscapedHooksAndReplays(t *te
 		t.Fatal(err)
 	}
 	conversation := eng.Session.History[2].Blocks[0].Content
-	if len(conversation) > (1<<20)+64 {
+	if len(conversation) > (1<<20)+maxShellHookContent+1024 {
 		t.Fatalf("finalized shell content bytes = %d, want hard bound", len(conversation))
 	}
 	if !strings.Contains(conversation, "[output truncated:") || !strings.HasSuffix(conversation, "<") {
@@ -266,5 +272,62 @@ func TestTurn_BuiltinShellFinalContentBoundsMultipleEscapedHooksAndReplays(t *te
 	}
 	if terminalIndex < 0 || completionIndex <= terminalIndex {
 		t.Fatalf("journal lost terminal or later completion: terminal=%d completion=%d", terminalIndex, completionIndex)
+	}
+}
+
+func TestTurn_BuiltinShellBoundsEscapedHookErrorDiagnosticsAndReplays(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "exec_large_hook_error", ToolName: "exec_command", Input: map[string]any{
+				"cmd": "printf 'shell output'",
+			}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "large hook failure handled"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, true)
+	eng.Hooks = &fakeHookRunner{errors: map[hooks.EventName]error{
+		hooks.EventPostToolUse: errors.New("post hook failed: " + strings.Repeat("<", 2<<20)),
+	}}
+
+	var errored toolevents.ErroredPayload
+	bus.Subscribe(toolevents.ErroredType, func(event events.Event) {
+		payload, _ := event.Payload.(toolevents.ErroredPayload)
+		if payload.ToolUseID == "exec_large_hook_error" {
+			errored = payload
+		}
+	})
+
+	if _, err := eng.Turn(context.Background(), "run shell with large failing hook"); err != nil {
+		t.Fatal(err)
+	}
+	if len(errored.Error) > maxShellEventDiagnostic+64 || !strings.Contains(errored.Error, "truncated") {
+		t.Fatalf("errored diagnostic was not bounded: bytes=%d", len(errored.Error))
+	}
+	conversation := eng.Session.History[2].Blocks[0].Content
+	if errored.Content != conversation || !strings.Contains(conversation, "shell output") || !strings.Contains(conversation, "[output truncated:") {
+		t.Fatalf("bounded terminal content does not match conversation: bytes=%d", len(conversation))
+	}
+	journal, err := session.ReadEvents(eng.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalIndex := -1
+	completionIndex := -1
+	for index, event := range journal {
+		switch event.Type {
+		case toolevents.ErroredType:
+			payload, _ := event.Payload.(map[string]any)
+			if payload["tool_use_id"] == "exec_large_hook_error" {
+				terminalIndex = index
+				if payload["content"] != conversation {
+					t.Fatalf("replayed errored content does not match conversation")
+				}
+			}
+		case "turn.completed":
+			completionIndex = index
+		}
+	}
+	if terminalIndex < 0 || completionIndex <= terminalIndex {
+		t.Fatalf("journal lost errored terminal or later completion: terminal=%d completion=%d", terminalIndex, completionIndex)
 	}
 }

@@ -1056,16 +1056,19 @@ func sanitizeShellOutputBytes(data []byte) SanitizedOutput {
 	return SanitizedOutput{Text: info.Placeholder(), Binary: info}
 }
 
-// BoundShellContent reapplies the Shell result retention and binary hygiene
-// contract after runtime hooks have finalized the provider-facing content.
-func BoundShellContent(content string) string {
+// BoundShellContent applies Shell head/tail retention and binary hygiene to
+// runtime-added content without changing an already-bounded Shell result.
+func BoundShellContent(content string, limit int) string {
 	const markerHeadroom = 64
-	if len(content) <= defaultShellTranscriptBytes+markerHeadroom {
+	if limit <= 0 {
+		limit = defaultShellTranscriptBytes
+	}
+	if len(content) <= limit+markerHeadroom {
 		return sanitizeShellOutputBytes([]byte(content)).Text
 	}
 	var buffer shellOutputBuffer
-	buffer.Append([]byte(content), defaultShellTranscriptBytes)
-	return string(buffer.Snapshot(defaultShellTranscriptBytes, true).Bytes)
+	buffer.Append([]byte(content), limit)
+	return string(buffer.Snapshot(limit, true).Bytes)
 }
 
 func trimShellOutputSuffix(head, tail []byte, count int) ([]byte, []byte) {
@@ -1092,7 +1095,7 @@ func validUTF8PrefixLength(data []byte, length int) int {
 			return candidate
 		}
 	}
-	return length
+	return 0
 }
 
 func validUTF8SuffixStart(data []byte, start int) int {
@@ -1107,7 +1110,7 @@ func validUTF8SuffixStart(data []byte, start int) int {
 			return candidate
 		}
 	}
-	return start
+	return len(data)
 }
 
 func shellDeltaChunkSize(data []byte, limit int) int {

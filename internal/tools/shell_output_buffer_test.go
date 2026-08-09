@@ -218,12 +218,29 @@ func TestShellOutputBufferConsumesPendingUTF8WhenControlRatioIsBinary(t *testing
 
 func TestBoundShellContentReboundsFinalizedHookOutput(t *testing.T) {
 	content := strings.Repeat("<", defaultShellTranscriptBytes+4096)
-	bounded := BoundShellContent(content)
+	bounded := BoundShellContent(content, defaultShellTranscriptBytes)
 	if len(bounded) > defaultShellTranscriptBytes+64 {
 		t.Fatalf("bounded content bytes = %d, want hard bound", len(bounded))
 	}
 	if !strings.HasPrefix(bounded, "<") || !strings.HasSuffix(bounded, "<") || !strings.Contains(bounded, "[output truncated:") {
 		t.Fatalf("bounded content lost head/marker/tail: %q", bounded)
+	}
+}
+
+func TestShellOutputBufferTinyLocalizedProjectionsRemainValidUTF8(t *testing.T) {
+	input := []byte("中文🙂结尾")
+	for _, limit := range []int{1, 2, 3, 4, 5, 7, 9, 11} {
+		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
+			var buffer shellOutputBuffer
+			buffer.Append(input, defaultShellTranscriptBytes)
+			snapshot := buffer.Snapshot(limit, true)
+			if !utf8.Valid(snapshot.Bytes) {
+				t.Fatalf("snapshot is invalid UTF-8: %x", snapshot.Bytes)
+			}
+			if !snapshot.Truncated || !strings.Contains(string(snapshot.Bytes), "[output truncated:") {
+				t.Fatalf("snapshot = %q, want bounded marker", snapshot.Bytes)
+			}
+		})
 	}
 }
 

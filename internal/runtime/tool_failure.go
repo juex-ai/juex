@@ -19,6 +19,7 @@ import (
 const (
 	repeatedFailureThreshold = 2
 	failurePreviewLimit      = 500
+	failureErrorLimit        = 4 * 1024
 )
 
 type toolFailureObservation struct {
@@ -176,7 +177,7 @@ func (l *toolFailureLedger) recordFailure(obs toolFailureObservation) ToolFailur
 	rec.Blocking = classified.Blocking
 	rec.ToolUseID = obs.ToolUseID
 	rec.Occurrences++
-	rec.Error = firstNonEmptyString(obs.Error, extractToolError(obs.Content))
+	rec.Error = boundedRuntimeDiagnostic(firstNonEmptyString(obs.Error, extractToolError(obs.Content)), failureErrorLimit)
 	rec.ExitCode = cloneIntPtr(firstExitCode(obs.ExitCode, obs.Content))
 	rec.OutputLen = len(obs.Content)
 	rec.OutputPreview = truncate(obs.Content, failurePreviewLimit)

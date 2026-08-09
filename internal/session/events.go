@@ -12,9 +12,9 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 )
 
-// Finalized Shell content is re-bounded to about 1 MiB after hooks.
-// encoding/json expands HTML-sensitive runes such as '<' to six-byte escapes,
-// so the journal reader needs bounded headroom above that hard content bound.
+// Finalized Shell content contains an approximately 1 MiB bounded base plus a
+// 128 KiB bounded hook/error suffix. encoding/json expands HTML-sensitive
+// runes such as '<' to six-byte escapes, so the reader needs bounded headroom.
 const maxEventLineBytes = 8 * 1024 * 1024
 
 // ReadEvents loads the durable event journal for status and replay projections.

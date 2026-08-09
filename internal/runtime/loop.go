@@ -49,6 +49,8 @@ const (
 	DefaultPendingInputTTL  = 15 * time.Minute
 	DefaultExternalEventTTL = 24 * time.Hour
 	maxToolErrorOutput      = 32 * 1024
+	maxShellHookContent     = 128 * 1024
+	maxShellEventDiagnostic = 4 * 1024
 )
 
 type Engine struct {
@@ -894,6 +896,11 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 			block.ChunkedWrite = &event
 		}
 	}
+	shellBaseContent := ""
+	isShellCall := isShellStructuredResult(info.StructuredResult)
+	if isShellCall {
+		shellBaseContent = block.Content
+	}
 	postReq := e.newHookRequest(hooks.EventPostToolUse, turnID)
 	postReq.ToolName = call.ToolName
 	postReq.ToolInput = call.Input
@@ -911,8 +918,8 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 	}
 	appendToolHookContext(&block, preResults, false)
 	appendToolHookContext(&block, postResults, true)
-	if isShellStructuredResult(info.StructuredResult) {
-		block.Content = tools.BoundShellContent(block.Content)
+	if isShellCall {
+		block.Content = finalizedShellContent(shellBaseContent, block.Content)
 	}
 	if !block.IsError {
 		if media, ok := tools.MediaRefFromStructuredResult(info.StructuredResult); ok {
@@ -974,6 +981,8 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 			opts.Preview = truncate(observation.Content, 200)
 		}
 		if isShellResult {
+			opts.Error = boundedRuntimeDiagnostic(opts.Error, maxShellEventDiagnostic)
+			opts.RawCause = boundedRuntimeDiagnostic(opts.RawCause, maxShellEventDiagnostic)
 			opts.Len = len(terminalContent)
 			opts.Content = terminalContent
 		}
@@ -1429,6 +1438,38 @@ func boundedToolErrorContent(out string, err error) string {
 		return publicErr
 	}
 	return strings.TrimRight(out, "\n") + "\n\n[tool error]\n" + publicErr
+}
+
+func finalizedShellContent(base, finalized string) string {
+	if finalized == base {
+		return base
+	}
+	suffix, ok := strings.CutPrefix(finalized, base)
+	if !ok {
+		return tools.BoundShellContent(finalized, maxShellHookContent)
+	}
+	return base + tools.BoundShellContent(suffix, maxShellHookContent)
+}
+
+func boundedRuntimeDiagnostic(value string, maxBytes int) string {
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+	limit := validUTF8Cut(value, maxBytes)
+	return value[:limit] + "...(truncated, total " + strconv.Itoa(len(value)) + " bytes)"
+}
+
+func validUTF8Cut(value string, limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+	if limit >= len(value) {
+		return len(value)
+	}
+	for limit > 0 && (value[limit]&0xC0) == 0x80 {
+		limit--
+	}
+	return limit
 }
 
 func isShellStructuredResult(result any) bool {
