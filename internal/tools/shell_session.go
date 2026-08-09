@@ -863,18 +863,27 @@ func (b *shellOutputBuffer) Snapshot(limit int, final bool) shellOutputSnapshot 
 		retained = append(retained, head...)
 		retained = append(retained, tail...)
 	} else {
+		headSource := head
+		tailSource := tail
+		if int64(len(head)+len(tail)) == totalBytes {
+			full := make([]byte, 0, len(head)+len(tail))
+			full = append(full, head...)
+			full = append(full, tail...)
+			headSource = full
+			tailSource = full
+		}
 		headLimit := (limit + 1) / 2
 		tailLimit := limit - headLimit
-		headLen := min(headLimit, len(head))
-		tailLen := min(tailLimit, len(tail))
-		headLen = validUTF8PrefixLength(head, headLen)
-		tailStart := validUTF8SuffixStart(tail, len(tail)-tailLen)
-		tailLen = len(tail) - tailStart
+		headLen := min(headLimit, len(headSource))
+		tailLen := min(tailLimit, len(tailSource))
+		headLen = validUTF8PrefixLength(headSource, headLen)
+		tailStart := validUTF8SuffixStart(tailSource, len(tailSource)-tailLen)
+		tailLen = len(tailSource) - tailStart
 		omitted := totalBytes - int64(headLen) - int64(tailLen)
 		retained = make([]byte, 0, headLen+tailLen+64)
-		retained = append(retained, head[:headLen]...)
+		retained = append(retained, headSource[:headLen]...)
 		retained = fmt.Appendf(retained, "[output truncated: %d bytes omitted]\n", omitted)
-		retained = append(retained, tail[tailStart:]...)
+		retained = append(retained, tailSource[tailStart:]...)
 	}
 
 	if !binary {

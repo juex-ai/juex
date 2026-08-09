@@ -69,6 +69,27 @@ func TestShellOutputBufferAppliesSmallerProjectionToBothEnds(t *testing.T) {
 	}
 }
 
+func TestShellOutputBufferSmallerProjectionUsesTailBeforeRetentionHeadFills(t *testing.T) {
+	var buffer shellOutputBuffer
+	head := "HEAD-SENTINEL\n"
+	tail := "\nTAIL-SENTINEL"
+	input := []byte(head + strings.Repeat("m", 100<<10-len(head)-len(tail)) + tail)
+	buffer.Append(input, defaultShellTranscriptBytes)
+
+	snapshot := buffer.Snapshot(16<<10, true)
+	if !snapshot.Truncated {
+		t.Fatal("snapshot should be truncated by the smaller projection")
+	}
+	text := string(snapshot.Bytes)
+	if !strings.HasPrefix(text, head) || !strings.HasSuffix(text, tail) {
+		t.Fatalf("smaller projection lost head/tail sentinels: prefix=%t suffix=%t", strings.HasPrefix(text, head), strings.HasSuffix(text, tail))
+	}
+	wantMarker := fmt.Sprintf("[output truncated: %d bytes omitted]", len(input)-(16<<10))
+	if strings.Count(text, wantMarker) != 1 {
+		t.Fatalf("snapshot marker = %q, want one %q", text, wantMarker)
+	}
+}
+
 func TestShellOutputBufferKeepsUTF8Boundaries(t *testing.T) {
 	var buffer shellOutputBuffer
 	input := []byte(strings.Repeat("开", 30) + strings.Repeat("中", 40) + strings.Repeat("结", 30))
