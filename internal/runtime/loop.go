@@ -909,7 +909,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 	postErr = cancellation.NormalizeError(postErr)
 	if postErr != nil {
 		if isShellStructuredResult(info.StructuredResult) {
-			block.Content = boundedToolErrorContent(block.Content, postErr)
+			block.Content = appendShellRuntimeErrorContent(block.Content, postErr)
 		} else {
 			block.Content = toolErrorContent(block.Content, postErr)
 		}
@@ -960,11 +960,20 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 	eventResult := observation.StructuredResult
 	terminalContent := ""
 	isShellResult := false
-	if shellResult, ok := eventResult.(tools.ShellResult); ok {
+	switch shellResult := eventResult.(type) {
+	case tools.ShellResult:
 		isShellResult = true
 		shellResult.Output = ""
 		eventResult = shellResult
 		terminalContent = block.Content
+	case *tools.ShellResult:
+		if shellResult != nil {
+			isShellResult = true
+			metadata := *shellResult
+			metadata.Output = ""
+			eventResult = &metadata
+			terminalContent = block.Content
+		}
 	}
 	if block.IsError {
 		opts := toolevents.ErroredOptions{
@@ -1438,6 +1447,20 @@ func boundedToolErrorContent(out string, err error) string {
 		return publicErr
 	}
 	return strings.TrimRight(out, "\n") + "\n\n[tool error]\n" + publicErr
+}
+
+func appendShellRuntimeErrorContent(base string, err error) string {
+	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
+	if base == "" {
+		return publicErr
+	}
+	separator := "\n\n"
+	if strings.HasSuffix(base, "\n\n") {
+		separator = ""
+	} else if strings.HasSuffix(base, "\n") {
+		separator = "\n"
+	}
+	return base + separator + "[tool error]\n" + publicErr
 }
 
 func finalizedShellContent(base, finalized string) string {

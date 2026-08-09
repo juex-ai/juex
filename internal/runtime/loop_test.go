@@ -5110,6 +5110,32 @@ func TestTurn_BuiltinShellCompletedEventCarriesAuthoritativeContentWithoutStruct
 	}
 }
 
+func TestEmitToolFinishedHandlesPointerShellResult(t *testing.T) {
+	bus := events.NewBus()
+	eng := &Engine{Bus: bus}
+	var completed toolevents.CompletedPayload
+	bus.Subscribe(toolevents.CompletedType, func(event events.Event) {
+		completed, _ = event.Payload.(toolevents.CompletedPayload)
+	})
+	original := &tools.ShellResult{Output: "duplicate raw output", OriginalBytes: 20}
+	call := llm.Block{Type: llm.BlockToolUse, ToolUseID: "pointer-shell", ToolName: "exec_command"}
+	block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.ToolName, Content: "finalized bounded output"}
+	observation := tools.NewObservation(tools.ObservationOptions{Content: "earlier output", StructuredResult: original})
+
+	eng.emitToolFinished("turn-1", call, block, observation, tools.CallInfo{})
+
+	result, ok := completed.Result.(*tools.ShellResult)
+	if !ok {
+		t.Fatalf("completed result = %#v, want *tools.ShellResult", completed.Result)
+	}
+	if completed.Content != block.Content || completed.Preview != "" || result.Output != "" {
+		t.Fatalf("completed event = %+v result=%+v", completed, result)
+	}
+	if original.Output != "duplicate raw output" {
+		t.Fatalf("source pointer was mutated: %+v", original)
+	}
+}
+
 func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{

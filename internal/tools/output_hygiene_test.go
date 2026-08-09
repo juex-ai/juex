@@ -50,6 +50,27 @@ func TestSanitizeOutputBytesOmitsControlHeavyText(t *testing.T) {
 	}
 }
 
+func TestSanitizeOutputPreservesPrefixAndTailBinaryDetectionCoverage(t *testing.T) {
+	middleBinary := strings.Repeat("a", 4<<10) + strings.Repeat("\x00", 4<<10) + strings.Repeat("z", 4<<10)
+	tailBinary := strings.Repeat("text", 5<<10) + "\x00tail"
+	for _, test := range []struct {
+		name string
+		data string
+	}{
+		{name: "binary in former prefix window", data: middleBinary},
+		{name: "binary in tail window", data: tailBinary},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := SanitizeOutputBytes([]byte(test.data)); !got.Binary.Omitted {
+				t.Fatalf("byte output exposed binary payload")
+			}
+			if got := SanitizeOutputText(test.data); !got.Binary.Omitted {
+				t.Fatalf("text output exposed binary payload")
+			}
+		})
+	}
+}
+
 func TestRegistryCallWithInfoSanitizesHandlerBinaryOutput(t *testing.T) {
 	r := NewRegistry()
 	payload := []byte{0x00, 0x01, 'P', 'N', 'G'}

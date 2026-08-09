@@ -279,7 +279,7 @@ func TestTurn_BuiltinShellBoundsEscapedHookErrorDiagnosticsAndReplays(t *testing
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "exec_large_hook_error", ToolName: "exec_command", Input: map[string]any{
-				"cmd": "printf 'shell output'",
+				"cmd": "awk 'BEGIN { printf \"HEAD-HOOK-ERROR-SENTINEL\\n\"; for (i = 0; i < 1100000; i++) printf \"x\"; printf \"\\nTAIL-HOOK-ERROR-SENTINEL\\n\" }'",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "large hook failure handled"), StopReason: llm.StopEndTurn},
@@ -304,7 +304,10 @@ func TestTurn_BuiltinShellBoundsEscapedHookErrorDiagnosticsAndReplays(t *testing
 		t.Fatalf("errored diagnostic was not bounded: bytes=%d", len(errored.Error))
 	}
 	conversation := eng.Session.History[2].Blocks[0].Content
-	if errored.Content != conversation || !strings.Contains(conversation, "shell output") || !strings.Contains(conversation, "[output truncated:") {
+	rawBytes := len("HEAD-HOOK-ERROR-SENTINEL\n") + 1100000 + len("\nTAIL-HOOK-ERROR-SENTINEL\n")
+	wantMarker := fmt.Sprintf("[output truncated: %d bytes omitted]\n", rawBytes-(1<<20))
+	if errored.Content != conversation || !strings.Contains(conversation, "HEAD-HOOK-ERROR-SENTINEL") ||
+		!strings.Contains(conversation, "TAIL-HOOK-ERROR-SENTINEL") || strings.Count(conversation, wantMarker) != 1 {
 		t.Fatalf("bounded terminal content does not match conversation: bytes=%d", len(conversation))
 	}
 	journal, err := session.ReadEvents(eng.Session.Dir)

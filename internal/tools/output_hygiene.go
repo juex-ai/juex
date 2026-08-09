@@ -109,13 +109,12 @@ func isBinaryOutputText(text string) bool {
 }
 
 func binaryDetectionSample(data []byte) []byte {
-	if len(data) <= binaryOutputDetectionBytes {
+	if len(data) <= 2*binaryOutputDetectionBytes {
 		return data
 	}
-	half := binaryOutputDetectionBytes / 2
-	headEnd := validUTF8SamplePrefix(data, half)
-	tailStart := validUTF8SampleSuffix(data, len(data)-half)
-	sample := make([]byte, 0, binaryOutputDetectionBytes)
+	headEnd := validUTF8SamplePrefix(data, binaryOutputDetectionBytes)
+	tailStart := validUTF8SampleSuffix(data, len(data)-binaryOutputDetectionBytes)
+	sample := make([]byte, 0, 2*binaryOutputDetectionBytes)
 	sample = append(sample, data[:headEnd]...)
 	sample = append(sample, data[tailStart:]...)
 	return sample
@@ -134,7 +133,7 @@ func validUTF8SamplePrefix(data []byte, length int) int {
 			return candidate
 		}
 	}
-	return min(length, len(data))
+	return 0
 }
 
 func validUTF8SampleSuffix(data []byte, start int) int {
@@ -144,7 +143,7 @@ func validUTF8SampleSuffix(data []byte, start int) int {
 			return candidate
 		}
 	}
-	return start
+	return len(data)
 }
 
 func isTextRune(r rune) bool {
