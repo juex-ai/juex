@@ -289,6 +289,7 @@ type RuntimeLimits struct {
 	ContextWindow         int
 	MaxOutputTokens       int
 	Compaction            CompactionConfig
+	ToolOutput            ToolOutputConfig
 	PendingInputTTL       time.Duration
 	ExternalEventTTL      time.Duration
 	ToolTimeout           time.Duration
@@ -300,6 +301,7 @@ func (c Config) RuntimeLimits() RuntimeLimits {
 		ContextWindow:         c.ContextWindow,
 		MaxOutputTokens:       c.MaxOutputTokens,
 		Compaction:            c.Compaction,
+		ToolOutput:            c.ToolOutput,
 		PendingInputTTL:       c.PendingInputTTL,
 		ExternalEventTTL:      c.ExternalEventTTL,
 		ToolTimeout:           c.ToolTimeout,

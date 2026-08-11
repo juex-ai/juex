@@ -66,6 +66,102 @@ func TestProjectMessageLockedDoesNotMutateOriginalBlocks(t *testing.T) {
 	}
 }
 
+func TestProjectMessageLockedLeavesShortToolResultUnchangedWhenCompactionDisabled(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.Compaction = CompactionPolicy{Enabled: false}
+	eng.ToolOutput = ToolOutputPolicy{InlineMaxBytes: 64}
+	msg := llm.Message{
+		Role: llm.RoleUser,
+		Blocks: []llm.Block{{
+			Type:      llm.BlockToolResult,
+			ToolUseID: "call-short",
+			Content:   "short result",
+		}},
+	}
+
+	projected, stats, err := eng.projectMessageLocked(msg, effectiveCompactionPolicy(eng.Compaction, DefaultContextWindowTokens))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stats.empty() {
+		t.Fatalf("stats = %+v, want empty", stats)
+	}
+	if projected.ID != "" || projected.Blocks[0].Content != msg.Blocks[0].Content || projected.Blocks[0].Artifact != nil {
+		t.Fatalf("projected = %+v, want unchanged short result", projected)
+	}
+}
+
+func TestProjectMessageLockedBoundsToolResultWhenCompactionEnabled(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.ToolOutput = ToolOutputPolicy{
+		InlineMaxBytes:   16,
+		PreviewHeadBytes: 4,
+		PreviewTailBytes: 4,
+	}
+	msg := llm.Message{
+		ID:   "enabled-tool-result",
+		Role: llm.RoleUser,
+		Blocks: []llm.Block{{
+			Type:      llm.BlockToolResult,
+			ToolUseID: "call-enabled",
+			Content:   "head-long-middle-tail",
+		}},
+	}
+
+	projected, stats, err := eng.projectMessageLocked(msg, effectiveCompactionPolicy(eng.Compaction, DefaultContextWindowTokens))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ToolResultsExternalized != 1 || projected.Blocks[0].Artifact == nil {
+		t.Fatalf("projected/stats = %+v / %+v", projected, stats)
+	}
+	if got := string(readProjectedArtifact(t, eng, projected.Blocks[0].Artifact)); got != msg.Blocks[0].Content {
+		t.Fatalf("artifact = %q, want %q", got, msg.Blocks[0].Content)
+	}
+}
+
+func TestProjectMessagesForProviderLockedBoundsLegacyToolResultWhenCompactionDisabled(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.Compaction = CompactionPolicy{Enabled: false}
+	eng.ToolOutput = ToolOutputPolicy{
+		InlineMaxBytes:   32,
+		PreviewHeadBytes: 8,
+		PreviewTailBytes: 8,
+	}
+	original := "tool-head" + strings.Repeat("-middle", 40) + "-tool-tail"
+	msg := llm.Message{
+		ID:   "legacy-tool-result",
+		Role: llm.RoleUser,
+		Blocks: []llm.Block{{
+			Type:      llm.BlockToolResult,
+			ToolUseID: "call-legacy",
+			Content:   original,
+		}},
+	}
+	if err := eng.Session.Append(msg); err != nil {
+		t.Fatal(err)
+	}
+
+	projected, stats, err := eng.projectMessagesForProviderLocked(eng.Session.History, effectiveCompactionPolicy(eng.Compaction, DefaultContextWindowTokens))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ToolResultsExternalized != 1 {
+		t.Fatalf("stats = %+v, want one externalized tool result", stats)
+	}
+	block := projected[0].Blocks[0]
+	if block.Artifact == nil || !strings.Contains(block.Content, "Tool output stored outside context.") || !strings.Contains(block.Content, "tool-hea") || !strings.Contains(block.Content, "ool-tail") {
+		t.Fatalf("projected block = %+v", block)
+	}
+	if got := eng.Session.History[0].Blocks[0]; got.Content != original || got.Artifact != nil {
+		t.Fatalf("canonical history was mutated: %+v", got)
+	}
+	if got := string(readProjectedArtifact(t, eng, block.Artifact)); got != original {
+		t.Fatalf("artifact = %q, want complete original", got)
+	}
+}
+
 func TestProjectCompactionRetentionMessageLockedTightensExistingUserInputPreview(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	original := "HEAD-" + strings.Repeat("middle ", 1000) + "-TAIL"

@@ -185,7 +185,10 @@ compaction:
   user_input_inline_max_bytes: 65536
   user_input_preview_head_bytes: 8192
   user_input_preview_tail_bytes: 8192
-  tool_result_inline_max_bytes: 32768
-  tool_result_preview_head_bytes: 8192
-  tool_result_preview_tail_bytes: 8192
   max_auto_failures: 3
+
+# Always-on provider-context projection for large tool results.
+tool_output:
+  inline_max_bytes: 32768
+  preview_head_bytes: 8192
+  preview_tail_bytes: 8192

@@ -42,6 +42,7 @@ type Config struct {
 	ProviderCapabilities      llm.CapabilityOverrides
 	ProviderCompat            llm.CompatOptions
 	Compaction                CompactionConfig
+	ToolOutput                ToolOutputConfig
 	PendingInputTTL           time.Duration
 	ExternalEventTTL          time.Duration
 	ToolTimeout               time.Duration
@@ -106,6 +107,7 @@ type fileConfig struct {
 	EnableUserAgentsResources optionalBool      `yaml:"enable_user_agents_resources"`
 	Providers                 []providerConfig  `yaml:"providers"`
 	Compaction                compactionConfig  `yaml:"compaction"`
+	ToolOutput                toolOutputConfig  `yaml:"tool_output"`
 	Hooks                     hooks.FileConfig  `yaml:"hooks"`
 	Runtime                   runtimeConfig     `yaml:"runtime"`
 	Shell                     *ShellConfig      `yaml:"shell"`
@@ -158,6 +160,7 @@ type providerCompatConfig struct {
 }
 
 type CompactionConfig = runtimepolicy.CompactionPolicy
+type ToolOutputConfig = runtimepolicy.ToolOutputPolicy
 
 // ModelRef is the provider:model selector used by the top-level config model.
 // The provider id may not contain ":", while the model id may contain slashes
@@ -215,20 +218,23 @@ func (e *ModelOverrideError) Unwrap() error {
 }
 
 type compactionConfig struct {
-	Enabled                    *bool   `yaml:"enabled"`
-	Instructions               *string `yaml:"instructions"`
-	ReserveTokens              int     `yaml:"reserve_tokens"`
-	KeepRecentTokens           int     `yaml:"keep_recent_tokens"`
-	SummaryModel               string  `yaml:"summary_model"`
-	SummaryMaxTokens           int     `yaml:"summary_max_tokens"`
-	ToolResultMaxChars         int     `yaml:"tool_result_max_chars"`
-	UserInputInlineMaxBytes    int     `yaml:"user_input_inline_max_bytes"`
-	UserInputPreviewHeadBytes  int     `yaml:"user_input_preview_head_bytes"`
-	UserInputPreviewTailBytes  int     `yaml:"user_input_preview_tail_bytes"`
-	ToolResultInlineMaxBytes   int     `yaml:"tool_result_inline_max_bytes"`
-	ToolResultPreviewHeadBytes int     `yaml:"tool_result_preview_head_bytes"`
-	ToolResultPreviewTailBytes int     `yaml:"tool_result_preview_tail_bytes"`
-	MaxAutoFailures            int     `yaml:"max_auto_failures"`
+	Enabled                   *bool   `yaml:"enabled"`
+	Instructions              *string `yaml:"instructions"`
+	ReserveTokens             int     `yaml:"reserve_tokens"`
+	KeepRecentTokens          int     `yaml:"keep_recent_tokens"`
+	SummaryModel              string  `yaml:"summary_model"`
+	SummaryMaxTokens          int     `yaml:"summary_max_tokens"`
+	ToolResultMaxChars        int     `yaml:"tool_result_max_chars"`
+	UserInputInlineMaxBytes   int     `yaml:"user_input_inline_max_bytes"`
+	UserInputPreviewHeadBytes int     `yaml:"user_input_preview_head_bytes"`
+	UserInputPreviewTailBytes int     `yaml:"user_input_preview_tail_bytes"`
+	MaxAutoFailures           int     `yaml:"max_auto_failures"`
+}
+
+type toolOutputConfig struct {
+	InlineMaxBytes   int `yaml:"inline_max_bytes"`
+	PreviewHeadBytes int `yaml:"preview_head_bytes"`
+	PreviewTailBytes int `yaml:"preview_tail_bytes"`
 }
 
 type runtimeConfig struct {
@@ -437,6 +443,7 @@ func loadUserConfigForWorkDir(workDir string) (Config, error) {
 	cfg := Config{
 		ContextWindow:             DefaultContextWindow,
 		Compaction:                DefaultCompactionConfig(),
+		ToolOutput:                DefaultToolOutputConfig(),
 		PendingInputTTL:           DefaultPendingInputTTL,
 		ExternalEventTTL:          DefaultExternalEventTTL,
 		ToolTimeout:               DefaultToolTimeout,
@@ -842,6 +849,7 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
 	applyCompactionConfig(cfg, fc.Compaction)
+	applyToolOutputConfig(cfg, fc.ToolOutput)
 	applyRuntimeConfig(cfg, fc.Runtime)
 	if err := applySkillsConfig(cfg, fc.Skills); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
@@ -1035,6 +1043,10 @@ func cleanStringList(values []string) []string {
 
 func DefaultCompactionConfig() CompactionConfig {
 	return runtimepolicy.DefaultCompactionPolicy()
+}
+
+func DefaultToolOutputConfig() ToolOutputConfig {
+	return runtimepolicy.DefaultToolOutputPolicy()
 }
 
 func applyProvidersConfig(cfg *Config, providers []providerConfig) error {
@@ -1332,17 +1344,20 @@ func applyCompactionConfig(cfg *Config, c compactionConfig) {
 	if c.UserInputPreviewTailBytes > 0 {
 		cfg.Compaction.UserInputPreviewTailBytes = c.UserInputPreviewTailBytes
 	}
-	if c.ToolResultInlineMaxBytes > 0 {
-		cfg.Compaction.ToolResultInlineMaxBytes = c.ToolResultInlineMaxBytes
-	}
-	if c.ToolResultPreviewHeadBytes > 0 {
-		cfg.Compaction.ToolResultPreviewHeadBytes = c.ToolResultPreviewHeadBytes
-	}
-	if c.ToolResultPreviewTailBytes > 0 {
-		cfg.Compaction.ToolResultPreviewTailBytes = c.ToolResultPreviewTailBytes
-	}
 	if c.MaxAutoFailures > 0 {
 		cfg.Compaction.MaxAutoFailures = c.MaxAutoFailures
+	}
+}
+
+func applyToolOutputConfig(cfg *Config, c toolOutputConfig) {
+	if c.InlineMaxBytes > 0 {
+		cfg.ToolOutput.InlineMaxBytes = c.InlineMaxBytes
+	}
+	if c.PreviewHeadBytes > 0 {
+		cfg.ToolOutput.PreviewHeadBytes = c.PreviewHeadBytes
+	}
+	if c.PreviewTailBytes > 0 {
+		cfg.ToolOutput.PreviewTailBytes = c.PreviewTailBytes
 	}
 }
 

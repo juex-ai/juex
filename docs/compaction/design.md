@@ -83,8 +83,8 @@ type ContextArtifactProjection struct {
 }
 ```
 
-When a tool output exceeds `compaction.tool_result_inline_max_bytes`, Juex
-writes the full output to:
+When a tool output exceeds `tool_output.inline_max_bytes`, Juex writes the full
+output independently of whether compaction is enabled:
 
 ```text
 .juex/artifacts/tool-results/<session-id>/<tool-use-id>-<block-index>.txt
@@ -124,9 +124,10 @@ compaction:
   user_input_inline_max_bytes: 65536
   user_input_preview_head_bytes: 8192
   user_input_preview_tail_bytes: 8192
-  tool_result_inline_max_bytes: 32768
-  tool_result_preview_head_bytes: 8192
-  tool_result_preview_tail_bytes: 8192
+tool_output:
+  inline_max_bytes: 32768
+  preview_head_bytes: 8192
+  preview_tail_bytes: 8192
 ```
 
 Rationale:
@@ -146,21 +147,24 @@ latest compact summary + retained tail + messages after compact + incoming
 V2 extends this with a projection pass:
 
 ```go
-// internal/runtime/compaction_policy.go
+// internal/runtime/compaction_policy.go and tool_output_policy.go
 type compactionPolicy struct {
-    Enabled                    bool
-    ReserveTokens              int
-    KeepRecentTokens           int
-    SummaryMaxTokens           int
-    ToolResultMaxChars         int
-    UserInputInlineMaxBytes    int
-    UserInputPreviewHeadBytes  int
-    UserInputPreviewTailBytes  int
-    ToolResultInlineMaxBytes   int
-    ToolResultPreviewHeadBytes int
-    ToolResultPreviewTailBytes int
-    MaxAutoFailures            int
-    TriggerTokens              int
+    Enabled                   bool
+    ReserveTokens             int
+    KeepRecentTokens          int
+    SummaryMaxTokens          int
+    ToolResultMaxChars        int
+    UserInputInlineMaxBytes   int
+    UserInputPreviewHeadBytes int
+    UserInputPreviewTailBytes int
+    MaxAutoFailures           int
+    TriggerTokens             int
+}
+
+type ToolOutputPolicy struct {
+    InlineMaxBytes   int
+    PreviewHeadBytes int
+    PreviewTailBytes int
 }
 ```
 

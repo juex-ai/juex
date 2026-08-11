@@ -88,6 +88,7 @@ func TestTurn_BuiltinShellErroredEventCarriesAuthoritativeContent(t *testing.T) 
 		{Message: llm.TextMessage(llm.RoleAssistant, "failure handled"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, true)
+	eng.ToolOutput = ToolOutputPolicy{InlineMaxBytes: 4 << 20}
 
 	var errored toolevents.ErroredPayload
 	bus.Subscribe(toolevents.ErroredType, func(event events.Event) {
@@ -222,6 +223,7 @@ func TestTurn_BuiltinShellFinalContentBoundsMultipleEscapedHooksAndReplays(t *te
 		{Message: llm.TextMessage(llm.RoleAssistant, "large hooks handled"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, true)
+	eng.ToolOutput = ToolOutputPolicy{InlineMaxBytes: 4 << 20}
 	eng.Hooks = hookRunnerFunc(func(_ context.Context, request hooks.Request) ([]hooks.Result, error) {
 		if request.EventName != hooks.EventPostToolUse {
 			return nil, nil
@@ -285,6 +287,7 @@ func TestTurn_BuiltinShellBoundsEscapedHookErrorDiagnosticsAndReplays(t *testing
 		{Message: llm.TextMessage(llm.RoleAssistant, "large hook failure handled"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, true)
+	eng.ToolOutput = ToolOutputPolicy{InlineMaxBytes: 4 << 20}
 	eng.Hooks = &fakeHookRunner{errors: map[hooks.EventName]error{
 		hooks.EventPostToolUse: errors.New("post hook failed: " + strings.Repeat("<", 2<<20)),
 	}}

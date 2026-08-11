@@ -435,6 +435,7 @@ func New(opts Options) (*App, error) {
 		ContextWindow:         runtimeLimits.ContextWindow,
 		MaxOutputTokens:       runtimeLimits.MaxOutputTokens,
 		Compaction:            runtimeLimits.Compaction,
+		ToolOutput:            runtimeLimits.ToolOutput,
 	}
 	if err := eng.ReplaceSessionRuntime(sess); err != nil {
 		closeSessionResources()

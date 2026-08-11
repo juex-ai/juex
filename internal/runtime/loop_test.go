@@ -983,9 +983,12 @@ func TestTurn_ExternalizesLargeToolResultBeforeNextProviderRequest(t *testing.T)
 	}}
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
-	eng.Compaction.ToolResultInlineMaxBytes = 64
-	eng.Compaction.ToolResultPreviewHeadBytes = 10
-	eng.Compaction.ToolResultPreviewTailBytes = 10
+	eng.Compaction.Enabled = false
+	eng.ToolOutput = ToolOutputPolicy{
+		InlineMaxBytes:   64,
+		PreviewHeadBytes: 10,
+		PreviewTailBytes: 10,
+	}
 	if err := eng.Tools.Register(tools.Tool{
 		Name:        "big",
 		Description: "return a big result",
