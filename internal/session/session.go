@@ -45,7 +45,6 @@ type Session struct {
 	eventFD      *os.File
 	transcript   transcriptIndex
 	historyPath  string
-	recordActive bool
 	startedAtMS  int64
 	lastActiveMS int64
 }
@@ -54,8 +53,6 @@ type Options struct {
 	Alias            string
 	Kind             string
 	Active           bool
-	RecordActive     bool
-	NoRecordActive   bool
 	HistoryPath      string
 	Lazy             bool
 	RepairTranscript bool
@@ -85,7 +82,6 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 	id := newID()
 	dir := filepath.Join(rootDir, id)
 	kind := NormalizeKind(opts.Kind)
-	recordActive := shouldRecordActive(opts, kind)
 	nowMS := time.Now().UTC().UnixMilli()
 	if opts.Lazy {
 		return &Session{
@@ -95,7 +91,6 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 			Kind:         kind,
 			Active:       opts.Active,
 			historyPath:  opts.HistoryPath,
-			recordActive: recordActive,
 			startedAtMS:  nowMS,
 			lastActiveMS: nowMS,
 		}, nil
@@ -132,7 +127,6 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 		convFD:       convFD,
 		eventFD:      eventFD,
 		historyPath:  opts.HistoryPath,
-		recordActive: recordActive,
 		startedAtMS:  nowMS,
 		lastActiveMS: nowMS,
 	}, nil
@@ -228,9 +222,6 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 	if !ok {
 		return prepared, nil
 	}
-	if s.recordActive && info.Kind == KindPrimary {
-		return prepared, SetActive(historyPath, info)
-	}
 	return prepared, RecordSession(historyPath, info)
 }
 
@@ -283,7 +274,6 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 	}
 	alias := meta.Alias
 	kind := meta.Kind
-	recordActive := shouldRecordActive(opts, kind)
 	convPath := filepath.Join(dir, conversationFile)
 	idx, err := scanTranscriptIndex(convPath)
 	if err != nil {
@@ -346,20 +336,9 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		eventFD:      eventFD,
 		transcript:   idx,
 		historyPath:  opts.HistoryPath,
-		recordActive: recordActive,
 		startedAtMS:  meta.StartedAtMS,
 		lastActiveMS: meta.LastActiveAtMS,
 	}, nil
-}
-
-func shouldRecordActive(opts Options, kind string) bool {
-	if opts.RecordActive {
-		return true
-	}
-	if opts.NoRecordActive {
-		return false
-	}
-	return opts.HistoryPath != "" && NormalizeKind(kind) == KindPrimary
 }
 
 // SubscribeBus wires every event emitted on bus through to AppendEvent. App

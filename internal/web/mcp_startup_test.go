@@ -596,6 +596,9 @@ func seedWebSession(t *testing.T, srv *Server, text string) *session.Session {
 	if err := sess.Append(llm.TextMessage(llm.RoleUser, text)); err != nil {
 		t.Fatal(err)
 	}
+	if err := session.SetActive(srv.opts.Cfg.HistoryPath(), sess.Info()); err != nil {
+		t.Fatal(err)
+	}
 	if err := sess.Close(); err != nil {
 		t.Fatal(err)
 	}

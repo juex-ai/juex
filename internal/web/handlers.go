@@ -104,8 +104,8 @@ func (s *Server) handleActiveSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) webActiveSessionID() (string, bool, error) {
-	s.createMu.Lock()
-	defer s.createMu.Unlock()
+	s.activeSelectionMu.Lock()
+	defer s.activeSelectionMu.Unlock()
 
 	id, ok, err := s.activePrimarySessionID()
 	if err != nil || !ok {
@@ -339,6 +339,8 @@ func parseSessionMessageWindow(r *http.Request) (sessionMessageWindow, error) {
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id string) {
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
+	s.activeSelectionMu.Lock()
+	defer s.activeSelectionMu.Unlock()
 
 	_, runtimeActive := s.sessions.Load(id)
 	plan, err := session.PrepareDelete(s.opts.Cfg.SessionsDir(), s.opts.Cfg.HistoryPath(), id)
@@ -365,7 +367,9 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id 
 
 func (s *Server) handleActivateSession(w http.ResponseWriter, r *http.Request, id string) {
 	s.createMu.Lock()
+	s.activeSelectionMu.Lock()
 	info, err := session.Activate(s.opts.Cfg.SessionsDir(), s.opts.Cfg.HistoryPath(), id)
+	s.activeSelectionMu.Unlock()
 	s.createMu.Unlock()
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -589,6 +593,8 @@ func (s *Server) admitNewSessionTurn(ctx context.Context, as *activeSession, id 
 	// between them.
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
+	s.activeSelectionMu.Lock()
+	defer s.activeSelectionMu.Unlock()
 	activeID, ok, err := s.activePrimarySessionID()
 	if err != nil {
 		return app.TurnAdmissionResult{}, err
