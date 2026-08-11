@@ -100,6 +100,7 @@ type Engine struct {
 	// turns. A zero value leaves the provider default in place.
 	MaxOutputTokens int
 	Compaction      CompactionPolicy
+	ToolOutput      ToolOutputPolicy
 
 	// mu serializes turns for one Engine. MCP notifications can arrive while
 	// a user turn is running, and both paths append to the same session

@@ -5,21 +5,18 @@ import runtimepolicy "github.com/juex-ai/juex/internal/runtime/policy"
 type CompactionPolicy = runtimepolicy.CompactionPolicy
 
 type Policy struct {
-	Enabled                    bool
-	Instructions               string
-	ReserveTokens              int
-	KeepRecentTokens           int
-	SummaryModel               string
-	SummaryMaxTokens           int
-	ToolResultMaxChars         int
-	UserInputInlineMaxBytes    int
-	UserInputPreviewHeadBytes  int
-	UserInputPreviewTailBytes  int
-	ToolResultInlineMaxBytes   int
-	ToolResultPreviewHeadBytes int
-	ToolResultPreviewTailBytes int
-	MaxAutoFailures            int
-	TriggerTokens              int
+	Enabled                   bool
+	Instructions              string
+	ReserveTokens             int
+	KeepRecentTokens          int
+	SummaryModel              string
+	SummaryMaxTokens          int
+	ToolResultMaxChars        int
+	UserInputInlineMaxBytes   int
+	UserInputPreviewHeadBytes int
+	UserInputPreviewTailBytes int
+	MaxAutoFailures           int
+	TriggerTokens             int
 }
 
 func DefaultCompactionPolicy() CompactionPolicy {
@@ -74,18 +71,6 @@ func EffectivePolicy(policy CompactionPolicy, contextWindow int, defaultContextW
 	if userTail <= 0 {
 		userTail = defaults.UserInputPreviewTailBytes
 	}
-	toolInlineMax := policy.ToolResultInlineMaxBytes
-	if toolInlineMax <= 0 {
-		toolInlineMax = defaults.ToolResultInlineMaxBytes
-	}
-	toolHead := policy.ToolResultPreviewHeadBytes
-	if toolHead <= 0 {
-		toolHead = defaults.ToolResultPreviewHeadBytes
-	}
-	toolTail := policy.ToolResultPreviewTailBytes
-	if toolTail <= 0 {
-		toolTail = defaults.ToolResultPreviewTailBytes
-	}
 	maxFailures := policy.MaxAutoFailures
 	if maxFailures <= 0 {
 		maxFailures = defaults.MaxAutoFailures
@@ -95,21 +80,18 @@ func EffectivePolicy(policy CompactionPolicy, contextWindow int, defaultContextW
 		trigger = maxInt(1, contextWindow/2)
 	}
 	return Policy{
-		Enabled:                    policy.Enabled,
-		Instructions:               policy.Instructions,
-		ReserveTokens:              reserve,
-		KeepRecentTokens:           keep,
-		SummaryModel:               policy.SummaryModel,
-		SummaryMaxTokens:           summaryMax,
-		ToolResultMaxChars:         toolMax,
-		UserInputInlineMaxBytes:    userInlineMax,
-		UserInputPreviewHeadBytes:  userHead,
-		UserInputPreviewTailBytes:  userTail,
-		ToolResultInlineMaxBytes:   toolInlineMax,
-		ToolResultPreviewHeadBytes: toolHead,
-		ToolResultPreviewTailBytes: toolTail,
-		MaxAutoFailures:            maxFailures,
-		TriggerTokens:              trigger,
+		Enabled:                   policy.Enabled,
+		Instructions:              policy.Instructions,
+		ReserveTokens:             reserve,
+		KeepRecentTokens:          keep,
+		SummaryModel:              policy.SummaryModel,
+		SummaryMaxTokens:          summaryMax,
+		ToolResultMaxChars:        toolMax,
+		UserInputInlineMaxBytes:   userInlineMax,
+		UserInputPreviewHeadBytes: userHead,
+		UserInputPreviewTailBytes: userTail,
+		MaxAutoFailures:           maxFailures,
+		TriggerTokens:             trigger,
 	}
 }
 

@@ -699,6 +699,8 @@ func TestApp_NewAppliesRuntimePolicyValues(t *testing.T) {
 	dir := t.TempDir()
 	compaction := config.DefaultCompactionConfig()
 	compaction.ReserveTokens = 123
+	toolOutput := config.DefaultToolOutputConfig()
+	toolOutput.InlineMaxBytes = 456
 	a, err := New(Options{
 		Config: config.Config{
 			ProviderID:       "openai",
@@ -708,6 +710,7 @@ func TestApp_NewAppliesRuntimePolicyValues(t *testing.T) {
 			ContextWindow:    2048,
 			MaxOutputTokens:  8192,
 			Compaction:       compaction,
+			ToolOutput:       toolOutput,
 			PendingInputTTL:  30 * time.Minute,
 			ExternalEventTTL: 48 * time.Hour,
 		},
@@ -726,6 +729,9 @@ func TestApp_NewAppliesRuntimePolicyValues(t *testing.T) {
 	}
 	if a.Engine.Compaction.ReserveTokens != 123 {
 		t.Fatalf("Engine.Compaction.ReserveTokens = %d, want 123", a.Engine.Compaction.ReserveTokens)
+	}
+	if a.Engine.ToolOutput.InlineMaxBytes != 456 {
+		t.Fatalf("Engine.ToolOutput.InlineMaxBytes = %d, want 456", a.Engine.ToolOutput.InlineMaxBytes)
 	}
 	if a.Engine.PendingInputTTL != 30*time.Minute || a.Engine.ExternalEventTTL != 48*time.Hour {
 		t.Fatalf("Engine pending TTLs = %s/%s", a.Engine.PendingInputTTL, a.Engine.ExternalEventTTL)

@@ -1799,6 +1799,11 @@ func TestRuntimeLimits_ResolvedValues(t *testing.T) {
 	cfg := Config{
 		ContextWindow: 1234,
 		Compaction:    DefaultCompactionConfig(),
+		ToolOutput: ToolOutputConfig{
+			InlineMaxBytes:   456,
+			PreviewHeadBytes: 78,
+			PreviewTailBytes: 90,
+		},
 	}
 	limits := cfg.RuntimeLimits()
 	if limits.ContextWindow != 1234 {
@@ -1806,6 +1811,9 @@ func TestRuntimeLimits_ResolvedValues(t *testing.T) {
 	}
 	if !limits.Compaction.Enabled {
 		t.Fatalf("compaction = %+v", limits.Compaction)
+	}
+	if limits.ToolOutput != cfg.ToolOutput {
+		t.Fatalf("tool output = %+v, want %+v", limits.ToolOutput, cfg.ToolOutput)
 	}
 }
 
@@ -1996,6 +2004,60 @@ compaction:
 	}
 }
 
+func TestLoadFromFile_ToolOutputConfig(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: openai:gpt-4
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+compaction:
+  enabled: false
+tool_output:
+  inline_max_bytes: 1234
+  preview_head_bytes: 234
+  preview_tail_bytes: 345
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Compaction.Enabled {
+		t.Fatal("compaction enabled = true, want false")
+	}
+	if cfg.ToolOutput.InlineMaxBytes != 1234 || cfg.ToolOutput.PreviewHeadBytes != 234 || cfg.ToolOutput.PreviewTailBytes != 345 {
+		t.Fatalf("ToolOutput = %+v", cfg.ToolOutput)
+	}
+}
+
+func TestLoadFromFile_RejectsToolOutputKeysUnderCompaction(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: openai:gpt-4
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+compaction:
+  tool_result_inline_max_bytes: 1234
+`
+	writeTextFile(t, configPath, body)
+
+	_, err := LoadFromFile(configPath)
+	if err == nil || !strings.Contains(err.Error(), "tool_result_inline_max_bytes") {
+		t.Fatalf("LoadFromFile error = %v, want rejected old compaction key", err)
+	}
+}
+
 func TestApplyCompactionConfigExplicitEmptyClearsInstructions(t *testing.T) {
 	cfg := Config{Compaction: DefaultCompactionConfig()}
 	global := "Preserve the global release focus."
@@ -2091,6 +2153,9 @@ func TestLoadFromFile_CompactionDefaults(t *testing.T) {
 	}
 	if !cfg.Compaction.Enabled || cfg.Compaction.ReserveTokens != 16384 || cfg.Compaction.KeepRecentTokens != 20000 || cfg.Compaction.SummaryMaxTokens != 2048 || cfg.Compaction.ToolResultMaxChars != 2000 {
 		t.Fatalf("Compaction defaults = %+v", cfg.Compaction)
+	}
+	if cfg.ToolOutput.InlineMaxBytes != 32768 || cfg.ToolOutput.PreviewHeadBytes != 8192 || cfg.ToolOutput.PreviewTailBytes != 8192 {
+		t.Fatalf("ToolOutput defaults = %+v", cfg.ToolOutput)
 	}
 }
 

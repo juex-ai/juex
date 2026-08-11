@@ -1854,10 +1854,11 @@ compaction:
   user_input_inline_max_bytes: 65536
   user_input_preview_head_bytes: 8192
   user_input_preview_tail_bytes: 8192
-  tool_result_inline_max_bytes: 32768
-  tool_result_preview_head_bytes: 8192
-  tool_result_preview_tail_bytes: 8192
   max_auto_failures: 3
+tool_output:
+  inline_max_bytes: 32768
+  preview_head_bytes: 8192
+  preview_tail_bytes: 8192
 ```
 
 | Field | Description |
@@ -1914,10 +1915,10 @@ compaction:
 | `compaction.user_input_inline_max_bytes` | user text larger than this is stored under `.juex/artifacts/user-inputs/` and replaced by a stable preview before provider calls |
 | `compaction.user_input_preview_head_bytes` | leading bytes kept inline for externalized user input |
 | `compaction.user_input_preview_tail_bytes` | trailing bytes kept inline for externalized user input |
-| `compaction.tool_result_inline_max_bytes` | tool output larger than this is stored under `.juex/artifacts/tool-results/` and replaced by a stable preview before provider calls |
-| `compaction.tool_result_preview_head_bytes` | leading bytes kept inline for externalized tool output |
-| `compaction.tool_result_preview_tail_bytes` | trailing bytes kept inline for externalized tool output |
 | `compaction.max_auto_failures` | consecutive automatic compaction failures before the session pauses proactive compaction with a clear error |
+| `tool_output.inline_max_bytes` | tool output larger than this is stored under `.juex/artifacts/tool-results/` and replaced by a stable preview before provider calls, independently of compaction |
+| `tool_output.preview_head_bytes` | leading bytes kept inline for externalized tool output |
+| `tool_output.preview_tail_bytes` | trailing bytes kept inline for externalized tool output |
 
 YAML resolution order (later wins) is `defaults` <
 `~/.juex/juex.yaml` < a canonically distinct `$JUEX_HOME/juex.yaml` <

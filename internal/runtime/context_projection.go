@@ -34,18 +34,19 @@ func (e *Engine) projectCompactionRetentionMessageLocked(msg llm.Message, policy
 }
 
 func (e *Engine) projectMessageWithRetentionLocked(msg llm.Message, policy compactionPolicy, tightenRetainedInput bool) (llm.Message, projectionStats, error) {
-	if e == nil || e.currentSession() == nil || !policy.Enabled {
+	if e == nil || e.currentSession() == nil {
 		return msg, projectionStats{}, nil
 	}
-	if msg.ID == "" {
+	if msg.ID == "" && policy.Enabled {
 		msg.ID = "msg-" + newID()
 	}
+	toolOutput := effectiveToolOutputPolicy(e.ToolOutput)
 	var stats projectionStats
 	var clonedBlocks []llm.Block
 	for i := range msg.Blocks {
 		block := msg.Blocks[i]
 		if block.Artifact != nil {
-			if tightenRetainedInput {
+			if tightenRetainedInput && policy.Enabled {
 				projected, changed, err := e.tightenProjectedUserInput(block, policy)
 				if err != nil {
 					return msg, stats, err
@@ -64,7 +65,7 @@ func (e *Engine) projectMessageWithRetentionLocked(msg llm.Message, policy compa
 			continue
 		}
 		switch {
-		case msg.Kind != llm.MessageKindCompact && msg.Role == llm.RoleUser && block.Type == llm.BlockText && len(block.Text) > policy.UserInputInlineMaxBytes:
+		case policy.Enabled && msg.Kind != llm.MessageKindCompact && msg.Role == llm.RoleUser && block.Type == llm.BlockText && len(block.Text) > policy.UserInputInlineMaxBytes:
 			if clonedBlocks == nil {
 				clonedBlocks = make([]llm.Block, i, len(msg.Blocks))
 				copy(clonedBlocks, msg.Blocks[:i])
@@ -77,12 +78,15 @@ func (e *Engine) projectMessageWithRetentionLocked(msg llm.Message, policy compa
 			block.Artifact = &artifact
 			stats.UserInputsExternalized++
 			stats.BytesExternalized += artifact.OriginalBytes
-		case block.Type == llm.BlockToolResult && len(block.Content) > policy.ToolResultInlineMaxBytes:
+		case block.Type == llm.BlockToolResult && len(block.Content) > toolOutput.InlineMaxBytes:
 			if clonedBlocks == nil {
 				clonedBlocks = make([]llm.Block, i, len(msg.Blocks))
 				copy(clonedBlocks, msg.Blocks[:i])
 			}
-			artifact, text, err := e.writeProjectedArtifact("tool_result", msg.ID, i, block, block.Content, policy.ToolResultPreviewHeadBytes, policy.ToolResultPreviewTailBytes)
+			if msg.ID == "" {
+				msg.ID = "msg-" + newID()
+			}
+			artifact, text, err := e.writeProjectedArtifact("tool_result", msg.ID, i, block, block.Content, toolOutput.PreviewHeadBytes, toolOutput.PreviewTailBytes)
 			if err != nil {
 				return msg, stats, err
 			}
