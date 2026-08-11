@@ -1432,6 +1432,54 @@ func TestGetSessionShow_LimitsRecentTranscript(t *testing.T) {
 	}
 }
 
+func TestGetSessionShow_ExtendsLimitedPageForToolPair(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260812T010101-tool-page"
+	body := `{"id":"m1","role":"user","kind":"compact","blocks":[{"type":"text","text":"summary"}]}` + "\n" +
+		`{"id":"m2","role":"assistant","blocks":[{"type":"tool_use","tool_use_id":"call-1","tool_name":"read","input":{"path":"a.txt"}}]}` + "\n" +
+		`{"id":"m3","role":"user","kind":"tool_result","blocks":[{"type":"tool_result","tool_use_id":"call-1","tool_name":"read","content":"done"}]}` + "\n" +
+		`{"id":"m4","role":"assistant","blocks":[{"type":"text","text":"latest"}]}` + "\n"
+	seedSession(t, srv.opts.Cfg.WorkDir, id, body)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "?limit=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var parsed struct {
+		Messages      []llm.Message `json:"messages"`
+		HasMoreBefore bool          `json:"has_more_before"`
+		OldestID      string        `json:"oldest_message_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if got := messageIDsFromLLM(parsed.Messages); strings.Join(got, ",") != "m2,m3,m4" {
+		t.Fatalf("messages = %v, want m2,m3,m4", got)
+	}
+	if !parsed.HasMoreBefore || parsed.OldestID != "m2" {
+		t.Fatalf("pagination = has_more:%v oldest:%q, want true/m2", parsed.HasMoreBefore, parsed.OldestID)
+	}
+	if parsed.Messages[0].Blocks[0].ToolUseID != "call-1" || parsed.Messages[1].Blocks[0].ToolUseID != "call-1" {
+		t.Fatalf("tool pair = %+v", parsed.Messages[:2])
+	}
+}
+
+func messageIDsFromLLM(messages []llm.Message) []string {
+	ids := make([]string, 0, len(messages))
+	for _, message := range messages {
+		ids = append(ids, message.ID)
+	}
+	return ids
+}
+
 func TestMessagesForSessionResponseProjectsCanonicalCreatedAt(t *testing.T) {
 	messages := messagesForSessionResponse([]llm.Message{
 		{ID: "msg-20260718T065604-8f0582f4", Role: llm.RoleAssistant},

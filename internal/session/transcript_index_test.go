@@ -1,0 +1,174 @@
+package session
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/juex-ai/juex/internal/llm"
+)
+
+func TestTranscriptMessagePageKeepsToolExchangeCoherent(t *testing.T) {
+	root := t.TempDir()
+	tests := []struct {
+		name       string
+		messages   []llm.Message
+		before     string
+		limit      int
+		wantIDs    string
+		wantOldest string
+		wantMore   bool
+	}{
+		{
+			name: "initial page",
+			messages: []llm.Message{
+				messageWithID(compactTestMessage("summary"), "m1"),
+				toolUseMessage("m2", "call-1", "read"),
+				toolResultMessage("m3", "call-1", "done"),
+				messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m4"),
+			},
+			limit:      2,
+			wantIDs:    "m2,m3,m4",
+			wantOldest: "m2",
+			wantMore:   true,
+		},
+		{
+			name: "multiple result messages",
+			messages: []llm.Message{
+				messageWithID(compactTestMessage("summary"), "m1"),
+				multiToolUseMessage("m2", "call-1", "call-2"),
+				toolResultMessage("m3", "call-1", "first"),
+				toolResultMessage("m4", "call-2", "second"),
+				messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m5"),
+			},
+			limit:      3,
+			wantIDs:    "m2,m3,m4,m5",
+			wantOldest: "m2",
+			wantMore:   true,
+		},
+		{
+			name: "multiple results in one message",
+			messages: []llm.Message{
+				messageWithID(compactTestMessage("summary"), "m1"),
+				multiToolUseMessage("m2", "call-1", "call-2"),
+				multiToolResultMessage("m3", "call-1", "call-2"),
+				messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m4"),
+			},
+			limit:      2,
+			wantIDs:    "m2,m3,m4",
+			wantOldest: "m2",
+			wantMore:   true,
+		},
+		{
+			name: "matched and orphan results in one message",
+			messages: []llm.Message{
+				messageWithID(compactTestMessage("summary"), "m1"),
+				toolUseMessage("m2", "call-1", "read"),
+				multiToolResultMessage("m3", "call-1", "missing-call"),
+				messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m4"),
+			},
+			limit:      2,
+			wantIDs:    "m2,m3,m4",
+			wantOldest: "m2",
+			wantMore:   true,
+		},
+		{
+			name: "unmatched result",
+			messages: []llm.Message{
+				messageWithID(compactTestMessage("summary"), "m1"),
+				toolUseMessage("m2", "other-call", "read"),
+				toolResultMessage("m3", "missing-call", "orphan"),
+				messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m4"),
+			},
+			limit:      2,
+			wantIDs:    "m3,m4",
+			wantOldest: "m3",
+			wantMore:   true,
+		},
+		{
+			name: "older page",
+			messages: []llm.Message{
+				messageWithID(llm.TextMessage(llm.RoleUser, "oldest"), "m1"),
+				toolUseMessage("m2", "call-1", "read"),
+				toolResultMessage("m3", "call-1", "done"),
+				messageWithID(llm.TextMessage(llm.RoleAssistant, "later"), "m4"),
+				messageWithID(llm.TextMessage(llm.RoleUser, "newest"), "m5"),
+			},
+			before:     "m5",
+			limit:      2,
+			wantIDs:    "m2,m3,m4",
+			wantOldest: "m2",
+			wantMore:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := makeSession(t, root, "20260812T010101-"+strings.ReplaceAll(tt.name, " ", "-"), tt.messages, time.Now())
+			_, page, err := LoadInfoPage(dir, tt.before, tt.limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(messageIDsForTest(page.Messages), ","); got != tt.wantIDs {
+				t.Fatalf("messages = %s, want %s", got, tt.wantIDs)
+			}
+			if page.OldestMessageID != tt.wantOldest || page.HasMoreBefore != tt.wantMore {
+				t.Fatalf("page = %+v, want oldest %q more %v", page, tt.wantOldest, tt.wantMore)
+			}
+		})
+	}
+}
+
+func messageWithID(msg llm.Message, id string) llm.Message {
+	msg.ID = id
+	return msg
+}
+
+func toolUseMessage(id, toolUseID, name string) llm.Message {
+	return llm.Message{
+		ID:   id,
+		Role: llm.RoleAssistant,
+		Blocks: []llm.Block{{
+			Type:      llm.BlockToolUse,
+			ToolUseID: toolUseID,
+			ToolName:  name,
+		}},
+	}
+}
+
+func multiToolUseMessage(id string, toolUseIDs ...string) llm.Message {
+	msg := llm.Message{ID: id, Role: llm.RoleAssistant}
+	for _, toolUseID := range toolUseIDs {
+		msg.Blocks = append(msg.Blocks, llm.Block{
+			Type:      llm.BlockToolUse,
+			ToolUseID: toolUseID,
+			ToolName:  "read",
+		})
+	}
+	return msg
+}
+
+func toolResultMessage(id, toolUseID, content string) llm.Message {
+	return llm.Message{
+		ID:   id,
+		Role: llm.RoleUser,
+		Kind: llm.MessageKindToolResult,
+		Blocks: []llm.Block{{
+			Type:      llm.BlockToolResult,
+			ToolUseID: toolUseID,
+			Content:   content,
+		}},
+	}
+}
+
+func multiToolResultMessage(id string, toolUseIDs ...string) llm.Message {
+	msg := llm.Message{ID: id, Role: llm.RoleUser, Kind: llm.MessageKindToolResult}
+	for _, toolUseID := range toolUseIDs {
+		msg.Blocks = append(msg.Blocks, llm.Block{
+			Type:      llm.BlockToolResult,
+			ToolUseID: toolUseID,
+			Content:   toolUseID + " result",
+		})
+	}
+	return msg
+}

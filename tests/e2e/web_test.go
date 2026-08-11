@@ -26,6 +26,7 @@ import (
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/web"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -86,6 +87,60 @@ func (p *interruptibleCompactWebProvider) Complete(ctx context.Context, sys stri
 		return llm.Response{}, ctx.Err()
 	case <-p.release:
 		return llm.Response{}, context.Canceled
+	}
+}
+
+func TestWeb_TranscriptPageKeepsToolPairAtBoundary(t *testing.T) {
+	work := t.TempDir()
+	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
+	sess, err := session.New(cfg.SessionsDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := sess.ID
+	messages := []llm.Message{
+		{ID: "m1", Role: llm.RoleUser, Kind: llm.MessageKindCompact, Blocks: []llm.Block{{Type: llm.BlockText, Text: "summary"}}},
+		{ID: "m2", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "read", Input: map[string]any{"path": "a.txt"}}}},
+		{ID: "m3", Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "call-1", ToolName: "read", Content: "done"}}},
+		{ID: "m4", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockText, Text: "latest"}}},
+	}
+	if err := sess.AppendBatch(messages); err != nil {
+		sess.Close()
+		t.Fatal(err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := web.NewServer(web.Options{Cfg: cfg, Provider: &webProvider{}})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + sessionID + "?limit=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("session status = %d body=%s", resp.StatusCode, body)
+	}
+	var got struct {
+		Messages      []llm.Message `json:"messages"`
+		HasMoreBefore bool          `json:"has_more_before"`
+		OldestID      string        `json:"oldest_message_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 3 ||
+		got.Messages[0].ID != "m2" ||
+		got.Messages[0].Blocks[0].ToolUseID != "call-1" ||
+		got.Messages[1].Blocks[0].ToolUseID != "call-1" ||
+		got.OldestID != "m2" ||
+		!got.HasMoreBefore {
+		t.Fatalf("coherent transcript page = %+v", got)
 	}
 }
 
