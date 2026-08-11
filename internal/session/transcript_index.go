@@ -34,6 +34,7 @@ type transcriptIndexEntry struct {
 	Offset             int64
 	Length             int
 	ID                 string
+	Role               llm.Role
 	Kind               string
 	TailStartMessageID string
 	ToolUseIDs         []string
@@ -90,6 +91,7 @@ func (idx *transcriptIndex) add(msg llm.Message, lineIndex int, offset int64, le
 		Offset:             offset,
 		Length:             length,
 		ID:                 msg.ID,
+		Role:               msg.Role,
 		Kind:               msg.Kind,
 		TailStartMessageID: tailStartID,
 		ToolUseIDs:         toolUseIDs,
@@ -208,13 +210,22 @@ func (idx transcriptIndex) indexByIDBefore(id string, before int) int {
 	return -1
 }
 
-func (idx transcriptIndex) coherentPageStart(start, floor int) int {
+func (idx transcriptIndex) coherentPageStart(start, floor, end int) int {
 	if start <= floor || start >= len(idx.entries) {
 		return start
 	}
-	required := make(map[string]struct{}, len(idx.entries[start].ToolResultIDs))
-	for _, id := range idx.entries[start].ToolResultIDs {
-		required[id] = struct{}{}
+	required := make(map[string]struct{})
+	for i := start; i < end; i++ {
+		entry := idx.entries[i]
+		if entry.Kind == llm.MessageKindHookEvent {
+			continue
+		}
+		if entry.Kind != llm.MessageKindToolResult {
+			break
+		}
+		for _, id := range entry.ToolResultIDs {
+			required[id] = struct{}{}
+		}
 	}
 	if len(required) == 0 {
 		return start
@@ -224,10 +235,13 @@ func (idx transcriptIndex) coherentPageStart(start, floor int) int {
 		if entry.Kind == llm.MessageKindHookEvent {
 			continue
 		}
-		for _, id := range entry.ToolResultIDs {
-			required[id] = struct{}{}
+		if entry.Kind == llm.MessageKindToolResult {
+			for _, id := range entry.ToolResultIDs {
+				required[id] = struct{}{}
+			}
+			continue
 		}
-		if len(entry.ToolUseIDs) > 0 {
+		if entry.Role == llm.RoleAssistant && entry.Kind == "" && len(entry.ToolUseIDs) > 0 {
 			matched := false
 			for _, id := range entry.ToolUseIDs {
 				if _, ok := required[id]; ok {
@@ -240,9 +254,7 @@ func (idx transcriptIndex) coherentPageStart(start, floor int) int {
 			}
 			return start
 		}
-		if len(entry.ToolResultIDs) == 0 {
-			return start
-		}
+		return start
 	}
 	return start
 }
@@ -311,7 +323,7 @@ func transcriptMessagePage(path string, idx transcriptIndex, beforeID string, li
 	if end < start {
 		end = start
 	}
-	start = idx.coherentPageStart(start, floor)
+	start = idx.coherentPageStart(start, floor, end)
 	msgs, err := readTranscriptMessages(path, idx.entries[start:end])
 	if err != nil {
 		return MessagePage{}, err

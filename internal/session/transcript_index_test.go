@@ -75,6 +75,48 @@ func TestTranscriptMessagePageKeepsToolExchangeCoherent(t *testing.T) {
 			wantMore:   true,
 		},
 		{
+			name: "page boundary on hook trace",
+			messages: []llm.Message{
+				messageWithID(compactTestMessage("summary"), "m1"),
+				toolUseMessage("m2", "call-1", "read"),
+				hookTraceMessage("m3", "pre hook completed"),
+				toolResultMessage("m4", "call-1", "done"),
+				messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m5"),
+			},
+			limit:      3,
+			wantIDs:    "m2,m3,m4,m5",
+			wantOldest: "m2",
+			wantMore:   true,
+		},
+		{
+			name: "boundary sequence starts with orphan result",
+			messages: []llm.Message{
+				messageWithID(compactTestMessage("summary"), "m1"),
+				toolUseMessage("m2", "call-1", "read"),
+				toolResultMessage("m3", "missing-call", "orphan"),
+				toolResultMessage("m4", "call-1", "done"),
+				messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m5"),
+			},
+			limit:      3,
+			wantIDs:    "m2,m3,m4,m5",
+			wantOldest: "m2",
+			wantMore:   true,
+		},
+		{
+			name: "before page ends before hook result",
+			messages: []llm.Message{
+				toolUseMessage("m1", "call-1", "read"),
+				hookTraceMessage("m2", "pre hook completed"),
+				toolResultMessage("m3", "call-1", "done"),
+				messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m4"),
+			},
+			before:     "m3",
+			limit:      1,
+			wantIDs:    "m2",
+			wantOldest: "m2",
+			wantMore:   true,
+		},
+		{
 			name: "matched and orphan results in one message",
 			messages: []llm.Message{
 				messageWithID(compactTestMessage("summary"), "m1"),
@@ -93,6 +135,19 @@ func TestTranscriptMessagePageKeepsToolExchangeCoherent(t *testing.T) {
 				messageWithID(compactTestMessage("summary"), "m1"),
 				toolUseMessage("m2", "other-call", "read"),
 				toolResultMessage("m3", "missing-call", "orphan"),
+				messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m4"),
+			},
+			limit:      2,
+			wantIDs:    "m3,m4",
+			wantOldest: "m3",
+			wantMore:   true,
+		},
+		{
+			name: "direct message with result block is a hard boundary",
+			messages: []llm.Message{
+				messageWithID(compactTestMessage("summary"), "m1"),
+				toolUseMessage("m2", "call-1", "read"),
+				directToolResultMessage("m3", "call-1", "not a protocol result"),
 				messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m4"),
 			},
 			limit:      2,
@@ -174,6 +229,12 @@ func toolResultMessage(id, toolUseID, content string) llm.Message {
 			Content:   content,
 		}},
 	}
+}
+
+func directToolResultMessage(id, toolUseID, content string) llm.Message {
+	msg := toolResultMessage(id, toolUseID, content)
+	msg.Kind = llm.MessageKindDirect
+	return msg
 }
 
 func multiToolResultMessage(id string, toolUseIDs ...string) llm.Message {

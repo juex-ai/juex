@@ -118,7 +118,7 @@ func TestWeb_TranscriptPageKeepsToolPairAtBoundary(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/sessions/" + sessionID + "?limit=2")
+	resp, err := http.Get(ts.URL + "/api/sessions/" + sessionID + "?limit=3")
 	if err != nil {
 		t.Fatal(err)
 	}
