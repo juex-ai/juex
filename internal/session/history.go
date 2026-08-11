@@ -234,7 +234,9 @@ func RecordSession(path string, info Info) error {
 		}
 		info = normalizeInfo(info)
 		upsertHistorySession(&h, info)
-		if h.Active != nil && h.Active.ID == info.ID && info.Kind == KindPrimary {
+		// Session activity may refresh the selected Session's cached summary,
+		// but selecting a primary remains an explicit SetActive operation.
+		if info.Kind == KindPrimary && h.Active != nil && h.Active.ID == info.ID {
 			active := info
 			active.Active = true
 			h.Active = &active

@@ -84,7 +84,6 @@ func resumeWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (Se
 	sess, err := session.LoadWithOptions(req.ResumeDir, session.Options{
 		Alias:            req.Alias,
 		Active:           active,
-		RecordActive:     active,
 		HistoryPath:      cfg.HistoryPath(),
 		RepairTranscript: true,
 	})
@@ -115,7 +114,6 @@ func attachActiveWorkspaceSession(cfg config.Config, req SessionAttachmentReques
 	sess, err := session.LoadWithOptions(session.InfoDir(cfg.SessionsDir(), info), session.Options{
 		Alias:            req.Alias,
 		Active:           true,
-		RecordActive:     true,
 		HistoryPath:      cfg.HistoryPath(),
 		RepairTranscript: true,
 	})
@@ -131,12 +129,11 @@ func attachActiveWorkspaceSession(cfg config.Config, req SessionAttachmentReques
 
 func newPrimaryWorkspaceSession(cfg config.Config, req SessionAttachmentRequest, lockMode SessionMode) (SessionAttachment, error) {
 	sess, err := session.NewWithOptions(cfg.SessionsDir(), session.Options{
-		Alias:        req.Alias,
-		Kind:         session.KindPrimary,
-		Active:       true,
-		RecordActive: true,
-		HistoryPath:  cfg.HistoryPath(),
-		Lazy:         req.Lazy,
+		Alias:       req.Alias,
+		Kind:        session.KindPrimary,
+		Active:      true,
+		HistoryPath: cfg.HistoryPath(),
+		Lazy:        req.Lazy,
 	})
 	if err != nil {
 		return SessionAttachment{}, err
@@ -150,11 +147,10 @@ func newPrimaryWorkspaceSession(cfg config.Config, req SessionAttachmentRequest,
 
 func newSideWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (SessionAttachment, error) {
 	sess, err := session.NewWithOptions(cfg.SessionsDir(), session.Options{
-		Alias:          req.Alias,
-		Kind:           session.KindSide,
-		NoRecordActive: true,
-		HistoryPath:    cfg.HistoryPath(),
-		Lazy:           req.Lazy,
+		Alias:       req.Alias,
+		Kind:        session.KindSide,
+		HistoryPath: cfg.HistoryPath(),
+		Lazy:        req.Lazy,
 	})
 	if err != nil {
 		return SessionAttachment{}, err

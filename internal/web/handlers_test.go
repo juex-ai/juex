@@ -438,9 +438,9 @@ func TestGetActiveSessionReturnsLiveLazyPrimary(t *testing.T) {
 	}
 }
 
-func TestGetActiveSessionSerializesWithSessionChanges(t *testing.T) {
+func TestGetActiveSessionSerializesWithSessionSelectionChanges(t *testing.T) {
 	srv := newTestServer(t)
-	srv.createMu.Lock()
+	srv.activeSelectionMu.Lock()
 	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
@@ -451,11 +451,11 @@ func TestGetActiveSessionSerializesWithSessionChanges(t *testing.T) {
 	<-started
 	select {
 	case err := <-done:
-		srv.createMu.Unlock()
+		srv.activeSelectionMu.Unlock()
 		t.Fatalf("active lookup completed outside session-change lock: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
-	srv.createMu.Unlock()
+	srv.activeSelectionMu.Unlock()
 	select {
 	case err := <-done:
 		if err != nil {
@@ -463,6 +463,373 @@ func TestGetActiveSessionSerializesWithSessionChanges(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("active lookup did not resume after session-change lock released")
+	}
+}
+
+func TestActivateSessionIsNotRevertedByPreviousPrimaryAppend(t *testing.T) {
+	srv := newTestServer(t)
+	previous, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousInfo, ok := previous.app.SessionInfo()
+	if !ok {
+		t.Fatal("previous primary session unavailable")
+	}
+	next := seedWebSession(t, srv, "next")
+	if err := session.SetActive(srv.opts.Cfg.HistoryPath(), previousInfo); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+next.ID+"/activate", nil)
+	recorder := httptest.NewRecorder()
+	srv.handleActivateSession(recorder, req, next.ID)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("activate status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if err := previous.app.Session.Append(llm.TextMessage(llm.RoleAssistant, "late append")); err != nil {
+		t.Fatal(err)
+	}
+
+	activeID, found, err := srv.activePrimarySessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || activeID != next.ID {
+		t.Fatalf("active session after previous append = (%q, %v), want (%q, true)", activeID, found, next.ID)
+	}
+}
+
+func TestGetActiveSessionDoesNotWaitForRuntimeRestore(t *testing.T) {
+	srv := newTestServer(t)
+	active := seedWebSession(t, srv, "active")
+
+	// Runtime restoration currently holds createMu while app.New rebuilds the
+	// live session, including replaying its durable event journal. The
+	// lightweight active-id lookup only reads committed selection state and
+	// must remain available throughout that work.
+	srv.createMu.Lock()
+	done := make(chan struct {
+		id  string
+		ok  bool
+		err error
+	}, 1)
+	go func() {
+		id, ok, err := srv.webActiveSessionID()
+		done <- struct {
+			id  string
+			ok  bool
+			err error
+		}{id: id, ok: ok, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		srv.createMu.Unlock()
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if !got.ok || got.id != active.ID {
+			t.Fatalf("active lookup = (%q, %v), want (%q, true)", got.id, got.ok, active.ID)
+		}
+	case <-time.After(time.Second):
+		srv.createMu.Unlock()
+		t.Fatal("active lookup waited for runtime restoration")
+	}
+}
+
+func TestExactActiveSessionRestoreDoesNotTakeSelectionLock(t *testing.T) {
+	srv := newTestServer(t)
+	active := seedWebSession(t, srv, "active")
+
+	srv.activeSelectionMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			srv.activeSelectionMu.Unlock()
+		}
+	}()
+	done := make(chan struct {
+		active *activeSession
+		err    error
+	}, 1)
+	go func() {
+		as, err := srv.getActiveSession(t.Context(), active.ID)
+		done <- struct {
+			active *activeSession
+			err    error
+		}{active: as, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		srv.activeSelectionMu.Unlock()
+		locked = false
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if !activeSessionMatches(got.active, active.ID) {
+			t.Fatalf("restored active session does not match %q", active.ID)
+		}
+	case <-time.After(5 * time.Second):
+		srv.activeSelectionMu.Unlock()
+		locked = false
+		t.Fatal("exact active restore waited for selection lock")
+	}
+}
+
+func TestActiveSessionMutationsTakeSelectionLock(t *testing.T) {
+	lockSelection := func(t *testing.T, srv *Server) func() {
+		t.Helper()
+		srv.activeSelectionMu.Lock()
+		var once sync.Once
+		release := func() { once.Do(srv.activeSelectionMu.Unlock) }
+		t.Cleanup(release)
+		return release
+	}
+	assertStillActive := func(t *testing.T, srv *Server, want string) {
+		t.Helper()
+		id, ok, err := srv.activePrimarySessionID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want == "" {
+			if ok {
+				t.Fatalf("active session = %q while mutation is blocked, want none", id)
+			}
+			return
+		}
+		if !ok || id != want {
+			t.Fatalf("active session = (%q, %v) while mutation is blocked, want (%q, true)", id, ok, want)
+		}
+	}
+	waitForMutation := func(t *testing.T, done <-chan error) error {
+		t.Helper()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(5 * time.Second):
+			t.Fatal("selection mutation did not complete")
+			return nil
+		}
+	}
+	assertBlocked := func(t *testing.T, srv *Server, done <-chan error) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			select {
+			case err := <-done:
+				t.Fatalf("selection mutation completed before taking activeSelectionMu: %v", err)
+			default:
+			}
+			if !srv.createMu.TryLock() {
+				break
+			}
+			srv.createMu.Unlock()
+			if time.Now().After(deadline) {
+				t.Fatal("selection mutation did not reach activeSelectionMu")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("selection mutation completed while activeSelectionMu was held: %v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	t.Run("new primary", func(t *testing.T) {
+		srv := newTestServer(t)
+		releaseSelection := lockSelection(t, srv)
+		done := make(chan error, 1)
+		go func() {
+			_, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
+			done <- err
+		}()
+		assertBlocked(t, srv, done)
+		assertStillActive(t, srv, "")
+		releaseSelection()
+		if err := waitForMutation(t, done); err != nil {
+			t.Fatal(err)
+		}
+		assertStillActive(t, srv, mustActiveSessionID(t, srv))
+	})
+
+	t.Run("activate", func(t *testing.T) {
+		srv := newTestServer(t)
+		previous := seedWebSession(t, srv, "previous")
+		next := seedWebSession(t, srv, "next")
+		if err := session.SetActive(srv.opts.Cfg.HistoryPath(), previous.Info()); err != nil {
+			t.Fatal(err)
+		}
+		releaseSelection := lockSelection(t, srv)
+		done := make(chan error, 1)
+		go func() {
+			recorder := httptest.NewRecorder()
+			srv.handleActivateSession(recorder, httptest.NewRequest(http.MethodPost, "/api/sessions/"+next.ID+"/activate", nil), next.ID)
+			if recorder.Code != http.StatusOK {
+				done <- fmt.Errorf("status=%d body=%s", recorder.Code, recorder.Body.String())
+				return
+			}
+			done <- nil
+		}()
+		assertBlocked(t, srv, done)
+		assertStillActive(t, srv, previous.ID)
+		releaseSelection()
+		if err := waitForMutation(t, done); err != nil {
+			t.Fatal(err)
+		}
+		assertStillActive(t, srv, next.ID)
+	})
+
+	t.Run("delete active", func(t *testing.T) {
+		srv := newTestServer(t)
+		fallback := seedWebSession(t, srv, "fallback")
+		active := seedWebSession(t, srv, "active")
+		if err := session.SetActive(srv.opts.Cfg.HistoryPath(), active.Info()); err != nil {
+			t.Fatal(err)
+		}
+		releaseSelection := lockSelection(t, srv)
+		done := make(chan error, 1)
+		go func() {
+			recorder := httptest.NewRecorder()
+			srv.handleDeleteSession(recorder, httptest.NewRequest(http.MethodDelete, "/api/sessions/"+active.ID, nil), active.ID)
+			if recorder.Code != http.StatusOK {
+				done <- fmt.Errorf("status=%d body=%s", recorder.Code, recorder.Body.String())
+				return
+			}
+			done <- nil
+		}()
+		assertBlocked(t, srv, done)
+		assertStillActive(t, srv, active.ID)
+		if _, err := os.Stat(active.Dir); err != nil {
+			t.Fatalf("active Session changed while delete was blocked: %v", err)
+		}
+		releaseSelection()
+		if err := waitForMutation(t, done); err != nil {
+			t.Fatal(err)
+		}
+		assertStillActive(t, srv, fallback.ID)
+		if _, err := os.Stat(active.Dir); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("deleted Session stat = %v, want not exist", err)
+		}
+	})
+
+	t.Run("new slash", func(t *testing.T) {
+		srv := newTestServer(t)
+		ts := httptest.NewServer(srv.Handler())
+		t.Cleanup(ts.Close)
+		oldID := createTestSession(t, ts.URL)
+		releaseSelection := lockSelection(t, srv)
+		done := make(chan error, 1)
+		var newID string
+		go func() {
+			resp, err := http.Post(ts.URL+"/api/sessions/"+oldID+"/turns", "application/json", strings.NewReader(`{"prompt":"/new"}`))
+			if err != nil {
+				done <- err
+				return
+			}
+			defer resp.Body.Close()
+			var parsed startTurnResponse
+			if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+				done <- err
+				return
+			}
+			if resp.StatusCode != http.StatusOK || parsed.Command == nil {
+				done <- fmt.Errorf("status=%d response=%+v", resp.StatusCode, parsed)
+				return
+			}
+			newID = parsed.Command.Status.SessionID
+			done <- nil
+		}()
+		assertBlocked(t, srv, done)
+		assertStillActive(t, srv, oldID)
+		releaseSelection()
+		if err := waitForMutation(t, done); err != nil {
+			t.Fatal(err)
+		}
+		if newID == "" || newID == oldID {
+			t.Fatalf("new Session id = %q, old = %q", newID, oldID)
+		}
+		assertStillActive(t, srv, newID)
+	})
+}
+
+func mustActiveSessionID(t *testing.T, srv *Server) string {
+	t.Helper()
+	id, ok, err := srv.activePrimarySessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || id == "" {
+		t.Fatal("active Session id unavailable")
+	}
+	return id
+}
+
+func TestSessionReadRemainsAvailableWhileLiveEndpointsWaitForRuntimeRestore(t *testing.T) {
+	srv := newTestServer(t)
+	active := seedWebSession(t, srv, "active")
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	srv.createMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			srv.createMu.Unlock()
+		}
+	}()
+
+	show, err := http.Get(ts.URL + "/api/sessions/" + active.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer show.Body.Close()
+	if show.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(show.Body)
+		t.Fatalf("session show status = %d, body=%s", show.StatusCode, body)
+	}
+	var shown sessionShowResponse
+	if err := json.NewDecoder(show.Body).Decode(&shown); err != nil {
+		t.Fatal(err)
+	}
+	if shown.ID != active.ID {
+		t.Fatalf("session show id = %q, want %q", shown.ID, active.ID)
+	}
+
+	events := make(chan *http.Response, 1)
+	eventsErr := make(chan error, 1)
+	go func() {
+		resp, err := http.Get(ts.URL + "/api/sessions/" + active.ID + "/events")
+		if err != nil {
+			eventsErr <- err
+			return
+		}
+		events <- resp
+	}()
+	select {
+	case resp := <-events:
+		resp.Body.Close()
+		t.Fatal("live event stream opened before runtime restoration completed")
+	case err := <-eventsErr:
+		t.Fatalf("live event stream failed before runtime restoration completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	srv.createMu.Unlock()
+	locked = false
+	select {
+	case resp := <-events:
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("event stream status = %d, body=%s", resp.StatusCode, body)
+		}
+	case err := <-eventsErr:
+		t.Fatal(err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("live event stream did not resume after runtime restoration completed")
 	}
 }
 

@@ -353,6 +353,51 @@ func TestRecordSessionSideDoesNotUpdateActive(t *testing.T) {
 	}
 }
 
+func TestRecordSessionDoesNotChangeActiveSelection(t *testing.T) {
+	t.Run("does not claim empty selection", func(t *testing.T) {
+		historyPath := filepath.Join(t.TempDir(), "history.json")
+		primary := Info{ID: "primary", Kind: KindPrimary, Turns: 1, Preview: "first"}
+		if err := RecordSession(historyPath, primary); err != nil {
+			t.Fatal(err)
+		}
+		history, err := LoadHistory(historyPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if history.Active != nil {
+			t.Fatalf("active = %+v, want none", history.Active)
+		}
+	})
+
+	t.Run("does not replace newer selection", func(t *testing.T) {
+		historyPath := filepath.Join(t.TempDir(), "history.json")
+		previous := Info{ID: "previous", Kind: KindPrimary, Turns: 2, Preview: "late"}
+		selected := Info{ID: "selected", Kind: KindPrimary, Turns: 1, Preview: "current"}
+		if err := SetActive(historyPath, selected); err != nil {
+			t.Fatal(err)
+		}
+		if err := RecordSession(historyPath, previous); err != nil {
+			t.Fatal(err)
+		}
+		history, err := LoadHistory(historyPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if history.Active == nil || history.Active.ID != selected.ID {
+			t.Fatalf("active = %+v, want %q", history.Active, selected.ID)
+		}
+		foundPrevious := false
+		for _, info := range history.Sessions {
+			if info.ID == previous.ID {
+				foundPrevious = info.Turns == previous.Turns && info.Preview == previous.Preview
+			}
+		}
+		if !foundPrevious {
+			t.Fatalf("previous summary not recorded: %+v", history.Sessions)
+		}
+	})
+}
+
 func TestActivatePrimarySetsHistoryAndReturnsActive(t *testing.T) {
 	root := t.TempDir()
 	sessionsRoot := filepath.Join(root, "sessions")

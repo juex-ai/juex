@@ -54,9 +54,15 @@ type Server struct {
 	startedAt    time.Time
 	statusStream *statusapi.ActivityStore
 
-	createMu sync.Mutex // serialises POST /api/sessions
-	closeMu  sync.Mutex
-	closed   bool
+	// createMu serializes live Session creation and mutation. activeSelectionMu is
+	// narrower: it makes active-id reads atomic with operations that can change
+	// the selected primary Session. Always acquire createMu before activeSelectionMu
+	// when both are needed. Restoring the already-selected Session only needs
+	// createMu, so lightweight persisted reads remain available during replay.
+	createMu          sync.Mutex
+	activeSelectionMu sync.Mutex
+	closeMu           sync.Mutex
+	closed            bool
 
 	runtimeMu     sync.Mutex
 	runtimeMCPErr map[string]string
@@ -511,6 +517,13 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
+	// A general explicit resume can select a different primary. Exact restore
+	// of the already-selected primary bypasses this wrapper through
+	// getActiveSessionLocked and therefore does not take activeSelectionMu.
+	if resumeDir != "" || mode != app.SessionModeNewSide {
+		s.activeSelectionMu.Lock()
+		defer s.activeSelectionMu.Unlock()
+	}
 	return s.openSessionLocked(ctx, resumeDir, mode)
 }
 

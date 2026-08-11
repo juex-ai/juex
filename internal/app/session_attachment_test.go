@@ -234,10 +234,7 @@ func attachmentTestConfig(t *testing.T) config.Config {
 
 func seedAttachmentSession(t *testing.T, cfg config.Config, kind, text, history string) session.Info {
 	t.Helper()
-	opts := session.Options{
-		Kind:           kind,
-		NoRecordActive: true,
-	}
+	opts := session.Options{Kind: kind}
 	if history != "none" {
 		opts.HistoryPath = cfg.HistoryPath()
 	}

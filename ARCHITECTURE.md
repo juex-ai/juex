@@ -970,7 +970,10 @@ fingerprint `{size, mtime_ms}`. Alias, kind, timestamps, and usage remain owned
 by session metadata and event files. `run`, `repl`, and `listen` attach to the
 active primary by default; `--new` and `/new` create a new primary and switch
 active. Side sessions are durable and listed, but never become active and are
-not valid Web turn targets.
+not valid Web turn targets. Explicit selection operations own `active_id`;
+ordinary primary activity refreshes the cached active summary only when that
+Session is still selected, so a late append from a previous live primary
+cannot undo a newer activation.
 Workspace session attachment is an app-level policy. `internal/app` chooses
 the attachment target, records active/session history, preserves side-session
 non-activation, applies lazy fresh-session creation for web callers, and
@@ -1519,7 +1522,11 @@ The lightweight `GET /api/sessions/active` route reads the recorded active id,
 accepts an in-memory lazy primary session, and otherwise validates only the
 persisted conversation and small metadata file. It never scans a transcript.
 The Chat root uses this route for its canonical-session redirect instead of
-loading the complete history list.
+loading the complete history list. Active selection reads serialize with
+create, activate, delete, and `/new` selection changes, but not with background
+restoration of the already-selected Session. The detail route can therefore
+serve its persisted projection while runtime event replay is still warming;
+live-only routes wait for the complete in-memory App.
 
 The server merges active in-memory sessions into `GET /api/sessions` and
 `GET /api/sessions/<id>` so a newly created empty chat is visible in the web
@@ -1542,10 +1549,13 @@ The CLI continues a recorded side session through `juex sessions continue`
 without making it active.
 Live-only Web routes resolve an on-disk App only when the requested id still
 matches `history.active_id`. Active-id validation, disk restore, `/new` registry
-re-keying, and explicit activation share the server's session-creation critical
-section; a stale EventSource reconnect for an inactive primary returns a
-conflict without changing the active Session. Historical transcript, context,
-scratchpad, and status reads continue through their read-only disk projections.
+re-keying, and explicit activation share the server's runtime/session-creation
+critical section. A narrower active-selection critical section makes persisted
+active-id reads atomic with operations that can change the selected primary,
+without coupling them to long event replay. A stale EventSource reconnect for
+an inactive primary returns a conflict without changing the active Session.
+Historical transcript, context, scratchpad, and status reads continue through
+their read-only disk projections.
 The web handler is a transport adapter over app-level turn admission: it
 validates HTTP/session access, decodes request JSON, renders admission results,
 updates its in-memory session cache when `/new` switches sessions, and owns
