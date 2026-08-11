@@ -1538,7 +1538,14 @@ disk-list contract. Session transcript responses are windowed by default:
 `GET /api/sessions/<id>` returns the latest compact marker and following
 messages when one exists, otherwise a bounded recent message window. Clients
 can request older windows with `before=<message_id>` and can lower or raise the
-window with `limit`, capped by the server.
+window with `limit`, capped by the server. The limit is a target: when its
+boundary would begin inside a contiguous Tool Result sequence, the Session read
+model minimally extends the page backward to include the matching assistant
+Tool Call, crossing only intervening UI-only Hook Event traces. Pagination
+metadata reflects that expanded start, so clients can
+prepend older pages without duplicating the added tool context. Truly orphaned
+results remain output-only transcript facts rather than being attached to an
+unrelated call.
 Each message response may also include an RFC3339 `created_at` read-model field
 derived by `internal/session` from canonical message IDs. This timestamp is not
 added to `llm.Message` or persisted JSONL; IDs without the canonical timestamp

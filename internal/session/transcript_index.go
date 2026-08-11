@@ -34,8 +34,11 @@ type transcriptIndexEntry struct {
 	Offset             int64
 	Length             int
 	ID                 string
+	Role               llm.Role
 	Kind               string
 	TailStartMessageID string
+	ToolUseIDs         []string
+	ToolResultIDs      []string
 }
 
 func scanTranscriptIndex(path string) (transcriptIndex, error) {
@@ -82,15 +85,35 @@ func (idx *transcriptIndex) add(msg llm.Message, lineIndex int, offset int64, le
 	if msg.Compaction != nil {
 		tailStartID = msg.Compaction.TailStartMessageID
 	}
+	toolUseIDs, toolResultIDs := transcriptToolIDs(msg)
 	idx.entries = append(idx.entries, transcriptIndexEntry{
 		LineIndex:          lineIndex,
 		Offset:             offset,
 		Length:             length,
 		ID:                 msg.ID,
+		Role:               msg.Role,
 		Kind:               msg.Kind,
 		TailStartMessageID: tailStartID,
+		ToolUseIDs:         toolUseIDs,
+		ToolResultIDs:      toolResultIDs,
 	})
 	idx.addSummary(msg)
+}
+
+func transcriptToolIDs(msg llm.Message) (uses, results []string) {
+	for _, block := range msg.Blocks {
+		switch block.Type {
+		case llm.BlockToolUse:
+			if block.ToolUseID != "" {
+				uses = append(uses, block.ToolUseID)
+			}
+		case llm.BlockToolResult:
+			if block.ToolUseID != "" {
+				results = append(results, block.ToolUseID)
+			}
+		}
+	}
+	return uses, results
 }
 
 func (idx *transcriptIndex) appendMessage(msg llm.Message, offset int64, length int) {
@@ -187,6 +210,55 @@ func (idx transcriptIndex) indexByIDBefore(id string, before int) int {
 	return -1
 }
 
+func (idx transcriptIndex) coherentPageStart(start, floor, end int) int {
+	if start <= floor || start >= len(idx.entries) {
+		return start
+	}
+	required := make(map[string]struct{})
+	for i := start; i < end; i++ {
+		entry := idx.entries[i]
+		if entry.Kind == llm.MessageKindHookEvent {
+			continue
+		}
+		if entry.Kind != llm.MessageKindToolResult {
+			break
+		}
+		for _, id := range entry.ToolResultIDs {
+			required[id] = struct{}{}
+		}
+	}
+	if len(required) == 0 {
+		return start
+	}
+	for i := start - 1; i >= floor; i-- {
+		entry := idx.entries[i]
+		if entry.Kind == llm.MessageKindHookEvent {
+			continue
+		}
+		if entry.Kind == llm.MessageKindToolResult {
+			for _, id := range entry.ToolResultIDs {
+				required[id] = struct{}{}
+			}
+			continue
+		}
+		if entry.Role == llm.RoleAssistant && entry.Kind == "" && len(entry.ToolUseIDs) > 0 {
+			matched := false
+			for _, id := range entry.ToolUseIDs {
+				if _, ok := required[id]; ok {
+					matched = true
+					delete(required, id)
+				}
+			}
+			if matched {
+				return i
+			}
+			return start
+		}
+		return start
+	}
+	return start
+}
+
 func readActiveTranscriptWindow(path string, idx transcriptIndex) ([]llm.Message, error) {
 	start := idx.activeStart()
 	if start >= len(idx.entries) {
@@ -230,14 +302,16 @@ func readTranscriptMessages(path string, entries []transcriptIndexEntry) ([]llm.
 }
 
 func transcriptMessagePage(path string, idx transcriptIndex, beforeID string, limit int) (MessagePage, error) {
-	start := idx.initialPageStart()
+	floor := idx.initialPageStart()
+	start := floor
 	end := len(idx.entries)
 	if beforeID != "" {
 		before := idx.indexByID(beforeID)
 		if before < 0 {
 			return MessagePage{}, fmt.Errorf("%w: %s", ErrBeforeMessageNotFound, beforeID)
 		}
-		start = 0
+		floor = 0
+		start = floor
 		end = before
 	}
 	if limit > 0 && end-start > limit {
@@ -249,6 +323,7 @@ func transcriptMessagePage(path string, idx transcriptIndex, beforeID string, li
 	if end < start {
 		end = start
 	}
+	start = idx.coherentPageStart(start, floor, end)
 	msgs, err := readTranscriptMessages(path, idx.entries[start:end])
 	if err != nil {
 		return MessagePage{}, err
