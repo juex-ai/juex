@@ -60,6 +60,21 @@ func TestTranscriptMessagePageKeepsToolExchangeCoherent(t *testing.T) {
 			wantMore:   true,
 		},
 		{
+			name: "hook traces between call and result",
+			messages: []llm.Message{
+				messageWithID(compactTestMessage("summary"), "m1"),
+				toolUseMessage("m2", "call-1", "read"),
+				hookTraceMessage("m3", "pre hook completed"),
+				hookTraceMessage("m4", "post hook completed"),
+				toolResultMessage("m5", "call-1", "done"),
+				messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m6"),
+			},
+			limit:      2,
+			wantIDs:    "m2,m3,m4,m5,m6",
+			wantOldest: "m2",
+			wantMore:   true,
+		},
+		{
 			name: "matched and orphan results in one message",
 			messages: []llm.Message{
 				messageWithID(compactTestMessage("summary"), "m1"),
@@ -170,5 +185,11 @@ func multiToolResultMessage(id string, toolUseIDs ...string) llm.Message {
 			Content:   toolUseID + " result",
 		})
 	}
+	return msg
+}
+
+func hookTraceMessage(id, text string) llm.Message {
+	msg := messageWithID(llm.TextMessage(llm.RoleSystem, text), id)
+	msg.Kind = llm.MessageKindHookEvent
 	return msg
 }

@@ -221,6 +221,9 @@ func (idx transcriptIndex) coherentPageStart(start, floor int) int {
 	}
 	for i := start - 1; i >= floor; i-- {
 		entry := idx.entries[i]
+		if entry.Kind == llm.MessageKindHookEvent {
+			continue
+		}
 		for _, id := range entry.ToolResultIDs {
 			required[id] = struct{}{}
 		}
