@@ -149,6 +149,38 @@ func TestLinuxBlockedPathsAreMasked(t *testing.T) {
 	}
 }
 
+func TestLinuxBlockedPathMaskFollowsWritableAgentStateBind(t *testing.T) {
+	workspace := t.TempDir()
+	agentStateDir := t.TempDir()
+	blocked := filepath.Join(agentStateDir, "private")
+	if err := os.Mkdir(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	policy := DefaultPolicy()
+	policy.Enabled = true
+	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
+	policy.FileSystem.BlockedPaths = []string{blocked}
+	got, err := (DefaultRunner{
+		RuntimeOS: "linux",
+		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+	}).Prepare(context.Background(), Request{
+		Policy:        policy,
+		WorkDir:       workspace,
+		WritableRoots: []string{workspace, agentStateDir},
+		Spec:          ExecSpec{Binary: "/bin/true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Join(got.Args, "\x00")
+	bind := "--bind\x00" + agentStateDir + "\x00" + agentStateDir
+	mask := "--ro-bind\x00"
+	bindAt, maskAt := strings.Index(args, bind), strings.LastIndex(args, mask)
+	if bindAt < 0 || maskAt < 0 || maskAt < bindAt || !strings.Contains(args[maskAt:], blocked) {
+		t.Fatalf("blocked mask must follow AgentStateDir bind: %#v", got.Args)
+	}
+}
+
 func TestLinuxBlockedPathsRejectMissingPaths(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing-secret")
 	policy := DefaultPolicy()

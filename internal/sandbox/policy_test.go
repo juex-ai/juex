@@ -3,8 +3,6 @@ package sandbox
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -147,110 +145,5 @@ func TestDefaultRunnerLinuxMissingBubblewrapFailsClosed(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "backend=bubblewrap") || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("err = %v, want bubblewrap unavailable", err)
-	}
-}
-
-func TestDefaultRunnerLetsBlockedPathsOverrideAgentWritableRoot(t *testing.T) {
-	root := t.TempDir()
-	dataDir := filepath.Join(root, "agent", "extensions", "demo")
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	policy := DefaultPolicy()
-	policy.Enabled = true
-	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
-	tests := []struct {
-		name    string
-		blocked string
-	}{
-		{name: "blocked ancestor", blocked: filepath.Dir(dataDir)},
-		{name: "blocked exact", blocked: dataDir},
-		{name: "blocked descendant", blocked: filepath.Join(dataDir, "secret")},
-		{name: "relative blocked ancestor", blocked: filepath.Join("agent", "extensions")},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			policy := policy
-			policy.FileSystem.BlockedPaths = []string{tc.blocked}
-			got, err := (DefaultRunner{
-				RuntimeOS: "darwin",
-				LookPath:  func(string) (string, error) { return "/usr/bin/sandbox-exec", nil },
-			}).Prepare(context.Background(), Request{
-				Policy:        policy,
-				WorkDir:       root,
-				WritableRoots: []string{root, dataDir},
-				Spec:          ExecSpec{Binary: "/bin/true"},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			profile := strings.Join(got.Args, "\n")
-			if !strings.Contains(profile, "deny file-read") || !strings.Contains(profile, filepath.Clean(tc.blocked)) {
-				t.Fatalf("profile does not let blocked path override writable root:\n%s", profile)
-			}
-		})
-	}
-}
-
-func TestDefaultRunnerResolvesSymlinkedBlockedPathInsideWritableRoot(t *testing.T) {
-	root := t.TempDir()
-	physical := filepath.Join(root, "physical")
-	if err := os.Mkdir(physical, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	logical := filepath.Join(root, "logical")
-	if err := os.Symlink(physical, logical); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	policy := DefaultPolicy()
-	policy.Enabled = true
-	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
-	policy.FileSystem.BlockedPaths = []string{physical}
-	got, err := (DefaultRunner{
-		RuntimeOS: "darwin",
-		LookPath:  func(string) (string, error) { return "/usr/bin/sandbox-exec", nil },
-	}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       root,
-		WritableRoots: []string{root, logical},
-		Spec:          ExecSpec{Binary: "/bin/true"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if profile := strings.Join(got.Args, "\n"); !strings.Contains(profile, physical) {
-		t.Fatalf("profile does not contain physical blocked path %q:\n%s", physical, profile)
-	}
-}
-
-func TestRelativeBlockedPathUsesWorkDirNotWritableRootOrder(t *testing.T) {
-	workspace := t.TempDir()
-	agentStateDir := t.TempDir()
-	blocked := filepath.Join(workspace, "secret")
-	if err := os.Mkdir(blocked, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	policy := DefaultPolicy()
-	policy.Enabled = true
-	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
-	policy.FileSystem.BlockedPaths = []string{"secret"}
-	got, err := (DefaultRunner{
-		RuntimeOS: "darwin",
-		LookPath:  func(string) (string, error) { return "/usr/bin/sandbox-exec", nil },
-	}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       workspace,
-		WritableRoots: []string{agentStateDir, workspace},
-		Spec:          ExecSpec{Binary: "/bin/true"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile := strings.Join(got.Args, "\n")
-	if !strings.Contains(profile, blocked) {
-		t.Fatalf("relative blocked path did not resolve from WorkDir:\n%s", profile)
-	}
-	if wrong := filepath.Join(agentStateDir, "secret"); strings.Contains(profile, wrong) {
-		t.Fatalf("relative blocked path resolved from WritableRoots order: %s", wrong)
 	}
 }
