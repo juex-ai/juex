@@ -172,6 +172,9 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 		suffix.entries[0].Kind != llm.MessageKindCompact {
 		return scanActiveTranscriptIndex(path)
 	}
+	if !retainedEntriesMatchCompact(idx.entries, suffix.entries[0]) {
+		return scanActiveTranscriptIndex(path)
+	}
 	idx.entries = append(idx.entries, suffix.entries...)
 	idx.turns = checkpoint.Turns
 	idx.preview = checkpoint.Preview
@@ -180,6 +183,19 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 	idx.repairPrefixSafe = checkpoint.RepairPrefixSafe
 	idx.complete = false
 	return idx, true, nil
+}
+
+func retainedEntriesMatchCompact(entries []transcriptIndexEntry, compact transcriptIndexEntry) bool {
+	expected, ok := retainedTranscriptEntries(entries, compact)
+	if !ok || len(expected) != len(entries) {
+		return false
+	}
+	for i := range entries {
+		if entries[i].ID != expected[i].ID {
+			return false
+		}
+	}
+	return true
 }
 
 func scanActiveTranscriptIndex(path string) (transcriptIndex, bool, error) {

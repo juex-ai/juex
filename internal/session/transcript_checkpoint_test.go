@@ -288,6 +288,58 @@ func TestCorruptCheckpointEntryFallsBackToCanonicalTranscript(t *testing.T) {
 	}
 }
 
+func TestCheckpointRetainedEntriesMustMatchCompactMarker(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []llm.Message{
+		messageWithID(llm.TextMessage(llm.RoleUser, "old"), "m1"),
+		messageWithID(llm.TextMessage(llm.RoleAssistant, "retained"), "m2"),
+	} {
+		if err := s.Append(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compact := messageWithID(compactTestMessage("summary"), "m3")
+	compact.Compaction = &llm.CompactionMetadata{RetainedMessageIDs: []string{"m2"}}
+	if err := s.Append(compact); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "latest"), "m4")); err != nil {
+		t.Fatal(err)
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, conversationFile)
+	canonical, err := scanTranscriptIndex(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.Transcript.Retained[0] = checkpointEntry(canonical.entries[0])
+	if err := saveMetadata(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	idx, checkpointed, err := loadActiveTranscriptIndex(path, meta.Transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpointed {
+		t.Fatal("active transcript accepted retained entries that disagree with compact marker")
+	}
+	if got := strings.Join(transcriptEntryIDs(idx.entries), ","); got != "m2,m3,m4" {
+		t.Fatalf("active index ids = %s, want m2,m3,m4", got)
+	}
+}
+
 func TestCheckpointRepairSafetyRecoversAfterToolResult(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)
