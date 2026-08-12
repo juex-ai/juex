@@ -76,7 +76,7 @@ func newBundleCmd(flags *persistentFlags) *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "json", "json|text")
 	cmd.Flags().BoolVar(&redact, "redact", true, "redact secret-like values from bundled text files")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing output path")
-	cmd.Flags().BoolVar(&includeArtifacts, "include-artifacts", false, "include .juex/artifacts files")
+	cmd.Flags().BoolVar(&includeArtifacts, "include-artifacts", false, "include Agent-managed Artifact files")
 	cmd.Flags().BoolVar(&includeWorktreeSummary, "include-worktree-summary", false, "include a worktree summary without file contents")
 	declareAgentStatePolicy(cmd, agentStateExisting)
 	return cmd

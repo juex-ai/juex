@@ -22,6 +22,7 @@ type BuiltinOptions struct {
 	Providers          []BuiltinProvider
 	ChunkedWrites      *ChunkedWriteManager
 	AgentStateDir      string
+	ArtifactDir        string
 }
 
 type ShellProfile struct {
@@ -58,6 +59,7 @@ type BuiltinProviderContext struct {
 	Options            BuiltinOptions
 	ChunkedWrites      *ChunkedWriteManager
 	AgentStateDir      string
+	ArtifactDir        string
 }
 
 func DefaultBuiltinProviders() []BuiltinProvider {
@@ -134,6 +136,7 @@ func newBuiltinProviderContext(r *Registry, opts BuiltinOptions) BuiltinProvider
 		Options:            opts,
 		ChunkedWrites:      opts.ChunkedWrites,
 		AgentStateDir:      opts.AgentStateDir,
+		ArtifactDir:        opts.ArtifactDir,
 	}
 }
 

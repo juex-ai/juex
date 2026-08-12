@@ -1,7 +1,7 @@
 import { DownloadIcon, ImageOffIcon, XIcon } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 
-import { getMediaURL } from "@/api";
+import { getMediaURL, type MediaRoot } from "@/api";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,6 +18,7 @@ type ImageBlockProps = {
   alt?: string;
   className?: string;
   media?: MediaRef | null;
+  root?: MediaRoot;
   variant?: "card" | "thumbnail";
 };
 
@@ -25,6 +26,7 @@ export function ImageBlock({
   alt,
   className,
   media,
+  root = "artifact",
   variant = "card",
 }: ImageBlockProps) {
   const path = media?.artifact_path?.trim();
@@ -53,7 +55,7 @@ export function ImageBlock({
     );
   }
 
-  const src = getMediaURL(path);
+  const src = getMediaURL(path, root);
   const name = mediaName(path);
   const aspectRatio =
     media?.width && media.height ? `${media.width} / ${media.height}` : undefined;

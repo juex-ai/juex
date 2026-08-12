@@ -383,15 +383,27 @@ func markActiveWithHistory(h History, infos []Info) []Info {
 }
 
 // PrepareDelete validates one on-disk session and any active-session fallback
-// before callers stop a live runtime or remove persistent data.
+// before callers stop a live runtime or remove persistent data. If a previous
+// delete removed the directory but failed while updating history, the returned
+// plan can finish the history-only cleanup.
 func PrepareDelete(root, historyPath, id string) (*DeletePlan, error) {
 	dir, ok := sessionDir(root, id)
 	if !ok {
 		return nil, os.ErrNotExist
 	}
+	conversationExists := true
 	if _, err := os.Stat(filepath.Join(dir, conversationFile)); err != nil {
-		return nil, err
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		if _, dirErr := os.Stat(dir); dirErr == nil {
+			return nil, err
+		} else if !errors.Is(dirErr, os.ErrNotExist) {
+			return nil, dirErr
+		}
+		conversationExists = false
 	}
+	historyContains := false
 	removedActive := false
 	fallbackActiveID := ""
 	if historyPath != "" {
@@ -399,13 +411,26 @@ func PrepareDelete(root, historyPath, id string) (*DeletePlan, error) {
 		if err != nil {
 			return nil, err
 		}
+		for _, info := range h.Sessions {
+			if info.ID == id {
+				historyContains = true
+				break
+			}
+		}
 		removedActive = h.Active != nil && h.Active.ID == id
 		if removedActive {
+			historyContains = true
 			fallbackActiveID, err = newestPrimarySessionID(root, id)
 			if err != nil {
 				return nil, err
 			}
 		}
+	}
+	if !conversationExists {
+		if !historyContains {
+			return nil, os.ErrNotExist
+		}
+		dir = ""
 	}
 	return &DeletePlan{
 		dir:              dir,
@@ -420,8 +445,10 @@ func (p *DeletePlan) Commit() error {
 	if p == nil {
 		return os.ErrInvalid
 	}
-	if err := os.RemoveAll(p.dir); err != nil {
-		return err
+	if p.dir != "" {
+		if err := os.RemoveAll(p.dir); err != nil {
+			return err
+		}
 	}
 	return removeHistory(p.historyPath, p.id, p.fallbackActiveID)
 }

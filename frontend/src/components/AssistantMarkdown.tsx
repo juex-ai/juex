@@ -141,6 +141,7 @@ function AssistantMarkdownImage({
         alt={alt}
         variant="thumbnail"
         media={mediaByPath.get(path) ?? { artifact_path: path }}
+        root="workspace"
       />
     );
   }
@@ -157,7 +158,7 @@ function AssistantMarkdownImage({
 }
 
 function absoluteMediaURL(path: string): string {
-  return new URL(getMediaURL(path), window.location.origin).toString();
+  return new URL(getMediaURL(path, "workspace"), window.location.origin).toString();
 }
 
 function markdownMediaPath(src?: string): string | null {

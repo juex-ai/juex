@@ -705,6 +705,11 @@ func (c Config) HistoryPath() string {
 	return c.RuntimePaths().HistoryPath
 }
 
+// ArtifactDir returns the current Agent's managed Artifact root.
+func (c Config) ArtifactDir() string {
+	return c.RuntimePaths().ArtifactDir
+}
+
 // RuntimeConfigPath returns the work-local runtime config file path.
 func (c Config) RuntimeConfigPath() string {
 	return c.RuntimePaths().RuntimeConfigPath

@@ -51,7 +51,7 @@ func (a *App) REPL(ctx context.Context, in io.Reader, out, errOut io.Writer) err
 			if !ok {
 				return ErrSessionUnavailable
 			}
-			ref, err := usermedia.StoreFile(a.cfg.WorkDir, identity.ID, imagePath, usermedia.Limits{})
+			ref, err := usermedia.StoreFile(a.cfg.WorkDir, a.cfg.ArtifactDir(), identity.ID, imagePath, usermedia.Limits{})
 			if err != nil {
 				if writeErr := writeREPLError(out, err); writeErr != nil {
 					return writeErr

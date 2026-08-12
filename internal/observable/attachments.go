@@ -12,13 +12,14 @@ type attachmentSnapshot struct {
 	eventBytesExceeded bool
 }
 
-func snapshotAttachmentRefs(workDir, agentStateDir string, guard sandbox.PathGuard, refs []eventmedia.AttachmentRef, maxEventBytes int64) attachmentSnapshot {
+func snapshotAttachmentRefs(workDir, agentStateDir, artifactDir string, guard sandbox.PathGuard, refs []eventmedia.AttachmentRef, maxEventBytes int64) attachmentSnapshot {
 	if len(refs) == 0 {
 		return attachmentSnapshot{}
 	}
 	report := eventmedia.ValidateAttachments(refs, eventmedia.ValidationOptions{
 		WorkDir:       workDir,
 		AgentStateDir: agentStateDir,
+		ArtifactDir:   artifactDir,
 		PathGuard:     guard,
 		MaxEventBytes: maxEventBytes,
 	})
@@ -28,6 +29,8 @@ func snapshotAttachmentRefs(workDir, agentStateDir string, guard sandbox.PathGua
 		stored = append(stored, eventmedia.AttachmentRef{
 			Path:      attachment.ArtifactPath,
 			MediaType: attachment.MediaType,
+			SHA256:    attachment.SHA256,
+			Bytes:     attachment.OriginalBytes,
 		})
 		storedBytes += int64(attachment.OriginalBytes)
 	}

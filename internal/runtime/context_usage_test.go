@@ -125,7 +125,7 @@ func TestEstimateMessageTokensIncludesImageFootprint(t *testing.T) {
 		Blocks: []llm.Block{{
 			Type: llm.BlockImage,
 			Media: &llm.MediaRef{
-				ArtifactPath:  ".juex/artifacts/media/s/image.png",
+				ArtifactPath:  "sessions/s/media/image.png",
 				MediaType:     "image/png",
 				SHA256:        strings.Repeat("a", 64),
 				OriginalBytes: 1000,

@@ -853,7 +853,7 @@ func TestLoadInfo_PreservesStoredIDsAndCompactionMetadata(t *testing.T) {
 			Kind: llm.MessageKindDirect,
 			Blocks: []llm.Block{{Type: llm.BlockText, Text: "bounded preview", Artifact: &llm.ContextArtifactProjection{
 				SourceKind: "user_input",
-				StoredPath: ".juex/artifacts/user-inputs/session/input-ref-0.txt",
+				StoredPath: "sessions/session/user-inputs/input-ref-0.txt",
 				SHA256:     "input-sha",
 			}}},
 		}},
@@ -873,7 +873,7 @@ func TestLoadInfo_PreservesStoredIDsAndCompactionMetadata(t *testing.T) {
 		t.Fatalf("compaction metadata = %+v", msgs[1].Compaction)
 	}
 	refs := msgs[1].Compaction.RetainedInputReferences
-	if len(refs) != 1 || refs[0].ID != "input-ref" || refs[0].Blocks[0].Artifact == nil || refs[0].Blocks[0].Artifact.StoredPath != ".juex/artifacts/user-inputs/session/input-ref-0.txt" {
+	if len(refs) != 1 || refs[0].ID != "input-ref" || refs[0].Blocks[0].Artifact == nil || refs[0].Blocks[0].Artifact.StoredPath != "sessions/session/user-inputs/input-ref-0.txt" {
 		t.Fatalf("retained input references = %+v", refs)
 	}
 }

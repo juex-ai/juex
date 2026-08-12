@@ -224,6 +224,7 @@ func New(opts Options) (*App, error) {
 		}
 		modelCandidates = make([]runtime.ModelCandidate, 0, len(resolvedChain))
 		for _, resolved := range resolvedChain {
+			resolved.Selection.ArtifactDir = runtimePaths.ArtifactDir
 			profile, err := resolved.Selection.ProviderProfile()
 			if err != nil {
 				return nil, err
@@ -247,7 +248,12 @@ func New(opts Options) (*App, error) {
 	}
 	summaryProvider := opts.SummaryProvider
 	if summaryProvider == nil && !providerInjected && strings.TrimSpace(runtimeLimits.Compaction.SummaryModel) != "" {
-		profile, err := cfg.ProviderProfileForModelRef(runtimeLimits.Compaction.SummaryModel)
+		selection, err := cfg.ProviderSelectionForModelRef(runtimeLimits.Compaction.SummaryModel)
+		if err != nil {
+			return nil, fmt.Errorf("app: compaction.summary_model: %w", err)
+		}
+		selection.ArtifactDir = runtimePaths.ArtifactDir
+		profile, err := selection.ProviderProfile()
 		if err != nil {
 			return nil, fmt.Errorf("app: compaction.summary_model: %w", err)
 		}
@@ -290,6 +296,7 @@ func New(opts Options) (*App, error) {
 		ToolTimeoutSeconds: toolTimeoutSeconds,
 		ChunkedWrites:      chunkedWrites,
 		AgentStateDir:      runtimePaths.StateDir,
+		ArtifactDir:        runtimePaths.ArtifactDir,
 	})
 
 	skillLoader := skills.NewLoaderFromDirsWithOptions(resourceGraph.SkillDirs(), skillLoaderOptions(cfg))
@@ -415,6 +422,7 @@ func New(opts Options) (*App, error) {
 		Session:         sess,
 		Prompt:          pb,
 		WorkDir:         runtimePaths.WorkDir,
+		ArtifactDir:     runtimePaths.ArtifactDir,
 		Hooks:           hookRunner,
 		HookContext: hooks.Request{
 			CWD:              runtimePaths.WorkDir,
@@ -485,6 +493,7 @@ func New(opts Options) (*App, error) {
 		StateDir:              cfg.ObservablesStateDir(),
 		WorkDir:               runtimePaths.WorkDir,
 		AgentStateDir:         runtimePaths.StateDir,
+		ArtifactDir:           runtimePaths.ArtifactDir,
 		Environment:           runtimeEnvironment,
 		Shell:                 cfg.Shell,
 		Sandbox:               cfg.SandboxPolicy(),
@@ -625,7 +634,7 @@ func (a *App) SwitchToNewPrimarySession() error {
 	if err := a.replaceSession(sess, sessLock); err != nil {
 		_ = sessLock.Close()
 		_ = sess.Close()
-		cleanupErr := session.Delete(a.cfg.SessionsDir(), a.cfg.HistoryPath(), sess.ID)
+		cleanupErr := DeleteSession(a.cfg, sess.ID, SessionDeleteOptions{AllowMissingSession: true})
 		restoreErr := session.SetActive(a.cfg.HistoryPath(), oldInfo)
 		return errors.Join(err, cleanupErr, restoreErr)
 	}
@@ -812,7 +821,7 @@ func (a *App) RunWithAttachments(ctx context.Context, prompt string, attachments
 	if a.Session == nil {
 		return "", errors.New("app: attachment turn requires an initialized session and engine")
 	}
-	if err := usermedia.ValidateSessionMediaRefs(a.cfg.WorkDir, a.Session.ID, attachments, usermedia.Limits{}); err != nil {
+	if err := usermedia.ValidateSessionMediaRefs(a.cfg.ArtifactDir(), a.Session.ID, attachments, usermedia.Limits{}); err != nil {
 		return "", err
 	}
 	return a.Engine.TurnMessage(ctx, userTurnMessage(prompt, attachments))
@@ -957,6 +966,7 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 type attachmentOptions struct {
 	WorkDir       string
 	AgentStateDir string
+	ArtifactDir   string
 	PathGuard     sandbox.PathGuard
 }
 
@@ -965,6 +975,7 @@ func (a *App) externalAttachmentOptions() attachmentOptions {
 	return attachmentOptions{
 		WorkDir:       paths.WorkDir,
 		AgentStateDir: paths.StateDir,
+		ArtifactDir:   paths.ArtifactDir,
 		PathGuard:     sandbox.NewPathGuard(paths.WorkDir, a.cfg.SandboxPolicy()),
 	}
 }
@@ -975,7 +986,7 @@ func observationMessage(record observable.ObservationRecord, opts attachmentOpti
 }
 
 func buildObservationMessage(record observable.ObservationRecord, opts attachmentOptions) (llm.Message, []string, error) {
-	report := eventmedia.ValidateAttachments(record.Attachments, eventmedia.ValidationOptions{WorkDir: opts.WorkDir, AgentStateDir: opts.AgentStateDir, PathGuard: opts.PathGuard})
+	report := eventmedia.ValidateStoredAttachments(record.Attachments, eventmedia.ValidationOptions{ArtifactDir: opts.ArtifactDir})
 	text := renderObservationText(record, report)
 	msg := eventMessageWithAttachments(llm.MessageKindObservation, text, report)
 	errors := append([]string(nil), record.AttachmentErrors...)
@@ -985,7 +996,7 @@ func buildObservationMessage(record observable.ObservationRecord, opts attachmen
 
 func mcpNotificationMessage(n mcp.Notification, eventType string, opts attachmentOptions) (llm.Message, error) {
 	refs, err := eventmedia.ExtractAttachmentRefs(n.Params["attachments"])
-	report := eventmedia.ValidateAttachments(refs, eventmedia.ValidationOptions{WorkDir: opts.WorkDir, AgentStateDir: opts.AgentStateDir, PathGuard: opts.PathGuard})
+	report := eventmedia.ValidateAttachments(refs, eventmedia.ValidationOptions{WorkDir: opts.WorkDir, AgentStateDir: opts.AgentStateDir, ArtifactDir: opts.ArtifactDir, PathGuard: opts.PathGuard})
 	text := renderMCPNotificationText(n, eventType, report, err)
 	return eventMessageWithAttachments(llm.MessageKindMCPEvent, text, report), nil
 }

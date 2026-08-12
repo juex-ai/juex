@@ -11,21 +11,21 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 )
 
-func TestProjectedArtifactStoreUsesExplicitWorkDir(t *testing.T) {
+func TestProjectedArtifactStoreUsesExplicitArtifactDir(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	workDir := t.TempDir()
-	eng.WorkDir = workDir
+	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	eng.ArtifactDir = artifactDir
 
 	store, err := eng.projectedArtifactStore()
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("tool-results/session/item.txt", []byte("result\n"))
+	ref, err := store.Put("sessions/session/tool-results/item.txt", []byte("result\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(workDir, filepath.FromSlash(ref.Path))); err != nil {
-		t.Fatalf("artifact was not stored in explicit workdir: %v", err)
+	if _, err := os.Stat(filepath.Join(artifactDir, filepath.FromSlash(ref.Path))); err != nil {
+		t.Fatalf("artifact was not stored in explicit ArtifactDir: %v", err)
 	}
 }
 
@@ -333,7 +333,7 @@ func TestProjectOversizedCompactionInputsKeepsOneByteCaptionAlongsideImage(t *te
 		Blocks: []llm.Block{
 			{Type: llm.BlockText, Text: "A"},
 			{Type: llm.BlockImage, Media: &llm.MediaRef{
-				ArtifactPath:  ".juex/artifacts/media/session/photo.png",
+				ArtifactPath:  "sessions/session/media/photo.png",
 				MediaType:     "image/png",
 				SHA256:        "image-sha",
 				OriginalBytes: 1234,
@@ -354,7 +354,7 @@ func TestProjectOversizedCompactionInputsKeepsOneByteCaptionAlongsideImage(t *te
 		t.Fatalf("projected text block count = %d, want 1", got)
 	}
 	reference := appendCompactionInputReferences("summary", retained)
-	for _, want := range []string{"\nA\n", "Image: path=.juex/artifacts/media/session/photo.png"} {
+	for _, want := range []string{"\nA\n", "Image: path=sessions/session/media/photo.png"} {
 		if !strings.Contains(reference, want) {
 			t.Fatalf("retained reference missing %q:\n%s", want, reference)
 		}
@@ -370,7 +370,7 @@ func TestCarryCompactionInputReferencesPrunesOldestToCompleteBudget(t *testing.T
 			Role: llm.RoleUser,
 			Kind: llm.MessageKindDirect,
 			Blocks: []llm.Block{{Type: llm.BlockImage, Media: &llm.MediaRef{
-				ArtifactPath:  fmt.Sprintf(".juex/artifacts/media/session/image-%02d.png", i),
+				ArtifactPath:  fmt.Sprintf("sessions/session/media/image-%02d.png", i),
 				MediaType:     "image/png",
 				SHA256:        strings.Repeat(fmt.Sprintf("%x", i%16), 64),
 				OriginalBytes: 1234 + i,

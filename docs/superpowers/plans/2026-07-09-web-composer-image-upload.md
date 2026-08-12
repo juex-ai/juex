@@ -48,7 +48,7 @@ func StoreUpload(workDir, sessionID, filename string, r io.Reader, limits Limits
 func ValidateSessionMediaRefs(workDir, sessionID string, refs []llm.MediaRef, limits Limits) error
 ```
 
-Use `.juex/artifacts/media/<session-id>/<sha256>.<ext>` as the only accepted storage root.
+Use `sessions/<session-id>/media/<sha256>.<ext>` under the Agent Artifact root as the only accepted storage namespace.
 
 - [ ] **Step 3: Verify helper**
 

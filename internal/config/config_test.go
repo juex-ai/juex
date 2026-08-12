@@ -1764,6 +1764,19 @@ func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestRuntimePathsArtifactDirRequiresExplicitAgentStateDir(t *testing.T) {
+	workDir := filepath.Join("/proj")
+	manual := Config{WorkDir: workDir}
+	if got := manual.RuntimePaths().ArtifactDir; got != "" {
+		t.Fatalf("manual ArtifactDir = %q, want empty", got)
+	}
+	stateDir := filepath.Join("/state", "agents", "abcdef")
+	resident := Config{WorkDir: workDir, AgentStateDir: stateDir}
+	if got, want := resident.RuntimePaths().ArtifactDir, filepath.Join(stateDir, "artifacts"); got != want {
+		t.Fatalf("resident ArtifactDir = %q, want %q", got, want)
+	}
+}
+
 func TestPaths_DisabledUserAgentsResourcesOmitsHomeResources(t *testing.T) {
 	cfg := Config{
 		HomeAgentsDir:             filepath.Join("/u", ".agents"),

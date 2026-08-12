@@ -40,7 +40,10 @@ func (stubProvider) Complete(ctx context.Context, sys string, h []llm.Message, t
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	work := t.TempDir()
-	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, Compaction: config.DefaultCompactionConfig()}
+	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, AgentStateDir: filepath.Join(work, ".juex"), Compaction: config.DefaultCompactionConfig()}
+	if err := os.MkdirAll(cfg.AgentStateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	srv := NewServer(Options{
 		Cfg:      cfg,
 		Provider: stubProvider{},

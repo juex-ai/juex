@@ -625,7 +625,7 @@ func TestAdmitTurnStatusSlashAllowedWhileRunning(t *testing.T) {
 
 func turnAdmissionMediaRef() llm.MediaRef {
 	return llm.MediaRef{
-		ArtifactPath:  ".juex/artifacts/media/session-1/image.png",
+		ArtifactPath:  "sessions/session-1/media/image.png",
 		MediaType:     "image/png",
 		SHA256:        strings.Repeat("a", 64),
 		OriginalBytes: 123,

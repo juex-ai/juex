@@ -124,7 +124,7 @@ test("startTurn includes uploaded attachments", async () => {
   try {
     await startTurn("session one", "", [
       {
-        artifact_path: ".juex/artifacts/media/session one/image.png",
+		artifact_path: "sessions/session one/media/image.png",
         media_type: "image/png",
         sha256: "abc",
       },
@@ -140,7 +140,7 @@ test("startTurn includes uploaded attachments", async () => {
     prompt: "",
     attachments: [
       {
-        artifact_path: ".juex/artifacts/media/session one/image.png",
+		artifact_path: "sessions/session one/media/image.png",
         media_type: "image/png",
         sha256: "abc",
       },
@@ -244,7 +244,7 @@ test("uploadSessionAttachment posts multipart file data", async () => {
     calls.push({ input: String(input), init });
     return new Response(
       JSON.stringify({
-        artifact_path: ".juex/artifacts/media/session/image.png",
+		artifact_path: "sessions/session/media/image.png",
         media_type: "image/png",
       }),
       {

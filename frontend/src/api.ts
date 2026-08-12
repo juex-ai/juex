@@ -241,7 +241,7 @@ export async function getMediaMetadata(
   path: string,
   signal?: AbortSignal,
 ): Promise<MediaRef> {
-  const response = await fetch(getMediaURL(path), {
+  const response = await fetch(getMediaURL(path, "workspace"), {
     method: "HEAD",
     signal,
   });
@@ -268,8 +268,12 @@ export function getFileRawURL(path: string): string {
   return agentAPIPath(`/api/files/raw?path=${encodeURIComponent(path)}`);
 }
 
-export function getMediaURL(path: string): string {
-  return agentAPIPath(`/api/media?path=${encodeURIComponent(path)}`);
+export type MediaRoot = "artifact" | "workspace";
+
+export function getMediaURL(path: string, root: MediaRoot): string {
+  return agentAPIPath(
+    `/api/media?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`,
+  );
 }
 
 export async function getRuntimeStatus(): Promise<RuntimeStatusResponse> {

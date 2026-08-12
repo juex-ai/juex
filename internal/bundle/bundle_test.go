@@ -387,8 +387,8 @@ func TestCreateRedactsConfiguredValuesFromArchivePathsAndResolvesCollisions(t *t
 		"conversation.jsonl": "{}\n",
 		"events.jsonl":       "{}\n",
 	})
-	writeBundleFile(t, filepath.Join(work, ".juex", "artifacts", "run", "alpha-private.txt"), "alpha body")
-	writeBundleFile(t, filepath.Join(work, ".juex", "artifacts", "run", "beta-private.txt"), "beta body")
+	writeBundleFile(t, filepath.Join(cfg.ArtifactDir(), "run", "alpha-private.txt"), "alpha body")
+	writeBundleFile(t, filepath.Join(cfg.ArtifactDir(), "run", "beta-private.txt"), "beta body")
 
 	out := filepath.Join(t.TempDir(), "debug.tar.gz")
 	result, err := Create(Options{
@@ -575,7 +575,8 @@ func TestCreateIncludesExtraFilesAndArtifactsWhenRequested(t *testing.T) {
 		"conversation.jsonl": `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n",
 		"events.jsonl":       `{"type":"x"}` + "\n",
 	})
-	writeBundleFile(t, filepath.Join(work, ".juex", "artifacts", "run", "output.txt"), "artifact output")
+	stateDir := filepath.Join(work, ".juex")
+	writeBundleFile(t, filepath.Join(stateDir, "artifacts", "run", "output.txt"), "artifact output")
 	out := filepath.Join(work, "debug.tar.gz")
 
 	_, err := Create(Options{
@@ -584,6 +585,7 @@ func TestCreateIncludesExtraFilesAndArtifactsWhenRequested(t *testing.T) {
 		OutPath:                out,
 		Redact:                 true,
 		IncludeArtifacts:       true,
+		Config:                 config.Config{WorkDir: work, AgentStateDir: stateDir},
 		ExtraFiles:             []ExtraFile{{ArchivePath: "verifier/log.txt", Bytes: []byte("token=verifier-secret\n"), Redact: true}},
 		IncludeWorktreeSummary: true,
 	})

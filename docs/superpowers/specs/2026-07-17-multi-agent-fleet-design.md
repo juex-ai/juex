@@ -45,10 +45,9 @@ Runtime state moves from `<workspace>/.juex/` to a per-agent home directory:
 
 - State follows authorship: user-authored configuration, including
   `.juex/observables.json`, stays with the workspace, while machine-generated
-  runtime state centralizes under the resident agent home. Workspace-rooted
-  `.juex/artifacts/` is the deliberate exception because its references are
-  relative to the work; it remains a watch item rather than moving in this
-  change.
+  runtime state centralizes under the resident agent home. Later artifact
+  storage work moved JueX-managed artifacts into the resident agent state
+  directory, under the Artifact root.
 - The workspace keeps one marker file, `.juex/juex.local.json`, holding
   `{"agent_id": ...}` with room for future workspace-local fields.
   `agent.json` holds the reverse pointer in its `workspace` field; the pair

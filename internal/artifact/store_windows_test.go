@@ -12,8 +12,8 @@ import (
 )
 
 func TestStorePutRetriesWindowsSharingViolation(t *testing.T) {
-	workDir := t.TempDir()
-	store, err := NewStore(workDir)
+	artifactDir := t.TempDir()
+	store, err := NewStore(artifactDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +21,7 @@ func TestStorePutRetriesWindowsSharingViolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	absPath := filepath.Join(workDir, filepath.FromSlash(ref.Path))
+	absPath := filepath.Join(artifactDir, filepath.FromSlash(ref.Path))
 	pathp, err := windows.UTF16PtrFromString(absPath)
 	if err != nil {
 		t.Fatal(err)

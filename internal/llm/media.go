@@ -11,6 +11,8 @@ import (
 	"github.com/juex-ai/juex/internal/artifact"
 )
 
+const maxProviderImageArtifactBytes = 10 * 1024 * 1024
+
 func imagePlaceholderBlock(b Block) Block {
 	return Block{Type: BlockText, Text: mediaReferenceText("image", b.Media)}
 }
@@ -50,23 +52,23 @@ func mediaReferenceText(label string, media *MediaRef) string {
 	return "[" + label + ": " + strings.Join(parts, " ") + "; " + unavailable + "]"
 }
 
-func imageDataURL(workDir string, media *MediaRef) (string, bool) {
-	encoded, mediaType, ok := readImageBase64(workDir, media)
+func imageDataURL(artifactDir string, media *MediaRef) (string, bool) {
+	encoded, mediaType, ok := readImageBase64(artifactDir, media)
 	if !ok {
 		return "", false
 	}
 	return "data:" + mediaType + ";base64," + encoded, true
 }
 
-func readImageBase64(workDir string, media *MediaRef) (string, string, bool) {
+func readImageBase64(artifactDir string, media *MediaRef) (string, string, bool) {
 	if media == nil || media.ArtifactPath == "" {
 		return "", "", false
 	}
-	store, err := artifact.NewStore(workDir)
+	store, err := artifact.NewStore(artifactDir)
 	if err != nil {
 		return "", "", false
 	}
-	data, err := store.Read(artifact.Ref{Path: media.ArtifactPath, SHA256: media.SHA256})
+	data, err := store.ReadLimit(artifact.Ref{Path: media.ArtifactPath, SHA256: media.SHA256, Bytes: media.OriginalBytes}, maxProviderImageArtifactBytes)
 	if err != nil || len(data) == 0 {
 		return "", "", false
 	}

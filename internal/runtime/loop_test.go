@@ -386,13 +386,15 @@ func newEngineWithToolTimeout(t *testing.T, prov llm.Provider, builtinTools bool
 		AgentsMDDirs: []string{t.TempDir()},
 		Now:          func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
 	}
+	artifactState := t.TempDir()
 	return &Engine{
-		Provider: prov,
-		Tools:    reg,
-		Bus:      bus,
-		Session:  sess,
-		Prompt:   pb,
-		WorkDir:  t.TempDir(),
+		Provider:    prov,
+		Tools:       reg,
+		Bus:         bus,
+		Session:     sess,
+		Prompt:      pb,
+		WorkDir:     t.TempDir(),
+		ArtifactDir: filepath.Join(artifactState, "artifacts"),
 	}, bus
 }
 
@@ -419,7 +421,7 @@ func TestTurn_ReturnsImagePlaceholderForImageOnlyResponse(t *testing.T) {
 				{
 					Type: llm.BlockImage,
 					Media: &llm.MediaRef{
-						ArtifactPath:  ".juex/artifacts/media/s/chart.png",
+						ArtifactPath:  "sessions/s/media/chart.png",
 						MediaType:     "image/png",
 						OriginalBytes: 2048,
 						Width:         640,
@@ -483,6 +485,7 @@ func newEngineForSession(t *testing.T, sess *session.Session, prov llm.Provider)
 		AgentsMDDirs: []string{t.TempDir()},
 		Now:          func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
 	}
+	artifactState := t.TempDir()
 	return &Engine{
 		Provider:          prov,
 		Tools:             reg,
@@ -493,6 +496,7 @@ func newEngineForSession(t *testing.T, sess *session.Session, prov llm.Provider)
 		PendingInputTTL:   time.Hour,
 		ExternalEventTTL:  24 * time.Hour,
 		WorkDir:           t.TempDir(),
+		ArtifactDir:       filepath.Join(artifactState, "artifacts"),
 	}
 }
 
@@ -584,7 +588,7 @@ func TestTurn_CompactionSummarizesRealInputThatExceedsRetentionBudget(t *testing
 		t.Fatalf("active context has unterminated artifact path:\n%s", activeText)
 	}
 	artifactPath := strings.TrimSpace(activeText[pathStart+len("path: ") : pathStart+pathEnd])
-	artifactData, err := os.ReadFile(filepath.Join(eng.WorkDir, filepath.FromSlash(artifactPath)))
+	artifactData, err := os.ReadFile(filepath.Join(eng.ArtifactDir, filepath.FromSlash(artifactPath)))
 	if err != nil {
 		t.Fatalf("read retained input artifact: %v", err)
 	}
@@ -894,7 +898,7 @@ func TestTurn_CompactionKeepsOversizedImageInputReferenceAndOneByteCaption(t *te
 		Blocks: []llm.Block{
 			{Type: llm.BlockText, Text: "A"},
 			{Type: llm.BlockImage, Media: &llm.MediaRef{
-				ArtifactPath:  ".juex/artifacts/media/session/photo.png",
+				ArtifactPath:  "sessions/session/media/photo.png",
 				MediaType:     "image/png",
 				SHA256:        "image-sha",
 				OriginalBytes: 1234,
@@ -922,7 +926,7 @@ func TestTurn_CompactionKeepsOversizedImageInputReferenceAndOneByteCaption(t *te
 		if index > 0 {
 			caption = "\nA\n"
 		}
-		for _, want := range []string{caption, ".juex/artifacts/media/session/photo.png", "image-sha", "size=4000x4000"} {
+		for _, want := range []string{caption, "sessions/session/media/photo.png", "image-sha", "size=4000x4000"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("provider history %d missing media reference %q:\n%s", index, want, text)
 			}
@@ -2929,7 +2933,7 @@ func TestTurn_ToolStructuredMediaBecomesToolResultMedia(t *testing.T) {
 	}}
 	eng, _ := newEngine(t, prov, false)
 	media := llm.MediaRef{
-		ArtifactPath:  ".juex/artifacts/media/read/test.png",
+		ArtifactPath:  "read-media/test.png",
 		MediaType:     "image/png",
 		SHA256:        strings.Repeat("a", 64),
 		OriginalBytes: 12,

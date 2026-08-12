@@ -190,8 +190,9 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	t.Helper()
 	dir := t.TempDir()
 	prov := &stubProvider{replies: replies}
+	stateDir := filepath.Join(dir, ".juex")
 	a, err := New(Options{
-		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, AgentStateDir: stateDir},
 		Provider: prov,
 		WorkDir:  dir,
 	})
@@ -810,6 +811,10 @@ func TestApp_HandleObservationIncludesValidatedImageAttachment(t *testing.T) {
 	writeAppTestPNG(t, filepath.Join(a.cfg.WorkDir, filepath.FromSlash(relPath)))
 	record := testObservationRecord("obs-image")
 	record.Attachments = []eventmedia.AttachmentRef{{Path: relPath, MediaType: "image/png"}}
+	record, err := a.obsv.RecordObservation(record)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := a.HandleObservation(context.Background(), record); err != nil {
 		t.Fatal(err)
@@ -822,16 +827,16 @@ func TestApp_HandleObservationIncludesValidatedImageAttachment(t *testing.T) {
 		t.Fatalf("blocks = %+v, want text plus image block", got.Blocks)
 	}
 	media := got.Blocks[1].Media
-	if media == nil || !strings.HasPrefix(media.ArtifactPath, ".juex/artifacts/event-media/") || media.MediaType != "image/png" || media.Width != 1 || media.Height != 1 {
+	if media == nil || !strings.HasPrefix(media.ArtifactPath, "event-media/") || media.MediaType != "image/png" || media.Width != 1 || media.Height != 1 {
 		t.Fatalf("media = %+v", media)
 	}
-	if !strings.Contains(got.FirstText(), "attachments:") || !strings.Contains(got.FirstText(), relPath) {
+	if !strings.Contains(got.FirstText(), "attachments:") || !strings.Contains(got.FirstText(), media.ArtifactPath) {
 		t.Fatalf("observation text missing attachment list:\n%s", got.FirstText())
 	}
 	if err := os.Remove(filepath.Join(a.cfg.WorkDir, filepath.FromSlash(relPath))); err != nil {
 		t.Fatal(err)
 	}
-	store, err := artifact.NewStore(a.cfg.WorkDir)
+	store, err := artifact.NewStore(a.cfg.ArtifactDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -853,6 +858,10 @@ func TestApp_HandleObservationRendersNonImageAttachmentAsTextReference(t *testin
 	}
 	record := testObservationRecord("obs-text-file")
 	record.Attachments = []eventmedia.AttachmentRef{{Path: relPath, MediaType: "text/plain"}}
+	record, err := a.obsv.RecordObservation(record)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := a.HandleObservation(context.Background(), record); err != nil {
 		t.Fatal(err)
@@ -862,7 +871,7 @@ func TestApp_HandleObservationRendersNonImageAttachmentAsTextReference(t *testin
 		t.Fatalf("blocks = %+v, want text only for non-image attachment", got.Blocks)
 	}
 	text := got.FirstText()
-	if !strings.Contains(text, "file source="+relPath) || !strings.Contains(text, "artifact=.juex/artifacts/event-media/") {
+	if !strings.Contains(text, "file source=event-media/") || !strings.Contains(text, "artifact=event-media/") {
 		t.Fatalf("non-image attachment reference missing:\n%s", text)
 	}
 }
@@ -949,7 +958,7 @@ func TestApp_HandleObservationEmitsAttachmentErrorWhenRecordIsNotPersisted(t *te
 		t.Fatalf("errored events = %+v provider calls = %d", seen, prov.calls)
 	}
 	payload, ok := seen[0].Payload.(observable.ObservationEventPayload)
-	if !ok || payload.Observation.ID != record.ID || !strings.Contains(payload.Error, "missing.png") {
+	if !ok || payload.Observation.ID != record.ID || !strings.Contains(payload.Error, "integrity metadata") {
 		t.Fatalf("attachment error payload = %#v", seen[0].Payload)
 	}
 }
@@ -1696,7 +1705,7 @@ func TestApp_MCPNotificationIncludesValidatedImageAttachment(t *testing.T) {
 		t.Fatalf("blocks = %+v, want text plus image block", user.Blocks)
 	}
 	media := user.Blocks[1].Media
-	if media == nil || !strings.HasPrefix(media.ArtifactPath, ".juex/artifacts/event-media/") || media.MediaType != "image/png" {
+	if media == nil || !strings.HasPrefix(media.ArtifactPath, "event-media/") || media.MediaType != "image/png" {
 		t.Fatalf("media = %+v", media)
 	}
 	if !strings.Contains(user.FirstText(), "attachments:") || !strings.Contains(user.FirstText(), relPath) {
@@ -1706,6 +1715,7 @@ func TestApp_MCPNotificationIncludesValidatedImageAttachment(t *testing.T) {
 
 func TestMCPNotificationPreservesValidAttachmentWhenAnotherIsMalformed(t *testing.T) {
 	workDir := t.TempDir()
+	artifactDir := filepath.Join(t.TempDir(), "artifacts")
 	relPath := ".juex/inbox/mcp.png"
 	writeAppTestPNG(t, filepath.Join(workDir, filepath.FromSlash(relPath)))
 
@@ -1720,7 +1730,7 @@ func TestMCPNotificationPreservesValidAttachmentWhenAnotherIsMalformed(t *testin
 				map[string]any{"path": 42},
 			},
 		},
-	}, "message", attachmentOptions{WorkDir: workDir})
+	}, "message", attachmentOptions{WorkDir: workDir, ArtifactDir: artifactDir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1735,12 +1745,17 @@ func TestMCPNotificationPreservesValidAttachmentWhenAnotherIsMalformed(t *testin
 func TestExternalEventMessagesAcceptCurrentAgentStateAttachments(t *testing.T) {
 	workDir := t.TempDir()
 	agentStateDir := filepath.Join(t.TempDir(), "agents", "yqmgmu")
+	artifactDir := filepath.Join(agentStateDir, "artifacts")
 	sourcePath := filepath.Join(agentStateDir, "extensions", "wechat-wire", "media", "pixel.png")
 	writeAppTestPNG(t, sourcePath)
-	opts := attachmentOptions{WorkDir: workDir, AgentStateDir: agentStateDir}
+	opts := attachmentOptions{WorkDir: workDir, AgentStateDir: agentStateDir, ArtifactDir: artifactDir}
 
 	record := testObservationRecord("obs-agent-state-image")
-	record.Attachments = []eventmedia.AttachmentRef{{Path: sourcePath, MediaType: "image/png"}}
+	report := eventmedia.ValidateAttachments([]eventmedia.AttachmentRef{{Path: sourcePath, MediaType: "image/png"}}, eventmedia.ValidationOptions{WorkDir: workDir, AgentStateDir: agentStateDir, ArtifactDir: artifactDir})
+	if len(report.Valid) != 1 || len(report.Errors) != 0 {
+		t.Fatalf("attachment report = %+v", report)
+	}
+	record.Attachments = []eventmedia.AttachmentRef{{Path: report.Valid[0].ArtifactPath, MediaType: report.Valid[0].MediaType, SHA256: report.Valid[0].SHA256, Bytes: report.Valid[0].OriginalBytes}}
 	observation, err := observationMessage(record, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -1775,6 +1790,9 @@ func TestExternalAttachmentOptionsUsesRuntimePathFallback(t *testing.T) {
 	wantStateDir := filepath.Join(workDir, ".juex")
 	if opts.AgentStateDir != wantStateDir {
 		t.Fatalf("AgentStateDir = %q, want runtime fallback %q", opts.AgentStateDir, wantStateDir)
+	}
+	if opts.ArtifactDir != "" {
+		t.Fatalf("ArtifactDir = %q, want empty without an explicit AgentStateDir", opts.ArtifactDir)
 	}
 }
 
@@ -2166,7 +2184,7 @@ func storeAppTestMedia(t *testing.T, a *App, name string) llm.MediaRef {
 	t.Helper()
 	path := filepath.Join(a.cfg.WorkDir, name)
 	writeAppTestPNG(t, path)
-	ref, err := usermedia.StoreFile(a.cfg.WorkDir, a.Session.ID, path, usermedia.Limits{})
+	ref, err := usermedia.StoreFile(a.cfg.WorkDir, a.cfg.ArtifactDir(), a.Session.ID, path, usermedia.Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}

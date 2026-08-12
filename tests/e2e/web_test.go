@@ -551,11 +551,12 @@ func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {
 
 func TestWeb_ComposerImageUpload(t *testing.T) {
 	work := t.TempDir()
+	stateDir := filepath.Join(t.TempDir(), "agent")
 	prov := &webProvider{steps: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "image noted"), StopReason: llm.StopEndTurn},
 	}}
 	srv := web.NewServer(web.Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, AgentStateDir: stateDir},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -837,12 +838,13 @@ func TestWeb_PendingInputQueuesDuringObservableTurn(t *testing.T) {
 
 func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 	work := t.TempDir()
+	stateDir := filepath.Join(t.TempDir(), "agent")
 	writeE2EObservableConfig(t, work)
 	prov := &webProvider{steps: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "observable handled"), StopReason: llm.StopEndTurn},
 	}}
 	srv := web.NewServer(web.Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, AgentStateDir: stateDir},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -900,7 +902,7 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 	if got.ID != "observable-e2e" {
 		t.Fatalf("observable id = %q", got.ID)
 	}
-	eventsData, err := os.ReadFile(filepath.Join(work, ".juex", "sessions", c.ID, "events.jsonl"))
+	eventsData, err := os.ReadFile(filepath.Join(stateDir, "sessions", c.ID, "events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -917,7 +919,7 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 		}
 		for _, msg := range messages {
 			for _, block := range msg.Blocks {
-				if block.Type == "image" && block.Media != nil && strings.HasPrefix(block.Media.ArtifactPath, ".juex/artifacts/event-media/") {
+				if block.Type == "image" && block.Media != nil && strings.HasPrefix(block.Media.ArtifactPath, "event-media/") {
 					eventArtifactPath = block.Media.ArtifactPath
 					return true
 				}
@@ -928,7 +930,7 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 	if err := os.Remove(filepath.Join(work, ".juex", "inbox", "observable-e2e.png")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(work, filepath.FromSlash(eventArtifactPath))); err != nil {
+	if _, err := os.Stat(filepath.Join(stateDir, "artifacts", filepath.FromSlash(eventArtifactPath))); err != nil {
 		t.Fatalf("stored observable event artifact unavailable after source removal: %v", err)
 	}
 	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/observables/observable-e2e", nil)

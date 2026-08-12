@@ -536,8 +536,8 @@ func TestSessionsShow_TextRendersReasoning(t *testing.T) {
 
 func TestSessionsShow_TextRendersImages(t *testing.T) {
 	work := t.TempDir()
-	body := `{"role":"assistant","blocks":[{"type":"image","media":{"artifact_path":".juex/artifacts/media/s/chart.png","media_type":"image/png","original_bytes":2048,"width":640,"height":480}}]}` + "\n" +
-		`{"role":"user","blocks":[{"type":"tool_result","tool_use_id":"tool-1","content":"chart rendered","media":{"artifact_path":".juex/artifacts/media/s/tool.png","media_type":"image/png","original_bytes":512,"width":20,"height":10}}]}` + "\n"
+	body := `{"role":"assistant","blocks":[{"type":"image","media":{"artifact_path":"sessions/s/media/chart.png","media_type":"image/png","original_bytes":2048,"width":640,"height":480}}]}` + "\n" +
+		`{"role":"user","blocks":[{"type":"tool_result","tool_use_id":"tool-1","content":"chart rendered","media":{"artifact_path":"sessions/s/media/tool.png","media_type":"image/png","original_bytes":512,"width":20,"height":10}}]}` + "\n"
 	seedSession(t, work, "20260506T103500-show0004", body)
 
 	root := newRootCmd()

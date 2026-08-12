@@ -1,12 +1,12 @@
 # Artifact Storage
 
-`artifact` owns safe, durable bytes under `<WorkDir>/.juex/artifacts`.
+`artifact` owns safe, durable bytes under `<AgentStateDir>/artifacts`.
 
 Its Store accepts logical paths relative to the artifact directory and returns
-workspace-relative references containing the path, SHA-256, and stored byte
+root-relative references containing the path, SHA-256, and stored byte
 count. It centralizes:
 
-- workspace-rooted path and symlink safety through `os.Root`;
+- Agent-rooted path and symlink safety through `os.Root`;
 - same-directory temporary writes and atomic replacement;
 - idempotent content-addressed storage;
 - integrity verification on read;

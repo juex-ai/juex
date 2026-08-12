@@ -47,7 +47,7 @@ juex/
 │   │   ├── turn_admission.go
 │   │   └── turn_admission_queue.go
 │   ├── agentstate/               # resident/ephemeral identity, marker, registry, address
-│   ├── artifact/                 # safe workspace artifact storage and integrity verification
+│   ├── artifact/                 # safe Agent Artifact storage and integrity verification
 │   ├── usermedia/                # session-scoped image upload and media reference policy
 │   ├── eventmedia/               # external-event attachment validation and artifact admission
 │   ├── cli/                      # cobra-based CLI surface
@@ -317,7 +317,7 @@ type ContextArtifactProjection struct {
     ToolUseID     string
     ToolName      string
     OriginalBytes int
-    StoredPath    string // workspace-relative `.juex/artifacts/...` reference
+    StoredPath    string // Agent Artifact root-relative reference
     SHA256        string
     HeadBytes     int
     TailBytes     int
@@ -948,6 +948,12 @@ persistent append; loading a persisted session ensures it exists. The session
 package owns the canonical path and deletion remains atomic at the session
 directory boundary. Active-session deletion validates the canonical fallback
 before callers stop a live runtime or remove the directory.
+`internal/app` composes that Session plan with cleanup of the matching
+`artifacts/sessions/<id>` namespace. It preflights both stores before a Web
+caller closes the live runtime, commits Session persistence first, and reports
+a typed partial failure if Artifact cleanup fails. A retry may remove the
+orphan Artifact namespace even after the Session directory is gone. Agent-level
+Artifact namespaces such as `event-media` and `read-media` are unaffected.
 
 `internal/observability` subscribes to the in-process event bus and writes
 derived session-local artifacts: `logs/juex.log`, `logs/debug.log`,
@@ -1678,7 +1684,7 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | GET | `/api/files/tree` | workdir file tree for the web sidebar |
 | GET | `/api/files/content?path=<path>` | bounded text preview or image preview metadata for one workdir file |
 | GET | `/api/files/raw?path=<path>` | bounded-to-workdir image bytes for preview rendering |
-| GET | `/api/media?path=<path>` | image bytes with immutable caching for content-addressed artifacts and revalidation for mutable workdir paths |
+| GET | `/api/media?root=artifact\|workspace&path=<path>` | image bytes from one explicit root; verified content-addressed Artifacts use immutable caching and mutable Workspace files use revalidation |
 | GET | `/api/runtime` | app-assembled provider, grouped builtin/MCP tool catalog, shell, hooks, system prompt, and skills status translated to the web DTO |
 | GET | `/api/status` | selected-agent runtime-status snapshot with idle/working compatibility fields |
 | GET | `/api/status/events` | selected-agent runtime-status SSE stream |
@@ -1918,11 +1924,11 @@ tool_output:
 | `compaction.summary_model` | optional `provider:model` used only for compaction summary calls; if omitted or if the summary provider fails, compaction uses the active model |
 | `compaction.summary_max_tokens` | maximum output tokens for summary generation |
 | `compaction.tool_result_max_chars` | per-tool-result truncation limit in summary input |
-| `compaction.user_input_inline_max_bytes` | user text larger than this is stored under `.juex/artifacts/user-inputs/` and replaced by a stable preview before provider calls |
+| `compaction.user_input_inline_max_bytes` | user text larger than this is stored under `artifacts/sessions/<session-id>/user-inputs/` in Agent state and replaced by a stable preview before provider calls |
 | `compaction.user_input_preview_head_bytes` | leading bytes kept inline for externalized user input |
 | `compaction.user_input_preview_tail_bytes` | trailing bytes kept inline for externalized user input |
 | `compaction.max_auto_failures` | consecutive automatic compaction failures before the session pauses proactive compaction with a clear error |
-| `tool_output.inline_max_bytes` | tool output larger than this is stored under `.juex/artifacts/tool-results/` and replaced by a stable preview before provider calls, independently of compaction |
+| `tool_output.inline_max_bytes` | tool output larger than this is stored under `artifacts/sessions/<session-id>/tool-results/` in Agent state and replaced by a stable preview before provider calls, independently of compaction |
 | `tool_output.preview_head_bytes` | leading bytes kept inline for externalized tool output |
 | `tool_output.preview_tail_bytes` | trailing bytes kept inline for externalized tool output |
 
@@ -2090,11 +2096,11 @@ read OS keyring credentials.
 
 Compaction is controlled by the `compaction` config section. The runtime keeps
 the full recoverable content either in `conversation.jsonl` or in
-`.juex/artifacts/`, appends compact boundary messages with metadata, and
+the current Agent's Artifact root, appends compact boundary messages with metadata, and
 assembles provider context as latest compact summary, retained recent tail, and
 messages after the compact marker. Large user inputs and tool results are
-materialized to `.juex/artifacts/user-inputs/<session-id>/` and
-`.juex/artifacts/tool-results/<session-id>/`; provider-visible messages keep a
+materialized to `sessions/<session-id>/user-inputs/` and
+`sessions/<session-id>/tool-results/` relative to that root; provider-visible messages keep a
 stable replacement with path, byte count, SHA-256, and head/tail preview.
 Compaction summary input keeps readable reasoning summaries when providers
 expose them, but encrypted/redacted reasoning payloads are represented only as
@@ -2151,6 +2157,9 @@ workspace, the section also provides a relative path for the chunked-write
 tools, which intentionally reject absolute paths. Scratchpad bytes are never
 recited or automatically projected into provider context. The model manages
 them with existing file tools, so no parallel scratchpad tool protocol exists.
+Scratchpad files are mutable Session working material. They are deliberately
+separate from immutable, integrity-addressed Artifacts such as User Media,
+external-event media, externalized user inputs, and externalized Tool Results.
 
 The separate `goal_state.json` sidecar carries model-owned operational goal
 state instead of advisory context. It is updated through `create_goal` and
@@ -2222,6 +2231,10 @@ $JUEX_HOME/
     ├── api.sock                  # preferred local endpoint while serving
     ├── history.json              # cached session summaries + active primary id
     ├── logs/fleet.log            # detached child stdout + stderr
+    ├── artifacts/                # Agent-owned durable generated bytes
+    │   ├── event-media/          # accepted external-event media
+    │   ├── read-media/           # content-addressed read-tool media
+    │   └── sessions/<id>/        # media, user-inputs, and tool-results
     ├── extensions/<name>/        # Agent-owned persistent extension data
     ├── memory/
     ├── observables/              # generated runs, observations, oversized payload files, and schedule state
@@ -2237,7 +2250,6 @@ $JUEX_HOME/
 │   └── skills/<name>/SKILL.md    # project skills (project overrides user)
 └── .juex/
     ├── juex.local.json           # workspace-to-agent identity marker
-    ├── artifacts/                # durable bytes managed by internal/artifact
     ├── extensions/<name>/        # work-local Extension; may include observables.json
     │   └── juex.extension.json   # required selected-Extension manifest
     ├── juex.yaml                 # local runtime provider config
@@ -2262,9 +2274,10 @@ the caller explicitly keeps it.
 
 ### 6.1 Artifact Storage
 
-`internal/artifact` owns workspace-rooted artifact writes and reads. Callers
-pass a logical path relative to `.juex/artifacts`; the Store returns a stable
-workspace-relative reference with SHA-256 and stored byte count. Filesystem
+`internal/artifact` owns Agent-rooted artifact writes and reads. Callers pass
+the resolved `<AgentStateDir>/artifacts` directory and a logical path relative
+to that root; the Store returns a stable root-relative reference with SHA-256
+and stored byte count. Filesystem
 access uses `os.Root`, writes use same-directory temporary files plus atomic
 replacement, and reads verify supplied integrity metadata. Bounded reads stop
 after the caller's byte limit instead of loading an oversized artifact first.
@@ -2281,7 +2294,7 @@ Store read or write.
 `internal/usermedia` owns session-scoped image attachment policy. It validates
 HTTP upload bodies and CLI-local image paths, records dimensions and integrity
 metadata, limits the number of images admitted to one turn, and rejects
-references outside the target session's `.juex/artifacts/media/<session-id>/`
+references outside the target Session's `sessions/<session-id>/media/`
 namespace. Durable bytes are stored and verified through `internal/artifact`;
 `usermedia` does not
 implement a second filesystem boundary.

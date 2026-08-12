@@ -32,8 +32,10 @@ import (
 )
 
 func registerTestBuiltins(r *Registry, workDir string) {
-	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, Shell: DefaultShellProfile()})
+	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, ArtifactDir: testArtifactDir(workDir), Shell: DefaultShellProfile()})
 }
+
+func testArtifactDir(workDir string) string { return filepath.Join(workDir, "artifacts") }
 
 func registerSandboxedTestBuiltins(r *Registry, workDir string, blockedPaths []string) {
 	policy := sandbox.DefaultPolicy()
@@ -966,10 +968,10 @@ func TestBuiltins_ReadImageReturnsMediaResult(t *testing.T) {
 	if media.OriginalBytes != len(source) {
 		t.Fatalf("original bytes = %d, want %d", media.OriginalBytes, len(source))
 	}
-	if !strings.HasPrefix(filepath.ToSlash(media.ArtifactPath), ".juex/artifacts/media/read/") {
+	if !strings.HasPrefix(filepath.ToSlash(media.ArtifactPath), "read-media/") {
 		t.Fatalf("artifact path = %q, want read media artifact", media.ArtifactPath)
 	}
-	cached, err := os.ReadFile(filepath.Join(workDir, filepath.FromSlash(media.ArtifactPath)))
+	cached, err := os.ReadFile(filepath.Join(testArtifactDir(workDir), filepath.FromSlash(media.ArtifactPath)))
 	if err != nil {
 		t.Fatalf("read cached media: %v", err)
 	}
@@ -978,7 +980,7 @@ func TestBuiltins_ReadImageReturnsMediaResult(t *testing.T) {
 		t.Fatalf("sha = %q, want cached file sha %q", media.SHA256, got)
 	}
 	sentinel := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	artifactPath := filepath.Join(workDir, filepath.FromSlash(media.ArtifactPath))
+	artifactPath := filepath.Join(testArtifactDir(workDir), filepath.FromSlash(media.ArtifactPath))
 	if err := os.Chtimes(artifactPath, sentinel, sentinel); err != nil {
 		t.Fatalf("set cached media time: %v", err)
 	}
@@ -1011,10 +1013,8 @@ func TestBuiltins_ReadImageReturnsMediaResult(t *testing.T) {
 func TestBuiltins_ReadImageRejectsSymlinkedMediaArtifactRoots(t *testing.T) {
 	source := testPNG(t, 2, 1)
 	cases := []string{
-		".juex",
-		filepath.Join(".juex", "artifacts"),
-		filepath.Join(".juex", "artifacts", "media"),
-		filepath.Join(".juex", "artifacts", "media", "read"),
+		"artifacts",
+		filepath.Join("artifacts", "read-media"),
 	}
 	for _, linkRel := range cases {
 		t.Run(linkRel, func(t *testing.T) {
@@ -1130,7 +1130,7 @@ func TestBuiltins_ReadImageDownsamplesLongSide(t *testing.T) {
 	if media.Width > readImageMaxSide || media.Height > readImageMaxSide {
 		t.Fatalf("media dimensions = %dx%d, want max side <= %d", media.Width, media.Height, readImageMaxSide)
 	}
-	cached, err := os.Open(filepath.Join(workDir, filepath.FromSlash(media.ArtifactPath)))
+	cached, err := os.Open(filepath.Join(testArtifactDir(workDir), filepath.FromSlash(media.ArtifactPath)))
 	if err != nil {
 		t.Fatalf("open cached media: %v", err)
 	}
@@ -1177,7 +1177,7 @@ func TestBuiltins_ReadImageDownsampleFailureStillReturnsMedia(t *testing.T) {
 	if !ok || media == nil {
 		t.Fatalf("structured result = %#v, want media", info.StructuredResult)
 	}
-	cached, err := os.ReadFile(filepath.Join(workDir, filepath.FromSlash(media.ArtifactPath)))
+	cached, err := os.ReadFile(filepath.Join(testArtifactDir(workDir), filepath.FromSlash(media.ArtifactPath)))
 	if err != nil {
 		t.Fatalf("read cached media: %v", err)
 	}
@@ -1205,7 +1205,7 @@ func TestBuiltins_ReadImageOmitsUnsafePixelCount(t *testing.T) {
 	if media, ok := MediaRefFromStructuredResult(info.StructuredResult); ok || media != nil {
 		t.Fatalf("structured result = %#v, want no media for unsafe pixel count", info.StructuredResult)
 	}
-	if _, err := os.Stat(filepath.Join(workDir, ".juex", "artifacts", "media", "read")); !os.IsNotExist(err) {
+	if _, err := os.Stat(testArtifactDir(workDir)); !os.IsNotExist(err) {
 		t.Fatalf("unsafe image should not create media artifact dir, stat err=%v", err)
 	}
 }
@@ -1298,7 +1298,7 @@ func TestBuiltins_ReadImageOmitsReencodedOversizeImage(t *testing.T) {
 	if media, ok := MediaRefFromStructuredResult(info.StructuredResult); ok || media != nil {
 		t.Fatalf("structured result = %#v, want no media for oversized re-encode", info.StructuredResult)
 	}
-	if _, err := os.Stat(filepath.Join(workDir, ".juex", "artifacts", "media", "read")); !os.IsNotExist(err) {
+	if _, err := os.Stat(testArtifactDir(workDir)); !os.IsNotExist(err) {
 		t.Fatalf("oversized re-encode should not create media artifact dir, stat err=%v", err)
 	}
 }

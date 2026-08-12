@@ -107,7 +107,7 @@ type ContextArtifactProjection struct {
 	ToolUseID     string `json:"tool_use_id,omitempty"`
 	ToolName      string `json:"tool_name,omitempty"`
 	OriginalBytes int    `json:"original_bytes"`
-	StoredPath    string `json:"stored_path"` // workspace-relative `.juex/artifacts/...` reference
+	StoredPath    string `json:"stored_path"` // path relative to the current Agent Artifact root
 	SHA256        string `json:"sha256"`
 	HeadBytes     int    `json:"head_bytes"`
 	TailBytes     int    `json:"tail_bytes"`

@@ -171,7 +171,7 @@ test("messagesToGroups preserves safe reasoning summaries and merge boundaries",
         { type: "reasoning", text: "after text" },
         {
           type: "image",
-          media: { artifact_path: ".juex/artifacts/image.png" },
+			media: { artifact_path: "read-media/image.png" },
         },
         { type: "reasoning", text: "after image" },
         {
@@ -337,7 +337,7 @@ test("messagesToGroups keeps image-only messages as image units", () => {
         {
           type: "image",
           media: {
-            artifact_path: ".juex/artifacts/media/s/image.png",
+			artifact_path: "sessions/s/media/image.png",
             media_type: "image/png",
             sha256: "abc",
             original_bytes: 12,
@@ -371,7 +371,7 @@ test("messagesToGroups preserves canonical mixed text and image order", () => {
         {
           type: "image",
           media: {
-            artifact_path: ".juex/artifacts/media/s/image.png",
+			artifact_path: "sessions/s/media/image.png",
             media_type: "image/png",
             sha256: "abc",
             original_bytes: 12,

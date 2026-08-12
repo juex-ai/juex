@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/llm"
@@ -204,6 +205,14 @@ func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
 	if err := persisted.Close(); err != nil {
 		t.Fatal(err)
 	}
+	store, err := artifact.NewStore(filepath.Join(stateDir, "artifacts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactRef, err := store.PutContentAddressed("sessions/"+sessionID+"/media", ".png", previewPNG)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	backend := &fakeBackend{
 		endpointErr: errors.New("agent is stopped"),
@@ -242,7 +251,7 @@ func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
 
 	request = httptest.NewRequest(
 		http.MethodHead,
-		"/agents/aaaaaa/api/media?path=preview.png",
+		"/agents/aaaaaa/api/media?root=workspace&path=preview.png",
 		nil,
 	)
 	response = httptest.NewRecorder()
@@ -258,6 +267,20 @@ func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
 	}
 	if response.Body.Len() != 0 {
 		t.Fatalf("offline media HEAD body length = %d", response.Body.Len())
+	}
+
+	request = httptest.NewRequest(
+		http.MethodHead,
+		"/agents/aaaaaa/api/media?root=artifact&path="+url.QueryEscape(artifactRef.Path),
+		nil,
+	)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("offline Artifact media HEAD status = %d, body=%s", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Fatalf("offline Artifact cache-control = %q", got)
 	}
 }
 

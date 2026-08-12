@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -21,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/version"
@@ -262,7 +262,7 @@ func collectEntries(opts Options, workDir, sessionDir string, now time.Time) ([]
 		entries = append(entries, newEntry(pathInBundle("worktree/summary.json"), "", append(data, '\n'), false, false))
 	}
 	if opts.IncludeArtifacts {
-		artifactEntries, err := collectArtifacts(workDir, opts.Redact)
+		artifactEntries, err := collectArtifacts(opts.Config.ArtifactDir(), opts.Redact)
 		if err != nil {
 			return nil, err
 		}
@@ -536,39 +536,26 @@ func sessionBundleFiles() []sessionBundleFile {
 	}
 }
 
-func collectArtifacts(workDir string, redact bool) ([]archiveEntry, error) {
-	root := filepath.Join(workDir, ".juex", "artifacts")
-	if _, err := os.Stat(root); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
+func collectArtifacts(artifactDir string, redact bool) ([]archiveEntry, error) {
+	if strings.TrimSpace(artifactDir) == "" {
+		return nil, nil
+	}
+	store, err := artifact.NewStore(artifactDir)
+	if err != nil {
 		return nil, err
 	}
-	var entries []archiveEntry
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
+	files, err := store.Files()
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]archiveEntry, 0, len(files))
+	for _, file := range files {
+		data := file.Data
 		redacted := redact && isLikelyText(data)
 		if redacted {
 			data = redactBytes(data)
 		}
-		entries = append(entries, newEntry(pathInBundle(filepath.Join("artifacts", filepath.ToSlash(rel))), path, data, redacted, false))
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		entries = append(entries, newEntry(pathInBundle(filepath.Join("artifacts", filepath.FromSlash(file.Path))), "", data, redacted, false))
 	}
 	return entries, nil
 }

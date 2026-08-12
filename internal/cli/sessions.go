@@ -438,7 +438,7 @@ func newSessionsDeleteCmd(flags *persistentFlags) *cobra.Command {
 				return err
 			}
 			id := args[0]
-			if err := session.Delete(cfg.SessionsDir(), cfg.HistoryPath(), id); err != nil {
+			if err := app.DeleteSession(cfg, id, app.SessionDeleteOptions{}); err != nil {
 				if os.IsNotExist(err) {
 					return &notFoundError{msg: "session not found: " + id}
 				}

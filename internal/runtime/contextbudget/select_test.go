@@ -99,7 +99,7 @@ func TestSelectCompactionInputReferencesOversizedImageOnlyInput(t *testing.T) {
 		Role: llm.RoleUser,
 		Kind: llm.MessageKindDirect,
 		Blocks: []llm.Block{{Type: llm.BlockImage, Media: &llm.MediaRef{
-			ArtifactPath: ".juex/artifacts/media/session/photo.png",
+			ArtifactPath: "sessions/session/media/photo.png",
 			MediaType:    "image/png",
 			SHA256:       "image-sha",
 			Width:        4000,

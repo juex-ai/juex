@@ -232,7 +232,7 @@ func encodeOpenAIResponseInput(history []Message, profile ProviderProfile) respo
 			case BlockText:
 				textParts = append(textParts, b.Text)
 			case BlockImage:
-				if dataURL, ok := imageDataURL(profile.WorkDir, b.Media); ok {
+				if dataURL, ok := imageDataURL(profile.ArtifactDir, b.Media); ok {
 					flushTextToContent()
 					imagePart := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
 					imagePart.OfInputImage.ImageURL = param.NewOpt(dataURL)
@@ -251,7 +251,7 @@ func encodeOpenAIResponseInput(history []Message, profile ProviderProfile) respo
 				}
 				out = append(out, responses.ResponseInputItemParamOfFunctionCallOutput(boundedOpenAIResponsesToolCallID(b.ToolUseID), content))
 				if b.Media != nil {
-					if dataURL, ok := imageDataURL(profile.WorkDir, b.Media); ok {
+					if dataURL, ok := imageDataURL(profile.ArtifactDir, b.Media); ok {
 						imagePart := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
 						imagePart.OfInputImage.ImageURL = param.NewOpt(dataURL)
 						out = appendResponseMessage(out, RoleUser, nil, responses.ResponseInputMessageContentListParam{

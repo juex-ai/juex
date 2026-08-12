@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
@@ -1733,8 +1734,74 @@ func TestPostSessionAttachmentStoresImage(t *testing.T) {
 	if ref.MediaType != "image/png" || ref.SHA256 == "" || ref.Width != 2 || ref.Height != 3 {
 		t.Fatalf("media ref = %+v", ref)
 	}
-	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.WorkDir, filepath.FromSlash(ref.ArtifactPath))); err != nil {
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.ArtifactDir(), filepath.FromSlash(ref.ArtifactPath))); err != nil {
 		t.Fatalf("stored file missing: %v", err)
+	}
+}
+
+func TestStoreSessionAttachmentRejectsInactiveSessionWithoutWriting(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	oldID := createTestSession(t, ts.URL)
+	newID := createTestSession(t, ts.URL)
+	if oldID == newID {
+		t.Fatalf("session ids should differ: %q", oldID)
+	}
+
+	_, err := srv.storeSessionAttachment(context.Background(), oldID, "screen.png", bytes.NewReader(testUploadPNG(t)))
+	if !errors.Is(err, errSessionInactive) && !os.IsNotExist(err) {
+		t.Fatalf("storeSessionAttachment error = %v, want inactive or not found", err)
+	}
+	store, err := artifact.NewStore(srv.opts.Cfg.ArtifactDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := store.HasNamespace("sessions/" + oldID); err != nil || exists {
+		t.Fatalf("inactive upload namespace = %t, %v", exists, err)
+	}
+}
+
+func TestStoreSessionAttachmentWaitsForSessionMutationLock(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	id := createTestSession(t, ts.URL)
+	data := testUploadPNG(t)
+	store, err := artifact.NewStore(srv.opts.Cfg.ArtifactDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv.createMu.Lock()
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(srv.createMu.Unlock) }
+	defer release()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := srv.storeSessionAttachment(context.Background(), id, "screen.png", bytes.NewReader(data))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("storeSessionAttachment completed while createMu was held: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if exists, err := store.HasNamespace("sessions/" + id); err != nil || exists {
+		t.Fatalf("namespace while mutation lock held = %t, %v", exists, err)
+	}
+	release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("storeSessionAttachment did not complete after createMu release")
+	}
+	if exists, err := store.HasNamespace("sessions/" + id); err != nil || !exists {
+		t.Fatalf("namespace after mutation lock release = %t, %v", exists, err)
 	}
 }
 
@@ -1827,8 +1894,12 @@ func TestPostTurn_AttachmentTextAndImageReachesProvider(t *testing.T) {
 	)
 	close(prov.release)
 	work := t.TempDir()
+	stateDir := filepath.Join(work, ".juex")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	srv := NewServer(Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, Compaction: config.DefaultCompactionConfig()},
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, AgentStateDir: stateDir, Compaction: config.DefaultCompactionConfig()},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -1905,6 +1976,10 @@ func TestPostTurn_ImageOnlyAttachmentStartsTurn(t *testing.T) {
 	)
 	close(prov.release)
 	work := t.TempDir()
+	stateDir := filepath.Join(work, ".juex")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	vision := true
 	srv := NewServer(Options{
 		Cfg: config.Config{
@@ -1912,6 +1987,7 @@ func TestPostTurn_ImageOnlyAttachmentStartsTurn(t *testing.T) {
 			APIKey:               "x",
 			Model:                "m",
 			WorkDir:              work,
+			AgentStateDir:        stateDir,
 			Compaction:           config.DefaultCompactionConfig(),
 			ProviderCapabilities: llm.CapabilityOverrides{Vision: &vision},
 		},
@@ -1952,7 +2028,7 @@ func TestPostTurn_RejectsAttachmentOutsideSession(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 	id := createTestSession(t, ts.URL)
-	body := strings.NewReader(`{"prompt":"bad","attachments":[{"artifact_path":".juex/artifacts/media/other/image.png","media_type":"image/png","sha256":"` + strings.Repeat("a", 64) + `"}]}`)
+	body := strings.NewReader(`{"prompt":"bad","attachments":[{"artifact_path":"sessions/other/media/image.png","media_type":"image/png","sha256":"` + strings.Repeat("a", 64) + `"}]}`)
 
 	resp, err := http.Post(ts.URL+"/api/sessions/"+id+"/turns", "application/json", body)
 	if err != nil {

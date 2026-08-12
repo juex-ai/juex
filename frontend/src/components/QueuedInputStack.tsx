@@ -59,7 +59,7 @@ export function QueuedInputStack({ items }: { items: QueuedInput[] }) {
                       return (
                         <img
                           key={`${path}-${mediaIndex}`}
-                          src={getMediaURL(path)}
+                          src={getMediaURL(path, "artifact")}
                           alt={mediaName(path)}
                           className="size-10 rounded border border-border/70 object-cover"
                         />

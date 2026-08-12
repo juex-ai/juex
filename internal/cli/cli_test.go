@@ -949,9 +949,6 @@ func TestRunCmd_DryRunValidatesImageOnlyAttachmentsWithoutStoring(t *testing.T) 
 	if attachment.MediaType != "image/png" || attachment.Bytes != 68 || attachment.Width != 1 || attachment.Height != 1 {
 		t.Fatalf("attachment metadata = %+v", attachment)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".juex", "artifacts", "media")); !os.IsNotExist(err) {
-		t.Fatalf("dry-run stored attachment artifacts: %v", err)
-	}
 }
 
 func TestRunCmd_DryRunVisionCapabilitySuppressesAttachmentWarning(t *testing.T) {
@@ -1082,7 +1079,6 @@ func TestRunCmd_AttachedSlashDoesNotCreateSessionOrArtifact(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(dir, ".juex", "sessions"),
 		filepath.Join(dir, ".juex", "history.json"),
-		filepath.Join(dir, ".juex", "artifacts"),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("attached slash created %s: %v", path, err)

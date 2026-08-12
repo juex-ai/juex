@@ -13,11 +13,11 @@ test("getFileRawURL encodes workspace paths for image previews", () => {
   );
 });
 
-test("getMediaURL encodes transcript media paths", () => {
-  assert.equal(
-    getMediaURL(".juex/artifacts/media/s/image 1.png"),
-    "/api/media?path=.juex%2Fartifacts%2Fmedia%2Fs%2Fimage%201.png",
-  );
+test("getMediaURL encodes explicit media roots and paths", () => {
+	assert.equal(
+		getMediaURL("sessions/s/media/image 1.png", "artifact"),
+		"/api/media?root=artifact&path=sessions%2Fs%2Fmedia%2Fimage%201.png",
+	);
 });
 
 test("getMediaMetadata probes image headers without downloading content", async () => {
@@ -49,7 +49,7 @@ test("getMediaMetadata probes image headers without downloading content", async 
 
   assert.deepEqual(calls, [
     {
-      input: "/api/media?path=screenshots%2Fpreview.png",
+		input: "/api/media?root=workspace&path=screenshots%2Fpreview.png",
       method: "HEAD",
     },
   ]);

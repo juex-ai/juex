@@ -12,7 +12,7 @@ import { messagesToGroups } from "../../frontend/src/lib/display-units.ts";
 import type { BrowserEvent, MediaRef } from "../../frontend/src/types.ts";
 
 const imageMedia: MediaRef = {
-  artifact_path: ".juex/artifacts/media/session/image.png",
+	artifact_path: "sessions/session/media/image.png",
   media_type: "image/png",
   sha256: "abc",
 };

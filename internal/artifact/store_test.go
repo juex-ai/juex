@@ -12,24 +12,24 @@ import (
 )
 
 func TestStorePutAndRead(t *testing.T) {
-	workDir := t.TempDir()
-	store, err := NewStore(workDir)
+	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	store, err := NewStore(artifactDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	data := []byte("full projected content")
 
-	ref, err := store.Put("user-inputs/session-1/message-1.txt", data)
+	ref, err := store.Put("sessions/session-1/user-inputs/message-1.txt", data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref.Path != ".juex/artifacts/user-inputs/session-1/message-1.txt" {
+	if ref.Path != "sessions/session-1/user-inputs/message-1.txt" {
 		t.Fatalf("path = %q", ref.Path)
 	}
 	if ref.Bytes != len(data) || len(ref.SHA256) != 64 {
 		t.Fatalf("ref = %+v", ref)
 	}
-	reopened, err := NewStore(workDir)
+	reopened, err := NewStore(artifactDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,12 +40,147 @@ func TestStorePutAndRead(t *testing.T) {
 	if !bytes.Equal(got, data) {
 		t.Fatalf("data = %q, want %q", got, data)
 	}
-	entries, err := os.ReadDir(filepath.Join(workDir, ".juex", "artifacts", "user-inputs", "session-1"))
+	entries, err := os.ReadDir(filepath.Join(artifactDir, "sessions", "session-1", "user-inputs"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 1 || entries[0].Name() != "message-1.txt" {
 		t.Fatalf("entries = %+v, want only final artifact", entries)
+	}
+}
+
+func TestStoreRootIsLazyUntilFirstWrite(t *testing.T) {
+	parent := t.TempDir()
+	artifactDir := filepath.Join(parent, "artifacts")
+	store, err := NewStore(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files, err := store.Files(); err != nil || len(files) != 0 {
+		t.Fatalf("Files() = %+v, %v, want empty", files, err)
+	}
+	if exists, err := store.HasNamespace("sessions/session-1"); err != nil || exists {
+		t.Fatalf("HasNamespace() = %t, %v, want false", exists, err)
+	}
+	if _, err := os.Stat(artifactDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only access created Artifact root: %v", err)
+	}
+	if _, err := store.Put("read-media/item.txt", []byte("created")); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(artifactDir); err != nil || !info.IsDir() {
+		t.Fatalf("Artifact root stat = %+v, %v", info, err)
+	}
+}
+
+func TestStoreRejectsArtifactRootSymlink(t *testing.T) {
+	parent := t.TempDir()
+	outside := t.TempDir()
+	artifactDir := filepath.Join(parent, "artifacts")
+	if err := os.Symlink(outside, artifactDir); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := NewStore(artifactDir); err == nil {
+		t.Fatal("NewStore accepted a symlinked Artifact root")
+	}
+}
+
+func TestStoreRevalidatesArtifactRootBeforeEveryOperation(t *testing.T) {
+	parent := t.TempDir()
+	artifactDir := filepath.Join(parent, "artifacts")
+	store, err := NewStore(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Put("read-media/item.txt", []byte("inside"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(parent, "artifacts-original")
+	if err := os.Rename(artifactDir, original); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, artifactDir); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := store.Read(ref); err == nil {
+		t.Fatal("Read accepted a replaced Artifact root")
+	}
+	if _, err := store.Put("read-media/outside.txt", []byte("no")); err == nil {
+		t.Fatal("Put accepted a replaced Artifact root")
+	}
+	if _, err := store.Files(); err == nil {
+		t.Fatal("Files accepted a replaced Artifact root")
+	}
+	if err := store.RemoveNamespace("read-media"); err == nil {
+		t.Fatal("RemoveNamespace accepted a replaced Artifact root")
+	}
+	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
+		t.Fatalf("outside entries = %+v, %v, want empty", entries, err)
+	}
+}
+
+func TestStoreRevalidatesArtifactParentBeforeEveryOperation(t *testing.T) {
+	home := t.TempDir()
+	agentStateDir := filepath.Join(home, "agent")
+	artifactDir := filepath.Join(agentStateDir, "artifacts")
+	if err := os.MkdirAll(agentStateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put("read-media/item.txt", []byte("inside")); err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(home, "agent-original")
+	if err := os.Rename(agentStateDir, original); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(home, "outside-agent")
+	if err := os.MkdirAll(filepath.Join(outside, "artifacts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, agentStateDir); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := store.Put("read-media/outside.txt", []byte("no")); err == nil {
+		t.Fatal("Put accepted a replaced Artifact parent")
+	}
+	if entries, err := os.ReadDir(filepath.Join(outside, "artifacts")); err != nil || len(entries) != 0 {
+		t.Fatalf("outside artifact entries = %+v, %v, want empty", entries, err)
+	}
+}
+
+func TestStoreFilesAndRemoveNamespace(t *testing.T) {
+	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	store, err := NewStore(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put("sessions/session-1/media/image.png", []byte("image")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put("event-media/event.txt", []byte("event")); err != nil {
+		t.Fatal(err)
+	}
+	files, err := store.Files()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0].Path != "event-media/event.txt" || files[1].Path != "sessions/session-1/media/image.png" {
+		t.Fatalf("files = %+v", files)
+	}
+	if err := store.RemoveNamespace("sessions/session-1"); err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := store.HasNamespace("sessions/session-1"); err != nil || exists {
+		t.Fatalf("session namespace after removal = %t, %v", exists, err)
+	}
+	if exists, err := store.HasNamespace("event-media"); err != nil || !exists {
+		t.Fatalf("Agent namespace after session removal = %t, %v", exists, err)
 	}
 }
 
@@ -57,7 +192,7 @@ func TestStorePutContentAddressedReusesAndRepairs(t *testing.T) {
 	}
 	data := []byte("image bytes")
 
-	ref, err := store.PutContentAddressed("media/read", ".png", data)
+	ref, err := store.PutContentAddressed("read-media", ".png", data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +204,7 @@ func TestStorePutContentAddressedReusesAndRepairs(t *testing.T) {
 	if err := os.Chtimes(absPath, sentinel, sentinel); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.PutContentAddressed("media/read", ".png", data); err != nil {
+	if _, err := store.PutContentAddressed("read-media", ".png", data); err != nil {
 		t.Fatal(err)
 	}
 	stat, err := os.Stat(absPath)
@@ -83,7 +218,7 @@ func TestStorePutContentAddressedReusesAndRepairs(t *testing.T) {
 	if err := os.WriteFile(absPath, []byte("corrupt"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repaired, err := store.PutContentAddressed("media/read", ".png", data)
+	repaired, err := store.PutContentAddressed("read-media", ".png", data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +246,7 @@ func TestStorePutContentAddressedConcurrently(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ref, err := store.PutContentAddressed("media/read", ".bin", data)
+			ref, err := store.PutContentAddressed("read-media", ".bin", data)
 			if err != nil {
 				errs <- err
 				return
@@ -152,7 +287,7 @@ func TestStoreRejectsUnsafePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, unsafe := range []string{"", ".", "../escape.txt", "/tmp/escape.txt", "C:/escape.txt", `nested\\escape.txt`, ".juex/artifacts/nested.txt"} {
+	for _, unsafe := range []string{"", ".", "../escape.txt", "/tmp/escape.txt", "C:/escape.txt", `nested\\escape.txt`, ".hidden/nested.txt"} {
 		t.Run(unsafe, func(t *testing.T) {
 			if _, err := store.Put(unsafe, []byte("no")); err == nil {
 				t.Fatalf("Put(%q) succeeded", unsafe)
@@ -164,8 +299,8 @@ func TestStoreRejectsUnsafePaths(t *testing.T) {
 		extension string
 	}{
 		{namespace: "../media", extension: ".png"},
-		{namespace: "media/read", extension: "../png"},
-		{namespace: "media/read", extension: "png"},
+		{namespace: "read-media", extension: "../png"},
+		{namespace: "read-media", extension: "png"},
 	} {
 		if _, err := store.PutContentAddressed(tc.namespace, tc.extension, []byte("no")); err == nil {
 			t.Fatalf("PutContentAddressed(%q, %q) succeeded", tc.namespace, tc.extension)
@@ -176,11 +311,7 @@ func TestStoreRejectsUnsafePaths(t *testing.T) {
 func TestStoreRejectsEscapingSymlink(t *testing.T) {
 	workDir := t.TempDir()
 	outside := t.TempDir()
-	artifactDir := filepath.Join(workDir, ".juex", "artifacts")
-	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, filepath.Join(artifactDir, "escape")); err != nil {
+	if err := os.Symlink(outside, filepath.Join(workDir, "escape")); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	store, err := NewStore(workDir)
@@ -208,7 +339,7 @@ func TestStoreReadVerifiesIntegrity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("tool-results/session-1/call-1.txt", []byte("result"))
+	ref, err := store.Put("sessions/session-1/tool-results/call-1.txt", []byte("result"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +366,7 @@ func TestStoreReadLimitRejectsOversizedArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("media/session/image.png", []byte("image bytes"))
+	ref, err := store.Put("sessions/session/media/image.png", []byte("image bytes"))
 	if err != nil {
 		t.Fatal(err)
 	}
