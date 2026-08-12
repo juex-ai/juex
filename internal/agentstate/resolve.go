@@ -317,7 +317,7 @@ func inspectExistingIdentity(homeDir, workDir, markerPath string, marker Marker)
 	}
 	agentDir := address.StateDir()
 	agentFile := filepath.Join(agentDir, agentFileName)
-	info, statErr := os.Stat(agentDir)
+	info, statErr := os.Lstat(agentDir)
 	if errors.Is(statErr, os.ErrNotExist) {
 		return existingIdentityInspection{}, &UnknownAgentError{
 			AgentID: marker.AgentID, Marker: markerPath, HomeDir: homeDir, AgentFile: agentFile,
@@ -325,6 +325,9 @@ func inspectExistingIdentity(homeDir, workDir, markerPath string, marker Marker)
 	}
 	if statErr != nil {
 		return existingIdentityInspection{}, fmt.Errorf("agentstate: inspect agent directory %s: %w", agentDir, statErr)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return existingIdentityInspection{}, fmt.Errorf("agentstate: registry path %s for agent %q is a symbolic link", agentDir, marker.AgentID)
 	}
 	if !info.IsDir() {
 		return existingIdentityInspection{}, fmt.Errorf("agentstate: registry path %s for agent %q is not a directory", agentDir, marker.AgentID)

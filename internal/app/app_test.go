@@ -1732,6 +1732,52 @@ func TestMCPNotificationPreservesValidAttachmentWhenAnotherIsMalformed(t *testin
 	}
 }
 
+func TestExternalEventMessagesAcceptCurrentAgentStateAttachments(t *testing.T) {
+	workDir := t.TempDir()
+	agentStateDir := filepath.Join(t.TempDir(), "agents", "yqmgmu")
+	sourcePath := filepath.Join(agentStateDir, "extensions", "wechat-wire", "media", "pixel.png")
+	writeAppTestPNG(t, sourcePath)
+	opts := attachmentOptions{WorkDir: workDir, AgentStateDir: agentStateDir}
+
+	record := testObservationRecord("obs-agent-state-image")
+	record.Attachments = []eventmedia.AttachmentRef{{Path: sourcePath, MediaType: "image/png"}}
+	observation, err := observationMessage(record, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observation.Blocks) != 2 || observation.Blocks[1].Type != llm.BlockImage {
+		t.Fatalf("observation blocks = %+v, want text plus image", observation.Blocks)
+	}
+
+	notification, err := mcpNotificationMessage(mcp.Notification{
+		ServerName: "wechat-wire",
+		Method:     "notifications/claude/channel",
+		EventType:  "message",
+		Params: map[string]any{
+			"attachments": []any{map[string]any{"path": sourcePath, "media_type": "image/png"}},
+		},
+	}, "message", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notification.Blocks) != 2 || notification.Blocks[1].Type != llm.BlockImage {
+		t.Fatalf("MCP blocks = %+v, want text plus image", notification.Blocks)
+	}
+}
+
+func TestExternalAttachmentOptionsUsesRuntimePathFallback(t *testing.T) {
+	workDir := t.TempDir()
+	a := &App{cfg: config.Config{WorkDir: workDir}}
+	opts := a.externalAttachmentOptions()
+	if opts.WorkDir != workDir {
+		t.Fatalf("WorkDir = %q, want %q", opts.WorkDir, workDir)
+	}
+	wantStateDir := filepath.Join(workDir, ".juex")
+	if opts.AgentStateDir != wantStateDir {
+		t.Fatalf("AgentStateDir = %q, want runtime fallback %q", opts.AgentStateDir, wantStateDir)
+	}
+}
+
 type blockingAppProvider struct {
 	started chan struct{}
 	release chan struct{}

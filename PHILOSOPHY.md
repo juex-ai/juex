@@ -62,7 +62,7 @@ them and when the implementation can stay small enough to test and explain.
   mental model, at the cost of fewer deployment knobs.
 - Standard library first in Go: less dependency drift, at the cost of writing
   small protocol adapters ourselves.
-- Marker-bound agent homes: state survives workspace moves and supports a
+- Marker-bound AgentStateDirs: state survives Workspace moves and supports a
   central fleet registry, at the cost of an explicit identity binding and
   migration step.
 - Synchronous turn loop with parallel tool calls: simple ordering and tests,

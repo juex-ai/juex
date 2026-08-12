@@ -3,8 +3,6 @@ package sandbox
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -147,71 +145,5 @@ func TestDefaultRunnerLinuxMissingBubblewrapFailsClosed(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "backend=bubblewrap") || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("err = %v, want bubblewrap unavailable", err)
-	}
-}
-
-func TestDefaultRunnerRejectsAdditionalWritableRootBlockedPathOverlap(t *testing.T) {
-	root := t.TempDir()
-	dataDir := filepath.Join(root, "agent", "extensions", "demo")
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	policy := DefaultPolicy()
-	policy.Enabled = true
-	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
-	tests := []struct {
-		name    string
-		blocked string
-	}{
-		{name: "blocked ancestor", blocked: filepath.Dir(dataDir)},
-		{name: "blocked exact", blocked: dataDir},
-		{name: "blocked descendant", blocked: filepath.Join(dataDir, "secret")},
-		{name: "relative blocked ancestor", blocked: filepath.Join("agent", "extensions")},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			policy := policy
-			policy.FileSystem.BlockedPaths = []string{tc.blocked}
-			_, err := (DefaultRunner{
-				RuntimeOS: "darwin",
-				LookPath:  func(string) (string, error) { return "/usr/bin/sandbox-exec", nil },
-			}).Prepare(context.Background(), Request{
-				Policy:                  policy,
-				WorkspaceRoots:          []string{root},
-				AdditionalWritableRoots: []string{dataDir},
-				Spec:                    ExecSpec{Binary: "/bin/true"},
-			})
-			if err == nil || !strings.Contains(err.Error(), "additional writable root") || !strings.Contains(err.Error(), "blocked_paths") {
-				t.Fatalf("Prepare() error = %v, want writable-root conflict", err)
-			}
-		})
-	}
-}
-
-func TestDefaultRunnerRejectsSymlinkedAdditionalWritableRootBlockedOverlap(t *testing.T) {
-	root := t.TempDir()
-	physical := filepath.Join(root, "physical")
-	if err := os.Mkdir(physical, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	logical := filepath.Join(root, "logical")
-	if err := os.Symlink(physical, logical); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	policy := DefaultPolicy()
-	policy.Enabled = true
-	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
-	policy.FileSystem.BlockedPaths = []string{physical}
-	_, err := (DefaultRunner{
-		RuntimeOS: "darwin",
-		LookPath:  func(string) (string, error) { return "/usr/bin/sandbox-exec", nil },
-	}).Prepare(context.Background(), Request{
-		Policy:                  policy,
-		WorkspaceRoots:          []string{root},
-		AdditionalWritableRoots: []string{logical},
-		Spec:                    ExecSpec{Binary: "/bin/true"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "additional writable root") {
-		t.Fatalf("Prepare() error = %v, want physical-path conflict", err)
 	}
 }

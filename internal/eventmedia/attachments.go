@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/artifact"
+	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 const (
@@ -34,6 +35,8 @@ type AttachmentRef struct {
 
 type ValidationOptions struct {
 	WorkDir            string
+	AgentStateDir      string
+	PathGuard          sandbox.PathGuard
 	MaxAttachmentBytes int64
 	MaxEventBytes      int64
 }
@@ -203,17 +206,9 @@ func inspectAttachment(ref AttachmentRef, opts ValidationOptions, remainingEvent
 	if strings.TrimSpace(ref.Path) == "" {
 		return inspectedAttachment{}, fmt.Errorf("path is required")
 	}
-	root, err := resolvedWorkDir(opts.WorkDir)
+	root, absPath, rel, err := resolveAttachmentPath(opts, ref.Path)
 	if err != nil {
 		return inspectedAttachment{}, err
-	}
-	absPath, err := resolveAttachmentPath(root, ref.Path)
-	if err != nil {
-		return inspectedAttachment{}, err
-	}
-	rel, err := filepath.Rel(root, absPath)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return inspectedAttachment{}, fmt.Errorf("attachment path is outside allowed roots")
 	}
 	rootFS, err := os.OpenRoot(root)
 	if err != nil {
@@ -295,29 +290,49 @@ func resolvedWorkDir(workDir string) (string, error) {
 	return resolved, nil
 }
 
-func resolveAttachmentPath(root, rawPath string) (string, error) {
+func resolveAttachmentPath(opts ValidationOptions, rawPath string) (string, string, string, error) {
 	path := strings.TrimSpace(rawPath)
 	if path == "" {
-		return "", fmt.Errorf("path is required")
+		return "", "", "", fmt.Errorf("path is required")
+	}
+	workDir, err := resolvedWorkDir(opts.WorkDir)
+	if err != nil {
+		return "", "", "", err
 	}
 	var candidate string
 	if filepath.IsAbs(path) {
 		candidate = filepath.Clean(path)
 	} else {
-		candidate = filepath.Join(root, filepath.FromSlash(path))
+		candidate = filepath.Join(workDir, filepath.FromSlash(path))
+	}
+	if err := opts.PathGuard.Check(candidate); err != nil {
+		return "", "", "", err
 	}
 	resolved, err := filepath.EvalSymlinks(candidate)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf("attachment path does not exist")
+			return "", "", "", fmt.Errorf("attachment path does not exist")
 		}
-		return "", err
+		return "", "", "", err
 	}
-	rel, err := filepath.Rel(root, resolved)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("attachment path is outside allowed roots")
+	roots := []string{workDir}
+	for _, root := range roots {
+		rel, err := filepath.Rel(root, resolved)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+			return root, resolved, rel, nil
+		}
 	}
-	return resolved, nil
+	if strings.TrimSpace(opts.AgentStateDir) != "" {
+		agentStateDir, err := resolvedWorkDir(opts.AgentStateDir)
+		if err != nil {
+			return "", "", "", fmt.Errorf("AgentStateDir: %w", err)
+		}
+		rel, err := filepath.Rel(agentStateDir, resolved)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+			return agentStateDir, resolved, rel, nil
+		}
+	}
+	return "", "", "", fmt.Errorf("attachment path is outside allowed roots")
 }
 
 func validatedMediaType(data []byte, path string, declared string) (string, error) {

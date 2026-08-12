@@ -22,8 +22,8 @@ type ExtensionRuntimeContext struct {
 	agentStateDir string
 }
 
-// AgentExtensionsRuntime is the Agent-wide persistent root shared by
-// sandboxed shell commands and Observable subprocesses.
+// AgentExtensionsRuntime manages the Agent-owned parent directory used by
+// selected extensions for private persistent data.
 type AgentExtensionsRuntime struct {
 	RootDir string
 
@@ -39,15 +39,8 @@ func newAgentExtensionsRuntime(address agentstate.AgentAddress) AgentExtensionsR
 	return runtime
 }
 
-func (r AgentExtensionsRuntime) AdditionalWritableRoots() []string {
-	if r.RootDir == "" {
-		return nil
-	}
-	return []string{r.RootDir}
-}
-
 // Prepare creates only the Agent-wide root immediately before a sandboxed
-// child starts. State-free previews remain side-effect free.
+// extension child starts. State-free previews remain side-effect free.
 func (r AgentExtensionsRuntime) Prepare() error {
 	if r.RootDir == "" {
 		return nil
@@ -86,15 +79,6 @@ func newExtensionRuntimeContext(address agentstate.AgentAddress, extension exten
 		context.DataDir = filepath.Join(context.agentStateDir, "extensions", extension.Name)
 	}
 	return context
-}
-
-// AdditionalWritableRoots returns the narrow Agent-owned path that an
-// extension-aware sandbox request may explicitly grant.
-func (c ExtensionRuntimeContext) AdditionalWritableRoots() []string {
-	if c.DataDir == "" {
-		return nil
-	}
-	return []string{c.DataDir}
 }
 
 // PrepareDataDir creates the persistent data directory immediately before a

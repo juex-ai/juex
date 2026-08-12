@@ -15,7 +15,7 @@ func TestDarwinReadOnlyProfileRestrictsWritesOutsideWorkspace(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
-	profile, err := darwinProfile(policy, []string{"/tmp/workspace"})
+	profile, err := darwinProfile(policy, "/tmp/workspace", []string{"/tmp/workspace"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestDarwinProfileBlocksConfiguredPaths(t *testing.T) {
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadWrite
 	policy.FileSystem.BlockedPaths = []string{"/tmp/secret"}
-	profile, err := darwinProfile(policy, []string{"/tmp/workspace"})
+	profile, err := darwinProfile(policy, "/tmp/workspace", []string{"/tmp/workspace"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,8 +104,9 @@ func TestDarwinReadOnlyBackendAllowsWorkspaceWriteOnly(t *testing.T) {
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	spec, err := (DefaultRunner{RuntimeOS: "darwin"}).Prepare(context.Background(), Request{
-		Policy:         policy,
-		WorkspaceRoots: []string{work},
+		Policy:        policy,
+		WorkDir:       work,
+		WritableRoots: []string{work},
 		Spec: ExecSpec{
 			Binary: "sh",
 			Args: []string{
@@ -142,8 +143,9 @@ func TestDarwinReadOnlyBackendAllowsDeviceAndTempWrites(t *testing.T) {
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	spec, err := (DefaultRunner{RuntimeOS: "darwin"}).Prepare(context.Background(), Request{
-		Policy:         policy,
-		WorkspaceRoots: []string{work},
+		Policy:        policy,
+		WorkDir:       work,
+		WritableRoots: []string{work},
 		Spec: ExecSpec{
 			Binary: "sh",
 			Args: []string{
@@ -165,7 +167,7 @@ func TestDarwinReadOnlyBackendAllowsDeviceAndTempWrites(t *testing.T) {
 	}
 }
 
-func TestDefaultRunnerDarwinAllowsOnlyExactAdditionalWritableRoot(t *testing.T) {
+func TestDefaultRunnerDarwinAllowsWorkspaceAndAgentStateRoots(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
 	dataRoot := filepath.Join(root, "agent", "extensions")
@@ -183,10 +185,10 @@ func TestDefaultRunnerDarwinAllowsOnlyExactAdditionalWritableRoot(t *testing.T) 
 		RuntimeOS: "darwin",
 		LookPath:  func(string) (string, error) { return "/usr/bin/sandbox-exec", nil },
 	}).Prepare(context.Background(), Request{
-		Policy:                  policy,
-		WorkspaceRoots:          []string{workspace},
-		AdditionalWritableRoots: []string{dataDir},
-		Spec:                    ExecSpec{Binary: "/bin/true"},
+		Policy:        policy,
+		WorkDir:       workspace,
+		WritableRoots: []string{workspace, dataDir},
+		Spec:          ExecSpec{Binary: "/bin/true"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -208,6 +210,79 @@ func TestDefaultRunnerDarwinAllowsOnlyExactAdditionalWritableRoot(t *testing.T) 
 		if strings.Contains(profile, forbidden) {
 			t.Fatalf("profile grants forbidden root %q:\n%s", forbidden, profile)
 		}
+	}
+}
+
+func TestDarwinProfileLetsBlockedPathsOverrideAgentWritableRoot(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "agent", "extensions", "demo")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	policy := DefaultPolicy()
+	policy.Enabled = true
+	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
+	for _, blocked := range []string{
+		filepath.Dir(dataDir),
+		dataDir,
+		filepath.Join(dataDir, "secret"),
+		filepath.Join("agent", "extensions"),
+	} {
+		policy := policy
+		policy.FileSystem.BlockedPaths = []string{blocked}
+		profile, err := darwinProfile(policy, root, []string{root, dataDir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(profile, "deny file-read") || !strings.Contains(profile, filepath.Clean(blocked)) {
+			t.Fatalf("profile does not let blocked path %q override writable root:\n%s", blocked, profile)
+		}
+	}
+}
+
+func TestDarwinProfileResolvesSymlinkedBlockedPathInsideWritableRoot(t *testing.T) {
+	root := t.TempDir()
+	physical := filepath.Join(root, "physical")
+	if err := os.Mkdir(physical, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logical := filepath.Join(root, "logical")
+	if err := os.Symlink(physical, logical); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	policy := DefaultPolicy()
+	policy.Enabled = true
+	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
+	policy.FileSystem.BlockedPaths = []string{physical}
+	profile, err := darwinProfile(policy, root, []string{root, logical})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(profile, physical) {
+		t.Fatalf("profile does not contain physical blocked path %q:\n%s", physical, profile)
+	}
+}
+
+func TestDarwinProfileRelativeBlockedPathUsesWorkDirNotWritableRootOrder(t *testing.T) {
+	workspace := t.TempDir()
+	agentStateDir := t.TempDir()
+	blocked := filepath.Join(workspace, "secret")
+	if err := os.Mkdir(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	policy := DefaultPolicy()
+	policy.Enabled = true
+	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
+	policy.FileSystem.BlockedPaths = []string{"secret"}
+	profile, err := darwinProfile(policy, workspace, []string{agentStateDir, workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(profile, blocked) {
+		t.Fatalf("relative blocked path did not resolve from WorkDir:\n%s", profile)
+	}
+	if wrong := filepath.Join(agentStateDir, "secret"); strings.Contains(profile, wrong) {
+		t.Fatalf("relative blocked path resolved from WritableRoots order: %s", wrong)
 	}
 }
 

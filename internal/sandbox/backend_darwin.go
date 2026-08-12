@@ -11,7 +11,7 @@ func prepareDarwin(lookPath func(string) (string, error), req Request) (ExecSpec
 	if err != nil {
 		return ExecSpec{}, NewError(ErrorCodeBackendUnavailable, "darwin", "sandbox-exec", "lookup", req.Policy, "Install or enable sandbox-exec, set sandbox.enabled: false, or choose a platform backend that can enforce the requested policy.", err)
 	}
-	profile, err := darwinProfile(req.Policy, req.WorkspaceRoots)
+	profile, err := darwinProfile(req.Policy, req.WorkDir, req.WritableRoots)
 	if err != nil {
 		return ExecSpec{}, err
 	}
@@ -26,7 +26,7 @@ func prepareDarwin(lookPath func(string) (string, error), req Request) (ExecSpec
 	return wrapped, nil
 }
 
-func darwinProfile(policy Policy, workspaceRoots []string) (string, error) {
+func darwinProfile(policy Policy, workDir string, writableRoots []string) (string, error) {
 	if err := ValidateOutsideWorkspaceAccess(policy.FileSystem.OutsideWorkspace); err != nil {
 		return "", err
 	}
@@ -34,13 +34,13 @@ func darwinProfile(policy Policy, workspaceRoots []string) (string, error) {
 	b.WriteString("(version 1)\n")
 	b.WriteString("(allow default)\n")
 	if policy.FileSystem.OutsideWorkspace == OutsideWorkspaceReadOnly {
-		roots := normalizedRoots(workspaceRoots)
+		roots := normalizedRoots(writableRoots)
 		if len(roots) == 0 {
 			return "", NewError(ErrorCodePolicyUnavailable, "darwin", "sandbox-exec", "profile", policy, "A writable workspace root is required when outside_workspace is read_only.", nil)
 		}
 		fmt.Fprintf(&b, "(deny file-write* (require-not %s))\n", darwinWritablePathPredicate(roots))
 	}
-	for _, path := range normalizedBlockedPaths(firstWorkspaceRoot(workspaceRoots), policy.FileSystem.BlockedPaths) {
+	for _, path := range normalizedBlockedPaths(normalizedWorkDir(workDir), policy.FileSystem.BlockedPaths) {
 		fmt.Fprintf(&b, "(deny file-read* (literal %s))\n", strconv.Quote(path))
 		fmt.Fprintf(&b, "(deny file-read* (subpath %s))\n", strconv.Quote(path))
 		fmt.Fprintf(&b, "(deny file-write* (literal %s))\n", strconv.Quote(path))

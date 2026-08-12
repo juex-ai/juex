@@ -574,6 +574,9 @@ func TestRipgrepRunnerUsesSandboxRunnerAndExcludesBlockedDescendant(t *testing.T
 	if sandboxRunner.calls != 1 {
 		t.Fatalf("sandbox runner calls = %d, want 1", sandboxRunner.calls)
 	}
+	if got := sandboxRunner.requests[0].WritableRoots; len(got) != 1 || got[0] != root {
+		t.Fatalf("grep writable roots = %v, want only Workspace", got)
+	}
 	if got := strings.Join(sandboxRunner.specs[0].Env, "\n"); !strings.Contains(got, "GREP_RUNTIME_MARKER=from-snapshot") {
 		t.Fatalf("ripgrep environment = %q", got)
 	}

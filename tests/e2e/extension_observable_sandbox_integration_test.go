@@ -18,7 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/observable"
 )
 
-func TestIntegration_ExtensionObservableSandboxGrantsOnlyCurrentAgentExtensionsRoot(t *testing.T) {
+func TestIntegration_ExtensionObservableSandboxGrantsCurrentAgentStateDir(t *testing.T) {
 	switch runtime.GOOS {
 	case "darwin":
 		if _, err := exec.LookPath("sandbox-exec"); err != nil {
@@ -75,7 +75,7 @@ func TestIntegration_ExtensionObservableSandboxGrantsOnlyCurrentAgentExtensionsR
 				"args": []string{"-c", strings.Join([]string{
 					`if printf own > "$JUEX_EXT_DATA_DIR/own.txt"; then own=ok; else own=failed; fi`,
 					`if printf sibling > "$SIBLING_DATA/shared.txt"; then sibling=ok; else sibling=failed; fi`,
-					`if printf current > "$AGENT_OTHER/blocked.txt" 2>/dev/null; then current=unexpected; else current=blocked; fi`,
+					`if printf current > "$AGENT_OTHER/current.txt" 2>/dev/null; then current=ok; else current=failed; fi`,
 					`if printf other > "$OTHER_AGENT_EXTENSIONS/blocked.txt" 2>/dev/null; then other=unexpected; else other=blocked; fi`,
 					`printf '{"type":"sandbox_probe","level":"info","content":"own=%s sibling=%s current=%s other=%s"}\n' "$own" "$sibling" "$current" "$other"`,
 				}, "\n")},
@@ -113,6 +113,7 @@ func TestIntegration_ExtensionObservableSandboxGrantsOnlyCurrentAgentExtensionsR
 			WorkDir:          work,
 			HomeJuexDir:      home,
 			AgentAddress:     address,
+			AgentStateDir:    address.StateDir(),
 			Extensions: config.ExtensionPolicy{
 				Allow:      []string{"demo"},
 				Configured: true,
@@ -148,7 +149,7 @@ func TestIntegration_ExtensionObservableSandboxGrantsOnlyCurrentAgentExtensionsR
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if len(records) != 1 || records[0].Content != "own=ok sibling=ok current=blocked other=blocked" {
+	if len(records) != 1 || records[0].Content != "own=ok sibling=ok current=ok other=blocked" {
 		status, _ := a.Observables().StatusByID("extension-sandbox-probe")
 		t.Fatalf("observations = %+v, status = %+v", records, status)
 	}
@@ -160,13 +161,12 @@ func TestIntegration_ExtensionObservableSandboxGrantsOnlyCurrentAgentExtensionsR
 	if content, err := os.ReadFile(filepath.Join(siblingData, "shared.txt")); err != nil || string(content) != "sibling" {
 		t.Fatalf("sibling data = %q err=%v", content, err)
 	}
-	for _, blocked := range []string{
-		filepath.Join(agentOther, "blocked.txt"),
-		filepath.Join(otherAgentExtensions, "blocked.txt"),
-	} {
-		if _, err := os.Stat(blocked); !os.IsNotExist(err) {
-			t.Fatalf("blocked path %s was written, stat err=%v", blocked, err)
-		}
+	if content, err := os.ReadFile(filepath.Join(agentOther, "current.txt")); err != nil || string(content) != "current" {
+		t.Fatalf("current Agent state = %q err=%v", content, err)
+	}
+	blocked := filepath.Join(otherAgentExtensions, "blocked.txt")
+	if _, err := os.Stat(blocked); !os.IsNotExist(err) {
+		t.Fatalf("other-Agent path %s was written, stat err=%v", blocked, err)
 	}
 
 	status, err := a.Observables().StatusByID("extension-sandbox-probe")

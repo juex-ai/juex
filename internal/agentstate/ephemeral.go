@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-// Ephemeral owns one temporary, process-local agent home.
+// Ephemeral owns one temporary, process-local AgentStateDir.
 type Ephemeral struct {
 	Resolution Resolution
 	RootDir    string

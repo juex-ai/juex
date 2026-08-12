@@ -3,7 +3,7 @@
 Juex is a small Go agent runtime distributed as a managed CLI package. It provides a CLI,
 a local web UI, Anthropic and OpenAI-compatible providers, builtin file/shell
 tools, workspace Observables, local and remote MCP tools, skills and hooks from
-local resource bundles, agent-home memory, and resumable session history.
+local resource bundles, Agent-owned memory, and resumable session history.
 
 The project is intentionally narrow: it is a runtime for experimenting with
 agent loops, not a hosted service or an all-in-one integration framework.
@@ -593,11 +593,11 @@ temporary scratch paths needed by normal shell tools, but do not silently reopen
 arbitrary user paths outside the workspace. Unsupported platforms, missing
 helpers, permissions errors, or policies a backend cannot enforce fail closed
 instead of falling back to unsandboxed execution.
-Sandboxed `exec_command` and Command Observable processes receive the current
-Agent's complete `$JUEX_HOME/agents/<id>/extensions` directory as an additional
-writable root. Schedules do not spawn a child process. An overlap with
-`blocked_paths`, including through symlinks, fails before process startup; no
-other Agent directory or other part of the current Agent home is granted.
+Sandboxed `exec_command` and Command Observable processes receive the Workspace
+and current AgentStateDir (`$JUEX_HOME/agents/<id>` for a Resident Agent) as
+their two default writable roots. Schedules do not spawn a child process.
+`blocked_paths`, including paths matched through symlinks, remains inaccessible
+inside either root; no other AgentStateDir is granted.
 Local Extension MCP servers retain their narrower owning-Extension data root.
 
 Observables are configured sources that emit durable Observations. Definitions
@@ -634,8 +634,9 @@ alongside runtime status so an agent can compare recurrence and Observation
 content before creating duplicate timed work. JSONL command
 parsers can map an `attachments_field` containing
 `[{ "path": "...", "media_type": "..." }]`;
-schedule observations can declare static `observation.attachments`. Attachment
-paths are validated inside the workdir, including `.juex/inbox/`; image
+schedule observations can declare static `observation.attachments`. Relative
+attachment paths are resolved inside the Workspace, while absolute paths may
+refer to either the Workspace or current AgentStateDir; image
 attachments are copied into content-addressed
 `.juex/artifacts/event-media/` files when the event is accepted, before
 batching or asynchronous delivery, and then become provider image blocks.
@@ -645,13 +646,13 @@ Command fields expand `WORKDIR`, `JUEX_WORKDIR`, and, for extension definitions,
 `JUEX_EXT_DIR` and `JUEX_EXT_DATA_DIR` across command, args, cwd, and env
 values without a shell. Project definitions cannot set or reference the two
 extension-only variables, and inherited values are removed from their child
-environment. Every Command Observable receives the current Agent's complete
-Extension data root as an additional writable root; with Sandbox enabled and
-`outside_workspace: read_only`, another Agent's data and unrelated paths in the
-current Agent home remain read-only. Explicit `blocked_paths` still wins.
+environment. Every Command Observable receives the Workspace and current
+AgentStateDir as its writable roots. With Sandbox enabled and
+`outside_workspace: read_only`, another Agent's data and unrelated paths remain
+read-only. Explicit `blocked_paths` still wins.
 
 Generated run, Observation, delivery, idempotency, and schedule state follow
-the resident agent in its agent home. Creation requests may omit `id` when
+the Resident Agent in its AgentStateDir. Creation requests may omit `id` when
 `name` can be slugged into a stable lower-case id; persisted project entries
 include the resolved id.
 

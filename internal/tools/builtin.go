@@ -10,19 +10,18 @@ import (
 )
 
 type BuiltinOptions struct {
-	WorkDir                        string
-	Environment                    environment.Snapshot
-	Shell                          ShellProfile
-	ShellSessions                  *ShellSessionManager
-	SearchRunner                   SearchRunner
-	Sandbox                        sandbox.Policy
-	SandboxRunner                  sandbox.Runner
-	ToolTimeoutSeconds             int
-	DisableApplyPatch              bool
-	Providers                      []BuiltinProvider
-	ChunkedWrites                  *ChunkedWriteManager
-	AdditionalWritableRoots        []string
-	PrepareAdditionalWritableRoots func() error
+	WorkDir            string
+	Environment        environment.Snapshot
+	Shell              ShellProfile
+	ShellSessions      *ShellSessionManager
+	SearchRunner       SearchRunner
+	Sandbox            sandbox.Policy
+	SandboxRunner      sandbox.Runner
+	ToolTimeoutSeconds int
+	DisableApplyPatch  bool
+	Providers          []BuiltinProvider
+	ChunkedWrites      *ChunkedWriteManager
+	AgentStateDir      string
 }
 
 type ShellProfile struct {
@@ -48,18 +47,17 @@ type builtinDefinitionProvider interface {
 }
 
 type BuiltinProviderContext struct {
-	WorkDir                        string
-	Environment                    environment.Snapshot
-	Shell                          ShellProfile
-	ShellSessions                  *ShellSessionManager
-	SearchRunner                   SearchRunner
-	Sandbox                        sandbox.Policy
-	SandboxRunner                  sandbox.Runner
-	ToolTimeoutSeconds             int
-	Options                        BuiltinOptions
-	ChunkedWrites                  *ChunkedWriteManager
-	AdditionalWritableRoots        []string
-	PrepareAdditionalWritableRoots func() error
+	WorkDir            string
+	Environment        environment.Snapshot
+	Shell              ShellProfile
+	ShellSessions      *ShellSessionManager
+	SearchRunner       SearchRunner
+	Sandbox            sandbox.Policy
+	SandboxRunner      sandbox.Runner
+	ToolTimeoutSeconds int
+	Options            BuiltinOptions
+	ChunkedWrites      *ChunkedWriteManager
+	AgentStateDir      string
 }
 
 func DefaultBuiltinProviders() []BuiltinProvider {
@@ -125,18 +123,17 @@ func newBuiltinProviderContext(r *Registry, opts BuiltinOptions) BuiltinProvider
 	}
 	toolTimeoutSeconds = normalizedTimeoutSeconds(toolTimeoutSeconds)
 	return BuiltinProviderContext{
-		WorkDir:                        workDir,
-		Environment:                    opts.Environment,
-		Shell:                          shell,
-		ShellSessions:                  shellSessions,
-		SearchRunner:                   opts.SearchRunner,
-		Sandbox:                        opts.Sandbox,
-		SandboxRunner:                  opts.SandboxRunner,
-		ToolTimeoutSeconds:             toolTimeoutSeconds,
-		Options:                        opts,
-		ChunkedWrites:                  opts.ChunkedWrites,
-		AdditionalWritableRoots:        append([]string(nil), opts.AdditionalWritableRoots...),
-		PrepareAdditionalWritableRoots: opts.PrepareAdditionalWritableRoots,
+		WorkDir:            workDir,
+		Environment:        opts.Environment,
+		Shell:              shell,
+		ShellSessions:      shellSessions,
+		SearchRunner:       opts.SearchRunner,
+		Sandbox:            opts.Sandbox,
+		SandboxRunner:      opts.SandboxRunner,
+		ToolTimeoutSeconds: toolTimeoutSeconds,
+		Options:            opts,
+		ChunkedWrites:      opts.ChunkedWrites,
+		AgentStateDir:      opts.AgentStateDir,
 	}
 }
 

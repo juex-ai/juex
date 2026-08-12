@@ -14,7 +14,7 @@ go test ./tests/e2e -count=1
 
 | Area | Test | What it protects |
 | --- | --- | --- |
-| Full runtime loop | `TestEndToEnd_FullStack` | Prompt sources, skills, Agent-home memory tools, MCP stdio tools, builtin read/write/edit/apply_patch/exec_command/grep, parallel tool calls, event JSONL, conversation JSONL. |
+| Full runtime loop | `TestEndToEnd_FullStack` | Prompt sources, skills, AgentStateDir memory tools, MCP stdio tools, builtin read/write/edit/apply_patch/exec_command/grep, parallel tool calls, event JSONL, conversation JSONL. |
 | Apply patch builtin | `TestEndToEnd_ApplyPatchBuiltinFlow` | The runtime exposes `apply_patch`, applies update and add operations through the tool loop, persists compact tool results in conversation JSONL, and emits tool events without echoing the patch body as a result. |
 | Chunked write builtin | `TestEndToEnd_ChunkedWriteBuiltinFlow` | The runtime exposes `write_begin` / `write_chunk` / `write_commit`, assembles a long file through multiple model turns, persists compact tool results and tool events, and sends providers summarized chunk inputs without replaying chunk content. |
 | Tool failure ledger | `TestEndToEnd_ToolFailureLedgerRecordsAndStalesWithoutContinuation` | A failed check is recorded in the runtime ledger, no failure-ledger continuation is injected, a related file mutation marks the failure stale, and events JSONL persists the flow. |
@@ -72,10 +72,10 @@ The live cases exercise:
 - read-tool use;
 - a multi-step write/edit/exec_command workflow.
 
-`TestIntegration_ExtensionObservableSandboxGrantsOnlyCurrentAgentExtensionsRoot`
-uses the platform sandbox to prove that an Extension Command Observable may
-write sibling Extension data for its current Agent but cannot write another
-Agent directory or unrelated paths in the current Agent home.
+`TestIntegration_ExtensionObservableSandboxGrantsCurrentAgentStateDir` uses the
+platform sandbox to prove that an Extension Command Observable may write the
+Workspace and any state owned by its current Agent but cannot write another
+AgentStateDir.
 
 Keep live prompts objective and self-grading: they should assert concrete
 strings or filesystem effects, not subjective answer quality.

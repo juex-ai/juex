@@ -18,7 +18,7 @@ func prepareLinux(lookPath func(string) (string, error), req Request) (ExecSpec,
 	if err := ValidateOutsideWorkspaceAccess(req.Policy.FileSystem.OutsideWorkspace); err != nil {
 		return ExecSpec{}, err
 	}
-	roots := normalizedRoots(req.WorkspaceRoots)
+	roots := normalizedRoots(req.WritableRoots)
 	if req.Policy.FileSystem.OutsideWorkspace != OutsideWorkspaceReadWrite && len(roots) == 0 {
 		return ExecSpec{}, NewError(ErrorCodePolicyUnavailable, "linux", "bubblewrap", "mount", req.Policy, "A writable workspace root is required when outside_workspace is restricted.", nil)
 	}
@@ -36,7 +36,7 @@ func prepareLinux(lookPath func(string) (string, error), req Request) (ExecSpec,
 			args = append(args, "--bind", root, root)
 		}
 	}
-	blockedArgs, err := linuxBlockedPathArgs(normalizedBlockedPaths(firstWorkspaceRoot(roots), req.Policy.FileSystem.BlockedPaths))
+	blockedArgs, err := linuxBlockedPathArgs(normalizedBlockedPaths(normalizedWorkDir(req.WorkDir), req.Policy.FileSystem.BlockedPaths))
 	if err != nil {
 		return ExecSpec{}, NewError(ErrorCodePolicyUnavailable, "linux", "bubblewrap", "mount", req.Policy, "Unable to prepare blocked_paths mask mounts for the requested sandbox policy.", err)
 	}
