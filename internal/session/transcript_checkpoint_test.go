@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -291,6 +292,10 @@ func TestSameSizeTimestampPreservingRewriteInvalidatesCheckpoint(t *testing.T) {
 }
 
 func TestTranscriptSnapshotDetectsSameMetadataReplacement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows prevents replacing a path while the snapshot handle is open")
+	}
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "conversation.jsonl")
 	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
