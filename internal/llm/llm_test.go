@@ -168,16 +168,15 @@ func writeAnthropicThinkingAndTextStream(w http.ResponseWriter, model string) {
 	fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
 }
 
-func testImageMedia(t *testing.T) *MediaRef {
+func testImageMedia(t *testing.T) (*MediaRef, string) {
 	t.Helper()
 	dir := t.TempDir()
-	t.Chdir(dir)
 	data := []byte("fake image bytes")
 	store, err := artifact.NewStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("media/session/image.png", data)
+	ref, err := store.Put("sessions/session/media/image.png", data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +187,7 @@ func testImageMedia(t *testing.T) *MediaRef {
 		OriginalBytes: len(data),
 		Width:         2,
 		Height:        1,
-	}
+	}, dir
 }
 
 func writeAnthropicTextAndToolStream(w http.ResponseWriter, model, text string, inputTokens, outputTokens int) {
@@ -304,7 +303,7 @@ func TestBlockImageJSONRoundTripStoresMediaReference(t *testing.T) {
 		Blocks: []Block{{
 			Type: BlockImage,
 			Media: &MediaRef{
-				ArtifactPath:  ".juex/artifacts/media/s/sha.png",
+				ArtifactPath:  "sessions/s/media/sha.png",
 				MediaType:     "image/png",
 				SHA256:        "sha",
 				OriginalBytes: 123,
@@ -351,7 +350,7 @@ func TestReadImageBase64RejectsUnsafePathsAndMediaTypes(t *testing.T) {
 func TestReadImageBase64ResolvesRelativeArtifactFromWorkDir(t *testing.T) {
 	workDir := t.TempDir()
 	otherDir := t.TempDir()
-	artifactPath := ".juex/artifacts/media/session/image.png"
+	artifactPath := "sessions/session/media/image.png"
 	filePath := filepath.Join(workDir, filepath.FromSlash(artifactPath))
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
 		t.Fatal(err)
@@ -369,6 +368,7 @@ func TestReadImageBase64ResolvesRelativeArtifactFromWorkDir(t *testing.T) {
 
 func TestReadImageBase64ReadsStoredEventAttachmentAfterSourceRemoval(t *testing.T) {
 	workDir := t.TempDir()
+	artifactDir := filepath.Join(t.TempDir(), "artifacts")
 	sourcePath := filepath.Join(workDir, ".juex", "inbox", "event.png")
 	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
 		t.Fatal(err)
@@ -383,7 +383,7 @@ func TestReadImageBase64ReadsStoredEventAttachmentAfterSourceRemoval(t *testing.
 	report := eventmedia.ValidateAttachments([]eventmedia.AttachmentRef{{
 		Path:      ".juex/inbox/event.png",
 		MediaType: "image/png",
-	}}, eventmedia.ValidationOptions{WorkDir: workDir})
+	}}, eventmedia.ValidationOptions{WorkDir: workDir, ArtifactDir: artifactDir})
 	if len(report.Valid) != 1 || len(report.Errors) != 0 {
 		t.Fatalf("event attachment report = %+v", report)
 	}
@@ -391,7 +391,7 @@ func TestReadImageBase64ReadsStoredEventAttachmentAfterSourceRemoval(t *testing.
 	if err := os.Remove(sourcePath); err != nil {
 		t.Fatal(err)
 	}
-	encoded, mediaType, ok := readImageBase64(workDir, &MediaRef{
+	encoded, mediaType, ok := readImageBase64(artifactDir, &MediaRef{
 		ArtifactPath:  attachment.ArtifactPath,
 		MediaType:     attachment.MediaType,
 		SHA256:        attachment.SHA256,
@@ -408,7 +408,7 @@ func TestReadImageBase64RejectsIntegrityMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := store.Put("media/session/image.png", []byte("fake image bytes"))
+	ref, err := store.Put("sessions/session/media/image.png", []byte("fake image bytes"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +422,7 @@ func TestReadImageBase64RejectsIntegrityMismatch(t *testing.T) {
 }
 
 func TestAnthropic_ProjectsUserAndToolResultImages(t *testing.T) {
-	media := testImageMedia(t)
+	media, artifactDir := testImageMedia(t)
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf, _ := io.ReadAll(r.Body)
@@ -436,6 +436,7 @@ func TestAnthropic_ProjectsUserAndToolResultImages(t *testing.T) {
 		BaseURL:      srv.URL,
 		APIKey:       "test-key",
 		Model:        "claude-test",
+		ArtifactDir:  artifactDir,
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
 	}), nil)
 
@@ -1736,7 +1737,7 @@ func TestOpenAI_ToolResultRoundTrip(t *testing.T) {
 }
 
 func TestOpenAI_ProjectsUserAndToolResultImages(t *testing.T) {
-	media := testImageMedia(t)
+	media, artifactDir := testImageMedia(t)
 	type wireReq struct {
 		Messages []map[string]any `json:"messages"`
 	}
@@ -1754,6 +1755,7 @@ func TestOpenAI_ProjectsUserAndToolResultImages(t *testing.T) {
 		BaseURL:      srv.URL,
 		APIKey:       "k",
 		Model:        "m",
+		ArtifactDir:  artifactDir,
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
 	}), nil)
 	hist := []Message{
@@ -2365,7 +2367,7 @@ func TestOpenAIResponses_StreamIdleTimeout(t *testing.T) {
 }
 
 func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing.T) {
-	media := testImageMedia(t)
+	media, artifactDir := testImageMedia(t)
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf, _ := io.ReadAll(r.Body)
@@ -2385,6 +2387,7 @@ func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing
 		BaseURL:      srv.URL,
 		APIKey:       "k",
 		Model:        "gpt-test",
+		ArtifactDir:  artifactDir,
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
 	}))
 	if err != nil {

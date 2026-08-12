@@ -89,7 +89,7 @@ func TestBuildCompactionSummaryRequestPreservesImageMediaReference(t *testing.T)
 		ID:   "image-1",
 		Role: llm.RoleUser,
 		Blocks: []llm.Block{{Type: llm.BlockImage, Media: &llm.MediaRef{
-			ArtifactPath:  ".juex/artifacts/media/session/photo.png",
+			ArtifactPath:  "sessions/session/media/photo.png",
 			MediaType:     "image/png",
 			SHA256:        "image-sha",
 			OriginalBytes: 1234,
@@ -100,7 +100,7 @@ func TestBuildCompactionSummaryRequestPreservesImageMediaReference(t *testing.T)
 
 	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 100}, "")
 	body := hist[0].FirstText()
-	for _, want := range []string{"path=.juex/artifacts/media/session/photo.png", "type=image/png", "sha256=image-sha", "bytes=1234", "size=800x600"} {
+	for _, want := range []string{"path=sessions/session/media/photo.png", "type=image/png", "sha256=image-sha", "bytes=1234", "size=800x600"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary input missing media field %q:\n%s", want, body)
 		}

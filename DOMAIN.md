@@ -23,16 +23,16 @@ domain boundary.
 | Term | Meaning |
 | --- | --- |
 | Agent runtime | The local system that admits input, builds model context, calls a Provider, executes Tool Calls, persists Session state, and emits Events. |
-| Workspace | The project directory from which Juex loads work-local guidance and configuration and in which it stores the identity marker and workspace-rooted artifacts. It is user/project-owned, not Agent-owned state. |
+| Workspace | The project directory from which Juex loads work-local guidance and configuration and in which it stores the identity marker. It is user/project-owned, not Agent-owned state. |
 | Juex home | The effective writable Juex-owned root selected by `JUEX_HOME`, defaulting to `~/.juex`; it scopes instance configuration, extensions, locks, and the resident Agent registry. A non-default home inherits the read-only configuration base at `~/.juex/juex.yaml`. |
 | Resident Agent | A durable Agent identity bound one-to-one to a Workspace marker, stored in the Juex home registry, and visible to Fleet operations. Its identity-owned state survives Workspace moves. |
 | Ephemeral Agent | A process-local Agent identity with private temporary Agent state. It uses the normal Workspace and user configuration/resources but has no Workspace marker, is not registered with Fleet, and is deleted on exit unless explicitly kept. |
 | Workspace marker | `.juex/juex.local.json`, the narrow binding from a Workspace to its Resident Agent id. A marker is identity, not configuration or a copyable cache. |
 | Agent Address | The value that binds a resolved Agent id to its identity-owned state directory and endpoint guard. Consumers use the address rather than deriving identity or Juex-home layout from directory names. |
-| Agent State Directory (`AgentStateDir`) | The stable state root owned by one Agent identity. A Resident Agent uses `$JUEX_HOME/agents/<id>`; an Ephemeral Agent uses a private temporary directory. It contains the registry record, Sessions, history, memory, logs, extension data, and generated Observable state, and survives Runtime Instance replacement. |
+| Agent State Directory (`AgentStateDir`) | The stable state root owned by one Agent identity. A Resident Agent uses `$JUEX_HOME/agents/<id>`; an Ephemeral Agent uses a private temporary directory. It contains the registry record, Sessions, history, memory, Artifacts, logs, extension data, and generated Observable state, and survives Runtime Instance replacement. |
 | Runtime Instance | One serving process incarnation for an Agent, identified independently from the Agent id and described by its instance id, process id, endpoint, start time, and binary version. Restarting changes the Runtime Instance without changing the Agent. |
-| Workspace-local state | User-authored configuration and resources plus workspace-rooted artifacts under the Workspace. Project-owned Observable definitions are workspace-local; selected extension definitions remain in their bundle; generated Observable state is not Workspace-local. |
-| Agent state | Runtime state owned by an Agent identity, including Session history, memory, logs, and generated Observable state. It lives in that identity's AgentStateDir and is distinct from the Workspace and Runtime Instance. |
+| Workspace-local state | User-authored configuration and resources under the Workspace. Project-owned Observable definitions are workspace-local; selected extension definitions remain in their bundle; generated Observable state is not Workspace-local. |
+| Agent state | Runtime state owned by an Agent identity, including Session history, memory, Artifacts, logs, and generated Observable state. It lives in that identity's AgentStateDir and is distinct from the Workspace and Runtime Instance. |
 | Fleet | The control surface for Resident Agents registered under one effective Juex home. It projects binding and runtime health and manages lifecycle without owning user-authored Workspace content. |
 
 ### Sessions And Turns
@@ -81,7 +81,7 @@ domain boundary.
 | Schedule | An Observable backed by a one-shot, daily, monthly-calendar, or interval timetable and a pre-authored Observation payload. Monthly recurrence preserves local wall-clock intent, skips absent month days and DST gaps, and emits a repeated DST wall-clock time once at its earlier UTC instant. |
 | Observation | A durable normalized signal emitted by an Observable, with source identity, content, attachments, delivery state, and target Session when admitted. |
 | Event | A stable fact about runtime activity. Durable Events are committed to the Session journal before live delivery; explicitly transient Events exist only for current subscribers. |
-| Artifact | Durable Workspace-local bytes addressed by a safe relative path plus integrity metadata. An Artifact reference is portable with the Workspace and does not imply that the bytes are model-visible. Observable-private oversized payload files in Agent state are generated implementation state, not Workspace Artifacts. |
+| Artifact | Durable Agent-owned bytes beneath `<AgentStateDir>/artifacts`, addressed by a safe root-relative path plus integrity metadata. An Artifact reference follows the Agent across Workspace moves and does not imply that the bytes are model-visible. |
 | User Media | Session-scoped image input stored as an Artifact and represented in conversation by a validated media reference. Provider capabilities determine projection, not whether the durable reference exists. |
 
 ## Lifecycles
@@ -185,9 +185,9 @@ domain boundary.
    and control operations verify the exact Agent and Runtime Instance they
    target.
 4. **Storage follows ownership.** Workspace-authored configuration, resources,
-   project Observable definitions, and Artifacts stay with the Workspace;
-   Extension Observable definitions stay in the selected Extension.
-   Identity-owned Sessions, memory, history, logs, and generated Observable
+   and project Observable definitions stay with the Workspace; Extension
+   Observable definitions stay in the selected Extension. Identity-owned
+   Sessions, memory, history, Artifacts, logs, and generated Observable
    state stay with the Agent. The default `~/.juex/juex.yaml` may supply shared
    configuration, but a non-default Juex home never writes runtime state or
    instance configuration back to the default home.
@@ -213,6 +213,8 @@ domain boundary.
     follow the Workspace and read-only Extension definitions follow the selected
     Extension; generated runs, Observations, delivery records, and schedule
     cursors follow the Agent and remain keyed by the global logical id.
-14. **Artifact references are bounded.** Durable bytes remain Workspace-local,
-    references are safe relative paths with integrity metadata, and User Media
-    references are scoped to their target Session.
+14. **Artifact references are bounded.** Durable bytes remain under the current
+    Agent's Artifact root, references are safe root-relative paths with
+    integrity metadata, and Session-owned references are scoped to their target
+    Session. Session scratchpad files remain mutable working material and are
+    not Artifacts.

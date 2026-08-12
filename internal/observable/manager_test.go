@@ -31,10 +31,12 @@ func TestManager_RecordObservationSnapshotsAttachments(t *testing.T) {
 	if err := os.WriteFile(sourcePath, []byte(`{"kind":"deploy"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	artifactDir := filepath.Join(t.TempDir(), "artifacts")
 	mgr, err := observable.NewManager(observable.ManagerOptions{
-		ConfigPath: configPath(dir),
-		StateDir:   stateDir(dir),
-		WorkDir:    dir,
+		ConfigPath:  configPath(dir),
+		StateDir:    stateDir(dir),
+		WorkDir:     dir,
+		ArtifactDir: artifactDir,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -55,10 +57,10 @@ func TestManager_RecordObservationSnapshotsAttachments(t *testing.T) {
 	if err := os.Remove(sourcePath); err != nil {
 		t.Fatal(err)
 	}
-	if len(record.Attachments) != 1 || !strings.HasPrefix(record.Attachments[0].Path, ".juex/artifacts/event-media/") {
+	if len(record.Attachments) != 1 || !strings.HasPrefix(record.Attachments[0].Path, "event-media/") {
 		t.Fatalf("record attachments = %+v, want durable artifact", record.Attachments)
 	}
-	if report := eventmedia.ValidateAttachments(record.Attachments, eventmedia.ValidationOptions{WorkDir: dir}); len(report.Errors) != 0 || len(report.Valid) != 1 {
+	if report := eventmedia.ValidateStoredAttachments(record.Attachments, eventmedia.ValidationOptions{ArtifactDir: artifactDir}); len(report.Errors) != 0 || len(report.Valid) != 1 {
 		t.Fatalf("stored attachment validation = %+v", report)
 	}
 }
@@ -1289,10 +1291,11 @@ func TestManager_RunOnceDeliversStoppedScheduleWithoutChangingScheduleState(t *t
 	writeObservableConfig(t, dir, spec)
 	delivered := make(chan observable.ObservationRecord, 1)
 	mgr, err := observable.NewManager(observable.ManagerOptions{
-		ConfigPath: configPath(dir),
-		StateDir:   stateDir(dir),
-		WorkDir:    dir,
-		Now:        func() time.Time { return now },
+		ConfigPath:  configPath(dir),
+		StateDir:    stateDir(dir),
+		WorkDir:     dir,
+		ArtifactDir: filepath.Join(t.TempDir(), "artifacts"),
+		Now:         func() time.Time { return now },
 		Deliver: func(_ context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			delivered <- record
 			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil

@@ -423,10 +423,10 @@ func (e *Engine) writeProjectedArtifact(sourceKind, messageID string, blockIndex
 }
 
 func (e *Engine) projectedArtifactStore() (artifact.Store, error) {
-	if e == nil || e.WorkDir == "" {
-		return artifact.Store{}, fmt.Errorf("context artifact: missing workspace directory")
+	if e == nil || e.ArtifactDir == "" {
+		return artifact.Store{}, fmt.Errorf("context artifact: missing Agent Artifact directory")
 	}
-	store, err := artifact.NewStore(e.WorkDir)
+	store, err := artifact.NewStore(e.ArtifactDir)
 	if err != nil {
 		return artifact.Store{}, fmt.Errorf("context artifact store: %w", err)
 	}
@@ -445,10 +445,10 @@ func (e *Engine) projectedArtifactPath(sourceKind, messageID string, blockIndex 
 	sessionID := safeArtifactName(sess.ID)
 	switch sourceKind {
 	case "user_input":
-		dir = path.Join("user-inputs", sessionID)
+		dir = path.Join("sessions", sessionID, "user-inputs")
 		name = messageID
 	case "tool_result":
-		dir = path.Join("tool-results", sessionID)
+		dir = path.Join("sessions", sessionID, "tool-results")
 		name = block.ToolUseID
 		if name == "" {
 			name = messageID

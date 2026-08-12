@@ -28,7 +28,7 @@ func (FileToolProvider) definitions(opts BuiltinDefinitionOptions) []ToolDefinit
 func (FileToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	guard := sandbox.NewPathGuard(ctx.WorkDir, ctx.Sandbox)
 	out := []Tool{
-		readTool(ctx.WorkDir, guard),
+		readTool(ctx.WorkDir, ctx.ArtifactDir, guard),
 		writeTool(ctx.WorkDir, guard),
 		editTool(ctx.WorkDir, guard),
 	}
@@ -108,7 +108,7 @@ func applyPatchToolDefinition() ToolDefinition {
 	}
 }
 
-func readTool(workDir string, guard sandbox.PathGuard) Tool {
+func readTool(workDir, artifactDir string, guard sandbox.PathGuard) Tool {
 	return readToolDefinition().BindResult(func(ctx context.Context, in map[string]any) (Result, error) {
 		path, _ := in["path"].(string)
 		if path == "" {
@@ -128,7 +128,7 @@ func readTool(workDir string, guard sandbox.PathGuard) Tool {
 			if offset > 0 || limit > 0 {
 				return Result{}, fmt.Errorf("read: offset and limit are not supported for image files")
 			}
-			return readImageResult(workDir, data, kind)
+			return readImageResult(artifactDir, data, kind)
 		}
 		if offset <= 0 && limit <= 0 {
 			return Result{Text: string(data)}, nil

@@ -15,7 +15,7 @@ cache-aware projection layer before provider calls.
 
 Implemented:
 
-- Oversized user inputs and tool results are materialized to `.juex/artifacts/`
+- Oversized user inputs and tool results are materialized to the Agent Artifact root
   and replaced by stable provider-visible previews before provider requests.
 - Restored legacy history is projected before provider calls, even when the
   original `conversation.jsonl` row predates artifact metadata.
@@ -75,7 +75,7 @@ type ContextArtifactProjection struct {
     ToolUseID     string
     ToolName      string
     OriginalBytes int
-    StoredPath    string // workspace-relative `.juex/artifacts/...` reference
+    StoredPath    string // Agent Artifact root-relative reference
     SHA256        string
     HeadBytes     int
     TailBytes     int
@@ -87,14 +87,14 @@ When a tool output exceeds `tool_output.inline_max_bytes`, Juex writes the full
 output independently of whether compaction is enabled:
 
 ```text
-.juex/artifacts/tool-results/<session-id>/<tool-use-id>-<block-index>.txt
+sessions/<session-id>/tool-results/<tool-use-id>-<block-index>.txt
 ```
 
 When a user input exceeds `compaction.user_input_inline_max_bytes`, Juex writes
 the full input to:
 
 ```text
-.juex/artifacts/user-inputs/<session-id>/<message-id>-<block-index>.txt
+sessions/<session-id>/user-inputs/<message-id>-<block-index>.txt
 ```
 
 The provider-visible tool result becomes a stable text block:
@@ -105,7 +105,7 @@ tool_use_id: <id>
 tool_name: <name>
 bytes: <n>
 sha256: <hash>
-path: <absolute path>
+path: <Agent Artifact root-relative path>
 
 Preview:
 <head>

@@ -1733,7 +1733,7 @@ func TestPostSessionAttachmentStoresImage(t *testing.T) {
 	if ref.MediaType != "image/png" || ref.SHA256 == "" || ref.Width != 2 || ref.Height != 3 {
 		t.Fatalf("media ref = %+v", ref)
 	}
-	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.WorkDir, filepath.FromSlash(ref.ArtifactPath))); err != nil {
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.ArtifactDir(), filepath.FromSlash(ref.ArtifactPath))); err != nil {
 		t.Fatalf("stored file missing: %v", err)
 	}
 }
@@ -1827,8 +1827,12 @@ func TestPostTurn_AttachmentTextAndImageReachesProvider(t *testing.T) {
 	)
 	close(prov.release)
 	work := t.TempDir()
+	stateDir := filepath.Join(work, ".juex")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	srv := NewServer(Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, Compaction: config.DefaultCompactionConfig()},
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, AgentStateDir: stateDir, Compaction: config.DefaultCompactionConfig()},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -1905,6 +1909,10 @@ func TestPostTurn_ImageOnlyAttachmentStartsTurn(t *testing.T) {
 	)
 	close(prov.release)
 	work := t.TempDir()
+	stateDir := filepath.Join(work, ".juex")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	vision := true
 	srv := NewServer(Options{
 		Cfg: config.Config{
@@ -1912,6 +1920,7 @@ func TestPostTurn_ImageOnlyAttachmentStartsTurn(t *testing.T) {
 			APIKey:               "x",
 			Model:                "m",
 			WorkDir:              work,
+			AgentStateDir:        stateDir,
 			Compaction:           config.DefaultCompactionConfig(),
 			ProviderCapabilities: llm.CapabilityOverrides{Vision: &vision},
 		},
@@ -1952,7 +1961,7 @@ func TestPostTurn_RejectsAttachmentOutsideSession(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 	id := createTestSession(t, ts.URL)
-	body := strings.NewReader(`{"prompt":"bad","attachments":[{"artifact_path":".juex/artifacts/media/other/image.png","media_type":"image/png","sha256":"` + strings.Repeat("a", 64) + `"}]}`)
+	body := strings.NewReader(`{"prompt":"bad","attachments":[{"artifact_path":"sessions/other/media/image.png","media_type":"image/png","sha256":"` + strings.Repeat("a", 64) + `"}]}`)
 
 	resp, err := http.Post(ts.URL+"/api/sessions/"+id+"/turns", "application/json", body)
 	if err != nil {

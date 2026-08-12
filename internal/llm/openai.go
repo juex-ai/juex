@@ -213,7 +213,7 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 					userText.WriteString(b.Text)
 				case BlockImage:
 					flushDeferredUserMessages()
-					if dataURL, ok := imageDataURL(profile.WorkDir, b.Media); ok {
+					if dataURL, ok := imageDataURL(profile.ArtifactDir, b.Media); ok {
 						if userText.Len() > 0 {
 							userParts = append(userParts, openai.TextContentPart(userText.String()))
 							userText.Reset()
@@ -235,7 +235,7 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 					}
 					out = append(out, openai.ToolMessage(content, b.ToolUseID))
 					if b.Media != nil {
-						if dataURL, ok := imageDataURL(profile.WorkDir, b.Media); ok {
+						if dataURL, ok := imageDataURL(profile.ArtifactDir, b.Media); ok {
 							deferredUserMessages = append(deferredUserMessages, openAIUserContentPartsMessage([]openai.ChatCompletionContentPartUnionParam{
 								openai.TextContentPart(openAIToolResultImageAttribution(b)),
 								openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL}),

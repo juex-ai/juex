@@ -21,7 +21,7 @@ test("assistantBlocksFromEventPayload prefers ordered canonical blocks", () => {
       {
         type: "image",
         media: {
-          artifact_path: ".juex/artifacts/media/s/image.png",
+			artifact_path: "sessions/s/media/image.png",
           media_type: "image/png",
           sha256: "abc",
           original_bytes: 12,
@@ -46,7 +46,7 @@ test("assistantBlocksFromEventPayload prefers ordered canonical blocks", () => {
     {
       type: "image",
       media: {
-        artifact_path: ".juex/artifacts/media/s/image.png",
+		artifact_path: "sessions/s/media/image.png",
         media_type: "image/png",
         sha256: "abc",
         original_bytes: 12,

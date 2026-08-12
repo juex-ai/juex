@@ -860,7 +860,8 @@ providers:
 	if storedRef == nil || !strings.Contains(storedRef.ArtifactPath, "/"+result.SessionID+"/") {
 		t.Fatalf("stored media ref = %+v", storedRef)
 	}
-	if _, err := os.Stat(filepath.Join(work, filepath.FromSlash(storedRef.ArtifactPath))); err != nil {
+	agentStateDir := filepath.Dir(filepath.Dir(result.SessionDir))
+	if _, err := os.Stat(filepath.Join(agentStateDir, "artifacts", filepath.FromSlash(storedRef.ArtifactPath))); err != nil {
 		t.Fatalf("persisted artifact unavailable after source removal: %v", err)
 	}
 }

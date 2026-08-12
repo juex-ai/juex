@@ -49,7 +49,7 @@ type ProviderProfile struct {
 	Query          map[string]string
 	Capabilities   ProviderCapabilities
 	Compat         CompatOptions
-	WorkDir        string
+	ArtifactDir    string
 }
 
 func ResolveProfile(cfg Config) (ProviderProfile, error) {
@@ -63,7 +63,7 @@ func ResolveProfile(cfg Config) (ProviderProfile, error) {
 	profile.ThinkingEffort = firstNonEmpty(cfg.ThinkingEffort, profile.ThinkingEffort)
 	profile.Headers = mergeStringMap(profile.Headers, cfg.Headers)
 	profile.Query = mergeStringMap(profile.Query, cfg.Query)
-	profile.WorkDir = cfg.WorkDir
+	profile.ArtifactDir = cfg.ArtifactDir
 	profile.Capabilities = applyCapabilityOverrides(profile.Capabilities, cfg.Capabilities)
 	if len(cfg.Compat.ReasoningReplayFields) > 0 {
 		profile.Compat.ReasoningReplayFields = append([]string(nil), cfg.Compat.ReasoningReplayFields...)

@@ -281,7 +281,7 @@ func executeRunCommand(cmd *cobra.Command, flags *persistentFlags, args []string
 	if !ok {
 		return emit(opts.jsonOut, cmd.ErrOrStderr(), app.ErrSessionUnavailable, "", false)
 	}
-	attachments, err := preparedAttachments.Store(cfg.WorkDir, identity.ID)
+	attachments, err := preparedAttachments.Store(cfg.ArtifactDir(), identity.ID)
 	if err != nil {
 		return emitAttachmentError(opts.jsonOut, cmd.ErrOrStderr(), err)
 	}

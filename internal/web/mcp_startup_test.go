@@ -90,7 +90,7 @@ func TestServeMCPNotificationPreservesAttachmentImageBlock(t *testing.T) {
 	if err := os.Remove(filepath.Join(work, filepath.FromSlash(relPath))); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(work, filepath.FromSlash(artifactPath))); err != nil {
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.ArtifactDir(), filepath.FromSlash(artifactPath))); err != nil {
 		t.Fatalf("stored MCP event artifact unavailable after source removal: %v", err)
 	}
 }
@@ -644,7 +644,7 @@ func waitForMCPImageBlockInSession(t *testing.T, dir, relPath string) string {
 			return false
 		}
 		for _, block := range msg.Blocks {
-			if block.Type == llm.BlockImage && block.Media != nil && strings.HasPrefix(block.Media.ArtifactPath, ".juex/artifacts/event-media/") {
+			if block.Type == llm.BlockImage && block.Media != nil && strings.HasPrefix(block.Media.ArtifactPath, "event-media/") {
 				artifactPath = block.Media.ArtifactPath
 				return true
 			}

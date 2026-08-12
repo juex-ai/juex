@@ -293,7 +293,7 @@ func toAnthropicMessages(history []Message, profile ProviderProfile, cachePrompt
 			case BlockText:
 				block = anthropic.NewTextBlock(b.Text)
 			case BlockImage:
-				if imageBlock, ok := anthropicImageBlock(profile.WorkDir, b.Media); ok {
+				if imageBlock, ok := anthropicImageBlock(profile.ArtifactDir, b.Media); ok {
 					block = imageBlock
 				} else {
 					block = anthropic.NewTextBlock(mediaReferenceText("image", b.Media))
@@ -307,7 +307,7 @@ func toAnthropicMessages(history []Message, profile ProviderProfile, cachePrompt
 			case BlockToolUse:
 				block = anthropic.NewToolUseBlock(b.ToolUseID, b.Input, b.ToolName)
 			case BlockToolResult:
-				block = anthropicToolResultBlock(profile.WorkDir, b)
+				block = anthropicToolResultBlock(profile.ArtifactDir, b)
 			default:
 				continue
 			}

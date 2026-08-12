@@ -20,6 +20,7 @@ type runnerOptions struct {
 	runID         string
 	workDir       string
 	agentStateDir string
+	artifactDir   string
 	environment   environment.Snapshot
 	sandboxPolicy sandbox.Policy
 	sandboxRunner sandbox.Runner
@@ -46,7 +47,7 @@ func newRunner(opts runnerOptions) *runner {
 		opts: opts,
 		pipe: pipe,
 		batcher: newCommandBatcher(opts.spec, opts.store, BatcherOptions{
-			RunID: opts.runID, WorkDir: opts.workDir, AgentStateDir: opts.agentStateDir,
+			RunID: opts.runID, WorkDir: opts.workDir, AgentStateDir: opts.agentStateDir, ArtifactDir: opts.artifactDir,
 			PathGuard: sandbox.NewPathGuard(opts.workDir, opts.sandboxPolicy),
 		}),
 	}

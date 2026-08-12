@@ -196,9 +196,8 @@ func TestResolveIgnoresWorkspaceRuntimeState(t *testing.T) {
 		"history.json":                                        "{\"sessions\":[{\"id\":\"s1\"}]}\n",
 		filepath.Join("logs", "listen.log"):                   "ready\n",
 		filepath.Join("observables", "observations.jsonl"):    "{\"id\":\"o1\"}\n",
-		"juex.yaml":                            "model: local:test\n",
-		"observables.json":                     "[]\n",
-		filepath.Join("artifacts", "keep.txt"): "workspace-local\n",
+		"juex.yaml":        "model: local:test\n",
+		"observables.json": "[]\n",
 	}
 	for rel, body := range files {
 		writeText(t, filepath.Join(workspaceStateDir, rel), body)

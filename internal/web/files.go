@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -10,7 +11,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -253,13 +256,11 @@ func (s *Server) handleFilesContent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
 		return
 	}
-
 	file, reqErr := s.resolveFileRequest(r)
 	if reqErr != nil {
 		reqErr.write(w)
 		return
 	}
-
 	f, err := os.Open(file.resolvedPath)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
@@ -355,8 +356,18 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET or HEAD")
 		return
 	}
+	switch r.URL.Query().Get("root") {
+	case "workspace":
+		s.handleWorkspaceMedia(w, r)
+	case "artifact":
+		s.handleArtifactMedia(w, r)
+	default:
+		writeErr(w, http.StatusBadRequest, "bad_request", "root must be workspace or artifact")
+	}
+}
 
-	file, reqErr := s.resolveFileRequest(r)
+func (s *Server) handleWorkspaceMedia(w http.ResponseWriter, r *http.Request) {
+	file, reqErr := s.resolveWorkspaceFileRequest(r)
 	if reqErr != nil {
 		reqErr.write(w)
 		return
@@ -380,29 +391,61 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "media is only supported for images")
 		return
 	}
-	etag, cacheControl := mediaCacheHeaders(file)
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
 
 	w.Header().Set("Content-Type", mediaType)
-	w.Header().Set("Cache-Control", cacheControl)
-	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", fmt.Sprintf(`W/"%x-%x"`, file.info.ModTime().UnixNano(), file.info.Size()))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, file.relPath, file.info.ModTime(), f)
 }
 
-func mediaCacheHeaders(file resolvedFileRequest) (etag, cacheControl string) {
-	relPath := filepath.ToSlash(file.relPath)
+func (s *Server) handleArtifactMedia(w http.ResponseWriter, r *http.Request) {
+	relPath := strings.TrimSpace(r.URL.Query().Get("path"))
+	if relPath == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "missing path parameter")
+		return
+	}
 	name := filepath.Base(filepath.FromSlash(relPath))
 	digest := strings.TrimSuffix(name, filepath.Ext(name))
-	if strings.HasPrefix(relPath, ".juex/artifacts/") && len(digest) == 64 {
-		if _, err := hex.DecodeString(digest); err == nil {
-			return `"` + strings.ToLower(digest) + `"`, "public, max-age=31536000, immutable"
-		}
+	if len(digest) != 64 {
+		writeErr(w, http.StatusForbidden, "forbidden", "artifact media path is not content-addressed")
+		return
 	}
-	return fmt.Sprintf(`W/"%x-%x"`, file.info.ModTime().UnixNano(), file.info.Size()), "no-cache"
+	if _, err := hex.DecodeString(digest); err != nil {
+		writeErr(w, http.StatusForbidden, "forbidden", "artifact media path is not content-addressed")
+		return
+	}
+	store, err := artifact.NewStore(s.opts.Cfg.ArtifactDir())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	data, err := store.Read(artifact.Ref{Path: relPath, SHA256: digest})
+	if err != nil {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			writeErr(w, http.StatusNotFound, "not_found", "artifact not found")
+		case errors.Is(err, artifact.ErrIntegrity):
+			writeErr(w, http.StatusConflict, "integrity_error", err.Error())
+		default:
+			writeErr(w, http.StatusForbidden, "forbidden", err.Error())
+		}
+		return
+	}
+	mediaType, ok := imagePreviewMediaType(data)
+	if !ok {
+		writeErr(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "media is only supported for images")
+		return
+	}
+	w.Header().Set("Content-Type", mediaType)
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("ETag", `"`+strings.ToLower(digest)+`"`)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, relPath, time.Time{}, bytes.NewReader(data))
 }
 
 type resolvedFileRequest struct {
@@ -437,6 +480,10 @@ func (s *Server) resolveFileRequest(r *http.Request) (resolvedFileRequest, *file
 		reqPath = scratchpadPath
 		displayPath = logicalPath
 	}
+	return resolveFileAtRoot(root, reqPath, displayPath)
+}
+
+func resolveFileAtRoot(root, reqPath, displayPath string) (resolvedFileRequest, *fileRequestError) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return resolvedFileRequest{}, &fileRequestError{status: http.StatusInternalServerError, code: "general_error", message: err.Error()}
@@ -476,6 +523,18 @@ func (s *Server) resolveFileRequest(r *http.Request) (resolvedFileRequest, *file
 	}
 
 	return resolvedFileRequest{relPath: relPath, resolvedPath: resolved, info: info}, nil
+}
+
+func (s *Server) resolveWorkspaceFileRequest(r *http.Request) (resolvedFileRequest, *fileRequestError) {
+	reqPath := r.URL.Query().Get("path")
+	if reqPath == "" {
+		return resolvedFileRequest{}, &fileRequestError{status: http.StatusBadRequest, code: "bad_request", message: "missing path parameter"}
+	}
+	root := s.opts.Cfg.WorkDir
+	if root == "" {
+		root = "."
+	}
+	return resolveFileAtRoot(root, reqPath, "")
 }
 
 func resolveScratchpadRequestPath(reqPath string) (physicalPath, logicalPath string, ok bool) {

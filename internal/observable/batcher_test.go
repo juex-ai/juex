@@ -121,7 +121,8 @@ func TestBatcher_SnapshotsAttachmentsBeforeFlush(t *testing.T) {
 	sourcePath := filepath.Join(workDir, ".juex", "inbox", "pixel.png")
 	writeBatcherPNG(t, sourcePath)
 	store := observable.NewStore(filepath.Join(workDir, ".juex", "observables"), observable.StoreOptions{Now: fixedNow})
-	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{WorkDir: workDir})
+	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{WorkDir: workDir, ArtifactDir: artifactDir})
 	unit := parsedUnit("stdout", "image event", fixedTime)
 	unit.Attachments = []eventmedia.AttachmentRef{{Path: ".juex/inbox/pixel.png", MediaType: "image/png"}}
 	if _, err := b.Add(unit); err != nil {
@@ -139,10 +140,10 @@ func TestBatcher_SnapshotsAttachmentsBeforeFlush(t *testing.T) {
 		t.Fatalf("records = %+v, want one stored attachment", records)
 	}
 	ref := records[0].Attachments[0]
-	if !strings.HasPrefix(ref.Path, ".juex/artifacts/event-media/") {
+	if !strings.HasPrefix(ref.Path, "event-media/") {
 		t.Fatalf("attachment path = %q, want durable event artifact", ref.Path)
 	}
-	if report := eventmedia.ValidateAttachments(records[0].Attachments, eventmedia.ValidationOptions{WorkDir: workDir}); len(report.Errors) != 0 || len(report.Valid) != 1 {
+	if report := eventmedia.ValidateStoredAttachments(records[0].Attachments, eventmedia.ValidationOptions{ArtifactDir: artifactDir}); len(report.Errors) != 0 || len(report.Valid) != 1 {
 		t.Fatalf("stored attachment validation = %+v", report)
 	}
 }
@@ -156,6 +157,7 @@ func TestBatcher_SnapshotsAttachmentFromAgentStateDir(t *testing.T) {
 	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{
 		WorkDir:       workDir,
 		AgentStateDir: agentStateDir,
+		ArtifactDir:   filepath.Join(agentStateDir, "artifacts"),
 	})
 	unit := parsedUnit("stdout", "image event", fixedTime)
 	unit.Attachments = []eventmedia.AttachmentRef{{Path: sourcePath, MediaType: "image/png"}}
@@ -166,7 +168,7 @@ func TestBatcher_SnapshotsAttachmentFromAgentStateDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 || len(records[0].Attachments) != 1 || !strings.HasPrefix(records[0].Attachments[0].Path, ".juex/artifacts/event-media/") {
+	if len(records) != 1 || len(records[0].Attachments) != 1 || !strings.HasPrefix(records[0].Attachments[0].Path, "event-media/") {
 		t.Fatalf("records = %+v, want one stored AgentStateDir attachment", records)
 	}
 }
@@ -184,6 +186,7 @@ func TestBatcher_EnforcesAttachmentLimitAcrossBatch(t *testing.T) {
 	store := observable.NewStore(filepath.Join(workDir, ".juex", "observables"), observable.StoreOptions{Now: fixedNow})
 	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{
 		WorkDir:       workDir,
+		ArtifactDir:   filepath.Join(t.TempDir(), "artifacts"),
 		MaxEventBytes: 1,
 	})
 	first := parsedUnit("stdout", "first", fixedTime)
@@ -229,6 +232,7 @@ func TestBatcher_ResetsAttachmentLimitAfterIntervalFlush(t *testing.T) {
 	store := observable.NewStore(filepath.Join(workDir, ".juex", "observables"), observable.StoreOptions{Now: fixedNow})
 	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{
 		WorkDir:       workDir,
+		ArtifactDir:   filepath.Join(t.TempDir(), "artifacts"),
 		MaxEventBytes: 1,
 	})
 	first := parsedUnit("stdout", "first", fixedTime)
@@ -259,7 +263,8 @@ func TestBatcher_SnapshotsNewAttachmentBeforeIntervalFlush(t *testing.T) {
 	spec := validSpec("logs")
 	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) { config.Batch.MaxChars = 1 })
 	store := observable.NewStore(filepath.Join(workDir, ".juex", "observables"), observable.StoreOptions{Now: fixedNow})
-	b := newBatcher(t, spec, store, observable.BatcherOptions{WorkDir: workDir})
+	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	b := newBatcher(t, spec, store, observable.BatcherOptions{WorkDir: workDir, ArtifactDir: artifactDir})
 	first := parsedUnit("stdout", "old-batch", fixedTime)
 	if _, err := b.Add(first); err != nil {
 		t.Fatal(err)
@@ -295,7 +300,7 @@ func TestBatcher_SnapshotsNewAttachmentBeforeIntervalFlush(t *testing.T) {
 	if len(records) != 1 || len(records[0].Attachments) != 1 {
 		t.Fatalf("records = %+v, want new batch attachment", records)
 	}
-	storedPath := filepath.Join(workDir, filepath.FromSlash(records[0].Attachments[0].Path))
+	storedPath := filepath.Join(artifactDir, filepath.FromSlash(records[0].Attachments[0].Path))
 	stored, err := os.ReadFile(storedPath)
 	if err != nil {
 		t.Fatal(err)

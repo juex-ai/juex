@@ -414,7 +414,7 @@ test("submitPrompt forwards attachments and projects optimistic image blocks", a
   let submittedAttachments: MediaRef[] | undefined;
   const attachments: MediaRef[] = [
     {
-      artifact_path: ".juex/artifacts/media/image.png",
+		artifact_path: "read-media/image.png",
       media_type: "image/png",
       sha256: "abc123",
       original_bytes: 12,

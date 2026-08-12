@@ -69,7 +69,9 @@ type Engine struct {
 	// WorkDir is the workspace root. Runtime state may live outside it, so
 	// workspace-relative tools and artifacts must not infer it from Session.
 	WorkDir string
-	Hooks   HookRunner
+	// ArtifactDir is the current Agent's managed Artifact root.
+	ArtifactDir string
+	Hooks       HookRunner
 	// HookContext carries process/session metadata included in every hook
 	// command input. Event-specific fields are filled by the runtime.
 	HookContext hooks.Request

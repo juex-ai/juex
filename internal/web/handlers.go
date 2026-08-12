@@ -343,15 +343,10 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id 
 	defer s.activeSelectionMu.Unlock()
 
 	_, runtimeActive := s.sessions.Load(id)
-	plan, err := session.PrepareDelete(s.opts.Cfg.SessionsDir(), s.opts.Cfg.HistoryPath(), id)
+	plan, err := app.PrepareSessionDelete(s.opts.Cfg, id, app.SessionDeleteOptions{AllowMissingSession: runtimeActive})
 	if err != nil {
 		if os.IsNotExist(err) {
-			if !runtimeActive {
-				writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
-				return
-			}
-			s.closeActiveSession(id)
-			writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": id})
+			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
 			return
 		}
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
@@ -543,7 +538,7 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 	if len(req.Attachments) > 0 {
-		if err := usermedia.ValidateSessionMediaRefs(s.opts.Cfg.WorkDir, id, req.Attachments, usermedia.Limits{}); err != nil {
+		if err := usermedia.ValidateSessionMediaRefs(s.opts.Cfg.ArtifactDir(), id, req.Attachments, usermedia.Limits{}); err != nil {
 			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}
@@ -638,7 +633,7 @@ func (s *Server) handleSessionAttachmentUpload(w http.ResponseWriter, r *http.Re
 	if header != nil {
 		filename = header.Filename
 	}
-	ref, err := usermedia.StoreUpload(s.opts.Cfg.WorkDir, id, filename, file, usermedia.Limits{})
+	ref, err := usermedia.StoreUpload(s.opts.Cfg.ArtifactDir(), id, filename, file, usermedia.Limits{})
 	if err != nil {
 		status := http.StatusBadRequest
 		kind := "bad_request"

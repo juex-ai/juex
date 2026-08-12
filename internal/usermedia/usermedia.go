@@ -63,9 +63,9 @@ type PreparedFiles struct {
 	files []inspectedFile
 }
 
-func StoreUpload(workDir, sessionID, filename string, r io.Reader, limits Limits) (MediaRef, error) {
-	if strings.TrimSpace(workDir) == "" {
-		return MediaRef{}, errors.New("user media: missing work dir")
+func StoreUpload(artifactDir, sessionID, filename string, r io.Reader, limits Limits) (MediaRef, error) {
+	if strings.TrimSpace(artifactDir) == "" {
+		return MediaRef{}, errors.New("user media: missing Artifact directory")
 	}
 	if !safeSessionID(sessionID) {
 		return MediaRef{}, fmt.Errorf("user media: unsafe session id %q", sessionID)
@@ -82,7 +82,7 @@ func StoreUpload(workDir, sessionID, filename string, r io.Reader, limits Limits
 	if err != nil {
 		return MediaRef{}, err
 	}
-	return storeImageData(workDir, sessionID, info, ext, data)
+	return storeImageData(artifactDir, sessionID, info, ext, data)
 }
 
 // InspectFiles validates local image paths without persisting artifacts.
@@ -121,16 +121,16 @@ func (p PreparedFiles) Infos() []FileInfo {
 }
 
 // StoreFiles validates local image paths and persists session-scoped artifacts.
-func StoreFiles(workDir, sessionID string, inputPaths []string, limits Limits) ([]MediaRef, error) {
+func StoreFiles(workDir, artifactDir, sessionID string, inputPaths []string, limits Limits) ([]MediaRef, error) {
 	prepared, err := PrepareFiles(workDir, inputPaths, limits)
 	if err != nil {
 		return nil, err
 	}
-	return prepared.Store(workDir, sessionID)
+	return prepared.Store(artifactDir, sessionID)
 }
 
 // Store persists a prepared batch in one session's artifact namespace.
-func (p PreparedFiles) Store(workDir, sessionID string) ([]MediaRef, error) {
+func (p PreparedFiles) Store(artifactDir, sessionID string) ([]MediaRef, error) {
 	if len(p.files) == 0 {
 		return []MediaRef{}, nil
 	}
@@ -139,7 +139,7 @@ func (p PreparedFiles) Store(workDir, sessionID string) ([]MediaRef, error) {
 	}
 	refs := make([]MediaRef, 0, len(p.files))
 	for _, file := range p.files {
-		ref, err := storeImageData(workDir, sessionID, file.info, file.ext, file.data)
+		ref, err := storeImageData(artifactDir, sessionID, file.info, file.ext, file.data)
 		if err != nil {
 			return nil, err
 		}
@@ -149,11 +149,11 @@ func (p PreparedFiles) Store(workDir, sessionID string) ([]MediaRef, error) {
 }
 
 // StoreFile validates one local image path and persists a session-scoped artifact.
-func StoreFile(workDir, sessionID, inputPath string, limits Limits) (MediaRef, error) {
-	return storeFile(workDir, sessionID, inputPath, effectiveLimits(limits))
+func StoreFile(workDir, artifactDir, sessionID, inputPath string, limits Limits) (MediaRef, error) {
+	return storeFile(workDir, artifactDir, sessionID, inputPath, effectiveLimits(limits))
 }
 
-func storeFile(workDir, sessionID, inputPath string, limits Limits) (MediaRef, error) {
+func storeFile(workDir, artifactDir, sessionID, inputPath string, limits Limits) (MediaRef, error) {
 	if !safeSessionID(sessionID) {
 		return MediaRef{}, fmt.Errorf("user media: unsafe session id %q", sessionID)
 	}
@@ -161,7 +161,7 @@ func storeFile(workDir, sessionID, inputPath string, limits Limits) (MediaRef, e
 	if err != nil {
 		return MediaRef{}, err
 	}
-	return storeImageData(workDir, sessionID, info, ext, data)
+	return storeImageData(artifactDir, sessionID, info, ext, data)
 }
 
 func inspectFile(workDir, inputPath string, limits Limits) (FileInfo, string, []byte, error) {
@@ -243,12 +243,12 @@ func inspectImageData(resolvedPath, filename string, data []byte) (FileInfo, str
 	}, ext, nil
 }
 
-func storeImageData(workDir, sessionID string, info FileInfo, ext string, data []byte) (MediaRef, error) {
-	store, err := artifact.NewStore(workDir)
+func storeImageData(artifactDir, sessionID string, info FileInfo, ext string, data []byte) (MediaRef, error) {
+	store, err := artifact.NewStore(artifactDir)
 	if err != nil {
 		return MediaRef{}, fmt.Errorf("user media: artifact store: %w", err)
 	}
-	stored, err := store.PutContentAddressed(path.Join("media", sessionID), ext, data)
+	stored, err := store.PutContentAddressed(path.Join("sessions", sessionID, "media"), ext, data)
 	if err != nil {
 		return MediaRef{}, fmt.Errorf("user media: store upload: %w", err)
 	}
@@ -269,12 +269,12 @@ func validateInputCount(inputPaths []string, maxCount int) error {
 	return nil
 }
 
-func ValidateSessionMediaRefs(workDir, sessionID string, refs []MediaRef, limits Limits) error {
+func ValidateSessionMediaRefs(artifactDir, sessionID string, refs []MediaRef, limits Limits) error {
 	if len(refs) == 0 {
 		return nil
 	}
-	if strings.TrimSpace(workDir) == "" {
-		return errors.New("user media: missing work dir")
+	if strings.TrimSpace(artifactDir) == "" {
+		return errors.New("user media: missing Artifact directory")
 	}
 	if !safeSessionID(sessionID) {
 		return fmt.Errorf("user media: unsafe session id %q", sessionID)
@@ -283,7 +283,7 @@ func ValidateSessionMediaRefs(workDir, sessionID string, refs []MediaRef, limits
 	if limits.MaxCount > 0 && len(refs) > limits.MaxCount {
 		return fmt.Errorf("user media: too many images (%d/%d)", len(refs), limits.MaxCount)
 	}
-	store, err := artifact.NewStore(workDir)
+	store, err := artifact.NewStore(artifactDir)
 	if err != nil {
 		return fmt.Errorf("user media: artifact store: %w", err)
 	}
@@ -387,7 +387,7 @@ func sessionArtifactPath(sessionID, artifactPath string) (string, error) {
 	if artifactPath == "" {
 		return "", errors.New("missing artifact path")
 	}
-	root := path.Join(".juex", "artifacts", "media", sessionID)
+	root := path.Join("sessions", sessionID, "media")
 	if strings.Contains(artifactPath, `\`) || !fs.ValidPath(artifactPath) || path.Clean(artifactPath) != artifactPath || path.Dir(artifactPath) != root {
 		return "", errors.New("artifact path is outside session media root")
 	}

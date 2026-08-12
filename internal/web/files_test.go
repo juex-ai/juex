@@ -480,7 +480,7 @@ func TestMediaServesWorkDirImageWithRevalidationCache(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/media?path=screenshots%2Fpreview.png")
+	resp, err := http.Get(ts.URL + "/api/media?root=workspace&path=screenshots%2Fpreview.png")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,7 +515,7 @@ func TestMediaHeadReturnsImageMetadataWithoutBody(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Head(ts.URL + "/api/media?path=screenshots%2Fpreview.png")
+	resp, err := http.Head(ts.URL + "/api/media?root=workspace&path=screenshots%2Fpreview.png")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +537,7 @@ func TestMediaHeadReturnsImageMetadataWithoutBody(t *testing.T) {
 		t.Fatalf("HEAD body length = %d", len(body))
 	}
 
-	resp, err = http.Head(ts.URL + "/api/media?path=notes.txt")
+	resp, err = http.Head(ts.URL + "/api/media?root=workspace&path=notes.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,13 +550,13 @@ func TestMediaHeadReturnsImageMetadataWithoutBody(t *testing.T) {
 func TestMediaServesArtifactImage(t *testing.T) {
 	srv := newTestServer(t)
 	digest := "1b56b50ac4e976f488f128cabdcdffb2fc9331d6974bb9968131a415d14ade24"
-	artifactPath := filepath.Join(".juex", "artifacts", "media", "session", digest+".png")
-	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, artifactPath), tinyPNG)
+	artifactPath := filepath.Join("sessions", "session", "media", digest+".png")
+	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.ArtifactDir(), artifactPath), tinyPNG)
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/media?path=" + url.QueryEscape(filepath.ToSlash(artifactPath)))
+	resp, err := http.Get(ts.URL + "/api/media?root=artifact&path=" + url.QueryEscape(filepath.ToSlash(artifactPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -572,6 +572,61 @@ func TestMediaServesArtifactImage(t *testing.T) {
 	}
 	if got := resp.Header.Get("ETag"); got != `"`+digest+`"` {
 		t.Fatalf("etag = %q", got)
+	}
+}
+
+func TestMediaRequiresExplicitRoot(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/media?path=screenshots%2Fpreview.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestWorkspaceMediaDoesNotResolveSessionScratchpadAliases(t *testing.T) {
+	srv := newTestServer(t)
+	srv.opts.Cfg.AgentStateDir = filepath.Join(t.TempDir(), "agent")
+	id := "20260812T120000-scratch"
+	logical := filepath.ToSlash(filepath.Join(".juex", "sessions", id, "scratchpad", "image.png"))
+	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.SessionsDir(), id, "scratchpad", "image.png"), tinyPNG)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/media?root=workspace&path=" + url.QueryEscape(logical))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want workspace-only 404", resp.StatusCode)
+	}
+}
+
+func TestArtifactMediaRejectsCorruptedContentAddressedBytes(t *testing.T) {
+	srv := newTestServer(t)
+	digest := "1b56b50ac4e976f488f128cabdcdffb2fc9331d6974bb9968131a415d14ade24"
+	artifactPath := filepath.Join("sessions", "session", "media", digest+".png")
+	mustWriteFile(t, filepath.Join(srv.opts.Cfg.ArtifactDir(), artifactPath), "corrupted")
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/media?root=artifact&path=" + url.QueryEscape(filepath.ToSlash(artifactPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "" {
+		t.Fatalf("cache-control = %q, want empty for unverified bytes", got)
 	}
 }
 
@@ -602,7 +657,7 @@ func TestMediaRejectsEscapesAndNonImages(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := http.Get(ts.URL + "/api/media?path=" + tc.path)
+			resp, err := http.Get(ts.URL + "/api/media?root=workspace&path=" + tc.path)
 			if err != nil {
 				t.Fatal(err)
 			}

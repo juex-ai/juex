@@ -2,7 +2,9 @@ package eventmedia
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,11 +33,14 @@ var errEventAttachmentsTooLarge = errors.New("event attachments exceed byte limi
 type AttachmentRef struct {
 	Path      string `json:"path"`
 	MediaType string `json:"media_type,omitempty"`
+	SHA256    string `json:"sha256,omitempty"`
+	Bytes     int    `json:"bytes,omitempty"`
 }
 
 type ValidationOptions struct {
 	WorkDir            string
 	AgentStateDir      string
+	ArtifactDir        string
 	PathGuard          sandbox.PathGuard
 	MaxAttachmentBytes int64
 	MaxEventBytes      int64
@@ -117,7 +122,7 @@ func ValidateAttachments(refs []AttachmentRef, opts ValidationOptions) Validatio
 	if len(inspected) == 0 {
 		return report
 	}
-	store, err := artifact.NewStore(opts.WorkDir)
+	store, err := artifact.NewStore(opts.ArtifactDir)
 	if err != nil {
 		report.Errors = append(report.Errors, AttachmentError{Index: -1, Error: fmt.Sprintf("store event attachment: %v", err)})
 		return report
@@ -132,6 +137,63 @@ func ValidateAttachments(refs []AttachmentRef, opts ValidationOptions) Validatio
 		item.attachment.SHA256 = stored.SHA256
 		item.attachment.OriginalBytes = stored.Bytes
 		report.Valid = append(report.Valid, item.attachment)
+	}
+	return report
+}
+
+// ValidateStoredAttachments resolves already-admitted logical Artifact
+// references. It never reinterprets them as Workspace-relative source paths.
+func ValidateStoredAttachments(refs []AttachmentRef, opts ValidationOptions) ValidationReport {
+	opts = normalizeOptions(opts)
+	var report ValidationReport
+	if len(refs) == 0 {
+		return report
+	}
+	store, err := artifact.NewStore(opts.ArtifactDir)
+	if err != nil {
+		report.Errors = append(report.Errors, AttachmentError{Index: -1, Error: fmt.Sprintf("open stored attachment: %v", err)})
+		return report
+	}
+	var total int64
+	for i, ref := range normalizeAttachmentRefs(refs) {
+		remaining := opts.MaxEventBytes - total
+		if remaining <= 0 {
+			return eventSizeLimitReport(opts.MaxEventBytes)
+		}
+		limit := min(opts.MaxAttachmentBytes, remaining)
+		if ref.SHA256 == "" || ref.Bytes <= 0 {
+			report.Errors = append(report.Errors, AttachmentError{Index: i, Path: ref.Path, Error: "stored attachment is missing integrity metadata"})
+			continue
+		}
+		data, err := store.ReadLimit(artifact.Ref{Path: ref.Path, SHA256: ref.SHA256, Bytes: ref.Bytes}, limit)
+		if err != nil {
+			if errors.Is(err, artifact.ErrTooLarge) && remaining < opts.MaxAttachmentBytes {
+				return eventSizeLimitReport(opts.MaxEventBytes)
+			}
+			report.Errors = append(report.Errors, AttachmentError{Index: i, Path: ref.Path, Error: fmt.Sprintf("read stored attachment: %v", err)})
+			continue
+		}
+		mediaType, err := validatedMediaType(data, ref.Path, ref.MediaType)
+		if err != nil {
+			report.Errors = append(report.Errors, AttachmentError{Index: i, Path: ref.Path, Error: err.Error()})
+			continue
+		}
+		width, height, err := imageDimensions(data, mediaType)
+		if err != nil {
+			report.Errors = append(report.Errors, AttachmentError{Index: i, Path: ref.Path, Error: err.Error()})
+			continue
+		}
+		sum := sha256.Sum256(data)
+		total += int64(len(data))
+		report.Valid = append(report.Valid, ValidatedAttachment{
+			Ref:           AttachmentRef{Path: ref.Path, MediaType: mediaType, SHA256: ref.SHA256, Bytes: ref.Bytes},
+			ArtifactPath:  ref.Path,
+			MediaType:     mediaType,
+			SHA256:        hex.EncodeToString(sum[:]),
+			OriginalBytes: len(data),
+			Width:         width,
+			Height:        height,
+		})
 	}
 	return report
 }
@@ -170,6 +232,7 @@ func normalizeAttachmentRefs(refs []AttachmentRef) []AttachmentRef {
 	for _, ref := range refs {
 		ref.Path = strings.TrimSpace(ref.Path)
 		ref.MediaType = normalizeMediaType(ref.MediaType)
+		ref.SHA256 = strings.TrimSpace(ref.SHA256)
 		out = append(out, ref)
 	}
 	return out

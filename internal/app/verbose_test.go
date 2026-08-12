@@ -315,7 +315,7 @@ func TestVerbose_PrintsImageBlocks(t *testing.T) {
 				{
 					Type: llm.BlockImage,
 					Media: &llm.MediaRef{
-						ArtifactPath:  ".juex/artifacts/media/s/chart.png",
+						ArtifactPath:  "sessions/s/media/chart.png",
 						MediaType:     "image/png",
 						OriginalBytes: 2048,
 						Width:         640,
