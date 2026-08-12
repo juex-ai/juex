@@ -939,7 +939,9 @@ repair validation. A versioned SHA-256 checksum covers the exact transcript
 fingerprint and every derived checkpoint field, so sidecar-only edits are
 rejected. A matching, repair-safe checkpoint lets session resume read
 only retained rows plus the active suffix,
-and lets recent transcript pages scan backward from the file tail. Missing,
+and lets recent transcript pages validate the sealed compact row with one
+targeted read before scanning backward from the file tail. Recent paging never
+rebuilds the post-compaction suffix index. Missing,
 stale, or invalid checkpoints fall back to a strict full scan; the next
 successful append replaces them. The checkpoint never stores the complete
 message index, and full-history APIs remain proportional to transcript size.
@@ -954,6 +956,11 @@ also verify every canonical row from the retained tail start through the
 compact marker, so a checksum-consistent retained tail cannot contain holes.
 Resident sessions compare both their open file and the canonical path before
 append and refuse to write when either no longer matches the in-memory index.
+`conversation.lock` serializes the final fingerprint check, JSONL append, and
+metadata replacement across Session instances. An external suffix that still
+appears after a committed write is adopted by a canonical rescan; the caller
+is not told that an already-persisted batch failed and therefore will not
+duplicate it on retry.
 `events.jsonl` does not use this checkpoint because safely skipping event
 prefixes would also require a durable reducer-state snapshot.
 

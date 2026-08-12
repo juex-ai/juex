@@ -25,8 +25,9 @@ func transcriptMessagePageFromCheckpoint(
 		return MessagePage{}, false, nil
 	}
 	if checkpoint.LatestCompact != nil {
-		suffix, err := scanTranscriptIndexFromFile(snapshot.file, path, checkpoint.LatestCompact.Offset)
-		if err != nil || !checkpointNamesLatestCompact(suffix, *checkpoint.LatestCompact) {
+		entry := checkpointIndexEntry(*checkpoint.LatestCompact)
+		messages, err := readTranscriptMessagesFromFile(snapshot.file, path, []transcriptIndexEntry{entry})
+		if err != nil || len(messages) != 1 || messages[0].ID != entry.ID || messages[0].Kind != llm.MessageKindCompact {
 			return MessagePage{}, false, nil
 		}
 	}

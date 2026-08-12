@@ -338,6 +338,7 @@ $JUEX_HOME/
         ├── logs/
         ├── session.json         # metadata + rebuildable transcript checkpoint
         ├── conversation.jsonl
+        ├── conversation.lock    # cross-instance transcript append guard
         ├── events.jsonl
         ├── pending_input.jsonl
         ├── notes.md

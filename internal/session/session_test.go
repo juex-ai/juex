@@ -261,6 +261,143 @@ func TestSessionAppendRejectsExternallyChangedTranscript(t *testing.T) {
 	}
 }
 
+func TestSessionAppendNeverReportsFailureAfterPersistingBatch(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	external := messageWithID(llm.TextMessage(llm.RoleUser, "external"), "external")
+	externalLine, err := marshalJSONLine(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.beforeTranscriptWrite = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.Write(externalLine); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	message := messageWithID(llm.TextMessage(llm.RoleAssistant, "owned"), "owned")
+	appendErr := s.Append(message)
+	data, err := os.ReadFile(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := bytes.Contains(data, []byte(`"id":"owned"`))
+	if appendErr != nil && persisted {
+		t.Fatalf("Append error = %v after owned batch persisted: %s", appendErr, data)
+	}
+	if appendErr == nil && !persisted {
+		t.Fatalf("Append succeeded without persisting owned batch: %s", data)
+	}
+}
+
+func TestSessionAppendAdoptsCanonicalSuffixAfterCommittedRace(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	external := messageWithID(llm.TextMessage(llm.RoleUser, "external"), "external-after")
+	externalLine, err := marshalJSONLine(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.afterTranscriptWrite = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.Write(externalLine); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleAssistant, "owned"), "owned-before")); err != nil {
+		t.Fatalf("Append error after committed race = %v", err)
+	}
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "owned-before,external-after" {
+		t.Fatalf("resident history ids = %s, want owned-before,external-after", got)
+	}
+	meta, err := loadMetadata(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !transcriptCheckpointValid(meta.Transcript, fingerprint) {
+		t.Fatalf("recovered checkpoint = %+v, want current sealed checkpoint", meta.Transcript)
+	}
+}
+
+func TestConcurrentSessionAppendsSerializeBeforeFingerprintCheck(t *testing.T) {
+	first, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := first.Dir
+	second, err := Load(dir)
+	if err != nil {
+		first.Close()
+		t.Fatal(err)
+	}
+	defer first.Close()
+	defer second.Close()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	first.beforeTranscriptWrite = func() {
+		close(entered)
+		<-release
+	}
+	firstResult := make(chan error, 1)
+	secondResult := make(chan error, 1)
+	go func() {
+		firstResult <- first.Append(messageWithID(llm.TextMessage(llm.RoleUser, "first"), "first"))
+	}()
+	<-entered
+	go func() {
+		secondResult <- second.Append(messageWithID(llm.TextMessage(llm.RoleUser, "second"), "second"))
+	}()
+	select {
+	case err := <-secondResult:
+		close(release)
+		t.Fatalf("second append completed before the first write was released: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	firstErr := <-firstResult
+	secondErr := <-secondResult
+	if firstErr != nil {
+		t.Fatalf("first append error = %v", firstErr)
+	}
+	if !errors.Is(secondErr, ErrTranscriptChanged) {
+		t.Fatalf("second append error = %v, want ErrTranscriptChanged", secondErr)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"id":"first"`)) || bytes.Contains(data, []byte(`"id":"second"`)) {
+		t.Fatalf("serialized transcript = %s, want only first batch", data)
+	}
+}
+
 func TestResidentTranscriptFingerprintAllowsMatchingWeakIdentity(t *testing.T) {
 	weak := transcriptFingerprint{Size: 42, MtimeNS: 99}
 	if !residentTranscriptFingerprintMatches(weak, weak) {

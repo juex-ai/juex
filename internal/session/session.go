@@ -26,8 +26,9 @@ import (
 )
 
 const (
-	conversationFile = "conversation.jsonl"
-	eventsFile       = "events.jsonl"
+	conversationFile     = "conversation.jsonl"
+	transcriptAppendLock = "conversation.lock"
+	eventsFile           = "events.jsonl"
 )
 
 type Session struct {
@@ -47,6 +48,9 @@ type Session struct {
 	historyPath  string
 	startedAtMS  int64
 	lastActiveMS int64
+
+	beforeTranscriptWrite func()
+	afterTranscriptWrite  func()
 }
 
 type Options struct {
@@ -180,6 +184,12 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		s.mu.Unlock()
 		return nil, err
 	}
+	appendGuard, err := acquireLockGuard(filepath.Join(s.Dir, transcriptAppendLock))
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	defer func() { _ = appendGuard.Close() }()
 	currentFingerprint, err := s.currentTranscriptFingerprintLocked()
 	if err != nil {
 		s.mu.Unlock()
@@ -198,6 +208,18 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		s.mu.Unlock()
 		return nil, ErrTranscriptChanged
 	}
+	if s.beforeTranscriptWrite != nil {
+		s.beforeTranscriptWrite()
+	}
+	preWriteFingerprint, err := s.currentTranscriptFingerprintLocked()
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	if preWriteFingerprint != currentFingerprint || preWriteFingerprint.Size != offset {
+		s.mu.Unlock()
+		return nil, ErrTranscriptChanged
+	}
 	written, writeErr := s.convFD.Write(data)
 	if writeErr == nil && written != len(data) {
 		writeErr = io.ErrShortWrite
@@ -210,6 +232,9 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		}
 		return nil, writeErr
 	}
+	if s.afterTranscriptWrite != nil {
+		s.afterTranscriptWrite()
+	}
 	nextTranscript := s.transcript
 	nextTranscript.repairPending = append([]pendingTranscriptToolUse(nil), s.transcript.repairPending...)
 	nextHistory := append(s.History, prepared...)
@@ -218,28 +243,24 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		nextTranscript.appendMessage(message, entryOffset, len(lines[i]))
 		entryOffset += int64(len(lines[i]))
 	}
-	fingerprint, err := s.currentTranscriptFingerprintLocked()
-	if err != nil {
-		if errors.Is(err, ErrTranscriptChanged) {
-			s.mu.Unlock()
-			return nil, err
-		}
-		rollbackErr := s.rollbackConversationLocked(offset)
-		s.mu.Unlock()
-		if rollbackErr != nil {
-			return nil, errors.Join(err, fmt.Errorf("session: rollback conversation batch: %w", rollbackErr))
-		}
-		return nil, err
-	}
-	if fingerprint.Size != offset+int64(len(data)) {
-		s.mu.Unlock()
-		return nil, ErrTranscriptChanged
-	}
-	nextTranscript.fingerprint = fingerprint
 	lastActiveMS := time.Now().UTC().UnixMilli()
 	if lastActiveMS < s.lastActiveMS {
 		lastActiveMS = s.lastActiveMS
 	}
+	fingerprint, err := s.currentTranscriptFingerprintLocked()
+	if errors.Is(err, ErrTranscriptChanged) {
+		fingerprint, err = s.currentTranscriptFingerprintLocked()
+	}
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	if fingerprint.Size != offset+int64(len(data)) {
+		s.acceptCommittedTranscriptDivergenceLocked(nextTranscript, nextHistory, lastActiveMS)
+		s.mu.Unlock()
+		return prepared, nil
+	}
+	nextTranscript.fingerprint = fingerprint
 	meta := s.metadataLocked()
 	meta.LastActiveAtMS = lastActiveMS
 	meta.Transcript = buildTranscriptCheckpoint(nextTranscript, nextTranscript.fingerprint)
@@ -261,6 +282,32 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		return prepared, nil
 	}
 	return prepared, RecordSession(historyPath, info)
+}
+
+func (s *Session) acceptCommittedTranscriptDivergenceLocked(
+	fallbackIndex transcriptIndex,
+	fallbackHistory []llm.Message,
+	lastActiveMS int64,
+) {
+	path := filepath.Join(s.Dir, conversationFile)
+	recovered := false
+	idx, err := scanTranscriptIndex(path)
+	if err == nil {
+		active := activeTranscriptIndex(idx)
+		history, readErr := readTranscriptMessagesForFingerprint(path, active.entries, active.fingerprint)
+		if readErr == nil {
+			fallbackIndex = active
+			fallbackHistory = history
+			recovered = true
+		}
+	}
+	if !recovered {
+		fallbackIndex.fingerprint = transcriptFingerprint{}
+	}
+	s.lastActiveMS = lastActiveMS
+	s.History = fallbackHistory
+	s.transcript = fallbackIndex
+	_ = saveMetadata(s.Dir, s.metadataLocked())
 }
 
 // AppendEvent persists e to events.jsonl. Unlike Append, the event itself
