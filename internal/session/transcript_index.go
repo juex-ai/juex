@@ -24,9 +24,10 @@ type MessagePage struct {
 var ErrBeforeMessageNotFound = errors.New("before message not found")
 
 type transcriptIndex struct {
-	entries []transcriptIndexEntry
-	turns   int
-	preview string
+	entries     []transcriptIndexEntry
+	turns       int
+	preview     string
+	fingerprint transcriptFingerprint
 }
 
 type transcriptIndexEntry struct {
@@ -37,20 +38,31 @@ type transcriptIndexEntry struct {
 	Role               llm.Role
 	Kind               string
 	TailStartMessageID string
+	RetainedMessageIDs []string
 	ToolUseIDs         []string
 	ToolResultIDs      []string
 }
 
 func scanTranscriptIndex(path string) (transcriptIndex, error) {
+	return scanTranscriptIndexFrom(path, 0)
+}
+
+func scanTranscriptIndexFrom(path string, start int64) (transcriptIndex, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return transcriptIndex{}, err
 	}
 	defer f.Close()
+	if start < 0 {
+		return transcriptIndex{}, fmt.Errorf("session: invalid transcript offset %d", start)
+	}
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return transcriptIndex{}, err
+	}
 
 	var idx transcriptIndex
 	reader := bufio.NewReader(f)
-	var offset int64
+	offset := start
 	lineIndex := 0
 	for {
 		line, readErr := reader.ReadBytes('\n')
@@ -77,13 +89,20 @@ func scanTranscriptIndex(path string) (transcriptIndex, error) {
 			return transcriptIndex{}, readErr
 		}
 	}
+	st, err := f.Stat()
+	if err != nil {
+		return transcriptIndex{}, err
+	}
+	idx.fingerprint = fingerprintFromFileInfo(st)
 	return idx, nil
 }
 
 func (idx *transcriptIndex) add(msg llm.Message, lineIndex int, offset int64, length int) {
 	tailStartID := ""
+	var retainedMessageIDs []string
 	if msg.Compaction != nil {
 		tailStartID = msg.Compaction.TailStartMessageID
+		retainedMessageIDs = append([]string(nil), msg.Compaction.RetainedMessageIDs...)
 	}
 	toolUseIDs, toolResultIDs := transcriptToolIDs(msg)
 	idx.entries = append(idx.entries, transcriptIndexEntry{
@@ -94,6 +113,7 @@ func (idx *transcriptIndex) add(msg llm.Message, lineIndex int, offset int64, le
 		Role:               msg.Role,
 		Kind:               msg.Kind,
 		TailStartMessageID: tailStartID,
+		RetainedMessageIDs: retainedMessageIDs,
 		ToolUseIDs:         toolUseIDs,
 		ToolResultIDs:      toolResultIDs,
 	})
@@ -132,20 +152,6 @@ func (idx *transcriptIndex) addSummary(msg llm.Message) {
 	if idx.preview == "" {
 		idx.preview = truncateRunes(strings.TrimSpace(msg.FirstText()), previewMaxRunes)
 	}
-}
-
-func (idx transcriptIndex) activeStart() int {
-	compact := idx.latestCompact()
-	if compact < 0 {
-		return 0
-	}
-	start := compact
-	if tailStartID := idx.entries[compact].TailStartMessageID; tailStartID != "" {
-		if tail := idx.indexByIDBefore(tailStartID, compact); tail >= 0 {
-			start = tail
-		}
-	}
-	return start
 }
 
 func (idx transcriptIndex) initialPageStart() int {
@@ -192,22 +198,8 @@ func (s *Session) HasMessageID(id string) bool {
 			return true
 		}
 	}
-	return false
-}
-
-func (idx transcriptIndex) indexByIDBefore(id string, before int) int {
-	if id == "" {
-		return -1
-	}
-	if before > len(idx.entries) {
-		before = len(idx.entries)
-	}
-	for i := 0; i < before; i++ {
-		if idx.entries[i].ID == id {
-			return i
-		}
-	}
-	return -1
+	found, _ := transcriptContainsMessageID(filepath.Join(s.Dir, conversationFile), id)
+	return found
 }
 
 func (idx transcriptIndex) coherentPageStart(start, floor, end int) int {
@@ -257,14 +249,6 @@ func (idx transcriptIndex) coherentPageStart(start, floor, end int) int {
 		return start
 	}
 	return start
-}
-
-func readActiveTranscriptWindow(path string, idx transcriptIndex) ([]llm.Message, error) {
-	start := idx.activeStart()
-	if start >= len(idx.entries) {
-		return []llm.Message{}, nil
-	}
-	return readTranscriptMessages(path, idx.entries[start:])
 }
 
 func readTranscriptMessages(path string, entries []transcriptIndexEntry) ([]llm.Message, error) {
@@ -346,7 +330,19 @@ func (s *Session) TranscriptMessagePage(beforeID string, limit int) (MessagePage
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return transcriptMessagePage(filepath.Join(s.Dir, conversationFile), s.transcript, beforeID, limit)
+	if s.convFD == nil && len(s.History) == 0 {
+		return MessagePage{Messages: []llm.Message{}}, nil
+	}
+	path := filepath.Join(s.Dir, conversationFile)
+	checkpoint := buildTranscriptCheckpoint(s.transcript, s.transcript.fingerprint)
+	if page, ok, err := transcriptMessagePageFromCheckpoint(path, checkpoint, beforeID, limit); ok || err != nil {
+		return page, err
+	}
+	idx, err := scanTranscriptIndex(path)
+	if err != nil {
+		return MessagePage{}, err
+	}
+	return transcriptMessagePage(path, idx, beforeID, limit)
 }
 
 // LoadInfoPage returns the session summary and only the requested transcript
@@ -356,7 +352,21 @@ func LoadInfoPage(dir string, beforeID string, limit int) (Info, MessagePage, er
 	if err != nil {
 		return Info{}, MessagePage{}, err
 	}
-	page, err := transcriptMessagePage(filepath.Join(dir, conversationFile), idx, beforeID, limit)
+	meta, err := loadMetadata(dir)
+	if err != nil {
+		return Info{}, MessagePage{}, err
+	}
+	path := filepath.Join(dir, conversationFile)
+	if page, ok, err := transcriptMessagePageFromCheckpoint(path, meta.Transcript, beforeID, limit); ok || err != nil {
+		return info, page, err
+	}
+	if len(idx.entries) == 0 {
+		idx, err = scanTranscriptIndex(path)
+		if err != nil {
+			return Info{}, MessagePage{}, err
+		}
+	}
+	page, err := transcriptMessagePage(path, idx, beforeID, limit)
 	if err != nil {
 		return Info{}, MessagePage{}, err
 	}
@@ -367,9 +377,49 @@ func LoadInfoPage(dir string, beforeID string, limit int) (Info, MessagePage, er
 // an inactive session without materializing the entire transcript in memory.
 func LoadActiveMessages(dir string) ([]llm.Message, error) {
 	convPath := filepath.Join(dir, conversationFile)
-	idx, err := scanTranscriptIndex(convPath)
+	if _, err := os.Stat(convPath); errors.Is(err, os.ErrNotExist) {
+		if info, dirErr := os.Stat(dir); dirErr == nil && info.IsDir() {
+			return []llm.Message{}, nil
+		}
+		return nil, err
+	} else if err != nil {
+		return nil, err
+	}
+	meta, err := loadMetadata(dir)
 	if err != nil {
 		return nil, err
 	}
-	return readActiveTranscriptWindow(convPath, idx)
+	idx, _, err := loadActiveTranscriptIndex(convPath, meta.Transcript)
+	if err != nil {
+		return nil, err
+	}
+	return readTranscriptMessages(convPath, idx.entries)
+}
+
+func transcriptContainsMessageID(path, id string) (bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	reader, err := newReverseLineReader(file)
+	if err != nil {
+		return false, err
+	}
+	for {
+		line, err := reader.next()
+		if errors.Is(err, io.EOF) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		message, err := decodeReverseTranscriptMessage(path, line)
+		if err != nil {
+			return false, err
+		}
+		if message.ID == id {
+			return true, nil
+		}
+	}
 }

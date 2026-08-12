@@ -194,10 +194,16 @@ func LoadInfo(dir string) (Info, []llm.Message, error) {
 
 // loadInfo is the workhorse for List and LoadInfo.
 func loadInfo(dir string) (Info, []llm.Message, error) {
-	info, idx, err := loadInfoSummary(dir)
+	info, _, err := loadInfoSummary(dir)
 	if err != nil {
 		return Info{}, nil, err
 	}
+	idx, err := scanTranscriptIndex(filepath.Join(dir, conversationFile))
+	if err != nil {
+		return Info{}, nil, err
+	}
+	info.Turns = idx.turns
+	info.Preview = idx.preview
 	msgs, err := readTranscriptMessages(filepath.Join(dir, conversationFile), idx.entries)
 	if err != nil {
 		return Info{}, nil, err
@@ -225,9 +231,16 @@ func loadInfoSummary(dir string) (Info, transcriptIndex, error) {
 		StartedAt:    time.UnixMilli(meta.StartedAtMS).UTC(),
 		transcript:   fingerprintFromFileInfo(st),
 	}
-	idx, err := scanTranscriptIndex(convPath)
-	if err != nil {
-		return Info{}, transcriptIndex{}, err
+	var idx transcriptIndex
+	if transcriptCheckpointValid(meta.Transcript, info.transcript) {
+		idx.turns = meta.Transcript.Turns
+		idx.preview = meta.Transcript.Preview
+		idx.fingerprint = info.transcript
+	} else {
+		idx, err = scanTranscriptIndex(convPath)
+		if err != nil {
+			return Info{}, transcriptIndex{}, err
+		}
 	}
 	info.Turns = idx.turns
 	info.Preview = idx.preview

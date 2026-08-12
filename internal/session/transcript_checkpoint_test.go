@@ -1,0 +1,217 @@
+package session
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/juex-ai/juex/internal/llm"
+)
+
+func TestLoadUsesCheckpointForCompactedActiveHistory(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range []llm.Message{
+		messageWithID(llm.TextMessage(llm.RoleUser, "old user"), "m1"),
+		messageWithID(llm.TextMessage(llm.RoleAssistant, "old assistant"), "m2"),
+		messageWithID(llm.TextMessage(llm.RoleUser, "retained user"), "m3"),
+	} {
+		if err := s.Append(msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compact := messageWithID(compactTestMessage("summary"), "m4")
+	compact.Compaction = &llm.CompactionMetadata{RetainedMessageIDs: []string{"m3"}}
+	if err := s.Append(compact); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleAssistant, "recent"), "m5")); err != nil {
+		t.Fatal(err)
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Transcript == nil || meta.Transcript.LatestCompact == nil {
+		t.Fatalf("transcript checkpoint = %+v, want latest compact", meta.Transcript)
+	}
+	idx, checkpointed, err := loadActiveTranscriptIndex(filepath.Join(dir, conversationFile), meta.Transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !checkpointed {
+		t.Fatal("active transcript used full scan, want checkpoint")
+	}
+	if got := strings.Join(transcriptEntryIDs(idx.entries), ","); got != "m3,m4,m5" {
+		t.Fatalf("active index ids = %s, want m3,m4,m5", got)
+	}
+
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loaded.Close()
+	if got := strings.Join(messageIDsForTest(loaded.History), ","); got != "m3,m4,m5" {
+		t.Fatalf("active history ids = %s, want m3,m4,m5", got)
+	}
+}
+
+func TestLoadInfoPageUsesCheckpointAndKeepsToolPair(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range []llm.Message{
+		messageWithID(llm.TextMessage(llm.RoleUser, "old"), "m1"),
+		messageWithID(compactTestMessage("summary"), "m2"),
+		toolUseMessage("m3", "call-1", "read"),
+		toolResultMessage("m4", "call-1", "done"),
+		messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m5"),
+	} {
+		if err := s.Append(msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, checkpointed, err := transcriptMessagePageFromCheckpoint(
+		filepath.Join(dir, conversationFile), meta.Transcript, "", 2,
+	); err != nil || !checkpointed {
+		t.Fatalf("checkpoint page = used %v error %v, want fast checkpoint path", checkpointed, err)
+	}
+
+	info, page, err := LoadInfoPage(dir, "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(messageIDsForTest(page.Messages), ","); got != "m3,m4,m5" {
+		t.Fatalf("page ids = %s, want m3,m4,m5", got)
+	}
+	if !page.HasMoreBefore || page.OldestMessageID != "m3" {
+		t.Fatalf("page = %+v, want more before m3", page)
+	}
+	if info.Turns != 2 || info.Preview != "old" {
+		t.Fatalf("summary = turns %d preview %q, want 2/old", info.Turns, info.Preview)
+	}
+	_, older, err := LoadInfoPage(dir, "m3", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(messageIDsForTest(older.Messages), ","); got != "m1,m2" {
+		t.Fatalf("older page ids = %s, want m1,m2", got)
+	}
+	if older.HasMoreBefore || older.OldestMessageID != "m1" {
+		t.Fatalf("older page = %+v, want complete prefix from m1", older)
+	}
+}
+
+func TestStaleTranscriptCheckpointFallsBackToStrictScan(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "valid"), "m1")); err != nil {
+		t.Fatal(err)
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, conversationFile)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("not-json\n"); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := LoadInfoPage(dir, "", 1); err == nil || !strings.Contains(err.Error(), "parse") {
+		t.Fatalf("LoadInfoPage error = %v, want strict parse failure", err)
+	}
+}
+
+func TestLegacyTranscriptGainsCheckpointOnNextAppend(t *testing.T) {
+	root := t.TempDir()
+	id := "20260812T120000-legacy01"
+	dir := makeSession(t, root, id, []llm.Message{
+		messageWithID(llm.TextMessage(llm.RoleUser, "legacy"), "m1"),
+	}, time.Now())
+	meta, err := loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Transcript != nil {
+		t.Fatalf("legacy checkpoint = %+v, want nil", meta.Transcript)
+	}
+
+	s, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleAssistant, "adopted"), "m2")); err != nil {
+		s.Close()
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	meta, err = loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Transcript == nil || meta.Transcript.Fingerprint.Size <= 0 {
+		t.Fatalf("adopted checkpoint = %+v, want current fingerprint", meta.Transcript)
+	}
+}
+
+func TestLegacyCompactedTranscriptWithRepairLoadsOnlyActiveWindow(t *testing.T) {
+	root := t.TempDir()
+	compact := messageWithID(compactTestMessage("summary"), "m3")
+	compact.Compaction = &llm.CompactionMetadata{TailStartMessageID: "m2"}
+	dir := makeSession(t, root, "20260812T120000-legacy02", []llm.Message{
+		messageWithID(llm.TextMessage(llm.RoleUser, "old"), "m1"),
+		messageWithID(llm.TextMessage(llm.RoleAssistant, "retained"), "m2"),
+		compact,
+		messageWithID(llm.TextMessage(llm.RoleUser, "latest"), "m4"),
+	}, time.Now())
+
+	s, err := LoadWithOptions(dir, Options{RepairTranscript: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "m2,m3,m4" {
+		t.Fatalf("active history ids = %s, want m2,m3,m4", got)
+	}
+}
+
+func transcriptEntryIDs(entries []transcriptIndexEntry) []string {
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		ids = append(ids, entry.ID)
+	}
+	return ids
+}

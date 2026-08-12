@@ -930,12 +930,25 @@ its valid prefix before the existing repair warning is returned. `ReadEvents`
 remains the slice-based compatibility adapter for callers that explicitly need
 all events.
 
+`conversation.jsonl` remains the canonical, inspectable transcript. A bounded
+derived checkpoint in `session.json` records the transcript fingerprint,
+cumulative turn count and preview, the latest compaction-marker byte location,
+and byte locations for explicitly retained pre-compaction messages. A matching
+checkpoint lets session resume read only retained rows plus the active suffix,
+and lets recent transcript pages scan backward from the file tail. Missing,
+stale, or invalid checkpoints fall back to a strict full scan; the next
+successful append replaces them. The checkpoint never stores the complete
+message index, and full-history APIs remain proportional to transcript size.
+`events.jsonl` does not use this checkpoint because safely skipping event
+prefixes would also require a durable reducer-state snapshot.
+
 `session.json` owns the session's creation and activity timestamps as positive
 epoch-millisecond integers (`started_at_ms` and `last_active_at_ms`). Creation
 sets both values; each successful transcript append advances
-`last_active_at_ms`. The transcript write and metadata replacement occur under
-the Session lock, and a metadata failure rolls the transcript append back
-before in-memory indexes change. Session IDs retain a timestamp-like prefix
+`last_active_at_ms` and refreshes the derived transcript checkpoint. The
+transcript write and metadata replacement occur under the Session lock, and a
+metadata failure rolls the transcript append back before in-memory indexes
+change. Session IDs retain a timestamp-like prefix
 only for readable, naturally sorted paths; no session time is parsed from the
 ID or inferred from a file mtime. Read surfaces convert the stored epochs with
 `time.UnixMilli(...).UTC()` while keeping their existing RFC3339 contract.
@@ -1021,6 +1034,8 @@ fall back to the same strict disk scan as `List`; after a successful scan,
 `ListWithHistory` rechecks the canonical fingerprint under the history lock and
 repairs the derived summary cache without changing `active_id`. `List` and
 `LoadInfo` remain read-only, and canonical session files remain authoritative.
+Recent transcript pages independently use the validated session checkpoint and
+reverse line reader, preserving tool-use/result pairs at page boundaries.
 
 ### 3.6 App + Runtime
 

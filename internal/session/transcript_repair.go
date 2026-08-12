@@ -39,15 +39,19 @@ func (s *Session) RepairTranscript(reason string) ([]TranscriptRepair, error) {
 	defer s.mu.Unlock()
 
 	convPath := filepath.Join(s.Dir, conversationFile)
-	history := s.History
-	if len(s.transcript.entries) > len(s.History) {
-		fullHistory, err := readTranscriptMessages(convPath, s.transcript.entries)
-		if err != nil {
-			return nil, err
-		}
-		history = fullHistory
+	_, activeRepairs := repairTranscriptMessages(s.History, reason)
+	if len(activeRepairs) == 0 {
+		return nil, nil
 	}
-	repaired, repairs := repairTranscriptMessages(history, reason)
+	fullIndex, err := scanTranscriptIndex(convPath)
+	if err != nil {
+		return nil, err
+	}
+	fullHistory, err := readTranscriptMessages(convPath, fullIndex.entries)
+	if err != nil {
+		return nil, err
+	}
+	repaired, repairs := repairTranscriptMessages(fullHistory, reason)
 	if len(repairs) == 0 {
 		return nil, nil
 	}
@@ -173,8 +177,14 @@ func (s *Session) rewriteConversationLocked(history []llm.Message) error {
 	if err != nil {
 		return err
 	}
-	activeHistory, err := readActiveTranscriptWindow(convPath, idx)
+	idx = activeTranscriptIndex(idx)
+	activeHistory, err := readTranscriptMessages(convPath, idx.entries)
 	if err != nil {
+		return err
+	}
+	meta := s.metadataLocked()
+	meta.Transcript = buildTranscriptCheckpoint(idx, idx.fingerprint)
+	if err := saveMetadata(s.Dir, meta); err != nil {
 		return err
 	}
 	convFD, err := os.OpenFile(convPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)

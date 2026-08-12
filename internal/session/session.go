@@ -195,12 +195,30 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		}
 		return nil, writeErr
 	}
+	nextTranscript := cloneTranscriptIndex(s.transcript)
+	nextHistory := append(append([]llm.Message(nil), s.History...), prepared...)
+	entryOffset := offset
+	for i, message := range prepared {
+		nextTranscript.appendMessage(message, entryOffset, len(lines[i]))
+		entryOffset += int64(len(lines[i]))
+	}
+	transcriptInfo, err := s.convFD.Stat()
+	if err != nil {
+		rollbackErr := s.rollbackConversationLocked(offset)
+		s.mu.Unlock()
+		if rollbackErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("session: rollback conversation batch: %w", rollbackErr))
+		}
+		return nil, err
+	}
+	nextTranscript.fingerprint = fingerprintFromFileInfo(transcriptInfo)
 	lastActiveMS := time.Now().UTC().UnixMilli()
 	if lastActiveMS < s.lastActiveMS {
 		lastActiveMS = s.lastActiveMS
 	}
 	meta := s.metadataLocked()
 	meta.LastActiveAtMS = lastActiveMS
+	meta.Transcript = buildTranscriptCheckpoint(nextTranscript, nextTranscript.fingerprint)
 	if err := saveMetadata(s.Dir, meta); err != nil {
 		rollbackErr := s.rollbackConversationLocked(offset)
 		s.mu.Unlock()
@@ -210,12 +228,8 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		return nil, err
 	}
 	s.lastActiveMS = lastActiveMS
-	entryOffset := offset
-	for i, message := range prepared {
-		s.History = append(s.History, message)
-		s.transcript.appendMessage(message, entryOffset, len(lines[i]))
-		entryOffset += int64(len(lines[i]))
-	}
+	s.History = nextHistory
+	s.transcript = nextTranscript
 	info, ok := s.historyInfoLocked()
 	historyPath := s.historyPath
 	s.mu.Unlock()
@@ -275,34 +289,28 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 	alias := meta.Alias
 	kind := meta.Kind
 	convPath := filepath.Join(dir, conversationFile)
-	idx, err := scanTranscriptIndex(convPath)
-	if err != nil {
-		return nil, err
-	}
-	history, err := readActiveTranscriptWindow(convPath, idx)
-	if err != nil {
-		return nil, err
-	}
-	var repairs []TranscriptRepair
+	var idx transcriptIndex
+	loadedFullTranscript := false
 	if opts.RepairTranscript {
-		fullHistory, err := readTranscriptMessages(convPath, idx.entries)
-		if err != nil {
-			return nil, err
+		st, statErr := os.Stat(convPath)
+		if statErr != nil {
+			return nil, statErr
 		}
-		fullHistory, repairs = repairTranscriptMessages(fullHistory, "load")
-		if len(repairs) > 0 {
-			if err := writeConversationMessages(convPath, fullHistory); err != nil {
-				return nil, err
-			}
+		if !transcriptCheckpointValid(meta.Transcript, fingerprintFromFileInfo(st)) {
 			idx, err = scanTranscriptIndex(convPath)
-			if err != nil {
-				return nil, err
-			}
+			loadedFullTranscript = true
+		} else {
+			idx, _, err = loadActiveTranscriptIndex(convPath, meta.Transcript)
 		}
-		history, err = readActiveTranscriptWindow(convPath, idx)
-		if err != nil {
-			return nil, err
-		}
+	} else {
+		idx, _, err = loadActiveTranscriptIndex(convPath, meta.Transcript)
+	}
+	if err != nil {
+		return nil, err
+	}
+	history, err := readTranscriptMessages(convPath, idx.entries)
+	if err != nil {
+		return nil, err
 	}
 	if err := ensureScratchpadDir(dir); err != nil {
 		return nil, err
@@ -316,14 +324,8 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		convFD.Close()
 		return nil, err
 	}
-	if len(repairs) > 0 {
-		_ = writeJSONL(eventFD, events.Normalize(events.Event{
-			Type:    "transcript.repaired",
-			Payload: TranscriptRepairedPayload{Reason: "load", Repairs: repairs},
-		}))
-	}
 	tokenUsage, contextUsage, _ := loadLatestSessionUsage(dir)
-	return &Session{
+	sess := &Session{
 		ID:           id,
 		Dir:          dir,
 		Alias:        alias,
@@ -338,7 +340,31 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		historyPath:  opts.HistoryPath,
 		startedAtMS:  meta.StartedAtMS,
 		lastActiveMS: meta.LastActiveAtMS,
-	}, nil
+	}
+	if opts.RepairTranscript {
+		repairs, err := sess.RepairTranscript("load")
+		if err != nil {
+			_ = sess.Close()
+			return nil, err
+		}
+		if loadedFullTranscript && len(repairs) == 0 {
+			activeIndex := activeTranscriptIndex(idx)
+			activeHistory, err := readTranscriptMessages(convPath, activeIndex.entries)
+			if err != nil {
+				_ = sess.Close()
+				return nil, err
+			}
+			sess.transcript = activeIndex
+			sess.History = activeHistory
+		}
+		if len(repairs) > 0 {
+			_ = writeJSONL(eventFD, events.Normalize(events.Event{
+				Type:    "transcript.repaired",
+				Payload: TranscriptRepairedPayload{Reason: "load", Repairs: repairs},
+			}))
+		}
+	}
+	return sess, nil
 }
 
 // SubscribeBus wires every event emitted on bus through to AppendEvent. App
@@ -539,12 +565,14 @@ func (s *Session) infoLocked() Info {
 }
 
 func (s *Session) metadataLocked() metadata {
-	return metadata{
+	meta := metadata{
 		Alias:          s.Alias,
 		Kind:           s.Kind,
 		StartedAtMS:    s.startedAtMS,
 		LastActiveAtMS: s.lastActiveMS,
 	}
+	meta.Transcript = buildTranscriptCheckpoint(s.transcript, s.transcript.fingerprint)
+	return meta
 }
 
 func (s *Session) rollbackConversationLocked(offset int64) error {

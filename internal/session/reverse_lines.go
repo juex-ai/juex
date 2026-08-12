@@ -10,14 +10,26 @@ import (
 const reverseLineBlockBytes = 64 * 1024
 
 type reverseLineReader struct {
-	file   *os.File
-	offset int64
-	floor  int64
-	buf    []byte
+	file         *os.File
+	offset       int64
+	floor        int64
+	floorAligned bool
+	buf          []byte
 }
 
 func newReverseLineReader(file *os.File) (*reverseLineReader, error) {
 	return newBoundedReverseLineReader(file, 0)
+}
+
+func newReverseLineReaderAt(file *os.File, floor int64) (*reverseLineReader, error) {
+	st, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if floor < 0 || floor > st.Size() {
+		return nil, errors.New("session: invalid reverse-line floor")
+	}
+	return &reverseLineReader{file: file, offset: st.Size(), floor: floor, floorAligned: true}, nil
 }
 
 // newBoundedReverseLineReader reads at most maxBytes from the end of file.
@@ -53,7 +65,7 @@ func (r *reverseLineReader) next() ([]byte, error) {
 		if r.offset == r.floor {
 			// A bounded scan can begin in the middle of a line. Discard that
 			// partial prefix instead of treating it as an event.
-			if r.floor > 0 {
+			if r.floor > 0 && !r.floorAligned {
 				r.buf = nil
 				return nil, io.EOF
 			}

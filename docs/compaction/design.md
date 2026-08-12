@@ -41,6 +41,11 @@ Still future work:
 - Do not hide compaction state in an opaque local database.
 - Do not build a large multi-agent memory system as part of this change.
 
+The compaction marker remains an ordinary canonical transcript row. Session
+metadata may cache bounded byte locations for the latest marker and its
+explicitly retained messages, but that derived checkpoint must be fingerprinted,
+discardable, and rebuildable from `conversation.jsonl`.
+
 ## Architecture
 
 V2 is a four-stage context pipeline:

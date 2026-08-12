@@ -31,10 +31,11 @@ var (
 )
 
 type metadata struct {
-	Alias          string `json:"alias,omitempty"`
-	Kind           string `json:"kind,omitempty"`
-	StartedAtMS    int64  `json:"started_at_ms"`
-	LastActiveAtMS int64  `json:"last_active_at_ms"`
+	Alias          string                `json:"alias,omitempty"`
+	Kind           string                `json:"kind,omitempty"`
+	StartedAtMS    int64                 `json:"started_at_ms"`
+	LastActiveAtMS int64                 `json:"last_active_at_ms"`
+	Transcript     *transcriptCheckpoint `json:"transcript,omitempty"`
 }
 
 type History struct {
