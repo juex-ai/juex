@@ -592,7 +592,7 @@ func TestMediaRequiresExplicitRoot(t *testing.T) {
 	}
 }
 
-func TestWorkspaceMediaDoesNotResolveSessionScratchpadAliases(t *testing.T) {
+func TestWorkspaceMediaResolvesSessionScratchpadAliases(t *testing.T) {
 	srv := newTestServer(t)
 	srv.opts.Cfg.AgentStateDir = filepath.Join(t.TempDir(), "agent")
 	id := "20260812T120000-scratch"
@@ -606,8 +606,11 @@ func TestWorkspaceMediaDoesNotResolveSessionScratchpadAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("status = %d, want workspace-only 404", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "image/png" {
+		t.Fatalf("content type = %q", got)
 	}
 }
 

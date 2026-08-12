@@ -529,15 +529,7 @@ func resolveFileAtRoot(root, reqPath, displayPath string) (resolvedFileRequest, 
 }
 
 func (s *Server) resolveWorkspaceFileRequest(r *http.Request) (resolvedFileRequest, *fileRequestError) {
-	reqPath := r.URL.Query().Get("path")
-	if reqPath == "" {
-		return resolvedFileRequest{}, &fileRequestError{status: http.StatusBadRequest, code: "bad_request", message: "missing path parameter"}
-	}
-	root := s.opts.Cfg.WorkDir
-	if root == "" {
-		root = "."
-	}
-	return resolveFileAtRoot(root, reqPath, "")
+	return s.resolveFileRequest(r)
 }
 
 func resolveScratchpadRequestPath(reqPath string) (physicalPath, logicalPath string, ok bool) {
