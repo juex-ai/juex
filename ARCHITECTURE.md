@@ -1732,8 +1732,9 @@ adapted from the selected `ExtensionRuntimeContext`: installation directory,
 one Agent-owned data directory, and its deferred prepare callback. The runner
 expands command, args, cwd, and env without a shell and injects authoritative
 `WORKDIR`, `JUEX_WORKDIR`, `JUEX_EXT_DIR`, and `JUEX_EXT_DATA_DIR`. Every
-project or Extension Command Observable receives the separately resolved
-Agent-wide Extension data root as its additional Sandbox writable root.
+project or Extension Command Observable receives the Workspace and current
+AgentStateDir as its Sandbox writable roots. The Extension data directory is
+still prepared only when that Extension process is selected.
 Project definitions reject Extension-context variables and strip inherited
 values. Schedule sources do not launch subprocesses.
 
@@ -2404,8 +2405,9 @@ Claude channel notifications preserve the full JSON-RPC `params` object. They
 run through the normal Agent turn loop as `mcp_event` user messages rendered as
 structured text: server, method, event type, content, metadata, and selected
 params. `params.attachments` may contain
-`[{ "path": "...", "media_type": "..." }]`, using the same workdir-bounded
-validation as Observable attachments. Valid bytes are copied to the
+`[{ "path": "...", "media_type": "..." }]`, using the same Workspace/current-
+AgentStateDir validation as Observable attachments. Relative paths remain
+Workspace-relative. Valid bytes are copied to the
 content-addressed `event-media` artifact namespace before image attachments
 become image blocks on the incoming user message; queued or persisted messages
 therefore do not depend on the source file remaining in the inbox. Invalid
