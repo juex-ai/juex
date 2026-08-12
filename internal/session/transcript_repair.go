@@ -38,11 +38,10 @@ func (s *Session) RepairTranscript(reason string) ([]TranscriptRepair, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	convPath := filepath.Join(s.Dir, conversationFile)
-	_, activeRepairs := repairTranscriptMessages(s.History, reason)
-	if len(activeRepairs) == 0 {
+	if s.transcript.repairSafe {
 		return nil, nil
 	}
+	convPath := filepath.Join(s.Dir, conversationFile)
 	fullIndex, err := scanTranscriptIndex(convPath)
 	if err != nil {
 		return nil, err
@@ -53,6 +52,9 @@ func (s *Session) RepairTranscript(reason string) ([]TranscriptRepair, error) {
 	}
 	repaired, repairs := repairTranscriptMessages(fullHistory, reason)
 	if len(repairs) == 0 {
+		fullIndex.repairSafe = true
+		fullIndex.repairPrefixSafe = true
+		s.transcript = fullIndex
 		return nil, nil
 	}
 	if err := s.rewriteConversationLocked(repaired); err != nil {
@@ -177,6 +179,8 @@ func (s *Session) rewriteConversationLocked(history []llm.Message) error {
 	if err != nil {
 		return err
 	}
+	idx.repairSafe = true
+	idx.repairPrefixSafe = true
 	idx = activeTranscriptIndex(idx)
 	activeHistory, err := readTranscriptMessages(convPath, idx.entries)
 	if err != nil {

@@ -23,8 +23,18 @@ func transcriptMessagePageFromCheckpoint(
 	if !transcriptCheckpointValid(checkpoint, fingerprintFromFileInfo(st)) {
 		return MessagePage{}, false, nil
 	}
+	if checkpoint.LatestCompact != nil {
+		entry := checkpointIndexEntry(*checkpoint.LatestCompact)
+		messages, err := readTranscriptMessages(path, []transcriptIndexEntry{entry})
+		if err != nil || len(messages) != 1 || messages[0].ID != entry.ID || messages[0].Kind != llm.MessageKindCompact {
+			return MessagePage{}, false, nil
+		}
+	}
 	page, err := reverseTranscriptMessagePage(path, checkpoint, beforeID, limit)
-	return page, true, err
+	if err != nil {
+		return MessagePage{}, false, nil
+	}
+	return page, true, nil
 }
 
 func reverseTranscriptMessagePage(path string, checkpoint *transcriptCheckpoint, beforeID string, limit int) (MessagePage, error) {

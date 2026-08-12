@@ -24,10 +24,13 @@ type MessagePage struct {
 var ErrBeforeMessageNotFound = errors.New("before message not found")
 
 type transcriptIndex struct {
-	entries     []transcriptIndexEntry
-	turns       int
-	preview     string
-	fingerprint transcriptFingerprint
+	entries          []transcriptIndexEntry
+	turns            int
+	preview          string
+	fingerprint      transcriptFingerprint
+	repairSafe       bool
+	repairPrefixSafe bool
+	complete         bool
 }
 
 type transcriptIndexEntry struct {
@@ -61,6 +64,7 @@ func scanTranscriptIndexFrom(path string, start int64) (transcriptIndex, error) 
 	}
 
 	var idx transcriptIndex
+	idx.complete = true
 	reader := bufio.NewReader(f)
 	offset := start
 	lineIndex := 0

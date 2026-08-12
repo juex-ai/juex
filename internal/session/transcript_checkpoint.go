@@ -1,7 +1,6 @@
 package session
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/juex-ai/juex/internal/llm"
@@ -13,12 +12,14 @@ const transcriptCheckpointVersion = 1
 // The transcript fingerprint makes the JSONL file authoritative whenever the
 // two disagree.
 type transcriptCheckpoint struct {
-	Version       int                         `json:"version"`
-	Fingerprint   transcriptFingerprint       `json:"fingerprint"`
-	Turns         int                         `json:"turns"`
-	Preview       string                      `json:"preview,omitempty"`
-	LatestCompact *transcriptCheckpointEntry  `json:"latest_compact,omitempty"`
-	Retained      []transcriptCheckpointEntry `json:"retained,omitempty"`
+	Version          int                         `json:"version"`
+	Fingerprint      transcriptFingerprint       `json:"fingerprint"`
+	Turns            int                         `json:"turns"`
+	Preview          string                      `json:"preview,omitempty"`
+	RepairSafe       bool                        `json:"repair_safe"`
+	RepairPrefixSafe bool                        `json:"repair_prefix_safe"`
+	LatestCompact    *transcriptCheckpointEntry  `json:"latest_compact,omitempty"`
+	Retained         []transcriptCheckpointEntry `json:"retained,omitempty"`
 }
 
 type transcriptCheckpointEntry struct {
@@ -69,10 +70,12 @@ func validCheckpointEntry(entry transcriptCheckpointEntry, ceiling int64) bool {
 
 func buildTranscriptCheckpoint(idx transcriptIndex, fingerprint transcriptFingerprint) *transcriptCheckpoint {
 	checkpoint := &transcriptCheckpoint{
-		Version:     transcriptCheckpointVersion,
-		Fingerprint: fingerprint,
-		Turns:       idx.turns,
-		Preview:     idx.preview,
+		Version:          transcriptCheckpointVersion,
+		Fingerprint:      fingerprint,
+		Turns:            idx.turns,
+		Preview:          idx.preview,
+		RepairSafe:       idx.repairSafe,
+		RepairPrefixSafe: idx.repairPrefixSafe,
 	}
 	compactIndex := idx.latestCompact()
 	if compactIndex < 0 {
@@ -142,6 +145,10 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 		if err != nil {
 			return transcriptIndex{}, false, err
 		}
+		if transcriptCheckpointValid(checkpoint, fingerprint) {
+			idx.repairSafe = checkpoint.RepairSafe
+			idx.repairPrefixSafe = checkpoint.RepairPrefixSafe
+		}
 		return activeTranscriptIndex(idx), false, nil
 	}
 
@@ -150,26 +157,37 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 		entry := checkpointIndexEntry(retained)
 		messages, err := readTranscriptMessages(path, []transcriptIndexEntry{entry})
 		if err != nil {
-			return transcriptIndex{}, false, err
+			return scanActiveTranscriptIndex(path)
 		}
 		if len(messages) != 1 || messages[0].ID != retained.ID {
-			return transcriptIndex{}, false, fmt.Errorf("session: transcript checkpoint retained message %q does not match", retained.ID)
+			return scanActiveTranscriptIndex(path)
 		}
 		idx.add(messages[0], 0, retained.Offset, retained.Length)
 	}
 	suffix, err := scanTranscriptIndexFrom(path, checkpoint.LatestCompact.Offset)
 	if err != nil {
-		return transcriptIndex{}, false, err
+		return scanActiveTranscriptIndex(path)
 	}
 	if len(suffix.entries) == 0 || suffix.entries[0].ID != checkpoint.LatestCompact.ID ||
 		suffix.entries[0].Kind != llm.MessageKindCompact {
-		return transcriptIndex{}, false, fmt.Errorf("session: transcript checkpoint compact message %q does not match", checkpoint.LatestCompact.ID)
+		return scanActiveTranscriptIndex(path)
 	}
 	idx.entries = append(idx.entries, suffix.entries...)
 	idx.turns = checkpoint.Turns
 	idx.preview = checkpoint.Preview
 	idx.fingerprint = fingerprint
+	idx.repairSafe = checkpoint.RepairSafe
+	idx.repairPrefixSafe = checkpoint.RepairPrefixSafe
+	idx.complete = false
 	return idx, true, nil
+}
+
+func scanActiveTranscriptIndex(path string) (transcriptIndex, bool, error) {
+	idx, err := scanTranscriptIndex(path)
+	if err != nil {
+		return transcriptIndex{}, false, err
+	}
+	return activeTranscriptIndex(idx), false, nil
 }
 
 func activeTranscriptIndex(idx transcriptIndex) transcriptIndex {
@@ -178,6 +196,7 @@ func activeTranscriptIndex(idx transcriptIndex) transcriptIndex {
 		return idx
 	}
 	compact := idx.entries[compactIndex]
+	originalLength := len(idx.entries)
 	retained, ok := retainedTranscriptEntries(idx.entries[:compactIndex], compact)
 	if !ok {
 		return idx
@@ -186,6 +205,7 @@ func activeTranscriptIndex(idx transcriptIndex) transcriptIndex {
 	entries = append(entries, retained...)
 	entries = append(entries, idx.entries[compactIndex:]...)
 	idx.entries = entries
+	idx.complete = idx.complete && len(entries) == originalLength
 	return idx
 }
 

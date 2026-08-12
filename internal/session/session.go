@@ -93,6 +93,7 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 			historyPath:  opts.HistoryPath,
 			startedAtMS:  nowMS,
 			lastActiveMS: nowMS,
+			transcript:   transcriptIndex{repairSafe: true, repairPrefixSafe: true, complete: true},
 		}, nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -129,6 +130,7 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 		historyPath:  opts.HistoryPath,
 		startedAtMS:  nowMS,
 		lastActiveMS: nowMS,
+		transcript:   transcriptIndex{repairSafe: true, repairPrefixSafe: true, complete: true},
 	}, nil
 }
 
@@ -201,6 +203,15 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 	for i, message := range prepared {
 		nextTranscript.appendMessage(message, entryOffset, len(lines[i]))
 		entryOffset += int64(len(lines[i]))
+	}
+	if nextTranscript.complete || nextTranscript.repairPrefixSafe {
+		_, repairs := repairTranscriptMessages(nextHistory, "")
+		nextTranscript.repairSafe = len(repairs) == 0
+	}
+	for _, message := range prepared {
+		if message.Kind == llm.MessageKindCompact {
+			nextTranscript.repairPrefixSafe = nextTranscript.repairSafe
+		}
 	}
 	transcriptInfo, err := s.convFD.Stat()
 	if err != nil {
@@ -296,7 +307,7 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		if statErr != nil {
 			return nil, statErr
 		}
-		if !transcriptCheckpointValid(meta.Transcript, fingerprintFromFileInfo(st)) {
+		if !transcriptCheckpointValid(meta.Transcript, fingerprintFromFileInfo(st)) || !meta.Transcript.RepairSafe {
 			idx, err = scanTranscriptIndex(convPath)
 			loadedFullTranscript = true
 		} else {
@@ -348,7 +359,7 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 			return nil, err
 		}
 		if loadedFullTranscript && len(repairs) == 0 {
-			activeIndex := activeTranscriptIndex(idx)
+			activeIndex := activeTranscriptIndex(sess.transcript)
 			activeHistory, err := readTranscriptMessages(convPath, activeIndex.entries)
 			if err != nil {
 				_ = sess.Close()

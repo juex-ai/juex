@@ -208,6 +208,125 @@ func TestLegacyCompactedTranscriptWithRepairLoadsOnlyActiveWindow(t *testing.T) 
 	}
 }
 
+func TestCheckpointedCompactedTranscriptRepairsUnretainedToolUse(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []llm.Message{
+		toolUseMessage("m1", "call-hidden", "read"),
+		messageWithID(compactTestMessage("summary"), "m2"),
+		messageWithID(llm.TextMessage(llm.RoleUser, "latest"), "m3"),
+	} {
+		if err := s.Append(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	repaired, err := LoadWithOptions(dir, Options{RepairTranscript: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repaired.Close()
+	_, full, err := LoadInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full) != 4 || full[0].ID != "m1" || full[1].Kind != llm.MessageKindToolResult ||
+		full[1].Blocks[0].ToolUseID != "call-hidden" || full[2].ID != "m2" {
+		t.Fatalf("repaired transcript = %+v, want hidden tool result before compact marker", full)
+	}
+}
+
+func TestCorruptCheckpointEntryFallsBackToCanonicalTranscript(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []llm.Message{
+		messageWithID(llm.TextMessage(llm.RoleUser, "old"), "m1"),
+		messageWithID(llm.TextMessage(llm.RoleAssistant, "retained"), "m2"),
+	} {
+		if err := s.Append(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compact := messageWithID(compactTestMessage("summary"), "m3")
+	compact.Compaction = &llm.CompactionMetadata{RetainedMessageIDs: []string{"m2"}}
+	if err := s.Append(compact); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "latest"), "m4")); err != nil {
+		t.Fatal(err)
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.Transcript.Retained[0].ID = "wrong-id"
+	if err := saveMetadata(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loaded.Close()
+	if got := strings.Join(messageIDsForTest(loaded.History), ","); got != "m2,m3,m4" {
+		t.Fatalf("active history ids = %s, want m2,m3,m4", got)
+	}
+}
+
+func TestCheckpointRepairSafetyRecoversAfterToolResult(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(toolUseMessage("m1", "call-1", "read")); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := loadMetadata(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Transcript.RepairSafe {
+		t.Fatal("checkpoint repair_safe = true with an unresolved tool call")
+	}
+	if err := s.Append(toolResultMessage("m2", "call-1", "done")); err != nil {
+		t.Fatal(err)
+	}
+	compact := messageWithID(compactTestMessage("summary"), "m3")
+	if err := s.Append(compact); err != nil {
+		t.Fatal(err)
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	meta, err = loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !meta.Transcript.RepairSafe || !meta.Transcript.RepairPrefixSafe {
+		t.Fatalf("checkpoint repair state = %+v, want safe transcript and prefix", meta.Transcript)
+	}
+	if _, checkpointed, err := loadActiveTranscriptIndex(filepath.Join(dir, conversationFile), meta.Transcript); err != nil || !checkpointed {
+		t.Fatalf("checkpoint load = used %v error %v, want fast path", checkpointed, err)
+	}
+}
+
 func transcriptEntryIDs(entries []transcriptIndexEntry) []string {
 	ids := make([]string, 0, len(entries))
 	for _, entry := range entries {

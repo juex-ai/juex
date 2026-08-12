@@ -44,7 +44,9 @@ Still future work:
 The compaction marker remains an ordinary canonical transcript row. Session
 metadata may cache bounded byte locations for the latest marker and its
 explicitly retained messages, but that derived checkpoint must be fingerprinted,
-discardable, and rebuildable from `conversation.jsonl`.
+discardable, and rebuildable from `conversation.jsonl`. A repair-safe marker in
+the checkpoint is valid only for the matching transcript fingerprint; unresolved
+Tool Calls or unverified hidden prefixes force canonical repair scanning.
 
 ## Architecture
 

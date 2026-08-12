@@ -933,14 +933,22 @@ all events.
 `conversation.jsonl` remains the canonical, inspectable transcript. A bounded
 derived checkpoint in `session.json` records the transcript fingerprint,
 cumulative turn count and preview, the latest compaction-marker byte location,
-and byte locations for explicitly retained pre-compaction messages. A matching
-checkpoint lets session resume read only retained rows plus the active suffix,
+byte locations for explicitly retained pre-compaction messages, and whether
+the complete transcript and hidden pre-compaction prefix passed Tool Call
+repair validation. A matching, repair-safe checkpoint lets session resume read
+only retained rows plus the active suffix,
 and lets recent transcript pages scan backward from the file tail. Missing,
 stale, or invalid checkpoints fall back to a strict full scan; the next
 successful append replaces them. The checkpoint never stores the complete
 message index, and full-history APIs remain proportional to transcript size.
 `events.jsonl` does not use this checkpoint because safely skipping event
 prefixes would also require a durable reducer-state snapshot.
+
+An unresolved Tool Call marks the checkpoint repair-unsafe. A following Tool
+result can restore the safe state from the active window when the hidden prefix
+was already validated. Otherwise repair scans canonical JSONL before declaring
+the transcript clean. Byte-location or identity mismatches in derived entries
+also discard the checkpoint and retry through the canonical full scan.
 
 `session.json` owns the session's creation and activity timestamps as positive
 epoch-millisecond integers (`started_at_ms` and `last_active_at_ms`). Creation
