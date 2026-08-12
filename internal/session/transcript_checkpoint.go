@@ -1,12 +1,8 @@
 package session
 
-import (
-	"os"
+import "github.com/juex-ai/juex/internal/llm"
 
-	"github.com/juex-ai/juex/internal/llm"
-)
-
-const transcriptCheckpointVersion = 1
+const transcriptCheckpointVersion = 2
 
 // transcriptCheckpoint is a bounded, derived index over conversation.jsonl.
 // The transcript fingerprint makes the JSONL file authoritative whenever the
@@ -37,7 +33,8 @@ func checkpointIndexEntry(entry transcriptCheckpointEntry) transcriptIndexEntry 
 }
 
 func transcriptCheckpointValid(checkpoint *transcriptCheckpoint, fingerprint transcriptFingerprint) bool {
-	if checkpoint == nil || checkpoint.Version != transcriptCheckpointVersion || checkpoint.Fingerprint != fingerprint ||
+	if checkpoint == nil || checkpoint.Version != transcriptCheckpointVersion || !fingerprint.strong() ||
+		checkpoint.Fingerprint != fingerprint ||
 		checkpoint.Turns < 0 || checkpoint.Fingerprint.Size < 0 {
 		return false
 	}
@@ -69,6 +66,9 @@ func validCheckpointEntry(entry transcriptCheckpointEntry, ceiling int64) bool {
 }
 
 func buildTranscriptCheckpoint(idx transcriptIndex, fingerprint transcriptFingerprint) *transcriptCheckpoint {
+	if !fingerprint.strong() {
+		return nil
+	}
 	checkpoint := &transcriptCheckpoint{
 		Version:          transcriptCheckpointVersion,
 		Fingerprint:      fingerprint,
@@ -135,11 +135,12 @@ func retainedTranscriptEntries(entries []transcriptIndexEntry, compact transcrip
 // window when a current checkpoint is available. The bool reports whether the
 // full transcript scan was avoided.
 func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (transcriptIndex, bool, error) {
-	st, err := os.Stat(path)
+	snapshot, err := openTranscriptSnapshot(path)
 	if err != nil {
 		return transcriptIndex{}, false, err
 	}
-	fingerprint := fingerprintFromFileInfo(st)
+	defer snapshot.close()
+	fingerprint := snapshot.fingerprint
 	if !transcriptCheckpointValid(checkpoint, fingerprint) || checkpoint.LatestCompact == nil {
 		idx, err := scanTranscriptIndex(path)
 		if err != nil {
@@ -151,7 +152,7 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 	var idx transcriptIndex
 	for _, retained := range checkpoint.Retained {
 		entry := checkpointIndexEntry(retained)
-		messages, err := readTranscriptMessages(path, []transcriptIndexEntry{entry})
+		messages, err := readTranscriptMessagesFromFile(snapshot.file, path, []transcriptIndexEntry{entry})
 		if err != nil {
 			return scanActiveTranscriptIndex(path)
 		}
@@ -160,7 +161,7 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 		}
 		idx.add(messages[0], 0, retained.Offset, retained.Length)
 	}
-	suffix, err := scanTranscriptIndexFrom(path, checkpoint.LatestCompact.Offset)
+	suffix, err := scanTranscriptIndexFromFile(snapshot.file, path, checkpoint.LatestCompact.Offset)
 	if err != nil {
 		return scanActiveTranscriptIndex(path)
 	}
@@ -189,6 +190,9 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 	idx.complete = false
 	idx.latestCompactAt = latestCompactAt
 	idx.hasLatestCompact = true
+	if err := snapshot.verify(); err != nil {
+		return scanActiveTranscriptIndex(path)
+	}
 	return idx, true, nil
 }
 

@@ -204,6 +204,63 @@ func TestSessionAppendRollsBackWhenMetadataUpdateFails(t *testing.T) {
 	}
 }
 
+func TestSessionAppendRejectsExternallyChangedTranscript(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Append(llm.TextMessage(llm.RoleUser, "first")); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(s.Dir, conversationFile)
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := bytes.Replace(data, []byte("first"), []byte("other"), 1)
+	if bytes.Equal(changed, data) {
+		t.Fatal("test transcript did not contain the expected text")
+	}
+	if err := os.WriteFile(path, changed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	metadataBefore, err := os.ReadFile(filepath.Join(s.Dir, metadataFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.Append(llm.TextMessage(llm.RoleAssistant, "must not append"))
+	if !errors.Is(err, ErrTranscriptChanged) {
+		t.Fatalf("Append error = %v, want ErrTranscriptChanged", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, changed) {
+		t.Fatalf("conversation changed after rejected append:\ngot  %s\nwant %s", got, changed)
+	}
+	metadataAfter, err := os.ReadFile(filepath.Join(s.Dir, metadataFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(metadataAfter, metadataBefore) {
+		t.Fatal("rejected append replaced the transcript checkpoint")
+	}
+	if len(s.History) != 1 || len(s.transcript.entries) != 1 {
+		t.Fatalf("rejected append mutated memory: history=%d entries=%d", len(s.History), len(s.transcript.entries))
+	}
+}
+
 func TestMessageCreatedAtParsesOnlyCanonicalMessageIDs(t *testing.T) {
 	got, ok := MessageCreatedAt("msg-20260718T065604-8f0582f4")
 	if !ok {

@@ -400,8 +400,9 @@ providers:
 			ID         string `json:"id"`
 			Turns      int    `json:"turns"`
 			Transcript struct {
-				Size    int64 `json:"size"`
-				MtimeMS int64 `json:"mtime_ms"`
+				Size     int64  `json:"size"`
+				MtimeNS  int64  `json:"mtime_ns"`
+				ChangeID string `json:"change_id"`
 			} `json:"transcript"`
 		} `json:"sessions"`
 	}
@@ -413,7 +414,8 @@ providers:
 		history.Sessions[0].ID != first.SessionID ||
 		history.Sessions[0].Turns == 0 ||
 		history.Sessions[0].Transcript.Size == 0 ||
-		history.Sessions[0].Transcript.MtimeMS == 0 {
+		history.Sessions[0].Transcript.MtimeNS == 0 ||
+		history.Sessions[0].Transcript.ChangeID == "" {
 		t.Fatalf("history = %+v", history)
 	}
 	for _, forbidden := range [][]byte{
@@ -446,28 +448,8 @@ providers:
 	listCmd := exec.Command(bin, "-C", work, "sessions", "list", "--format", "json")
 	listCmd.Env = env
 	listOut, err := listCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("cached sessions list: %v\n%s", err, listOut)
-	}
-	var listed struct {
-		Sessions []struct {
-			ID           string `json:"id"`
-			Active       bool   `json:"active"`
-			Turns        int    `json:"turns"`
-			StartedAt    string `json:"started_at"`
-			LastActiveAt string `json:"last_active_at"`
-		} `json:"sessions"`
-	}
-	if err := json.Unmarshal(listOut, &listed); err != nil {
-		t.Fatalf("decode sessions list: %v\n%s", err, listOut)
-	}
-	if len(listed.Sessions) != 1 ||
-		listed.Sessions[0].ID != first.SessionID ||
-		!listed.Sessions[0].Active ||
-		listed.Sessions[0].Turns == 0 ||
-		!strings.HasSuffix(listed.Sessions[0].StartedAt, "Z") ||
-		!strings.HasSuffix(listed.Sessions[0].LastActiveAt, "Z") {
-		t.Fatalf("cached sessions list = %+v", listed.Sessions)
+	if err == nil || !bytes.Contains(listOut, []byte("parse")) {
+		t.Fatalf("changed transcript list error = %v; output = %s", err, listOut)
 	}
 
 	if err := os.WriteFile(conversationPath, conversation, 0o644); err != nil {

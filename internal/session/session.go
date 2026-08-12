@@ -110,7 +110,7 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 	}); err != nil {
 		return nil, err
 	}
-	convFD, err := os.OpenFile(filepath.Join(dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	convFD, err := os.OpenFile(filepath.Join(dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}
@@ -180,10 +180,28 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		s.mu.Unlock()
 		return nil, err
 	}
+	currentFingerprint, err := s.currentTranscriptFingerprintLocked()
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	if s.transcript.fingerprint == (transcriptFingerprint{}) {
+		if currentFingerprint.Size != 0 {
+			s.mu.Unlock()
+			return nil, ErrTranscriptChanged
+		}
+	} else if !currentFingerprint.strong() || currentFingerprint != s.transcript.fingerprint {
+		s.mu.Unlock()
+		return nil, ErrTranscriptChanged
+	}
 	offset, err := s.convFD.Seek(0, io.SeekEnd)
 	if err != nil {
 		s.mu.Unlock()
 		return nil, err
+	}
+	if offset != currentFingerprint.Size {
+		s.mu.Unlock()
+		return nil, ErrTranscriptChanged
 	}
 	written, writeErr := s.convFD.Write(data)
 	if writeErr == nil && written != len(data) {
@@ -205,8 +223,12 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		nextTranscript.appendMessage(message, entryOffset, len(lines[i]))
 		entryOffset += int64(len(lines[i]))
 	}
-	transcriptInfo, err := s.convFD.Stat()
+	fingerprint, err := s.currentTranscriptFingerprintLocked()
 	if err != nil {
+		if errors.Is(err, ErrTranscriptChanged) {
+			s.mu.Unlock()
+			return nil, err
+		}
 		rollbackErr := s.rollbackConversationLocked(offset)
 		s.mu.Unlock()
 		if rollbackErr != nil {
@@ -214,7 +236,11 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		}
 		return nil, err
 	}
-	nextTranscript.fingerprint = fingerprintFromFileInfo(transcriptInfo)
+	if fingerprint.Size != offset+int64(len(data)) {
+		s.mu.Unlock()
+		return nil, ErrTranscriptChanged
+	}
+	nextTranscript.fingerprint = fingerprint
 	lastActiveMS := time.Now().UTC().UnixMilli()
 	if lastActiveMS < s.lastActiveMS {
 		lastActiveMS = s.lastActiveMS
@@ -295,15 +321,20 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 	var idx transcriptIndex
 	loadedFullTranscript := false
 	if opts.RepairTranscript {
-		st, statErr := os.Stat(convPath)
-		if statErr != nil {
-			return nil, statErr
-		}
-		if !transcriptCheckpointValid(meta.Transcript, fingerprintFromFileInfo(st)) || !meta.Transcript.RepairSafe {
+		if meta.Transcript == nil || !meta.Transcript.RepairSafe {
 			idx, err = scanTranscriptIndex(convPath)
 			loadedFullTranscript = true
 		} else {
-			idx, _, err = loadActiveTranscriptIndex(convPath, meta.Transcript)
+			var checkpointed bool
+			idx, checkpointed, err = loadActiveTranscriptIndex(convPath, meta.Transcript)
+			if err == nil && !checkpointed {
+				if idx.complete {
+					loadedFullTranscript = true
+				} else {
+					idx, err = scanTranscriptIndex(convPath)
+					loadedFullTranscript = true
+				}
+			}
 		}
 	} else {
 		idx, _, err = loadActiveTranscriptIndex(convPath, meta.Transcript)
@@ -311,14 +342,14 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	history, err := readTranscriptMessages(convPath, idx.entries)
+	history, err := readTranscriptMessagesForFingerprint(convPath, idx.entries, idx.fingerprint)
 	if err != nil {
 		return nil, err
 	}
 	if err := ensureScratchpadDir(dir); err != nil {
 		return nil, err
 	}
-	convFD, err := os.OpenFile(convPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	convFD, err := os.OpenFile(convPath, os.O_APPEND|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +383,9 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		}
 		if loadedFullTranscript && len(repairs) == 0 {
 			activeIndex := activeTranscriptIndex(sess.transcript)
-			activeHistory, err := readTranscriptMessages(convPath, activeIndex.entries)
+			activeHistory, err := readTranscriptMessagesForFingerprint(
+				convPath, activeIndex.entries, activeIndex.fingerprint,
+			)
 			if err != nil {
 				_ = sess.Close()
 				return nil, err
@@ -471,7 +504,7 @@ func (s *Session) ensureFilesLocked() error {
 		return err
 	}
 	if s.convFD == nil {
-		convFD, err := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		convFD, err := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
 		if err != nil {
 			return err
 		}
@@ -542,12 +575,13 @@ func (s *Session) infoLocked() Info {
 		StartedAt:    time.UnixMilli(s.startedAtMS).UTC(),
 		LastActiveAt: time.UnixMilli(s.lastActiveMS).UTC(),
 	}
-	if s.convFD != nil {
-		if st, err := s.convFD.Stat(); err == nil {
-			info.transcript = fingerprintFromFileInfo(st)
+	info.transcript = s.transcript.fingerprint
+	if info.transcript == (transcriptFingerprint{}) {
+		if s.convFD != nil {
+			info.transcript, _ = fingerprintFromOpenFile(s.convFD)
+		} else {
+			info.transcript, _ = fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
 		}
-	} else if st, err := os.Stat(filepath.Join(s.Dir, conversationFile)); err == nil {
-		info.transcript = fingerprintFromFileInfo(st)
 	}
 	if len(s.transcript.entries) > 0 || len(s.History) == 0 {
 		info.Turns = s.transcript.turns
@@ -586,7 +620,32 @@ func (s *Session) rollbackConversationLocked(offset int64) error {
 	if _, err := s.convFD.Seek(offset, io.SeekStart); rollbackErr == nil {
 		rollbackErr = err
 	}
+	if rollbackErr == nil {
+		fingerprint, err := s.currentTranscriptFingerprintLocked()
+		if err != nil {
+			return err
+		}
+		s.transcript.fingerprint = fingerprint
+	}
 	return rollbackErr
+}
+
+func (s *Session) currentTranscriptFingerprintLocked() (transcriptFingerprint, error) {
+	if s.convFD == nil {
+		return transcriptFingerprint{}, fmt.Errorf("session: conversation file closed")
+	}
+	openFingerprint, err := fingerprintFromOpenFile(s.convFD)
+	if err != nil {
+		return transcriptFingerprint{}, err
+	}
+	pathFingerprint, err := fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		return transcriptFingerprint{}, err
+	}
+	if openFingerprint != pathFingerprint {
+		return transcriptFingerprint{}, ErrTranscriptChanged
+	}
+	return openFingerprint, nil
 }
 
 func newID() string {

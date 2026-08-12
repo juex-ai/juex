@@ -209,7 +209,7 @@ func TestGetSessionsListReturnsUTCTimestampsForCosmeticIDs(t *testing.T) {
 	}
 }
 
-func TestGetSessionsListUsesRecordedTranscriptSummary(t *testing.T) {
+func TestGetSessionsListRejectsChangedTranscriptDespiteMatchingSizeAndMtime(t *testing.T) {
 	srv := newTestServer(t)
 	id := "20260727T120000-cached01"
 	dir := filepath.Join(srv.opts.Cfg.SessionsDir(), id)
@@ -251,22 +251,9 @@ func TestGetSessionsListUsesRecordedTranscriptSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusInternalServerError {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d; body = %s", resp.StatusCode, body)
-	}
-	var parsed struct {
-		Sessions []session.Info `json:"sessions"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		t.Fatal(err)
-	}
-	if len(parsed.Sessions) != 1 {
-		t.Fatalf("sessions = %+v", parsed.Sessions)
-	}
-	got := parsed.Sessions[0]
-	if got.ID != id || got.Dir != dir || got.Turns != 42 || got.Preview != "cached preview" {
-		t.Fatalf("session = %+v", got)
 	}
 }
 

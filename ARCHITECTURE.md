@@ -941,6 +941,13 @@ and lets recent transcript pages scan backward from the file tail. Missing,
 stale, or invalid checkpoints fall back to a strict full scan; the next
 successful append replaces them. The checkpoint never stores the complete
 message index, and full-history APIs remain proportional to transcript size.
+Platforms that cannot provide a stable file identity and change time reject
+the checkpoint rather than trusting a weak size-and-mtime match.
+The token detects ordinary in-place edits (including restored mtimes), file
+replacement, and accidental concurrent writes; it is not a cryptographic
+tamper proof against an actor capable of forging filesystem change metadata.
+Resident sessions compare both their open file and the canonical path before
+append and refuse to write when either no longer matches the in-memory index.
 `events.jsonl` does not use this checkpoint because safely skipping event
 prefixes would also require a durable reducer-state snapshot.
 
@@ -991,9 +998,12 @@ Each resident agent has one active primary session recorded in
 `$JUEX_HOME/agents/<id>/history.json` as `{active_id, sessions}`. History
 session entries are a cache, not canonical metadata: they contain only the
 session ID, transcript-derived turn count and preview, and a transcript
-fingerprint `{size, mtime_ms}`. Alias, kind, timestamps, and usage remain owned
-by session metadata and event files. `run`, `repl`, and `listen` attach to the
-active primary by default; `--new` and `/new` create a new primary and switch
+fingerprint `{size, mtime_ns, change_id}`. The opaque change identity combines
+the platform file identity and change time, so same-size rewrites that preserve
+the modification timestamp still invalidate derived state. Alias, kind,
+timestamps, and usage remain owned by session metadata and event files. `run`,
+`repl`, and `listen` attach to the active primary by default; `--new` and
+`/new` create a new primary and switch
 active. Side sessions are durable and listed, but never become active and are
 not valid Web turn targets. Explicit selection operations own `active_id`;
 ordinary primary activity refreshes the cached active summary only when that
@@ -1032,9 +1042,10 @@ and `repl`.
 directory under `root`; `session.LoadInfo(dir)` returns one session's
 summary plus its full message slice. `session.ListWithHistory(root,
 historyPath)` is the cached form used by Web and `juex sessions list`: it reuses
-transcript-derived summaries from the Agent history index only while both the
-canonical transcript size and millisecond-truncated modification time match
-its recorded fingerprint, reloads small session metadata directly, and reads
+transcript-derived summaries from the Agent history index only while the
+canonical transcript's size, nanosecond modification time, and platform change
+identity match its recorded fingerprint, reloads small session metadata
+directly, and reads
 cumulative usage backward from at most the latest 8 MiB of the event-journal
 tail. Usage fields that are absent from that bounded tail remain unset instead
 of forcing a full legacy-journal scan. Missing or stale transcript summaries

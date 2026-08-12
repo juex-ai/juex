@@ -23,8 +23,9 @@ const previewMaxRunes = 80
 const maxSessionUsageScanBytes = int64(maxEventLineBytes)
 
 type transcriptFingerprint struct {
-	Size    int64 `json:"size"`
-	MtimeMS int64 `json:"mtime_ms"`
+	Size     int64  `json:"size"`
+	MtimeNS  int64  `json:"mtime_ns"`
+	ChangeID string `json:"change_id,omitempty"`
 }
 
 // Info is a lightweight, read-only summary of a session on disk. It is
@@ -74,7 +75,7 @@ func List(root string) ([]Info, error) {
 
 // ListWithHistory enumerates canonical session directories like List while
 // reusing transcript summaries recorded in historyPath when their transcript
-// modification time still matches. Current metadata and event usage are always
+// fingerprint still matches. Current metadata and event usage are always
 // read from their canonical session files.
 func ListWithHistory(root, historyPath string) ([]Info, error) {
 	return listWithHistoryLoader(root, historyPath, loadInfoSummary)
@@ -145,13 +146,12 @@ func cachedOrScannedInfo(
 	loadSummary summaryLoader,
 ) (Info, bool, error) {
 	convPath := filepath.Join(dir, conversationFile)
-	st, err := os.Stat(convPath)
+	fingerprint, err := fingerprintFromPath(convPath)
 	if err != nil {
 		return Info{}, false, err
 	}
 	cached, ok := recorded[id]
-	fingerprint := fingerprintFromFileInfo(st)
-	if !ok || cached.transcript != fingerprint {
+	if !ok || !fingerprint.strong() || cached.transcript != fingerprint {
 		info, _, err := loadSummary(dir)
 		if err != nil {
 			return Info{}, false, err
@@ -204,7 +204,9 @@ func loadInfo(dir string) (Info, []llm.Message, error) {
 	}
 	info.Turns = idx.turns
 	info.Preview = idx.preview
-	msgs, err := readTranscriptMessages(filepath.Join(dir, conversationFile), idx.entries)
+	msgs, err := readTranscriptMessagesForFingerprint(
+		filepath.Join(dir, conversationFile), idx.entries, idx.fingerprint,
+	)
 	if err != nil {
 		return Info{}, nil, err
 	}
@@ -213,7 +215,7 @@ func loadInfo(dir string) (Info, []llm.Message, error) {
 
 func loadInfoSummary(dir string) (Info, transcriptIndex, error) {
 	convPath := filepath.Join(dir, conversationFile)
-	st, err := os.Stat(convPath)
+	fingerprint, err := fingerprintFromPath(convPath)
 	if err != nil {
 		return Info{}, transcriptIndex{}, err
 	}
@@ -229,7 +231,7 @@ func loadInfoSummary(dir string) (Info, transcriptIndex, error) {
 		Kind:         meta.Kind,
 		LastActiveAt: time.UnixMilli(meta.LastActiveAtMS).UTC(),
 		StartedAt:    time.UnixMilli(meta.StartedAtMS).UTC(),
-		transcript:   fingerprintFromFileInfo(st),
+		transcript:   fingerprint,
 	}
 	var idx transcriptIndex
 	if transcriptCheckpointValid(meta.Transcript, info.transcript) {
@@ -310,8 +312,31 @@ func loadLatestSessionUsageWithin(dir string, maxBytes int64) (llm.Usage, *llm.C
 func fingerprintFromFileInfo(info os.FileInfo) transcriptFingerprint {
 	return transcriptFingerprint{
 		Size:    info.Size(),
-		MtimeMS: info.ModTime().UnixMilli(),
+		MtimeNS: info.ModTime().UnixNano(),
 	}
+}
+
+func fingerprintFromPath(path string) (transcriptFingerprint, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return transcriptFingerprint{}, err
+	}
+	defer file.Close()
+	return fingerprintFromOpenFile(file)
+}
+
+func fingerprintFromOpenFile(file *os.File) (transcriptFingerprint, error) {
+	info, err := file.Stat()
+	if err != nil {
+		return transcriptFingerprint{}, err
+	}
+	fingerprint := fingerprintFromFileInfo(info)
+	fingerprint.ChangeID = transcriptFileChangeID(file, info)
+	return fingerprint, nil
+}
+
+func (f transcriptFingerprint) strong() bool {
+	return f.ChangeID != ""
 }
 
 func truncateRunes(s string, n int) string {

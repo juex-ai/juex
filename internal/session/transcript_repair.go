@@ -46,7 +46,7 @@ func (s *Session) RepairTranscript(reason string) ([]TranscriptRepair, error) {
 	if err != nil {
 		return nil, err
 	}
-	fullHistory, err := readTranscriptMessages(convPath, fullIndex.entries)
+	fullHistory, err := readTranscriptMessagesForFingerprint(convPath, fullIndex.entries, fullIndex.fingerprint)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +182,7 @@ func (s *Session) rewriteConversationLocked(history []llm.Message) error {
 	idx.repairSafe = true
 	idx.repairPrefixSafe = true
 	idx = activeTranscriptIndex(idx)
-	activeHistory, err := readTranscriptMessages(convPath, idx.entries)
+	activeHistory, err := readTranscriptMessagesForFingerprint(convPath, idx.entries, idx.fingerprint)
 	if err != nil {
 		return err
 	}
@@ -191,7 +191,7 @@ func (s *Session) rewriteConversationLocked(history []llm.Message) error {
 	if err := saveMetadata(s.Dir, meta); err != nil {
 		return err
 	}
-	convFD, err := os.OpenFile(convPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	convFD, err := os.OpenFile(convPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
 	if err != nil {
 		return fmt.Errorf("session: reopen repaired conversation: %w", err)
 	}

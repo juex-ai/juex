@@ -55,11 +55,23 @@ func scanTranscriptIndex(path string) (transcriptIndex, error) {
 }
 
 func scanTranscriptIndexFrom(path string, start int64) (transcriptIndex, error) {
-	f, err := os.Open(path)
+	snapshot, err := openTranscriptSnapshot(path)
 	if err != nil {
 		return transcriptIndex{}, err
 	}
-	defer f.Close()
+	defer snapshot.close()
+	idx, err := scanTranscriptIndexFromFile(snapshot.file, path, start)
+	if err != nil {
+		return transcriptIndex{}, err
+	}
+	if err := snapshot.verify(); err != nil {
+		return transcriptIndex{}, err
+	}
+	idx.fingerprint = snapshot.fingerprint
+	return idx, nil
+}
+
+func scanTranscriptIndexFromFile(f *os.File, path string, start int64) (transcriptIndex, error) {
 	if start < 0 {
 		return transcriptIndex{}, fmt.Errorf("session: invalid transcript offset %d", start)
 	}
@@ -81,11 +93,11 @@ func scanTranscriptIndexFrom(path string, start int64) (transcriptIndex, error) 
 				if err := json.Unmarshal(line, &msg); err != nil {
 					return transcriptIndex{}, fmt.Errorf("session: parse %s:%d: %w", path, lineIndex+1, err)
 				}
-				msg, err = normalizeLoadedMessage(path, lineIndex+1, msg)
+				normalized, err := normalizeLoadedMessage(path, lineIndex+1, msg)
 				if err != nil {
 					return transcriptIndex{}, err
 				}
-				idx.add(msg, lineIndex, entryOffset, len(line))
+				idx.add(normalized, lineIndex, entryOffset, len(line))
 			}
 			lineIndex++
 		}
@@ -96,11 +108,6 @@ func scanTranscriptIndexFrom(path string, start int64) (transcriptIndex, error) 
 			return transcriptIndex{}, readErr
 		}
 	}
-	st, err := f.Stat()
-	if err != nil {
-		return transcriptIndex{}, err
-	}
-	idx.fingerprint = fingerprintFromFileInfo(st)
 	return idx, nil
 }
 
@@ -288,15 +295,36 @@ func (idx transcriptIndex) coherentPageStart(start, floor, end int) int {
 }
 
 func readTranscriptMessages(path string, entries []transcriptIndexEntry) ([]llm.Message, error) {
-	if len(entries) == 0 {
+	return readTranscriptMessagesForFingerprint(path, entries, transcriptFingerprint{})
+}
+
+func readTranscriptMessagesForFingerprint(
+	path string,
+	entries []transcriptIndexEntry,
+	expected transcriptFingerprint,
+) ([]llm.Message, error) {
+	if len(entries) == 0 && expected == (transcriptFingerprint{}) {
 		return []llm.Message{}, nil
 	}
-	f, err := os.Open(path)
+	snapshot, err := openTranscriptSnapshot(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer snapshot.close()
+	if expected != (transcriptFingerprint{}) && snapshot.fingerprint != expected {
+		return nil, ErrTranscriptChanged
+	}
+	out, err := readTranscriptMessagesFromFile(snapshot.file, path, entries)
+	if err != nil {
+		return nil, err
+	}
+	if err := snapshot.verify(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
+func readTranscriptMessagesFromFile(f *os.File, path string, entries []transcriptIndexEntry) ([]llm.Message, error) {
 	out := make([]llm.Message, 0, len(entries))
 	for _, entry := range entries {
 		if entry.Length <= 0 {
@@ -344,7 +372,7 @@ func transcriptMessagePage(path string, idx transcriptIndex, beforeID string, li
 		end = start
 	}
 	start = idx.coherentPageStart(start, floor, end)
-	msgs, err := readTranscriptMessages(path, idx.entries[start:end])
+	msgs, err := readTranscriptMessagesForFingerprint(path, idx.entries[start:end], idx.fingerprint)
 	if err != nil {
 		return MessagePage{}, err
 	}
@@ -429,7 +457,7 @@ func LoadActiveMessages(dir string) ([]llm.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	return readTranscriptMessages(convPath, idx.entries)
+	return readTranscriptMessagesForFingerprint(convPath, idx.entries, idx.fingerprint)
 }
 
 func transcriptContainsMessageID(path, id string) (bool, error) {

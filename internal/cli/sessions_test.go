@@ -162,7 +162,7 @@ func TestSessionsList_JSONTimestampsAreUTCForCosmeticIDs(t *testing.T) {
 	}
 }
 
-func TestSessionsListUsesMatchingHistoryFingerprint(t *testing.T) {
+func TestSessionsListRejectsChangedTranscriptDespiteMatchingSizeAndMtime(t *testing.T) {
 	work := t.TempDir()
 	id := "20260729T120000-cached01"
 	valid := `{"id":"m1","role":"user","blocks":[]}` + "\n"
@@ -196,11 +196,9 @@ func TestSessionsListUsesMatchingHistoryFingerprint(t *testing.T) {
 	root.SetOut(&out)
 	root.SetErr(&out)
 	root.SetArgs([]string{"-C", work, "sessions", "list"})
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), `"turns": 42`) || !strings.Contains(out.String(), `"preview": "cached preview"`) {
-		t.Fatalf("sessions list did not use cached summary:\n%s", out.String())
+	err = root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "parse") {
+		t.Fatalf("sessions list error = %v, want canonical transcript parse failure", err)
 	}
 }
 

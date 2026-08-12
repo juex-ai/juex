@@ -16,34 +16,38 @@ func transcriptMessagePageFromCheckpoint(
 	beforeID string,
 	limit int,
 ) (MessagePage, bool, error) {
-	st, err := os.Stat(path)
+	snapshot, err := openTranscriptSnapshot(path)
 	if err != nil {
 		return MessagePage{}, false, err
 	}
-	if !transcriptCheckpointValid(checkpoint, fingerprintFromFileInfo(st)) {
+	defer snapshot.close()
+	if !transcriptCheckpointValid(checkpoint, snapshot.fingerprint) {
 		return MessagePage{}, false, nil
 	}
 	if checkpoint.LatestCompact != nil {
 		entry := checkpointIndexEntry(*checkpoint.LatestCompact)
-		messages, err := readTranscriptMessages(path, []transcriptIndexEntry{entry})
+		messages, err := readTranscriptMessagesFromFile(snapshot.file, path, []transcriptIndexEntry{entry})
 		if err != nil || len(messages) != 1 || messages[0].ID != entry.ID || messages[0].Kind != llm.MessageKindCompact {
 			return MessagePage{}, false, nil
 		}
 	}
-	page, err := reverseTranscriptMessagePage(path, checkpoint, beforeID, limit)
+	page, err := reverseTranscriptMessagePageFromFile(snapshot.file, path, checkpoint, beforeID, limit)
 	if err != nil {
+		return MessagePage{}, false, nil
+	}
+	if err := snapshot.verify(); err != nil {
 		return MessagePage{}, false, nil
 	}
 	return page, true, nil
 }
 
-func reverseTranscriptMessagePage(path string, checkpoint *transcriptCheckpoint, beforeID string, limit int) (MessagePage, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return MessagePage{}, err
-	}
-	defer file.Close()
-
+func reverseTranscriptMessagePageFromFile(
+	file *os.File,
+	path string,
+	checkpoint *transcriptCheckpoint,
+	beforeID string,
+	limit int,
+) (MessagePage, error) {
 	floor := int64(0)
 	if beforeID == "" && checkpoint != nil && checkpoint.LatestCompact != nil {
 		floor = checkpoint.LatestCompact.Offset

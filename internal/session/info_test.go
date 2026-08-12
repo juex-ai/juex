@@ -89,11 +89,11 @@ func writeEvents(t *testing.T, dir string, evs []events.Event) {
 
 func withTranscriptFingerprint(t *testing.T, info Info, dir string) Info {
 	t.Helper()
-	st, err := os.Stat(filepath.Join(dir, conversationFile))
+	fingerprint, err := fingerprintFromPath(filepath.Join(dir, conversationFile))
 	if err != nil {
 		t.Fatal(err)
 	}
-	info.transcript = fingerprintFromFileInfo(st)
+	info.transcript = fingerprint
 	return info
 }
 
@@ -323,6 +323,34 @@ func TestListWithHistoryDoesNotRescanMatchingTranscriptFingerprint(t *testing.T)
 	}
 	if info.ContextUsage == nil || info.ContextUsage.Model != "mock" || info.ContextUsage.TotalTokens != 12 {
 		t.Fatalf("context usage = %+v", info.ContextUsage)
+	}
+}
+
+func TestCachedInfoRejectsWeakTranscriptFingerprint(t *testing.T) {
+	root := t.TempDir()
+	id := "20260727T120000-weak0001"
+	dir := makeSession(t, root, id,
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "current")}, time.Now())
+	current, _, err := loadInfoSummary(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached := current
+	cached.Turns = 99
+	cached.transcript.ChangeID = ""
+	scans := 0
+	got, scanned, err := cachedOrScannedInfo(dir, id, map[string]Info{id: cached}, func(dir string) (Info, transcriptIndex, error) {
+		scans++
+		return loadInfoSummary(dir)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !scanned || scans != 1 {
+		t.Fatalf("weak cache scan = %t/%d, want true/1", scanned, scans)
+	}
+	if got.Turns != 1 || got.Preview != "current" {
+		t.Fatalf("summary = turns %d preview %q, want canonical 1/current", got.Turns, got.Preview)
 	}
 }
 

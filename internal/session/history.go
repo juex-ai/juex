@@ -264,14 +264,14 @@ func repairHistorySummaries(root, path string, infos []Info) error {
 			if !ok {
 				continue
 			}
-			st, err := os.Stat(filepath.Join(dir, conversationFile))
+			fingerprint, err := fingerprintFromPath(filepath.Join(dir, conversationFile))
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					continue
 				}
 				return err
 			}
-			if fingerprintFromFileInfo(st) != info.transcript {
+			if !fingerprint.strong() || fingerprint != info.transcript {
 				continue
 			}
 			info.Dir = dir
