@@ -165,8 +165,7 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 	if err != nil {
 		return scanActiveTranscriptIndex(path)
 	}
-	if len(suffix.entries) == 0 || suffix.entries[0].ID != checkpoint.LatestCompact.ID ||
-		suffix.entries[0].Kind != llm.MessageKindCompact {
+	if !checkpointNamesLatestCompact(suffix, *checkpoint.LatestCompact) {
 		return scanActiveTranscriptIndex(path)
 	}
 	if !retainedEntriesMatchCompact(idx.entries, suffix.entries[0]) {
@@ -194,6 +193,11 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 		return scanActiveTranscriptIndex(path)
 	}
 	return idx, true, nil
+}
+
+func checkpointNamesLatestCompact(suffix transcriptIndex, checkpoint transcriptCheckpointEntry) bool {
+	return len(suffix.entries) > 0 && suffix.entries[0].ID == checkpoint.ID &&
+		suffix.entries[0].Kind == llm.MessageKindCompact && suffix.latestCompact() == 0
 }
 
 func retainedEntriesMatchCompact(entries []transcriptIndexEntry, compact transcriptIndexEntry) bool {

@@ -185,12 +185,7 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		s.mu.Unlock()
 		return nil, err
 	}
-	if s.transcript.fingerprint == (transcriptFingerprint{}) {
-		if currentFingerprint.Size != 0 {
-			s.mu.Unlock()
-			return nil, ErrTranscriptChanged
-		}
-	} else if !currentFingerprint.strong() || currentFingerprint != s.transcript.fingerprint {
+	if !residentTranscriptFingerprintMatches(s.transcript.fingerprint, currentFingerprint) {
 		s.mu.Unlock()
 		return nil, ErrTranscriptChanged
 	}
@@ -646,6 +641,13 @@ func (s *Session) currentTranscriptFingerprintLocked() (transcriptFingerprint, e
 		return transcriptFingerprint{}, ErrTranscriptChanged
 	}
 	return openFingerprint, nil
+}
+
+func residentTranscriptFingerprintMatches(resident, current transcriptFingerprint) bool {
+	if resident == (transcriptFingerprint{}) {
+		return current.Size == 0
+	}
+	return resident == current
 }
 
 func newID() string {

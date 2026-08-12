@@ -536,6 +536,63 @@ func TestCheckpointRetainedEntriesMustMatchCompactMarker(t *testing.T) {
 	}
 }
 
+func TestCheckpointLatestCompactMustMatchCanonicalLatestMarker(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCompact := messageWithID(compactTestMessage("first summary"), "m3")
+	firstCompact.Compaction = &llm.CompactionMetadata{RetainedMessageIDs: []string{"m2"}}
+	latestCompact := messageWithID(compactTestMessage("latest summary"), "m5")
+	latestCompact.Compaction = &llm.CompactionMetadata{RetainedMessageIDs: []string{"m4"}}
+	for _, message := range []llm.Message{
+		messageWithID(llm.TextMessage(llm.RoleUser, "old"), "m1"),
+		messageWithID(llm.TextMessage(llm.RoleAssistant, "first retained"), "m2"),
+		firstCompact,
+		messageWithID(llm.TextMessage(llm.RoleUser, "latest retained"), "m4"),
+		latestCompact,
+		messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m6"),
+	} {
+		if err := s.Append(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, conversationFile)
+	canonical, err := scanTranscriptIndex(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.Transcript.LatestCompact = pointerToCheckpointEntry(checkpointEntry(canonical.entries[2]))
+	meta.Transcript.Retained = []transcriptCheckpointEntry{checkpointEntry(canonical.entries[1])}
+	if err := saveMetadata(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	idx, checkpointed, err := loadActiveTranscriptIndex(path, meta.Transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpointed {
+		t.Fatal("active transcript accepted a checkpoint that names an older compact marker")
+	}
+	if got := strings.Join(transcriptEntryIDs(idx.entries), ","); got != "m4,m5,m6" {
+		t.Fatalf("active index ids = %s, want m4,m5,m6", got)
+	}
+	if _, checkpointed, err := transcriptMessagePageFromCheckpoint(path, meta.Transcript, "", 60); err != nil {
+		t.Fatal(err)
+	} else if checkpointed {
+		t.Fatal("transcript page accepted a checkpoint that names an older compact marker")
+	}
+}
+
 func TestCheckpointRepairSafetyRecoversAfterToolResult(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)

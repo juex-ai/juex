@@ -261,6 +261,16 @@ func TestSessionAppendRejectsExternallyChangedTranscript(t *testing.T) {
 	}
 }
 
+func TestResidentTranscriptFingerprintAllowsMatchingWeakIdentity(t *testing.T) {
+	weak := transcriptFingerprint{Size: 42, MtimeNS: 99}
+	if !residentTranscriptFingerprintMatches(weak, weak) {
+		t.Fatal("matching weak fingerprint rejected resident append")
+	}
+	if residentTranscriptFingerprintMatches(weak, transcriptFingerprint{Size: 43, MtimeNS: 99}) {
+		t.Fatal("changed weak fingerprint accepted resident append")
+	}
+}
+
 func TestMessageCreatedAtParsesOnlyCanonicalMessageIDs(t *testing.T) {
 	got, ok := MessageCreatedAt("msg-20260718T065604-8f0582f4")
 	if !ok {
