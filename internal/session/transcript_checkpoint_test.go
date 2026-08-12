@@ -122,6 +122,44 @@ func TestLoadInfoPageUsesCheckpointAndKeepsToolPair(t *testing.T) {
 	}
 }
 
+func TestCheckpointPageKeepsFastPathForOversizedTranscriptRow(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(messageWithID(compactTestMessage("summary"), "m1")); err != nil {
+		t.Fatal(err)
+	}
+	oversized := llm.TextMessage(llm.RoleAssistant, strings.Repeat("x", maxEventLineBytes+1))
+	if err := s.Append(messageWithID(oversized, "m2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "latest"), "m3")); err != nil {
+		t.Fatal(err)
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page, checkpointed, err := transcriptMessagePageFromCheckpoint(
+		filepath.Join(dir, conversationFile), meta.Transcript, "", 2,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !checkpointed {
+		t.Fatal("oversized transcript row forced checkpoint page fallback")
+	}
+	if got := strings.Join(messageIDsForTest(page.Messages), ","); got != "m2,m3" {
+		t.Fatalf("page ids = %s, want m2,m3", got)
+	}
+}
+
 func TestStaleTranscriptCheckpointFallsBackToStrictScan(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)

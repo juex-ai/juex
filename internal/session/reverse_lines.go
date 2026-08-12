@@ -14,6 +14,7 @@ type reverseLineReader struct {
 	offset       int64
 	floor        int64
 	floorAligned bool
+	maxLineBytes int
 	buf          []byte
 }
 
@@ -21,7 +22,7 @@ func newReverseLineReader(file *os.File) (*reverseLineReader, error) {
 	return newBoundedReverseLineReader(file, 0)
 }
 
-func newReverseLineReaderAt(file *os.File, floor int64) (*reverseLineReader, error) {
+func newUncappedReverseLineReaderAt(file *os.File, floor int64) (*reverseLineReader, error) {
 	st, err := file.Stat()
 	if err != nil {
 		return nil, err
@@ -43,7 +44,7 @@ func newBoundedReverseLineReader(file *os.File, maxBytes int64) (*reverseLineRea
 	if maxBytes > 0 && st.Size() > maxBytes {
 		floor = st.Size() - maxBytes
 	}
-	return &reverseLineReader{file: file, offset: st.Size(), floor: floor}, nil
+	return &reverseLineReader{file: file, offset: st.Size(), floor: floor, maxLineBytes: maxEventLineBytes}, nil
 }
 
 func (r *reverseLineReader) next() ([]byte, error) {
@@ -57,7 +58,7 @@ func (r *reverseLineReader) next() ([]byte, error) {
 			if len(line) == 0 {
 				continue
 			}
-			if len(line) > maxEventLineBytes {
+			if r.lineTooLong(line) {
 				return nil, errEventLineTooLong
 			}
 			return line, nil
@@ -80,7 +81,7 @@ func (r *reverseLineReader) next() ([]byte, error) {
 			if len(line) == 0 {
 				return nil, io.EOF
 			}
-			if len(line) > maxEventLineBytes {
+			if r.lineTooLong(line) {
 				return nil, errEventLineTooLong
 			}
 			return line, nil
@@ -97,12 +98,28 @@ func (r *reverseLineReader) next() ([]byte, error) {
 			return nil, err
 		}
 		chunk = chunk[:n]
-		combined := make([]byte, len(chunk)+len(r.buf))
-		copy(combined, chunk)
-		copy(combined[len(chunk):], r.buf)
-		r.buf = combined
-		if bytes.IndexByte(r.buf, '\n') < 0 && len(r.buf) > maxEventLineBytes {
+		r.buf = prependReverseLineChunk(r.buf, chunk)
+		if bytes.IndexByte(r.buf, '\n') < 0 && r.lineTooLong(r.buf) {
 			return nil, errEventLineTooLong
 		}
 	}
+}
+
+func (r *reverseLineReader) lineTooLong(line []byte) bool {
+	return r.maxLineBytes > 0 && len(line) > r.maxLineBytes
+}
+
+func prependReverseLineChunk(buf, chunk []byte) []byte {
+	required := len(chunk) + len(buf)
+	if cap(buf) < required {
+		capacity := max(required, max(cap(buf)*2, reverseLineBlockBytes))
+		grown := make([]byte, len(buf), capacity)
+		copy(grown, buf)
+		buf = grown
+	}
+	oldLength := len(buf)
+	buf = buf[:required]
+	copy(buf[len(chunk):], buf[:oldLength])
+	copy(buf, chunk)
+	return buf
 }

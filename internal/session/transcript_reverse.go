@@ -48,7 +48,7 @@ func reverseTranscriptMessagePage(path string, checkpoint *transcriptCheckpoint,
 	if beforeID == "" && checkpoint != nil && checkpoint.LatestCompact != nil {
 		floor = checkpoint.LatestCompact.Offset
 	}
-	reader, err := newReverseLineReaderAt(file, floor)
+	reader, err := newUncappedReverseLineReaderAt(file, floor)
 	if err != nil {
 		return MessagePage{}, err
 	}
