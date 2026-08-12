@@ -935,7 +935,9 @@ derived checkpoint in `session.json` records the transcript fingerprint,
 cumulative turn count and preview, the latest compaction-marker byte location,
 byte locations for explicitly retained pre-compaction messages, and whether
 the complete transcript and hidden pre-compaction prefix passed Tool Call
-repair validation. A matching, repair-safe checkpoint lets session resume read
+repair validation. A versioned SHA-256 checksum covers the exact transcript
+fingerprint and every derived checkpoint field, so sidecar-only edits are
+rejected. A matching, repair-safe checkpoint lets session resume read
 only retained rows plus the active suffix,
 and lets recent transcript pages scan backward from the file tail. Missing,
 stale, or invalid checkpoints fall back to a strict full scan; the next
@@ -946,6 +948,10 @@ the checkpoint rather than trusting a weak size-and-mtime match.
 The token detects ordinary in-place edits (including restored mtimes), file
 replacement, and accidental concurrent writes; it is not a cryptographic
 tamper proof against an actor capable of forging filesystem change metadata.
+The checkpoint checksum likewise detects ordinary metadata edits rather than
+an actor deliberately recomputing the checksum. Legacy tail-start checkpoints
+also verify every canonical row from the retained tail start through the
+compact marker, so a checksum-consistent retained tail cannot contain holes.
 Resident sessions compare both their open file and the canonical path before
 append and refuse to write when either no longer matches the in-memory index.
 `events.jsonl` does not use this checkpoint because safely skipping event

@@ -1,8 +1,15 @@
 package session
 
-import "github.com/juex-ai/juex/internal/llm"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"os"
 
-const transcriptCheckpointVersion = 2
+	"github.com/juex-ai/juex/internal/llm"
+)
+
+const transcriptCheckpointVersion = 3
 
 // transcriptCheckpoint is a bounded, derived index over conversation.jsonl.
 // The transcript fingerprint makes the JSONL file authoritative whenever the
@@ -16,6 +23,7 @@ type transcriptCheckpoint struct {
 	RepairPrefixSafe bool                        `json:"repair_prefix_safe"`
 	LatestCompact    *transcriptCheckpointEntry  `json:"latest_compact,omitempty"`
 	Retained         []transcriptCheckpointEntry `json:"retained,omitempty"`
+	ChecksumSHA256   string                      `json:"checksum_sha256"`
 }
 
 type transcriptCheckpointEntry struct {
@@ -35,7 +43,8 @@ func checkpointIndexEntry(entry transcriptCheckpointEntry) transcriptIndexEntry 
 func transcriptCheckpointValid(checkpoint *transcriptCheckpoint, fingerprint transcriptFingerprint) bool {
 	if checkpoint == nil || checkpoint.Version != transcriptCheckpointVersion || !fingerprint.strong() ||
 		checkpoint.Fingerprint != fingerprint ||
-		checkpoint.Turns < 0 || checkpoint.Fingerprint.Size < 0 {
+		checkpoint.Turns < 0 || checkpoint.Fingerprint.Size < 0 ||
+		checkpoint.ChecksumSHA256 == "" || checkpoint.ChecksumSHA256 != transcriptCheckpointChecksum(checkpoint) {
 		return false
 	}
 	if checkpoint.LatestCompact == nil {
@@ -60,6 +69,20 @@ func transcriptCheckpointValid(checkpoint *transcriptCheckpoint, fingerprint tra
 	return true
 }
 
+func transcriptCheckpointChecksum(checkpoint *transcriptCheckpoint) string {
+	if checkpoint == nil {
+		return ""
+	}
+	canonical := *checkpoint
+	canonical.ChecksumSHA256 = ""
+	data, err := json.Marshal(canonical)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 func validCheckpointEntry(entry transcriptCheckpointEntry, ceiling int64) bool {
 	return entry.ID != "" && entry.Offset >= 0 && entry.Length > 0 &&
 		entry.Offset+int64(entry.Length) <= ceiling
@@ -79,7 +102,7 @@ func buildTranscriptCheckpoint(idx transcriptIndex, fingerprint transcriptFinger
 	}
 	compactIndex := idx.latestCompact()
 	if compactIndex < 0 {
-		return checkpoint
+		return sealTranscriptCheckpoint(checkpoint, fingerprint)
 	}
 	compact := idx.entries[compactIndex]
 	checkpoint.LatestCompact = pointerToCheckpointEntry(checkpointEntry(compact))
@@ -92,6 +115,11 @@ func buildTranscriptCheckpoint(idx transcriptIndex, fingerprint transcriptFinger
 	for _, entry := range retained {
 		checkpoint.Retained = append(checkpoint.Retained, checkpointEntry(entry))
 	}
+	return sealTranscriptCheckpoint(checkpoint, fingerprint)
+}
+
+func sealTranscriptCheckpoint(checkpoint *transcriptCheckpoint, fingerprint transcriptFingerprint) *transcriptCheckpoint {
+	checkpoint.ChecksumSHA256 = transcriptCheckpointChecksum(checkpoint)
 	if !transcriptCheckpointValid(checkpoint, fingerprint) {
 		return nil
 	}
@@ -168,7 +196,8 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 	if !checkpointNamesLatestCompact(suffix, *checkpoint.LatestCompact) {
 		return scanActiveTranscriptIndex(path)
 	}
-	if !retainedEntriesMatchCompact(idx.entries, suffix.entries[0]) {
+	retainedMatch, err := retainedEntriesMatchCompact(snapshot.file, path, idx.entries, suffix.entries[0])
+	if err != nil || !retainedMatch {
 		return scanActiveTranscriptIndex(path)
 	}
 	repairBroken := suffix.repairBroken || !checkpoint.RepairPrefixSafe
@@ -200,17 +229,63 @@ func checkpointNamesLatestCompact(suffix transcriptIndex, checkpoint transcriptC
 		suffix.entries[0].Kind == llm.MessageKindCompact && suffix.latestCompact() == 0
 }
 
-func retainedEntriesMatchCompact(entries []transcriptIndexEntry, compact transcriptIndexEntry) bool {
+func retainedEntriesMatchCompact(
+	file *os.File,
+	path string,
+	entries []transcriptIndexEntry,
+	compact transcriptIndexEntry,
+) (bool, error) {
+	if len(compact.RetainedMessageIDs) == 0 && compact.TailStartMessageID != "" {
+		return legacyRetainedTailMatches(file, path, entries, compact)
+	}
 	expected, ok := retainedTranscriptEntries(entries, compact)
 	if !ok || len(expected) != len(entries) {
-		return false
+		return false, nil
 	}
 	for i := range entries {
 		if entries[i].ID != expected[i].ID {
-			return false
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
+}
+
+func legacyRetainedTailMatches(
+	file *os.File,
+	path string,
+	entries []transcriptIndexEntry,
+	compact transcriptIndexEntry,
+) (bool, error) {
+	if len(entries) == 0 || entries[0].ID != compact.TailStartMessageID {
+		return false, nil
+	}
+	canonical, err := scanTranscriptIndexFromFile(file, path, entries[0].Offset)
+	if err != nil {
+		return false, err
+	}
+	compactIndex := -1
+	for i, entry := range canonical.entries {
+		if entry.Offset == compact.Offset {
+			if entry.ID != compact.ID || entry.Kind != llm.MessageKindCompact {
+				return false, nil
+			}
+			compactIndex = i
+			break
+		}
+		if entry.Offset > compact.Offset {
+			return false, nil
+		}
+	}
+	if compactIndex < 0 || compactIndex != len(entries) {
+		return false, nil
+	}
+	for i, entry := range entries {
+		canonicalEntry := canonical.entries[i]
+		if entry.ID != canonicalEntry.ID || entry.Offset != canonicalEntry.Offset || entry.Length != canonicalEntry.Length {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func scanActiveTranscriptIndex(path string) (transcriptIndex, bool, error) {

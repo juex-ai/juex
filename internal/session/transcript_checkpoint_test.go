@@ -593,6 +593,109 @@ func TestCheckpointLatestCompactMustMatchCanonicalLatestMarker(t *testing.T) {
 	}
 }
 
+func TestCheckpointRepairFlagsMustMatchCanonicalCompactMarker(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []llm.Message{
+		toolUseMessage("m1", "call-hidden", "read"),
+		messageWithID(compactTestMessage("summary"), "m2"),
+		messageWithID(llm.TextMessage(llm.RoleUser, "latest"), "m3"),
+	} {
+		if err := s.Append(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Transcript == nil || meta.Transcript.RepairPrefixSafe || meta.Transcript.RepairSafe {
+		t.Fatalf("checkpoint repair state = %+v, want unsafe prefix", meta.Transcript)
+	}
+	meta.Transcript.RepairPrefixSafe = true
+	meta.Transcript.RepairSafe = true
+	if err := saveMetadata(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := fingerprintFromPath(filepath.Join(dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transcriptCheckpointValid(meta.Transcript, fingerprint) {
+		t.Fatal("checkpoint accepted repair flags changed without a matching checksum")
+	}
+
+	loaded, err := LoadWithOptions(dir, Options{RepairTranscript: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loaded.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, full, err := LoadInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full) != 4 || full[0].ID != "m1" || full[1].Kind != llm.MessageKindToolResult ||
+		full[1].Blocks[0].ToolUseID != "call-hidden" || full[2].ID != "m2" {
+		t.Fatalf("repaired transcript = %+v, want hidden tool result before compact marker", full)
+	}
+}
+
+func TestCheckpointLegacyTailMustRetainEveryCanonicalRow(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact := messageWithID(compactTestMessage("summary"), "m4")
+	compact.Compaction = &llm.CompactionMetadata{TailStartMessageID: "m2"}
+	for _, message := range []llm.Message{
+		messageWithID(llm.TextMessage(llm.RoleUser, "old"), "m1"),
+		messageWithID(llm.TextMessage(llm.RoleAssistant, "tail start"), "m2"),
+		messageWithID(llm.TextMessage(llm.RoleUser, "tail middle"), "m3"),
+		compact,
+		messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m5"),
+	} {
+		if err := s.Append(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, conversationFile)
+	meta, err := loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Transcript.Retained) != 2 {
+		t.Fatalf("checkpoint retained = %+v, want m2 and m3", meta.Transcript.Retained)
+	}
+	meta.Transcript.Retained = meta.Transcript.Retained[:1]
+	meta.Transcript.ChecksumSHA256 = transcriptCheckpointChecksum(meta.Transcript)
+	if err := saveMetadata(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	idx, checkpointed, err := loadActiveTranscriptIndex(path, meta.Transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpointed {
+		t.Fatal("active transcript accepted a legacy retained tail with a canonical hole")
+	}
+	if got := strings.Join(transcriptEntryIDs(idx.entries), ","); got != "m2,m3,m4,m5" {
+		t.Fatalf("active index ids = %s, want m2,m3,m4,m5", got)
+	}
+}
+
 func TestCheckpointRepairSafetyRecoversAfterToolResult(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)
