@@ -1,6 +1,7 @@
 package session
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -186,6 +187,32 @@ func TestTranscriptMessagePageKeepsToolExchangeCoherent(t *testing.T) {
 				t.Fatalf("page = %+v, want oldest %q more %v", page, tt.wantOldest, tt.wantMore)
 			}
 		})
+	}
+}
+
+func TestTranscriptContainsMessageIDFallsBackPastOversizedRow(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "target"), "m1")); err != nil {
+		t.Fatal(err)
+	}
+	oversized := llm.TextMessage(llm.RoleAssistant, strings.Repeat("x", maxEventLineBytes+1))
+	if err := s.Append(messageWithID(oversized, "m2")); err != nil {
+		t.Fatal(err)
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := transcriptContainsMessageID(filepath.Join(dir, conversationFile), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("target message before oversized row was not found")
 	}
 }
 

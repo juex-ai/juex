@@ -379,6 +379,40 @@ func TestCheckpointRepairSafetyRecoversAfterToolResult(t *testing.T) {
 	}
 }
 
+func TestLiveTranscriptIndexIsBoundedAfterCompaction(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, message := range []llm.Message{
+		messageWithID(llm.TextMessage(llm.RoleUser, "old"), "m1"),
+		messageWithID(llm.TextMessage(llm.RoleAssistant, "retained"), "m2"),
+	} {
+		if err := s.Append(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compact := messageWithID(compactTestMessage("summary"), "m3")
+	compact.Compaction = &llm.CompactionMetadata{RetainedMessageIDs: []string{"m2"}}
+	if err := s.Append(compact); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "latest"), "m4")); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "m1,m2,m3,m4" {
+		t.Fatalf("live history ids = %s, want m1,m2,m3,m4", got)
+	}
+	if got := strings.Join(transcriptEntryIDs(s.transcript.entries), ","); got != "m2,m3,m4" {
+		t.Fatalf("active index ids = %s, want m2,m3,m4", got)
+	}
+	if s.transcript.complete {
+		t.Fatal("compacted live transcript index is still marked complete")
+	}
+}
+
 func transcriptEntryIDs(entries []transcriptIndexEntry) []string {
 	ids := make([]string, 0, len(entries))
 	for _, entry := range entries {

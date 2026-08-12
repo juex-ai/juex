@@ -197,21 +197,13 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		}
 		return nil, writeErr
 	}
-	nextTranscript := cloneTranscriptIndex(s.transcript)
-	nextHistory := append(append([]llm.Message(nil), s.History...), prepared...)
+	nextTranscript := s.transcript
+	nextTranscript.repairPending = append([]pendingTranscriptToolUse(nil), s.transcript.repairPending...)
+	nextHistory := append(s.History, prepared...)
 	entryOffset := offset
 	for i, message := range prepared {
 		nextTranscript.appendMessage(message, entryOffset, len(lines[i]))
 		entryOffset += int64(len(lines[i]))
-	}
-	if nextTranscript.complete || nextTranscript.repairPrefixSafe {
-		_, repairs := repairTranscriptMessages(nextHistory, "")
-		nextTranscript.repairSafe = len(repairs) == 0
-	}
-	for _, message := range prepared {
-		if message.Kind == llm.MessageKindCompact {
-			nextTranscript.repairPrefixSafe = nextTranscript.repairSafe
-		}
 	}
 	transcriptInfo, err := s.convFD.Stat()
 	if err != nil {
@@ -240,7 +232,7 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 	}
 	s.lastActiveMS = lastActiveMS
 	s.History = nextHistory
-	s.transcript = nextTranscript
+	s.transcript = activeTranscriptIndex(nextTranscript)
 	info, ok := s.historyInfoLocked()
 	historyPath := s.historyPath
 	s.mu.Unlock()

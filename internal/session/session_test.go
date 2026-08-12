@@ -283,6 +283,28 @@ func TestSessionAppendBatchPersistsAdjacentMessages(t *testing.T) {
 	}
 }
 
+func TestSessionAppendReusesAvailableHistoryCapacity(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Append(llm.TextMessage(llm.RoleUser, "first")); err != nil {
+		t.Fatal(err)
+	}
+
+	history := make([]llm.Message, len(s.History), len(s.History)+2)
+	copy(history, s.History)
+	s.History = history
+	first := &s.History[0]
+	if err := s.Append(llm.TextMessage(llm.RoleAssistant, "second")); err != nil {
+		t.Fatal(err)
+	}
+	if &s.History[0] != first {
+		t.Fatal("Append replaced history backing storage despite available capacity")
+	}
+}
+
 func TestSessionAppendAssignedReturnsPersistedMessageIDs(t *testing.T) {
 	s, err := New(t.TempDir())
 	if err != nil {

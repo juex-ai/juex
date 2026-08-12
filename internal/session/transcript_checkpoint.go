@@ -145,10 +145,6 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 		if err != nil {
 			return transcriptIndex{}, false, err
 		}
-		if transcriptCheckpointValid(checkpoint, fingerprint) {
-			idx.repairSafe = checkpoint.RepairSafe
-			idx.repairPrefixSafe = checkpoint.RepairPrefixSafe
-		}
 		return activeTranscriptIndex(idx), false, nil
 	}
 
@@ -175,13 +171,24 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 	if !retainedEntriesMatchCompact(idx.entries, suffix.entries[0]) {
 		return scanActiveTranscriptIndex(path)
 	}
+	repairBroken := suffix.repairBroken || !checkpoint.RepairPrefixSafe
+	repairPending := append([]pendingTranscriptToolUse(nil), suffix.repairPending...)
+	repairSafe := !repairBroken && len(repairPending) == 0
+	if repairSafe != checkpoint.RepairSafe {
+		return scanActiveTranscriptIndex(path)
+	}
+	latestCompactAt := len(idx.entries)
 	idx.entries = append(idx.entries, suffix.entries...)
 	idx.turns = checkpoint.Turns
 	idx.preview = checkpoint.Preview
 	idx.fingerprint = fingerprint
-	idx.repairSafe = checkpoint.RepairSafe
+	idx.repairSafe = repairSafe
 	idx.repairPrefixSafe = checkpoint.RepairPrefixSafe
+	idx.repairBroken = repairBroken
+	idx.repairPending = repairPending
 	idx.complete = false
+	idx.latestCompactAt = latestCompactAt
+	idx.hasLatestCompact = true
 	return idx, true, nil
 }
 
@@ -222,16 +229,7 @@ func activeTranscriptIndex(idx transcriptIndex) transcriptIndex {
 	entries = append(entries, idx.entries[compactIndex:]...)
 	idx.entries = entries
 	idx.complete = idx.complete && len(entries) == originalLength
+	idx.latestCompactAt = len(retained)
+	idx.hasLatestCompact = true
 	return idx
-}
-
-func cloneTranscriptIndex(idx transcriptIndex) transcriptIndex {
-	cloned := idx
-	cloned.entries = append([]transcriptIndexEntry(nil), idx.entries...)
-	for i := range cloned.entries {
-		cloned.entries[i].RetainedMessageIDs = append([]string(nil), idx.entries[i].RetainedMessageIDs...)
-		cloned.entries[i].ToolUseIDs = append([]string(nil), idx.entries[i].ToolUseIDs...)
-		cloned.entries[i].ToolResultIDs = append([]string(nil), idx.entries[i].ToolResultIDs...)
-	}
-	return cloned
 }

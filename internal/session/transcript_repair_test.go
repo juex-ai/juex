@@ -117,6 +117,57 @@ func TestRepairTranscriptLeavesValidMultiToolHistoryUnchanged(t *testing.T) {
 	}
 }
 
+func TestIncrementalRepairStateMatchesFullRepairScan(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []llm.Message
+	}{
+		{
+			name: "matched tool call",
+			messages: []llm.Message{
+				toolUseMessage("m1", "call-1", "read"),
+				toolResultMessage("m2", "call-1", "done"),
+			},
+		},
+		{
+			name: "pending tool call",
+			messages: []llm.Message{
+				toolUseMessage("m1", "call-1", "read"),
+			},
+		},
+		{
+			name: "provider boundary before result",
+			messages: []llm.Message{
+				toolUseMessage("m1", "call-1", "read"),
+				messageWithID(llm.TextMessage(llm.RoleUser, "continue"), "m2"),
+				toolResultMessage("m3", "call-1", "late"),
+			},
+		},
+		{
+			name: "hook between call and result",
+			messages: []llm.Message{
+				toolUseMessage("m1", "call-1", "read"),
+				hookTraceMessage("m2", "hook"),
+				toolResultMessage("m3", "call-1", "done"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			idx := transcriptIndex{repairSafe: true, repairPrefixSafe: true, complete: true}
+			for i, message := range tt.messages {
+				idx.add(message, i, int64(i), 1)
+			}
+			_, repairs := repairTranscriptMessages(tt.messages, "test")
+			wantSafe := len(repairs) == 0
+			if idx.repairSafe != wantSafe {
+				t.Fatalf("incremental repair_safe = %v, full scan = %v", idx.repairSafe, wantSafe)
+			}
+		})
+	}
+}
+
 func TestLoadWithRepairTranscriptWritesCompleteEvent(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)

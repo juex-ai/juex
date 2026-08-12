@@ -30,7 +30,11 @@ type transcriptIndex struct {
 	fingerprint      transcriptFingerprint
 	repairSafe       bool
 	repairPrefixSafe bool
+	repairBroken     bool
+	repairPending    []pendingTranscriptToolUse
 	complete         bool
+	latestCompactAt  int
+	hasLatestCompact bool
 }
 
 type transcriptIndexEntry struct {
@@ -63,8 +67,7 @@ func scanTranscriptIndexFrom(path string, start int64) (transcriptIndex, error) 
 		return transcriptIndex{}, err
 	}
 
-	var idx transcriptIndex
-	idx.complete = true
+	idx := transcriptIndex{repairSafe: true, repairPrefixSafe: true, complete: true}
 	reader := bufio.NewReader(f)
 	offset := start
 	lineIndex := 0
@@ -122,6 +125,36 @@ func (idx *transcriptIndex) add(msg llm.Message, lineIndex int, offset int64, le
 		ToolResultIDs:      toolResultIDs,
 	})
 	idx.addSummary(msg)
+	idx.addRepairState(msg)
+	if msg.Kind == llm.MessageKindCompact {
+		idx.latestCompactAt = len(idx.entries) - 1
+		idx.hasLatestCompact = true
+		idx.repairPrefixSafe = idx.repairSafe
+	}
+}
+
+func (idx *transcriptIndex) addRepairState(msg llm.Message) {
+	pending := idx.repairPending
+	if len(pending) > 0 {
+		remaining, invalid := consumePendingToolResults(pending, msg)
+		if invalid {
+			idx.repairBroken = true
+		} else {
+			pending = remaining
+			if len(pending) > 0 {
+				idx.repairPending = pending
+				idx.repairSafe = false
+				return
+			}
+			pending = append(pending, messageToolUses(msg)...)
+			idx.repairPending = pending
+			idx.repairSafe = !idx.repairBroken && len(pending) == 0
+			return
+		}
+	}
+	pending = messageToolUses(msg)
+	idx.repairPending = pending
+	idx.repairSafe = !idx.repairBroken && len(pending) == 0
 }
 
 func transcriptToolIDs(msg llm.Message) (uses, results []string) {
@@ -166,10 +199,9 @@ func (idx transcriptIndex) initialPageStart() int {
 }
 
 func (idx transcriptIndex) latestCompact() int {
-	for i := len(idx.entries) - 1; i >= 0; i-- {
-		if idx.entries[i].Kind == llm.MessageKindCompact {
-			return i
-		}
+	if idx.hasLatestCompact && idx.latestCompactAt >= 0 && idx.latestCompactAt < len(idx.entries) &&
+		idx.entries[idx.latestCompactAt].Kind == llm.MessageKindCompact {
+		return idx.latestCompactAt
 	}
 	return -1
 }
@@ -401,6 +433,18 @@ func LoadActiveMessages(dir string) ([]llm.Message, error) {
 }
 
 func transcriptContainsMessageID(path, id string) (bool, error) {
+	found, err := reverseTranscriptContainsMessageID(path, id)
+	if err == nil {
+		return found, nil
+	}
+	idx, scanErr := scanTranscriptIndex(path)
+	if scanErr != nil {
+		return false, scanErr
+	}
+	return idx.indexByID(id) >= 0, nil
+}
+
+func reverseTranscriptContainsMessageID(path, id string) (bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return false, err
