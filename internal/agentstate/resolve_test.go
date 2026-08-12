@@ -345,6 +345,27 @@ func TestResolveUsesConfiguredGlobalExcludesFile(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsSymlinkedAgentStateDir(t *testing.T) {
+	home, workDir := prepareResolveTest(t)
+	first, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateDir := first.Address.StateDir()
+	physical := filepath.Join(filepath.Dir(stateDir), "physical-agent-state")
+	if err := os.Rename(stateDir, physical); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(physical, stateDir); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	_, err = Resolve(Options{HomeDir: home, WorkDir: workDir})
+	if err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("Resolve() error = %v, want AgentStateDir symlink rejection", err)
+	}
+}
+
 func TestResolveUsesXDGDefaultGlobalExcludesFile(t *testing.T) {
 	home, workDir := prepareResolveTest(t)
 	xdgConfig := filepath.Join(home, "custom-config")

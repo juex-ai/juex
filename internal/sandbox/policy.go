@@ -70,10 +70,10 @@ type ExecSpec struct {
 }
 
 type Request struct {
-	Policy                  Policy
-	WorkspaceRoots          []string
-	AdditionalWritableRoots []string
-	Spec                    ExecSpec
+	Policy        Policy
+	WorkDir       string
+	WritableRoots []string
+	Spec          ExecSpec
 }
 
 type Runner interface {
@@ -94,19 +94,7 @@ func (r DefaultRunner) Prepare(ctx context.Context, req Request) (ExecSpec, erro
 	if runtimeOS == "" {
 		runtimeOS = runtime.GOOS
 	}
-	prepared, err := prepareWritableRoots(req)
-	if err != nil {
-		return ExecSpec{}, NewError(
-			ErrorCodePolicyUnavailable,
-			runtimeOS,
-			runtimeOS,
-			"writable-roots",
-			req.Policy,
-			"Remove the overlap between additional writable roots and sandbox.file_system.blocked_paths.",
-			err,
-		)
-	}
-	req = prepared
+	req = prepareWritableRoots(req)
 	lookPath := r.LookPath
 	if lookPath == nil {
 		lookPath = exec.LookPath

@@ -279,19 +279,17 @@ func New(opts Options) (*App, error) {
 	})
 	chunkedWrites := tools.NewChunkedWriteManager(runtimePaths.WorkDir, sandbox.NewPathGuard(runtimePaths.WorkDir, cfg.SandboxPolicy()))
 	runtimeEnvironment := agentRuntime.Environment()
-	extensionsRuntime := agentRuntime.ExtensionsRuntime()
 	sandboxRunner := sandbox.DefaultRunner{LookPath: cfg.LaunchEnvironmentSnapshot().LookPath}
 	tools.RegisterBuiltins(reg, tools.BuiltinOptions{
-		WorkDir:                        runtimePaths.WorkDir,
-		Environment:                    runtimeEnvironment,
-		Shell:                          toolsShellProfile(cfg.Shell),
-		ShellSessions:                  shellSessions,
-		Sandbox:                        cfg.SandboxPolicy(),
-		SandboxRunner:                  sandboxRunner,
-		ToolTimeoutSeconds:             toolTimeoutSeconds,
-		ChunkedWrites:                  chunkedWrites,
-		AdditionalWritableRoots:        extensionsRuntime.AdditionalWritableRoots(),
-		PrepareAdditionalWritableRoots: extensionsRuntime.Prepare,
+		WorkDir:            runtimePaths.WorkDir,
+		Environment:        runtimeEnvironment,
+		Shell:              toolsShellProfile(cfg.Shell),
+		ShellSessions:      shellSessions,
+		Sandbox:            cfg.SandboxPolicy(),
+		SandboxRunner:      sandboxRunner,
+		ToolTimeoutSeconds: toolTimeoutSeconds,
+		ChunkedWrites:      chunkedWrites,
+		AgentStateDir:      runtimePaths.StateDir,
 	})
 
 	skillLoader := skills.NewLoaderFromDirsWithOptions(resourceGraph.SkillDirs(), skillLoaderOptions(cfg))
@@ -482,18 +480,17 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 	obsv, err := observable.NewManager(observable.ManagerOptions{
-		ConfigPath:                 cfg.ObservablesConfigPath(),
-		ReadOnlyConfigSources:      observableReadOnlyConfigSources(resourceGraph.ObservableConfigs()),
-		StateDir:                   cfg.ObservablesStateDir(),
-		WorkDir:                    runtimePaths.WorkDir,
-		Environment:                runtimeEnvironment,
-		Shell:                      cfg.Shell,
-		Sandbox:                    cfg.SandboxPolicy(),
-		SandboxRunner:              sandboxRunner,
-		Bus:                        bus,
-		Deliver:                    a.DeliverObservation,
-		AgentExtensionsRoot:        extensionsRuntime.RootDir,
-		PrepareAgentExtensionsRoot: extensionsRuntime.Prepare,
+		ConfigPath:            cfg.ObservablesConfigPath(),
+		ReadOnlyConfigSources: observableReadOnlyConfigSources(resourceGraph.ObservableConfigs()),
+		StateDir:              cfg.ObservablesStateDir(),
+		WorkDir:               runtimePaths.WorkDir,
+		AgentStateDir:         runtimePaths.StateDir,
+		Environment:           runtimeEnvironment,
+		Shell:                 cfg.Shell,
+		Sandbox:               cfg.SandboxPolicy(),
+		SandboxRunner:         sandboxRunner,
+		Bus:                   bus,
+		Deliver:               a.DeliverObservation,
 	})
 	if err != nil {
 		_ = a.detachObservability()
@@ -891,7 +888,7 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	if eventType == "" {
 		eventType = "notification"
 	}
-	msg, err := mcpNotificationMessage(n, eventType, attachmentOptions{WorkDir: a.cfg.WorkDir})
+	msg, err := mcpNotificationMessage(n, eventType, a.externalAttachmentOptions())
 	if err != nil {
 		return err
 	}
@@ -927,7 +924,7 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 		return observable.DeliveryOutcome{}, ctx.Err()
 	default:
 	}
-	msg, attachmentErrors, err := buildObservationMessage(record, attachmentOptions{WorkDir: a.cfg.WorkDir})
+	msg, attachmentErrors, err := buildObservationMessage(record, a.externalAttachmentOptions())
 	if err != nil {
 		return observable.DeliveryOutcome{}, err
 	}
@@ -958,7 +955,18 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 }
 
 type attachmentOptions struct {
-	WorkDir string
+	WorkDir       string
+	AgentStateDir string
+	PathGuard     sandbox.PathGuard
+}
+
+func (a *App) externalAttachmentOptions() attachmentOptions {
+	paths := a.cfg.RuntimePaths()
+	return attachmentOptions{
+		WorkDir:       paths.WorkDir,
+		AgentStateDir: paths.StateDir,
+		PathGuard:     sandbox.NewPathGuard(paths.WorkDir, a.cfg.SandboxPolicy()),
+	}
 }
 
 func observationMessage(record observable.ObservationRecord, opts attachmentOptions) (llm.Message, error) {
@@ -967,7 +975,7 @@ func observationMessage(record observable.ObservationRecord, opts attachmentOpti
 }
 
 func buildObservationMessage(record observable.ObservationRecord, opts attachmentOptions) (llm.Message, []string, error) {
-	report := eventmedia.ValidateAttachments(record.Attachments, eventmedia.ValidationOptions{WorkDir: opts.WorkDir})
+	report := eventmedia.ValidateAttachments(record.Attachments, eventmedia.ValidationOptions{WorkDir: opts.WorkDir, AgentStateDir: opts.AgentStateDir, PathGuard: opts.PathGuard})
 	text := renderObservationText(record, report)
 	msg := eventMessageWithAttachments(llm.MessageKindObservation, text, report)
 	errors := append([]string(nil), record.AttachmentErrors...)
@@ -977,7 +985,7 @@ func buildObservationMessage(record observable.ObservationRecord, opts attachmen
 
 func mcpNotificationMessage(n mcp.Notification, eventType string, opts attachmentOptions) (llm.Message, error) {
 	refs, err := eventmedia.ExtractAttachmentRefs(n.Params["attachments"])
-	report := eventmedia.ValidateAttachments(refs, eventmedia.ValidationOptions{WorkDir: opts.WorkDir})
+	report := eventmedia.ValidateAttachments(refs, eventmedia.ValidationOptions{WorkDir: opts.WorkDir, AgentStateDir: opts.AgentStateDir, PathGuard: opts.PathGuard})
 	text := renderMCPNotificationText(n, eventType, report, err)
 	return eventMessageWithAttachments(llm.MessageKindMCPEvent, text, report), nil
 }

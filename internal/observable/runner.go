@@ -16,19 +16,18 @@ import (
 )
 
 type runnerOptions struct {
-	spec                       commandRuntimeSpec
-	runID                      string
-	workDir                    string
-	environment                environment.Snapshot
-	sandboxPolicy              sandbox.Policy
-	sandboxRunner              sandbox.Runner
-	store                      *Store
-	submit                     func(context.Context, ObservationRecord) bool
-	runtime                    RuntimeContext
-	source                     string
-	extension                  bool
-	agentExtensionsRoot        string
-	prepareAgentExtensionsRoot func() error
+	spec          commandRuntimeSpec
+	runID         string
+	workDir       string
+	agentStateDir string
+	environment   environment.Snapshot
+	sandboxPolicy sandbox.Policy
+	sandboxRunner sandbox.Runner
+	store         *Store
+	submit        func(context.Context, ObservationRecord) bool
+	runtime       RuntimeContext
+	source        string
+	extension     bool
 }
 
 type runner struct {
@@ -44,9 +43,12 @@ type runner struct {
 func newRunner(opts runnerOptions) *runner {
 	pipe, _ := newCommandPipeline(opts.spec)
 	return &runner{
-		opts:    opts,
-		pipe:    pipe,
-		batcher: newCommandBatcher(opts.spec, opts.store, BatcherOptions{RunID: opts.runID, WorkDir: opts.workDir}),
+		opts: opts,
+		pipe: pipe,
+		batcher: newCommandBatcher(opts.spec, opts.store, BatcherOptions{
+			RunID: opts.runID, WorkDir: opts.workDir, AgentStateDir: opts.agentStateDir,
+			PathGuard: sandbox.NewPathGuard(opts.workDir, opts.sandboxPolicy),
+		}),
 	}
 }
 
@@ -78,7 +80,6 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 		Dir:    cwd,
 		Env:    r.env(runtimeSpec.Env, reserved),
 	}
-	var additionalWritableRoots []string
 	if r.opts.extension && r.opts.runtime.ExtensionDataDir != "" {
 		if r.opts.runtime.PrepareExtensionDataDir == nil {
 			return nil, fmt.Errorf("observable: extension source %s has a data directory without a prepare callback", r.opts.source)
@@ -94,33 +95,15 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 		}
 	}
 	if r.opts.sandboxPolicy.Enabled {
-		agentExtensionsRoot := r.opts.agentExtensionsRoot
-		prepareAgentExtensionsRoot := r.opts.prepareAgentExtensionsRoot
-		if agentExtensionsRoot == "" && r.opts.extension && r.opts.runtime.ExtensionDataDir != "" {
-			agentExtensionsRoot = filepath.Dir(r.opts.runtime.ExtensionDataDir)
-			prepareAgentExtensionsRoot = func() error { return nil }
-		}
-		if agentExtensionsRoot != "" {
-			if prepareAgentExtensionsRoot == nil {
-				return nil, fmt.Errorf("observable: Agent extensions root has no prepare callback")
-			}
-			if err := callCtx.Err(); err != nil {
-				return nil, err
-			}
-			if err := prepareAgentExtensionsRoot(); err != nil {
-				return nil, err
-			}
-			additionalWritableRoots = []string{agentExtensionsRoot}
-		}
 		sandboxRunner := r.opts.sandboxRunner
 		if sandboxRunner == nil {
 			sandboxRunner = sandbox.DefaultRunner{}
 		}
 		prepared, err := sandboxRunner.Prepare(callCtx, sandbox.Request{
-			Policy:                  r.opts.sandboxPolicy,
-			WorkspaceRoots:          []string{r.opts.workDir},
-			AdditionalWritableRoots: additionalWritableRoots,
-			Spec:                    spec,
+			Policy:        r.opts.sandboxPolicy,
+			WorkDir:       r.opts.workDir,
+			WritableRoots: observableWritableRoots(r.opts.workDir, r.opts.agentStateDir),
+			Spec:          spec,
 		})
 		if err != nil {
 			return nil, err
@@ -167,6 +150,17 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 	r.wg.Add(1)
 	go r.flushLoop(r.flushCh)
 	return cmd, nil
+}
+
+func observableWritableRoots(workDir, agentStateDir string) []string {
+	roots := make([]string, 0, 2)
+	if strings.TrimSpace(workDir) != "" {
+		roots = append(roots, workDir)
+	}
+	if strings.TrimSpace(agentStateDir) != "" {
+		roots = append(roots, agentStateDir)
+	}
+	return roots
 }
 
 func (r *runner) wait() (*int, error) {

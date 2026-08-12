@@ -8,11 +8,14 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/eventmedia"
+	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 type BatcherOptions struct {
 	RunID         string
 	WorkDir       string
+	AgentStateDir string
+	PathGuard     sandbox.PathGuard
 	MaxEventBytes int64
 }
 
@@ -21,6 +24,8 @@ type Batcher struct {
 	store         *Store
 	runID         string
 	workDir       string
+	agentStateDir string
+	pathGuard     sandbox.PathGuard
 	maxEventBytes int64
 	batch         *activeBatch
 }
@@ -55,6 +60,8 @@ func newCommandBatcher(spec commandRuntimeSpec, store *Store, opts BatcherOption
 		store:         store,
 		runID:         opts.RunID,
 		workDir:       opts.WorkDir,
+		agentStateDir: opts.AgentStateDir,
+		pathGuard:     opts.PathGuard,
 		maxEventBytes: maxEventBytes,
 	}
 }
@@ -75,7 +82,7 @@ func (b *Batcher) Add(unit ParsedUnit) ([]ObservationRecord, error) {
 	if len(unit.Attachments) > 0 && remainingEventBytes <= 0 {
 		unit.AttachmentErrors = append(unit.AttachmentErrors, attachmentBudgetError(b.maxEventBytes, 0))
 	} else {
-		snapshot = snapshotAttachmentRefs(b.workDir, unit.Attachments, remainingEventBytes)
+		snapshot = snapshotAttachmentRefs(b.workDir, b.agentStateDir, b.pathGuard, unit.Attachments, remainingEventBytes)
 		if snapshot.eventBytesExceeded {
 			unit.AttachmentErrors = append(unit.AttachmentErrors, attachmentBudgetError(b.maxEventBytes, remainingEventBytes))
 		} else {

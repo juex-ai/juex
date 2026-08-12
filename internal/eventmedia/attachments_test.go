@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/artifact"
+	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 func TestValidateAttachmentsAcceptsWorkdirImage(t *testing.T) {
@@ -51,6 +52,99 @@ func TestValidateAttachmentsAcceptsWorkdirImage(t *testing.T) {
 	}
 	if data, err := store.Read(ref); err != nil || len(data) == 0 {
 		t.Fatalf("stored event artifact after source removal = %d bytes, err=%v", len(data), err)
+	}
+}
+
+func TestValidateAttachmentsAcceptsCurrentAgentStateImage(t *testing.T) {
+	workDir := t.TempDir()
+	agentStateDir := filepath.Join(t.TempDir(), "agents", "yqmgmu")
+	sourcePath := filepath.Join(agentStateDir, "extensions", "wechat-wire", "media", "pixel.png")
+	writeAttachmentPNG(t, sourcePath)
+
+	report := ValidateAttachments([]AttachmentRef{{
+		Path:      sourcePath,
+		MediaType: "image/png",
+	}}, ValidationOptions{WorkDir: workDir, AgentStateDir: agentStateDir})
+	if len(report.Errors) != 0 || len(report.Valid) != 1 {
+		t.Fatalf("report = %+v, want one valid AgentStateDir attachment", report)
+	}
+	resolvedSourcePath, err := filepath.EvalSymlinks(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := report.Valid[0]; got.AbsolutePath != resolvedSourcePath || !strings.HasPrefix(got.ArtifactPath, ".juex/artifacts/event-media/") {
+		t.Fatalf("validated attachment = %+v", got)
+	}
+}
+
+func TestValidateAttachmentsRejectsOtherAgentAndSymlinkEscape(t *testing.T) {
+	workDir := t.TempDir()
+	agentsDir := filepath.Join(t.TempDir(), "agents")
+	agentStateDir := filepath.Join(agentsDir, "current")
+	otherAgentPath := filepath.Join(agentsDir, "other", "extensions", "demo", "media", "other.png")
+	outsidePath := filepath.Join(t.TempDir(), "outside.png")
+	writeAttachmentPNG(t, otherAgentPath)
+	writeAttachmentPNG(t, outsidePath)
+	if err := os.MkdirAll(agentStateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(agentStateDir, "escaped.png")
+	if err := os.Symlink(outsidePath, symlinkPath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	for _, path := range []string{otherAgentPath, symlinkPath} {
+		report := ValidateAttachments([]AttachmentRef{{Path: path}}, ValidationOptions{
+			WorkDir:       workDir,
+			AgentStateDir: agentStateDir,
+		})
+		if len(report.Valid) != 0 || len(report.Errors) != 1 || !strings.Contains(report.Errors[0].Error, "outside allowed roots") {
+			t.Fatalf("ValidateAttachments(%q) = %+v, want outside-roots error", path, report)
+		}
+	}
+}
+
+func TestValidateAttachmentsHonorsBlockedPathsInAgentStateDir(t *testing.T) {
+	workDir := t.TempDir()
+	agentStateDir := filepath.Join(t.TempDir(), "agents", "current")
+	blockedPath := filepath.Join(agentStateDir, "extensions", "wechat-wire", "private.png")
+	writeAttachmentPNG(t, blockedPath)
+	policy := sandbox.DefaultPolicy()
+	policy.Enabled = true
+	policy.FileSystem.BlockedPaths = []string{blockedPath}
+
+	report := ValidateAttachments([]AttachmentRef{{Path: blockedPath}}, ValidationOptions{
+		WorkDir:       workDir,
+		AgentStateDir: agentStateDir,
+		PathGuard:     sandbox.NewPathGuard(workDir, policy),
+	})
+	if len(report.Valid) != 0 || len(report.Errors) != 1 || !strings.Contains(report.Errors[0].Error, "blocked path") {
+		t.Fatalf("report = %+v, want blocked-path error", report)
+	}
+}
+
+func TestValidateAttachmentsHonorsPhysicalBlockedPathThroughAgentStateAlias(t *testing.T) {
+	workDir := t.TempDir()
+	agentStateDir := filepath.Join(t.TempDir(), "agents", "current")
+	physicalDir := filepath.Join(agentStateDir, "private")
+	physicalPath := filepath.Join(physicalDir, "image.png")
+	writeAttachmentPNG(t, physicalPath)
+	aliasDir := filepath.Join(agentStateDir, "alias")
+	if err := os.Symlink(physicalDir, aliasDir); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	aliasPath := filepath.Join(aliasDir, "image.png")
+	policy := sandbox.DefaultPolicy()
+	policy.Enabled = true
+	policy.FileSystem.BlockedPaths = []string{physicalDir}
+
+	report := ValidateAttachments([]AttachmentRef{{Path: aliasPath}}, ValidationOptions{
+		WorkDir:       workDir,
+		AgentStateDir: agentStateDir,
+		PathGuard:     sandbox.NewPathGuard(workDir, policy),
+	})
+	if len(report.Valid) != 0 || len(report.Errors) != 1 || !strings.Contains(report.Errors[0].Error, "blocked path") {
+		t.Fatalf("report = %+v, want physical blocked-path error", report)
 	}
 }
 

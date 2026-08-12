@@ -213,9 +213,9 @@ implementation decisions live.
 | `internal/tools` | Tool registry and dispatch, builtin file/shell/search adapters, Tool result normalization and output hygiene | Canonical chunked-write lifecycle, Provider wire quirks, Session persistence, Observable/MCP source lifecycles |
 | `internal/chunkedwrite` | Canonical chunked-write lifecycle facts and deterministic state derivation | Tool schemas/dispatch, filesystem execution, runtime Event transport |
 | `internal/hooks` | Trusted hook config, matching, bounded command execution, and hook result facts | Lifecycle phase ordering, interpretation of deny/continue results, Tool execution |
-| `internal/sandbox` | Command sandbox policy, platform backend selection, exact additional-writable-root projection, blocked-path conflict checks, execution wrapping, structured availability errors | Shell Tool lifecycle, config parsing, runtime permission policy outside commands |
+| `internal/sandbox` | Command sandbox policy, platform backend selection, generic writable-root projection, blocked-path enforcement, execution wrapping, structured availability errors | AgentStateDir selection, Shell Tool lifecycle, config parsing, runtime permission policy outside commands |
 | `internal/observable` | Tagged Command Observable/Schedule specs, project and Extension definition-source validation and ownership, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Extension discovery, Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
-| `internal/eventmedia` | Workdir-confined external-event attachment validation, size gates, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
+| `internal/eventmedia` | Workspace/current-AgentStateDir external-event attachment validation, size gates, blocked-path enforcement, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
 | `internal/mcp` | Adapter over the official Go SDK: Claude-compatible MCP config normalization, command and Streamable HTTP sessions, static HTTP header handling, Tool discovery, staged remote readiness, custom notification preservation, and transport-specific diagnostics | Protocol framing/negotiation, Turn policy, active Session selection, Web ownership |
 | `internal/memory` | `AGENTS.md` hierarchy loading, Agent-owned Memory Entry storage, memory Tool registration | Final prompt-section ordering, Session history, Skill loading |
 | `internal/skills` | `SKILL.md` frontmatter loading, Skill metadata, catalog prompt rendering, compression, and budget selection | Final system-prompt section assembly, task execution policy, Tool dispatch |
@@ -718,15 +718,13 @@ filesystem tools so sensitive paths stay inaccessible regardless of whether the
 broader preset is `read_write` or `read_only`. Linux bubblewrap cannot mask a
 blocked path that does not exist without creating a host-visible mountpoint, so
 that backend fails closed for missing blocked paths instead of creating them.
-Callers may provide narrow additional writable roots without mutating the
-resolved sandbox policy. The runner normalizes Workspace and additional roots
-once for both platform backends and rejects any lexical or symlink-resolved
-ancestor, exact, or descendant overlap with `blocked_paths` before launching a
-wrapper. Every `exec_command` and Command Observable process projects the
-current Agent's complete `extensions` data root. This grants sibling Extension
-data for the same Agent but never another Agent directory or the rest of the
-current Agent home. Local Extension MCP processes retain their exact
-owning-Extension data directory.
+Callers provide a Workspace root for relative `blocked_paths` resolution and a
+generic writable-root set without mutating the resolved sandbox policy. Both
+platform backends normalize the roots once, then apply blocked-path deny/mask
+rules after the broader writable grants. Every `exec_command` and Command
+Observable process projects the Workspace and current AgentStateDir. This grants
+state owned by that Agent but never another AgentStateDir. Local Extension MCP
+processes retain their exact owning-Extension data directory.
 Sandbox helper discovery uses the inherited launch snapshot rather than a
 workspace-controlled runtime `PATH`. Dynamic-loader variables such as `LD_*`,
 `DYLD_*`, and `GLIBC_TUNABLES` are removed from the wrapper process and restored
@@ -984,7 +982,7 @@ then other disk-listed primary sessions before creating a new active primary.
 Web startup and MCP
 notification routing use exported app helpers for active-primary records and
 ids instead of duplicating those rules.
-App lifetimes acquire `sessions/<id>/session.lock` inside the agent home so
+App lifetimes acquire `sessions/<id>/session.lock` inside AgentStateDir so
 processes do not append to the same session concurrently. Metadata overrides
 for an existing session are applied only after that lock is acquired and
 reload the canonical metadata before writing, so they cannot replace newer
@@ -2195,7 +2193,7 @@ ordinary user turns keep failing loudly on compaction errors.
 ## 6. Filesystem Conventions
 
 Resources and state split between personal, default-home configuration,
-effective JueX-home, agent-home, and work-local:
+effective JueX home, AgentStateDir, and work-local:
 
 ```
 ~/.agents/                       # optional user-global resources
@@ -2245,7 +2243,7 @@ $JUEX_HOME/
     └── observables.json          # workspace observable configuration
 ```
 
-The full session subtree beneath the agent home retains the existing
+The full session subtree beneath AgentStateDir retains the existing
 `session.json`, transcript, event, lock, notes, scratchpad, goal, trace, span,
 tool, and per-session log files described in §3.5.
 
@@ -2645,7 +2643,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `runtime` | mock-provider script, parallel tool calls, long tool follow-up turn, ctx cancel, unknown-tool, provider error, multi-turn |
 | `observability` | log-level parsing, stable artifact creation, trace/span schema, parent-child spans, tool summaries, redaction, error-kind classification |
 | `netbootstrap` | resolv.conf parsing (IPv4/IPv6/comments/malformed), JUEX_DNS env var, Termux PREFIX auto-detect, applyResolver wiring, idempotent install |
-| `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, agent-home sessions, observability artifact wiring, history update, missing-key fail, default-cwd |
+| `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, AgentStateDir sessions, observability artifact wiring, history update, missing-key fail, default-cwd |
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flags including model, debug, and log-level |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
 | `tests/e2e` | full-stack tempdir scenario, apply_patch builtin flow, resume round-trip, debug observability artifacts, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
@@ -2711,7 +2709,7 @@ provider replay, or long-session behavior changes.
 ## 12. One-Sentence Summary
 
 **Juex is a Go binary with a cobra CLI, React web UI, builtin and MCP tools,
-AGENTS.md/skills/memory loading, a synchronous turn loop, Agent-home JSONL
+AGENTS.md/skills/memory loading, a synchronous turn loop, AgentStateDir JSONL
 persistence with Workspace-local artifacts and configuration, an event bus,
 cross-platform releases via goreleaser, and GitHub Actions CI.** Stdlib-first;
 modules stay small enough to test and explain.

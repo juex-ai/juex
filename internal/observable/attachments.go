@@ -1,6 +1,9 @@
 package observable
 
-import "github.com/juex-ai/juex/internal/eventmedia"
+import (
+	"github.com/juex-ai/juex/internal/eventmedia"
+	"github.com/juex-ai/juex/internal/sandbox"
+)
 
 type attachmentSnapshot struct {
 	refs               []eventmedia.AttachmentRef
@@ -9,12 +12,14 @@ type attachmentSnapshot struct {
 	eventBytesExceeded bool
 }
 
-func snapshotAttachmentRefs(workDir string, refs []eventmedia.AttachmentRef, maxEventBytes int64) attachmentSnapshot {
+func snapshotAttachmentRefs(workDir, agentStateDir string, guard sandbox.PathGuard, refs []eventmedia.AttachmentRef, maxEventBytes int64) attachmentSnapshot {
 	if len(refs) == 0 {
 		return attachmentSnapshot{}
 	}
 	report := eventmedia.ValidateAttachments(refs, eventmedia.ValidationOptions{
 		WorkDir:       workDir,
+		AgentStateDir: agentStateDir,
+		PathGuard:     guard,
 		MaxEventBytes: maxEventBytes,
 	})
 	stored := make([]eventmedia.AttachmentRef, 0, len(report.Valid))

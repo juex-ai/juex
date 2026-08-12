@@ -19,9 +19,10 @@ func TestLinuxReadOnlyProvidesWritableDevicesAndTemp(t *testing.T) {
 		RuntimeOS: "linux",
 		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
 	}).Prepare(context.Background(), Request{
-		Policy:         policy,
-		WorkspaceRoots: []string{"/work"},
-		Spec:           ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}},
+		Policy:        policy,
+		WorkDir:       "/work",
+		WritableRoots: []string{"/work"},
+		Spec:          ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +35,7 @@ func TestLinuxReadOnlyProvidesWritableDevicesAndTemp(t *testing.T) {
 	}
 }
 
-func TestLinuxReadOnlyBindsExactAdditionalWritableRoot(t *testing.T) {
+func TestLinuxReadOnlyBindsWorkspaceAndAgentStateRoots(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
 	dataRoot := filepath.Join(root, "agent", "extensions")
@@ -52,10 +53,10 @@ func TestLinuxReadOnlyBindsExactAdditionalWritableRoot(t *testing.T) {
 		RuntimeOS: "linux",
 		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
 	}).Prepare(context.Background(), Request{
-		Policy:                  policy,
-		WorkspaceRoots:          []string{workspace},
-		AdditionalWritableRoots: []string{dataDir},
-		Spec:                    ExecSpec{Binary: "/bin/true"},
+		Policy:        policy,
+		WorkDir:       workspace,
+		WritableRoots: []string{workspace, dataDir},
+		Spec:          ExecSpec{Binary: "/bin/true"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -132,9 +133,10 @@ func TestLinuxBlockedPathsAreMasked(t *testing.T) {
 		RuntimeOS: "linux",
 		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
 	}).Prepare(context.Background(), Request{
-		Policy:         policy,
-		WorkspaceRoots: []string{"/work"},
-		Spec:           ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}},
+		Policy:        policy,
+		WorkDir:       "/work",
+		WritableRoots: []string{"/work"},
+		Spec:          ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -157,9 +159,10 @@ func TestLinuxBlockedPathsRejectMissingPaths(t *testing.T) {
 		RuntimeOS: "linux",
 		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
 	}).Prepare(context.Background(), Request{
-		Policy:         policy,
-		WorkspaceRoots: []string{"/work"},
-		Spec:           ExecSpec{Binary: "sh"},
+		Policy:        policy,
+		WorkDir:       "/work",
+		WritableRoots: []string{"/work"},
+		Spec:          ExecSpec{Binary: "sh"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("err = %v, want missing blocked path error", err)

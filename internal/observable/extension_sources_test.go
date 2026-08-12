@@ -196,7 +196,7 @@ func TestExtensionDataPreparationIsDeferredUntilCommandStart(t *testing.T) {
 	}
 }
 
-func TestExtensionCommandExpandsRuntimeAndGetsAgentExtensionsSandboxRoot(t *testing.T) {
+func TestExtensionCommandExpandsRuntimeAndGetsAgentStateSandboxRoot(t *testing.T) {
 	dir := t.TempDir()
 	extensionDir := filepath.Join(dir, "extension with spaces")
 	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
@@ -233,11 +233,13 @@ func TestExtensionCommandExpandsRuntimeAndGetsAgentExtensionsSandboxRoot(t *test
 	}
 	runner := &recordingSandboxRunner{}
 	var prepares atomic.Int32
+	agentStateDir := filepath.Dir(filepath.Dir(dataDir))
 	mgr, err := observable.NewManager(observable.ManagerOptions{
-		ConfigPath:  configPath(dir),
-		StateDir:    stateDir(dir),
-		WorkDir:     dir,
-		Environment: snapshot,
+		ConfigPath:    configPath(dir),
+		StateDir:      stateDir(dir),
+		WorkDir:       dir,
+		AgentStateDir: agentStateDir,
+		Environment:   snapshot,
 		Sandbox: sandbox.Policy{
 			Enabled: true,
 			FileSystem: sandbox.FileSystemPolicy{
@@ -272,9 +274,8 @@ func TestExtensionCommandExpandsRuntimeAndGetsAgentExtensionsSandboxRoot(t *test
 	if prepares.Load() != 1 {
 		t.Fatalf("prepare count = %d, want 1", prepares.Load())
 	}
-	wantWritableRoot := filepath.Dir(dataDir)
-	if len(runner.last.AdditionalWritableRoots) != 1 || runner.last.AdditionalWritableRoots[0] != wantWritableRoot {
-		t.Fatalf("additional writable roots = %v, want only %q", runner.last.AdditionalWritableRoots, wantWritableRoot)
+	if got := runner.last.WritableRoots; len(got) != 2 || got[0] != dir || got[1] != agentStateDir {
+		t.Fatalf("writable roots = %v, want Workspace and AgentStateDir", got)
 	}
 	gotBinary, err := os.Stat(runner.last.Spec.Binary)
 	if err != nil {
@@ -303,61 +304,45 @@ func TestExtensionCommandExpandsRuntimeAndGetsAgentExtensionsSandboxRoot(t *test
 	}
 }
 
-func TestProjectCommandGetsPreparedAgentExtensionsSandboxRoot(t *testing.T) {
+func TestProjectCommandGetsWorkspaceAndAgentStateSandboxRoots(t *testing.T) {
 	dir := t.TempDir()
 	writeObservableConfig(t, dir, helperSpec("project-runtime", "json-once"))
-	agentExtensionsRoot := filepath.Join(t.TempDir(), "agents", "abcdef", "extensions")
+	agentStateDir := filepath.Join(t.TempDir(), "agents", "abcdef")
 	runner := &recordingSandboxRunner{}
-	var prepares atomic.Int32
 	mgr, err := observable.NewManager(observable.ManagerOptions{
-		ConfigPath:  configPath(dir),
-		StateDir:    stateDir(dir),
-		WorkDir:     dir,
-		Environment: environment.FromEnviron(os.Environ()),
+		ConfigPath:    configPath(dir),
+		StateDir:      stateDir(dir),
+		WorkDir:       dir,
+		AgentStateDir: agentStateDir,
+		Environment:   environment.FromEnviron(os.Environ()),
 		Sandbox: sandbox.Policy{
 			Enabled:    true,
 			FileSystem: sandbox.FileSystemPolicy{OutsideWorkspace: sandbox.OutsideWorkspaceReadOnly},
 		},
-		SandboxRunner:       runner,
-		AgentExtensionsRoot: agentExtensionsRoot,
-		PrepareAgentExtensionsRoot: func() error {
-			prepares.Add(1)
-			return os.MkdirAll(agentExtensionsRoot, 0o700)
-		},
+		SandboxRunner: runner,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = mgr.Close() }()
-	if prepares.Load() != 0 {
-		t.Fatalf("prepare count after load = %d, want 0", prepares.Load())
-	}
 	if err := mgr.Start(context.Background(), "project-runtime"); err != nil {
 		t.Fatal(err)
 	}
-	if prepares.Load() != 1 {
-		t.Fatalf("prepare count = %d, want 1", prepares.Load())
-	}
-	if got := runner.last.AdditionalWritableRoots; len(got) != 1 || got[0] != agentExtensionsRoot {
-		t.Fatalf("additional writable roots = %#v", got)
+	if got := runner.last.WritableRoots; len(got) != 2 || got[0] != dir || got[1] != agentStateDir {
+		t.Fatalf("writable roots = %#v, want Workspace and AgentStateDir", got)
 	}
 }
 
-func TestProjectCommandDoesNotPrepareAgentExtensionsRootWithoutSandbox(t *testing.T) {
+func TestProjectCommandDoesNotCreateAgentStateDirWithoutSandbox(t *testing.T) {
 	dir := t.TempDir()
 	writeObservableConfig(t, dir, helperSpec("project-unsandboxed", "json-once"))
-	agentExtensionsRoot := filepath.Join(t.TempDir(), "agents", "abcdef", "extensions")
-	var prepares atomic.Int32
+	agentStateDir := filepath.Join(t.TempDir(), "agents", "abcdef")
 	mgr, err := observable.NewManager(observable.ManagerOptions{
-		ConfigPath:          configPath(dir),
-		StateDir:            stateDir(dir),
-		WorkDir:             dir,
-		Environment:         environment.FromEnviron(os.Environ()),
-		AgentExtensionsRoot: agentExtensionsRoot,
-		PrepareAgentExtensionsRoot: func() error {
-			prepares.Add(1)
-			return os.MkdirAll(agentExtensionsRoot, 0o700)
-		},
+		ConfigPath:    configPath(dir),
+		StateDir:      stateDir(dir),
+		WorkDir:       dir,
+		AgentStateDir: agentStateDir,
+		Environment:   environment.FromEnviron(os.Environ()),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -366,11 +351,8 @@ func TestProjectCommandDoesNotPrepareAgentExtensionsRootWithoutSandbox(t *testin
 	if err := mgr.Start(context.Background(), "project-unsandboxed"); err != nil {
 		t.Fatal(err)
 	}
-	if prepares.Load() != 0 {
-		t.Fatalf("unsandboxed prepare count = %d, want 0", prepares.Load())
-	}
-	if _, err := os.Stat(agentExtensionsRoot); !os.IsNotExist(err) {
-		t.Fatalf("unsandboxed command created Agent extensions root: %v", err)
+	if _, err := os.Stat(agentStateDir); !os.IsNotExist(err) {
+		t.Fatalf("unsandboxed command created AgentStateDir: %v", err)
 	}
 }
 
@@ -411,8 +393,8 @@ func TestProjectCommandRejectsAndStripsExtensionEnvironment(t *testing.T) {
 	if _, ok := env["JUEX_EXT_DATA_DIR"]; ok {
 		t.Fatalf("project inherited JUEX_EXT_DATA_DIR leaked: %#v", env)
 	}
-	if len(runner.last.AdditionalWritableRoots) != 0 {
-		t.Fatalf("project additional writable roots = %v, want none", runner.last.AdditionalWritableRoots)
+	if got := runner.last.WritableRoots; len(got) != 1 || got[0] != dir {
+		t.Fatalf("project writable roots = %v, want only Workspace without AgentStateDir", got)
 	}
 
 	rejectDir := t.TempDir()
@@ -435,7 +417,7 @@ func TestProjectCommandRejectsAndStripsExtensionEnvironment(t *testing.T) {
 	}
 }
 
-func TestExtensionBlockedDataPathFailsAfterPrepareWithoutStartingProcess(t *testing.T) {
+func TestExtensionDataDirPreparesIndependentlyFromSandboxRoots(t *testing.T) {
 	dir := t.TempDir()
 	extensionDir := filepath.Join(dir, "extension")
 	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
@@ -450,10 +432,13 @@ func TestExtensionBlockedDataPathFailsAfterPrepareWithoutStartingProcess(t *test
 	})
 	writeObservableConfigPath(t, extensionPath, spec)
 	var prepares atomic.Int32
+	runner := &recordingSandboxRunner{}
+	agentStateDir := filepath.Dir(filepath.Dir(dataDir))
 	mgr, err := observable.NewManager(observable.ManagerOptions{
-		ConfigPath: configPath(dir),
-		StateDir:   stateDir(dir),
-		WorkDir:    dir,
+		ConfigPath:    configPath(dir),
+		StateDir:      stateDir(dir),
+		WorkDir:       dir,
+		AgentStateDir: agentStateDir,
 		Sandbox: sandbox.Policy{
 			Enabled: true,
 			FileSystem: sandbox.FileSystemPolicy{
@@ -462,6 +447,7 @@ func TestExtensionBlockedDataPathFailsAfterPrepareWithoutStartingProcess(t *test
 			},
 			Network: sandbox.NetworkPolicy{Enabled: true},
 		},
+		SandboxRunner: runner,
 		ReadOnlyConfigSources: []observable.ReadOnlyConfigSource{{
 			Path:   extensionPath,
 			Source: "ext:demo",
@@ -480,14 +466,20 @@ func TestExtensionBlockedDataPathFailsAfterPrepareWithoutStartingProcess(t *test
 	}
 	defer func() { _ = mgr.Close() }()
 	err = mgr.Start(context.Background(), spec.ID)
-	if err == nil || !strings.Contains(err.Error(), "blocked_paths") {
-		t.Fatalf("Start() err = %v, want blocked_paths rejection", err)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if prepares.Load() != 1 {
 		t.Fatalf("prepare count = %d, want 1", prepares.Load())
 	}
 	if info, statErr := os.Stat(dataDir); statErr != nil || !info.IsDir() {
 		t.Fatalf("prepared data dir stat = %+v err=%v", info, statErr)
+	}
+	if got := runner.last.WritableRoots; len(got) != 2 || got[0] != dir || got[1] != agentStateDir {
+		t.Fatalf("writable roots = %v, want Workspace and AgentStateDir", got)
+	}
+	if got := runner.last.Policy.FileSystem.BlockedPaths; len(got) != 1 || got[0] != dataDir {
+		t.Fatalf("blocked paths = %v, want %q", got, dataDir)
 	}
 }
 

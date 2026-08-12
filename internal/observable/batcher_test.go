@@ -147,6 +147,30 @@ func TestBatcher_SnapshotsAttachmentsBeforeFlush(t *testing.T) {
 	}
 }
 
+func TestBatcher_SnapshotsAttachmentFromAgentStateDir(t *testing.T) {
+	workDir := t.TempDir()
+	agentStateDir := filepath.Join(t.TempDir(), "agents", "yqmgmu")
+	sourcePath := filepath.Join(agentStateDir, "extensions", "wechat-wire", "media", "pixel.png")
+	writeBatcherPNG(t, sourcePath)
+	store := observable.NewStore(filepath.Join(agentStateDir, "observables"), observable.StoreOptions{Now: fixedNow})
+	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{
+		WorkDir:       workDir,
+		AgentStateDir: agentStateDir,
+	})
+	unit := parsedUnit("stdout", "image event", fixedTime)
+	unit.Attachments = []eventmedia.AttachmentRef{{Path: sourcePath, MediaType: "image/png"}}
+	if _, err := b.Add(unit); err != nil {
+		t.Fatal(err)
+	}
+	records, err := b.Flush("interval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || len(records[0].Attachments) != 1 || !strings.HasPrefix(records[0].Attachments[0].Path, ".juex/artifacts/event-media/") {
+		t.Fatalf("records = %+v, want one stored AgentStateDir attachment", records)
+	}
+}
+
 func TestBatcher_EnforcesAttachmentLimitAcrossBatch(t *testing.T) {
 	workDir := t.TempDir()
 	firstPath := filepath.Join(workDir, "first.txt")

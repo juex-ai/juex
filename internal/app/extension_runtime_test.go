@@ -54,12 +54,8 @@ func TestExtensionRuntimeContextUsesAgentOwnedDataDirectory(t *testing.T) {
 	if first.ExtensionDir != extension.Dir || first.Source != extension.Source || first.ExtensionName != extension.Name {
 		t.Fatalf("runtime metadata = %+v", first)
 	}
-	if got := first.AdditionalWritableRoots(); len(got) != 1 || got[0] != first.DataDir {
-		t.Fatalf("additional writable roots = %#v", got)
-	}
-
 	stateFree := newExtensionRuntimeContext(agentstate.AgentAddress{}, extension)
-	if stateFree.DataDir != "" || len(stateFree.AdditionalWritableRoots()) != 0 {
+	if stateFree.DataDir != "" {
 		t.Fatalf("state-free runtime context = %+v", stateFree)
 	}
 }
@@ -74,9 +70,6 @@ func TestAgentExtensionsRuntimePreparesPrivatePersistentRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtimeContext := newAgentExtensionsRuntime(address)
-	if got := runtimeContext.AdditionalWritableRoots(); len(got) != 1 || got[0] != runtimeContext.RootDir {
-		t.Fatalf("additional writable roots = %#v", got)
-	}
 	if _, err := os.Stat(runtimeContext.RootDir); !os.IsNotExist(err) {
 		t.Fatalf("runtime construction created extensions root: %v", err)
 	}
@@ -128,7 +121,7 @@ func TestAgentExtensionsRuntimeRejectsSymlinkEscape(t *testing.T) {
 	}
 
 	stateFree := newAgentExtensionsRuntime(agentstate.AgentAddress{})
-	if stateFree.RootDir != "" || len(stateFree.AdditionalWritableRoots()) != 0 {
+	if stateFree.RootDir != "" {
 		t.Fatalf("state-free runtime = %+v", stateFree)
 	}
 	if err := stateFree.Prepare(); err != nil {

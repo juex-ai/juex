@@ -15,7 +15,7 @@ func TestDarwinReadOnlyProfileRestrictsWritesOutsideWorkspace(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
-	profile, err := darwinProfile(policy, []string{"/tmp/workspace"})
+	profile, err := darwinProfile(policy, "/tmp/workspace", []string{"/tmp/workspace"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestDarwinProfileBlocksConfiguredPaths(t *testing.T) {
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadWrite
 	policy.FileSystem.BlockedPaths = []string{"/tmp/secret"}
-	profile, err := darwinProfile(policy, []string{"/tmp/workspace"})
+	profile, err := darwinProfile(policy, "/tmp/workspace", []string{"/tmp/workspace"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,8 +104,9 @@ func TestDarwinReadOnlyBackendAllowsWorkspaceWriteOnly(t *testing.T) {
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	spec, err := (DefaultRunner{RuntimeOS: "darwin"}).Prepare(context.Background(), Request{
-		Policy:         policy,
-		WorkspaceRoots: []string{work},
+		Policy:        policy,
+		WorkDir:       work,
+		WritableRoots: []string{work},
 		Spec: ExecSpec{
 			Binary: "sh",
 			Args: []string{
@@ -142,8 +143,9 @@ func TestDarwinReadOnlyBackendAllowsDeviceAndTempWrites(t *testing.T) {
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	spec, err := (DefaultRunner{RuntimeOS: "darwin"}).Prepare(context.Background(), Request{
-		Policy:         policy,
-		WorkspaceRoots: []string{work},
+		Policy:        policy,
+		WorkDir:       work,
+		WritableRoots: []string{work},
 		Spec: ExecSpec{
 			Binary: "sh",
 			Args: []string{
@@ -165,7 +167,7 @@ func TestDarwinReadOnlyBackendAllowsDeviceAndTempWrites(t *testing.T) {
 	}
 }
 
-func TestDefaultRunnerDarwinAllowsOnlyExactAdditionalWritableRoot(t *testing.T) {
+func TestDefaultRunnerDarwinAllowsWorkspaceAndAgentStateRoots(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
 	dataRoot := filepath.Join(root, "agent", "extensions")
@@ -183,10 +185,10 @@ func TestDefaultRunnerDarwinAllowsOnlyExactAdditionalWritableRoot(t *testing.T) 
 		RuntimeOS: "darwin",
 		LookPath:  func(string) (string, error) { return "/usr/bin/sandbox-exec", nil },
 	}).Prepare(context.Background(), Request{
-		Policy:                  policy,
-		WorkspaceRoots:          []string{workspace},
-		AdditionalWritableRoots: []string{dataDir},
-		Spec:                    ExecSpec{Binary: "/bin/true"},
+		Policy:        policy,
+		WorkDir:       workspace,
+		WritableRoots: []string{workspace, dataDir},
+		Spec:          ExecSpec{Binary: "/bin/true"},
 	})
 	if err != nil {
 		t.Fatal(err)

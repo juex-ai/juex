@@ -2862,66 +2862,50 @@ func TestBuiltins_ExecCommandSandboxEnabledWrapsBeforeStart(t *testing.T) {
 	}
 }
 
-func TestBuiltins_ExecCommandGrantsPreparedAgentExtensionsRoot(t *testing.T) {
+func TestBuiltins_ExecCommandGrantsAgentStateDir(t *testing.T) {
 	workDir := t.TempDir()
-	agentExtensionsRoot := filepath.Join(t.TempDir(), "agents", "abcdef", "extensions")
+	agentStateDir := filepath.Join(t.TempDir(), "agents", "abcdef")
+	if err := os.MkdirAll(agentStateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	runner := &fakeSandboxRunner{}
 	policy := sandbox.DefaultPolicy()
 	policy.Enabled = true
-	prepareCalls := 0
 	r := NewRegistry()
 	RegisterBuiltins(r, BuiltinOptions{
-		WorkDir:                 workDir,
-		Shell:                   fakeShellProfile(),
-		Sandbox:                 policy,
-		SandboxRunner:           runner,
-		AdditionalWritableRoots: []string{agentExtensionsRoot},
-		PrepareAdditionalWritableRoots: func() error {
-			prepareCalls++
-			return os.MkdirAll(agentExtensionsRoot, 0o700)
-		},
+		WorkDir:       workDir,
+		AgentStateDir: agentStateDir,
+		Shell:         fakeShellProfile(),
+		Sandbox:       policy,
+		SandboxRunner: runner,
 	})
 
 	if _, err := r.Call(context.Background(), "exec_command", map[string]any{"cmd": "ok"}); err != nil {
 		t.Fatal(err)
-	}
-	if prepareCalls != 1 {
-		t.Fatalf("prepare calls = %d, want 1", prepareCalls)
 	}
 	if len(runner.requests) != 1 {
 		t.Fatalf("sandbox requests = %d", len(runner.requests))
 	}
-	if got := runner.requests[0].AdditionalWritableRoots; len(got) != 1 || got[0] != agentExtensionsRoot {
-		t.Fatalf("additional writable roots = %#v", got)
-	}
-	if info, err := os.Stat(agentExtensionsRoot); err != nil || !info.IsDir() {
-		t.Fatalf("prepared root = %+v, %v", info, err)
+	if got := runner.requests[0].WritableRoots; len(got) != 2 || got[0] != workDir || got[1] != agentStateDir {
+		t.Fatalf("writable roots = %#v, want Workspace and AgentStateDir", got)
 	}
 }
 
-func TestBuiltins_ExecCommandDoesNotPrepareAgentExtensionsRootWithoutSandbox(t *testing.T) {
+func TestBuiltins_ExecCommandDoesNotCreateAgentStateDir(t *testing.T) {
 	t.Setenv("JUEX_FAKE_SHELL", "1")
 	t.Setenv("JUEX_FAKE_SHELL_MODE", "instant")
-	agentExtensionsRoot := filepath.Join(t.TempDir(), "agents", "abcdef", "extensions")
-	prepareCalls := 0
+	agentStateDir := filepath.Join(t.TempDir(), "agents", "abcdef")
 	r := NewRegistry()
 	RegisterBuiltins(r, BuiltinOptions{
-		WorkDir:                 t.TempDir(),
-		Shell:                   fakeShellProfile(),
-		AdditionalWritableRoots: []string{agentExtensionsRoot},
-		PrepareAdditionalWritableRoots: func() error {
-			prepareCalls++
-			return os.MkdirAll(agentExtensionsRoot, 0o700)
-		},
+		WorkDir:       t.TempDir(),
+		AgentStateDir: agentStateDir,
+		Shell:         fakeShellProfile(),
 	})
 	if _, err := r.Call(context.Background(), "exec_command", map[string]any{"cmd": "ok"}); err != nil {
 		t.Fatal(err)
 	}
-	if prepareCalls != 0 {
-		t.Fatalf("unsandboxed prepare calls = %d, want 0", prepareCalls)
-	}
-	if _, err := os.Stat(agentExtensionsRoot); !os.IsNotExist(err) {
-		t.Fatalf("unsandboxed command created Agent extensions root: %v", err)
+	if _, err := os.Stat(agentStateDir); !os.IsNotExist(err) {
+		t.Fatalf("exec_command created AgentStateDir: %v", err)
 	}
 }
 
