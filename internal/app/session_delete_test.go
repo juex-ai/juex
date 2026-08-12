@@ -120,6 +120,79 @@ func TestDeleteSessionRetriesOrphanArtifactCleanupAfterPartialFailure(t *testing
 	}
 }
 
+func TestDeleteSessionRetriesHistoryOnlyCleanupAfterSessionDirRemoved(t *testing.T) {
+	cfg := testSessionDeleteConfig(t)
+	sess, err := session.New(cfg.SessionsDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := sess.Info()
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SetActive(cfg.HistoryPath(), info); err != nil {
+		t.Fatal(err)
+	}
+	store, err := artifact.NewStore(cfg.ArtifactDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put("sessions/"+sess.ID+"/media/image.png", []byte("image")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(sess.Dir); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := DeleteSession(cfg, sess.ID, SessionDeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	history, err := session.LoadHistory(cfg.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history.Active != nil {
+		t.Fatalf("active history = %+v, want nil", history.Active)
+	}
+	for _, got := range history.Sessions {
+		if got.ID == sess.ID {
+			t.Fatalf("history still contains deleted Session: %+v", history)
+		}
+	}
+	if exists, err := store.HasNamespace("sessions/" + sess.ID); err != nil || exists {
+		t.Fatalf("history-only retry Artifact namespace = %t, %v", exists, err)
+	}
+}
+
+func TestSessionDeleteCommitRemovesNamespaceCreatedAfterPreflight(t *testing.T) {
+	cfg := testSessionDeleteConfig(t)
+	sess, err := session.New(cfg.SessionsDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareSessionDelete(cfg, sess.ID, SessionDeleteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := artifact.NewStore(cfg.ArtifactDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put("sessions/"+sess.ID+"/media/late.png", []byte("late")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := plan.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := store.HasNamespace("sessions/" + sess.ID); err != nil || exists {
+		t.Fatalf("late Artifact namespace = %t, %v", exists, err)
+	}
+}
+
 func testSessionDeleteConfig(t *testing.T) config.Config {
 	t.Helper()
 	stateDir := filepath.Join(t.TempDir(), "agent")

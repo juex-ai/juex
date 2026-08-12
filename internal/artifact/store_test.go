@@ -121,6 +121,39 @@ func TestStoreRevalidatesArtifactRootBeforeEveryOperation(t *testing.T) {
 	}
 }
 
+func TestStoreRevalidatesArtifactParentBeforeEveryOperation(t *testing.T) {
+	home := t.TempDir()
+	agentStateDir := filepath.Join(home, "agent")
+	artifactDir := filepath.Join(agentStateDir, "artifacts")
+	if err := os.MkdirAll(agentStateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put("read-media/item.txt", []byte("inside")); err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(home, "agent-original")
+	if err := os.Rename(agentStateDir, original); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(home, "outside-agent")
+	if err := os.MkdirAll(filepath.Join(outside, "artifacts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, agentStateDir); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := store.Put("read-media/outside.txt", []byte("no")); err == nil {
+		t.Fatal("Put accepted a replaced Artifact parent")
+	}
+	if entries, err := os.ReadDir(filepath.Join(outside, "artifacts")); err != nil || len(entries) != 0 {
+		t.Fatalf("outside artifact entries = %+v, %v, want empty", entries, err)
+	}
+}
+
 func TestStoreFilesAndRemoveNamespace(t *testing.T) {
 	artifactDir := filepath.Join(t.TempDir(), "artifacts")
 	store, err := NewStore(artifactDir)

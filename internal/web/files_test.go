@@ -15,7 +15,9 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/usermedia"
 )
 
 func TestFilesTreeReturnsSortedWorkDir(t *testing.T) {
@@ -627,6 +629,33 @@ func TestArtifactMediaRejectsCorruptedContentAddressedBytes(t *testing.T) {
 	}
 	if got := resp.Header.Get("Cache-Control"); got != "" {
 		t.Fatalf("cache-control = %q, want empty for unverified bytes", got)
+	}
+}
+
+func TestArtifactMediaRejectsOversizedContentAddressedBytes(t *testing.T) {
+	srv := newTestServer(t)
+	store, err := artifact.NewStore(srv.opts.Cfg.ArtifactDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.PutContentAddressed("sessions/session/media", ".png", bytes.Repeat([]byte("x"), usermedia.DefaultMaxBytes+1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/media?root=artifact&path=" + url.QueryEscape(ref.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body=%s, want 413", resp.StatusCode, body)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "" {
+		t.Fatalf("cache-control = %q, want empty for oversized bytes", got)
 	}
 }
 

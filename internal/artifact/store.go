@@ -40,6 +40,7 @@ type File struct {
 type Store struct {
 	artifactDir string
 	parentDir   string
+	parentInfo  os.FileInfo
 	rootName    string
 }
 
@@ -80,7 +81,7 @@ func NewStore(artifactDir string) (Store, error) {
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return Store{}, fmt.Errorf("artifact store root: %w", statErr)
 	}
-	return Store{artifactDir: rootPath, parentDir: parentDir, rootName: rootName}, nil
+	return Store{artifactDir: rootPath, parentDir: parentDir, parentInfo: info, rootName: rootName}, nil
 }
 
 // Put atomically stores data at a logical path relative to the Artifact root.
@@ -343,12 +344,19 @@ func (s Store) openRoot(create bool) (*os.Root, error) {
 		return nil, err
 	}
 	defer func() { _ = parent.Close() }()
-	rootInfo, err := os.Lstat(s.artifactDir)
+	parentInfo, err := parent.Stat(".")
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(s.parentInfo, parentInfo) {
+		return nil, fmt.Errorf("artifact store parent %q changed while opening", s.parentDir)
+	}
+	rootInfo, err := parent.Lstat(s.rootName)
 	if errors.Is(err, os.ErrNotExist) && create {
 		if mkdirErr := parent.Mkdir(s.rootName, 0o755); mkdirErr != nil && !errors.Is(mkdirErr, os.ErrExist) {
 			return nil, mkdirErr
 		}
-		rootInfo, err = os.Lstat(s.artifactDir)
+		rootInfo, err = parent.Lstat(s.rootName)
 	}
 	if err != nil {
 		return nil, err
@@ -359,7 +367,7 @@ func (s Store) openRoot(create bool) (*os.Root, error) {
 	if !rootInfo.IsDir() {
 		return nil, fmt.Errorf("artifact store root %q is not a directory", s.artifactDir)
 	}
-	root, err := os.OpenRoot(s.artifactDir)
+	root, err := parent.OpenRoot(s.rootName)
 	if err != nil {
 		return nil, err
 	}

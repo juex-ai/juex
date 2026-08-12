@@ -106,7 +106,7 @@ func (p *SessionDeletePlan) Commit() error {
 		}
 		sessionRemoved = true
 	}
-	if p.artifactEnabled && p.artifactExists {
+	if p.artifactEnabled {
 		if err := p.artifactStore.RemoveNamespace(path.Join("sessions", p.id)); err != nil {
 			if sessionRemoved {
 				return &PartialSessionDeleteError{SessionID: p.id, Err: err}

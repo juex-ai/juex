@@ -611,7 +611,7 @@ func (s *Server) handleSessionAttachmentUpload(w http.ResponseWriter, r *http.Re
 		}
 		return
 	}
-	if _, err := s.getActiveSession(r.Context(), id); err != nil {
+	if err := s.ensureMCPStarted(r.Context()); err != nil {
 		writeActiveSessionLookupError(w, id, err)
 		return
 	}
@@ -633,23 +633,42 @@ func (s *Server) handleSessionAttachmentUpload(w http.ResponseWriter, r *http.Re
 	if header != nil {
 		filename = header.Filename
 	}
-	ref, err := usermedia.StoreUpload(s.opts.Cfg.ArtifactDir(), id, filename, file, usermedia.Limits{})
+	ref, err := s.storeSessionAttachment(r.Context(), id, filename, file)
 	if err != nil {
-		status := http.StatusBadRequest
-		kind := "bad_request"
-		msg := err.Error()
-		switch {
-		case strings.Contains(msg, "unsupported image type"):
-			status = http.StatusUnsupportedMediaType
-			kind = "unsupported_media_type"
-		case strings.Contains(msg, "exceeds"):
-			status = http.StatusRequestEntityTooLarge
-			kind = "payload_too_large"
+		if errors.Is(err, errSessionInactive) || os.IsNotExist(err) {
+			writeActiveSessionLookupError(w, id, err)
+			return
 		}
-		writeErr(w, status, kind, msg)
+		writeSessionAttachmentStoreError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, ref)
+}
+
+func (s *Server) storeSessionAttachment(ctx context.Context, id, filename string, file io.Reader) (usermedia.MediaRef, error) {
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	s.activeSelectionMu.Lock()
+	defer s.activeSelectionMu.Unlock()
+	if _, err := s.getActiveSessionLocked(ctx, id); err != nil {
+		return usermedia.MediaRef{}, err
+	}
+	return usermedia.StoreUpload(s.opts.Cfg.ArtifactDir(), id, filename, file, usermedia.Limits{})
+}
+
+func writeSessionAttachmentStoreError(w http.ResponseWriter, err error) {
+	status := http.StatusBadRequest
+	kind := "bad_request"
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "unsupported image type"):
+		status = http.StatusUnsupportedMediaType
+		kind = "unsupported_media_type"
+	case strings.Contains(msg, "exceeds"):
+		status = http.StatusRequestEntityTooLarge
+		kind = "payload_too_large"
+	}
+	writeErr(w, status, kind, msg)
 }
 
 func (s *Server) nextTurnID(prefix string) string {

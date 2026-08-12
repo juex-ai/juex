@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -418,6 +419,33 @@ func TestReadImageBase64RejectsIntegrityMismatch(t *testing.T) {
 		SHA256:       strings.Repeat("0", 64),
 	}); ok || encoded != "" || mediaType != "" {
 		t.Fatalf("integrity mismatch accepted: encoded=%q mediaType=%q ok=%t", encoded, mediaType, ok)
+	}
+}
+
+func TestReadImageBase64RejectsOversizedArtifacts(t *testing.T) {
+	artifactDir := t.TempDir()
+	if encoded, mediaType, ok := readImageBase64(artifactDir, &MediaRef{
+		ArtifactPath:  "sessions/session/media/too-large.png",
+		MediaType:     "image/png",
+		OriginalBytes: maxProviderImageArtifactBytes + 1,
+	}); ok || encoded != "" || mediaType != "" {
+		t.Fatalf("oversized metadata accepted: encoded=%q mediaType=%q ok=%t", encoded, mediaType, ok)
+	}
+
+	store, err := artifact.NewStore(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Put("sessions/session/media/large.png", bytes.Repeat([]byte("x"), maxProviderImageArtifactBytes+1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoded, mediaType, ok := readImageBase64(artifactDir, &MediaRef{
+		ArtifactPath: ref.Path,
+		MediaType:    "image/png",
+		SHA256:       ref.SHA256,
+	}); ok || encoded != "" || mediaType != "" {
+		t.Fatalf("oversized bytes accepted: encoded=%q mediaType=%q ok=%t", encoded, mediaType, ok)
 	}
 }
 

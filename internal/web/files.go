@@ -15,6 +15,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/usermedia"
 )
 
 const maxFilePreviewBytes = 256 * 1024
@@ -424,13 +425,15 @@ func (s *Server) handleArtifactMedia(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	data, err := store.Read(artifact.Ref{Path: relPath, SHA256: digest})
+	data, err := store.ReadLimit(artifact.Ref{Path: relPath, SHA256: digest}, usermedia.DefaultMaxBytes)
 	if err != nil {
 		switch {
 		case errors.Is(err, os.ErrNotExist):
 			writeErr(w, http.StatusNotFound, "not_found", "artifact not found")
 		case errors.Is(err, artifact.ErrIntegrity):
 			writeErr(w, http.StatusConflict, "integrity_error", err.Error())
+		case errors.Is(err, artifact.ErrTooLarge):
+			writeErr(w, http.StatusRequestEntityTooLarge, "payload_too_large", err.Error())
 		default:
 			writeErr(w, http.StatusForbidden, "forbidden", err.Error())
 		}
