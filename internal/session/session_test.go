@@ -1632,6 +1632,54 @@ func TestSession_AppendEventToJSONL(t *testing.T) {
 	}
 }
 
+func TestSessionAppendEventDoesNotDependOnMetadataRetry(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	metadataPath := filepath.Join(s.Dir, metadataFile)
+	originalMetadata, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.eventFD.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.eventFD = nil
+	if err := os.Remove(metadataPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(metadataPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.metadataDirty = true
+
+	if err := s.AppendEvent(events.Event{Type: "turn.started", Payload: "durable"}); err != nil {
+		t.Fatalf("AppendEvent with unavailable transcript metadata = %v", err)
+	}
+	if !s.metadataDirty {
+		t.Fatal("event append cleared failed metadata retry obligation")
+	}
+	data, err := os.ReadFile(filepath.Join(s.Dir, eventsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countLines(data) != 1 || !bytes.Contains(data, []byte("durable")) {
+		t.Fatalf("events = %s, want durable event", data)
+	}
+
+	if err := os.RemoveAll(metadataPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadataPath, originalMetadata, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close retry metadata = %v", err)
+	}
+}
+
 func TestSession_AppendEventSkipsTransientEvent(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)

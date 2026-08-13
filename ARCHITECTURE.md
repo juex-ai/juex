@@ -971,9 +971,11 @@ its original offset, preserves complete live history independently from the
 bounded active index, and does not report an already-persisted batch as failed.
 Once a canonical append or repair is confirmed committed, failures while
 refreshing `session.json` or the global history summary become resident retry
-obligations instead of append failures. The next write repairs canonical
-metadata before mutating JSONL, the next append refreshes the latest history
-summary, and `Close` makes one final attempt at both. This avoids both silently
+obligations instead of append failures. The next transcript or metadata write
+repairs canonical metadata before mutating conversation state, the next append
+refreshes the latest history summary, and `Close` makes one final attempt at
+both. Event journaling remains independent: a failed transcript-checkpoint
+retry never prevents a durable event from reaching `events.jsonl`. This avoids both silently
 abandoning derived state and inviting callers to duplicate an already committed
 message batch.
 `events.jsonl` does not use this checkpoint because safely skipping event

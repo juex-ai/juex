@@ -15,7 +15,13 @@ type reverseLineReader struct {
 	floor        int64
 	floorAligned bool
 	maxLineBytes int
-	buf          []byte
+	buf          reverseLineBuffer
+}
+
+type reverseLineBuffer struct {
+	storage []byte
+	start   int
+	end     int
 }
 
 func newReverseLineReader(file *os.File) (*reverseLineReader, error) {
@@ -49,9 +55,10 @@ func newBoundedReverseLineReader(file *os.File, maxBytes int64) (*reverseLineRea
 
 func (r *reverseLineReader) next() ([]byte, error) {
 	for {
-		if newline := bytes.LastIndexByte(r.buf, '\n'); newline >= 0 {
-			line := r.buf[newline+1:]
-			r.buf = r.buf[:newline]
+		buffered := r.buf.bytes()
+		if newline := bytes.LastIndexByte(buffered, '\n'); newline >= 0 {
+			line := buffered[newline+1:]
+			r.buf.trimEnd(newline)
 			if len(line) > 0 && line[len(line)-1] == '\r' {
 				line = line[:len(line)-1]
 			}
@@ -67,14 +74,14 @@ func (r *reverseLineReader) next() ([]byte, error) {
 			// A bounded scan can begin in the middle of a line. Discard that
 			// partial prefix instead of treating it as an event.
 			if r.floor > 0 && !r.floorAligned {
-				r.buf = nil
+				r.buf.reset()
 				return nil, io.EOF
 			}
-			if len(r.buf) == 0 {
+			if r.buf.len() == 0 {
 				return nil, io.EOF
 			}
-			line := r.buf
-			r.buf = nil
+			line := r.buf.bytes()
+			r.buf.reset()
 			if len(line) > 0 && line[len(line)-1] == '\r' {
 				line = line[:len(line)-1]
 			}
@@ -98,8 +105,9 @@ func (r *reverseLineReader) next() ([]byte, error) {
 			return nil, err
 		}
 		chunk = chunk[:n]
-		r.buf = prependReverseLineChunk(r.buf, chunk)
-		if bytes.IndexByte(r.buf, '\n') < 0 && r.lineTooLong(r.buf) {
+		r.buf.prepend(chunk)
+		buffered = r.buf.bytes()
+		if bytes.IndexByte(buffered, '\n') < 0 && r.lineTooLong(buffered) {
 			return nil, errEventLineTooLong
 		}
 	}
@@ -109,17 +117,41 @@ func (r *reverseLineReader) lineTooLong(line []byte) bool {
 	return r.maxLineBytes > 0 && len(line) > r.maxLineBytes
 }
 
-func prependReverseLineChunk(buf, chunk []byte) []byte {
-	required := len(chunk) + len(buf)
-	if cap(buf) < required {
-		capacity := max(required, max(cap(buf)*2, reverseLineBlockBytes))
-		grown := make([]byte, len(buf), capacity)
-		copy(grown, buf)
-		buf = grown
+func (b *reverseLineBuffer) bytes() []byte {
+	return b.storage[b.start:b.end]
+}
+
+func (b *reverseLineBuffer) len() int {
+	return b.end - b.start
+}
+
+func (b *reverseLineBuffer) trimEnd(length int) {
+	b.end = b.start + length
+}
+
+func (b *reverseLineBuffer) reset() {
+	b.storage = nil
+	b.start = 0
+	b.end = 0
+}
+
+func (b *reverseLineBuffer) prepend(chunk []byte) {
+	if len(chunk) == 0 {
+		return
 	}
-	oldLength := len(buf)
-	buf = buf[:required]
-	copy(buf[len(chunk):], buf[:oldLength])
-	copy(buf, chunk)
-	return buf
+	if b.start >= len(chunk) {
+		b.start -= len(chunk)
+		copy(b.storage[b.start:], chunk)
+		return
+	}
+
+	required := len(chunk) + b.len()
+	capacity := max(required, max(len(b.storage)*2, reverseLineBlockBytes))
+	grown := make([]byte, capacity)
+	start := capacity - required
+	copy(grown[start:], chunk)
+	copy(grown[start+len(chunk):], b.bytes())
+	b.storage = grown
+	b.start = start
+	b.end = capacity
 }

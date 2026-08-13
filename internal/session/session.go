@@ -564,7 +564,10 @@ func (s *Session) AppendEvent(e events.Event) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.ensureFilesLocked(); err != nil {
+	// Event journaling is canonical in its own right. Retry transcript-derived
+	// metadata opportunistically, but never drop an event because that retry failed.
+	_ = s.retryDerivedStateLocked()
+	if err := s.ensureEventFileLocked(); err != nil {
 		return err
 	}
 	e = events.Normalize(e)
@@ -825,6 +828,40 @@ func (s *Session) ensureFilesLocked() error {
 		}
 		s.eventFD = eventFD
 	}
+	return nil
+}
+
+func (s *Session) ensureEventFileLocked() error {
+	if s.eventFD != nil {
+		return nil
+	}
+	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+		return err
+	}
+	if err := ensureScratchpadDir(s.Dir); err != nil {
+		return err
+	}
+	metadataPath := filepath.Join(s.Dir, metadataFile)
+	if _, err := os.Stat(metadataPath); errors.Is(err, os.ErrNotExist) && !s.metadataDirty {
+		if err := saveMetadata(s.Dir, s.metadataLocked()); err != nil {
+			return err
+		}
+		if s.convFD == nil {
+			conversationPath := filepath.Join(s.Dir, conversationFile)
+			conversation, err := os.OpenFile(conversationPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
+			if err != nil {
+				return err
+			}
+			s.convFD = conversation
+		}
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	eventFD, err := os.OpenFile(filepath.Join(s.Dir, eventsFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	s.eventFD = eventFD
 	return nil
 }
 
