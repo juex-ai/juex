@@ -383,6 +383,54 @@ func TestTranscriptSnapshotDetectsSameMetadataReplacement(t *testing.T) {
 	}
 }
 
+func TestTranscriptSnapshotIdentityRejectsWeakMetadataReplacement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows prevents replacing a path while the original handle is open")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conversation.jsonl")
+	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Close()
+	initialInfo, err := original.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	replacement := filepath.Join(dir, "replacement")
+	if err := os.WriteFile(replacement, []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(replacement, initialInfo.ModTime(), initialInfo.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	canonicalInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	openInfo, err := original.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialWeak := fingerprintFromFileInfo(initialInfo)
+	canonicalWeak := fingerprintFromFileInfo(canonicalInfo)
+	if initialWeak != canonicalWeak {
+		t.Fatalf("weak fingerprints differ: initial=%+v canonical=%+v", initialWeak, canonicalWeak)
+	}
+	if sameTranscriptFile(initialInfo, openInfo, canonicalInfo) {
+		t.Fatal("replacement accepted solely because weak size/mtime metadata matched")
+	}
+}
+
 func TestWeakFingerprintCannotBuildOrValidateCheckpoint(t *testing.T) {
 	fingerprint := transcriptFingerprint{Size: 1, MtimeNS: 2}
 	idx := transcriptIndex{repairSafe: true, repairPrefixSafe: true, complete: true}
