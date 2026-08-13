@@ -162,6 +162,55 @@ func TestCheckpointPageKeepsFastPathForOversizedTranscriptRow(t *testing.T) {
 	}
 }
 
+func TestCheckpointRecentPageDoesNotScanCompleteSuffix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, conversationFile)
+	compactLine, err := marshalJSONLine(messageWithID(compactTestMessage("summary"), "m1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	middleLine, err := marshalJSONLine(messageWithID(llm.TextMessage(llm.RoleAssistant, "middle"), "m2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	latestLine, err := marshalJSONLine(messageWithID(llm.TextMessage(llm.RoleUser, "latest"), "m3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := append([]byte{}, compactLine...)
+	data = append(data, []byte("not-json\n")...)
+	data = append(data, middleLine...)
+	data = append(data, latestLine...)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := fingerprintFromPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := &transcriptCheckpoint{
+		Version:       transcriptCheckpointVersion,
+		Fingerprint:   fingerprint,
+		RepairSafe:    true,
+		LatestCompact: &transcriptCheckpointEntry{ID: "m1", Offset: 0, Length: len(compactLine)},
+	}
+	checkpoint.ChecksumSHA256 = transcriptCheckpointChecksum(checkpoint)
+
+	page, checkpointed, err := transcriptMessagePageFromCheckpoint(path, checkpoint, "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !checkpointed {
+		t.Fatal("recent page scanned the malformed interior suffix instead of using the bounded tail path")
+	}
+	if got := strings.Join(messageIDsForTest(page.Messages), ","); got != "m3" {
+		t.Fatalf("recent page ids = %s, want m3", got)
+	}
+	if !page.HasMoreBefore {
+		t.Fatal("recent page has_more_before = false, want true")
+	}
+}
+
 func TestStaleTranscriptCheckpointFallsBackToStrictScan(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)

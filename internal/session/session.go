@@ -10,6 +10,7 @@
 package session
 
 import (
+	"bytes"
 	cryptorand "crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -247,20 +248,23 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 	if lastActiveMS < s.lastActiveMS {
 		lastActiveMS = s.lastActiveMS
 	}
-	fingerprint, err := s.currentTranscriptFingerprintLocked()
-	if errors.Is(err, ErrTranscriptChanged) {
-		fingerprint, err = s.currentTranscriptFingerprintLocked()
-	}
-	if err != nil {
+	commit, inspectErr := s.inspectTranscriptCommitLocked(offset, data)
+	if commit.diverged {
+		s.adoptTranscriptCommitLocked(commit, nextTranscript, nextHistory, lastActiveMS)
 		s.mu.Unlock()
-		return nil, err
+		if commit.committed {
+			return prepared, nil
+		}
+		if inspectErr != nil {
+			return nil, inspectErr
+		}
+		return nil, ErrTranscriptChanged
 	}
-	if fingerprint.Size != offset+int64(len(data)) {
-		s.acceptCommittedTranscriptDivergenceLocked(nextTranscript, nextHistory, lastActiveMS)
+	if inspectErr != nil {
 		s.mu.Unlock()
-		return prepared, nil
+		return nil, inspectErr
 	}
-	nextTranscript.fingerprint = fingerprint
+	nextTranscript.fingerprint = commit.fingerprint
 	meta := s.metadataLocked()
 	meta.LastActiveAtMS = lastActiveMS
 	meta.Transcript = buildTranscriptCheckpoint(nextTranscript, nextTranscript.fingerprint)
@@ -284,25 +288,78 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 	return prepared, RecordSession(historyPath, info)
 }
 
-func (s *Session) acceptCommittedTranscriptDivergenceLocked(
+type transcriptCommit struct {
+	committed   bool
+	diverged    bool
+	fingerprint transcriptFingerprint
+	index       transcriptIndex
+	history     []llm.Message
+}
+
+func (s *Session) inspectTranscriptCommitLocked(offset int64, data []byte) (transcriptCommit, error) {
+	path := filepath.Join(s.Dir, conversationFile)
+	snapshot, err := openTranscriptSnapshot(path)
+	if err != nil {
+		return transcriptCommit{diverged: true}, err
+	}
+	defer snapshot.close()
+	written := make([]byte, len(data))
+	n, readErr := snapshot.file.ReadAt(written, offset)
+	committed := n == len(data) && bytes.Equal(written, data)
+	openFingerprint, openErr := fingerprintFromOpenFile(s.convFD)
+	expectedSize := offset + int64(len(data))
+	if committed && openErr == nil && openFingerprint == snapshot.fingerprint && snapshot.fingerprint.Size == expectedSize {
+		if err := snapshot.verify(); err != nil {
+			return transcriptCommit{diverged: true}, err
+		}
+		return transcriptCommit{committed: true, fingerprint: snapshot.fingerprint}, nil
+	}
+
+	result := transcriptCommit{committed: committed, diverged: true, fingerprint: snapshot.fingerprint}
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return result, readErr
+	}
+	idx, err := scanTranscriptIndexFromFile(snapshot.file, path, 0)
+	if err != nil {
+		return result, err
+	}
+	idx.fingerprint = snapshot.fingerprint
+	active := activeTranscriptIndex(idx)
+	history, err := readTranscriptMessagesFromFile(snapshot.file, path, active.entries)
+	if err != nil {
+		return result, err
+	}
+	if err := snapshot.verify(); err != nil {
+		return transcriptCommit{diverged: true}, err
+	}
+	result.index = active
+	result.history = history
+	return result, nil
+}
+
+func (s *Session) adoptTranscriptCommitLocked(
+	commit transcriptCommit,
 	fallbackIndex transcriptIndex,
 	fallbackHistory []llm.Message,
 	lastActiveMS int64,
 ) {
-	path := filepath.Join(s.Dir, conversationFile)
-	recovered := false
-	idx, err := scanTranscriptIndex(path)
-	if err == nil {
-		active := activeTranscriptIndex(idx)
-		history, readErr := readTranscriptMessagesForFingerprint(path, active.entries, active.fingerprint)
-		if readErr == nil {
-			fallbackIndex = active
-			fallbackHistory = history
-			recovered = true
-		}
-	}
-	if !recovered {
+	if commit.index.fingerprint != (transcriptFingerprint{}) {
+		fallbackIndex = commit.index
+		fallbackHistory = commit.history
+	} else if commit.committed {
 		fallbackIndex.fingerprint = transcriptFingerprint{}
+	} else {
+		fallbackIndex = s.transcript
+		fallbackIndex.fingerprint = transcriptFingerprint{}
+		fallbackHistory = s.History
+		lastActiveMS = s.lastActiveMS
+	}
+	if s.convFD != nil {
+		_ = s.convFD.Close()
+		s.convFD = nil
+	}
+	if replacement, err := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_RDWR, 0o644); err == nil {
+		s.convFD = replacement
 	}
 	s.lastActiveMS = lastActiveMS
 	s.History = fallbackHistory

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -342,6 +343,102 @@ func TestSessionAppendAdoptsCanonicalSuffixAfterCommittedRace(t *testing.T) {
 	}
 	if !transcriptCheckpointValid(meta.Transcript, fingerprint) {
 		t.Fatalf("recovered checkpoint = %+v, want current sealed checkpoint", meta.Transcript)
+	}
+}
+
+func TestSessionAppendRejectsSameSizedPostWriteRewrite(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	owned := messageWithID(llm.TextMessage(llm.RoleAssistant, "owned"), "owned-same")
+	rewritten := messageWithID(llm.TextMessage(llm.RoleAssistant, "other"), "other-same")
+	ownedLine, err := marshalJSONLine(owned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrittenLine, err := marshalJSONLine(rewritten)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ownedLine) != len(rewrittenLine) {
+		t.Fatalf("test rows differ in size: owned=%d rewritten=%d", len(ownedLine), len(rewrittenLine))
+	}
+	s.afterTranscriptWrite = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.WriteAt(rewrittenLine, 0); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	if err := s.Append(owned); !errors.Is(err, ErrTranscriptChanged) {
+		t.Fatalf("Append error = %v, want ErrTranscriptChanged", err)
+	}
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "other-same" {
+		t.Fatalf("resident history ids = %s, want other-same", got)
+	}
+	data, err := os.ReadFile(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(`"id":"owned-same"`)) || !bytes.Contains(data, []byte(`"id":"other-same"`)) {
+		t.Fatalf("rewritten transcript = %s, want only other-same", data)
+	}
+}
+
+func TestSessionAppendAcceptsAtomicReplacementContainingBatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows prevents replacing the canonical path while the resident handle is open")
+	}
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	path := filepath.Join(s.Dir, conversationFile)
+	s.afterTranscriptWrite = func() {
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		replacement := filepath.Join(s.Dir, "conversation.replacement")
+		if writeErr := os.WriteFile(replacement, data, 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		if renameErr := os.Rename(replacement, path); renameErr != nil {
+			t.Fatal(renameErr)
+		}
+	}
+
+	owned := messageWithID(llm.TextMessage(llm.RoleAssistant, "owned"), "owned-replaced")
+	if err := s.Append(owned); err != nil {
+		t.Fatalf("Append error after canonical replacement containing batch = %v", err)
+	}
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "owned-replaced" {
+		t.Fatalf("resident history ids = %s, want owned-replaced", got)
+	}
+	if err := s.convFD.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.convFD = nil
+	s.afterTranscriptWrite = nil
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "next"), "next")); err != nil {
+		t.Fatalf("Append after descriptor rebinding = %v", err)
+	}
+	_, full, err := LoadInfo(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(messageIDsForTest(full), ","); got != "owned-replaced,next" {
+		t.Fatalf("canonical history ids = %s, want owned-replaced,next", got)
 	}
 }
 
