@@ -1562,6 +1562,9 @@ func TestAppHookHelperProcess(t *testing.T) {
 	case "deny":
 		_, _ = os.Stdout.WriteString("startup blocked")
 		os.Exit(2)
+	case "wait":
+		time.Sleep(time.Minute)
+		os.Exit(0)
 	}
 	os.Exit(0)
 }

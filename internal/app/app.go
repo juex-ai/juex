@@ -89,6 +89,7 @@ type Options struct {
 	sharedNotes             *runtime.NotesStore
 	sharedObservables       *observable.Manager
 	sideSessionFactory      sideSessionFactory
+	startupContext          context.Context
 }
 
 type SessionMode string
@@ -191,6 +192,13 @@ type MCPServerStatus struct {
 // New wires every subsystem and returns a ready-to-use App.
 // The caller must Close() to flush jsonl and stop MCP subprocesses.
 func New(opts Options) (*App, error) {
+	startupCtx := opts.startupContext
+	if startupCtx == nil {
+		startupCtx = context.Background()
+	}
+	if err := startupCtx.Err(); err != nil {
+		return nil, err
+	}
 	cfg := opts.Config
 	if opts.WorkDir != "" {
 		cfg.WorkDir = opts.WorkDir
@@ -612,7 +620,11 @@ func New(opts Options) (*App, error) {
 		a.mcpManager = mgr
 		a.cleanup = append(a.cleanup, mgr.Close)
 	}
-	if err := eng.RunSessionStartHooks(appCtx); err != nil {
+	if err := eng.RunSessionStartHooks(startupCtx); err != nil {
+		_ = a.Close()
+		return nil, err
+	}
+	if err := startupCtx.Err(); err != nil {
 		_ = a.Close()
 		return nil, err
 	}

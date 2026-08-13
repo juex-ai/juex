@@ -62,6 +62,7 @@ type SideSessionStatus struct {
 }
 
 type sideSessionChildOptions struct {
+	Context           context.Context
 	Config            config.Config
 	Model             string
 	UseParentProvider bool
@@ -141,6 +142,7 @@ func (m *sideSessionManager) newChildApp(child sideSessionChildOptions) (*App, e
 		sharedGoalState:         child.GoalState,
 		sharedNotes:             child.Notes,
 		sharedObservables:       child.Observables,
+		startupContext:          child.Context,
 	}
 	if child.UseParentProvider {
 		opts.Provider = parent.Engine.Provider
@@ -149,10 +151,16 @@ func (m *sideSessionManager) newChildApp(child sideSessionChildOptions) (*App, e
 	return New(opts)
 }
 
-func (m *sideSessionManager) Create(query, model string, subscribe bool) (SideSessionStatus, error) {
+func (m *sideSessionManager) Create(ctx context.Context, query, model string, subscribe bool) (SideSessionStatus, error) {
 	m.lifecycleMu.RLock()
 	defer m.lifecycleMu.RUnlock()
 	if err := m.ensureParentActive(); err != nil {
+		return SideSessionStatus{}, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
 		return SideSessionStatus{}, err
 	}
 	query = strings.TrimSpace(query)
@@ -170,16 +178,43 @@ func (m *sideSessionManager) Create(query, model string, subscribe bool) (SideSe
 		model = config.ModelRef{ProviderID: cfg.ProviderID, ModelID: cfg.Model}.String()
 	}
 	state := m.parent.Engine.SessionRuntimeSnapshot()
-	child, err := m.factory(sideSessionChildOptions{
-		Config:            cfg,
-		Model:             model,
-		UseParentProvider: useParentProvider,
-		GoalState:         state.GoalState,
-		Notes:             state.Notes,
-		Observables:       m.parent.obsv,
-	})
+	type factoryResult struct {
+		child *App
+		err   error
+	}
+	resultCh := make(chan factoryResult, 1)
+	go func() {
+		child, err := m.factory(sideSessionChildOptions{
+			Context:           ctx,
+			Config:            cfg,
+			Model:             model,
+			UseParentProvider: useParentProvider,
+			GoalState:         state.GoalState,
+			Notes:             state.Notes,
+			Observables:       m.parent.obsv,
+		})
+		resultCh <- factoryResult{child: child, err: err}
+	}()
+	var child *App
+	var err error
+	select {
+	case result := <-resultCh:
+		child, err = result.child, result.err
+	case <-ctx.Done():
+		go func() {
+			result := <-resultCh
+			if result.child != nil {
+				_ = result.child.CloseAndWait()
+			}
+		}()
+		return SideSessionStatus{}, ctx.Err()
+	}
 	if err != nil {
 		return SideSessionStatus{}, fmt.Errorf("create side session: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		_ = child.CloseAndWait()
+		return SideSessionStatus{}, err
 	}
 	identity, ok := child.SessionIdentity()
 	if !ok || session.NormalizeKind(identity.Kind) != session.KindSide {
@@ -218,18 +253,29 @@ func (m *sideSessionManager) Create(query, model string, subscribe bool) (SideSe
 	m.sessions[identity.ID] = managed
 	m.mu.Unlock()
 
+	if err := ctx.Err(); err != nil {
+		m.removeIfCurrent(managed)
+		_ = stopManagedSideSession(managed)
+		return SideSessionStatus{}, err
+	}
 	result := child.admitUserTurn(ctx, userTurnMessage(query, nil), TurnIDFunc(func(string) string { return m.nextTurnID() }))
 	if result.Kind != TurnAdmissionStarted || result.Start == nil {
-		m.mu.Lock()
-		delete(m.sessions, identity.ID)
-		m.mu.Unlock()
+		m.removeIfCurrent(managed)
 		_ = stopManagedSideSession(managed)
 		if result.Err != nil {
 			return SideSessionStatus{}, fmt.Errorf("start side session: %w", result.Err)
 		}
 		return SideSessionStatus{}, fmt.Errorf("start side session: unexpected admission %q", result.Kind)
 	}
-	if err := m.startRun(managed, result.Start); err != nil {
+	if err := ctx.Err(); err != nil {
+		child.CompleteAdmittedTurn(result.Start.TurnID)
+		m.removeIfCurrent(managed)
+		_ = stopManagedSideSession(managed)
+		return SideSessionStatus{}, err
+	}
+	if err := m.startRun(ctx, managed, result.Start); err != nil {
+		child.CompleteAdmittedTurn(result.Start.TurnID)
+		m.removeIfCurrent(managed)
 		_ = stopManagedSideSession(managed)
 		return SideSessionStatus{}, err
 	}
@@ -295,7 +341,7 @@ func (m *sideSessionManager) Send(id, message string) (SideSessionStatus, bool, 
 	)
 	switch result.Kind {
 	case TurnAdmissionStarted:
-		if err := m.startRun(managed, result.Start); err != nil {
+		if err := m.startRun(managed.ctx, managed, result.Start); err != nil {
 			managed.app.CompleteAdmittedTurn(result.Start.TurnID)
 			return SideSessionStatus{}, false, err
 		}
@@ -440,11 +486,15 @@ func (m *sideSessionManager) Close() error {
 	return m.drainTransition(items)
 }
 
-func (m *sideSessionManager) startRun(managed *managedSideSession, start *AdmittedTurn) error {
+func (m *sideSessionManager) startRun(ctx context.Context, managed *managedSideSession, start *AdmittedTurn) error {
 	if start == nil {
 		return errors.New("side session run: missing admitted turn")
 	}
 	m.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		m.mu.Unlock()
+		return err
+	}
 	if current := m.sessions[managed.status.SessionID]; current != managed || managed.status.State == SideSessionStateStopping {
 		m.mu.Unlock()
 		return ErrSideSessionNotActive
@@ -619,6 +669,17 @@ func (m *sideSessionManager) remove(id string) (*managedSideSession, error) {
 	return managed, nil
 }
 
+func (m *sideSessionManager) removeIfCurrent(managed *managedSideSession) {
+	if managed == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.sessions[managed.status.SessionID] == managed {
+		delete(m.sessions, managed.status.SessionID)
+	}
+	m.mu.Unlock()
+}
+
 func stopManagedSideSession(managed *managedSideSession) error {
 	return stopManagedSideSessionContext(context.Background(), managed)
 }
@@ -706,7 +767,7 @@ func RegisterSideSessionTools(reg *tools.Registry, manager *sideSessionManager) 
 	}
 	definitions := SideSessionToolDefinitions()
 	handlers := []tools.Handler{
-		func(_ context.Context, input map[string]any) (string, error) {
+		func(ctx context.Context, input map[string]any) (string, error) {
 			subscribe := true
 			if raw, ok := input["subscribe"]; ok {
 				value, valid := raw.(bool)
@@ -715,7 +776,7 @@ func RegisterSideSessionTools(reg *tools.Registry, manager *sideSessionManager) 
 				}
 				subscribe = value
 			}
-			status, err := manager.Create(toolString(input, "query"), toolString(input, "model"), subscribe)
+			status, err := manager.Create(ctx, toolString(input, "query"), toolString(input, "model"), subscribe)
 			return marshalSideToolResult(status, err)
 		},
 		func(_ context.Context, _ map[string]any) (string, error) {

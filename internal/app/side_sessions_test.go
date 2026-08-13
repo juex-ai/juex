@@ -13,6 +13,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
@@ -151,6 +152,7 @@ func newSideSessionTestApp(t *testing.T, parentProvider llm.Provider, childProvi
 				disableSideSessionTools: true,
 				sharedGoalState:         opts.GoalState,
 				sharedNotes:             opts.Notes,
+				startupContext:          opts.Context,
 			})
 		},
 	})
@@ -670,7 +672,7 @@ providers:
 			return New(Options{
 				Config: opts.Config, Provider: &scriptedSideProvider{}, WorkDir: opts.Config.WorkDir,
 				DisableMCP: true, SessionMode: SessionModeNewSide, disableSideSessionTools: true,
-				sharedGoalState: opts.GoalState, sharedNotes: opts.Notes,
+				sharedGoalState: opts.GoalState, sharedNotes: opts.Notes, startupContext: opts.Context,
 			})
 		},
 	})
@@ -848,6 +850,83 @@ func TestSideSessionStopHonorsToolCancellation(t *testing.T) {
 	close(child.release)
 }
 
+func TestSideSessionCreateHonorsToolCancellationDuringStartup(t *testing.T) {
+	workDir := t.TempDir()
+	stateDir := filepath.Join(workDir, ".juex")
+	childProvider := &scriptedSideProvider{}
+	factoryDone := make(chan struct{})
+	parent, err := New(Options{
+		Config: config.Config{
+			ProviderID:    "openai",
+			APIKey:        "test",
+			Model:         "primary",
+			WorkDir:       workDir,
+			AgentStateDir: stateDir,
+		},
+		Provider:   &scriptedSideProvider{},
+		WorkDir:    workDir,
+		DisableMCP: true,
+		sideSessionFactory: func(opts sideSessionChildOptions) (*App, error) {
+			defer close(factoryDone)
+			cfg := opts.Config
+			cfg.Hooks = hooks.Config{Commands: []hooks.CommandHook{{
+				Name:    "wait-for-cancellation",
+				Events:  []hooks.EventName{hooks.EventSessionStart},
+				Command: appHookCommand("wait"),
+			}}}
+			return New(Options{
+				Config:                  cfg,
+				Provider:                childProvider,
+				WorkDir:                 cfg.WorkDir,
+				DisableMCP:              true,
+				SessionMode:             SessionModeNewSide,
+				disableSideSessionTools: true,
+				sharedGoalState:         opts.GoalState,
+				sharedNotes:             opts.Notes,
+				startupContext:          opts.Context,
+			})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := parent.CloseAndWait(); err != nil {
+			t.Errorf("close parent app: %v", err)
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err = parent.Engine.Tools.Call(ctx, SideSessionToolCreate, map[string]any{
+		"query": "must not outlive create timeout",
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("create error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("create returned after %s, want prompt context cancellation", elapsed)
+	}
+	select {
+	case <-factoryDone:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled child factory did not finish")
+	}
+	parent.sideSessions.mu.Lock()
+	active := len(parent.sideSessions.sessions)
+	parent.sideSessions.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active side sessions after cancelled create = %d, want 0", active)
+	}
+	childProvider.mu.Lock()
+	calls := childProvider.calls
+	childProvider.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("child provider calls after cancelled create = %d, want 0", calls)
+	}
+}
+
 func TestSwitchToNewPrimaryStopsChildrenAndKeepsManagerUsable(t *testing.T) {
 	first := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
 	second := &scriptedSideProvider{}
@@ -896,7 +975,7 @@ func TestSwitchToNewPrimaryWaitsForConcurrentSideCreationAndThenStopsIt(t *testi
 	}
 	created := make(chan createResult, 1)
 	go func() {
-		status, err := parent.sideSessions.Create("concurrent child", "", false)
+		status, err := parent.sideSessions.Create(context.Background(), "concurrent child", "", false)
 		created <- createResult{status: status, err: err}
 	}()
 	<-factoryEntered
