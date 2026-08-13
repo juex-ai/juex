@@ -23,6 +23,17 @@ export class AgentViewModelStore {
 
   seedAgents(agents: readonly AgentStatus[]): void {
     let changed = false;
+    const rosterIDs = new Set(agents.map((agent) => agent.id));
+    for (const agentID of this.activities.keys()) {
+      if (!rosterIDs.has(agentID)) {
+        changed = this.activities.delete(agentID) || changed;
+      }
+    }
+    for (const agentID of this.sessionStatuses.keys()) {
+      if (!rosterIDs.has(agentID)) {
+        changed = this.sessionStatuses.delete(agentID) || changed;
+      }
+    }
     for (const agent of agents) {
       if (agent.runtime_health !== "healthy") {
         changed = this.activities.delete(agent.id) || changed;

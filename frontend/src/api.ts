@@ -30,7 +30,8 @@ import type {
   DirectoryListing,
   RemovedAgent,
   AgentRuntimeStatusSnapshot,
-  FleetAgentStatusEvent,
+  FleetEvent,
+  AgentResourceEvent,
   FleetStatus,
 } from "./types";
 import { agentBasePath } from "./lib/fleet-routes.ts";
@@ -358,14 +359,40 @@ export async function getFleetStatus(): Promise<FleetStatus> {
 }
 
 export function subscribeFleetEvents(opts: {
-  onEvent: (event: FleetAgentStatusEvent) => void;
+  onEvent: (event: FleetEvent) => void;
   onError?: (err: Event) => void;
 }): () => void {
   const es = new EventSource("/api/fleet/events");
   es.addEventListener("message", (event) => {
     try {
-      const parsed = JSON.parse((event as MessageEvent).data) as FleetAgentStatusEvent;
-      if (parsed.type === "agent.status") opts.onEvent(parsed);
+      const parsed = JSON.parse((event as MessageEvent).data) as FleetEvent;
+      if (
+        parsed.type === "agent.status" ||
+        parsed.type === "agent.process" ||
+        parsed.type === "fleet.roster" ||
+        parsed.type === "fleet.status"
+      ) {
+        opts.onEvent(parsed);
+      }
+    } catch {
+      /* ignore malformed frames */
+    }
+  });
+  if (opts.onError) es.addEventListener("error", opts.onError);
+  return () => es.close();
+}
+
+export function subscribeAgentResourceEvents(opts: {
+  onEvent: (event: AgentResourceEvent) => void;
+  onError?: (err: Event) => void;
+}): () => void {
+  const es = new EventSource(agentAPIPath("/api/resource-events"));
+  es.addEventListener("message", (event) => {
+    try {
+      const parsed = JSON.parse((event as MessageEvent).data) as AgentResourceEvent;
+      if (parsed.type === "resource.changed" && Array.isArray(parsed.resources)) {
+        opts.onEvent(parsed);
+      }
     } catch {
       /* ignore malformed frames */
     }

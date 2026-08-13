@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/processmetrics"
 )
 
 const (
@@ -28,12 +31,14 @@ type upstreamAgentStatusEvent struct {
 	Activity *agentActivity `json:"activity"`
 }
 
-type fleetAgentStatusEvent struct {
-	Type     string         `json:"type"`
-	AgentID  string         `json:"agent_id"`
-	Activity *agentActivity `json:"activity"`
-	Cursor   string         `json:"-"`
-	Sequence uint64         `json:"-"`
+type fleetStatusEvent struct {
+	Type     string                `json:"type"`
+	AgentID  string                `json:"agent_id,omitempty"`
+	Activity *agentActivity        `json:"activity,omitempty"`
+	Agents   *[]fleet.AgentStatus  `json:"agents,omitempty"`
+	Process  *processmetrics.Usage `json:"process,omitempty"`
+	Cursor   string                `json:"-"`
+	Sequence uint64                `json:"-"`
 }
 
 type fleetStatusSubscription struct {
@@ -42,12 +47,14 @@ type fleetStatusSubscription struct {
 }
 
 type fleetStatusHub struct {
-	manager backend
-	clients *activityClientPool
+	manager        backend
+	clients        *activityClientPool
+	processMetrics processmetrics.Provider
+	processPID     int
 
 	mu          sync.Mutex
-	current     map[string]fleetAgentStatusEvent
-	history     []fleetAgentStatusEvent
+	current     map[string]fleetStatusEvent
+	history     []fleetStatusEvent
 	subscribers map[uint64]*fleetStatusSubscriber
 	nextID      uint64
 	streamID    string
@@ -55,31 +62,35 @@ type fleetStatusHub struct {
 	sequence    uint64
 	running     bool
 	runCancel   context.CancelFunc
+	runReady    chan struct{}
+	reconcile   chan struct{}
+	roster      []fleet.AgentStatus
+	rosterReady bool
 }
 
 type fleetStatusHubSubscription struct {
-	initial []fleetAgentStatusEvent
+	initial []fleetStatusEvent
 	updates <-chan struct{}
-	take    func() []fleetAgentStatusEvent
+	take    func() []fleetStatusEvent
 	cancel  func()
 }
 
 type fleetStatusSubscriber struct {
 	mu      sync.Mutex
-	pending map[string]fleetAgentStatusEvent
+	pending map[string]fleetStatusEvent
 	notify  chan struct{}
 }
 
 func newFleetStatusSubscriber() *fleetStatusSubscriber {
 	return &fleetStatusSubscriber{
-		pending: map[string]fleetAgentStatusEvent{},
+		pending: map[string]fleetStatusEvent{},
 		notify:  make(chan struct{}, 1),
 	}
 }
 
-func (s *fleetStatusSubscriber) publish(event fleetAgentStatusEvent) {
+func (s *fleetStatusSubscriber) publish(event fleetStatusEvent) {
 	s.mu.Lock()
-	s.pending[event.AgentID] = event
+	s.pending[fleetStatusEventKey(event)] = event
 	s.mu.Unlock()
 	select {
 	case s.notify <- struct{}{}:
@@ -87,77 +98,105 @@ func (s *fleetStatusSubscriber) publish(event fleetAgentStatusEvent) {
 	}
 }
 
-func (s *fleetStatusSubscriber) take() []fleetAgentStatusEvent {
+func (s *fleetStatusSubscriber) take() []fleetStatusEvent {
 	s.mu.Lock()
-	events := make([]fleetAgentStatusEvent, 0, len(s.pending))
+	events := make([]fleetStatusEvent, 0, len(s.pending))
 	for _, event := range s.pending {
 		events = append(events, event)
 	}
-	s.pending = map[string]fleetAgentStatusEvent{}
+	s.pending = map[string]fleetStatusEvent{}
 	s.mu.Unlock()
 	sortFleetStatusEvents(events)
 	return events
 }
 
-func newFleetStatusHub(manager backend, clients *activityClientPool) *fleetStatusHub {
+func newFleetStatusHub(
+	manager backend,
+	clients *activityClientPool,
+	processMetrics ...processmetrics.Provider,
+) *fleetStatusHub {
+	var metrics processmetrics.Provider
+	if len(processMetrics) > 0 {
+		metrics = processMetrics[0]
+	}
 	return &fleetStatusHub{
-		manager:     manager,
-		clients:     clients,
-		current:     map[string]fleetAgentStatusEvent{},
-		subscribers: map[uint64]*fleetStatusSubscriber{},
-		streamID:    newFleetStatusStreamID(),
+		manager:        manager,
+		clients:        clients,
+		processMetrics: metrics,
+		processPID:     os.Getpid(),
+		current:        map[string]fleetStatusEvent{},
+		subscribers:    map[uint64]*fleetStatusSubscriber{},
+		streamID:       newFleetStatusStreamID(),
+		reconcile:      make(chan struct{}, 1),
 	}
 }
 
 func (h *fleetStatusHub) subscribe(since string) fleetStatusHubSubscription {
-	h.mu.Lock()
-	if !h.running {
-		ctx, cancel := context.WithCancel(context.Background())
-		h.generation++
-		generation := h.generation
-		h.sequence = 0
-		h.current = map[string]fleetAgentStatusEvent{}
-		h.running = true
-		h.runCancel = cancel
-		go h.run(ctx, generation)
-	}
-	h.nextID++
-	id := h.nextID
-	subscriber := newFleetStatusSubscriber()
-	h.subscribers[id] = subscriber
-	initial, found := eventsAfterFleetCursor(h.history, since)
-	if since == "" || !found {
-		initial = make([]fleetAgentStatusEvent, 0, len(h.current))
-		for _, event := range h.current {
-			initial = append(initial, event)
+	for {
+		h.mu.Lock()
+		if !h.running {
+			ctx, cancel := context.WithCancel(context.Background())
+			h.generation++
+			generation := h.generation
+			h.sequence = 0
+			h.current = map[string]fleetStatusEvent{}
+			h.roster = nil
+			h.rosterReady = false
+			h.running = true
+			h.runCancel = cancel
+			h.runReady = make(chan struct{})
+			go h.run(ctx, generation, h.runReady)
 		}
-		sortFleetStatusEvents(initial)
-	}
-	h.mu.Unlock()
+		ready := h.runReady
+		h.mu.Unlock()
+		<-ready
 
-	return fleetStatusHubSubscription{
-		initial: initial,
-		updates: subscriber.notify,
-		take:    subscriber.take,
-		cancel: func() {
-			var cancel context.CancelFunc
-			h.mu.Lock()
-			delete(h.subscribers, id)
-			if len(h.subscribers) == 0 && h.running {
-				cancel = h.runCancel
-				h.runCancel = nil
-				h.running = false
-				h.current = map[string]fleetAgentStatusEvent{}
-			}
+		h.mu.Lock()
+		if !h.running || h.runReady != ready {
 			h.mu.Unlock()
-			if cancel != nil {
-				cancel()
+			continue
+		}
+		h.nextID++
+		id := h.nextID
+		subscriber := newFleetStatusSubscriber()
+		h.subscribers[id] = subscriber
+		initial, found := eventsAfterFleetCursor(h.history, since)
+		if since == "" || !found {
+			initial = make([]fleetStatusEvent, 0, len(h.current))
+			for _, event := range h.current {
+				initial = append(initial, event)
 			}
-		},
+			sortFleetStatusEvents(initial)
+		}
+		h.mu.Unlock()
+
+		return fleetStatusHubSubscription{
+			initial: initial,
+			updates: subscriber.notify,
+			take:    subscriber.take,
+			cancel: func() {
+				var cancel context.CancelFunc
+				h.mu.Lock()
+				delete(h.subscribers, id)
+				if len(h.subscribers) == 0 && h.running {
+					cancel = h.runCancel
+					h.runCancel = nil
+					h.runReady = nil
+					h.running = false
+					h.current = map[string]fleetStatusEvent{}
+					h.roster = nil
+					h.rosterReady = false
+				}
+				h.mu.Unlock()
+				if cancel != nil {
+					cancel()
+				}
+			},
+		}
 	}
 }
 
-func (h *fleetStatusHub) publish(generation uint64, event fleetAgentStatusEvent) {
+func (h *fleetStatusHub) publish(generation uint64, event fleetStatusEvent) {
 	h.mu.Lock()
 	if !h.running || h.generation != generation {
 		h.mu.Unlock()
@@ -166,10 +205,10 @@ func (h *fleetStatusHub) publish(generation uint64, event fleetAgentStatusEvent)
 	h.sequence++
 	event.Cursor = fmt.Sprintf("%s:%d:%d", h.streamID, generation, h.sequence)
 	event.Sequence = h.sequence
-	h.current[event.AgentID] = event
+	h.current[fleetStatusEventKey(event)] = event
 	h.history = append(h.history, event)
 	if len(h.history) > fleetStatusHistoryLimit {
-		h.history = append([]fleetAgentStatusEvent(nil), h.history[len(h.history)-fleetStatusHistoryLimit:]...)
+		h.history = append([]fleetStatusEvent(nil), h.history[len(h.history)-fleetStatusHistoryLimit:]...)
 	}
 	subscribers := make([]*fleetStatusSubscriber, 0, len(h.subscribers))
 	for _, subscriber := range h.subscribers {
@@ -182,7 +221,7 @@ func (h *fleetStatusHub) publish(generation uint64, event fleetAgentStatusEvent)
 	}
 }
 
-func sortFleetStatusEvents(events []fleetAgentStatusEvent) {
+func sortFleetStatusEvents(events []fleetStatusEvent) {
 	sort.Slice(events, func(i, j int) bool {
 		if events[i].Sequence != events[j].Sequence {
 			return events[i].Sequence < events[j].Sequence
@@ -199,13 +238,13 @@ func newFleetStatusStreamID() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 36)
 }
 
-func eventsAfterFleetCursor(history []fleetAgentStatusEvent, since string) ([]fleetAgentStatusEvent, bool) {
+func eventsAfterFleetCursor(history []fleetStatusEvent, since string) ([]fleetStatusEvent, bool) {
 	if since == "" {
 		return nil, false
 	}
 	for i := len(history) - 1; i >= 0; i-- {
 		if history[i].Cursor == since {
-			return append([]fleetAgentStatusEvent(nil), history[i+1:]...), true
+			return append([]fleetStatusEvent(nil), history[i+1:]...), true
 		}
 	}
 	return nil, false
@@ -217,12 +256,97 @@ func (h *fleetStatusHub) removeCurrent(generation uint64, agentID string) {
 		h.mu.Unlock()
 		return
 	}
-	delete(h.current, agentID)
+	delete(h.current, "agent.status:"+agentID)
+	delete(h.current, "agent.process:"+agentID)
 	h.mu.Unlock()
 }
 
-func (h *fleetStatusHub) run(ctx context.Context, generation uint64) {
-	updates := make(chan fleetAgentStatusEvent, 32)
+func fleetStatusEventKey(event fleetStatusEvent) string {
+	if event.Type == "fleet.roster" || event.Type == "fleet.status" {
+		return event.Type
+	}
+	return event.Type + ":" + event.AgentID
+}
+
+func (h *fleetStatusHub) publishProcess(generation uint64, ctx context.Context) {
+	if h.processMetrics == nil {
+		return
+	}
+	usage, err := h.processMetrics.Sample(ctx, "fleet", h.processPID)
+	if err != nil {
+		return
+	}
+	h.publish(generation, fleetStatusEvent{Type: "fleet.status", Process: &usage})
+}
+
+func (h *fleetStatusHub) publishAgentProcesses(generation uint64, statuses []fleet.AgentStatus) {
+	for _, status := range statuses {
+		if status.Process == nil {
+			continue
+		}
+		process := *status.Process
+		h.publish(generation, fleetStatusEvent{
+			Type:    "agent.process",
+			AgentID: status.ID,
+			Process: &process,
+		})
+	}
+}
+
+func (h *fleetStatusHub) requestReconcile() {
+	if h == nil {
+		return
+	}
+	select {
+	case h.reconcile <- struct{}{}:
+	default:
+	}
+}
+
+func (h *fleetStatusHub) publishRoster(generation uint64, statuses []fleet.AgentStatus) {
+	next := cloneFleetStatuses(statuses)
+	sort.Slice(next, func(i, j int) bool { return next[i].ID < next[j].ID })
+	h.mu.Lock()
+	if !h.running || h.generation != generation {
+		h.mu.Unlock()
+		return
+	}
+	if h.rosterReady && equalFleetRoster(h.roster, next) {
+		h.mu.Unlock()
+		return
+	}
+	h.roster = cloneFleetStatuses(next)
+	h.rosterReady = true
+	h.mu.Unlock()
+	h.publish(generation, fleetStatusEvent{Type: "fleet.roster", Agents: &next})
+}
+
+func cloneFleetStatuses(statuses []fleet.AgentStatus) []fleet.AgentStatus {
+	cloned := make([]fleet.AgentStatus, len(statuses))
+	copy(cloned, statuses)
+	for index := range cloned {
+		if cloned[index].Process != nil {
+			process := *cloned[index].Process
+			cloned[index].Process = &process
+		}
+	}
+	return cloned
+}
+
+func equalFleetRoster(left, right []fleet.AgentStatus) bool {
+	left = cloneFleetStatuses(left)
+	right = cloneFleetStatuses(right)
+	for index := range left {
+		left[index].Process = nil
+	}
+	for index := range right {
+		right[index].Process = nil
+	}
+	return reflect.DeepEqual(left, right)
+}
+
+func (h *fleetStatusHub) run(ctx context.Context, generation uint64, ready chan<- struct{}) {
+	updates := make(chan fleetStatusEvent, 32)
 	subscriptions := map[string]fleetStatusSubscription{}
 	defer func() {
 		for _, subscription := range subscriptions {
@@ -231,10 +355,13 @@ func (h *fleetStatusHub) run(ctx context.Context, generation uint64) {
 	}()
 
 	reconcile := func() {
+		h.publishProcess(generation, ctx)
 		statuses, err := h.manager.Status(ctx)
 		if err != nil {
 			return
 		}
+		h.publishRoster(generation, statuses)
+		h.publishAgentProcesses(generation, statuses)
 		active := make(map[string]fleet.AgentStatus)
 		for _, status := range statuses {
 			if status.RuntimeHealth == fleet.RuntimeHealthy && status.Endpoint != "" {
@@ -261,12 +388,15 @@ func (h *fleetStatusHub) run(ctx context.Context, generation uint64) {
 	}
 
 	reconcile()
+	close(ready)
 	ticker := time.NewTicker(fleetReconcileInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case event := <-updates:
 			h.publish(generation, event)
+		case <-h.reconcile:
+			reconcile()
 		case <-ticker.C:
 			reconcile()
 		case <-ctx.Done():
@@ -300,7 +430,11 @@ func (s *Server) handleFleetEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-subscription.updates:
-			for _, event := range subscription.take() {
+			events := subscription.take()
+			if len(events) == 0 {
+				continue
+			}
+			for _, event := range events {
 				if err := writeFleetStatusSSE(w, event); err != nil {
 					return
 				}
@@ -324,12 +458,12 @@ func fleetResumeCursor(r *http.Request) string {
 func (h *fleetStatusHub) followAgentStatus(
 	ctx context.Context,
 	status fleet.AgentStatus,
-	updates chan<- fleetAgentStatusEvent,
+	updates chan<- fleetStatusEvent,
 ) {
 	for ctx.Err() == nil {
 		_ = h.clients.streamStatus(ctx, status, func(activity *agentActivity) {
 			select {
-			case updates <- fleetAgentStatusEvent{
+			case updates <- fleetStatusEvent{
 				Type:     "agent.status",
 				AgentID:  status.ID,
 				Activity: activity,
@@ -381,7 +515,7 @@ func scanAgentStatusSSE(r io.Reader, onActivity func(*agentActivity)) error {
 	return nil
 }
 
-func writeFleetStatusSSE(w http.ResponseWriter, event fleetAgentStatusEvent) error {
+func writeFleetStatusSSE(w http.ResponseWriter, event fleetStatusEvent) error {
 	body, err := json.Marshal(event)
 	if err != nil {
 		return err

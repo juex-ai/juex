@@ -94,7 +94,7 @@ func newServer(manager backend, opts Options) *Server {
 		activityClients: activityClients,
 		processMetrics:  processMetricProvider,
 	}
-	server.fleetStatus = newFleetStatusHub(manager, activityClients)
+	server.fleetStatus = newFleetStatusHub(manager, activityClients, processMetricProvider)
 	return server
 }
 
@@ -238,6 +238,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		if result.Created {
 			status = http.StatusCreated
 		}
+		s.fleetStatus.requestReconcile()
 		writeJSON(w, status, result)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or POST required")
@@ -274,6 +275,7 @@ func (s *Server) dispatchAgentAPI(w http.ResponseWriter, r *http.Request) {
 			writeFleetError(w, err)
 			return
 		}
+		s.fleetStatus.requestReconcile()
 		writeJSON(w, http.StatusOK, payload)
 	case "enable", "disable":
 		if r.Method != http.MethodPost {
@@ -285,6 +287,7 @@ func (s *Server) dispatchAgentAPI(w http.ResponseWriter, r *http.Request) {
 			writeFleetError(w, err)
 			return
 		}
+		s.fleetStatus.requestReconcile()
 		writeJSON(w, http.StatusOK, status)
 	case "logs":
 		s.handleLogs(w, r, selector)
@@ -323,6 +326,7 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request, selector s
 		writeFleetError(w, err)
 		return
 	}
+	s.fleetStatus.requestReconcile()
 	writeJSON(w, http.StatusOK, removed)
 }
 
@@ -358,6 +362,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request, selector s
 			writeFleetError(w, err)
 			return
 		}
+		s.fleetStatus.requestReconcile()
 		configState, err = fleet.RedactAgentConfig(configState)
 		if err != nil {
 			writeFleetError(w, err)

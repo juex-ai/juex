@@ -53,7 +53,7 @@ into `internal/web/dist/` for Go embedding.
 
 | Path | Purpose |
 | --- | --- |
-| `src/api.ts` | typed fleet and selected-agent fetch helpers, including lifecycle/config/log operations, lightweight active-session lookup, Schedule manual Run, session message pagination, composer image upload, workspace/media preview URLs, and SSE subscription |
+| `src/api.ts` | typed fleet and selected-agent fetch helpers, including lifecycle/config/log operations, lightweight active-session lookup, Schedule manual Run, session message pagination, composer image upload, workspace/media preview URLs, and transcript/Fleet/resource SSE subscriptions |
 | `src/types.ts` | TypeScript mirror of fleet, agent, session, and message API shapes, including the tagged Command Observable/Schedule create union, transcript paging and replay-cursor metadata, and the browser event contract from `internal/web` |
 | `src/lib/agent-config.ts` | pure config-save reconciliation for distinguishing persisted updates from restart failures |
 | `src/lib/fleet-directories.ts` | pure Add agent directory validation, stale-request isolation, listing merge, keyboard, and path-tail behavior |
@@ -95,9 +95,10 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/session-access.ts` | pure rules for writable versus read-only session views based on kind and active state |
 | `src/lib/utils.ts` | shared Tailwind class-merging helper used by UI primitives |
 | `src/lib/workspace-refresh.ts` | pure helper for refreshing workspace tree and open file preview data |
+| `src/lib/fleet-roster.ts` | pure Fleet roster reconciliation that retains current activity only for still-healthy Agents |
 | `src/pages/` | route-level views |
 | `src/components/` | app components |
-| `src/components/FileTreePanel.tsx` | collapsible workdir tree and file preview sheet |
+| `src/components/FileTreePanel.tsx` | collapsible workdir tree and file preview sheet refreshed by Agent resource notifications or explicit user action |
 | `src/components/fleet/` | persistent agent rail, tabbed stage header, runtime state bar, and selected-agent context |
 | `src/components/session/SessionComposer.tsx` | session composer, attachment workflow, queued-input/read-only presentation, and overlay measurement |
 | `src/components/session/SessionStatusPanel.tsx` | context, goal, notes, and runtime-state controls shown in the composer |

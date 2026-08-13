@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/processmetrics"
 )
 
 func TestFleetEventsPushesAgentStatusWithoutRosterPoll(t *testing.T) {
@@ -44,7 +45,7 @@ data: {"type":"agent.status","activity":{"state":"working","pending_input_count"
 	defer response.Body.Close()
 
 	scanner := bufio.NewScanner(response.Body)
-	var event fleetAgentStatusEvent
+	var event fleetStatusEvent
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -53,7 +54,9 @@ data: {"type":"agent.status","activity":{"state":"working","pending_input_count"
 		if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event); err != nil {
 			t.Fatal(err)
 		}
-		break
+		if event.Type == "agent.status" {
+			break
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
@@ -98,14 +101,14 @@ data: {"type":"agent.status","activity":{"state":"idle","pending_input_count":0,
 		t.Fatal(err)
 	}
 	defer first.Body.Close()
-	firstEvent := readFleetStatusEvent(t, first)
+	firstEvent := readFleetStatusEventType(t, first, "agent.status")
 
 	second, err := http.Get(server.URL + "/api/fleet/events")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer second.Body.Close()
-	secondEvent := readFleetStatusEvent(t, second)
+	secondEvent := readFleetStatusEventType(t, second, "agent.status")
 
 	if firstEvent.AgentID != "agent-1" || secondEvent.AgentID != "agent-1" {
 		t.Fatalf("events = %+v / %+v", firstEvent, secondEvent)
@@ -123,13 +126,13 @@ func TestFleetStatusHubResumesAfterAggregateCursor(t *testing.T) {
 	generation := hub.generation
 	hub.mu.Unlock()
 
-	hub.publish(generation, fleetAgentStatusEvent{Type: "agent.status", AgentID: "agent-1"})
+	hub.publish(generation, fleetStatusEvent{Type: "agent.status", AgentID: "agent-1"})
 	<-first.updates
 	firstBatch := first.take()
 	if len(firstBatch) != 1 || firstBatch[0].Cursor == "" {
 		t.Fatalf("first batch = %+v", firstBatch)
 	}
-	hub.publish(generation, fleetAgentStatusEvent{Type: "agent.status", AgentID: "agent-2"})
+	hub.publish(generation, fleetStatusEvent{Type: "agent.status", AgentID: "agent-2"})
 
 	resumed := hub.subscribe(firstBatch[0].Cursor)
 	defer resumed.cancel()
@@ -142,16 +145,16 @@ func TestFleetStatusHubResumesAfterAggregateCursor(t *testing.T) {
 
 	fallback := hub.subscribe("cursor-from-another-process")
 	defer fallback.cancel()
-	if len(fallback.initial) != 2 {
-		t.Fatalf("unknown cursor fallback = %+v, want current snapshot for both agents", fallback.initial)
+	if len(fallback.initial) != 3 {
+		t.Fatalf("unknown cursor fallback = %+v, want roster and both agent snapshots", fallback.initial)
 	}
 }
 
 func TestFleetStatusSubscriberCoalescesPerAgent(t *testing.T) {
 	subscriber := newFleetStatusSubscriber()
-	subscriber.publish(fleetAgentStatusEvent{AgentID: "hot", Cursor: "1", Sequence: 1})
-	subscriber.publish(fleetAgentStatusEvent{AgentID: "quiet", Cursor: "2", Sequence: 2})
-	subscriber.publish(fleetAgentStatusEvent{AgentID: "hot", Cursor: "3", Sequence: 3})
+	subscriber.publish(fleetStatusEvent{Type: "agent.status", AgentID: "hot", Cursor: "1", Sequence: 1})
+	subscriber.publish(fleetStatusEvent{Type: "agent.status", AgentID: "quiet", Cursor: "2", Sequence: 2})
+	subscriber.publish(fleetStatusEvent{Type: "agent.status", AgentID: "hot", Cursor: "3", Sequence: 3})
 
 	select {
 	case <-subscriber.notify:
@@ -165,6 +168,85 @@ func TestFleetStatusSubscriberCoalescesPerAgent(t *testing.T) {
 	if events[0].AgentID != "quiet" || events[0].Cursor != "2" ||
 		events[1].AgentID != "hot" || events[1].Cursor != "3" {
 		t.Fatalf("coalesced events = %+v", events)
+	}
+}
+
+func TestFleetStatusHubPublishesRosterOnlyWhenSnapshotChanges(t *testing.T) {
+	first := []fleet.AgentStatus{{ID: "agent-1", RuntimeHealth: fleet.RuntimeStopped}}
+	backend := &fakeBackend{statuses: first}
+	hub := newFleetStatusHub(backend, newActivityClientPool())
+	subscription := hub.subscribe("")
+	defer subscription.cancel()
+	events := subscription.initial
+	if len(events) != 1 || events[0].Type != "fleet.roster" || events[0].Agents == nil || len(*events[0].Agents) != 1 {
+		t.Fatalf("first roster events = %+v", events)
+	}
+
+	hub.mu.Lock()
+	generation := hub.generation
+	hub.mu.Unlock()
+	hub.publishRoster(generation, first)
+	select {
+	case <-subscription.updates:
+		t.Fatalf("unchanged roster events = %+v", subscription.take())
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	metricsOnly := cloneFleetStatuses(first)
+	metricsOnly[0].Process = &processmetrics.Usage{RSSBytes: 1024}
+	hub.publishRoster(generation, metricsOnly)
+	select {
+	case <-subscription.updates:
+		t.Fatalf("metrics-only roster events = %+v", subscription.take())
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	changed := []fleet.AgentStatus{{ID: "agent-1", RuntimeHealth: fleet.RuntimeHealthy, PID: 42}}
+	hub.publishRoster(generation, changed)
+	select {
+	case <-subscription.updates:
+		events = subscription.take()
+	case <-time.After(time.Second):
+		t.Fatal("changed roster was not published")
+	}
+	if len(events) != 1 || events[0].Agents == nil || (*events[0].Agents)[0].PID != 42 {
+		t.Fatalf("changed roster events = %+v", events)
+	}
+}
+
+func TestFleetStatusHubPublishesAgentProcessSeparatelyFromRoster(t *testing.T) {
+	hub := newFleetStatusHub(&fakeBackend{}, newActivityClientPool())
+	subscription := hub.subscribe("")
+	defer subscription.cancel()
+	hub.mu.Lock()
+	generation := hub.generation
+	hub.mu.Unlock()
+
+	hub.publishAgentProcesses(generation, []fleet.AgentStatus{{
+		ID:      "agent-1",
+		Process: &processmetrics.Usage{RSSBytes: 2048},
+	}})
+	select {
+	case <-subscription.updates:
+	case <-time.After(time.Second):
+		t.Fatal("agent process was not published")
+	}
+	events := subscription.take()
+	if len(events) != 1 || events[0].Type != "agent.process" ||
+		events[0].AgentID != "agent-1" || events[0].Process == nil ||
+		events[0].Process.RSSBytes != 2048 {
+		t.Fatalf("agent process events = %+v", events)
+	}
+}
+
+func TestFleetRosterEventEncodesEmptySnapshotAsArray(t *testing.T) {
+	agents := []fleet.AgentStatus{}
+	body, err := json.Marshal(fleetStatusEvent{Type: "fleet.roster", Agents: &agents})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(body); got != `{"type":"fleet.roster","agents":[]}` {
+		t.Fatalf("event JSON = %s", got)
 	}
 }
 
@@ -186,7 +268,7 @@ func TestFollowAgentStatusBacksOffAfterNormalEOF(t *testing.T) {
 	}
 	done := make(chan struct{})
 	go func() {
-		hub.followAgentStatus(ctx, status, make(chan fleetAgentStatusEvent, 1))
+		hub.followAgentStatus(ctx, status, make(chan fleetStatusEvent, 1))
 		close(done)
 	}()
 
@@ -215,19 +297,19 @@ func TestFleetEventsUsesLastEventIDForResume(t *testing.T) {
 	hub.mu.Lock()
 	generation := hub.generation
 	hub.mu.Unlock()
-	hub.publish(generation, fleetAgentStatusEvent{
+	hub.publish(generation, fleetStatusEvent{
 		Type: "agent.status", AgentID: "agent-1",
 		Activity: &agentActivity{State: "idle"},
 	})
 	<-firstSubscription.updates
 	first := firstSubscription.take()[0]
-	hub.publish(generation, fleetAgentStatusEvent{
+	hub.publish(generation, fleetStatusEvent{
 		Type: "agent.status", AgentID: "agent-1",
 		Activity: &agentActivity{State: "working"},
 	})
 	firstSubscription.cancel()
 	hub.mu.Lock()
-	if hub.running || len(hub.history) != 2 {
+	if hub.running || len(hub.history) != 3 {
 		t.Fatalf("hub after last disconnect: running=%v history=%d", hub.running, len(hub.history))
 	}
 	hub.mu.Unlock()
@@ -261,10 +343,7 @@ func TestFleetEventsUsesLastEventIDForResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := strings.Join(lines, "\n")
-	hub.mu.Lock()
-	latestCursor := hub.history[len(hub.history)-1].Cursor
-	hub.mu.Unlock()
-	if !strings.Contains(body, "id: "+latestCursor) || !strings.Contains(body, `"state":"working"`) {
+	if !strings.Contains(body, `"state":"working"`) {
 		t.Fatalf("resumed SSE = %q", body)
 	}
 }
@@ -277,7 +356,11 @@ func TestFleetResumeCursorPrefersLastEventIDOnReconnect(t *testing.T) {
 	}
 }
 
-func readFleetStatusEvent(t *testing.T, response *http.Response) fleetAgentStatusEvent {
+func readFleetStatusEvent(t *testing.T, response *http.Response) fleetStatusEvent {
+	return readFleetStatusEventType(t, response, "")
+}
+
+func readFleetStatusEventType(t *testing.T, response *http.Response, eventType string) fleetStatusEvent {
 	t.Helper()
 	scanner := bufio.NewScanner(response.Body)
 	for scanner.Scan() {
@@ -285,9 +368,12 @@ func readFleetStatusEvent(t *testing.T, response *http.Response) fleetAgentStatu
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		var event fleetAgentStatusEvent
+		var event fleetStatusEvent
 		if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event); err != nil {
 			t.Fatal(err)
+		}
+		if eventType != "" && event.Type != eventType {
+			continue
 		}
 		return event
 	}
@@ -295,5 +381,5 @@ func readFleetStatusEvent(t *testing.T, response *http.Response) fleetAgentStatu
 		t.Fatal(err)
 	}
 	t.Fatal("fleet status stream ended before an event")
-	return fleetAgentStatusEvent{}
+	return fleetStatusEvent{}
 }

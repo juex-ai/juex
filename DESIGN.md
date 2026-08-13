@@ -813,6 +813,15 @@ Scratchpad is selected and delegates file preview to the existing
 workspace-bounded endpoints. It is available only on a concrete session route;
 changing routes restores Workspace mode.
 
+Fleet and Agent operational read models use snapshot-plus-notification rather
+than browser polling. `/api/fleet/events` carries typed roster, Fleet process,
+and Agent activity snapshots. The selected Agent's `/api/resource-events`
+stream invalidates workspace, scratchpad, Observable, and process-lifetime
+runtime catalogs; pages then refetch their authoritative JSON snapshot.
+EventSource reconnection recalibrates these views from a current server frame.
+Commands remain ordinary HTTP requests because live invalidation is
+unidirectional and does not require a WebSocket command channel.
+
 `src/lib/session-read-controller.ts` owns the session-detail effect interpreter:
 route guards, snapshot/context refresh, EventSource dispatch, reconnect status
 calibration and snapshot application, stream cleanup, transient timers,

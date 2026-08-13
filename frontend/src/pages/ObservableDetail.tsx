@@ -11,6 +11,7 @@ import {
   stopObservable,
 } from "@/api";
 import { useShellTitle } from "@/components/AppShell";
+import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +32,7 @@ export function ObservableDetail() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const { resourceRevision } = useFleetAgent();
   useShellTitle(data?.observable.name || data?.observable.id || "Observable");
 
   const refresh = useCallback(async (
@@ -58,18 +60,11 @@ export function ObservableDetail() {
 
   useEffect(() => {
     let live = true;
-    let timer: number | undefined;
-    const load = async () => {
-      if (!live) return;
-      await refresh({ quiet: true });
-      if (live) timer = window.setTimeout(load, 3000);
-    };
-    void load();
+    if (live) void refresh({ quiet: true });
     return () => {
       live = false;
-      if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [refresh]);
+  }, [refresh, resourceRevision.observables]);
 
   async function runAction(action: "run" | "start" | "stop" | "delete") {
     if (!id) return;

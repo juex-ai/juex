@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -20,6 +21,7 @@ import {
   getSessionScratchpad,
   listAgents,
   runAgentAction,
+  subscribeAgentResourceEvents,
   subscribeFleetEvents,
 } from "@/api";
 import { FileTreePanel } from "@/components/FileTreePanel";
@@ -49,11 +51,18 @@ import {
 } from "@/lib/fleet-shell";
 import { AgentViewModelStore } from "@/lib/agent-view-model-store";
 import type { AgentStatus } from "@/types";
+import type { AgentResourceName } from "@/types";
 
 const WORKSPACE_DOCK_QUERY = "(min-width: 1280px)";
 const MOBILE_SIDEBAR_QUERY = "(max-width: 759px)";
 const LAST_AGENT_KEY = "juex:fleet:last-agent";
 const SIDEBAR_COLLAPSED_KEY = "juex:fleet:sidebar-collapsed";
+const INITIAL_RESOURCE_REVISION: Record<AgentResourceName, number> = {
+  workspace: 0,
+  scratchpad: 0,
+  observables: 0,
+  runtime: 0,
+};
 
 type FilePanelMode = "workspace" | "scratchpad";
 
@@ -113,6 +122,10 @@ export function AppShell() {
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [busyAgentID, setBusyAgentID] = useState<string | null>(null);
   const [fleetError, setFleetError] = useState<string | null>(null);
+  const [resourceRevision, setResourceRevision] = useState(
+    INITIAL_RESOURCE_REVISION,
+  );
+  const rosterRevision = useRef(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true",
   );
@@ -133,13 +146,16 @@ export function AppShell() {
     agentsLoaded && agentId !== "" && currentAgent === null;
 
   const refreshAgents = useCallback(async () => {
+    const requestedAt = rosterRevision.current;
     try {
       const next = await listAgents();
+      if (requestedAt !== rosterRevision.current) return;
       statusStore.seedAgents(next);
       setAgents(next);
       setFleetError(null);
       setAgentsLoaded(true);
     } catch (cause) {
+      if (requestedAt !== rosterRevision.current) return;
       setFleetError(
         cause instanceof Error ? cause.message : "Failed to load fleet agents.",
       );
@@ -147,29 +163,53 @@ export function AppShell() {
   }, [statusStore]);
 
   useEffect(() => {
-    let cancelled = false;
-    let timer: number | undefined;
-    const poll = async () => {
-      await refreshAgents();
-      if (!cancelled) {
-        timer = window.setTimeout(() => void poll(), 3_000);
-      }
-    };
-    void poll();
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
+    void refreshAgents();
   }, [refreshAgents]);
 
   useEffect(
     () =>
       subscribeFleetEvents({
-        onEvent: (event) => statusStore.applyFleetEvent(event),
+        onEvent: (event) => {
+          if (event.type === "agent.status") {
+            statusStore.applyFleetEvent(event);
+            return;
+          }
+          if (event.type === "fleet.status") return;
+          if (event.type === "agent.process") {
+            setAgents((current) =>
+              current.map((agent) =>
+                agent.id === event.agent_id
+                  ? { ...agent, process: event.process }
+                  : agent,
+              ),
+            );
+            return;
+          }
+          rosterRevision.current += 1;
+          statusStore.seedAgents(event.agents);
+          setAgents(event.agents);
+          setFleetError(null);
+          setAgentsLoaded(true);
+        },
         onError: (event) => console.error("fleet status stream failed", event),
       }),
     [statusStore],
   );
+
+  useEffect(() => {
+    setResourceRevision(INITIAL_RESOURCE_REVISION);
+    if (!agentId || currentAgent?.runtime_health !== "healthy") return;
+    return subscribeAgentResourceEvents({
+      onEvent: (event) => {
+        setResourceRevision((current) => {
+          const next = { ...current };
+          for (const resource of event.resources) next[resource] += 1;
+          return next;
+        });
+      },
+      onError: (event) => console.error("agent resource stream failed", event),
+    });
+  }, [agentId, currentAgent?.runtime_health]);
 
   useEffect(() => {
     if (!agentsLoaded || location.pathname !== "/" || agents.length === 0) {
@@ -267,6 +307,7 @@ export function AppShell() {
       agentsLoaded,
       statusStore,
       lifecycleBusy: busyAgentID === currentAgent?.id,
+      resourceRevision,
       startAgent: startCurrentAgent,
     }),
     [
@@ -274,6 +315,7 @@ export function AppShell() {
       agentsLoaded,
       busyAgentID,
       currentAgent,
+      resourceRevision,
       startCurrentAgent,
       statusStore,
     ],
@@ -314,6 +356,7 @@ export function AppShell() {
       ? "Refresh scratchpad"
       : "Refresh workspace",
     title: filePanelTitle,
+    refreshRevision: resourceRevision[scratchpadMode ? "scratchpad" : "workspace"],
   };
 
   const sidebar = (
