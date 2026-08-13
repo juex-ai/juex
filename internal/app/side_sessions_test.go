@@ -958,6 +958,61 @@ func TestSwitchToNewPrimaryStopsChildrenAndKeepsManagerUsable(t *testing.T) {
 	waitForSideState(t, parent, newID, SideSessionStateIdle)
 }
 
+func TestNewSlashHonorsCancellationWhileStoppingStubbornChild(t *testing.T) {
+	child := &stubbornSideProvider{started: make(chan struct{}, 1), release: make(chan struct{})}
+	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, child)
+	oldIdentity, ok := parent.SessionIdentity()
+	if !ok {
+		t.Fatal("missing primary identity")
+	}
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{
+		"query": "hold primary switch", "subscribe": false,
+	})
+	id := created["session_id"].(string)
+	select {
+	case <-child.started:
+	case <-time.After(time.Second):
+		t.Fatal("side child did not start")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, handled, err := parent.ExecuteSlashCommand(ctx, SlashNew)
+	if !handled {
+		t.Fatal("/new was not handled")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("/new error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("/new returned after %s, want prompt context cancellation", elapsed)
+	}
+	identity, ok := parent.SessionIdentity()
+	if !ok || identity.ID != oldIdentity.ID {
+		t.Fatalf("primary after cancelled /new = %+v, want %s", identity, oldIdentity.ID)
+	}
+	if _, err := parent.sideSessions.Status(id); !errors.Is(err, ErrSideSessionNotActive) {
+		t.Fatalf("old side status after cancelled /new = %v, want inactive", err)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- parent.CloseAndWait() }()
+	select {
+	case err := <-closed:
+		t.Fatalf("parent closed before deferred child cleanup: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(child.release)
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parent did not finish after deferred child cleanup")
+	}
+}
+
 func TestSwitchToNewPrimaryWaitsForConcurrentSideCreationAndThenStopsIt(t *testing.T) {
 	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, &scriptedSideProvider{})
 	originalFactory := parent.sideSessions.factory

@@ -661,6 +661,16 @@ func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
 }
 
 func (a *App) SwitchToNewPrimarySession() error {
+	return a.SwitchToNewPrimarySessionContext(context.Background())
+}
+
+func (a *App) SwitchToNewPrimarySessionContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	a.lifecycleMu.RLock()
 	defer a.lifecycleMu.RUnlock()
 	var oldInfo session.Info
@@ -690,7 +700,10 @@ func (a *App) SwitchToNewPrimarySession() error {
 		return nil
 	}
 	if a.sideSessions != nil {
-		return a.sideSessions.replacePrimary(replace)
+		return a.sideSessions.replacePrimary(ctx, replace)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return replace()
 }

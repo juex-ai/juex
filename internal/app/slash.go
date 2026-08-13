@@ -126,7 +126,7 @@ func (a *App) ExecuteParsedSlashCommand(ctx context.Context, cmd SlashCommand) (
 		status := a.StatusSnapshot()
 		return SlashCommandResult{Name: cmd.Name, Text: status.Text(), Status: &status}, nil
 	case SlashNew:
-		if err := a.SwitchToNewPrimarySession(); err != nil {
+		if err := a.SwitchToNewPrimarySessionContext(ctx); err != nil {
 			return SlashCommandResult{}, err
 		}
 		status := a.StatusSnapshot()

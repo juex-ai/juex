@@ -77,6 +77,7 @@ type managedSideSession struct {
 	app              *App
 	ctx              context.Context
 	deliveryCtx      context.Context
+	deliveryWait     *sync.WaitGroup
 	cancel           context.CancelCauseFunc
 	unsubscribeState func()
 	done             sync.WaitGroup
@@ -97,8 +98,9 @@ type sideSessionManager struct {
 	transitioning  bool
 	deliveryCtx    context.Context
 	deliveryCancel context.CancelFunc
+	deliveryWait   *sync.WaitGroup
+	deferred       sync.WaitGroup
 	turnSeq        atomic.Uint64
-	deliveries     sync.WaitGroup
 }
 
 func newSideSessionManager(parent *App) *sideSessionManager {
@@ -111,6 +113,7 @@ func newSideSessionManager(parent *App) *sideSessionManager {
 		baseCtx = parent.ctx
 	}
 	m.deliveryCtx, m.deliveryCancel = context.WithCancel(baseCtx)
+	m.deliveryWait = &sync.WaitGroup{}
 	if parent != nil && parent.sideFactory != nil {
 		m.factory = parent.sideFactory
 	} else {
@@ -201,12 +204,12 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 	case result := <-resultCh:
 		child, err = result.child, result.err
 	case <-ctx.Done():
-		go func() {
+		m.deferCleanup(func() {
 			result := <-resultCh
 			if result.child != nil {
 				_ = result.child.CloseAndWait()
 			}
-		}()
+		})
 		return SideSessionStatus{}, ctx.Err()
 	}
 	if err != nil {
@@ -224,10 +227,11 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 	now := time.Now().UTC()
 	ctx, cancel := context.WithCancelCause(child.ctx)
 	managed := &managedSideSession{
-		app:         child,
-		ctx:         ctx,
-		deliveryCtx: m.deliveryCtx,
-		cancel:      cancel,
+		app:          child,
+		ctx:          ctx,
+		deliveryCtx:  m.deliveryCtx,
+		deliveryWait: m.deliveryWait,
+		cancel:       cancel,
 		status: SideSessionStatus{
 			SessionID:  identity.ID,
 			Alias:      identity.Alias,
@@ -385,7 +389,7 @@ func (m *sideSessionManager) Stop(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	return stopManagedSideSessionContext(ctx, managed)
+	return stopManagedSideSessionContext(ctx, managed, &m.deferred)
 }
 
 func (m *sideSessionManager) StopAll() error {
@@ -394,41 +398,47 @@ func (m *sideSessionManager) StopAll() error {
 	}
 	m.transitionMu.Lock()
 	defer m.transitionMu.Unlock()
-	items, err := m.beginTransition(false)
+	items, deliveries, err := m.beginTransition(false)
 	if err != nil {
 		return err
 	}
 	defer m.finishTransition()
-	return m.drainTransition(items)
+	return m.drainTransitionContext(context.Background(), items, deliveries)
 }
 
-func (m *sideSessionManager) replacePrimary(replace func() error) error {
+func (m *sideSessionManager) replacePrimary(ctx context.Context, replace func() error) error {
 	if m == nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return replace()
 	}
 	m.transitionMu.Lock()
 	defer m.transitionMu.Unlock()
-	items, err := m.beginTransition(false)
+	items, deliveries, err := m.beginTransition(false)
 	if err != nil {
 		return err
 	}
 	defer m.finishTransition()
-	if err := m.drainTransition(items); err != nil {
+	if err := m.drainTransitionContext(ctx, items, deliveries); err != nil {
 		return fmt.Errorf("close managed side sessions: %w", err)
 	}
 	if err := m.parent.ctx.Err(); err != nil {
 		return ErrSideSessionManagerClosed
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return replace()
 }
 
-func (m *sideSessionManager) beginTransition(closing bool) ([]*managedSideSession, error) {
+func (m *sideSessionManager) beginTransition(closing bool) ([]*managedSideSession, *sync.WaitGroup, error) {
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
 	if m.closed && !closing {
 		m.mu.Unlock()
-		return nil, ErrSideSessionManagerClosed
+		return nil, nil, ErrSideSessionManagerClosed
 	}
 	if closing {
 		m.closed = true
@@ -437,6 +447,7 @@ func (m *sideSessionManager) beginTransition(closing bool) ([]*managedSideSessio
 	if m.deliveryCancel != nil {
 		m.deliveryCancel()
 	}
+	deliveries := m.deliveryWait
 	items := make([]*managedSideSession, 0, len(m.sessions))
 	for id, managed := range m.sessions {
 		managed.status.State = SideSessionStateStopping
@@ -445,15 +456,28 @@ func (m *sideSessionManager) beginTransition(closing bool) ([]*managedSideSessio
 		delete(m.sessions, id)
 	}
 	m.mu.Unlock()
-	return items, nil
+	return items, deliveries, nil
 }
 
-func (m *sideSessionManager) drainTransition(items []*managedSideSession) error {
+func (m *sideSessionManager) drainTransitionContext(ctx context.Context, items []*managedSideSession, deliveries *sync.WaitGroup) error {
 	var result error
 	for _, managed := range items {
-		result = errors.Join(result, stopManagedSideSession(managed))
+		result = errors.Join(result, stopManagedSideSessionContext(ctx, managed, &m.deferred))
 	}
-	m.deliveries.Wait()
+	if deliveries == nil {
+		return result
+	}
+	done := make(chan struct{})
+	go func() {
+		deliveries.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		m.deferCleanup(func() { <-done })
+		result = errors.Join(result, ctx.Err())
+	}
 	return result
 }
 
@@ -467,6 +491,7 @@ func (m *sideSessionManager) finishTransition() {
 			baseCtx = m.parent.ctx
 		}
 		m.deliveryCtx, m.deliveryCancel = context.WithCancel(baseCtx)
+		m.deliveryWait = &sync.WaitGroup{}
 	}
 	m.transitioning = false
 	m.mu.Unlock()
@@ -478,12 +503,14 @@ func (m *sideSessionManager) Close() error {
 	}
 	m.transitionMu.Lock()
 	defer m.transitionMu.Unlock()
-	items, err := m.beginTransition(true)
+	items, deliveries, err := m.beginTransition(true)
 	if err != nil {
 		return err
 	}
 	defer m.finishTransition()
-	return m.drainTransition(items)
+	result := m.drainTransitionContext(context.Background(), items, deliveries)
+	m.deferred.Wait()
+	return result
 }
 
 func (m *sideSessionManager) startRun(ctx context.Context, managed *managedSideSession, start *AdmittedTurn) error {
@@ -533,13 +560,14 @@ func (m *sideSessionManager) run(managed *managedSideSession, generation uint64,
 		managed.status.UpdatedAt = time.Now().UTC()
 		subscribed := managed.status.Subscribed
 		status := managed.status
-		if subscribed {
-			m.deliveries.Add(1)
+		deliveryWait := managed.deliveryWait
+		if subscribed && deliveryWait != nil {
+			deliveryWait.Add(1)
 		}
 		m.mu.Unlock()
-		if subscribed {
+		if subscribed && deliveryWait != nil {
 			go func() {
-				defer m.deliveries.Done()
+				defer deliveryWait.Done()
 				m.deliverResult(managed.deliveryCtx, managed, status)
 			}()
 		}
@@ -681,10 +709,10 @@ func (m *sideSessionManager) removeIfCurrent(managed *managedSideSession) {
 }
 
 func stopManagedSideSession(managed *managedSideSession) error {
-	return stopManagedSideSessionContext(context.Background(), managed)
+	return stopManagedSideSessionContext(context.Background(), managed, nil)
 }
 
-func stopManagedSideSessionContext(ctx context.Context, managed *managedSideSession) error {
+func stopManagedSideSessionContext(ctx context.Context, managed *managedSideSession, deferred *sync.WaitGroup) error {
 	if managed == nil || managed.app == nil {
 		return nil
 	}
@@ -706,12 +734,29 @@ func stopManagedSideSessionContext(ctx context.Context, managed *managedSideSess
 	case <-done:
 		return managed.app.CloseAndWait()
 	case <-ctx.Done():
+		if deferred != nil {
+			deferred.Add(1)
+		}
 		go func() {
+			if deferred != nil {
+				defer deferred.Done()
+			}
 			<-done
 			_ = managed.app.CloseAndWait()
 		}()
 		return ctx.Err()
 	}
+}
+
+func (m *sideSessionManager) deferCleanup(cleanup func()) {
+	if cleanup == nil {
+		return
+	}
+	m.deferred.Add(1)
+	go func() {
+		defer m.deferred.Done()
+		cleanup()
+	}()
 }
 
 func (m *sideSessionManager) snapshot(managed *managedSideSession) SideSessionStatus {
