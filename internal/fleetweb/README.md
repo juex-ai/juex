@@ -13,8 +13,10 @@ This package adapts `fleet.Manager` to the loopback browser surface used by
   the Add agent workflow. The mutation requires `application/json`, so a
   cross-origin browser cannot invoke it as a CORS-safelisted form request.
 - `/api/fleet/events` aggregates healthy agents' status streams and pushes
-  typed `fleet.roster`, `fleet.status`, `agent.process`, and `agent.status`
-  snapshots. Browser
+  typed `fleet.roster`, `fleet.roster.unavailable`, `fleet.status`,
+  `agent.process`, and `agent.status` snapshots. Roster failures preserve the
+  last known snapshot and a successful reconciliation explicitly clears the
+  unavailable state. Browser
   clients share one upstream stream per Agent, slow clients coalesce updates by
   event key, and aggregate cursors support bounded in-process resume with a
   current-snapshot fallback after restart. One server-side reconciliation loop

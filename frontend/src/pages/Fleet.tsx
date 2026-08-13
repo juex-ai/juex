@@ -88,6 +88,7 @@ export function Fleet() {
   const [addOpen, setAddOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<AgentStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rosterError, setRosterError] = useState<string | null>(null);
   const rosterRevision = useRef(0);
   const processRevision = useRef(0);
 
@@ -104,10 +105,11 @@ export function Fleet() {
       if (agentsResult.status === "fulfilled") {
         if (rosterRequestedAt === rosterRevision.current) {
           setAgents(agentsResult.value);
+          setRosterError(null);
         }
       } else if (rosterRequestedAt === rosterRevision.current) {
         const cause = agentsResult.reason;
-        setError(
+        setRosterError(
           cause instanceof Error ? cause.message : "Failed to load fleet roster.",
         );
       }
@@ -135,7 +137,12 @@ export function Fleet() {
           if (event.type === "fleet.roster") {
             rosterRevision.current += 1;
             setAgents((current) => mergeFleetRoster(current, event.agents));
-            setError(null);
+            setRosterError(null);
+            return;
+          }
+          if (event.type === "fleet.roster.unavailable") {
+            rosterRevision.current += 1;
+            setRosterError(event.error || "Fleet roster is unavailable.");
             return;
           }
           if (event.type === "fleet.status") {
@@ -265,12 +272,12 @@ export function Fleet() {
             </div>
           </div>
 
-          {error ? (
+          {error ?? rosterError ? (
             <div
               role="alert"
               className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-sm text-destructive"
             >
-              {error}
+              {error ?? rosterError}
             </div>
           ) : null}
 

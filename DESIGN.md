@@ -815,7 +815,10 @@ changing routes restores Workspace mode.
 
 Fleet and Agent operational read models use snapshot-plus-notification rather
 than browser polling. `/api/fleet/events` carries typed roster, Fleet process,
-and Agent activity snapshots. The selected Agent's `/api/resource-events`
+and Agent activity snapshots. A `fleet.roster.unavailable` snapshot preserves
+the last known roster while surfacing reconciliation failures; the next
+successful roster snapshot clears that failure even when its contents did not
+change. The selected Agent's `/api/resource-events`
 stream invalidates workspace, scratchpad, Observable, and process-lifetime
 runtime catalogs. Workspace or enabled user-global `AGENTS.md` guidance, Agent
 Memory, active primary Session selection, and active Session scratchpad content

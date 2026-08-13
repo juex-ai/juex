@@ -37,6 +37,7 @@ type fleetStatusEvent struct {
 	Activity *agentActivity         `json:"activity,omitempty"`
 	Agents   *[]fleet.AgentStatus   `json:"agents,omitempty"`
 	Process  **processmetrics.Usage `json:"process,omitempty"`
+	Error    string                 `json:"error,omitempty"`
 	Cursor   string                 `json:"-"`
 	Sequence uint64                 `json:"-"`
 }
@@ -66,6 +67,7 @@ type fleetStatusHub struct {
 	reconcile   chan struct{}
 	roster      []fleet.AgentStatus
 	rosterReady bool
+	rosterError string
 }
 
 type fleetStatusHubSubscription struct {
@@ -142,6 +144,7 @@ func (h *fleetStatusHub) subscribe(since string) fleetStatusHubSubscription {
 			h.current = map[string]fleetStatusEvent{}
 			h.roster = nil
 			h.rosterReady = false
+			h.rosterError = ""
 			h.running = true
 			h.runCancel = cancel
 			h.runReady = make(chan struct{})
@@ -186,6 +189,7 @@ func (h *fleetStatusHub) subscribe(since string) fleetStatusHubSubscription {
 					h.current = map[string]fleetStatusEvent{}
 					h.roster = nil
 					h.rosterReady = false
+					h.rosterError = ""
 				}
 				h.mu.Unlock()
 				if cancel != nil {
@@ -262,7 +266,7 @@ func (h *fleetStatusHub) removeCurrent(generation uint64, agentID string) {
 }
 
 func fleetStatusEventKey(event fleetStatusEvent) string {
-	if event.Type == "fleet.roster" || event.Type == "fleet.status" {
+	if event.Type == "fleet.roster" || event.Type == "fleet.roster.unavailable" || event.Type == "fleet.status" {
 		return event.Type
 	}
 	return event.Type + ":" + event.AgentID
@@ -329,14 +333,28 @@ func (h *fleetStatusHub) publishRoster(generation uint64, statuses []fleet.Agent
 		h.mu.Unlock()
 		return
 	}
-	if h.rosterReady && equalFleetRoster(h.roster, next) {
+	if h.rosterReady && h.rosterError == "" && equalFleetRoster(h.roster, next) {
 		h.mu.Unlock()
 		return
 	}
 	h.roster = cloneFleetStatuses(next)
 	h.rosterReady = true
+	h.rosterError = ""
+	delete(h.current, "fleet.roster.unavailable")
 	h.mu.Unlock()
 	h.publish(generation, fleetStatusEvent{Type: "fleet.roster", Agents: &next})
+}
+
+func (h *fleetStatusHub) publishRosterUnavailable(generation uint64, err error) {
+	message := err.Error()
+	h.mu.Lock()
+	if !h.running || h.generation != generation || h.rosterError == message {
+		h.mu.Unlock()
+		return
+	}
+	h.rosterError = message
+	h.mu.Unlock()
+	h.publish(generation, fleetStatusEvent{Type: "fleet.roster.unavailable", Error: message})
 }
 
 func cloneFleetStatuses(statuses []fleet.AgentStatus) []fleet.AgentStatus {
@@ -376,6 +394,7 @@ func (h *fleetStatusHub) run(ctx context.Context, generation uint64, ready chan<
 		h.publishProcess(generation, ctx)
 		statuses, err := h.manager.Status(ctx)
 		if err != nil {
+			h.publishRosterUnavailable(generation, err)
 			return
 		}
 		h.publishRoster(generation, statuses)

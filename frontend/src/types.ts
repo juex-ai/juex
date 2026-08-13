@@ -1093,6 +1093,11 @@ export interface FleetRosterEvent {
   agents: AgentStatus[];
 }
 
+export interface FleetRosterUnavailableEvent {
+  type: "fleet.roster.unavailable";
+  error: string;
+}
+
 export interface FleetProcessEvent {
   type: "fleet.status";
   process: ProcessUsage | null;
@@ -1107,6 +1112,7 @@ export interface AgentProcessEvent {
 export type FleetEvent =
   | FleetAgentStatusEvent
   | FleetRosterEvent
+  | FleetRosterUnavailableEvent
   | FleetProcessEvent
   | AgentProcessEvent;
 

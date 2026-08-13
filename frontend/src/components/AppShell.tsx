@@ -122,6 +122,7 @@ export function AppShell() {
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [busyAgentID, setBusyAgentID] = useState<string | null>(null);
   const [fleetError, setFleetError] = useState<string | null>(null);
+  const [rosterError, setRosterError] = useState<string | null>(null);
   const [resourceRevision, setResourceRevision] = useState(
     INITIAL_RESOURCE_REVISION,
   );
@@ -152,11 +153,11 @@ export function AppShell() {
       if (requestedAt !== rosterRevision.current) return;
       statusStore.seedAgents(next);
       setAgents(next);
-      setFleetError(null);
+      setRosterError(null);
       setAgentsLoaded(true);
     } catch (cause) {
       if (requestedAt !== rosterRevision.current) return;
-      setFleetError(
+      setRosterError(
         cause instanceof Error ? cause.message : "Failed to load fleet agents.",
       );
     }
@@ -175,6 +176,11 @@ export function AppShell() {
             return;
           }
           if (event.type === "fleet.status") return;
+          if (event.type === "fleet.roster.unavailable") {
+            rosterRevision.current += 1;
+            setRosterError(event.error || "Fleet roster is unavailable.");
+            return;
+          }
           if (event.type === "agent.process") {
             setAgents((current) =>
               current.map((agent) =>
@@ -188,7 +194,7 @@ export function AppShell() {
           rosterRevision.current += 1;
           statusStore.seedAgents(event.agents);
           setAgents(event.agents);
-          setFleetError(null);
+          setRosterError(null);
           setAgentsLoaded(true);
         },
         onError: (event) => console.error("fleet status stream failed", event),
@@ -432,18 +438,18 @@ export function AppShell() {
                 </Button>
               </div>
             ) : null}
-            {fleetError && agentsLoaded ? (
+            {(fleetError ?? rosterError) && agentsLoaded ? (
               <div
                 className="shrink-0 border-b border-destructive/25 bg-destructive/10 px-4 py-2 text-sm text-destructive"
                 role="alert"
               >
-                {fleetError}
+                {fleetError ?? rosterError}
               </div>
             ) : null}
 
             <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                {fleetError && !agentsLoaded ? (
+                {(fleetError ?? rosterError) && !agentsLoaded ? (
                   <div
                     className="flex min-h-0 flex-1 items-center justify-center px-4 py-8"
                     role="alert"
@@ -453,7 +459,7 @@ export function AppShell() {
                       <h1 className="mt-3 text-base font-semibold">
                         Fleet roster unavailable
                       </h1>
-                      <p className="mt-2 text-sm">{fleetError}</p>
+                      <p className="mt-2 text-sm">{fleetError ?? rosterError}</p>
                       <Button
                         type="button"
                         variant="outline"

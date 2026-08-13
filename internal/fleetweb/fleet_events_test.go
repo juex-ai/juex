@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -215,6 +216,66 @@ func TestFleetStatusHubPublishesRosterOnlyWhenSnapshotChanges(t *testing.T) {
 	}
 }
 
+func TestFleetStatusHubPublishesRosterFailureAndRecovery(t *testing.T) {
+	var unavailable atomic.Bool
+	statuses := []fleet.AgentStatus{{ID: "agent-1", RuntimeHealth: fleet.RuntimeStopped}}
+	backend := &fakeBackend{statusFn: func(context.Context) ([]fleet.AgentStatus, error) {
+		if unavailable.Load() {
+			return nil, errors.New("registry unavailable")
+		}
+		return statuses, nil
+	}}
+	hub := newFleetStatusHub(backend, newActivityClientPool())
+	subscription := hub.subscribe("")
+	defer subscription.cancel()
+
+	unavailable.Store(true)
+	hub.requestReconcile()
+	select {
+	case <-subscription.updates:
+	case <-time.After(time.Second):
+		t.Fatal("roster failure was not published")
+	}
+	events := subscription.take()
+	if len(events) != 1 || events[0].Type != "fleet.roster.unavailable" ||
+		events[0].Error != "registry unavailable" {
+		t.Fatalf("roster failure events = %+v", events)
+	}
+	joined := hub.subscribe("")
+	if len(joined.initial) != 3 || joined.initial[0].Type != "fleet.roster" ||
+		joined.initial[1].Type != "agent.process" ||
+		joined.initial[2].Type != "fleet.roster.unavailable" {
+		t.Fatalf("unavailable current snapshot = %+v", joined.initial)
+	}
+	joined.cancel()
+
+	hub.requestReconcile()
+	select {
+	case <-subscription.updates:
+		t.Fatalf("unchanged roster failure events = %+v", subscription.take())
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	unavailable.Store(false)
+	hub.requestReconcile()
+	select {
+	case <-subscription.updates:
+	case <-time.After(time.Second):
+		t.Fatal("roster recovery was not published")
+	}
+	events = subscription.take()
+	if len(events) == 0 || events[0].Type != "fleet.roster" || events[0].Agents == nil ||
+		len(*events[0].Agents) != 1 {
+		t.Fatalf("roster recovery events = %+v", events)
+	}
+	hub.mu.Lock()
+	_, stillUnavailable := hub.current["fleet.roster.unavailable"]
+	hub.mu.Unlock()
+	if stillUnavailable {
+		t.Fatal("recovered current snapshot retained roster failure")
+	}
+}
+
 func TestFleetStatusHubPublishesAgentProcessSeparatelyFromRoster(t *testing.T) {
 	hub := newFleetStatusHub(&fakeBackend{}, newActivityClientPool())
 	subscription := hub.subscribe("")
@@ -266,6 +327,19 @@ func TestFleetRosterEventEncodesEmptySnapshotAsArray(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := string(body); got != `{"type":"fleet.roster","agents":[]}` {
+		t.Fatalf("event JSON = %s", got)
+	}
+}
+
+func TestFleetRosterUnavailableEventEncodesError(t *testing.T) {
+	body, err := json.Marshal(fleetStatusEvent{
+		Type:  "fleet.roster.unavailable",
+		Error: "registry unavailable",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(body); got != `{"type":"fleet.roster.unavailable","error":"registry unavailable"}` {
 		t.Fatalf("event JSON = %s", got)
 	}
 }

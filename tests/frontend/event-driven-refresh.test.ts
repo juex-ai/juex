@@ -57,6 +57,7 @@ test("typed EventSource helpers isolate fleet and agent resources", () => {
     /new EventSource\(agentAPIPath\("\/api\/resource-events"\)\)/,
   );
   assert.match(apiSource, /parsed\.type === "fleet\.roster"/);
+  assert.match(apiSource, /parsed\.type === "fleet\.roster\.unavailable"/);
   assert.match(apiSource, /parsed\.type === "fleet\.status"/);
   assert.match(apiSource, /parsed\.type === "agent\.process"/);
   assert.match(apiSource, /parsed\.type === "resource\.changed"/);
@@ -104,6 +105,10 @@ test("fleet and resource subscriptions parse only their typed events", () => {
     });
     assert.equal(sources[0].url, "/api/fleet/events");
     sources[0].emit({ type: "fleet.roster", agents: [] });
+    sources[0].emit({
+      type: "fleet.roster.unavailable",
+      error: "registry unavailable",
+    });
     sources[0].emit({ type: "fleet.status", process: { rss_bytes: 1 } });
     sources[0].emit({
       type: "agent.process",
@@ -124,6 +129,7 @@ test("fleet and resource subscriptions parse only their typed events", () => {
     closeResources();
     assert.deepEqual(fleetTypes, [
       "fleet.roster",
+      "fleet.roster.unavailable",
       "fleet.status",
       "agent.process",
       "agent.process",

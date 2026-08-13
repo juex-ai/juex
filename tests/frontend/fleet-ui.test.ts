@@ -427,6 +427,13 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
     /await refresh\(\{ quiet: true \}\);\s+setError\(actionError\)/,
     "roster recovery must not clear the lifecycle action error",
   );
+  assert.match(fleetSource, /setRosterError\(null\)/);
+  assert.match(fleetSource, /event\.type === "fleet\.roster\.unavailable"/);
+  assert.doesNotMatch(
+    fleetSource,
+    /event\.type === "fleet\.roster"[\s\S]{0,220}setError\(null\)/,
+    "roster recovery must only clear the roster error",
+  );
 
   assert.match(logsSource, /getAgentLogs\(agentId, lines\)/);
   assert.match(logsSource, /1000/);

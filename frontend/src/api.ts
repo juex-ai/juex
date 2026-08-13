@@ -370,6 +370,7 @@ export function subscribeFleetEvents(opts: {
         parsed.type === "agent.status" ||
         parsed.type === "agent.process" ||
         parsed.type === "fleet.roster" ||
+        parsed.type === "fleet.roster.unavailable" ||
         parsed.type === "fleet.status"
       ) {
         opts.onEvent(parsed);

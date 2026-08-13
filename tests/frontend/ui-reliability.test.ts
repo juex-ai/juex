@@ -65,7 +65,10 @@ test("fleet initial load failure remains an error instead of an empty fleet", ()
     /finally\s*\{\s*setAgentsLoaded\(true\)/,
     "only a successful roster response establishes an authoritative fleet",
   );
-  assert.match(shellSource, /fleetError && !agentsLoaded/);
+  assert.match(
+    shellSource,
+    /\(fleetError \?\? rosterError\) && !agentsLoaded/,
+  );
 });
 
 test("quiet observable refresh preserves action errors", () => {
