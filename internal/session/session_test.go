@@ -543,6 +543,31 @@ func TestSessionAppendAdoptsCanonicalPrefixRewriteAfterWrite(t *testing.T) {
 	}
 }
 
+func TestTranscriptPrefixDigestDetectsRewrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversation.jsonl")
+	if err := os.WriteFile(path, []byte("prefix-owned"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	digest, err := digestTranscriptPrefix(file, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched, err := transcriptPrefixDigestMatches(file, 6, digest); err != nil || !matched {
+		t.Fatalf("unchanged prefix match = %t, %v; want true, nil", matched, err)
+	}
+	if _, err := file.WriteAt([]byte("PREFIX"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if matched, err := transcriptPrefixDigestMatches(file, 6, digest); err != nil || matched {
+		t.Fatalf("rewritten prefix match = %t, %v; want false, nil", matched, err)
+	}
+}
+
 func TestConcurrentSessionAppendsSerializeBeforeFingerprintCheck(t *testing.T) {
 	first, err := New(t.TempDir())
 	if err != nil {

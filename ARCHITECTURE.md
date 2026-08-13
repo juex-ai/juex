@@ -1012,8 +1012,11 @@ Each resident agent has one active primary session recorded in
 session entries are a cache, not canonical metadata: they contain only the
 session ID, transcript-derived turn count and preview, and a transcript
 fingerprint `{size, mtime_ns, change_id}`. The opaque change identity combines
-the platform file identity and change time, so same-size rewrites that preserve
-the modification timestamp still invalidate derived state. Alias, kind,
+the platform file identity with nanosecond ctime on Darwin/Linux or the per-file
+USN on Windows, so same-size rewrites that preserve the modification timestamp
+still invalidate derived state. Platforms without a reliable change identity
+leave derived caches fail-closed and verify the canonical pre-append prefix by
+content before accepting incremental resident state. Alias, kind,
 timestamps, and usage remain owned by session metadata and event files. `run`,
 `repl`, and `listen` attach to the active primary by default; `--new` and
 `/new` create a new primary and switch
