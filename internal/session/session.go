@@ -54,6 +54,7 @@ type Session struct {
 	beforeTranscriptWrite        func()
 	afterTranscriptPrewriteCheck func()
 	afterTranscriptWrite         func()
+	beforeRepairCheckpointSave   func()
 }
 
 type Options struct {

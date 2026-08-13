@@ -186,18 +186,22 @@ func (s *Session) rewriteConversationLocked(history []llm.Message) error {
 	if err != nil {
 		return err
 	}
-	meta := s.metadataLocked()
-	meta.Transcript = buildTranscriptCheckpoint(idx, idx.fingerprint)
-	if err := saveMetadata(s.Dir, meta); err != nil {
-		return err
-	}
 	convFD, err := os.OpenFile(convPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
 	if err != nil {
+		s.transcript = idx
+		s.History = activeHistory
 		return fmt.Errorf("session: reopen repaired conversation: %w", err)
 	}
 	s.convFD = convFD
 	s.transcript = idx
 	s.History = activeHistory
+	meta := s.metadataLocked()
+	if s.beforeRepairCheckpointSave != nil {
+		s.beforeRepairCheckpointSave()
+	}
+	if err := saveMetadata(s.Dir, meta); err != nil {
+		return err
+	}
 	return nil
 }
 

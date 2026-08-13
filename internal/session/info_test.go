@@ -97,6 +97,26 @@ func withTranscriptFingerprint(t *testing.T, info Info, dir string) Info {
 	return info
 }
 
+func writeTranscriptCheckpoint(t *testing.T, dir string) {
+	t.Helper()
+	path := filepath.Join(dir, conversationFile)
+	idx, err := scanTranscriptIndex(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.Transcript = buildTranscriptCheckpoint(idx, idx.fingerprint)
+	if meta.Transcript == nil {
+		t.Fatal("build transcript checkpoint")
+	}
+	if err := saveMetadata(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInfoDirPrefersID(t *testing.T) {
 	got := InfoDir("/sessions", Info{ID: "abc", Dir: "/recorded"})
 	if got != filepath.Join("/sessions", "abc") {
@@ -119,6 +139,7 @@ func TestListWithHistoryBoundsUsageEventTailScan(t *testing.T) {
 	dir := makeSession(t, root, id,
 		[]llm.Message{llm.TextMessage(llm.RoleUser, "bounded")},
 		mtime)
+	writeTranscriptCheckpoint(t, dir)
 	if err := RecordSession(historyPath, withTranscriptFingerprint(t, Info{
 		ID:           id,
 		Dir:          dir,
@@ -239,14 +260,10 @@ func TestListWithHistoryDoesNotRescanMatchingTranscriptFingerprint(t *testing.T)
 	historyPath := filepath.Join(t.TempDir(), "history.json")
 	mtime := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	id := "20260727T120000-cached01"
-	dir := makeSession(t, root, id, nil, mtime)
-	convPath := filepath.Join(dir, conversationFile)
-	if err := os.WriteFile(convPath, []byte("not-json\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(convPath, mtime, mtime); err != nil {
-		t.Fatal(err)
-	}
+	dir := makeSession(t, root, id,
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "cached transcript summary")},
+		mtime)
+	writeTranscriptCheckpoint(t, dir)
 	if err := RecordSession(historyPath, withTranscriptFingerprint(t, Info{
 		ID:           id,
 		Dir:          "/stale/recorded/path",
@@ -254,7 +271,7 @@ func TestListWithHistoryDoesNotRescanMatchingTranscriptFingerprint(t *testing.T)
 		Active:       true,
 		StartedAt:    mtime,
 		LastActiveAt: mtime,
-		Turns:        99,
+		Turns:        1,
 		Preview:      "cached transcript summary",
 		TokenUsage:   llm.Usage{InputTokens: 1},
 	}, dir)); err != nil {
@@ -315,7 +332,7 @@ func TestListWithHistoryDoesNotRescanMatchingTranscriptFingerprint(t *testing.T)
 	if info.Alias != "current alias" || info.Kind != KindSide || info.Active {
 		t.Fatalf("metadata = alias %q kind %q active %t", info.Alias, info.Kind, info.Active)
 	}
-	if info.Turns != 99 || info.Preview != "cached transcript summary" {
+	if info.Turns != 1 || info.Preview != "cached transcript summary" {
 		t.Fatalf("transcript summary = turns %d preview %q", info.Turns, info.Preview)
 	}
 	if info.TokenUsage != (llm.Usage{InputTokens: 20, OutputTokens: 4}) {
