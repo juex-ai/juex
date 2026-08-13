@@ -86,8 +86,8 @@ type resourceEventHub struct {
 	nextID        uint64
 	watcher       *fsnotify.Watcher
 	cancel        context.CancelFunc
-	watcherReady  chan struct{}
 	invalidations *resourceSubscriber
+	addWatch      func(*fsnotify.Watcher, string) error
 	closed        bool
 }
 
@@ -103,12 +103,13 @@ func newResourceEventHub(workDir, sessionsDir string) *resourceEventHub {
 		workDir:     filepath.Clean(workDir),
 		sessionsDir: filepath.Clean(sessionsDir),
 		subscribers: map[uint64]*resourceSubscriber{},
+		addWatch: func(watcher *fsnotify.Watcher, path string) error {
+			return watcher.Add(path)
+		},
 	}
 }
 
 func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
-	var startWatcher bool
-	var watcherReady chan struct{}
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -120,31 +121,39 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 			h.mu.Unlock()
 			return resourceSubscription{}, err
 		}
+		if err := h.addRoot(watcher, h.workDir); err != nil {
+			_ = watcher.Close()
+			h.mu.Unlock()
+			return resourceSubscription{}, err
+		}
+		if err := h.addRoot(watcher, h.sessionsDir); err != nil {
+			_ = watcher.Close()
+			h.mu.Unlock()
+			return resourceSubscription{}, err
+		}
+		observableDir := filepath.Join(h.workDir, ".juex")
+		if info, statErr := os.Stat(observableDir); statErr == nil && info.IsDir() {
+			if err := h.addWatch(watcher, observableDir); err != nil {
+				_ = watcher.Close()
+				h.mu.Unlock()
+				return resourceSubscription{}, fmt.Errorf("watch observable config directory %q: %w", observableDir, err)
+			}
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			_ = watcher.Close()
+			h.mu.Unlock()
+			return resourceSubscription{}, fmt.Errorf("inspect observable config directory %q: %w", observableDir, statErr)
+		}
 		ctx, cancel := context.WithCancel(context.Background())
 		h.watcher = watcher
 		h.cancel = cancel
-		h.watcherReady = make(chan struct{})
 		h.invalidations = newResourceSubscriber()
-		startWatcher = true
-		watcherReady = h.watcherReady
 		go h.runWatcher(ctx, watcher, h.invalidations)
-	} else {
-		watcherReady = h.watcherReady
 	}
 	h.nextID++
 	id := h.nextID
 	subscriber := newResourceSubscriber()
 	h.subscribers[id] = subscriber
-	watcher := h.watcher
 	h.mu.Unlock()
-	if startWatcher {
-		h.addRoot(watcher, h.workDir)
-		h.addRoot(watcher, h.sessionsDir)
-		_ = watcher.Add(filepath.Join(h.workDir, ".juex"))
-		close(watcherReady)
-	} else if watcherReady != nil {
-		<-watcherReady
-	}
 
 	return resourceSubscription{
 		updates: subscriber.notify,
@@ -152,36 +161,33 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 		take:    subscriber.take,
 		cancel: func() {
 			var cancel context.CancelFunc
-			var watcher *fsnotify.Watcher
 			h.mu.Lock()
-			delete(h.subscribers, id)
-			if len(h.subscribers) == 0 {
+			_, subscribed := h.subscribers[id]
+			if subscribed {
+				delete(h.subscribers, id)
+			}
+			if subscribed && len(h.subscribers) == 0 {
 				cancel = h.cancel
-				watcher = h.watcher
 				h.cancel = nil
 				h.watcher = nil
-				h.watcherReady = nil
 				h.invalidations = nil
 			}
 			h.mu.Unlock()
 			if cancel != nil {
 				cancel()
 			}
-			if watcher != nil {
-				_ = watcher.Close()
-			}
 			subscriber.close()
 		},
 	}, nil
 }
 
-func (h *resourceEventHub) addRoot(watcher *fsnotify.Watcher, root string) {
+func (h *resourceEventHub) addRoot(watcher *fsnotify.Watcher, root string) error {
 	if root == "" || root == "." {
-		return
+		return nil
 	}
-	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			return err
 		}
 		if !entry.IsDir() {
 			return nil
@@ -189,9 +195,15 @@ func (h *resourceEventHub) addRoot(watcher *fsnotify.Watcher, root string) {
 		if path != root && skipWatchedDirectory(entry.Name()) {
 			return filepath.SkipDir
 		}
-		_ = watcher.Add(path)
+		if err := h.addWatch(watcher, path); err != nil {
+			return fmt.Errorf("watch directory %q: %w", path, err)
+		}
 		return nil
 	})
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 func skipWatchedDirectory(name string) bool {
@@ -208,6 +220,7 @@ func (h *resourceEventHub) runWatcher(
 	watcher *fsnotify.Watcher,
 	invalidations *resourceSubscriber,
 ) {
+	defer func() { _ = watcher.Close() }()
 	pending := map[string]struct{}{}
 	var timer *time.Timer
 	var timerC <-chan time.Time
@@ -254,10 +267,16 @@ func (h *resourceEventHub) runWatcher(
 			if event.Op&fsnotify.Create != 0 {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
 					if filepath.Clean(event.Name) == filepath.Join(h.workDir, ".juex") {
-						_ = watcher.Add(event.Name)
+						if err := h.addWatch(watcher, event.Name); err != nil {
+							h.failWatcher(watcher)
+							return
+						}
 						resource = resourceObservable
 					} else {
-						h.addRoot(watcher, event.Name)
+						if err := h.addRoot(watcher, event.Name); err != nil {
+							h.failWatcher(watcher)
+							return
+						}
 					}
 				}
 			}
@@ -273,10 +292,38 @@ func (h *resourceEventHub) runWatcher(
 			if !ok {
 				return
 			}
-			// A single watch failure must not terminate the shared SSE stream.
+			h.resyncAfterWatcherError()
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+func (h *resourceEventHub) resyncAfterWatcherError() {
+	h.publish(resourceObservable, resourceRuntime, resourceScratchpad, resourceWorkspace)
+}
+
+func (h *resourceEventHub) failWatcher(failed *fsnotify.Watcher) {
+	h.mu.Lock()
+	if h.watcher != failed {
+		h.mu.Unlock()
+		return
+	}
+	cancel := h.cancel
+	h.cancel = nil
+	h.watcher = nil
+	h.invalidations = nil
+	subscribers := make([]*resourceSubscriber, 0, len(h.subscribers))
+	for _, subscriber := range h.subscribers {
+		subscribers = append(subscribers, subscriber)
+	}
+	h.subscribers = map[uint64]*resourceSubscriber{}
+	h.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	for _, subscriber := range subscribers {
+		subscriber.close()
 	}
 }
 
@@ -372,10 +419,8 @@ func (h *resourceEventHub) close() {
 	h.mu.Lock()
 	h.closed = true
 	cancel := h.cancel
-	watcher := h.watcher
 	h.cancel = nil
 	h.watcher = nil
-	h.watcherReady = nil
 	h.invalidations = nil
 	subscribers := make([]*resourceSubscriber, 0, len(h.subscribers))
 	for _, subscriber := range h.subscribers {
@@ -385,9 +430,6 @@ func (h *resourceEventHub) close() {
 	h.mu.Unlock()
 	if cancel != nil {
 		cancel()
-	}
-	if watcher != nil {
-		_ = watcher.Close()
 	}
 	for _, subscriber := range subscribers {
 		subscriber.close()

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/toolevents"
@@ -162,6 +164,70 @@ func TestResourceEventHubWatchesLateObservableConfigWithoutRuntimeTree(t *testin
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("late observable config mutation was not observed")
+	}
+}
+
+func TestResourceEventHubRejectsIncompleteInitialWatchTree(t *testing.T) {
+	workDir := t.TempDir()
+	hub := newResourceEventHub(workDir, t.TempDir())
+	hub.addWatch = func(_ *fsnotify.Watcher, path string) error {
+		if filepath.Clean(path) == filepath.Clean(workDir) {
+			return errors.New("watch limit reached")
+		}
+		return nil
+	}
+
+	if _, err := hub.subscribe(); err == nil || !strings.Contains(err.Error(), "watch limit reached") {
+		t.Fatalf("subscribe error = %v, want watch registration failure", err)
+	}
+	if hub.watcher != nil || len(hub.subscribers) != 0 {
+		t.Fatalf("failed watcher remained active: watcher=%v subscribers=%d", hub.watcher, len(hub.subscribers))
+	}
+}
+
+func TestResourceEventHubEndsStreamWhenLateDirectoryCannotBeWatched(t *testing.T) {
+	workDir := t.TempDir()
+	hub := newResourceEventHub(workDir, t.TempDir())
+	hub.addWatch = func(watcher *fsnotify.Watcher, path string) error {
+		if strings.HasPrefix(filepath.Clean(path), filepath.Join(workDir, "late")) {
+			return errors.New("watch limit reached")
+		}
+		return watcher.Add(path)
+	}
+	subscription, err := hub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscription.cancel()
+	if err := os.Mkdir(filepath.Join(workDir, "late"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-subscription.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("resource stream stayed healthy after a directory watch failed")
+	}
+}
+
+func TestResourceEventHubResynchronizesAfterWatcherError(t *testing.T) {
+	hub := newResourceEventHub(t.TempDir(), t.TempDir())
+	subscription, err := hub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscription.cancel()
+
+	hub.resyncAfterWatcherError()
+	select {
+	case <-subscription.updates:
+		got := subscription.take().Resources
+		want := []string{resourceObservable, resourceRuntime, resourceScratchpad, resourceWorkspace}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("resources = %v, want %v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("watcher error did not invalidate all resources")
 	}
 }
 
