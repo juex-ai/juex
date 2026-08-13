@@ -27,7 +27,7 @@ func TestCreateIncludesSessionFilesManifestAndRedacts(t *testing.T) {
 		"session.json":        `{"alias":"debug","kind":"primary","api_key":"sk-session-secret"}`,
 		"conversation.jsonl":  `{"role":"user","blocks":[{"type":"text","text":"use Bearer abc123 and api_key=sk-live-secret"}]}` + "\n",
 		"events.jsonl":        `{"type":"llm.responded","payload":{"token_usage":{"input_tokens":3,"output_tokens":1},"auth_token":"credential-token"}}` + "\n",
-		"trace.jsonl":         `{"event":"tool.completed","authorization":"Bearer trace-secret"}` + "\n",
+		"diagnostic.jsonl":    `{"event":"tool.completed","authorization":"Bearer diagnostic-secret"}` + "\n",
 		"notes.md":            "- [ ] password=raw-secret\n",
 		"logs/juex.log":       "cookie=session-cookie\n",
 		"logs/debug.log":      "OPENAI_API_KEY=sk-debug-secret\n",
@@ -64,7 +64,6 @@ func TestCreateIncludesSessionFilesManifestAndRedacts(t *testing.T) {
 		"juex-debug-bundle/session/session.json",
 		"juex-debug-bundle/session/conversation.jsonl",
 		"juex-debug-bundle/session/events.jsonl",
-		"juex-debug-bundle/session/trace.jsonl",
 		"juex-debug-bundle/session/notes.md",
 		"juex-debug-bundle/session/logs/juex.log",
 		"juex-debug-bundle/session/logs/debug.log",
@@ -74,6 +73,9 @@ func TestCreateIncludesSessionFilesManifestAndRedacts(t *testing.T) {
 			t.Fatalf("archive missing %s; files=%v", want, sortedBundleKeys(files))
 		}
 	}
+	if _, ok := files["juex-debug-bundle/session/diagnostic.jsonl"]; ok {
+		t.Fatalf("archive should exclude files outside the session bundle contract: files=%v", sortedBundleKeys(files))
+	}
 
 	all := string(joinBundleFiles(files))
 	for _, leaked := range []string{
@@ -81,7 +83,7 @@ func TestCreateIncludesSessionFilesManifestAndRedacts(t *testing.T) {
 		"sk-live-secret",
 		"abc123",
 		"credential-token",
-		"trace-secret",
+		"diagnostic-secret",
 		"raw-secret",
 		"session-cookie",
 		"sk-debug-secret",

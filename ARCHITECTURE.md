@@ -1015,16 +1015,14 @@ a typed partial failure if Artifact cleanup fails. A retry may remove the
 orphan Artifact namespace even after the Session directory is gone. Agent-level
 Artifact namespaces such as `event-media` and `read-media` are unaffected.
 
-`internal/observability` subscribes to the in-process event bus and writes
-derived session-local artifacts: `logs/juex.log`, `logs/debug.log`,
-`trace.jsonl`, `spans.jsonl`, and `tools.jsonl`. These files are diagnostic
-views over runtime events and intentionally do not alter the compatibility
-shape of `conversation.jsonl` or `events.jsonl`. Trace records include
-`session_id`, `turn_id`, span identifiers, level/status, duration, error kind,
-artifact paths, and bounded summaries with secret-shaped values redacted.
-Timeout traces prefer structured event fields such as `error_kind`,
-`timed_out`, `timeout_seconds`, and `raw_cause`; string parsing is only a
-fallback for older events that predate those fields.
+`internal/observability` subscribes to the in-process event bus and writes the
+human-readable, session-local `logs/juex.log` and `logs/debug.log`. The logs
+contain bounded event summaries with secret-shaped values redacted. Structured
+diagnosis uses the canonical `events.jsonl` journal directly. Each session has
+two history journals, `conversation.jsonl` and `events.jsonl`, with distinct
+recovery and replay responsibilities. Timeout summaries preserve structured
+event fields such as `error_kind`, `timed_out`, `timeout_seconds`, and
+`raw_cause`.
 
 Each resident agent has one active primary session recorded in
 `$JUEX_HOME/agents/<id>/history.json` as `{active_id, sessions}`. History

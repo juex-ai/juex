@@ -336,6 +336,8 @@ $JUEX_HOME/
     ├── observables/             # generated runs, observations, and schedule state
     └── sessions/<id>/
         ├── logs/
+        │   ├── juex.log
+        │   └── debug.log
         ├── session.json         # metadata + rebuildable transcript checkpoint
         ├── conversation.jsonl
         ├── conversation.lock    # cross-instance transcript append guard
@@ -343,10 +345,7 @@ $JUEX_HOME/
         ├── pending_input.jsonl
         ├── notes.md
         ├── scratchpad/
-        ├── goal_state.json
-        ├── trace.jsonl
-        ├── spans.jsonl
-        └── tools.jsonl
+        └── goal_state.json
 ```
 
 Personal agent resources live under `~/.agents/`; JueX-home Extensions

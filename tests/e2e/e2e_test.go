@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1904,32 +1905,18 @@ func TestEndToEnd_DebugObservabilityArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, rel := range []string{"logs/juex.log", "logs/debug.log", "trace.jsonl", "spans.jsonl", "tools.jsonl"} {
+	for _, rel := range []string{"logs/juex.log", "logs/debug.log"} {
 		if _, err := os.Stat(filepath.Join(sessionDir, rel)); err != nil {
 			t.Fatalf("%s missing: %v", rel, err)
 		}
 	}
-	trace := readJSONLObjects(t, filepath.Join(sessionDir, "trace.jsonl"))
+	if got := rootJSONLFiles(t, sessionDir); !slices.Equal(got, []string{"conversation.jsonl", "events.jsonl"}) {
+		t.Fatalf("session JSONL files = %v, want canonical journals", got)
+	}
+	journal := readJSONLObjects(t, filepath.Join(sessionDir, "events.jsonl"))
 	for _, want := range []string{"tool.completed", "tool.errored", "context.compact.completed", "finish.attempted"} {
-		if !jsonlHasString(trace, "event", want) {
-			t.Fatalf("trace missing event %q: %+v", want, trace)
-		}
-	}
-	spans := readJSONLObjects(t, filepath.Join(sessionDir, "spans.jsonl"))
-	for _, want := range [][2]string{
-		{"tool", "end"},
-		{"tool", "error"},
-		{"compaction", "end"},
-		{"finish", "instant"},
-	} {
-		if !jsonlHasNameEvent(spans, want[0], want[1]) {
-			t.Fatalf("spans missing %s/%s: %+v", want[0], want[1], spans)
-		}
-	}
-	tools := readJSONLObjects(t, filepath.Join(sessionDir, "tools.jsonl"))
-	for _, want := range []string{"tool.completed", "tool.errored"} {
-		if !jsonlHasString(tools, "event", want) {
-			t.Fatalf("tools missing event %q: %+v", want, tools)
+		if !jsonlHasString(journal, "type", want) {
+			t.Fatalf("event journal missing %q: %+v", want, journal)
 		}
 	}
 	debugLog, err := os.ReadFile(filepath.Join(sessionDir, "logs", "debug.log"))
@@ -2021,11 +2008,18 @@ func jsonlHasString(rows []map[string]any, key, want string) bool {
 	return false
 }
 
-func jsonlHasNameEvent(rows []map[string]any, name, event string) bool {
-	for _, row := range rows {
-		if row["name"] == name && row["event"] == event {
-			return true
+func rootJSONLFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".jsonl") {
+			names = append(names, entry.Name())
 		}
 	}
-	return false
+	slices.Sort(names)
+	return names
 }
