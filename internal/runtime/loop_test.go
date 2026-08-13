@@ -1355,6 +1355,48 @@ func TestTurnMessage_MCPEventContinuesAfterAutoCompactionFailure(t *testing.T) {
 	}
 }
 
+func TestTurnMessage_SideSessionContinuesAfterAutoCompactionFailure(t *testing.T) {
+	prov := &mockProviderWithErrors{
+		errs: []error{fmt.Errorf("openai codex responses: codex SSE read: context deadline exceeded")},
+		responses: []llm.Response{
+			{Message: llm.TextMessage(llm.RoleAssistant, "handled side result"), StopReason: llm.StopEndTurn},
+		},
+	}
+	eng, bus := newEngine(t, prov, false)
+	eng.ContextWindow = 100
+	eng.Compaction = DefaultCompactionPolicy()
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var compactErr string
+	bus.Subscribe("context.compact.errored", func(e events.Event) {
+		payload, _ := e.Payload.(ContextCompactErroredPayload)
+		compactErr = payload.Error
+	})
+
+	msg := llm.TextMessage(llm.RoleUser, "Side Session result: done")
+	msg.Kind = llm.MessageKindSideSession
+	out, err := eng.TurnMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "handled side result" {
+		t.Fatalf("out = %q, want handled side result", out)
+	}
+	if !strings.Contains(compactErr, "codex SSE read") {
+		t.Fatalf("compact error event = %q, want original failure", compactErr)
+	}
+	if prov.called != 2 {
+		t.Fatalf("provider calls = %d, want compact attempt plus side result turn", prov.called)
+	}
+	if len(eng.Session.History) != 3 {
+		t.Fatalf("history len = %d, want old message, side result, assistant", len(eng.Session.History))
+	}
+	if got := eng.Session.History[1]; got.Kind != llm.MessageKindSideSession || got.FirstText() != "Side Session result: done" {
+		t.Fatalf("side result not preserved: %+v", got)
+	}
+}
+
 func TestTurnMessage_MCPEventStripsRedactedReasoningWhenAutoCompactionPaused(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "handled event"), StopReason: llm.StopEndTurn},

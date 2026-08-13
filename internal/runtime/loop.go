@@ -1523,7 +1523,15 @@ func prepareToolInputs(blocks []llm.Block, registry *tools.Registry) []llm.Block
 }
 
 func canContinueAfterAutoCompactError(ctx context.Context, msg llm.Message) bool {
-	return msg.Kind == llm.MessageKindMCPEvent && ctx.Err() == nil
+	if ctx.Err() != nil {
+		return false
+	}
+	switch msg.Kind {
+	case llm.MessageKindMCPEvent, llm.MessageKindSideSession:
+		return true
+	default:
+		return false
+	}
 }
 
 func toolErrorContent(out string, err error) string {

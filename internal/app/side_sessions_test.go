@@ -803,7 +803,7 @@ func TestSideSessionStopCancelsNewlySentTurnWithoutUserAttribution(t *testing.T)
 	callSideTool(t, parent, SideSessionToolSend, map[string]any{"session_id": id, "message": "second"})
 
 	stopped := make(chan error, 1)
-	go func() { stopped <- parent.sideSessions.Stop(id) }()
+	go func() { stopped <- parent.sideSessions.Stop(context.Background(), id) }()
 	select {
 	case err := <-stopped:
 		if err != nil {
@@ -819,6 +819,33 @@ func TestSideSessionStopCancelsNewlySentTurnWithoutUserAttribution(t *testing.T)
 	if strings.Contains(string(data), "cancelled by user") || !strings.Contains(string(data), "side session stopped") {
 		t.Fatalf("stop attribution in events = %s", data)
 	}
+}
+
+func TestSideSessionStopHonorsToolCancellation(t *testing.T) {
+	child := &stubbornSideProvider{started: make(chan struct{}, 1), release: make(chan struct{})}
+	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, child)
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{"query": "stubborn work", "subscribe": false})
+	id := created["session_id"].(string)
+	select {
+	case <-child.started:
+	case <-time.After(time.Second):
+		t.Fatal("side child did not start")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := parent.Engine.Tools.Call(ctx, SideSessionToolStop, map[string]any{"session_id": id})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stop error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("stop returned after %s, want prompt context cancellation", elapsed)
+	}
+	if _, err := parent.sideSessions.Status(id); !errors.Is(err, ErrSideSessionNotActive) {
+		t.Fatalf("status after cancelled stop = %v, want inactive", err)
+	}
+	close(child.release)
 }
 
 func TestSwitchToNewPrimaryStopsChildrenAndKeepsManagerUsable(t *testing.T) {

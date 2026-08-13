@@ -329,7 +329,7 @@ func (m *sideSessionManager) Subscribe(id string, subscribed bool) (SideSessionS
 	return m.snapshotLocked(managed), nil
 }
 
-func (m *sideSessionManager) Stop(id string) error {
+func (m *sideSessionManager) Stop(ctx context.Context, id string) error {
 	m.lifecycleMu.RLock()
 	defer m.lifecycleMu.RUnlock()
 	if err := m.ensureParentActive(); err != nil {
@@ -339,7 +339,7 @@ func (m *sideSessionManager) Stop(id string) error {
 	if err != nil {
 		return err
 	}
-	return stopManagedSideSession(managed)
+	return stopManagedSideSessionContext(ctx, managed)
 }
 
 func (m *sideSessionManager) StopAll() error {
@@ -620,8 +620,15 @@ func (m *sideSessionManager) remove(id string) (*managedSideSession, error) {
 }
 
 func stopManagedSideSession(managed *managedSideSession) error {
+	return stopManagedSideSessionContext(context.Background(), managed)
+}
+
+func stopManagedSideSessionContext(ctx context.Context, managed *managedSideSession) error {
 	if managed == nil || managed.app == nil {
 		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	managed.cancel(ErrSideSessionStopped)
 	if managed.unsubscribeState != nil {
@@ -629,8 +636,21 @@ func stopManagedSideSession(managed *managedSideSession) error {
 		managed.unsubscribeState = nil
 	}
 	managed.app.CancelActiveTurn(ErrSideSessionStopped)
-	managed.done.Wait()
-	return managed.app.CloseAndWait()
+	done := make(chan struct{})
+	go func() {
+		managed.done.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return managed.app.CloseAndWait()
+	case <-ctx.Done():
+		go func() {
+			<-done
+			_ = managed.app.CloseAndWait()
+		}()
+		return ctx.Err()
+	}
 }
 
 func (m *sideSessionManager) snapshot(managed *managedSideSession) SideSessionStatus {
@@ -726,9 +746,9 @@ func RegisterSideSessionTools(reg *tools.Registry, manager *sideSessionManager) 
 			status, err := manager.Subscribe(toolString(input, "session_id"), subscribed)
 			return marshalSideToolResult(status, err)
 		},
-		func(_ context.Context, input map[string]any) (string, error) {
+		func(ctx context.Context, input map[string]any) (string, error) {
 			id := toolString(input, "session_id")
-			if err := manager.Stop(id); err != nil {
+			if err := manager.Stop(ctx, id); err != nil {
 				return "", err
 			}
 			return marshalSideToolResult(map[string]any{"session_id": id, "stopped": true}, nil)
