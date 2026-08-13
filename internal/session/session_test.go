@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -175,6 +176,10 @@ func TestSessionAppendRollsBackWhenMetadataUpdateFails(t *testing.T) {
 	}
 	defer s.Close()
 	metadataPath := filepath.Join(s.Dir, metadataFile)
+	originalMetadata, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(metadataPath); err != nil {
 		t.Fatal(err)
 	}
@@ -201,6 +206,841 @@ func TestSessionAppendRollsBackWhenMetadataUpdateFails(t *testing.T) {
 	}
 	if len(data) != 0 {
 		t.Fatalf("conversation = %q, want rolled back empty file", data)
+	}
+	if !s.metadataDirty {
+		t.Fatal("rolled-back metadata failure discarded its retry obligation")
+	}
+	if err := os.RemoveAll(metadataPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadataPath, originalMetadata, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close retry metadata = %v", err)
+	}
+	meta, err := loadMetadata(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !transcriptCheckpointValid(meta.Transcript, fingerprint) {
+		t.Fatalf("retried rollback checkpoint = %+v, want current fingerprint", meta.Transcript)
+	}
+}
+
+func TestSessionAppendRejectsExternallyChangedTranscript(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Append(llm.TextMessage(llm.RoleUser, "first")); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(s.Dir, conversationFile)
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := bytes.Replace(data, []byte("first"), []byte("other"), 1)
+	if bytes.Equal(changed, data) {
+		t.Fatal("test transcript did not contain the expected text")
+	}
+	if err := os.WriteFile(path, changed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	metadataBefore, err := os.ReadFile(filepath.Join(s.Dir, metadataFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.Append(llm.TextMessage(llm.RoleAssistant, "must not append"))
+	if !errors.Is(err, ErrTranscriptChanged) {
+		t.Fatalf("Append error = %v, want ErrTranscriptChanged", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, changed) {
+		t.Fatalf("conversation changed after rejected append:\ngot  %s\nwant %s", got, changed)
+	}
+	metadataAfter, err := os.ReadFile(filepath.Join(s.Dir, metadataFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(metadataAfter, metadataBefore) {
+		t.Fatal("rejected append replaced the transcript checkpoint")
+	}
+	if len(s.History) != 1 || len(s.transcript.entries) != 1 {
+		t.Fatalf("rejected append mutated memory: history=%d entries=%d", len(s.History), len(s.transcript.entries))
+	}
+}
+
+func TestSessionAppendNeverReportsFailureAfterPersistingBatch(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	external := messageWithID(llm.TextMessage(llm.RoleUser, "external"), "external")
+	externalLine, err := marshalJSONLine(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.beforeTranscriptWrite = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.Write(externalLine); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	message := messageWithID(llm.TextMessage(llm.RoleAssistant, "owned"), "owned")
+	appendErr := s.Append(message)
+	data, err := os.ReadFile(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := bytes.Contains(data, []byte(`"id":"owned"`))
+	if appendErr != nil && persisted {
+		t.Fatalf("Append error = %v after owned batch persisted: %s", appendErr, data)
+	}
+	if appendErr == nil && !persisted {
+		t.Fatalf("Append succeeded without persisting owned batch: %s", data)
+	}
+}
+
+func TestSessionAppendAdoptsCanonicalSuffixAfterCommittedRace(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	external := messageWithID(llm.TextMessage(llm.RoleUser, "external"), "external-after")
+	externalLine, err := marshalJSONLine(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.afterTranscriptWrite = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.Write(externalLine); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleAssistant, "owned"), "owned-before")); err != nil {
+		t.Fatalf("Append error after committed race = %v", err)
+	}
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "owned-before,external-after" {
+		t.Fatalf("resident history ids = %s, want owned-before,external-after", got)
+	}
+	meta, err := loadMetadata(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !transcriptCheckpointValid(meta.Transcript, fingerprint) {
+		t.Fatalf("recovered checkpoint = %+v, want current sealed checkpoint", meta.Transcript)
+	}
+}
+
+func TestSessionAppendRetriesMetadataAfterCommittedDivergence(t *testing.T) {
+	historyPath := filepath.Join(t.TempDir(), "history.json")
+	s, err := NewWithOptions(t.TempDir(), Options{HistoryPath: historyPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	metadataPath := filepath.Join(s.Dir, metadataFile)
+	originalMetadata, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	external := messageWithID(llm.TextMessage(llm.RoleUser, "external"), "external-after")
+	externalLine, err := marshalJSONLine(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.afterTranscriptWrite = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.Write(externalLine); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		if removeErr := os.Remove(metadataPath); removeErr != nil {
+			t.Fatal(removeErr)
+		}
+		if mkdirErr := os.Mkdir(metadataPath, 0o755); mkdirErr != nil {
+			t.Fatal(mkdirErr)
+		}
+		if writeErr := os.WriteFile(filepath.Join(metadataPath, "block"), []byte("block"), 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
+
+	owned := messageWithID(llm.TextMessage(llm.RoleAssistant, "owned"), "owned-before")
+	assigned, err := s.AppendBatchAssigned([]llm.Message{owned})
+	if err != nil {
+		t.Fatalf("committed divergence append = %v", err)
+	}
+	if len(assigned) != 1 || assigned[0].ID != owned.ID {
+		t.Fatalf("assigned = %+v, want committed owned message", assigned)
+	}
+	if !s.metadataDirty {
+		t.Fatal("metadata failure discarded its retry obligation")
+	}
+	if s.historyDirty {
+		t.Fatal("successful history refresh remained dirty")
+	}
+	blocked := messageWithID(llm.TextMessage(llm.RoleUser, "blocked"), "blocked")
+	if err := s.Append(blocked); err == nil || !strings.Contains(err.Error(), "retry derived metadata") {
+		t.Fatalf("append with unresolved metadata obligation = %v, want retry error", err)
+	}
+	data, err := os.ReadFile(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(`"id":"blocked"`)) {
+		t.Fatalf("blocked retry appended a duplicate-risk batch: %s", data)
+	}
+
+	s.afterTranscriptWrite = nil
+	if err := os.RemoveAll(metadataPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadataPath, originalMetadata, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "next"), "next")); err != nil {
+		t.Fatalf("append after restoring metadata = %v", err)
+	}
+	if s.metadataDirty || s.historyDirty {
+		t.Fatalf("derived state remained dirty: metadata=%t history=%t", s.metadataDirty, s.historyDirty)
+	}
+	meta, err := loadMetadata(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !transcriptCheckpointValid(meta.Transcript, fingerprint) {
+		t.Fatalf("retried checkpoint = %+v, want current fingerprint", meta.Transcript)
+	}
+	history, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Sessions) != 1 || history.Sessions[0].Turns != 2 {
+		t.Fatalf("history after retry = %+v, want current two user turns", history.Sessions)
+	}
+}
+
+func TestSessionAppendRetriesHistoryCacheWithoutDuplicatingCommittedBatch(t *testing.T) {
+	historyPath := filepath.Join(t.TempDir(), "history.json")
+	if err := os.Mkdir(historyPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(historyPath, "block"), []byte("block"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewWithOptions(t.TempDir(), Options{HistoryPath: historyPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	first := messageWithID(llm.TextMessage(llm.RoleUser, "first"), "first")
+	assigned, err := s.AppendBatchAssigned([]llm.Message{first})
+	if err != nil {
+		t.Fatalf("append with unavailable history cache = %v", err)
+	}
+	if len(assigned) != 1 || assigned[0].ID != first.ID {
+		t.Fatalf("assigned = %+v, want committed first message", assigned)
+	}
+	if !s.historyDirty {
+		t.Fatal("history failure discarded its retry obligation")
+	}
+	if err := os.RemoveAll(historyPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleAssistant, "second"), "second")); err != nil {
+		t.Fatalf("append after restoring history cache = %v", err)
+	}
+	if s.historyDirty {
+		t.Fatal("history retry obligation remained after successful refresh")
+	}
+	data, err := os.ReadFile(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Count(data, []byte(`"id":"first"`)) != 1 || bytes.Count(data, []byte(`"id":"second"`)) != 1 {
+		t.Fatalf("conversation contains duplicate committed batches: %s", data)
+	}
+	history, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Sessions) != 1 || history.Sessions[0].Turns != 1 {
+		t.Fatalf("history after retry = %+v, want current summary", history.Sessions)
+	}
+}
+
+func TestConcurrentAppendsReleaseTranscriptLockBeforeHistoryRefresh(t *testing.T) {
+	historyPath := filepath.Join(t.TempDir(), "history.json")
+	s, err := NewWithOptions(t.TempDir(), Options{HistoryPath: historyPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	held := make(chan struct{})
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	lockDone := make(chan error, 1)
+	go func() {
+		lockDone <- withHistoryLock(historyPath, func() error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "first"), "first"))
+	}()
+	waitForTranscriptMessage(t, s.Dir, "first")
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- s.Append(messageWithID(llm.TextMessage(llm.RoleAssistant, "second"), "second"))
+	}()
+	waitForTranscriptMessage(t, s.Dir, "second")
+
+	close(release)
+	released = true
+	if err := <-lockDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStaleHistoryRefreshKeepsRetryObligation(t *testing.T) {
+	historyPath := filepath.Join(t.TempDir(), "history.json")
+	s, err := NewWithOptions(t.TempDir(), Options{HistoryPath: historyPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "first"), "first")); err != nil {
+		t.Fatal(err)
+	}
+	stale := s.Info()
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "second"), "second")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.finishHistoryRefresh(historyPath, stale); err != nil {
+		t.Fatal(err)
+	}
+	if !s.historyDirty {
+		t.Fatal("stale history refresh cleared the retry obligation")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	history, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Sessions) != 1 || history.Sessions[0].Turns != 2 {
+		t.Fatalf("history after stale refresh repair = %+v, want current two-turn summary", history.Sessions)
+	}
+}
+
+func waitForTranscriptMessage(t *testing.T, dir, id string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	needle := []byte(`"id":"` + id + `"`)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(filepath.Join(dir, conversationFile))
+		if err == nil && bytes.Contains(data, needle) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("message %q was not committed before history refresh completed", id)
+}
+
+func TestSessionAppendRecognizesBatchShiftedByExternalAppend(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "base"), "base")); err != nil {
+		t.Fatal(err)
+	}
+	external := messageWithID(llm.TextMessage(llm.RoleAssistant, "external"), "external-before")
+	externalLine, err := marshalJSONLine(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.afterTranscriptPrewriteCheck = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.Write(externalLine); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	owned := messageWithID(llm.TextMessage(llm.RoleUser, "owned"), "owned-shifted")
+	if err := s.Append(owned); err != nil {
+		t.Fatalf("Append shifted batch = %v", err)
+	}
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "base,external-before,owned-shifted" {
+		t.Fatalf("resident history ids = %s, want base,external-before,owned-shifted", got)
+	}
+}
+
+func TestSessionAppendPreservesFullHistoryAfterCompactedDivergence(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, message := range []llm.Message{
+		messageWithID(llm.TextMessage(llm.RoleUser, "old"), "m1"),
+		messageWithID(llm.TextMessage(llm.RoleAssistant, "retained"), "m2"),
+	} {
+		if err := s.Append(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compact := messageWithID(compactTestMessage("summary"), "m3")
+	compact.Compaction = &llm.CompactionMetadata{RetainedMessageIDs: []string{"m2"}}
+	if err := s.Append(compact); err != nil {
+		t.Fatal(err)
+	}
+	external := messageWithID(llm.TextMessage(llm.RoleAssistant, "external"), "m5")
+	externalLine, err := marshalJSONLine(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.afterTranscriptWrite = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.Write(externalLine); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "owned"), "m4")); err != nil {
+		t.Fatalf("Append after compacted divergence = %v", err)
+	}
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "m1,m2,m3,m4,m5" {
+		t.Fatalf("live history ids = %s, want m1,m2,m3,m4,m5", got)
+	}
+	if got := strings.Join(transcriptEntryIDs(s.transcript.entries), ","); got != "m2,m3,m4,m5" {
+		t.Fatalf("active index ids = %s, want m2,m3,m4,m5", got)
+	}
+}
+
+func TestSessionAppendRejectsSameSizedPostWriteRewrite(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	lastActiveMS := s.lastActiveMS
+	owned := messageWithID(llm.TextMessage(llm.RoleAssistant, "owned"), "owned-same")
+	rewritten := messageWithID(llm.TextMessage(llm.RoleAssistant, "other"), "other-same")
+	ownedLine, err := marshalJSONLine(owned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrittenLine, err := marshalJSONLine(rewritten)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ownedLine) != len(rewrittenLine) {
+		t.Fatalf("test rows differ in size: owned=%d rewritten=%d", len(ownedLine), len(rewrittenLine))
+	}
+	s.afterTranscriptWrite = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.WriteAt(rewrittenLine, 0); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	if err := s.Append(owned); !errors.Is(err, ErrTranscriptChanged) {
+		t.Fatalf("Append error = %v, want ErrTranscriptChanged", err)
+	}
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "other-same" {
+		t.Fatalf("resident history ids = %s, want other-same", got)
+	}
+	if s.lastActiveMS != lastActiveMS {
+		t.Fatalf("last_active_at_ms = %d, want unchanged %d after rejected append", s.lastActiveMS, lastActiveMS)
+	}
+	meta, err := loadMetadata(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.LastActiveAtMS != lastActiveMS {
+		t.Fatalf("persisted last_active_at_ms = %d, want unchanged %d", meta.LastActiveAtMS, lastActiveMS)
+	}
+	data, err := os.ReadFile(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(`"id":"owned-same"`)) || !bytes.Contains(data, []byte(`"id":"other-same"`)) {
+		t.Fatalf("rewritten transcript = %s, want only other-same", data)
+	}
+}
+
+func TestSessionAppendAcceptsAtomicReplacementContainingBatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows prevents replacing the canonical path while the resident handle is open")
+	}
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	path := filepath.Join(s.Dir, conversationFile)
+	s.afterTranscriptWrite = func() {
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		replacement := filepath.Join(s.Dir, "conversation.replacement")
+		if writeErr := os.WriteFile(replacement, data, 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		if renameErr := os.Rename(replacement, path); renameErr != nil {
+			t.Fatal(renameErr)
+		}
+	}
+
+	owned := messageWithID(llm.TextMessage(llm.RoleAssistant, "owned"), "owned-replaced")
+	if err := s.Append(owned); err != nil {
+		t.Fatalf("Append error after canonical replacement containing batch = %v", err)
+	}
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "owned-replaced" {
+		t.Fatalf("resident history ids = %s, want owned-replaced", got)
+	}
+	if err := s.convFD.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.convFD = nil
+	s.afterTranscriptWrite = nil
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "next"), "next")); err != nil {
+		t.Fatalf("Append after descriptor rebinding = %v", err)
+	}
+	_, full, err := LoadInfo(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(messageIDsForTest(full), ","); got != "owned-replaced,next" {
+		t.Fatalf("canonical history ids = %s, want owned-replaced,next", got)
+	}
+}
+
+func TestTranscriptRangeRecheckDetectsSameInodeWeakRewrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), conversationFile)
+	original := []byte("owned-row\n")
+	rewritten := []byte("other-row\n")
+	if len(original) != len(rewritten) {
+		t.Fatalf("test data length mismatch: original=%d rewritten=%d", len(original), len(rewritten))
+	}
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	before, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched, err := transcriptRangeMatches(file, 0, original); err != nil || !matched {
+		t.Fatalf("initial range match = %t, %v; want true, nil", matched, err)
+	}
+
+	if err := os.WriteFile(path, rewritten, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("test rewrote a different inode")
+	}
+	if before.Size() != after.Size() || before.ModTime().UnixNano() != after.ModTime().UnixNano() {
+		t.Fatalf("weak metadata changed: before=%d/%d after=%d/%d",
+			before.Size(), before.ModTime().UnixNano(), after.Size(), after.ModTime().UnixNano())
+	}
+	if matched, err := transcriptRangeMatches(file, 0, original); err != nil || matched {
+		t.Fatalf("final range match = %t, %v; want false, nil", matched, err)
+	}
+}
+
+func TestSessionAppendAdoptsCanonicalPrefixRewriteAfterWrite(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	first := messageWithID(llm.TextMessage(llm.RoleAssistant, "first"), "first-old")
+	rewritten := messageWithID(llm.TextMessage(llm.RoleAssistant, "other"), "first-new")
+	firstLine, err := marshalJSONLine(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrittenLine, err := marshalJSONLine(rewritten)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstLine) != len(rewrittenLine) {
+		t.Fatalf("test rows differ in size: first=%d rewritten=%d", len(firstLine), len(rewrittenLine))
+	}
+	if err := s.Append(first); err != nil {
+		t.Fatal(err)
+	}
+	s.afterTranscriptWrite = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.WriteAt(rewrittenLine, 0); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	owned := messageWithID(llm.TextMessage(llm.RoleAssistant, "owned"), "owned")
+	if err := s.Append(owned); err != nil {
+		t.Fatalf("Append after canonical prefix rewrite = %v", err)
+	}
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "first-new,owned" {
+		t.Fatalf("resident history ids = %s, want first-new,owned", got)
+	}
+	meta, err := loadMetadata(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalFingerprint, err := fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !transcriptCheckpointValid(meta.Transcript, canonicalFingerprint) {
+		t.Fatalf("checkpoint = %+v, want canonical fingerprint %+v", meta.Transcript, canonicalFingerprint)
+	}
+}
+
+func TestSessionAppendAdoptsPrefixRewriteAfterPrewriteDigest(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	first := messageWithID(llm.TextMessage(llm.RoleAssistant, "first"), "first-old")
+	rewritten := messageWithID(llm.TextMessage(llm.RoleAssistant, "other"), "first-new")
+	firstLine, err := marshalJSONLine(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrittenLine, err := marshalJSONLine(rewritten)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstLine) != len(rewrittenLine) {
+		t.Fatalf("test rows differ in size: first=%d rewritten=%d", len(firstLine), len(rewrittenLine))
+	}
+	if err := s.Append(first); err != nil {
+		t.Fatal(err)
+	}
+	s.afterTranscriptPrewriteCheck = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.WriteAt(rewrittenLine, 0); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleAssistant, "owned"), "owned")); err != nil {
+		t.Fatalf("Append after prewrite prefix rewrite = %v", err)
+	}
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "first-new,owned" {
+		t.Fatalf("resident history ids = %s, want first-new,owned", got)
+	}
+}
+
+func TestTranscriptPrefixDigestDetectsRewrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversation.jsonl")
+	if err := os.WriteFile(path, []byte("prefix-owned"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	digest, err := digestTranscriptPrefix(file, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched, err := transcriptPrefixDigestMatches(file, 6, digest); err != nil || !matched {
+		t.Fatalf("unchanged prefix match = %t, %v; want true, nil", matched, err)
+	}
+	if _, err := file.WriteAt([]byte("PREFIX"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if matched, err := transcriptPrefixDigestMatches(file, 6, digest); err != nil || matched {
+		t.Fatalf("rewritten prefix match = %t, %v; want false, nil", matched, err)
+	}
+}
+
+func TestConcurrentSessionAppendsSerializeBeforeFingerprintCheck(t *testing.T) {
+	first, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := first.Dir
+	second, err := Load(dir)
+	if err != nil {
+		first.Close()
+		t.Fatal(err)
+	}
+	defer first.Close()
+	defer second.Close()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	first.beforeTranscriptWrite = func() {
+		close(entered)
+		<-release
+	}
+	firstResult := make(chan error, 1)
+	secondResult := make(chan error, 1)
+	go func() {
+		firstResult <- first.Append(messageWithID(llm.TextMessage(llm.RoleUser, "first"), "first"))
+	}()
+	<-entered
+	go func() {
+		secondResult <- second.Append(messageWithID(llm.TextMessage(llm.RoleUser, "second"), "second"))
+	}()
+	select {
+	case err := <-secondResult:
+		close(release)
+		t.Fatalf("second append completed before the first write was released: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	firstErr := <-firstResult
+	secondErr := <-secondResult
+	if firstErr != nil {
+		t.Fatalf("first append error = %v", firstErr)
+	}
+	if !errors.Is(secondErr, ErrTranscriptChanged) {
+		t.Fatalf("second append error = %v, want ErrTranscriptChanged", secondErr)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"id":"first"`)) || bytes.Contains(data, []byte(`"id":"second"`)) {
+		t.Fatalf("serialized transcript = %s, want only first batch", data)
+	}
+}
+
+func TestResidentTranscriptFingerprintAllowsMatchingWeakIdentity(t *testing.T) {
+	weak := transcriptFingerprint{Size: 42, MtimeNS: 99}
+	if !residentTranscriptFingerprintMatches(weak, weak) {
+		t.Fatal("matching weak fingerprint rejected resident append")
+	}
+	if residentTranscriptFingerprintMatches(weak, transcriptFingerprint{Size: 43, MtimeNS: 99}) {
+		t.Fatal("changed weak fingerprint accepted resident append")
 	}
 }
 
@@ -280,6 +1120,28 @@ func TestSessionAppendBatchPersistsAdjacentMessages(t *testing.T) {
 	}
 	if s.transcript.turns != 0 {
 		t.Fatalf("fallback notice counted as user turn: %d", s.transcript.turns)
+	}
+}
+
+func TestSessionAppendReusesAvailableHistoryCapacity(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Append(llm.TextMessage(llm.RoleUser, "first")); err != nil {
+		t.Fatal(err)
+	}
+
+	history := make([]llm.Message, len(s.History), len(s.History)+2)
+	copy(history, s.History)
+	s.History = history
+	first := &s.History[0]
+	if err := s.Append(llm.TextMessage(llm.RoleAssistant, "second")); err != nil {
+		t.Fatal(err)
+	}
+	if &s.History[0] != first {
+		t.Fatal("Append replaced history backing storage despite available capacity")
 	}
 }
 
@@ -767,6 +1629,57 @@ func TestSession_AppendEventToJSONL(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(s.Dir, eventsFile))
 	if c := countLines(data); c != 2 {
 		t.Fatalf("expected 2 event lines, got %d", c)
+	}
+}
+
+func TestSessionAppendEventDoesNotDependOnMetadataRetry(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	metadataPath := filepath.Join(s.Dir, metadataFile)
+	originalMetadata, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.eventFD.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.eventFD = nil
+	if err := os.Remove(metadataPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(metadataPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metadataPath, "block-replacement"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.metadataDirty = true
+
+	if err := s.AppendEvent(events.Event{Type: "turn.started", Payload: "durable"}); err != nil {
+		t.Fatalf("AppendEvent with unavailable transcript metadata = %v", err)
+	}
+	if !s.metadataDirty {
+		t.Fatal("event append cleared failed metadata retry obligation")
+	}
+	data, err := os.ReadFile(filepath.Join(s.Dir, eventsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countLines(data) != 1 || !bytes.Contains(data, []byte("durable")) {
+		t.Fatalf("events = %s, want durable event", data)
+	}
+
+	if err := os.RemoveAll(metadataPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metadataPath, originalMetadata, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close retry metadata = %v", err)
 	}
 }
 

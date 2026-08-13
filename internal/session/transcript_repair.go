@@ -37,18 +37,27 @@ func (s *Session) RepairTranscript(reason string) ([]TranscriptRepair, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	convPath := filepath.Join(s.Dir, conversationFile)
-	history := s.History
-	if len(s.transcript.entries) > len(s.History) {
-		fullHistory, err := readTranscriptMessages(convPath, s.transcript.entries)
-		if err != nil {
-			return nil, err
-		}
-		history = fullHistory
+	if err := s.retryDerivedStateLocked(); err != nil {
+		return nil, err
 	}
-	repaired, repairs := repairTranscriptMessages(history, reason)
+
+	if s.transcript.repairSafe {
+		return nil, nil
+	}
+	convPath := filepath.Join(s.Dir, conversationFile)
+	fullIndex, err := scanTranscriptIndex(convPath)
+	if err != nil {
+		return nil, err
+	}
+	fullHistory, err := readTranscriptMessagesForFingerprint(convPath, fullIndex.entries, fullIndex.fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	repaired, repairs := repairTranscriptMessages(fullHistory, reason)
 	if len(repairs) == 0 {
+		fullIndex.repairSafe = true
+		fullIndex.repairPrefixSafe = true
+		s.transcript = fullIndex
 		return nil, nil
 	}
 	if err := s.rewriteConversationLocked(repaired); err != nil {
@@ -173,18 +182,27 @@ func (s *Session) rewriteConversationLocked(history []llm.Message) error {
 	if err != nil {
 		return err
 	}
-	activeHistory, err := readActiveTranscriptWindow(convPath, idx)
+	idx.repairSafe = true
+	idx.repairPrefixSafe = true
+	idx = activeTranscriptIndex(idx)
+	activeHistory, err := readTranscriptMessagesForFingerprint(convPath, idx.entries, idx.fingerprint)
 	if err != nil {
 		return err
 	}
-	convFD, err := os.OpenFile(convPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	s.transcript = idx
+	s.History = activeHistory
+	s.metadataDirty = true
+	s.historyDirty = s.historyPath != ""
+	convFD, err := os.OpenFile(convPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
 	if err != nil {
 		return fmt.Errorf("session: reopen repaired conversation: %w", err)
 	}
 	s.convFD = convFD
-	s.transcript = idx
-	s.History = activeHistory
-	return nil
+	if s.beforeRepairCheckpointSave != nil {
+		s.beforeRepairCheckpointSave()
+	}
+	metadataErr := s.persistMetadataLocked()
+	return metadataErr
 }
 
 func writeConversationMessages(path string, history []llm.Message) error {

@@ -336,8 +336,9 @@ $JUEX_HOME/
     ├── observables/             # generated runs, observations, and schedule state
     └── sessions/<id>/
         ├── logs/
-        ├── session.json         # alias, kind, and owned epoch-ms timestamps
+        ├── session.json         # metadata + rebuildable transcript checkpoint
         ├── conversation.jsonl
+        ├── conversation.lock    # cross-instance transcript append guard
         ├── events.jsonl
         ├── pending_input.jsonl
         ├── notes.md

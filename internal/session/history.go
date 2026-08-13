@@ -31,10 +31,11 @@ var (
 )
 
 type metadata struct {
-	Alias          string `json:"alias,omitempty"`
-	Kind           string `json:"kind,omitempty"`
-	StartedAtMS    int64  `json:"started_at_ms"`
-	LastActiveAtMS int64  `json:"last_active_at_ms"`
+	Alias          string                `json:"alias,omitempty"`
+	Kind           string                `json:"kind,omitempty"`
+	StartedAtMS    int64                 `json:"started_at_ms"`
+	LastActiveAtMS int64                 `json:"last_active_at_ms"`
+	Transcript     *transcriptCheckpoint `json:"transcript,omitempty"`
 }
 
 type History struct {
@@ -263,15 +264,26 @@ func repairHistorySummaries(root, path string, infos []Info) error {
 			if !ok {
 				continue
 			}
-			st, err := os.Stat(filepath.Join(dir, conversationFile))
+			fingerprint, err := fingerprintFromPath(filepath.Join(dir, conversationFile))
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					continue
 				}
 				return err
 			}
-			if fingerprintFromFileInfo(st) != info.transcript {
+			if !fingerprint.strong() || fingerprint != info.transcript {
 				continue
+			}
+			if transcriptCheckpointContentDigestRequired(fingerprint) {
+				matched, err := transcriptDigestMatchesPath(
+					filepath.Join(dir, conversationFile),
+					fingerprint,
+					info.transcriptDigest,
+					info.transcriptDigestValid,
+				)
+				if err != nil || !matched {
+					continue
+				}
 			}
 			info.Dir = dir
 			info = normalizeInfo(info)

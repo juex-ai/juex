@@ -10,7 +10,9 @@
 package session
 
 import (
+	"bytes"
 	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -26,8 +28,9 @@ import (
 )
 
 const (
-	conversationFile = "conversation.jsonl"
-	eventsFile       = "events.jsonl"
+	conversationFile     = "conversation.jsonl"
+	transcriptAppendLock = "conversation.lock"
+	eventsFile           = "events.jsonl"
 )
 
 type Session struct {
@@ -47,6 +50,15 @@ type Session struct {
 	historyPath  string
 	startedAtMS  int64
 	lastActiveMS int64
+	// Canonical transcript commits cannot be retried by their callers. Keep
+	// failed derived writes resident until a later operation or Close repairs them.
+	metadataDirty bool
+	historyDirty  bool
+
+	beforeTranscriptWrite        func()
+	afterTranscriptPrewriteCheck func()
+	afterTranscriptWrite         func()
+	beforeRepairCheckpointSave   func()
 }
 
 type Options struct {
@@ -93,6 +105,7 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 			historyPath:  opts.HistoryPath,
 			startedAtMS:  nowMS,
 			lastActiveMS: nowMS,
+			transcript:   newEmptyTranscriptIndex(),
 		}, nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -109,7 +122,7 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 	}); err != nil {
 		return nil, err
 	}
-	convFD, err := os.OpenFile(filepath.Join(dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	convFD, err := os.OpenFile(filepath.Join(dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}
@@ -129,6 +142,7 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 		historyPath:  opts.HistoryPath,
 		startedAtMS:  nowMS,
 		lastActiveMS: nowMS,
+		transcript:   newEmptyTranscriptIndex(),
 	}, nil
 }
 
@@ -178,10 +192,57 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		s.mu.Unlock()
 		return nil, err
 	}
+	appendGuard, err := acquireLockGuard(filepath.Join(s.Dir, transcriptAppendLock))
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	defer func() { _ = appendGuard.Close() }()
+	currentFingerprint, err := s.currentTranscriptFingerprintLocked()
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	if !residentTranscriptFingerprintMatches(s.transcript.fingerprint, currentFingerprint) {
+		s.mu.Unlock()
+		return nil, ErrTranscriptChanged
+	}
 	offset, err := s.convFD.Seek(0, io.SeekEnd)
 	if err != nil {
 		s.mu.Unlock()
 		return nil, err
+	}
+	if offset != currentFingerprint.Size {
+		s.mu.Unlock()
+		return nil, ErrTranscriptChanged
+	}
+	if s.beforeTranscriptWrite != nil {
+		s.beforeTranscriptWrite()
+	}
+	preWriteFingerprint, err := s.currentTranscriptFingerprintLocked()
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	if preWriteFingerprint != currentFingerprint || preWriteFingerprint.Size != offset {
+		s.mu.Unlock()
+		return nil, ErrTranscriptChanged
+	}
+	if !s.transcript.contentDigestValid {
+		s.mu.Unlock()
+		return nil, ErrTranscriptChanged
+	}
+	prefixDigest, appendedDigest, err := digestTranscriptAppend(s.convFD, offset, data)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	if prefixDigest != s.transcript.contentDigest {
+		s.mu.Unlock()
+		return nil, ErrTranscriptChanged
+	}
+	if s.afterTranscriptPrewriteCheck != nil {
+		s.afterTranscriptPrewriteCheck()
 	}
 	written, writeErr := s.convFD.Write(data)
 	if writeErr == nil && written != len(data) {
@@ -195,14 +256,63 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		}
 		return nil, writeErr
 	}
+	if s.convFD != nil {
+		_ = s.convFD.Close()
+		s.convFD = nil
+	}
+	committedFingerprint, _ := fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
+	if s.afterTranscriptWrite != nil {
+		s.afterTranscriptWrite()
+	}
+	nextTranscript := s.transcript
+	nextTranscript.repairPending = append([]pendingTranscriptToolUse(nil), s.transcript.repairPending...)
+	nextHistory := append(s.History, prepared...)
+	entryOffset := offset
+	for i, message := range prepared {
+		nextTranscript.appendMessage(message, entryOffset, len(lines[i]))
+		entryOffset += int64(len(lines[i]))
+	}
 	lastActiveMS := time.Now().UTC().UnixMilli()
 	if lastActiveMS < s.lastActiveMS {
 		lastActiveMS = s.lastActiveMS
 	}
+	commit, inspectErr := s.inspectTranscriptCommitLocked(
+		offset,
+		data,
+		committedFingerprint,
+		prefixDigest,
+		appendedDigest,
+	)
+	if commit.diverged {
+		s.adoptTranscriptCommitLocked(commit, nextTranscript, nextHistory, lastActiveMS)
+		historyPath, historyInfo, refreshHistory := s.prepareHistoryRefreshLocked()
+		_ = appendGuard.Close()
+		appendGuard = nil
+		s.mu.Unlock()
+		if refreshHistory {
+			_ = s.finishHistoryRefresh(historyPath, historyInfo)
+		}
+		if commit.committed {
+			return prepared, nil
+		}
+		if inspectErr != nil {
+			return nil, inspectErr
+		}
+		return nil, ErrTranscriptChanged
+	}
+	if inspectErr != nil {
+		s.mu.Unlock()
+		return nil, inspectErr
+	}
+	nextTranscript.fingerprint = commit.fingerprint
+	nextTranscript.contentDigest = commit.contentDigest
+	nextTranscript.contentDigestValid = commit.contentDigestValid
 	meta := s.metadataLocked()
 	meta.LastActiveAtMS = lastActiveMS
+	meta.Transcript = buildTranscriptCheckpoint(nextTranscript, nextTranscript.fingerprint)
 	if err := saveMetadata(s.Dir, meta); err != nil {
 		rollbackErr := s.rollbackConversationLocked(offset)
+		s.metadataDirty = rollbackErr == nil
 		s.mu.Unlock()
 		if rollbackErr != nil {
 			return nil, errors.Join(err, fmt.Errorf("session: rollback conversation batch: %w", rollbackErr))
@@ -210,19 +320,240 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		return nil, err
 	}
 	s.lastActiveMS = lastActiveMS
-	entryOffset := offset
-	for i, message := range prepared {
-		s.History = append(s.History, message)
-		s.transcript.appendMessage(message, entryOffset, len(lines[i]))
-		entryOffset += int64(len(lines[i]))
-	}
-	info, ok := s.historyInfoLocked()
-	historyPath := s.historyPath
+	s.History = nextHistory
+	s.transcript = activeTranscriptIndex(nextTranscript)
+	s.metadataDirty = false
+	s.reopenConversationLocked()
+	historyPath, historyInfo, refreshHistory := s.prepareHistoryRefreshLocked()
+	_ = appendGuard.Close()
+	appendGuard = nil
 	s.mu.Unlock()
-	if !ok {
-		return prepared, nil
+	if refreshHistory {
+		_ = s.finishHistoryRefresh(historyPath, historyInfo)
 	}
-	return prepared, RecordSession(historyPath, info)
+	return prepared, nil
+}
+
+type transcriptCommit struct {
+	committed          bool
+	diverged           bool
+	fingerprint        transcriptFingerprint
+	index              transcriptIndex
+	history            []llm.Message
+	contentDigest      transcriptPrefixDigest
+	contentDigestValid bool
+}
+
+func (s *Session) inspectTranscriptCommitLocked(
+	offset int64,
+	data []byte,
+	committedFingerprint transcriptFingerprint,
+	prefixDigest transcriptPrefixDigest,
+	appendedDigest transcriptPrefixDigest,
+) (transcriptCommit, error) {
+	path := filepath.Join(s.Dir, conversationFile)
+	snapshot, err := openTranscriptSnapshot(path)
+	if err != nil {
+		return transcriptCommit{diverged: true}, err
+	}
+	defer snapshot.close()
+	committed, readErr := transcriptRangeMatches(snapshot.file, offset, data)
+	expectedSize := offset + int64(len(data))
+	incrementalSafe := committedFingerprint.strong() && snapshot.fingerprint == committedFingerprint
+	if committed && snapshot.fingerprint.Size == expectedSize {
+		incrementalSafe, err = transcriptPrefixDigestMatches(snapshot.file, offset, prefixDigest)
+		if err != nil {
+			return transcriptCommit{diverged: true}, err
+		}
+	}
+	if incrementalSafe && committed && snapshot.fingerprint.Size == expectedSize {
+		if err := snapshot.verify(); err != nil {
+			return transcriptCommit{diverged: true}, err
+		}
+		committed, err = transcriptRangeMatches(snapshot.file, offset, data)
+		if err != nil {
+			return transcriptCommit{diverged: true}, err
+		}
+		if !committed {
+			return s.inspectDivergedTranscriptCommitLocked(snapshot, offset, data)
+		}
+		prefixMatches, err := transcriptPrefixDigestMatches(snapshot.file, offset, prefixDigest)
+		if err != nil {
+			return transcriptCommit{diverged: true}, err
+		}
+		if !prefixMatches {
+			return s.inspectDivergedTranscriptCommitLocked(snapshot, offset, data)
+		}
+		commit := transcriptCommit{committed: true, fingerprint: snapshot.fingerprint}
+		commit.contentDigest = appendedDigest
+		commit.contentDigestValid = true
+		return commit, nil
+	}
+
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return transcriptCommit{committed: committed, diverged: true, fingerprint: snapshot.fingerprint}, readErr
+	}
+	return s.inspectDivergedTranscriptCommitLocked(snapshot, offset, data)
+}
+
+type transcriptPrefixDigest [sha256.Size]byte
+
+func digestTranscriptPrefix(file *os.File, size int64) (transcriptPrefixDigest, error) {
+	hash := sha256.New()
+	if _, err := io.Copy(hash, io.NewSectionReader(file, 0, size)); err != nil {
+		return transcriptPrefixDigest{}, err
+	}
+	var digest transcriptPrefixDigest
+	copy(digest[:], hash.Sum(nil))
+	return digest, nil
+}
+
+func digestTranscriptAppend(
+	file *os.File,
+	size int64,
+	suffix []byte,
+) (transcriptPrefixDigest, transcriptPrefixDigest, error) {
+	hash := sha256.New()
+	if _, err := io.Copy(hash, io.NewSectionReader(file, 0, size)); err != nil {
+		return transcriptPrefixDigest{}, transcriptPrefixDigest{}, err
+	}
+	var prefix transcriptPrefixDigest
+	copy(prefix[:], hash.Sum(nil))
+	if _, err := hash.Write(suffix); err != nil {
+		return transcriptPrefixDigest{}, transcriptPrefixDigest{}, err
+	}
+	var appended transcriptPrefixDigest
+	copy(appended[:], hash.Sum(nil))
+	return prefix, appended, nil
+}
+
+func transcriptPrefixDigestMatches(file *os.File, size int64, expected transcriptPrefixDigest) (bool, error) {
+	actual, err := digestTranscriptPrefix(file, size)
+	return actual == expected, err
+}
+
+func (s *Session) inspectDivergedTranscriptCommitLocked(
+	snapshot *transcriptSnapshot,
+	offset int64,
+	data []byte,
+) (transcriptCommit, error) {
+	path := filepath.Join(s.Dir, conversationFile)
+	result := transcriptCommit{diverged: true, fingerprint: snapshot.fingerprint}
+	idx, err := scanTranscriptIndexFromFile(snapshot.file, path, 0)
+	if err != nil {
+		return result, err
+	}
+	idx.fingerprint = snapshot.fingerprint
+	active := activeTranscriptIndex(idx)
+	history, err := readTranscriptMessagesFromFile(snapshot.file, path, idx.entries)
+	if err != nil {
+		return result, err
+	}
+	if err := snapshot.verify(); err != nil {
+		return transcriptCommit{diverged: true}, err
+	}
+	matched, err := transcriptPrefixDigestMatches(snapshot.file, snapshot.fingerprint.Size, idx.contentDigest)
+	if err != nil {
+		return result, err
+	}
+	if !idx.contentDigestValid || !matched {
+		return result, ErrTranscriptChanged
+	}
+	result.committed, err = transcriptBatchPresent(snapshot.file, idx.entries, offset, data)
+	if err != nil {
+		return result, err
+	}
+	if err := snapshot.verify(); err != nil {
+		return transcriptCommit{diverged: true}, err
+	}
+	matched, err = transcriptPrefixDigestMatches(snapshot.file, snapshot.fingerprint.Size, idx.contentDigest)
+	if err != nil || !matched {
+		if err != nil {
+			return result, err
+		}
+		return result, ErrTranscriptChanged
+	}
+	result.index = active
+	result.history = history
+	result.contentDigest = idx.contentDigest
+	result.contentDigestValid = idx.contentDigestValid
+	return result, nil
+}
+
+func transcriptBatchPresent(file *os.File, entries []transcriptIndexEntry, offset int64, data []byte) (bool, error) {
+	for _, entry := range entries {
+		if entry.Offset < offset {
+			continue
+		}
+		matched, err := transcriptRangeMatches(file, entry.Offset, data)
+		if err != nil {
+			return false, err
+		}
+		if matched {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func transcriptRangeMatches(file *os.File, offset int64, data []byte) (bool, error) {
+	written := make([]byte, len(data))
+	n, err := file.ReadAt(written, offset)
+	if errors.Is(err, io.EOF) {
+		err = nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return n == len(data) && bytes.Equal(written, data), err
+}
+
+func (s *Session) adoptTranscriptCommitLocked(
+	commit transcriptCommit,
+	fallbackIndex transcriptIndex,
+	fallbackHistory []llm.Message,
+	lastActiveMS int64,
+) {
+	if commit.index.fingerprint != (transcriptFingerprint{}) {
+		fallbackIndex = commit.index
+		fallbackHistory = commit.history
+		if !commit.committed {
+			lastActiveMS = s.lastActiveMS
+		}
+	} else if commit.committed {
+		fallbackIndex.fingerprint = transcriptFingerprint{}
+	} else {
+		fallbackIndex = s.transcript
+		fallbackIndex.fingerprint = transcriptFingerprint{}
+		fallbackHistory = s.History
+		lastActiveMS = s.lastActiveMS
+	}
+	s.reopenConversationLocked()
+	s.lastActiveMS = lastActiveMS
+	s.History = fallbackHistory
+	s.transcript = fallbackIndex
+	_ = s.persistMetadataLocked()
+	s.historyDirty = s.historyPath != ""
+}
+
+func (s *Session) reopenConversationLocked() {
+	if s.convFD != nil {
+		_ = s.convFD.Close()
+		s.convFD = nil
+	}
+	if replacement, err := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_RDWR, 0o644); err == nil {
+		s.convFD = replacement
+	}
+}
+
+func newEmptyTranscriptIndex() transcriptIndex {
+	return transcriptIndex{
+		repairSafe:         true,
+		repairPrefixSafe:   true,
+		complete:           true,
+		contentDigest:      sha256.Sum256(nil),
+		contentDigestValid: true,
+	}
 }
 
 // AppendEvent persists e to events.jsonl. Unlike Append, the event itself
@@ -233,7 +564,10 @@ func (s *Session) AppendEvent(e events.Event) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.ensureFilesLocked(); err != nil {
+	// Event journaling is canonical in its own right. Retry transcript-derived
+	// metadata opportunistically, but never drop an event because that retry failed.
+	_ = s.retryDerivedStateLocked()
+	if err := s.ensureEventFileLocked(); err != nil {
 		return err
 	}
 	e = events.Normalize(e)
@@ -242,10 +576,18 @@ func (s *Session) AppendEvent(e events.Event) error {
 
 func (s *Session) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	var firstErr error
+	if s.metadataDirty {
+		if err := s.persistMetadataLocked(); err != nil {
+			firstErr = err
+		}
+	}
+	historyPath, historyInfo, refreshHistory := "", Info{}, false
+	if s.historyDirty {
+		historyPath, historyInfo, refreshHistory = s.prepareHistoryRefreshLocked()
+	}
 	if s.convFD != nil {
-		if err := s.convFD.Close(); err != nil {
+		if err := s.convFD.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 		s.convFD = nil
@@ -255,6 +597,12 @@ func (s *Session) Close() error {
 			firstErr = err
 		}
 		s.eventFD = nil
+	}
+	s.mu.Unlock()
+	if refreshHistory {
+		if err := s.finishHistoryRefresh(historyPath, historyInfo); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	return firstErr
 }
@@ -275,39 +623,38 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 	alias := meta.Alias
 	kind := meta.Kind
 	convPath := filepath.Join(dir, conversationFile)
-	idx, err := scanTranscriptIndex(convPath)
-	if err != nil {
-		return nil, err
-	}
-	history, err := readActiveTranscriptWindow(convPath, idx)
-	if err != nil {
-		return nil, err
-	}
-	var repairs []TranscriptRepair
+	var idx transcriptIndex
+	loadedFullTranscript := false
 	if opts.RepairTranscript {
-		fullHistory, err := readTranscriptMessages(convPath, idx.entries)
-		if err != nil {
-			return nil, err
-		}
-		fullHistory, repairs = repairTranscriptMessages(fullHistory, "load")
-		if len(repairs) > 0 {
-			if err := writeConversationMessages(convPath, fullHistory); err != nil {
-				return nil, err
-			}
+		if meta.Transcript == nil || !meta.Transcript.RepairSafe {
 			idx, err = scanTranscriptIndex(convPath)
-			if err != nil {
-				return nil, err
+			loadedFullTranscript = true
+		} else {
+			var checkpointed bool
+			idx, checkpointed, err = loadActiveTranscriptIndex(convPath, meta.Transcript)
+			if err == nil && !checkpointed {
+				if idx.complete {
+					loadedFullTranscript = true
+				} else {
+					idx, err = scanTranscriptIndex(convPath)
+					loadedFullTranscript = true
+				}
 			}
 		}
-		history, err = readActiveTranscriptWindow(convPath, idx)
-		if err != nil {
-			return nil, err
-		}
+	} else {
+		idx, _, err = loadActiveTranscriptIndex(convPath, meta.Transcript)
+	}
+	if err != nil {
+		return nil, err
+	}
+	history, err := readTranscriptMessagesForFingerprint(convPath, idx.entries, idx.fingerprint)
+	if err != nil {
+		return nil, err
 	}
 	if err := ensureScratchpadDir(dir); err != nil {
 		return nil, err
 	}
-	convFD, err := os.OpenFile(convPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	convFD, err := os.OpenFile(convPath, os.O_APPEND|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}
@@ -316,14 +663,8 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		convFD.Close()
 		return nil, err
 	}
-	if len(repairs) > 0 {
-		_ = writeJSONL(eventFD, events.Normalize(events.Event{
-			Type:    "transcript.repaired",
-			Payload: TranscriptRepairedPayload{Reason: "load", Repairs: repairs},
-		}))
-	}
 	tokenUsage, contextUsage, _ := loadLatestSessionUsage(dir)
-	return &Session{
+	sess := &Session{
 		ID:           id,
 		Dir:          dir,
 		Alias:        alias,
@@ -338,7 +679,33 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		historyPath:  opts.HistoryPath,
 		startedAtMS:  meta.StartedAtMS,
 		lastActiveMS: meta.LastActiveAtMS,
-	}, nil
+	}
+	if opts.RepairTranscript {
+		repairs, err := sess.RepairTranscript("load")
+		if err != nil {
+			_ = sess.Close()
+			return nil, err
+		}
+		if loadedFullTranscript && len(repairs) == 0 {
+			activeIndex := activeTranscriptIndex(sess.transcript)
+			activeHistory, err := readTranscriptMessagesForFingerprint(
+				convPath, activeIndex.entries, activeIndex.fingerprint,
+			)
+			if err != nil {
+				_ = sess.Close()
+				return nil, err
+			}
+			sess.transcript = activeIndex
+			sess.History = activeHistory
+		}
+		if len(repairs) > 0 {
+			_ = writeJSONL(eventFD, events.Normalize(events.Event{
+				Type:    "transcript.repaired",
+				Payload: TranscriptRepairedPayload{Reason: "load", Repairs: repairs},
+			}))
+		}
+	}
+	return sess, nil
 }
 
 // SubscribeBus wires every event emitted on bus through to AppendEvent. App
@@ -373,6 +740,9 @@ func (s *Session) ApplyAlias(alias string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.retryDerivedStateLocked(); err != nil {
+		return err
+	}
 	if s.convFD == nil {
 		s.Alias = alias
 		return nil
@@ -429,6 +799,9 @@ func (s *Session) Snapshot() (Info, []llm.Message) {
 }
 
 func (s *Session) ensureFilesLocked() error {
+	if err := s.retryDerivedStateLocked(); err != nil {
+		return err
+	}
 	if s.convFD != nil && s.eventFD != nil {
 		return nil
 	}
@@ -442,7 +815,7 @@ func (s *Session) ensureFilesLocked() error {
 		return err
 	}
 	if s.convFD == nil {
-		convFD, err := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		convFD, err := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
 		if err != nil {
 			return err
 		}
@@ -455,6 +828,84 @@ func (s *Session) ensureFilesLocked() error {
 		}
 		s.eventFD = eventFD
 	}
+	return nil
+}
+
+func (s *Session) ensureEventFileLocked() error {
+	if s.eventFD != nil {
+		return nil
+	}
+	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+		return err
+	}
+	if err := ensureScratchpadDir(s.Dir); err != nil {
+		return err
+	}
+	metadataPath := filepath.Join(s.Dir, metadataFile)
+	if _, err := os.Stat(metadataPath); errors.Is(err, os.ErrNotExist) && !s.metadataDirty {
+		if err := saveMetadata(s.Dir, s.metadataLocked()); err != nil {
+			return err
+		}
+		if s.convFD == nil {
+			conversationPath := filepath.Join(s.Dir, conversationFile)
+			conversation, err := os.OpenFile(conversationPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
+			if err != nil {
+				return err
+			}
+			s.convFD = conversation
+		}
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	eventFD, err := os.OpenFile(filepath.Join(s.Dir, eventsFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	s.eventFD = eventFD
+	return nil
+}
+
+func (s *Session) retryDerivedStateLocked() error {
+	if s.metadataDirty {
+		if err := s.persistMetadataLocked(); err != nil {
+			return fmt.Errorf("session: retry derived metadata: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Session) persistMetadataLocked() error {
+	err := saveMetadata(s.Dir, s.metadataLocked())
+	s.metadataDirty = err != nil
+	return err
+}
+
+func (s *Session) prepareHistoryRefreshLocked() (string, Info, bool) {
+	if s.historyPath == "" {
+		s.historyDirty = false
+		return "", Info{}, false
+	}
+	s.historyDirty = true
+	return s.historyPath, s.infoLocked(), true
+}
+
+func (s *Session) finishHistoryRefresh(path string, info Info) error {
+	err := RecordSession(path, info)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		s.historyDirty = true
+		return err
+	}
+	current := s.infoLocked()
+	if current.transcript == info.transcript &&
+		current.transcriptDigestValid == info.transcriptDigestValid &&
+		current.transcriptDigest == info.transcriptDigest &&
+		current.Turns == info.Turns && current.Preview == info.Preview {
+		s.historyDirty = false
+		return nil
+	}
+	s.historyDirty = true
 	return nil
 }
 
@@ -496,13 +947,6 @@ func normalizeLoadedMessage(path string, line int, m llm.Message) (llm.Message, 
 	return m, nil
 }
 
-func (s *Session) historyInfoLocked() (Info, bool) {
-	if s.historyPath == "" {
-		return Info{}, false
-	}
-	return s.infoLocked(), true
-}
-
 func (s *Session) infoLocked() Info {
 	info := Info{
 		ID:           s.ID,
@@ -513,12 +957,15 @@ func (s *Session) infoLocked() Info {
 		StartedAt:    time.UnixMilli(s.startedAtMS).UTC(),
 		LastActiveAt: time.UnixMilli(s.lastActiveMS).UTC(),
 	}
-	if s.convFD != nil {
-		if st, err := s.convFD.Stat(); err == nil {
-			info.transcript = fingerprintFromFileInfo(st)
+	info.transcript = s.transcript.fingerprint
+	info.transcriptDigest = s.transcript.contentDigest
+	info.transcriptDigestValid = s.transcript.contentDigestValid
+	if info.transcript == (transcriptFingerprint{}) {
+		if s.convFD != nil {
+			info.transcript, _ = fingerprintFromOpenFile(s.convFD)
+		} else {
+			info.transcript, _ = fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
 		}
-	} else if st, err := os.Stat(filepath.Join(s.Dir, conversationFile)); err == nil {
-		info.transcript = fingerprintFromFileInfo(st)
 	}
 	if len(s.transcript.entries) > 0 || len(s.History) == 0 {
 		info.Turns = s.transcript.turns
@@ -539,12 +986,14 @@ func (s *Session) infoLocked() Info {
 }
 
 func (s *Session) metadataLocked() metadata {
-	return metadata{
+	meta := metadata{
 		Alias:          s.Alias,
 		Kind:           s.Kind,
 		StartedAtMS:    s.startedAtMS,
 		LastActiveAtMS: s.lastActiveMS,
 	}
+	meta.Transcript = buildTranscriptCheckpoint(s.transcript, s.transcript.fingerprint)
+	return meta
 }
 
 func (s *Session) rollbackConversationLocked(offset int64) error {
@@ -552,10 +1001,71 @@ func (s *Session) rollbackConversationLocked(offset int64) error {
 	// File.Truncate requires. A named truncate obtains a separate write handle
 	// while preserving atomic append semantics for the resident descriptor.
 	rollbackErr := os.Truncate(filepath.Join(s.Dir, conversationFile), offset)
-	if _, err := s.convFD.Seek(offset, io.SeekStart); rollbackErr == nil {
-		rollbackErr = err
+	if s.convFD != nil {
+		if _, err := s.convFD.Seek(offset, io.SeekStart); rollbackErr == nil {
+			rollbackErr = err
+		}
+	}
+	if rollbackErr == nil {
+		fingerprint, err := fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
+		if err != nil {
+			return err
+		}
+		s.transcript.fingerprint = fingerprint
 	}
 	return rollbackErr
+}
+
+func (s *Session) currentTranscriptFingerprintLocked() (transcriptFingerprint, error) {
+	if s.convFD == nil {
+		return transcriptFingerprint{}, fmt.Errorf("session: conversation file closed")
+	}
+	openFingerprint, err := fingerprintFromOpenFile(s.convFD)
+	if err != nil {
+		return transcriptFingerprint{}, err
+	}
+	pathFingerprint, err := fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		return transcriptFingerprint{}, err
+	}
+	if openFingerprint != pathFingerprint {
+		return transcriptFingerprint{}, ErrTranscriptChanged
+	}
+	return openFingerprint, nil
+}
+
+func residentTranscriptFingerprintMatches(resident, current transcriptFingerprint) bool {
+	if resident == (transcriptFingerprint{}) {
+		return current.Size == 0
+	}
+	return resident == current
+}
+
+func transcriptDigestMatchesPath(
+	path string,
+	fingerprint transcriptFingerprint,
+	digest transcriptPrefixDigest,
+	valid bool,
+) (bool, error) {
+	if !valid {
+		return false, nil
+	}
+	snapshot, err := openTranscriptSnapshot(path)
+	if err != nil {
+		return false, err
+	}
+	defer snapshot.close()
+	if snapshot.fingerprint != fingerprint {
+		return false, nil
+	}
+	matched, err := transcriptPrefixDigestMatches(snapshot.file, fingerprint.Size, digest)
+	if err != nil || !matched {
+		return false, err
+	}
+	if err := snapshot.verify(); err != nil {
+		return false, nil
+	}
+	return transcriptPrefixDigestMatches(snapshot.file, fingerprint.Size, digest)
 }
 
 func newID() string {

@@ -265,8 +265,9 @@ func TestHistoryFileStoresOnlyCompactSummaryAndTranscriptFingerprint(t *testing.
 		}
 	}
 	var fingerprint struct {
-		Size    int64 `json:"size"`
-		MtimeMS int64 `json:"mtime_ms"`
+		Size     int64  `json:"size"`
+		MtimeNS  int64  `json:"mtime_ns"`
+		ChangeID string `json:"change_id"`
 	}
 	if err := json.Unmarshal(entry["transcript"], &fingerprint); err != nil {
 		t.Fatalf("transcript fingerprint: %v; history=%s", err, data)
@@ -275,8 +276,9 @@ func TestHistoryFileStoresOnlyCompactSummaryAndTranscriptFingerprint(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fingerprint.Size != st.Size() || fingerprint.MtimeMS != st.ModTime().UnixMilli() {
-		t.Fatalf("fingerprint = %+v, want size=%d mtime_ms=%d", fingerprint, st.Size(), st.ModTime().UnixMilli())
+	if fingerprint.Size != st.Size() || fingerprint.MtimeNS != st.ModTime().UnixNano() || fingerprint.ChangeID == "" {
+		t.Fatalf("fingerprint = %+v, want size=%d mtime_ns=%d and a change id",
+			fingerprint, st.Size(), st.ModTime().UnixNano())
 	}
 }
 

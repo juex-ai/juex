@@ -39,6 +39,36 @@ func TestReverseLineReader(t *testing.T) {
 	}
 }
 
+func TestUncappedReverseLineReaderReadsMultiBlockLine(t *testing.T) {
+	long := strings.Repeat("x", reverseLineBlockBytes*16+17)
+	path := filepath.Join(t.TempDir(), "conversation.jsonl")
+	if err := os.WriteFile(path, []byte("first\n"+long+"\nlast"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	reader, err := newUncappedReverseLineReaderAt(file, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for index, want := range []string{"last", long, "first"} {
+		got, err := reader.next()
+		if err != nil {
+			t.Fatalf("line %d: %v", index, err)
+		}
+		if string(got) != want {
+			t.Fatalf("line %d length = %d, want %d", index, len(got), len(want))
+		}
+	}
+	if _, err := reader.next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("final error = %v, want EOF", err)
+	}
+}
+
 func TestReverseLineReaderRejectsOversizedLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.jsonl")
 	if err := os.WriteFile(path, []byte(strings.Repeat("x", maxEventLineBytes+1)), 0o644); err != nil {

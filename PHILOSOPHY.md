@@ -67,5 +67,6 @@ them and when the implementation can stay small enough to test and explain.
   migration step.
 - Synchronous turn loop with parallel tool calls: simple ordering and tests,
   while still allowing independent tool calls inside one model response.
-- JSONL history: durable and append-friendly, with heavier reads when a full
-  transcript is needed.
+- JSONL history: durable and append-friendly; validated metadata checkpoints
+  and reverse paging keep common reads bounded, while full audit reads remain
+  proportional to transcript size.

@@ -930,12 +930,72 @@ its valid prefix before the existing repair warning is returned. `ReadEvents`
 remains the slice-based compatibility adapter for callers that explicitly need
 all events.
 
+`conversation.jsonl` remains the canonical, inspectable transcript. A bounded
+derived checkpoint in `session.json` records the transcript fingerprint and
+canonical content SHA-256,
+cumulative turn count and preview, the latest compaction-marker byte location,
+byte locations for explicitly retained pre-compaction messages, and whether
+the complete transcript and hidden pre-compaction prefix passed Tool Call
+repair validation. A versioned SHA-256 checksum covers the exact transcript
+fingerprint, content digest, and every derived checkpoint field, so
+sidecar-only edits are
+rejected. A matching, repair-safe checkpoint lets session resume read
+only retained rows plus the active suffix,
+and lets recent transcript pages validate the sealed compact row with one
+targeted read before scanning backward from the file tail. Recent paging never
+rebuilds the post-compaction suffix index. Missing,
+stale, or invalid checkpoints fall back to a strict full scan; the next
+successful append replaces them. The checkpoint never stores the complete
+message index, and full-history APIs remain proportional to transcript size.
+Windows validates the canonical content digest before reusing a checkpoint or
+history summary because multiple changes can share one `ChangeTime` clock tick.
+Platforms that cannot provide a stable file identity and change time reject
+the checkpoint rather than trusting a weak size-and-mtime match.
+The token detects ordinary in-place edits (including restored mtimes), file
+replacement, and accidental concurrent writes; it is not a cryptographic
+tamper proof against an actor capable of forging filesystem change metadata.
+The checkpoint checksum likewise detects ordinary metadata edits rather than
+an actor deliberately recomputing the checksum. Legacy tail-start checkpoints
+also verify every canonical row from the retained tail start through the
+compact marker, so a checksum-consistent retained tail cannot contain holes.
+Resident sessions compare both their open file and the canonical path before
+append, hash the adopted canonical prefix before writing, and verify that same
+prefix before accepting incremental metadata. This makes append proportional to
+the existing transcript size while resume and recent paging retain their
+bounded checkpoint paths.
+`conversation.lock` serializes the final fingerprint check, JSONL append, and
+metadata replacement across Session instances. An external suffix that still
+appears after a committed write is adopted by a canonical rescan. The scan
+recognizes the exact owned batch even when an external append shifted it beyond
+its original offset, preserves complete live history independently from the
+bounded active index, and does not report an already-persisted batch as failed.
+Once a canonical append or repair is confirmed committed, failures while
+refreshing `session.json` or the global history summary become resident retry
+obligations instead of append failures. The next transcript or metadata write
+repairs canonical metadata before mutating conversation state, the next append
+refreshes the latest history summary, and `Close` makes one final attempt at
+both. Event journaling remains independent: a failed transcript-checkpoint
+retry never prevents a durable event from reaching `events.jsonl`. This avoids both silently
+abandoning derived state and inviting callers to duplicate an already committed
+message batch.
+`events.jsonl` does not use this checkpoint because safely skipping event
+prefixes would also require a durable reducer-state snapshot.
+
+An unresolved Tool Call marks the checkpoint repair-unsafe. A following Tool
+result can restore the safe state from the active window when the hidden prefix
+was already validated. Otherwise repair scans canonical JSONL before declaring
+the transcript clean. Byte-location or identity mismatches in derived entries
+also discard the checkpoint and retry through the canonical full scan.
+
 `session.json` owns the session's creation and activity timestamps as positive
 epoch-millisecond integers (`started_at_ms` and `last_active_at_ms`). Creation
 sets both values; each successful transcript append advances
-`last_active_at_ms`. The transcript write and metadata replacement occur under
-the Session lock, and a metadata failure rolls the transcript append back
-before in-memory indexes change. Session IDs retain a timestamp-like prefix
+`last_active_at_ms` and refreshes the derived transcript checkpoint. The
+transcript write and metadata replacement occur under the Session lock, and a
+metadata failure rolls a normal incremental append back before in-memory indexes
+change. A divergence path that has already verified the owned batch in canonical
+JSONL adopts that state and uses the retry obligation described above instead of
+attempting an unsafe rollback. Session IDs retain a timestamp-like prefix
 only for readable, naturally sorted paths; no session time is parsed from the
 ID or inferred from a file mtime. Read surfaces convert the stored epochs with
 `time.UnixMilli(...).UTC()` while keeping their existing RFC3339 contract.
@@ -970,9 +1030,17 @@ Each resident agent has one active primary session recorded in
 `$JUEX_HOME/agents/<id>/history.json` as `{active_id, sessions}`. History
 session entries are a cache, not canonical metadata: they contain only the
 session ID, transcript-derived turn count and preview, and a transcript
-fingerprint `{size, mtime_ms}`. Alias, kind, timestamps, and usage remain owned
-by session metadata and event files. `run`, `repl`, and `listen` attach to the
-active primary by default; `--new` and `/new` create a new primary and switch
+fingerprint `{size, mtime_ns, change_id}`. The opaque change identity combines
+the platform file identity with nanosecond ctime on Darwin/Linux or
+`FILE_BASIC_INFO.ChangeTime` on Windows, so ordinary same-size rewrites that
+preserve the modification timestamp still invalidate derived state. Windows
+also validates the checkpoint's canonical content digest because `ChangeTime`
+alone cannot distinguish multiple writes in one clock tick. Platforms without
+a reliable change identity leave derived caches fail-closed. Every platform
+uses the resident content digest to anchor incremental append state. Alias, kind,
+timestamps, and usage remain owned by session metadata and event files. `run`,
+`repl`, and `listen` attach to the active primary by default; `--new` and
+`/new` create a new primary and switch
 active. Side sessions are durable and listed, but never become active and are
 not valid Web turn targets. Explicit selection operations own `active_id`;
 ordinary primary activity refreshes the cached active summary only when that
@@ -1011,9 +1079,10 @@ and `repl`.
 directory under `root`; `session.LoadInfo(dir)` returns one session's
 summary plus its full message slice. `session.ListWithHistory(root,
 historyPath)` is the cached form used by Web and `juex sessions list`: it reuses
-transcript-derived summaries from the Agent history index only while both the
-canonical transcript size and millisecond-truncated modification time match
-its recorded fingerprint, reloads small session metadata directly, and reads
+transcript-derived summaries from the Agent history index only while the
+canonical transcript's size, nanosecond modification time, and platform change
+identity match its recorded fingerprint, reloads small session metadata
+directly, and reads
 cumulative usage backward from at most the latest 8 MiB of the event-journal
 tail. Usage fields that are absent from that bounded tail remain unset instead
 of forcing a full legacy-journal scan. Missing or stale transcript summaries
@@ -1021,6 +1090,11 @@ fall back to the same strict disk scan as `List`; after a successful scan,
 `ListWithHistory` rechecks the canonical fingerprint under the history lock and
 repairs the derived summary cache without changing `active_id`. `List` and
 `LoadInfo` remain read-only, and canonical session files remain authoritative.
+Recent transcript pages independently use the validated session checkpoint and
+reverse line reader, preserving tool-use/result pairs at page boundaries. An
+inactive-session response derives its turn count, preview, transcript revision,
+and message page from that same validated checkpoint or fallback scan, so a
+concurrent append cannot pair newer messages with an older summary.
 
 ### 3.6 App + Runtime
 
