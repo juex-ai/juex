@@ -487,6 +487,62 @@ func TestTranscriptRangeRecheckDetectsSameInodeWeakRewrite(t *testing.T) {
 	}
 }
 
+func TestSessionAppendAdoptsCanonicalPrefixRewriteAfterWrite(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	first := messageWithID(llm.TextMessage(llm.RoleAssistant, "first"), "first-old")
+	rewritten := messageWithID(llm.TextMessage(llm.RoleAssistant, "other"), "first-new")
+	firstLine, err := marshalJSONLine(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrittenLine, err := marshalJSONLine(rewritten)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstLine) != len(rewrittenLine) {
+		t.Fatalf("test rows differ in size: first=%d rewritten=%d", len(firstLine), len(rewrittenLine))
+	}
+	if err := s.Append(first); err != nil {
+		t.Fatal(err)
+	}
+	s.afterTranscriptWrite = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.WriteAt(rewrittenLine, 0); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	owned := messageWithID(llm.TextMessage(llm.RoleAssistant, "owned"), "owned")
+	if err := s.Append(owned); err != nil {
+		t.Fatalf("Append after canonical prefix rewrite = %v", err)
+	}
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "first-new,owned" {
+		t.Fatalf("resident history ids = %s, want first-new,owned", got)
+	}
+	meta, err := loadMetadata(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalFingerprint, err := fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !transcriptCheckpointValid(meta.Transcript, canonicalFingerprint) {
+		t.Fatalf("checkpoint = %+v, want canonical fingerprint %+v", meta.Transcript, canonicalFingerprint)
+	}
+}
+
 func TestConcurrentSessionAppendsSerializeBeforeFingerprintCheck(t *testing.T) {
 	first, err := New(t.TempDir())
 	if err != nil {

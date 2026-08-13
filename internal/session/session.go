@@ -233,6 +233,7 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		}
 		return nil, writeErr
 	}
+	committedFingerprint, fingerprintErr := s.currentTranscriptFingerprintLocked()
 	if s.afterTranscriptWrite != nil {
 		s.afterTranscriptWrite()
 	}
@@ -248,7 +249,10 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 	if lastActiveMS < s.lastActiveMS {
 		lastActiveMS = s.lastActiveMS
 	}
-	commit, inspectErr := s.inspectTranscriptCommitLocked(offset, data)
+	commit, inspectErr := s.inspectTranscriptCommitLocked(offset, data, committedFingerprint)
+	if inspectErr == nil && fingerprintErr != nil {
+		inspectErr = fingerprintErr
+	}
 	if commit.diverged {
 		s.adoptTranscriptCommitLocked(commit, nextTranscript, nextHistory, lastActiveMS)
 		s.mu.Unlock()
@@ -296,7 +300,11 @@ type transcriptCommit struct {
 	history     []llm.Message
 }
 
-func (s *Session) inspectTranscriptCommitLocked(offset int64, data []byte) (transcriptCommit, error) {
+func (s *Session) inspectTranscriptCommitLocked(
+	offset int64,
+	data []byte,
+	committedFingerprint transcriptFingerprint,
+) (transcriptCommit, error) {
 	path := filepath.Join(s.Dir, conversationFile)
 	snapshot, err := openTranscriptSnapshot(path)
 	if err != nil {
@@ -306,7 +314,9 @@ func (s *Session) inspectTranscriptCommitLocked(offset int64, data []byte) (tran
 	committed, readErr := transcriptRangeMatches(snapshot.file, offset, data)
 	openFingerprint, openErr := fingerprintFromOpenFile(s.convFD)
 	expectedSize := offset + int64(len(data))
-	if committed && openErr == nil && openFingerprint == snapshot.fingerprint && snapshot.fingerprint.Size == expectedSize {
+	if committedFingerprint.strong() && committed && openErr == nil &&
+		openFingerprint == committedFingerprint && snapshot.fingerprint == committedFingerprint &&
+		snapshot.fingerprint.Size == expectedSize {
 		if err := snapshot.verify(); err != nil {
 			return transcriptCommit{diverged: true}, err
 		}
