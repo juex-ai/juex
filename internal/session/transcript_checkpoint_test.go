@@ -127,6 +127,75 @@ func TestLoadInfoPageUsesCheckpointAndKeepsToolPair(t *testing.T) {
 	}
 }
 
+func TestLoadInfoPageKeepsSummaryAndPageOnSameTranscriptRevision(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		append func(*testing.T, *Session, string, llm.Message)
+	}{
+		{
+			name: "new checkpoint",
+			append: func(t *testing.T, s *Session, _ string, message llm.Message) {
+				t.Helper()
+				if err := s.Append(message); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "checkpoint fallback",
+			append: func(t *testing.T, _ *Session, path string, message llm.Message) {
+				t.Helper()
+				line, err := marshalJSONLine(message)
+				if err != nil {
+					t.Fatal(err)
+				}
+				file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := file.Write(line); err != nil {
+					file.Close()
+					t.Fatal(err)
+				}
+				if err := file.Close(); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s, err := New(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if err := s.Append(messageWithID(llm.TextMessage(llm.RoleAssistant, "initial"), "m1")); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(s.Dir, conversationFile)
+			newMessage := messageWithID(llm.TextMessage(llm.RoleUser, "new user"), "m2")
+			appended := false
+			info, page, err := loadInfoPageWithSummaryLoader(s.Dir, "", 10, func(dir string) (Info, transcriptIndex, error) {
+				info, idx, err := loadInfoSummary(dir)
+				if err == nil && !appended {
+					appended = true
+					test.append(t, s, path, newMessage)
+				}
+				return info, idx, err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(messageIDsForTest(page.Messages), ","); got != "m1,m2" {
+				t.Fatalf("page ids = %s, want m1,m2", got)
+			}
+			if info.Turns != 1 || info.Preview != "new user" {
+				t.Fatalf("summary = turns %d preview %q, want 1/new user", info.Turns, info.Preview)
+			}
+		})
+	}
+}
+
 func TestCheckpointPageKeepsFastPathForOversizedTranscriptRow(t *testing.T) {
 	s, err := New(t.TempDir())
 	if err != nil {

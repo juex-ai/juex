@@ -1091,7 +1091,10 @@ fall back to the same strict disk scan as `List`; after a successful scan,
 repairs the derived summary cache without changing `active_id`. `List` and
 `LoadInfo` remain read-only, and canonical session files remain authoritative.
 Recent transcript pages independently use the validated session checkpoint and
-reverse line reader, preserving tool-use/result pairs at page boundaries.
+reverse line reader, preserving tool-use/result pairs at page boundaries. An
+inactive-session response derives its turn count, preview, transcript revision,
+and message page from that same validated checkpoint or fallback scan, so a
+concurrent append cannot pair newer messages with an older summary.
 
 ### 3.6 App + Runtime
 

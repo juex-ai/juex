@@ -423,7 +423,16 @@ func (s *Session) TranscriptMessagePage(beforeID string, limit int) (MessagePage
 // LoadInfoPage returns the session summary and only the requested transcript
 // page. It keeps web session views from loading full long-running transcripts.
 func LoadInfoPage(dir string, beforeID string, limit int) (Info, MessagePage, error) {
-	info, idx, err := loadInfoSummary(dir)
+	return loadInfoPageWithSummaryLoader(dir, beforeID, limit, loadInfoSummary)
+}
+
+func loadInfoPageWithSummaryLoader(
+	dir string,
+	beforeID string,
+	limit int,
+	loadSummary summaryLoader,
+) (Info, MessagePage, error) {
+	info, _, err := loadSummary(dir)
 	if err != nil {
 		return Info{}, MessagePage{}, err
 	}
@@ -433,19 +442,42 @@ func LoadInfoPage(dir string, beforeID string, limit int) (Info, MessagePage, er
 	}
 	path := filepath.Join(dir, conversationFile)
 	if page, ok, err := transcriptMessagePageFromCheckpoint(path, meta.Transcript, beforeID, limit); ok || err != nil {
+		if ok {
+			applyCheckpointSummary(&info, meta.Transcript)
+		}
 		return info, page, err
 	}
-	if len(idx.entries) == 0 {
-		idx, err = scanTranscriptIndex(path)
-		if err != nil {
-			return Info{}, MessagePage{}, err
-		}
+	idx, err := scanTranscriptIndex(path)
+	if err != nil {
+		return Info{}, MessagePage{}, err
 	}
 	page, err := transcriptMessagePage(path, idx, beforeID, limit)
 	if err != nil {
 		return Info{}, MessagePage{}, err
 	}
+	applyTranscriptSummary(&info, idx)
 	return info, page, nil
+}
+
+func applyCheckpointSummary(info *Info, checkpoint *transcriptCheckpoint) {
+	if info == nil || checkpoint == nil {
+		return
+	}
+	info.Turns = checkpoint.Turns
+	info.Preview = checkpoint.Preview
+	info.transcript = checkpoint.Fingerprint
+	info.transcriptDigest, info.transcriptDigestValid = checkpointContentDigest(checkpoint)
+}
+
+func applyTranscriptSummary(info *Info, idx transcriptIndex) {
+	if info == nil {
+		return
+	}
+	info.Turns = idx.turns
+	info.Preview = idx.preview
+	info.transcript = idx.fingerprint
+	info.transcriptDigest = idx.contentDigest
+	info.transcriptDigestValid = idx.contentDigestValid
 }
 
 // LoadActiveMessages returns the provider-visible active transcript window for
