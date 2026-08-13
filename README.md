@@ -225,7 +225,7 @@ default config when `JUEX_HOME` is unset) or the current workspace config.
 | `juex run --ephemeral "<prompt>"` | Run with isolated temporary agent state; add `--keep` to retain and print the state path. |
 | `juex run --attach <path> ["<prompt>"]` | Attach one or more local images to a text, image-only, or mixed-content turn; repeat `--attach` for multiple images. |
 | `juex --model <provider>:<model> run "<prompt>"` | Override the configured model for this invocation. |
-| `juex --debug run --json "<prompt>"` | Write detailed session logs, trace, span, and tool summary JSONL while emitting the normal run result. |
+| `juex --debug run --json "<prompt>"` | Write detailed session logs while emitting the normal run result. |
 | `juex run --new "<prompt>"` | Create a new active primary session for the prompt. |
 | `juex run --side "<prompt>"` | Create a side session without changing the active primary session. |
 | `juex repl` | Start an interactive CLI session attached to the active primary session. |
@@ -336,6 +336,8 @@ $JUEX_HOME/
     ├── observables/             # generated runs, observations, and schedule state
     └── sessions/<id>/
         ├── logs/
+        │   ├── juex.log
+        │   └── debug.log
         ├── session.json         # metadata + rebuildable transcript checkpoint
         ├── conversation.jsonl
         ├── conversation.lock    # cross-instance transcript append guard
@@ -343,10 +345,7 @@ $JUEX_HOME/
         ├── pending_input.jsonl
         ├── notes.md
         ├── scratchpad/
-        ├── goal_state.json
-        ├── trace.jsonl
-        ├── spans.jsonl
-        └── tools.jsonl
+        └── goal_state.json
 ```
 
 Personal agent resources live under `~/.agents/`; JueX-home Extensions
@@ -724,7 +723,7 @@ completions and failures into the conversation as UI-only hook trace rows.
 
 `juex bundle --session <id> --out <file.tar.gz>` creates a local archive for
 debugging one session. The archive includes a manifest, runtime snapshot,
-conversation, events, observability files, and logs when present. Redaction is
+conversation, events, session state, and logs when present. Redaction is
 enabled by default for secret-like values; use `--include-artifacts` or
 `--include-worktree-summary` to add optional context. Configured runtime
 environment values, including effective and shadowed Extension declarations,
@@ -734,8 +733,8 @@ runtime metadata contains only key, source, and source path.
 `--debug` enables detailed session-local observability. `--log-level` accepts
 `debug`, `info`, `warn`, or `error`; the default is `info`, and `--debug`
 records debug-level events such as streaming tool output deltas. These files
-are derived from runtime events and do not change the compatibility contract of
-`conversation.jsonl` or `events.jsonl`.
+are human-readable projections of runtime events and do not change the
+compatibility contract of `conversation.jsonl` or `events.jsonl`.
 
 ## Development
 

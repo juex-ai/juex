@@ -1378,7 +1378,7 @@ func TestAppExtensionObservableHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
-func TestApp_DebugObservabilityWritesSessionArtifacts(t *testing.T) {
+func TestApp_DebugObservabilityWritesLogsWithCanonicalJournals(t *testing.T) {
 	dir := t.TempDir()
 	a, err := New(Options{
 		Config: config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
@@ -1404,27 +1404,38 @@ func TestApp_DebugObservabilityWritesSessionArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, rel := range []string{"logs/juex.log", "logs/debug.log", "trace.jsonl", "spans.jsonl", "tools.jsonl"} {
+	for _, rel := range []string{"logs/juex.log", "logs/debug.log"} {
 		if _, err := os.Stat(filepath.Join(sessionDir, rel)); err != nil {
 			t.Fatalf("%s missing: %v", rel, err)
 		}
 	}
-	trace, err := os.ReadFile(filepath.Join(sessionDir, "trace.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{`"event":"turn.started"`, `"event":"llm.requested"`, `"event":"llm.responded"`, `"event":"finish.attempted"`, `"session_id":"` + filepath.Base(sessionDir) + `"`} {
-		if !strings.Contains(string(trace), want) {
-			t.Fatalf("trace missing %s:\n%s", want, trace)
-		}
+	if got := sessionRootJSONL(t, sessionDir); !reflect.DeepEqual(got, []string{"conversation.jsonl", "events.jsonl"}) {
+		t.Fatalf("session JSONL files = %v, want canonical journals", got)
 	}
 	debugData, err := os.ReadFile(filepath.Join(sessionDir, "logs", "debug.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(debugData), "finish.attempted") {
-		t.Fatalf("debug log missing finish event:\n%s", debugData)
+	for _, want := range []string{"turn.started", "llm.requested", "llm.responded", "finish.attempted"} {
+		if !strings.Contains(string(debugData), want) {
+			t.Fatalf("debug log missing %s:\n%s", want, debugData)
+		}
 	}
+}
+
+func sessionRootJSONL(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".jsonl") {
+			names = append(names, entry.Name())
+		}
+	}
+	return names
 }
 
 func mustWriteAppTestFile(t *testing.T, path, body string) {

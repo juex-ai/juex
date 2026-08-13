@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1020,22 +1021,19 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 
 	conversationPath := filepath.Join(result.SessionDir, "conversation.jsonl")
 	assertConversationExecCommandToolRoundTrip(t, conversationPath, "call_exec_cli", marker)
-	for _, rel := range []string{"logs/juex.log", "logs/debug.log", "trace.jsonl", "spans.jsonl", "tools.jsonl"} {
+	for _, rel := range []string{"logs/juex.log", "logs/debug.log"} {
 		if _, err := os.Stat(filepath.Join(result.SessionDir, rel)); err != nil {
 			t.Fatalf("debug artifact %s missing: %v", rel, err)
 		}
 	}
-	trace := readJSONLObjects(t, filepath.Join(result.SessionDir, "trace.jsonl"))
+	if got := rootJSONLFiles(t, result.SessionDir); !slices.Equal(got, []string{"conversation.jsonl", "events.jsonl"}) {
+		t.Fatalf("session JSONL files = %v, want canonical journals", got)
+	}
+	journal := readJSONLObjects(t, filepath.Join(result.SessionDir, "events.jsonl"))
 	for _, want := range []string{"tool.completed", "finish.attempted"} {
-		if !jsonlHasString(trace, "event", want) {
-			t.Fatalf("trace missing %q: %+v", want, trace)
+		if !jsonlHasString(journal, "type", want) {
+			t.Fatalf("event journal missing %q: %+v", want, journal)
 		}
-	}
-	if spans := readJSONLObjects(t, filepath.Join(result.SessionDir, "spans.jsonl")); len(spans) == 0 {
-		t.Fatalf("spans.jsonl should be parseable and non-empty")
-	}
-	if tools := readJSONLObjects(t, filepath.Join(result.SessionDir, "tools.jsonl")); !jsonlHasString(tools, "event", "tool.completed") {
-		t.Fatalf("tools missing tool.completed: %+v", tools)
 	}
 }
 

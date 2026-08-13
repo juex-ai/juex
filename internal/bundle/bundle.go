@@ -528,9 +528,6 @@ func sessionBundleFiles() []sessionBundleFile {
 		{name: "pending_input.jsonl"},
 		{name: "notes.md"},
 		{name: "goal_state.json"},
-		{name: "trace.jsonl"},
-		{name: "spans.jsonl"},
-		{name: "tools.jsonl"},
 		{name: filepath.Join("logs", "juex.log")},
 		{name: filepath.Join("logs", "debug.log")},
 	}

@@ -75,7 +75,7 @@ juex/
 │   ├── events/                   # in-process EventBus + durable commit sink
 │   ├── hooks/                    # trusted lifecycle command hook execution
 │   ├── observable/               # Observable source adapters plus durable Observation lifecycle/store/tools
-│   ├── observability/            # session-local logs, traces, spans, tool summaries
+│   ├── observability/            # redacted session-local event logs
 │   ├── fleet/                    # resident-agent registry health and lifecycle policy
 │   ├── fleetservice/             # launchd/systemd/Termux supervisor registration
 │   ├── fleetweb/                 # fleet HTTP API, SSE aggregation, reverse proxy, embedded SPA
@@ -208,8 +208,8 @@ implementation decisions live.
 | `internal/statusapi` | Transport-neutral runtime status DTOs, projection from runtime snapshots, and the current-only Agent Activity stream adapter | Runtime state transitions, Session persistence, HTTP/SSE routing, multi-Agent Fleet replay |
 | `internal/statusstream` | Replaceable snapshot storage, optional bounded cursor replay, sequential replay-to-live streams, latest-value coalescing, and subscription cleanup | Runtime projection rules, HTTP cursor extraction, SSE framing, Fleet roster/generation semantics |
 | `internal/events` | Generic Event envelope, normalization, synchronous subscriptions, durable commit-before-delivery boundary | Producer-specific Event vocabulary, Session journal implementation, UI projection |
-| `internal/toolevents` | Stable Tool Event names, payloads, and constructors shared by producers and consumers | Tool execution, Event dispatch, observability storage |
-| `internal/observability` | Derived Session logs, traces, spans, and Tool summaries projected from Events | Authoritative transcript/Event state, runtime decisions, Web presentation |
+| `internal/toolevents` | Stable Tool Event names, payloads, and constructors shared by producers and consumers | Tool execution, Event dispatch, Event persistence and log projection |
+| `internal/observability` | Redacted human-readable Session logs projected from Events | Authoritative transcript/Event state, runtime decisions, Web presentation |
 | `internal/tools` | Tool registry and dispatch, builtin file/shell/search adapters, Tool result normalization and output hygiene | Canonical chunked-write lifecycle, Provider wire quirks, Session persistence, Observable/MCP source lifecycles |
 | `internal/chunkedwrite` | Canonical chunked-write lifecycle facts and deterministic state derivation | Tool schemas/dispatch, filesystem execution, runtime Event transport |
 | `internal/hooks` | Trusted hook config, matching, bounded command execution, and hook result facts | Lifecycle phase ordering, interpretation of deny/continue results, Tool execution |
@@ -816,7 +816,7 @@ Standard event families include `turn.started/completed/errored`,
 `transcript.repaired`, `pending_input.*`, `context.compact.*`, and
 `context.projection.applied`.
 `llm.output_delta` and `tool.output_delta` are live-only projection events and
-are not appended to the session journal, trace, or logs. CLI and browser
+are not appended to the session journal or logs. CLI and browser
 subscribers may render them provisionally; the following durable
 `llm.responded`, `tool.completed`, or `tool.errored` event is authoritative and
 replaces the matching provisional content. The `internal/toolevents`
@@ -1015,16 +1015,14 @@ a typed partial failure if Artifact cleanup fails. A retry may remove the
 orphan Artifact namespace even after the Session directory is gone. Agent-level
 Artifact namespaces such as `event-media` and `read-media` are unaffected.
 
-`internal/observability` subscribes to the in-process event bus and writes
-derived session-local artifacts: `logs/juex.log`, `logs/debug.log`,
-`trace.jsonl`, `spans.jsonl`, and `tools.jsonl`. These files are diagnostic
-views over runtime events and intentionally do not alter the compatibility
-shape of `conversation.jsonl` or `events.jsonl`. Trace records include
-`session_id`, `turn_id`, span identifiers, level/status, duration, error kind,
-artifact paths, and bounded summaries with secret-shaped values redacted.
-Timeout traces prefer structured event fields such as `error_kind`,
-`timed_out`, `timeout_seconds`, and `raw_cause`; string parsing is only a
-fallback for older events that predate those fields.
+`internal/observability` subscribes to the in-process event bus and writes the
+human-readable, session-local `logs/juex.log` and `logs/debug.log`. The logs
+contain bounded event summaries with secret-shaped values redacted. Structured
+diagnosis uses the canonical `events.jsonl` journal directly. Each session has
+two history journals, `conversation.jsonl` and `events.jsonl`, with distinct
+recovery and replay responsibilities. Timeout summaries preserve structured
+event fields such as `error_kind`, `timed_out`, `timeout_seconds`, and
+`raw_cause`.
 
 Each resident agent has one active primary session recorded in
 `$JUEX_HOME/agents/<id>/history.json` as `{active_id, sessions}`. History
@@ -2330,9 +2328,9 @@ $JUEX_HOME/
     └── observables.json          # workspace observable configuration
 ```
 
-The full session subtree beneath AgentStateDir retains the existing
-`session.json`, transcript, event, lock, notes, scratchpad, goal, trace, span,
-tool, and per-session log files described in §3.5.
+The full session subtree beneath AgentStateDir contains the `session.json`
+metadata, conversation and event journals, lock, pending-input queue, notes,
+scratchpad, goal state, and per-session logs described in §3.5.
 
 `JUEX_HOME` scopes the writable instance config and extension installation,
 supervisor/endpoint/Fleet locks, and Agent registry state. A canonically
@@ -2730,12 +2728,12 @@ and `tests/eval/` covers the local evaluation harness.
 | `prompt` | all sources, only-global, only-project, ops context, memory rendering, divider, fresh rebuild |
 | `session` | append → jsonl line counts, event subscription, load round-trip, alias metadata, history index, delete |
 | `runtime` | mock-provider script, parallel tool calls, long tool follow-up turn, ctx cancel, unknown-tool, provider error, multi-turn |
-| `observability` | log-level parsing, stable artifact creation, trace/span schema, parent-child spans, tool summaries, redaction, error-kind classification |
+| `observability` | log-level parsing, stable log creation, transient filtering, retry status, redaction, timeout/signal metadata, close idempotence |
 | `netbootstrap` | resolv.conf parsing (IPv4/IPv6/comments/malformed), JUEX_DNS env var, Termux PREFIX auto-detect, applyResolver wiring, idempotent install |
-| `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, AgentStateDir sessions, observability artifact wiring, history update, missing-key fail, default-cwd |
+| `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, AgentStateDir sessions, observability log wiring, history update, missing-key fail, default-cwd |
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flags including model, debug, and log-level |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
-| `tests/e2e` | full-stack tempdir scenario, apply_patch builtin flow, resume round-trip, debug observability artifacts, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
+| `tests/e2e` | full-stack tempdir scenario, apply_patch builtin flow, resume round-trip, canonical session journals and debug logs, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
 | `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracles for conversation/event/tool and Schedule persistence artifacts; retry-isolated live Schedule routing; live-model rotation; eval shell wrappers; development step flags; report directory defaults |
 
 Run the deterministic suite with `make test`.

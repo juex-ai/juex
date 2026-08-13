@@ -1,5 +1,5 @@
-// Package observability derives session-local logs, traces, spans, and tool
-// summaries from runtime events without changing the compatibility transcript.
+// Package observability derives human-readable session logs from runtime
+// events without changing the canonical conversation and event journals.
 package observability
 
 import (
@@ -12,16 +12,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 const (
-	traceFile = "trace.jsonl"
-	spansFile = "spans.jsonl"
-	toolsFile = "tools.jsonl"
-
 	logsDir  = "logs"
 	juexLog  = "juex.log"
 	debugLog = "debug.log"
@@ -73,21 +68,18 @@ func (l Level) String() string {
 }
 
 type Options struct {
-	SessionID  string
 	SessionDir string
 	Debug      bool
 	LogLevel   string
 }
 
 type Recorder struct {
-	sessionID  string
 	sessionDir string
 	level      Level
 	debug      bool
 
-	mu         sync.Mutex
-	files      map[string]*os.File
-	spanStarts map[string]time.Time
+	mu    sync.Mutex
+	files map[string]*os.File
 
 	closed       bool
 	filesEnsured bool
@@ -102,12 +94,10 @@ func NewRecorder(opts Options) (*Recorder, error) {
 		level = LevelDebug
 	}
 	return &Recorder{
-		sessionID:  opts.SessionID,
 		sessionDir: opts.SessionDir,
 		level:      level,
 		debug:      opts.Debug || level == LevelDebug,
 		files:      map[string]*os.File{},
-		spanStarts: map[string]time.Time{},
 	}, nil
 }
 
@@ -143,34 +133,6 @@ func (r *Recorder) Record(ev events.Event) error {
 		r.filesEnsured = true
 	}
 
-	trace := TraceRecord{
-		TS:           ts,
-		SessionID:    r.sessionID,
-		TurnID:       ev.TurnID,
-		Event:        ev.Type,
-		Level:        meta.Level.String(),
-		Status:       meta.Status,
-		SpanID:       meta.SpanID,
-		ParentID:     meta.ParentID,
-		DurationMS:   meta.DurationMS,
-		ErrorKind:    meta.ErrorKind,
-		Summary:      meta.Summary,
-		ArtifactPath: meta.ArtifactPath,
-	}
-	if err := r.writeJSONLocked(traceFile, trace); err != nil {
-		return err
-	}
-	if span, ok := r.spanRecordLocked(ts, ev, meta); ok {
-		if err := r.writeJSONLocked(spansFile, span); err != nil {
-			return err
-		}
-	}
-	if meta.Tool != nil {
-		meta.Tool.SessionID = r.sessionID
-		if err := r.writeJSONLocked(toolsFile, *meta.Tool); err != nil {
-			return err
-		}
-	}
 	if err := r.writeLogLocked(filepath.Join(logsDir, juexLog), ts, meta.Level, ev.Type, ev.TurnID, meta.Status, meta.Summary); err != nil {
 		return err
 	}
@@ -209,26 +171,12 @@ func (r *Recorder) shouldRecord(level Level) bool {
 }
 
 func (r *Recorder) ensureStableFilesLocked() error {
-	for _, name := range []string{traceFile, spansFile, toolsFile, filepath.Join(logsDir, juexLog), filepath.Join(logsDir, debugLog)} {
+	for _, name := range []string{filepath.Join(logsDir, juexLog), filepath.Join(logsDir, debugLog)} {
 		if _, err := r.fileLocked(name); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (r *Recorder) writeJSONLocked(name string, v any) error {
-	f, err := r.fileLocked(name)
-	if err != nil {
-		return err
-	}
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	_, err = f.Write(data)
-	return err
 }
 
 func (r *Recorder) writeLogLocked(name string, ts time.Time, level Level, event, turnID, status string, summary map[string]any) error {
@@ -257,90 +205,26 @@ func (r *Recorder) fileLocked(name string) (*os.File, error) {
 	return f, nil
 }
 
-type TraceRecord struct {
-	TS           time.Time      `json:"ts"`
-	SessionID    string         `json:"session_id"`
-	TurnID       string         `json:"turn_id,omitempty"`
-	Event        string         `json:"event"`
-	Level        string         `json:"level"`
-	Status       string         `json:"status"`
-	SpanID       string         `json:"span_id,omitempty"`
-	ParentID     string         `json:"parent_id,omitempty"`
-	DurationMS   int64          `json:"duration_ms,omitempty"`
-	ErrorKind    string         `json:"error_kind,omitempty"`
-	Summary      map[string]any `json:"summary,omitempty"`
-	ArtifactPath string         `json:"artifact_path,omitempty"`
-}
-
-type SpanRecord struct {
-	TS         time.Time      `json:"ts"`
-	SessionID  string         `json:"session_id"`
-	TurnID     string         `json:"turn_id,omitempty"`
-	SpanID     string         `json:"span_id"`
-	ParentID   string         `json:"parent_id,omitempty"`
-	Name       string         `json:"name"`
-	Event      string         `json:"event"`
-	Status     string         `json:"status"`
-	StartTS    time.Time      `json:"start_ts"`
-	EndTS      time.Time      `json:"end_ts,omitempty"`
-	DurationMS int64          `json:"duration_ms"`
-	ErrorKind  string         `json:"error_kind,omitempty"`
-	Summary    map[string]any `json:"summary,omitempty"`
-}
-
-type ToolRecord struct {
-	TS         time.Time      `json:"ts"`
-	SessionID  string         `json:"session_id"`
-	TurnID     string         `json:"turn_id,omitempty"`
-	Event      string         `json:"event"`
-	Status     string         `json:"status"`
-	ToolName   string         `json:"tool_name,omitempty"`
-	ToolUseID  string         `json:"tool_use_id,omitempty"`
-	SessionRef string         `json:"session_ref,omitempty"`
-	ChunkID    int            `json:"chunk_id,omitempty"`
-	Stream     string         `json:"stream,omitempty"`
-	Input      any            `json:"input,omitempty"`
-	Preview    string         `json:"preview,omitempty"`
-	Error      string         `json:"error,omitempty"`
-	ErrorKind  string         `json:"error_kind,omitempty"`
-	Summary    map[string]any `json:"summary,omitempty"`
-}
-
 type eventMeta struct {
-	Level        Level
-	Status       string
-	SpanID       string
-	ParentID     string
-	SpanName     string
-	SpanEvent    string
-	DurationMS   int64
-	ErrorKind    string
-	Summary      map[string]any
-	ArtifactPath string
-	Tool         *ToolRecord
+	Level   Level
+	Status  string
+	Summary map[string]any
 }
 
 func classify(ev events.Event) eventMeta {
 	payload := payloadMap(ev.Payload)
 	meta := eventMeta{
-		Level:     LevelInfo,
-		Status:    "ok",
-		SpanID:    spanID(ev.Type, ev.TurnID, payload),
-		ParentID:  parentID(ev.Type, ev.TurnID),
-		SpanName:  spanName(ev.Type),
-		SpanEvent: spanEvent(ev.Type),
-		Summary:   summaryFor(ev.Type, payload),
+		Level:   LevelInfo,
+		Status:  "ok",
+		Summary: summaryFor(ev.Type, payload),
 	}
-	meta.DurationMS = int64Value(payload["duration_ms"])
 	if strings.Contains(ev.Type, "errored") || ev.Type == "turn.errored" {
 		meta.Level = LevelError
 		meta.Status = "error"
-		meta.ErrorKind = firstNonEmpty(stringValue(payload["error_kind"]), errorclass.KindForText(stringValue(payload["error"])))
 	}
 	if ev.Type == "tool.failure.recorded" {
 		meta.Level = LevelWarn
 		meta.Status = "unresolved"
-		meta.ErrorKind = stringValue(payload["classification"])
 	}
 	if ev.Type == "tool.failure.continued" {
 		meta.Level = LevelWarn
@@ -359,54 +243,11 @@ func classify(ev events.Event) eventMeta {
 		meta.Level = LevelWarn
 		if boolValue(payload["exhausted"]) {
 			meta.Status = "exhausted"
-			meta.ErrorKind = "provider_retry_exhausted"
 		} else if boolValue(payload["will_retry"]) {
 			meta.Status = "retrying"
 		}
 	}
-	if strings.HasPrefix(ev.Type, "tool.") {
-		meta.ArtifactPath = toolsFile
-		meta.Tool = toolRecord(ev, payload, meta)
-	}
 	return meta
-}
-
-func (r *Recorder) spanRecordLocked(ts time.Time, ev events.Event, meta eventMeta) (SpanRecord, bool) {
-	if meta.SpanID == "" || meta.SpanEvent == "" {
-		return SpanRecord{}, false
-	}
-	start := ts
-	if meta.SpanEvent == "start" {
-		r.spanStarts[meta.SpanID] = ts
-	} else if meta.SpanEvent != "instant" {
-		if existing, ok := r.spanStarts[meta.SpanID]; ok {
-			start = existing
-			delete(r.spanStarts, meta.SpanID)
-		}
-	}
-	end := time.Time{}
-	if meta.SpanEvent != "start" {
-		end = ts
-	}
-	duration := meta.DurationMS
-	if duration == 0 && !end.IsZero() {
-		duration = end.Sub(start).Milliseconds()
-	}
-	return SpanRecord{
-		TS:         ts,
-		SessionID:  r.sessionID,
-		TurnID:     ev.TurnID,
-		SpanID:     meta.SpanID,
-		ParentID:   meta.ParentID,
-		Name:       meta.SpanName,
-		Event:      meta.SpanEvent,
-		Status:     meta.Status,
-		StartTS:    start,
-		EndTS:      end,
-		DurationMS: duration,
-		ErrorKind:  meta.ErrorKind,
-		Summary:    meta.Summary,
-	}, true
 }
 
 func payloadMap(payload any) map[string]any {
@@ -558,111 +399,6 @@ func summaryFor(event string, p map[string]any) map[string]any {
 	return out
 }
 
-func toolRecord(ev events.Event, p map[string]any, meta eventMeta) *ToolRecord {
-	record := &ToolRecord{
-		Event:     ev.Type,
-		Status:    meta.Status,
-		ToolName:  stringValue(p["name"]),
-		ToolUseID: stringValue(p["tool_use_id"]),
-		Error:     truncate(stringValue(p["error"]), previewLimit),
-		ErrorKind: meta.ErrorKind,
-		Summary:   meta.Summary,
-	}
-	if ev.Timestamp.IsZero() {
-		record.TS = time.Now().UTC()
-	} else {
-		record.TS = ev.Timestamp.UTC()
-	}
-	record.TurnID = ev.TurnID
-	if input, ok := p["input"]; ok {
-		record.Input = sanitize("input", input, 0)
-	}
-	if preview := stringValue(p["preview"]); preview != "" {
-		record.Preview = truncate(preview, previewLimit)
-	}
-	if text := stringValue(p["text"]); text != "" {
-		record.Preview = truncate(text, previewLimit)
-	}
-	record.SessionRef = stringValue(p["session_id"])
-	record.ChunkID = intValue(p["chunk_id"])
-	record.Stream = stringValue(p["stream"])
-	return record
-}
-
-func spanID(event, turnID string, p map[string]any) string {
-	if turnID == "" {
-		turnID = "session"
-	}
-	switch event {
-	case "turn.started", "turn.completed", "turn.errored":
-		return "turn:" + turnID
-	case "llm.requested", "llm.responded", "llm.retry":
-		iter := stringValue(p["iter"])
-		if iter == "" {
-			iter = firstNonEmpty(stringValue(p["purpose"]), "0")
-		}
-		return "llm:" + turnID + ":" + iter
-	case toolevents.RequestedType, toolevents.CompletedType, toolevents.ErroredType:
-		return "tool:" + turnID + ":" + firstNonEmpty(stringValue(p["tool_use_id"]), stringValue(p["name"]))
-	case "context.compact.started", "context.compact.completed", "context.compact.errored":
-		return "compact:" + turnID + ":" + firstNonEmpty(stringValue(p["reason"]), "context")
-	case "hook.started", "hook.completed", "hook.errored":
-		return "hook:" + turnID + ":" + firstNonEmpty(stringValue(p["name"]), "hook") + ":" + firstNonEmpty(stringValue(p["event_name"]), "event")
-	case "finish.attempted":
-		return "finish:" + turnID
-	default:
-		return ""
-	}
-}
-
-func parentID(event, turnID string) string {
-	if turnID == "" {
-		return ""
-	}
-	switch event {
-	case "turn.started", "turn.completed", "turn.errored":
-		return ""
-	case "llm.requested", "llm.responded", "llm.retry", toolevents.RequestedType, toolevents.CompletedType, toolevents.ErroredType, "context.compact.started", "context.compact.completed", "context.compact.errored", "hook.started", "hook.completed", "hook.errored", "finish.attempted":
-		return "turn:" + turnID
-	default:
-		return ""
-	}
-}
-
-func spanEvent(event string) string {
-	switch event {
-	case "turn.started", "llm.requested", toolevents.RequestedType, "context.compact.started", "hook.started":
-		return "start"
-	case "turn.completed", "llm.responded", toolevents.CompletedType, "context.compact.completed", "hook.completed":
-		return "end"
-	case "turn.errored", toolevents.ErroredType, "context.compact.errored", "hook.errored":
-		return "error"
-	case "finish.attempted", "llm.retry":
-		return "instant"
-	default:
-		return ""
-	}
-}
-
-func spanName(event string) string {
-	switch {
-	case strings.HasPrefix(event, "turn."):
-		return "turn"
-	case strings.HasPrefix(event, "llm."):
-		return "provider"
-	case strings.HasPrefix(event, "tool."):
-		return "tool"
-	case strings.HasPrefix(event, "context.compact."):
-		return "compaction"
-	case strings.HasPrefix(event, "hook."):
-		return "hook"
-	case event == "finish.attempted":
-		return "finish"
-	default:
-		return event
-	}
-}
-
 func sanitize(key string, value any, depth int) any {
 	if isSecretKey(key) {
 		return "[REDACTED]"
@@ -719,26 +455,6 @@ func isSecretKey(key string) bool {
 	return key == "token" || strings.HasSuffix(key, "_token") || strings.HasPrefix(key, "token_") || strings.Contains(key, "_token_")
 }
 
-func int64Value(v any) int64 {
-	switch n := v.(type) {
-	case int64:
-		return n
-	case int:
-		return int64(n)
-	case float64:
-		return int64(n)
-	case json.Number:
-		i, _ := n.Int64()
-		return i
-	default:
-		return 0
-	}
-}
-
-func intValue(v any) int {
-	return int(int64Value(v))
-}
-
 func boolValue(v any) bool {
 	switch b := v.(type) {
 	case bool:
@@ -766,13 +482,4 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

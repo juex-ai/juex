@@ -749,7 +749,6 @@ func (a *App) attachObservability(sess *session.Session) error {
 		return nil
 	}
 	rec, err := observability.NewRecorder(observability.Options{
-		SessionID:  sess.ID,
 		SessionDir: sess.Dir,
 		Debug:      a.debug,
 		LogLevel:   a.logLevel,
