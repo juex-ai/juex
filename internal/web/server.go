@@ -102,12 +102,14 @@ type activeSession struct {
 var errSessionInactive = errors.New("web: session is inactive")
 
 func NewServer(opts Options) *Server {
+	resources := newResourceEventHub(opts.Cfg.WorkDir, opts.Cfg.SessionsDir())
+	resources.setRuntimeInputs(opts.Cfg.GlobalAgentsMDPath(), opts.Cfg.MemoryDir())
 	return &Server{
 		opts:          opts,
 		modelHealth:   llm.NewModelHealth(llm.ModelHealthOptions{}),
 		startedAt:     time.Now().UTC(),
 		statusStream:  statusapi.NewActivityStore(),
-		resources:     newResourceEventHub(opts.Cfg.WorkDir, opts.Cfg.SessionsDir()),
+		resources:     resources,
 		runtimeMCPErr: map[string]string{},
 		runtimeSkills: app.NewRuntimeStatusSkillCache(),
 	}

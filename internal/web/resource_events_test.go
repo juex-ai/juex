@@ -42,6 +42,73 @@ func TestResourceEventHubClassifiesWorkspaceAndRuntimePaths(t *testing.T) {
 	}
 }
 
+func TestResourceEventHubClassifiesMutableRuntimeInputs(t *testing.T) {
+	workDir := t.TempDir()
+	hub := newResourceEventHub(workDir, t.TempDir())
+	tests := []struct {
+		path string
+		want []string
+	}{
+		{path: filepath.Join(workDir, "AGENTS.md"), want: []string{resourceWorkspace, resourceRuntime}},
+		{path: filepath.Join(workDir, ".agents"), want: []string{resourceWorkspace, resourceRuntime}},
+		{path: filepath.Join(workDir, ".agents", "AGENTS.md"), want: []string{resourceWorkspace, resourceRuntime}},
+		{path: filepath.Join(workDir, ".agents", "skills", "review", "SKILL.md"), want: []string{resourceWorkspace}},
+		{path: filepath.Join(workDir, ".agents", "mcp.json"), want: []string{resourceWorkspace}},
+		{path: filepath.Join(workDir, "src", "main.go"), want: []string{resourceWorkspace}},
+	}
+	for _, test := range tests {
+		if got := hub.resourcesForPath(test.path); !reflect.DeepEqual(got, test.want) {
+			t.Errorf("resourcesForPath(%q) = %v, want %v", test.path, got, test.want)
+		}
+	}
+}
+
+func TestResourceEventHubClassifiesExternalRuntimeInputs(t *testing.T) {
+	workDir := t.TempDir()
+	globalAgentsDir := t.TempDir()
+	memoryDir := filepath.Join(t.TempDir(), "memory")
+	hub := newResourceEventHub(workDir, t.TempDir())
+	hub.setRuntimeInputs(filepath.Join(globalAgentsDir, "AGENTS.md"), memoryDir)
+
+	tests := []struct {
+		path string
+		want []string
+	}{
+		{path: globalAgentsDir, want: []string{resourceRuntime}},
+		{path: filepath.Join(globalAgentsDir, "AGENTS.md"), want: []string{resourceRuntime}},
+		{path: memoryDir, want: []string{resourceRuntime}},
+		{path: filepath.Join(memoryDir, "facts.md"), want: []string{resourceRuntime}},
+		{path: filepath.Join(globalAgentsDir, "skills", "demo", "SKILL.md")},
+	}
+	for _, test := range tests {
+		if got := hub.resourcesForPath(test.path); !reflect.DeepEqual(got, test.want) {
+			t.Errorf("resourcesForPath(%q) = %v, want %v", test.path, got, test.want)
+		}
+	}
+}
+
+func TestResourceEventHubProjectsMemoryToolEvents(t *testing.T) {
+	hub := newResourceEventHub(t.TempDir(), t.TempDir())
+	subscription, err := hub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscription.cancel()
+
+	hub.Publish(events.Event{
+		Type:    toolevents.CompletedType,
+		Payload: toolevents.CompletedPayload{Name: "memory_write"},
+	})
+	select {
+	case <-subscription.updates:
+		if got := subscription.take().Resources; !reflect.DeepEqual(got, []string{resourceRuntime}) {
+			t.Fatalf("resources = %v, want runtime", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("memory tool event did not invalidate runtime")
+	}
+}
+
 func TestResourceEventHubProjectsObservableAndWriteEvents(t *testing.T) {
 	hub := newResourceEventHub(t.TempDir(), t.TempDir())
 	subscription, err := hub.subscribe()
@@ -132,6 +199,100 @@ func TestResourceEventHubWatchesWorkspaceOnDemand(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("workspace mutation was not observed")
+	}
+}
+
+func TestResourceEventHubWatchesMutableRuntimeInput(t *testing.T) {
+	workDir := t.TempDir()
+	hub := newResourceEventHub(workDir, t.TempDir())
+	subscription, err := hub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscription.cancel()
+
+	if err := os.WriteFile(filepath.Join(workDir, "AGENTS.md"), []byte("updated guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-subscription.updates:
+		got := subscription.take().Resources
+		want := []string{resourceRuntime, resourceWorkspace}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("resources = %v, want %v", got, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime input mutation was not observed")
+	}
+}
+
+func TestResourceEventHubWatchesLateAgentsDirectory(t *testing.T) {
+	workDir := t.TempDir()
+	hub := newResourceEventHub(workDir, t.TempDir())
+	subscription, err := hub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscription.cancel()
+
+	if err := os.Mkdir(filepath.Join(workDir, ".agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-subscription.updates:
+		got := subscription.take().Resources
+		want := []string{resourceRuntime, resourceWorkspace}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("resources = %v, want %v", got, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("late .agents directory was not observed as a runtime input")
+	}
+}
+
+func TestResourceEventHubWatchesExternalGlobalAgentsFile(t *testing.T) {
+	globalAgentsDir := t.TempDir()
+	hub := newResourceEventHub(t.TempDir(), t.TempDir())
+	hub.setRuntimeInputs(filepath.Join(globalAgentsDir, "AGENTS.md"), "")
+	subscription, err := hub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscription.cancel()
+
+	if err := os.WriteFile(filepath.Join(globalAgentsDir, "AGENTS.md"), []byte("global guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-subscription.updates:
+		if got := subscription.take().Resources; !reflect.DeepEqual(got, []string{resourceRuntime}) {
+			t.Fatalf("resources = %v, want runtime", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("external global AGENTS.md mutation was not observed")
+	}
+}
+
+func TestResourceEventHubWatchesLateMemoryDirectory(t *testing.T) {
+	memoryDir := filepath.Join(t.TempDir(), "memory")
+	hub := newResourceEventHub(t.TempDir(), t.TempDir())
+	hub.setRuntimeInputs("", memoryDir)
+	subscription, err := hub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscription.cancel()
+
+	if err := os.Mkdir(memoryDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-subscription.updates:
+		if got := subscription.take().Resources; !reflect.DeepEqual(got, []string{resourceRuntime}) {
+			t.Fatalf("resources = %v, want runtime", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("late memory directory was not observed")
 	}
 }
 

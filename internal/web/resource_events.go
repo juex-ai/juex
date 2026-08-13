@@ -80,6 +80,8 @@ func (s *resourceSubscriber) take() agentResourceEvent {
 type resourceEventHub struct {
 	workDir     string
 	sessionsDir string
+	runtimeFile string
+	runtimeDir  string
 
 	mu            sync.Mutex
 	subscribers   map[uint64]*resourceSubscriber
@@ -109,6 +111,11 @@ func newResourceEventHub(workDir, sessionsDir string) *resourceEventHub {
 	}
 }
 
+func (h *resourceEventHub) setRuntimeInputs(file, dir string) {
+	h.runtimeFile = filepath.Clean(file)
+	h.runtimeDir = filepath.Clean(dir)
+}
+
 func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 	h.mu.Lock()
 	if h.closed {
@@ -127,6 +134,25 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 			return resourceSubscription{}, err
 		}
 		if err := h.addRoot(watcher, h.sessionsDir); err != nil {
+			_ = watcher.Close()
+			h.mu.Unlock()
+			return resourceSubscription{}, err
+		}
+		if h.runtimeFile != "" && h.runtimeFile != "." {
+			if err := h.addExistingDirectory(watcher, filepath.Dir(h.runtimeFile)); err != nil {
+				_ = watcher.Close()
+				h.mu.Unlock()
+				return resourceSubscription{}, err
+			}
+		}
+		if h.runtimeDir != "" && h.runtimeDir != "." {
+			if err := h.addExistingDirectory(watcher, filepath.Dir(h.runtimeDir)); err != nil {
+				_ = watcher.Close()
+				h.mu.Unlock()
+				return resourceSubscription{}, err
+			}
+		}
+		if err := h.addRoot(watcher, h.runtimeDir); err != nil {
 			_ = watcher.Close()
 			h.mu.Unlock()
 			return resourceSubscription{}, err
@@ -179,6 +205,23 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 			subscriber.close()
 		},
 	}, nil
+}
+
+func (h *resourceEventHub) addExistingDirectory(watcher *fsnotify.Watcher, dir string) error {
+	info, err := os.Stat(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect runtime input directory %q: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("runtime input directory %q is not a directory", dir)
+	}
+	if err := h.addWatch(watcher, dir); err != nil {
+		return fmt.Errorf("watch runtime input directory %q: %w", dir, err)
+	}
+	return nil
 }
 
 func (h *resourceEventHub) addRoot(watcher *fsnotify.Watcher, root string) error {
@@ -263,7 +306,7 @@ func (h *resourceEventHub) runWatcher(
 			if !ok {
 				return
 			}
-			resource := h.resourceForPath(event.Name)
+			resources := h.resourcesForPath(event.Name)
 			if event.Op&fsnotify.Create != 0 {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
 					if filepath.Clean(event.Name) == filepath.Join(h.workDir, ".juex") {
@@ -271,8 +314,8 @@ func (h *resourceEventHub) runWatcher(
 							h.failWatcher(watcher)
 							return
 						}
-						resource = resourceObservable
-					} else {
+						resources = []string{resourceObservable}
+					} else if h.shouldWatchCreatedDirectory(event.Name) {
 						if err := h.addRoot(watcher, event.Name); err != nil {
 							h.failWatcher(watcher)
 							return
@@ -280,9 +323,7 @@ func (h *resourceEventHub) runWatcher(
 					}
 				}
 			}
-			if resource != "" {
-				queue(resource)
-			}
+			queue(resources...)
 		case <-invalidations.notify:
 			queue(invalidations.take().Resources...)
 		case <-timerC:
@@ -297,6 +338,14 @@ func (h *resourceEventHub) runWatcher(
 			return
 		}
 	}
+}
+
+func (h *resourceEventHub) shouldWatchCreatedDirectory(path string) bool {
+	path = filepath.Clean(path)
+	if pathWithin(h.workDir, path) || pathWithin(h.sessionsDir, path) || pathWithin(h.runtimeDir, path) {
+		return true
+	}
+	return h.runtimeFile != "" && h.runtimeFile != "." && path == filepath.Dir(h.runtimeFile)
 }
 
 func (h *resourceEventHub) resyncAfterWatcherError() {
@@ -349,6 +398,41 @@ func (h *resourceEventHub) resourceForPath(path string) string {
 	return resourceWorkspace
 }
 
+func (h *resourceEventHub) resourcesForPath(path string) []string {
+	resource := h.resourceForPath(path)
+	if resource == "" {
+		if h.isMutableRuntimeInput(path) {
+			return []string{resourceRuntime}
+		}
+		return nil
+	}
+	resources := []string{resource}
+	if resource == resourceWorkspace && h.isMutableRuntimeInput(path) {
+		resources = append(resources, resourceRuntime)
+	}
+	return resources
+}
+
+func (h *resourceEventHub) isMutableRuntimeInput(path string) bool {
+	path = filepath.Clean(path)
+	if h.runtimeFile != "" && h.runtimeFile != "." && path == h.runtimeFile {
+		return true
+	}
+	if h.runtimeFile != "" && h.runtimeFile != "." && path == filepath.Dir(h.runtimeFile) {
+		return true
+	}
+	if h.runtimeDir != "" && h.runtimeDir != "." && pathWithin(h.runtimeDir, path) {
+		return true
+	}
+	relative, err := filepath.Rel(h.workDir, path)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return relative == "AGENTS.md" ||
+		relative == ".agents" ||
+		relative == filepath.Join(".agents", "AGENTS.md")
+}
+
 func pathWithin(root, path string) bool {
 	if root == "" || root == "." || path == "" || path == "." {
 		return false
@@ -378,8 +462,11 @@ func (h *resourceEventHub) Publish(event events.Event) {
 		h.invalidate(resourceObservable)
 	case event.Type == toolevents.CompletedType || event.Type == toolevents.ErroredType:
 		name := toolEventName(event.Payload)
-		if name == "write" || name == "edit" || name == "apply_patch" || name == "write_commit" {
+		switch name {
+		case "write", "edit", "apply_patch", "write_commit":
 			h.invalidate(resourceWorkspace, resourceScratchpad)
+		case "memory_write", "memory_delete":
+			h.invalidate(resourceRuntime)
 		}
 	}
 }
