@@ -51,8 +51,9 @@ type Session struct {
 	startedAtMS  int64
 	lastActiveMS int64
 
-	beforeTranscriptWrite func()
-	afterTranscriptWrite  func()
+	beforeTranscriptWrite        func()
+	afterTranscriptPrewriteCheck func()
+	afterTranscriptWrite         func()
 }
 
 type Options struct {
@@ -99,7 +100,7 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 			historyPath:  opts.HistoryPath,
 			startedAtMS:  nowMS,
 			lastActiveMS: nowMS,
-			transcript:   transcriptIndex{repairSafe: true, repairPrefixSafe: true, complete: true},
+			transcript:   newEmptyTranscriptIndex(),
 		}, nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -136,7 +137,7 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 		historyPath:  opts.HistoryPath,
 		startedAtMS:  nowMS,
 		lastActiveMS: nowMS,
-		transcript:   transcriptIndex{repairSafe: true, repairPrefixSafe: true, complete: true},
+		transcript:   newEmptyTranscriptIndex(),
 	}, nil
 }
 
@@ -222,14 +223,21 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		s.mu.Unlock()
 		return nil, ErrTranscriptChanged
 	}
-	var prefixDigest *transcriptPrefixDigest
-	if transcriptPrefixDigestRequired(currentFingerprint) {
-		digest, err := digestTranscriptPrefix(s.convFD, offset)
-		if err != nil {
-			s.mu.Unlock()
-			return nil, err
-		}
-		prefixDigest = &digest
+	if !s.transcript.contentDigestValid {
+		s.mu.Unlock()
+		return nil, ErrTranscriptChanged
+	}
+	prefixDigest, appendedDigest, err := digestTranscriptAppend(s.convFD, offset, data)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	if prefixDigest != s.transcript.contentDigest {
+		s.mu.Unlock()
+		return nil, ErrTranscriptChanged
+	}
+	if s.afterTranscriptPrewriteCheck != nil {
+		s.afterTranscriptPrewriteCheck()
 	}
 	written, writeErr := s.convFD.Write(data)
 	if writeErr == nil && written != len(data) {
@@ -263,7 +271,13 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 	if lastActiveMS < s.lastActiveMS {
 		lastActiveMS = s.lastActiveMS
 	}
-	commit, inspectErr := s.inspectTranscriptCommitLocked(offset, data, committedFingerprint, prefixDigest)
+	commit, inspectErr := s.inspectTranscriptCommitLocked(
+		offset,
+		data,
+		committedFingerprint,
+		prefixDigest,
+		appendedDigest,
+	)
 	if commit.diverged {
 		s.adoptTranscriptCommitLocked(commit, nextTranscript, nextHistory, lastActiveMS)
 		s.mu.Unlock()
@@ -280,6 +294,8 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		return nil, inspectErr
 	}
 	nextTranscript.fingerprint = commit.fingerprint
+	nextTranscript.contentDigest = commit.contentDigest
+	nextTranscript.contentDigestValid = commit.contentDigestValid
 	meta := s.metadataLocked()
 	meta.LastActiveAtMS = lastActiveMS
 	meta.Transcript = buildTranscriptCheckpoint(nextTranscript, nextTranscript.fingerprint)
@@ -294,6 +310,7 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 	s.lastActiveMS = lastActiveMS
 	s.History = nextHistory
 	s.transcript = activeTranscriptIndex(nextTranscript)
+	s.reopenConversationLocked()
 	info, ok := s.historyInfoLocked()
 	historyPath := s.historyPath
 	s.mu.Unlock()
@@ -304,18 +321,21 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 }
 
 type transcriptCommit struct {
-	committed   bool
-	diverged    bool
-	fingerprint transcriptFingerprint
-	index       transcriptIndex
-	history     []llm.Message
+	committed          bool
+	diverged           bool
+	fingerprint        transcriptFingerprint
+	index              transcriptIndex
+	history            []llm.Message
+	contentDigest      transcriptPrefixDigest
+	contentDigestValid bool
 }
 
 func (s *Session) inspectTranscriptCommitLocked(
 	offset int64,
 	data []byte,
 	committedFingerprint transcriptFingerprint,
-	prefixDigest *transcriptPrefixDigest,
+	prefixDigest transcriptPrefixDigest,
+	appendedDigest transcriptPrefixDigest,
 ) (transcriptCommit, error) {
 	path := filepath.Join(s.Dir, conversationFile)
 	snapshot, err := openTranscriptSnapshot(path)
@@ -326,8 +346,8 @@ func (s *Session) inspectTranscriptCommitLocked(
 	committed, readErr := transcriptRangeMatches(snapshot.file, offset, data)
 	expectedSize := offset + int64(len(data))
 	incrementalSafe := committedFingerprint.strong() && snapshot.fingerprint == committedFingerprint
-	if prefixDigest != nil && committed && snapshot.fingerprint.Size == expectedSize {
-		incrementalSafe, err = transcriptPrefixDigestMatches(snapshot.file, offset, *prefixDigest)
+	if committed && snapshot.fingerprint.Size == expectedSize {
+		incrementalSafe, err = transcriptPrefixDigestMatches(snapshot.file, offset, prefixDigest)
 		if err != nil {
 			return transcriptCommit{diverged: true}, err
 		}
@@ -343,16 +363,17 @@ func (s *Session) inspectTranscriptCommitLocked(
 		if !committed {
 			return s.inspectDivergedTranscriptCommitLocked(snapshot, offset, data)
 		}
-		if prefixDigest != nil {
-			prefixMatches, err := transcriptPrefixDigestMatches(snapshot.file, offset, *prefixDigest)
-			if err != nil {
-				return transcriptCommit{diverged: true}, err
-			}
-			if !prefixMatches {
-				return s.inspectDivergedTranscriptCommitLocked(snapshot, offset, data)
-			}
+		prefixMatches, err := transcriptPrefixDigestMatches(snapshot.file, offset, prefixDigest)
+		if err != nil {
+			return transcriptCommit{diverged: true}, err
 		}
-		return transcriptCommit{committed: true, fingerprint: snapshot.fingerprint}, nil
+		if !prefixMatches {
+			return s.inspectDivergedTranscriptCommitLocked(snapshot, offset, data)
+		}
+		commit := transcriptCommit{committed: true, fingerprint: snapshot.fingerprint}
+		commit.contentDigest = appendedDigest
+		commit.contentDigestValid = true
+		return commit, nil
 	}
 
 	if readErr != nil && !errors.Is(readErr, io.EOF) {
@@ -373,6 +394,25 @@ func digestTranscriptPrefix(file *os.File, size int64) (transcriptPrefixDigest, 
 	return digest, nil
 }
 
+func digestTranscriptAppend(
+	file *os.File,
+	size int64,
+	suffix []byte,
+) (transcriptPrefixDigest, transcriptPrefixDigest, error) {
+	hash := sha256.New()
+	if _, err := io.Copy(hash, io.NewSectionReader(file, 0, size)); err != nil {
+		return transcriptPrefixDigest{}, transcriptPrefixDigest{}, err
+	}
+	var prefix transcriptPrefixDigest
+	copy(prefix[:], hash.Sum(nil))
+	if _, err := hash.Write(suffix); err != nil {
+		return transcriptPrefixDigest{}, transcriptPrefixDigest{}, err
+	}
+	var appended transcriptPrefixDigest
+	copy(appended[:], hash.Sum(nil))
+	return prefix, appended, nil
+}
+
 func transcriptPrefixDigestMatches(file *os.File, size int64, expected transcriptPrefixDigest) (bool, error) {
 	actual, err := digestTranscriptPrefix(file, size)
 	return actual == expected, err
@@ -391,20 +431,55 @@ func (s *Session) inspectDivergedTranscriptCommitLocked(
 	}
 	idx.fingerprint = snapshot.fingerprint
 	active := activeTranscriptIndex(idx)
-	history, err := readTranscriptMessagesFromFile(snapshot.file, path, active.entries)
+	history, err := readTranscriptMessagesFromFile(snapshot.file, path, idx.entries)
 	if err != nil {
 		return result, err
 	}
 	if err := snapshot.verify(); err != nil {
 		return transcriptCommit{diverged: true}, err
 	}
-	result.committed, err = transcriptRangeMatches(snapshot.file, offset, data)
+	matched, err := transcriptPrefixDigestMatches(snapshot.file, snapshot.fingerprint.Size, idx.contentDigest)
 	if err != nil {
 		return result, err
 	}
+	if !idx.contentDigestValid || !matched {
+		return result, ErrTranscriptChanged
+	}
+	result.committed, err = transcriptBatchPresent(snapshot.file, idx.entries, offset, data)
+	if err != nil {
+		return result, err
+	}
+	if err := snapshot.verify(); err != nil {
+		return transcriptCommit{diverged: true}, err
+	}
+	matched, err = transcriptPrefixDigestMatches(snapshot.file, snapshot.fingerprint.Size, idx.contentDigest)
+	if err != nil || !matched {
+		if err != nil {
+			return result, err
+		}
+		return result, ErrTranscriptChanged
+	}
 	result.index = active
 	result.history = history
+	result.contentDigest = idx.contentDigest
+	result.contentDigestValid = idx.contentDigestValid
 	return result, nil
+}
+
+func transcriptBatchPresent(file *os.File, entries []transcriptIndexEntry, offset int64, data []byte) (bool, error) {
+	for _, entry := range entries {
+		if entry.Offset < offset {
+			continue
+		}
+		matched, err := transcriptRangeMatches(file, entry.Offset, data)
+		if err != nil {
+			return false, err
+		}
+		if matched {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func transcriptRangeMatches(file *os.File, offset int64, data []byte) (bool, error) {
@@ -436,6 +511,14 @@ func (s *Session) adoptTranscriptCommitLocked(
 		fallbackHistory = s.History
 		lastActiveMS = s.lastActiveMS
 	}
+	s.reopenConversationLocked()
+	s.lastActiveMS = lastActiveMS
+	s.History = fallbackHistory
+	s.transcript = fallbackIndex
+	_ = saveMetadata(s.Dir, s.metadataLocked())
+}
+
+func (s *Session) reopenConversationLocked() {
 	if s.convFD != nil {
 		_ = s.convFD.Close()
 		s.convFD = nil
@@ -443,10 +526,16 @@ func (s *Session) adoptTranscriptCommitLocked(
 	if replacement, err := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_RDWR, 0o644); err == nil {
 		s.convFD = replacement
 	}
-	s.lastActiveMS = lastActiveMS
-	s.History = fallbackHistory
-	s.transcript = fallbackIndex
-	_ = saveMetadata(s.Dir, s.metadataLocked())
+}
+
+func newEmptyTranscriptIndex() transcriptIndex {
+	return transcriptIndex{
+		repairSafe:         true,
+		repairPrefixSafe:   true,
+		complete:           true,
+		contentDigest:      sha256.Sum256(nil),
+		contentDigestValid: true,
+	}
 }
 
 // AppendEvent persists e to events.jsonl. Unlike Append, the event itself
@@ -757,6 +846,8 @@ func (s *Session) infoLocked() Info {
 		LastActiveAt: time.UnixMilli(s.lastActiveMS).UTC(),
 	}
 	info.transcript = s.transcript.fingerprint
+	info.transcriptDigest = s.transcript.contentDigest
+	info.transcriptDigestValid = s.transcript.contentDigestValid
 	if info.transcript == (transcriptFingerprint{}) {
 		if s.convFD != nil {
 			info.transcript, _ = fingerprintFromOpenFile(s.convFD)
@@ -836,6 +927,33 @@ func residentTranscriptFingerprintMatches(resident, current transcriptFingerprin
 		return current.Size == 0
 	}
 	return resident == current
+}
+
+func transcriptDigestMatchesPath(
+	path string,
+	fingerprint transcriptFingerprint,
+	digest transcriptPrefixDigest,
+	valid bool,
+) (bool, error) {
+	if !valid {
+		return false, nil
+	}
+	snapshot, err := openTranscriptSnapshot(path)
+	if err != nil {
+		return false, err
+	}
+	defer snapshot.close()
+	if snapshot.fingerprint != fingerprint {
+		return false, nil
+	}
+	matched, err := transcriptPrefixDigestMatches(snapshot.file, fingerprint.Size, digest)
+	if err != nil || !matched {
+		return false, err
+	}
+	if err := snapshot.verify(); err != nil {
+		return false, nil
+	}
+	return transcriptPrefixDigestMatches(snapshot.file, fingerprint.Size, digest)
 }
 
 func newID() string {

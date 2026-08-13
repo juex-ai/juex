@@ -274,6 +274,17 @@ func repairHistorySummaries(root, path string, infos []Info) error {
 			if !fingerprint.strong() || fingerprint != info.transcript {
 				continue
 			}
+			if transcriptCheckpointContentDigestRequired(fingerprint) {
+				matched, err := transcriptDigestMatchesPath(
+					filepath.Join(dir, conversationFile),
+					fingerprint,
+					info.transcriptDigest,
+					info.transcriptDigestValid,
+				)
+				if err != nil || !matched {
+					continue
+				}
+			}
 			info.Dir = dir
 			info = normalizeInfo(info)
 			if historyHasSummary(h, info) {

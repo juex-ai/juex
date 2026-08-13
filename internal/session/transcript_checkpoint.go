@@ -9,7 +9,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 )
 
-const transcriptCheckpointVersion = 3
+const transcriptCheckpointVersion = 4
 
 // transcriptCheckpoint is a bounded, derived index over conversation.jsonl.
 // The transcript fingerprint makes the JSONL file authoritative whenever the
@@ -23,6 +23,7 @@ type transcriptCheckpoint struct {
 	RepairPrefixSafe bool                        `json:"repair_prefix_safe"`
 	LatestCompact    *transcriptCheckpointEntry  `json:"latest_compact,omitempty"`
 	Retained         []transcriptCheckpointEntry `json:"retained,omitempty"`
+	ContentSHA256    string                      `json:"content_sha256,omitempty"`
 	ChecksumSHA256   string                      `json:"checksum_sha256"`
 }
 
@@ -47,6 +48,9 @@ func transcriptCheckpointValid(checkpoint *transcriptCheckpoint, fingerprint tra
 		checkpoint.ChecksumSHA256 == "" || checkpoint.ChecksumSHA256 != transcriptCheckpointChecksum(checkpoint) {
 		return false
 	}
+	if _, ok := checkpointContentDigest(checkpoint); !ok {
+		return false
+	}
 	if checkpoint.LatestCompact == nil {
 		return len(checkpoint.Retained) == 0
 	}
@@ -67,6 +71,68 @@ func transcriptCheckpointValid(checkpoint *transcriptCheckpoint, fingerprint tra
 		lastOffset = entry.Offset
 	}
 	return true
+}
+
+func transcriptCheckpointMatchesSnapshot(checkpoint *transcriptCheckpoint, snapshot *transcriptSnapshot) bool {
+	if snapshot == nil {
+		return false
+	}
+	return transcriptCheckpointMatchesSnapshotWithContentCheck(
+		checkpoint,
+		snapshot,
+		transcriptCheckpointContentDigestRequired(snapshot.fingerprint),
+	)
+}
+
+func transcriptCheckpointMatchesSnapshotWithContentCheck(
+	checkpoint *transcriptCheckpoint,
+	snapshot *transcriptSnapshot,
+	contentRequired bool,
+) bool {
+	if snapshot == nil || !transcriptCheckpointValid(checkpoint, snapshot.fingerprint) {
+		return false
+	}
+	if !contentRequired {
+		return true
+	}
+	expected, ok := checkpointContentDigest(checkpoint)
+	if !ok {
+		return false
+	}
+	matched, err := transcriptPrefixDigestMatches(snapshot.file, snapshot.fingerprint.Size, expected)
+	return err == nil && matched
+}
+
+func transcriptCheckpointMatchesPath(
+	path string,
+	checkpoint *transcriptCheckpoint,
+	fingerprint transcriptFingerprint,
+) bool {
+	snapshot, err := openTranscriptSnapshot(path)
+	if err != nil {
+		return false
+	}
+	defer snapshot.close()
+	if snapshot.fingerprint != fingerprint || !transcriptCheckpointMatchesSnapshot(checkpoint, snapshot) {
+		return false
+	}
+	if err := snapshot.verify(); err != nil {
+		return false
+	}
+	return transcriptCheckpointMatchesSnapshot(checkpoint, snapshot)
+}
+
+func checkpointContentDigest(checkpoint *transcriptCheckpoint) (transcriptPrefixDigest, bool) {
+	if checkpoint == nil || checkpoint.ContentSHA256 == "" {
+		return transcriptPrefixDigest{}, false
+	}
+	decoded, err := hex.DecodeString(checkpoint.ContentSHA256)
+	if err != nil || len(decoded) != sha256.Size {
+		return transcriptPrefixDigest{}, false
+	}
+	var digest transcriptPrefixDigest
+	copy(digest[:], decoded)
+	return digest, true
 }
 
 func transcriptCheckpointChecksum(checkpoint *transcriptCheckpoint) string {
@@ -99,6 +165,9 @@ func buildTranscriptCheckpoint(idx transcriptIndex, fingerprint transcriptFinger
 		Preview:          idx.preview,
 		RepairSafe:       idx.repairSafe,
 		RepairPrefixSafe: idx.repairPrefixSafe,
+	}
+	if idx.contentDigestValid {
+		checkpoint.ContentSHA256 = hex.EncodeToString(idx.contentDigest[:])
 	}
 	compactIndex := idx.latestCompact()
 	if compactIndex < 0 {
@@ -169,7 +238,7 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 	}
 	defer snapshot.close()
 	fingerprint := snapshot.fingerprint
-	if !transcriptCheckpointValid(checkpoint, fingerprint) || checkpoint.LatestCompact == nil {
+	if !transcriptCheckpointMatchesSnapshot(checkpoint, snapshot) || checkpoint.LatestCompact == nil {
 		idx, err := scanTranscriptIndex(path)
 		if err != nil {
 			return transcriptIndex{}, false, err
@@ -211,6 +280,7 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 	idx.turns = checkpoint.Turns
 	idx.preview = checkpoint.Preview
 	idx.fingerprint = fingerprint
+	idx.contentDigest, idx.contentDigestValid = checkpointContentDigest(checkpoint)
 	idx.repairSafe = repairSafe
 	idx.repairPrefixSafe = checkpoint.RepairPrefixSafe
 	idx.repairBroken = repairBroken
@@ -219,6 +289,9 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 	idx.latestCompactAt = latestCompactAt
 	idx.hasLatestCompact = true
 	if err := snapshot.verify(); err != nil {
+		return scanActiveTranscriptIndex(path)
+	}
+	if !transcriptCheckpointMatchesSnapshot(checkpoint, snapshot) {
 		return scanActiveTranscriptIndex(path)
 	}
 	return idx, true, nil

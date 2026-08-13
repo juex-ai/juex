@@ -2,6 +2,6 @@
 
 package session
 
-func transcriptPrefixDigestRequired(transcriptFingerprint) bool {
+func transcriptCheckpointContentDigestRequired(transcriptFingerprint) bool {
 	return true
 }

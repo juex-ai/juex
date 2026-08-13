@@ -44,7 +44,9 @@ type Info struct {
 	TokenUsage   llm.Usage         `json:"token_usage"`
 	ContextUsage *llm.ContextUsage `json:"context_usage,omitempty"`
 
-	transcript transcriptFingerprint
+	transcript            transcriptFingerprint
+	transcriptDigest      transcriptPrefixDigest
+	transcriptDigestValid bool
 }
 
 // InfoDir returns the canonical on-disk directory for info under sessionsRoot.
@@ -151,16 +153,31 @@ func cachedOrScannedInfo(
 		return Info{}, false, err
 	}
 	cached, ok := recorded[id]
-	if !ok || !fingerprint.strong() || cached.transcript != fingerprint {
+	cacheMatches := ok && fingerprint.strong() && cached.transcript == fingerprint
+	var meta metadata
+	if cacheMatches && transcriptCheckpointContentDigestRequired(fingerprint) {
+		meta, err = loadMetadata(dir)
+		if err != nil {
+			return Info{}, false, err
+		}
+		cacheMatches = transcriptCheckpointMatchesPath(convPath, meta.Transcript, fingerprint)
+		if cacheMatches {
+			cached.Turns = meta.Transcript.Turns
+			cached.Preview = meta.Transcript.Preview
+		}
+	}
+	if !cacheMatches {
 		info, _, err := loadSummary(dir)
 		if err != nil {
 			return Info{}, false, err
 		}
 		return info, true, nil
 	}
-	meta, err := loadMetadata(dir)
-	if err != nil {
-		return Info{}, false, err
+	if meta.StartedAtMS == 0 {
+		meta, err = loadMetadata(dir)
+		if err != nil {
+			return Info{}, false, err
+		}
 	}
 	info := Info{
 		ID:           id,
@@ -172,6 +189,9 @@ func cachedOrScannedInfo(
 		Turns:        cached.Turns,
 		Preview:      cached.Preview,
 		transcript:   fingerprint,
+	}
+	if transcriptCheckpointContentDigestRequired(fingerprint) {
+		info.transcriptDigest, info.transcriptDigestValid = checkpointContentDigest(meta.Transcript)
 	}
 	info.TokenUsage, info.ContextUsage, _ = loadLatestSessionUsageWithin(dir, maxSessionUsageScanBytes)
 	return info, false, nil
@@ -234,10 +254,11 @@ func loadInfoSummary(dir string) (Info, transcriptIndex, error) {
 		transcript:   fingerprint,
 	}
 	var idx transcriptIndex
-	if transcriptCheckpointValid(meta.Transcript, info.transcript) {
+	if transcriptCheckpointMatchesPath(convPath, meta.Transcript, info.transcript) {
 		idx.turns = meta.Transcript.Turns
 		idx.preview = meta.Transcript.Preview
 		idx.fingerprint = info.transcript
+		idx.contentDigest, idx.contentDigestValid = checkpointContentDigest(meta.Transcript)
 	} else {
 		idx, err = scanTranscriptIndex(convPath)
 		if err != nil {
@@ -246,6 +267,10 @@ func loadInfoSummary(dir string) (Info, transcriptIndex, error) {
 	}
 	info.Turns = idx.turns
 	info.Preview = idx.preview
+	if transcriptCheckpointContentDigestRequired(fingerprint) {
+		info.transcriptDigest = idx.contentDigest
+		info.transcriptDigestValid = idx.contentDigestValid
+	}
 	info.TokenUsage, info.ContextUsage, _ = loadLatestSessionUsage(dir)
 	return info, idx, nil
 }

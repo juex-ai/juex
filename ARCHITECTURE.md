@@ -931,12 +931,14 @@ remains the slice-based compatibility adapter for callers that explicitly need
 all events.
 
 `conversation.jsonl` remains the canonical, inspectable transcript. A bounded
-derived checkpoint in `session.json` records the transcript fingerprint,
+derived checkpoint in `session.json` records the transcript fingerprint and
+canonical content SHA-256,
 cumulative turn count and preview, the latest compaction-marker byte location,
 byte locations for explicitly retained pre-compaction messages, and whether
 the complete transcript and hidden pre-compaction prefix passed Tool Call
 repair validation. A versioned SHA-256 checksum covers the exact transcript
-fingerprint and every derived checkpoint field, so sidecar-only edits are
+fingerprint, content digest, and every derived checkpoint field, so
+sidecar-only edits are
 rejected. A matching, repair-safe checkpoint lets session resume read
 only retained rows plus the active suffix,
 and lets recent transcript pages validate the sealed compact row with one
@@ -945,6 +947,8 @@ rebuilds the post-compaction suffix index. Missing,
 stale, or invalid checkpoints fall back to a strict full scan; the next
 successful append replaces them. The checkpoint never stores the complete
 message index, and full-history APIs remain proportional to transcript size.
+Windows validates the canonical content digest before reusing a checkpoint or
+history summary because multiple changes can share one `ChangeTime` clock tick.
 Platforms that cannot provide a stable file identity and change time reject
 the checkpoint rather than trusting a weak size-and-mtime match.
 The token detects ordinary in-place edits (including restored mtimes), file
@@ -955,12 +959,16 @@ an actor deliberately recomputing the checksum. Legacy tail-start checkpoints
 also verify every canonical row from the retained tail start through the
 compact marker, so a checksum-consistent retained tail cannot contain holes.
 Resident sessions compare both their open file and the canonical path before
-append and refuse to write when either no longer matches the in-memory index.
+append, hash the adopted canonical prefix before writing, and verify that same
+prefix before accepting incremental metadata. This makes append proportional to
+the existing transcript size while resume and recent paging retain their
+bounded checkpoint paths.
 `conversation.lock` serializes the final fingerprint check, JSONL append, and
 metadata replacement across Session instances. An external suffix that still
-appears after a committed write is adopted by a canonical rescan; the caller
-is not told that an already-persisted batch failed and therefore will not
-duplicate it on retry.
+appears after a committed write is adopted by a canonical rescan. The scan
+recognizes the exact owned batch even when an external append shifted it beyond
+its original offset, preserves complete live history independently from the
+bounded active index, and does not report an already-persisted batch as failed.
 `events.jsonl` does not use this checkpoint because safely skipping event
 prefixes would also require a durable reducer-state snapshot.
 
@@ -1013,13 +1021,12 @@ session entries are a cache, not canonical metadata: they contain only the
 session ID, transcript-derived turn count and preview, and a transcript
 fingerprint `{size, mtime_ns, change_id}`. The opaque change identity combines
 the platform file identity with nanosecond ctime on Darwin/Linux or
-`FILE_BASIC_INFO.ChangeTime` on Windows, so same-size rewrites that preserve the
-modification timestamp still invalidate derived state. Windows append commit
-inspection additionally compares a SHA-256 digest of the canonical pre-append
-prefix because `ChangeTime` alone cannot linearize multiple writes in one clock
-tick. Platforms without a reliable change identity leave derived caches
-fail-closed and use the same content check before accepting incremental resident
-state. Alias, kind,
+`FILE_BASIC_INFO.ChangeTime` on Windows, so ordinary same-size rewrites that
+preserve the modification timestamp still invalidate derived state. Windows
+also validates the checkpoint's canonical content digest because `ChangeTime`
+alone cannot distinguish multiple writes in one clock tick. Platforms without
+a reliable change identity leave derived caches fail-closed. Every platform
+uses the resident content digest to anchor incremental append state. Alias, kind,
 timestamps, and usage remain owned by session metadata and event files. `run`,
 `repl`, and `listen` attach to the active primary by default; `--new` and
 `/new` create a new primary and switch

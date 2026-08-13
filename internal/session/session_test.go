@@ -346,6 +346,92 @@ func TestSessionAppendAdoptsCanonicalSuffixAfterCommittedRace(t *testing.T) {
 	}
 }
 
+func TestSessionAppendRecognizesBatchShiftedByExternalAppend(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "base"), "base")); err != nil {
+		t.Fatal(err)
+	}
+	external := messageWithID(llm.TextMessage(llm.RoleAssistant, "external"), "external-before")
+	externalLine, err := marshalJSONLine(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.afterTranscriptPrewriteCheck = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.Write(externalLine); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	owned := messageWithID(llm.TextMessage(llm.RoleUser, "owned"), "owned-shifted")
+	if err := s.Append(owned); err != nil {
+		t.Fatalf("Append shifted batch = %v", err)
+	}
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "base,external-before,owned-shifted" {
+		t.Fatalf("resident history ids = %s, want base,external-before,owned-shifted", got)
+	}
+}
+
+func TestSessionAppendPreservesFullHistoryAfterCompactedDivergence(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, message := range []llm.Message{
+		messageWithID(llm.TextMessage(llm.RoleUser, "old"), "m1"),
+		messageWithID(llm.TextMessage(llm.RoleAssistant, "retained"), "m2"),
+	} {
+		if err := s.Append(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compact := messageWithID(compactTestMessage("summary"), "m3")
+	compact.Compaction = &llm.CompactionMetadata{RetainedMessageIDs: []string{"m2"}}
+	if err := s.Append(compact); err != nil {
+		t.Fatal(err)
+	}
+	external := messageWithID(llm.TextMessage(llm.RoleAssistant, "external"), "m5")
+	externalLine, err := marshalJSONLine(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.afterTranscriptWrite = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.Write(externalLine); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleUser, "owned"), "m4")); err != nil {
+		t.Fatalf("Append after compacted divergence = %v", err)
+	}
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "m1,m2,m3,m4,m5" {
+		t.Fatalf("live history ids = %s, want m1,m2,m3,m4,m5", got)
+	}
+	if got := strings.Join(transcriptEntryIDs(s.transcript.entries), ","); got != "m2,m3,m4,m5" {
+		t.Fatalf("active index ids = %s, want m2,m3,m4,m5", got)
+	}
+}
+
 func TestSessionAppendRejectsSameSizedPostWriteRewrite(t *testing.T) {
 	s, err := New(t.TempDir())
 	if err != nil {
@@ -540,6 +626,50 @@ func TestSessionAppendAdoptsCanonicalPrefixRewriteAfterWrite(t *testing.T) {
 	}
 	if !transcriptCheckpointValid(meta.Transcript, canonicalFingerprint) {
 		t.Fatalf("checkpoint = %+v, want canonical fingerprint %+v", meta.Transcript, canonicalFingerprint)
+	}
+}
+
+func TestSessionAppendAdoptsPrefixRewriteAfterPrewriteDigest(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	first := messageWithID(llm.TextMessage(llm.RoleAssistant, "first"), "first-old")
+	rewritten := messageWithID(llm.TextMessage(llm.RoleAssistant, "other"), "first-new")
+	firstLine, err := marshalJSONLine(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrittenLine, err := marshalJSONLine(rewritten)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstLine) != len(rewrittenLine) {
+		t.Fatalf("test rows differ in size: first=%d rewritten=%d", len(firstLine), len(rewrittenLine))
+	}
+	if err := s.Append(first); err != nil {
+		t.Fatal(err)
+	}
+	s.afterTranscriptPrewriteCheck = func() {
+		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_WRONLY, 0o644)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.WriteAt(rewrittenLine, 0); writeErr != nil {
+			file.Close()
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+
+	if err := s.Append(messageWithID(llm.TextMessage(llm.RoleAssistant, "owned"), "owned")); err != nil {
+		t.Fatalf("Append after prewrite prefix rewrite = %v", err)
+	}
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "first-new,owned" {
+		t.Fatalf("resident history ids = %s, want first-new,owned", got)
 	}
 }
 

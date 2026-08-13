@@ -1,6 +1,9 @@
 package session
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -194,6 +197,8 @@ func TestCheckpointRecentPageDoesNotScanCompleteSuffix(t *testing.T) {
 		RepairSafe:    true,
 		LatestCompact: &transcriptCheckpointEntry{ID: "m1", Offset: 0, Length: len(compactLine)},
 	}
+	digest := sha256.Sum256(data)
+	checkpoint.ContentSHA256 = hex.EncodeToString(digest[:])
 	checkpoint.ChecksumSHA256 = transcriptCheckpointChecksum(checkpoint)
 
 	page, checkpointed, err := transcriptMessagePageFromCheckpoint(path, checkpoint, "", 1)
@@ -337,6 +342,57 @@ func TestSameSizeTimestampPreservingRewriteInvalidatesCheckpoint(t *testing.T) {
 	if len(full) != 4 || full[0].ID != "m1" || full[1].Kind != llm.MessageKindToolResult ||
 		full[1].Blocks[0].ToolUseID != "call-hidden" || full[2].ID != "m2" {
 		t.Fatalf("repaired transcript = %+v, want hidden tool result before compact marker", full)
+	}
+}
+
+func TestCheckpointContentDigestRejectsFingerprintCollision(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []llm.Message{
+		messageWithID(llm.TextMessage(llm.RoleAssistant, "first"), "m1"),
+		messageWithID(compactTestMessage("summary"), "m2"),
+	} {
+		if err := s.Append(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := loadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, conversationFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten := bytes.Replace(data, []byte("first"), []byte("other"), 1)
+	if bytes.Equal(rewritten, data) || len(rewritten) != len(data) {
+		t.Fatal("test did not produce an equal-size content rewrite")
+	}
+	if err := os.WriteFile(path, rewritten, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := openTranscriptSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.close()
+
+	// Simulate a Windows metadata collision by making the stale checkpoint's
+	// fingerprint agree with the rewritten file while retaining its old digest.
+	meta.Transcript.Fingerprint = snapshot.fingerprint
+	meta.Transcript.ChecksumSHA256 = transcriptCheckpointChecksum(meta.Transcript)
+	if !transcriptCheckpointValid(meta.Transcript, snapshot.fingerprint) {
+		t.Fatal("simulated colliding checkpoint is structurally invalid")
+	}
+	if transcriptCheckpointMatchesSnapshotWithContentCheck(meta.Transcript, snapshot, true) {
+		t.Fatal("content digest accepted a stale checkpoint after an equal-size rewrite")
 	}
 }
 

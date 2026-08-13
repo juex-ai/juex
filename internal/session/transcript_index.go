@@ -3,6 +3,7 @@ package session
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,17 +25,19 @@ type MessagePage struct {
 var ErrBeforeMessageNotFound = errors.New("before message not found")
 
 type transcriptIndex struct {
-	entries          []transcriptIndexEntry
-	turns            int
-	preview          string
-	fingerprint      transcriptFingerprint
-	repairSafe       bool
-	repairPrefixSafe bool
-	repairBroken     bool
-	repairPending    []pendingTranscriptToolUse
-	complete         bool
-	latestCompactAt  int
-	hasLatestCompact bool
+	entries            []transcriptIndexEntry
+	turns              int
+	preview            string
+	fingerprint        transcriptFingerprint
+	repairSafe         bool
+	repairPrefixSafe   bool
+	repairBroken       bool
+	repairPending      []pendingTranscriptToolUse
+	contentDigest      transcriptPrefixDigest
+	contentDigestValid bool
+	complete           bool
+	latestCompactAt    int
+	hasLatestCompact   bool
 }
 
 type transcriptIndexEntry struct {
@@ -80,12 +83,16 @@ func scanTranscriptIndexFromFile(f *os.File, path string, start int64) (transcri
 	}
 
 	idx := transcriptIndex{repairSafe: true, repairPrefixSafe: true, complete: true}
+	hash := sha256.New()
 	reader := bufio.NewReader(f)
 	offset := start
 	lineIndex := 0
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if len(line) > 0 {
+			if start == 0 {
+				_, _ = hash.Write(line)
+			}
 			entryOffset := offset
 			offset += int64(len(line))
 			if len(bytes.TrimSuffix(line, []byte{'\n'})) > 0 {
@@ -107,6 +114,10 @@ func scanTranscriptIndexFromFile(f *os.File, path string, start int64) (transcri
 		if readErr != nil {
 			return transcriptIndex{}, readErr
 		}
+	}
+	if start == 0 {
+		copy(idx.contentDigest[:], hash.Sum(nil))
+		idx.contentDigestValid = true
 	}
 	return idx, nil
 }

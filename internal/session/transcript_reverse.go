@@ -21,7 +21,7 @@ func transcriptMessagePageFromCheckpoint(
 		return MessagePage{}, false, err
 	}
 	defer snapshot.close()
-	if !transcriptCheckpointValid(checkpoint, snapshot.fingerprint) {
+	if !transcriptCheckpointMatchesSnapshot(checkpoint, snapshot) {
 		return MessagePage{}, false, nil
 	}
 	if checkpoint.LatestCompact != nil {
@@ -36,6 +36,9 @@ func transcriptMessagePageFromCheckpoint(
 		return MessagePage{}, false, nil
 	}
 	if err := snapshot.verify(); err != nil {
+		return MessagePage{}, false, nil
+	}
+	if !transcriptCheckpointMatchesSnapshot(checkpoint, snapshot) {
 		return MessagePage{}, false, nil
 	}
 	return page, true, nil
