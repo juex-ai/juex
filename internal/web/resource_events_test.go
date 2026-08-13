@@ -43,6 +43,18 @@ func TestResourceEventHubClassifiesWorkspaceAndRuntimePaths(t *testing.T) {
 	}
 }
 
+func TestResourceEventHubClassifiesScratchpadAsRuntimeInput(t *testing.T) {
+	sessionsDir := filepath.Join(t.TempDir(), "sessions")
+	hub := newResourceEventHub(t.TempDir(), sessionsDir)
+	path := filepath.Join(sessionsDir, "session-1", "scratchpad", "notes.md")
+
+	got := hub.resourcesForPath(path)
+	want := []string{resourceScratchpad, resourceRuntime}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resourcesForPath(%q) = %v, want %v", path, got, want)
+	}
+}
+
 func TestResourceEventHubClassifiesMutableRuntimeInputs(t *testing.T) {
 	workDir := t.TempDir()
 	hub := newResourceEventHub(workDir, t.TempDir())
@@ -132,7 +144,7 @@ func TestResourceEventHubProjectsObservableAndWriteEvents(t *testing.T) {
 		t.Fatal("resource subscriber was not notified")
 	}
 	got := subscription.take().Resources
-	want := []string{resourceObservable, resourceScratchpad, resourceWorkspace}
+	want := []string{resourceObservable, resourceRuntime, resourceScratchpad, resourceWorkspace}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("resources = %v, want %v", got, want)
 	}
@@ -162,7 +174,7 @@ func TestResourceEventHubCoalescesProjectedAndFilesystemChanges(t *testing.T) {
 	select {
 	case <-subscription.updates:
 		got := subscription.take().Resources
-		want := []string{resourceScratchpad, resourceWorkspace}
+		want := []string{resourceRuntime, resourceScratchpad, resourceWorkspace}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("resources = %v, want %v", got, want)
 		}
@@ -273,6 +285,43 @@ func TestResourceEventHubWatchesExternalGlobalAgentsFile(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("external global AGENTS.md mutation was not observed")
+	}
+}
+
+func TestResourceEventHubWatchesLateExternalGlobalAgentsDirectory(t *testing.T) {
+	existingRoot := t.TempDir()
+	globalAgentsDir := filepath.Join(existingRoot, "missing", ".agents")
+	hub := newResourceEventHub(t.TempDir(), t.TempDir())
+	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md")}, "")
+	subscription, err := hub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscription.cancel()
+
+	if err := os.Mkdir(filepath.Join(existingRoot, "missing"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeInvalidation(t, subscription, "late external global resource ancestor")
+	if err := os.Mkdir(globalAgentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeInvalidation(t, subscription, "late external global resource directory")
+	if err := os.WriteFile(filepath.Join(globalAgentsDir, "AGENTS.md"), []byte("global guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeInvalidation(t, subscription, "late external global AGENTS.md mutation")
+}
+
+func assertRuntimeInvalidation(t *testing.T, subscription resourceSubscription, change string) {
+	t.Helper()
+	select {
+	case <-subscription.updates:
+		if got := subscription.take().Resources; !reflect.DeepEqual(got, []string{resourceRuntime}) {
+			t.Fatalf("resources = %v, want runtime", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("%s was not observed", change)
 	}
 }
 

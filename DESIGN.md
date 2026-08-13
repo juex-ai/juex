@@ -818,10 +818,10 @@ than browser polling. `/api/fleet/events` carries typed roster, Fleet process,
 and Agent activity snapshots. The selected Agent's `/api/resource-events`
 stream invalidates workspace, scratchpad, Observable, and process-lifetime
 runtime catalogs. Workspace or enabled user-global `AGENTS.md` guidance, Agent
-Memory, and active primary Session selection additionally invalidate the
-Runtime snapshot because those prompt sections are rebuilt dynamically; Skills,
-MCP, Hooks, and Extension selection remain Agent-startup facts. Pages then
-refetch their authoritative JSON snapshot.
+Memory, active primary Session selection, and active Session scratchpad content
+additionally invalidate the Runtime snapshot because those prompt sections are
+rebuilt dynamically; Skills, MCP, Hooks, and Extension selection remain
+Agent-startup facts. Pages then refetch their authoritative JSON snapshot.
 EventSource reconnection recalibrates these views from a current server frame.
 Commands remain ordinary HTTP requests because live invalidation is
 unidirectional and does not require a WebSocket command channel.

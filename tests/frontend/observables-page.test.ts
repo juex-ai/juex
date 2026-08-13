@@ -114,3 +114,11 @@ test("Schedule rows and details offer a distinct Run action", () => {
     /className="flex flex-wrap items-center justify-end gap-1"/,
   );
 });
+
+test("Observable refreshes ignore superseded responses", () => {
+  for (const source of [observablesPageSource, observableDetailSource]) {
+    assert.match(source, /beginLatestRequest\(refreshGeneration\)/);
+    assert.match(source, /if \(!isLatest\(\)\) return;/);
+    assert.match(source, /invalidateLatestRequest\(refreshGeneration\)/);
+  }
+});

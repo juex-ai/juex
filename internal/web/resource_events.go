@@ -150,7 +150,7 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 			if _, exists := watchedRuntimeParents[parent]; exists {
 				continue
 			}
-			if err := h.addExistingDirectory(watcher, parent); err != nil {
+			if err := h.addNearestExistingDirectory(watcher, parent); err != nil {
 				_ = watcher.Close()
 				h.mu.Unlock()
 				return resourceSubscription{}, err
@@ -158,7 +158,7 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 			watchedRuntimeParents[parent] = struct{}{}
 		}
 		if h.runtimeDir != "" && h.runtimeDir != "." {
-			if err := h.addExistingDirectory(watcher, filepath.Dir(h.runtimeDir)); err != nil {
+			if err := h.addNearestExistingDirectory(watcher, filepath.Dir(h.runtimeDir)); err != nil {
 				_ = watcher.Close()
 				h.mu.Unlock()
 				return resourceSubscription{}, err
@@ -219,21 +219,25 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 	}, nil
 }
 
-func (h *resourceEventHub) addExistingDirectory(watcher *fsnotify.Watcher, dir string) error {
-	info, err := os.Stat(dir)
-	if os.IsNotExist(err) {
-		return nil
+func (h *resourceEventHub) addNearestExistingDirectory(watcher *fsnotify.Watcher, target string) error {
+	for dir := filepath.Clean(target); ; dir = filepath.Dir(dir) {
+		info, err := os.Stat(dir)
+		if err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("runtime input ancestor %q is not a directory", dir)
+			}
+			if err := h.addWatch(watcher, dir); err != nil {
+				return fmt.Errorf("watch runtime input ancestor %q: %w", dir, err)
+			}
+			return nil
+		}
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("inspect runtime input ancestor %q: %w", dir, err)
+		}
+		if parent := filepath.Dir(dir); parent == dir {
+			return fmt.Errorf("no existing directory ancestor for runtime input %q", target)
+		}
 	}
-	if err != nil {
-		return fmt.Errorf("inspect runtime input directory %q: %w", dir, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("runtime input directory %q is not a directory", dir)
-	}
-	if err := h.addWatch(watcher, dir); err != nil {
-		return fmt.Errorf("watch runtime input directory %q: %w", dir, err)
-	}
-	return nil
 }
 
 func (h *resourceEventHub) addRoot(watcher *fsnotify.Watcher, root string) error {
@@ -358,7 +362,7 @@ func (h *resourceEventHub) shouldWatchCreatedDirectory(path string) bool {
 		return true
 	}
 	for file := range h.runtimeFiles {
-		if path == filepath.Dir(file) {
+		if pathWithin(path, filepath.Dir(file)) {
 			return true
 		}
 	}
@@ -424,7 +428,7 @@ func (h *resourceEventHub) resourcesForPath(path string) []string {
 		return nil
 	}
 	resources := []string{resource}
-	if resource == resourceWorkspace && h.isMutableRuntimeInput(path) {
+	if resource == resourceScratchpad || (resource == resourceWorkspace && h.isMutableRuntimeInput(path)) {
 		resources = append(resources, resourceRuntime)
 	}
 	return resources
@@ -436,7 +440,7 @@ func (h *resourceEventHub) isMutableRuntimeInput(path string) bool {
 		return true
 	}
 	for file := range h.runtimeFiles {
-		if path == filepath.Dir(file) {
+		if path == filepath.Dir(file) || pathWithin(path, filepath.Dir(file)) {
 			return true
 		}
 	}
@@ -483,7 +487,7 @@ func (h *resourceEventHub) Publish(event events.Event) {
 		name := toolEventName(event.Payload)
 		switch name {
 		case "write", "edit", "apply_patch", "write_commit":
-			h.invalidate(resourceWorkspace, resourceScratchpad)
+			h.invalidate(resourceWorkspace, resourceScratchpad, resourceRuntime)
 		case "memory_write", "memory_delete":
 			h.invalidate(resourceRuntime)
 		}

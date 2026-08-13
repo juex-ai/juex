@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Pause, Play, RefreshCw, Trash2, Zap } from "lucide-react";
@@ -19,6 +19,10 @@ import {
   formatObservationWindow,
 } from "@/lib/observation-time";
 import { cn } from "@/lib/utils";
+import {
+  beginLatestRequest,
+  invalidateLatestRequest,
+} from "@/lib/latest-request";
 import type { ObservableDetailResponse, ObservationRecord } from "@/types";
 import { StateBadge } from "@/pages/Observables";
 import { agentPathFromLocation } from "@/lib/fleet-routes";
@@ -32,6 +36,7 @@ export function ObservableDetail() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const refreshGeneration = useRef(0);
   const { resourceRevision } = useFleetAgent();
   useShellTitle(data?.observable.name || data?.observable.id || "Observable");
 
@@ -39,30 +44,34 @@ export function ObservableDetail() {
     { quiet = false }: { quiet?: boolean } = {},
   ) => {
     if (!id) return;
+    const isLatest = beginLatestRequest(refreshGeneration);
     if (!quiet) {
       setRefreshing(true);
       setError(null);
     }
     try {
       const next = await getObservable(id);
+      if (!isLatest()) return;
       setData(next);
       setRefreshError(null);
     } catch (e) {
+      if (!isLatest()) return;
       console.error("getObservable failed", e);
       setRefreshError(
         e instanceof Error ? e.message : "Failed to load observable.",
       );
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (isLatest()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [id]);
 
   useEffect(() => {
-    let live = true;
-    if (live) void refresh({ quiet: true });
+    void refresh({ quiet: true });
     return () => {
-      live = false;
+      invalidateLatestRequest(refreshGeneration);
     };
   }, [refresh, resourceRevision.observables]);
 
