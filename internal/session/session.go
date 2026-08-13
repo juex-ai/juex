@@ -314,7 +314,8 @@ func (s *Session) inspectTranscriptCommitLocked(
 	defer snapshot.close()
 	committed, readErr := transcriptRangeMatches(snapshot.file, offset, data)
 	expectedSize := offset + int64(len(data))
-	if committedFingerprint.strong() && committed && snapshot.fingerprint == committedFingerprint &&
+	if transcriptIncrementalRevisionReliable() && committedFingerprint.strong() && committed &&
+		snapshot.fingerprint == committedFingerprint &&
 		snapshot.fingerprint.Size == expectedSize {
 		if err := snapshot.verify(); err != nil {
 			return transcriptCommit{diverged: true}, err
