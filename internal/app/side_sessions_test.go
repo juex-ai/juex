@@ -519,6 +519,60 @@ func TestSideSessionTerminalSubscriptionSurvivesTransientPersistenceFailureAndLa
 	t.Fatal("terminal side notification was lost after persistence recovered")
 }
 
+func TestSideSessionDropsPersistedNotificationAfterPrimaryLosesOwnership(t *testing.T) {
+	primary := &scriptedSideProvider{}
+	child := &barrierSideProvider{started: make(chan struct{}, 1), release: make(chan struct{})}
+	parent := newSideSessionTestApp(t, primary, child)
+	identity, ok := parent.SessionIdentity()
+	if !ok {
+		t.Fatal("parent session identity unavailable")
+	}
+	pendingPath := filepath.Join(parent.cfg.SessionsDir(), identity.ID, "pending_input.jsonl")
+	if err := os.Mkdir(pendingPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{"query": "persist after ownership changes"})
+	id := created["session_id"].(string)
+	select {
+	case <-child.started:
+	case <-time.After(time.Second):
+		t.Fatal("side turn did not start")
+	}
+	close(child.release)
+	status := waitForSideState(t, parent, id, SideSessionStateIdle)
+	pendingID := "side-session-result:" + id + ":" + status.LastTurnID
+	time.Sleep(150 * time.Millisecond)
+
+	replacement, err := AttachWorkspaceSession(parent.cfg, SessionAttachmentRequest{Mode: SessionModeNewPrimary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = replacement.Session.Close() })
+	if err := os.Remove(pendingPath); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		records, err := parent.Engine.PendingInputQueue.Records()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record, ok := records[pendingID]; ok && record.State == runtime.PendingInputStateDropped {
+			primary.mu.Lock()
+			calls := primary.calls
+			primary.mu.Unlock()
+			if calls != 0 {
+				t.Fatalf("inactive primary provider calls = %d, want 0", calls)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("stale Side Session notification %q was not dropped", pendingID)
+}
+
 func TestSideSessionPermanentNotificationFailureIsObservableAndBounded(t *testing.T) {
 	child := &scriptedSideProvider{}
 	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, child)
@@ -604,6 +658,62 @@ func TestSideSessionFailureNotifiesParent(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("failed Side Session notification missing")
+}
+
+func TestSideSessionDoesNotDeliverAfterPrimaryLosesWorkspaceOwnership(t *testing.T) {
+	primary := &scriptedSideProvider{}
+	child := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
+	parent := newSideSessionTestApp(t, primary, child)
+	owner, ok := parent.SessionIdentity()
+	if !ok {
+		t.Fatal("parent session identity unavailable")
+	}
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{"query": "finish after activation"})
+	id := created["session_id"].(string)
+	select {
+	case <-child.started:
+	case <-time.After(time.Second):
+		t.Fatal("side turn did not start")
+	}
+
+	replacement, err := AttachWorkspaceSession(parent.cfg, SessionAttachmentRequest{Mode: SessionModeNewPrimary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = replacement.Session.Close() })
+	close(child.release)
+
+	deadline := time.Now().Add(3 * time.Second)
+	idle := false
+	for time.Now().Before(deadline) {
+		parent.sideSessions.mu.Lock()
+		managed := parent.sideSessions.sessions[id]
+		idle = managed != nil && managed.status.State == SideSessionStateIdle
+		parent.sideSessions.mu.Unlock()
+		if idle {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !idle {
+		t.Fatal("side turn did not complete after the parent lost workspace ownership")
+	}
+	time.Sleep(100 * time.Millisecond)
+	primary.mu.Lock()
+	calls := primary.calls
+	primary.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("inactive primary provider calls = %d, want 0", calls)
+	}
+	_, history, ok := parent.SessionSnapshot()
+	if !ok {
+		t.Fatal("parent session snapshot unavailable")
+	}
+	for _, message := range history {
+		if message.Kind == llm.MessageKindSideSession {
+			t.Fatalf("inactive primary %s received side result: %+v", owner.ID, message)
+		}
+	}
 }
 
 func TestManagedSideSessionSkipsSharedGoalCompletionGate(t *testing.T) {

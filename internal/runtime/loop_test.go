@@ -4334,6 +4334,31 @@ func TestEngine_EnqueuePersistedPendingMessageExpiresBeforeIdleAdmission(t *test
 	}
 }
 
+func TestEngine_DropPersistedPendingMessagePreventsReplay(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	record, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "stale external input"),
+		PendingInputOptions{ID: "stale-event", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.DropPersistedPendingMessage(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePersistedPendingMessage(context.Background(), record); !errors.Is(err, ErrPendingInputHandled) {
+		t.Fatalf("enqueue dropped record error = %v, want ErrPendingInputHandled", err)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[record.ID].State; got != PendingInputStateDropped {
+		t.Fatalf("record state = %q, want %q", got, PendingInputStateDropped)
+	}
+}
+
 func TestRunToolCallEmitsRequestedRunningCompleted(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	eng.Tools.MustRegister(tools.Tool{

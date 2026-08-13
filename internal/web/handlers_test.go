@@ -454,7 +454,7 @@ func TestGetActiveSessionSerializesWithSessionSelectionChanges(t *testing.T) {
 	}
 }
 
-func TestActivateSessionIsNotRevertedByPreviousPrimaryAppend(t *testing.T) {
+func TestActivateSessionClosesPreviousResidentPrimary(t *testing.T) {
 	srv := newTestServer(t)
 	previous, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
 	if err != nil {
@@ -475,8 +475,11 @@ func TestActivateSessionIsNotRevertedByPreviousPrimaryAppend(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("activate status = %d, body=%s", recorder.Code, recorder.Body.String())
 	}
-	if err := previous.app.Session.Append(llm.TextMessage(llm.RoleAssistant, "late append")); err != nil {
-		t.Fatal(err)
+	if _, exists := srv.sessions.Load(previousInfo.ID); exists {
+		t.Fatalf("previous primary %q remained resident after activating %q", previousInfo.ID, next.ID)
+	}
+	if _, ok := previous.app.SessionIdentity(); ok {
+		t.Fatalf("previous primary %q retained its App session after activation", previousInfo.ID)
 	}
 
 	activeID, found, err := srv.activePrimarySessionID()
@@ -484,7 +487,7 @@ func TestActivateSessionIsNotRevertedByPreviousPrimaryAppend(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !found || activeID != next.ID {
-		t.Fatalf("active session after previous append = (%q, %v), want (%q, true)", activeID, found, next.ID)
+		t.Fatalf("active session after activation = (%q, %v), want (%q, true)", activeID, found, next.ID)
 	}
 }
 

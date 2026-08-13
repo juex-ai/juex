@@ -235,6 +235,19 @@ func (e *Engine) PersistPendingMessageWithOptions(ctx context.Context, userMsg l
 	return queue.Enqueue(userMsg, opts, turnID)
 }
 
+// DropPersistedPendingMessage prevents an accepted external input from being
+// replayed after its owner has determined that delivery is no longer valid.
+func (e *Engine) DropPersistedPendingMessage(id string) error {
+	if e == nil || id == "" {
+		return nil
+	}
+	queue := e.currentPendingInputQueue()
+	if queue == nil {
+		return nil
+	}
+	return queue.MarkDropped([]string{id})
+}
+
 // EnqueuePersistedPendingMessage attaches one already-durable record to the
 // current in-memory turn queue. Queue-full is intentionally event-free because
 // the durable record remains accepted and its owner may retry admission.

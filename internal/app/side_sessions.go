@@ -575,6 +575,9 @@ func (m *sideSessionManager) run(managed *managedSideSession, generation uint64,
 }
 
 func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managedSideSession, status SideSessionStatus) {
+	if err := m.ensureParentActive(); err != nil {
+		return
+	}
 	payload := map[string]any{
 		"session_id": status.SessionID,
 		"turn_id":    status.LastTurnID,
@@ -629,6 +632,14 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 	}
 
 	for {
+		if err := ctx.Err(); err != nil {
+			_ = m.parent.Engine.DropPersistedPendingMessage(record.ID)
+			return
+		}
+		if err := m.ensureParentActive(); err != nil {
+			_ = m.parent.Engine.DropPersistedPendingMessage(record.ID)
+			return
+		}
 		result := m.parent.admitPersistedUserTurn(ctx, record, TurnIDFunc(func(string) string { return m.nextTurnID() }))
 		switch result.Kind {
 		case TurnAdmissionQueued:
