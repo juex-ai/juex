@@ -303,22 +303,36 @@ func (s *Session) inspectTranscriptCommitLocked(offset int64, data []byte) (tran
 		return transcriptCommit{diverged: true}, err
 	}
 	defer snapshot.close()
-	written := make([]byte, len(data))
-	n, readErr := snapshot.file.ReadAt(written, offset)
-	committed := n == len(data) && bytes.Equal(written, data)
+	committed, readErr := transcriptRangeMatches(snapshot.file, offset, data)
 	openFingerprint, openErr := fingerprintFromOpenFile(s.convFD)
 	expectedSize := offset + int64(len(data))
 	if committed && openErr == nil && openFingerprint == snapshot.fingerprint && snapshot.fingerprint.Size == expectedSize {
 		if err := snapshot.verify(); err != nil {
 			return transcriptCommit{diverged: true}, err
 		}
+		committed, err = transcriptRangeMatches(snapshot.file, offset, data)
+		if err != nil {
+			return transcriptCommit{diverged: true}, err
+		}
+		if !committed {
+			return s.inspectDivergedTranscriptCommitLocked(snapshot, offset, data)
+		}
 		return transcriptCommit{committed: true, fingerprint: snapshot.fingerprint}, nil
 	}
 
-	result := transcriptCommit{committed: committed, diverged: true, fingerprint: snapshot.fingerprint}
 	if readErr != nil && !errors.Is(readErr, io.EOF) {
-		return result, readErr
+		return transcriptCommit{committed: committed, diverged: true, fingerprint: snapshot.fingerprint}, readErr
 	}
+	return s.inspectDivergedTranscriptCommitLocked(snapshot, offset, data)
+}
+
+func (s *Session) inspectDivergedTranscriptCommitLocked(
+	snapshot *transcriptSnapshot,
+	offset int64,
+	data []byte,
+) (transcriptCommit, error) {
+	path := filepath.Join(s.Dir, conversationFile)
+	result := transcriptCommit{diverged: true, fingerprint: snapshot.fingerprint}
 	idx, err := scanTranscriptIndexFromFile(snapshot.file, path, 0)
 	if err != nil {
 		return result, err
@@ -332,9 +346,25 @@ func (s *Session) inspectTranscriptCommitLocked(offset int64, data []byte) (tran
 	if err := snapshot.verify(); err != nil {
 		return transcriptCommit{diverged: true}, err
 	}
+	result.committed, err = transcriptRangeMatches(snapshot.file, offset, data)
+	if err != nil {
+		return result, err
+	}
 	result.index = active
 	result.history = history
 	return result, nil
+}
+
+func transcriptRangeMatches(file *os.File, offset int64, data []byte) (bool, error) {
+	written := make([]byte, len(data))
+	n, err := file.ReadAt(written, offset)
+	if errors.Is(err, io.EOF) {
+		err = nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return n == len(data) && bytes.Equal(written, data), err
 }
 
 func (s *Session) adoptTranscriptCommitLocked(

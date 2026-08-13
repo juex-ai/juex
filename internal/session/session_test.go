@@ -442,6 +442,51 @@ func TestSessionAppendAcceptsAtomicReplacementContainingBatch(t *testing.T) {
 	}
 }
 
+func TestTranscriptRangeRecheckDetectsSameInodeWeakRewrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), conversationFile)
+	original := []byte("owned-row\n")
+	rewritten := []byte("other-row\n")
+	if len(original) != len(rewritten) {
+		t.Fatalf("test data length mismatch: original=%d rewritten=%d", len(original), len(rewritten))
+	}
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	before, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched, err := transcriptRangeMatches(file, 0, original); err != nil || !matched {
+		t.Fatalf("initial range match = %t, %v; want true, nil", matched, err)
+	}
+
+	if err := os.WriteFile(path, rewritten, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("test rewrote a different inode")
+	}
+	if before.Size() != after.Size() || before.ModTime().UnixNano() != after.ModTime().UnixNano() {
+		t.Fatalf("weak metadata changed: before=%d/%d after=%d/%d",
+			before.Size(), before.ModTime().UnixNano(), after.Size(), after.ModTime().UnixNano())
+	}
+	if matched, err := transcriptRangeMatches(file, 0, original); err != nil || matched {
+		t.Fatalf("final range match = %t, %v; want false, nil", matched, err)
+	}
+}
+
 func TestConcurrentSessionAppendsSerializeBeforeFingerprintCheck(t *testing.T) {
 	first, err := New(t.TempDir())
 	if err != nil {
