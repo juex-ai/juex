@@ -223,7 +223,7 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		return nil, ErrTranscriptChanged
 	}
 	var prefixDigest *transcriptPrefixDigest
-	if !currentFingerprint.strong() {
+	if transcriptPrefixDigestRequired(currentFingerprint) {
 		digest, err := digestTranscriptPrefix(s.convFD, offset)
 		if err != nil {
 			s.mu.Unlock()
