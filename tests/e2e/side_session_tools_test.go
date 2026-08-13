@@ -73,7 +73,11 @@ func TestEndToEnd_SideSessionToolDelegation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a.CloseAndWait()
+	t.Cleanup(func() {
+		if err := a.CloseAndWait(); err != nil {
+			t.Errorf("close app: %v", err)
+		}
+	})
 
 	if _, err := a.Run(context.Background(), "delegate through a Side Session"); err != nil {
 		t.Fatal(err)

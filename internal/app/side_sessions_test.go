@@ -221,7 +221,11 @@ func TestSideSessionToolsRegisterOnlyForActivePrimary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer side.CloseAndWait()
+	t.Cleanup(func() {
+		if err := side.CloseAndWait(); err != nil {
+			t.Errorf("close side app: %v", err)
+		}
+	})
 	for _, name := range []string{SideSessionToolCreate, SideSessionToolList, SideSessionToolStatus} {
 		if _, ok := side.Engine.Tools.Get(name); ok {
 			t.Errorf("side session unexpectedly registered tool %q", name)
@@ -673,7 +677,11 @@ providers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer parent.CloseAndWait()
+	t.Cleanup(func() {
+		if err := parent.CloseAndWait(); err != nil {
+			t.Errorf("close parent app: %v", err)
+		}
+	})
 	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{
 		"query": "specialized work", "model": "openai:specialist", "subscribe": false,
 	})
@@ -952,7 +960,11 @@ func TestSideSessionDefaultChildInheritsSummaryProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer parent.CloseAndWait()
+	t.Cleanup(func() {
+		if err := parent.CloseAndWait(); err != nil {
+			t.Errorf("close parent app: %v", err)
+		}
+	})
 	state := parent.Engine.SessionRuntimeSnapshot()
 	child, err := parent.sideSessions.newChildApp(sideSessionChildOptions{
 		Config: parent.cfg, Model: "openai:primary", UseParentProvider: true,
@@ -961,7 +973,11 @@ func TestSideSessionDefaultChildInheritsSummaryProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer child.CloseAndWait()
+	t.Cleanup(func() {
+		if err := child.CloseAndWait(); err != nil {
+			t.Errorf("close child app: %v", err)
+		}
+	})
 	if child.Engine.SummaryProvider != summary {
 		t.Fatalf("child SummaryProvider = %T %p, want parent provider %p", child.Engine.SummaryProvider, child.Engine.SummaryProvider, summary)
 	}
