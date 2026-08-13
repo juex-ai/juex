@@ -17,6 +17,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/observable"
+	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
@@ -66,9 +67,10 @@ func TestResourceEventHubClassifiesMutableRuntimeInputs(t *testing.T) {
 func TestResourceEventHubClassifiesExternalRuntimeInputs(t *testing.T) {
 	workDir := t.TempDir()
 	globalAgentsDir := t.TempDir()
+	historyPath := filepath.Join(t.TempDir(), "history.json")
 	memoryDir := filepath.Join(t.TempDir(), "memory")
 	hub := newResourceEventHub(workDir, t.TempDir())
-	hub.setRuntimeInputs(filepath.Join(globalAgentsDir, "AGENTS.md"), memoryDir)
+	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md"), historyPath}, memoryDir)
 
 	tests := []struct {
 		path string
@@ -76,6 +78,7 @@ func TestResourceEventHubClassifiesExternalRuntimeInputs(t *testing.T) {
 	}{
 		{path: globalAgentsDir, want: []string{resourceRuntime}},
 		{path: filepath.Join(globalAgentsDir, "AGENTS.md"), want: []string{resourceRuntime}},
+		{path: historyPath, want: []string{resourceRuntime}},
 		{path: memoryDir, want: []string{resourceRuntime}},
 		{path: filepath.Join(memoryDir, "facts.md"), want: []string{resourceRuntime}},
 		{path: filepath.Join(globalAgentsDir, "skills", "demo", "SKILL.md")},
@@ -253,7 +256,7 @@ func TestResourceEventHubWatchesLateAgentsDirectory(t *testing.T) {
 func TestResourceEventHubWatchesExternalGlobalAgentsFile(t *testing.T) {
 	globalAgentsDir := t.TempDir()
 	hub := newResourceEventHub(t.TempDir(), t.TempDir())
-	hub.setRuntimeInputs(filepath.Join(globalAgentsDir, "AGENTS.md"), "")
+	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md")}, "")
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -273,10 +276,39 @@ func TestResourceEventHubWatchesExternalGlobalAgentsFile(t *testing.T) {
 	}
 }
 
+func TestResourceEventHubWatchesExternalActiveSessionChange(t *testing.T) {
+	srv := newTestServer(t)
+	firstID := "20260814T090000-first"
+	secondID := "20260814T100000-second"
+	seedSession(t, srv.opts.Cfg.WorkDir, firstID, `{"role":"user","content":"first"}`)
+	seedSession(t, srv.opts.Cfg.WorkDir, secondID, `{"role":"user","content":"second"}`)
+	if _, err := session.Activate(srv.opts.Cfg.SessionsDir(), srv.opts.Cfg.HistoryPath(), firstID); err != nil {
+		t.Fatal(err)
+	}
+
+	subscription, err := srv.resources.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscription.cancel()
+
+	if _, err := session.Activate(srv.opts.Cfg.SessionsDir(), srv.opts.Cfg.HistoryPath(), secondID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-subscription.updates:
+		if got := subscription.take().Resources; !reflect.DeepEqual(got, []string{resourceRuntime}) {
+			t.Fatalf("resources = %v, want runtime", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("external active Session change did not invalidate runtime")
+	}
+}
+
 func TestResourceEventHubWatchesLateMemoryDirectory(t *testing.T) {
 	memoryDir := filepath.Join(t.TempDir(), "memory")
 	hub := newResourceEventHub(t.TempDir(), t.TempDir())
-	hub.setRuntimeInputs("", memoryDir)
+	hub.setRuntimeInputs(nil, memoryDir)
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)

@@ -78,10 +78,10 @@ func (s *resourceSubscriber) take() agentResourceEvent {
 }
 
 type resourceEventHub struct {
-	workDir     string
-	sessionsDir string
-	runtimeFile string
-	runtimeDir  string
+	workDir      string
+	sessionsDir  string
+	runtimeFiles map[string]struct{}
+	runtimeDir   string
 
 	mu            sync.Mutex
 	subscribers   map[uint64]*resourceSubscriber
@@ -102,17 +102,23 @@ type resourceSubscription struct {
 
 func newResourceEventHub(workDir, sessionsDir string) *resourceEventHub {
 	return &resourceEventHub{
-		workDir:     filepath.Clean(workDir),
-		sessionsDir: filepath.Clean(sessionsDir),
-		subscribers: map[uint64]*resourceSubscriber{},
+		workDir:      filepath.Clean(workDir),
+		sessionsDir:  filepath.Clean(sessionsDir),
+		runtimeFiles: map[string]struct{}{},
+		subscribers:  map[uint64]*resourceSubscriber{},
 		addWatch: func(watcher *fsnotify.Watcher, path string) error {
 			return watcher.Add(path)
 		},
 	}
 }
 
-func (h *resourceEventHub) setRuntimeInputs(file, dir string) {
-	h.runtimeFile = filepath.Clean(file)
+func (h *resourceEventHub) setRuntimeInputs(files []string, dir string) {
+	for _, file := range files {
+		file = filepath.Clean(file)
+		if file != "" && file != "." {
+			h.runtimeFiles[file] = struct{}{}
+		}
+	}
 	h.runtimeDir = filepath.Clean(dir)
 }
 
@@ -138,12 +144,18 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 			h.mu.Unlock()
 			return resourceSubscription{}, err
 		}
-		if h.runtimeFile != "" && h.runtimeFile != "." {
-			if err := h.addExistingDirectory(watcher, filepath.Dir(h.runtimeFile)); err != nil {
+		watchedRuntimeParents := map[string]struct{}{}
+		for file := range h.runtimeFiles {
+			parent := filepath.Dir(file)
+			if _, exists := watchedRuntimeParents[parent]; exists {
+				continue
+			}
+			if err := h.addExistingDirectory(watcher, parent); err != nil {
 				_ = watcher.Close()
 				h.mu.Unlock()
 				return resourceSubscription{}, err
 			}
+			watchedRuntimeParents[parent] = struct{}{}
 		}
 		if h.runtimeDir != "" && h.runtimeDir != "." {
 			if err := h.addExistingDirectory(watcher, filepath.Dir(h.runtimeDir)); err != nil {
@@ -345,7 +357,12 @@ func (h *resourceEventHub) shouldWatchCreatedDirectory(path string) bool {
 	if pathWithin(h.workDir, path) || pathWithin(h.sessionsDir, path) || pathWithin(h.runtimeDir, path) {
 		return true
 	}
-	return h.runtimeFile != "" && h.runtimeFile != "." && path == filepath.Dir(h.runtimeFile)
+	for file := range h.runtimeFiles {
+		if path == filepath.Dir(file) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *resourceEventHub) resyncAfterWatcherError() {
@@ -415,11 +432,13 @@ func (h *resourceEventHub) resourcesForPath(path string) []string {
 
 func (h *resourceEventHub) isMutableRuntimeInput(path string) bool {
 	path = filepath.Clean(path)
-	if h.runtimeFile != "" && h.runtimeFile != "." && path == h.runtimeFile {
+	if _, ok := h.runtimeFiles[path]; ok {
 		return true
 	}
-	if h.runtimeFile != "" && h.runtimeFile != "." && path == filepath.Dir(h.runtimeFile) {
-		return true
+	for file := range h.runtimeFiles {
+		if path == filepath.Dir(file) {
+			return true
+		}
 	}
 	if h.runtimeDir != "" && h.runtimeDir != "." && pathWithin(h.runtimeDir, path) {
 		return true
