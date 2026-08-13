@@ -178,7 +178,8 @@ func TestFleetStatusHubPublishesRosterOnlyWhenSnapshotChanges(t *testing.T) {
 	subscription := hub.subscribe("")
 	defer subscription.cancel()
 	events := subscription.initial
-	if len(events) != 1 || events[0].Type != "fleet.roster" || events[0].Agents == nil || len(*events[0].Agents) != 1 {
+	if len(events) != 2 || events[0].Type != "fleet.roster" || events[0].Agents == nil || len(*events[0].Agents) != 1 ||
+		events[1].Type != "agent.process" || events[1].Process == nil || *events[1].Process != nil {
 		t.Fatalf("first roster events = %+v", events)
 	}
 
@@ -234,8 +235,27 @@ func TestFleetStatusHubPublishesAgentProcessSeparatelyFromRoster(t *testing.T) {
 	events := subscription.take()
 	if len(events) != 1 || events[0].Type != "agent.process" ||
 		events[0].AgentID != "agent-1" || events[0].Process == nil ||
-		events[0].Process.RSSBytes != 2048 {
+		*events[0].Process == nil || (**events[0].Process).RSSBytes != 2048 {
 		t.Fatalf("agent process events = %+v", events)
+	}
+
+	hub.publishAgentProcesses(generation, []fleet.AgentStatus{{ID: "agent-1"}})
+	select {
+	case <-subscription.updates:
+	case <-time.After(time.Second):
+		t.Fatal("unavailable agent process was not published")
+	}
+	events = subscription.take()
+	if len(events) != 1 || events[0].Process == nil || *events[0].Process != nil {
+		t.Fatalf("unavailable agent process events = %+v", events)
+	}
+
+	hub.publishAgentProcesses(generation, nil)
+	hub.mu.Lock()
+	_, retained := hub.current["agent.process:agent-1"]
+	hub.mu.Unlock()
+	if retained {
+		t.Fatal("removed Agent process remained in the current snapshot")
 	}
 }
 
@@ -246,6 +266,17 @@ func TestFleetRosterEventEncodesEmptySnapshotAsArray(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := string(body); got != `{"type":"fleet.roster","agents":[]}` {
+		t.Fatalf("event JSON = %s", got)
+	}
+}
+
+func TestFleetProcessEventEncodesUnavailableSampleAsNull(t *testing.T) {
+	var process *processmetrics.Usage
+	body, err := json.Marshal(fleetStatusEvent{Type: "agent.process", AgentID: "one", Process: &process})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(body); got != `{"type":"agent.process","agent_id":"one","process":null}` {
 		t.Fatalf("event JSON = %s", got)
 	}
 }

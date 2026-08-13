@@ -1095,13 +1095,13 @@ export interface FleetRosterEvent {
 
 export interface FleetProcessEvent {
   type: "fleet.status";
-  process: ProcessUsage;
+  process: ProcessUsage | null;
 }
 
 export interface AgentProcessEvent {
   type: "agent.process";
   agent_id: string;
-  process: ProcessUsage;
+  process: ProcessUsage | null;
 }
 
 export type FleetEvent =

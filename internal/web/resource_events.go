@@ -32,16 +32,23 @@ type agentResourceEvent struct {
 }
 
 type resourceSubscriber struct {
-	mu      sync.Mutex
-	pending map[string]struct{}
-	notify  chan struct{}
+	mu        sync.Mutex
+	pending   map[string]struct{}
+	notify    chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 func newResourceSubscriber() *resourceSubscriber {
 	return &resourceSubscriber{
 		pending: map[string]struct{}{},
 		notify:  make(chan struct{}, 1),
+		done:    make(chan struct{}),
 	}
+}
+
+func (s *resourceSubscriber) close() {
+	s.closeOnce.Do(func() { close(s.done) })
 }
 
 func (s *resourceSubscriber) publish(resources ...string) {
@@ -81,10 +88,12 @@ type resourceEventHub struct {
 	cancel        context.CancelFunc
 	watcherReady  chan struct{}
 	invalidations *resourceSubscriber
+	closed        bool
 }
 
 type resourceSubscription struct {
 	updates <-chan struct{}
+	done    <-chan struct{}
 	take    func() agentResourceEvent
 	cancel  func()
 }
@@ -101,6 +110,10 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 	var startWatcher bool
 	var watcherReady chan struct{}
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return resourceSubscription{}, fmt.Errorf("resource event hub is closed")
+	}
 	if h.watcher == nil {
 		watcher, err := fsnotify.NewWatcher()
 		if err != nil {
@@ -135,6 +148,7 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 
 	return resourceSubscription{
 		updates: subscriber.notify,
+		done:    subscriber.done,
 		take:    subscriber.take,
 		cancel: func() {
 			var cancel context.CancelFunc
@@ -156,6 +170,7 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 			if watcher != nil {
 				_ = watcher.Close()
 			}
+			subscriber.close()
 		},
 	}, nil
 }
@@ -355,12 +370,17 @@ func (h *resourceEventHub) close() {
 		return
 	}
 	h.mu.Lock()
+	h.closed = true
 	cancel := h.cancel
 	watcher := h.watcher
 	h.cancel = nil
 	h.watcher = nil
 	h.watcherReady = nil
 	h.invalidations = nil
+	subscribers := make([]*resourceSubscriber, 0, len(h.subscribers))
+	for _, subscriber := range h.subscribers {
+		subscribers = append(subscribers, subscriber)
+	}
 	h.subscribers = map[uint64]*resourceSubscriber{}
 	h.mu.Unlock()
 	if cancel != nil {
@@ -368,6 +388,9 @@ func (h *resourceEventHub) close() {
 	}
 	if watcher != nil {
 		_ = watcher.Close()
+	}
+	for _, subscriber := range subscribers {
+		subscriber.close()
 	}
 }
 
@@ -407,6 +430,8 @@ func (s *Server) handleResourceEvents(w http.ResponseWriter, r *http.Request) {
 			if err := writeResourceSSE(w, event); err != nil {
 				return
 			}
+		case <-subscription.done:
+			return
 		case <-r.Context().Done():
 			return
 		}

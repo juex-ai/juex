@@ -60,6 +60,11 @@ test("typed EventSource helpers isolate fleet and agent resources", () => {
   assert.match(apiSource, /parsed\.type === "fleet\.status"/);
   assert.match(apiSource, /parsed\.type === "agent\.process"/);
   assert.match(apiSource, /parsed\.type === "resource\.changed"/);
+  assert.match(shellSource, /process: event\.process \?\? undefined/);
+  assert.match(
+    fleetSource,
+    /event\.process \? \{ process: event\.process \} : null/,
+  );
 });
 
 test("fleet and resource subscriptions parse only their typed events", () => {
@@ -105,6 +110,7 @@ test("fleet and resource subscriptions parse only their typed events", () => {
       agent_id: "one",
       process: { rss_bytes: 2 },
     });
+    sources[0].emit({ type: "agent.process", agent_id: "one", process: null });
     sources[0].emit({ type: "unknown" });
 
     const closeResources = subscribeAgentResourceEvents({
@@ -119,6 +125,7 @@ test("fleet and resource subscriptions parse only their typed events", () => {
     assert.deepEqual(fleetTypes, [
       "fleet.roster",
       "fleet.status",
+      "agent.process",
       "agent.process",
     ]);
     assert.deepEqual(resources, ["workspace"]);

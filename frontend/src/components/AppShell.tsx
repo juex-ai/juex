@@ -179,7 +179,7 @@ export function AppShell() {
             setAgents((current) =>
               current.map((agent) =>
                 agent.id === event.agent_id
-                  ? { ...agent, process: event.process }
+                  ? { ...agent, process: event.process ?? undefined }
                   : agent,
               ),
             );

@@ -32,13 +32,13 @@ type upstreamAgentStatusEvent struct {
 }
 
 type fleetStatusEvent struct {
-	Type     string                `json:"type"`
-	AgentID  string                `json:"agent_id,omitempty"`
-	Activity *agentActivity        `json:"activity,omitempty"`
-	Agents   *[]fleet.AgentStatus  `json:"agents,omitempty"`
-	Process  *processmetrics.Usage `json:"process,omitempty"`
-	Cursor   string                `json:"-"`
-	Sequence uint64                `json:"-"`
+	Type     string                 `json:"type"`
+	AgentID  string                 `json:"agent_id,omitempty"`
+	Activity *agentActivity         `json:"activity,omitempty"`
+	Agents   *[]fleet.AgentStatus   `json:"agents,omitempty"`
+	Process  **processmetrics.Usage `json:"process,omitempty"`
+	Cursor   string                 `json:"-"`
+	Sequence uint64                 `json:"-"`
 }
 
 type fleetStatusSubscription struct {
@@ -272,19 +272,37 @@ func (h *fleetStatusHub) publishProcess(generation uint64, ctx context.Context) 
 	if h.processMetrics == nil {
 		return
 	}
+	var process *processmetrics.Usage
 	usage, err := h.processMetrics.Sample(ctx, "fleet", h.processPID)
-	if err != nil {
-		return
+	if err == nil {
+		process = &usage
 	}
-	h.publish(generation, fleetStatusEvent{Type: "fleet.status", Process: &usage})
+	h.publish(generation, fleetStatusEvent{Type: "fleet.status", Process: &process})
 }
 
 func (h *fleetStatusHub) publishAgentProcesses(generation uint64, statuses []fleet.AgentStatus) {
+	present := make(map[string]struct{}, len(statuses))
 	for _, status := range statuses {
-		if status.Process == nil {
-			continue
+		present[status.ID] = struct{}{}
+	}
+	h.mu.Lock()
+	if h.running && h.generation == generation {
+		for key := range h.current {
+			if !strings.HasPrefix(key, "agent.process:") {
+				continue
+			}
+			if _, exists := present[strings.TrimPrefix(key, "agent.process:")]; !exists {
+				delete(h.current, key)
+			}
 		}
-		process := *status.Process
+	}
+	h.mu.Unlock()
+	for _, status := range statuses {
+		var process *processmetrics.Usage
+		if status.Process != nil {
+			usage := *status.Process
+			process = &usage
+		}
 		h.publish(generation, fleetStatusEvent{
 			Type:    "agent.process",
 			AgentID: status.ID,

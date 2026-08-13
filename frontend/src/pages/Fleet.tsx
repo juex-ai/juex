@@ -140,14 +140,14 @@ export function Fleet() {
           }
           if (event.type === "fleet.status") {
             processRevision.current += 1;
-            setFleetStatus({ process: event.process });
+            setFleetStatus(event.process ? { process: event.process } : null);
             return;
           }
           if (event.type === "agent.process") {
             setAgents((current) =>
               current.map((agent) =>
                 agent.id === event.agent_id
-                  ? { ...agent, process: event.process }
+                  ? { ...agent, process: event.process ?? undefined }
                   : agent,
               ),
             );

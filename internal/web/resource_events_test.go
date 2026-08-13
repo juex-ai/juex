@@ -194,3 +194,57 @@ func TestResourceEventsEndpointStartsWithAuthoritativeInvalidation(t *testing.T)
 		t.Fatalf("event = %+v, want resources %v", event, want)
 	}
 }
+
+func TestResourceEventHubCloseEndsActiveSubscriptions(t *testing.T) {
+	hub := newResourceEventHub(t.TempDir(), t.TempDir())
+	subscription, err := hub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hub.close()
+	select {
+	case <-subscription.done:
+	case <-time.After(time.Second):
+		t.Fatal("resource subscription stayed open after hub close")
+	}
+	// Cancellation remains idempotent after global shutdown.
+	subscription.cancel()
+	if _, err := hub.subscribe(); err == nil {
+		t.Fatal("closed resource hub accepted a new subscription")
+	}
+}
+
+func TestResourceEventsEndpointEndsWhenServerCloses(t *testing.T) {
+	server := NewServer(Options{})
+	httpServer := httptest.NewServer(server.APIHandler())
+	defer httpServer.Close()
+
+	response, err := http.Get(httpServer.URL + "/api/resource-events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	if _, err := reader.ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+
+	server.Close()
+	done := make(chan error, 1)
+	go func() {
+		_, err := reader.ReadString('\n')
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("resource stream returned another frame after server close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("resource stream did not end after server close")
+	}
+}
