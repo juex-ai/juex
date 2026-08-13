@@ -87,6 +87,10 @@ type Engine struct {
 	Notes *NotesStore
 	// GoalState persists the current session goal and latest completion check.
 	GoalState *GoalStateStore
+	// SkipGoalCompletionGate keeps shared Goal state visible and writable while
+	// preventing this Engine from extending turns to satisfy another Session's
+	// completion contract. Managed Side Sessions set this.
+	SkipGoalCompletionGate bool
 	// ShowBuiltinHookTraces includes built-in runtime gates in UI-only hook
 	// trace messages. Command hook traces are always shown.
 	ShowBuiltinHookTraces bool
@@ -145,6 +149,8 @@ var (
 	ErrNoActiveTurn          = errors.New("runtime: no active turn accepting pending input")
 	ErrActiveTurnExists      = errors.New("runtime: active turn already accepting pending input")
 	ErrPendingInputQueueFull = errors.New("runtime: pending input queue full")
+	ErrPendingInputExpired   = errors.New("runtime: pending input expired")
+	ErrPendingInputHandled   = errors.New("runtime: pending input is no longer replayable")
 )
 
 type PendingInputStatus struct {
@@ -202,6 +208,97 @@ func (e *Engine) EnqueuePendingInput(ctx context.Context, userInput string) (Pen
 
 func (e *Engine) EnqueuePendingMessage(ctx context.Context, userMsg llm.Message) (PendingInputStatus, error) {
 	return e.EnqueuePendingMessageWithOptions(ctx, userMsg, PendingInputOptions{})
+}
+
+// PersistPendingMessageWithOptions durably accepts a message independently of
+// whether a turn is active. Callers can then attach the returned record to the
+// active turn or start a new turn without losing the accepted input in between.
+func (e *Engine) PersistPendingMessageWithOptions(ctx context.Context, userMsg llm.Message, opts PendingInputOptions) (PendingInputRecord, error) {
+	userMsg = llm.ClassifyUserMessage(userMsg)
+	if e == nil {
+		return PendingInputRecord{}, ErrNoActiveTurn
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return PendingInputRecord{}, err
+	}
+	queue := e.currentPendingInputQueue()
+	if queue == nil {
+		return PendingInputRecord{}, fmt.Errorf("pending input queue unavailable")
+	}
+	opts = e.defaultPendingInputOptions(userMsg, opts)
+	e.pendingMu.Lock()
+	turnID := e.activeTurnID
+	e.pendingMu.Unlock()
+	return queue.Enqueue(userMsg, opts, turnID)
+}
+
+// EnqueuePersistedPendingMessage attaches one already-durable record to the
+// current in-memory turn queue. Queue-full is intentionally event-free because
+// the durable record remains accepted and its owner may retry admission.
+func (e *Engine) EnqueuePersistedPendingMessage(ctx context.Context, record PendingInputRecord) (PendingInputStatus, error) {
+	if e == nil {
+		return PendingInputStatus{}, ErrNoActiveTurn
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return PendingInputStatus{}, err
+	}
+	queue := e.currentPendingInputQueue()
+	if queue == nil {
+		return PendingInputStatus{}, fmt.Errorf("pending input queue unavailable")
+	}
+	records, err := queue.Records()
+	if err != nil {
+		return PendingInputStatus{}, err
+	}
+	if current, ok := records[record.ID]; ok {
+		record = current
+	}
+	if record.Expired(queue.now().UTC()) {
+		if err := queue.MarkExpired([]string{record.ID}); err != nil {
+			return PendingInputStatus{}, err
+		}
+		return PendingInputStatus{}, ErrPendingInputExpired
+	}
+	if !isReplayablePendingState(record.State) {
+		return PendingInputStatus{}, ErrPendingInputHandled
+	}
+	max := e.effectiveMaxPendingInputs()
+	e.pendingMu.Lock()
+	turnID := e.activeTurnID
+	status := PendingInputStatus{TurnID: turnID, PendingCount: len(e.pendingInput), MaxPendingInputs: max}
+	if turnID == "" {
+		e.pendingMu.Unlock()
+		return status, ErrNoActiveTurn
+	}
+	if e.hasPendingRecordLocked(record.ID) {
+		e.pendingMu.Unlock()
+		return status, nil
+	}
+	if len(e.pendingInput) >= max {
+		e.pendingMu.Unlock()
+		return status, ErrPendingInputQueueFull
+	}
+	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: record.ID, Message: record.Message})
+	status.PendingCount = len(e.pendingInput)
+	event := events.Event{Type: "pending_input.queued", TurnID: turnID, Payload: PendingInputQueuedPayload{
+		Input:            record.Message.FirstText(),
+		Kind:             record.Message.Kind,
+		MessageID:        record.Message.ID,
+		PendingCount:     status.PendingCount,
+		MaxPendingInputs: status.MaxPendingInputs,
+	}}
+	deferred := e.deferPendingEventLocked(event)
+	e.pendingMu.Unlock()
+	if !deferred {
+		e.emit(event)
+	}
+	return status, nil
 }
 
 func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg llm.Message, opts PendingInputOptions) (PendingInputStatus, error) {

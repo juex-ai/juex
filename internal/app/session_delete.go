@@ -101,7 +101,17 @@ func (p *SessionDeletePlan) Commit() error {
 		}
 		sessionRemoved = true
 	} else if p.missingSessionDir != "" {
-		if err := os.RemoveAll(p.missingSessionDir); err != nil {
+		if err := session.WithSessionRootGuard(filepath.Dir(p.missingSessionDir), func() error {
+			lock, err := session.AcquireSessionDeleteLock(p.missingSessionDir, "delete")
+			if err != nil {
+				return err
+			}
+			if lock == nil {
+				return nil
+			}
+			defer func() { _ = lock.Close() }()
+			return os.RemoveAll(p.missingSessionDir)
+		}); err != nil {
 			return err
 		}
 		sessionRemoved = true

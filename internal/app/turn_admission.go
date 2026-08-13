@@ -146,6 +146,10 @@ func (a *App) admitUserTurn(ctx context.Context, msg llm.Message, ids TurnIDAllo
 	return a.admissionQueue().admitUser(ctx, msg, ids)
 }
 
+func (a *App) admitPersistedUserTurn(ctx context.Context, record runtime.PendingInputRecord, ids TurnIDAllocator) TurnAdmissionResult {
+	return a.admissionQueue().admitPersisted(ctx, record, ids)
+}
+
 func (a *App) admitSlashTurn(ctx context.Context, cmd SlashCommand, ids TurnIDAllocator) TurnAdmissionResult {
 	switch cmd.Name {
 	case SlashStatus:

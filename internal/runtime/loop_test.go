@@ -4265,6 +4265,33 @@ func TestEngine_PendingInputBackpressure(t *testing.T) {
 	waitSignal(t, draining, PendingInputDrainingType)
 }
 
+func TestEngine_EnqueuePersistedPendingMessageExpiresBeforeIdleAdmission(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	record, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "expired external input"),
+		PendingInputOptions{ID: "expired-event", TTL: time.Millisecond},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	if _, err := eng.EnqueuePersistedPendingMessage(context.Background(), record); !errors.Is(err, ErrPendingInputExpired) {
+		t.Fatalf("enqueue expired record error = %v, want ErrPendingInputExpired", err)
+	}
+	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
+		t.Fatalf("pending status after expired admission = %+v", status)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[record.ID].State; got != PendingInputStateExpired {
+		t.Fatalf("record state = %q, want %q", got, PendingInputStateExpired)
+	}
+}
+
 func TestRunToolCallEmitsRequestedRunningCompleted(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	eng.Tools.MustRegister(tools.Tool{

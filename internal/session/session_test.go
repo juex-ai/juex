@@ -1292,6 +1292,53 @@ func TestAcquireSessionLockConflictsUntilClosed(t *testing.T) {
 	}
 }
 
+func TestSessionDeleteLockBlocksRecreateUntilRemovalFinishes(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "20260529T120000-delete-race")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deleteLock, err := AcquireSessionDeleteLock(dir, "delete")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		lock *Lock
+		err  error
+	}
+	acquired := make(chan result, 1)
+	go func() {
+		lock, err := AcquireSessionLock(dir, "run")
+		acquired <- result{lock: lock, err: err}
+	}()
+	select {
+	case got := <-acquired:
+		if got.lock != nil {
+			_ = got.lock.Close()
+		}
+		t.Fatalf("session recreate completed before delete lock released: %v", got.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := deleteLock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-acquired:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if err := got.lock.Close(); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session recreate did not continue after delete lock released")
+	}
+}
+
 func TestAcquireSessionLockRemovesDeadPIDLock(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "20260529T120000-stalelock")

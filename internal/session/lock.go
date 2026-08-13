@@ -10,12 +10,14 @@ import (
 
 const sessionLockFile = "session.lock"
 const sessionLockGuardFile = "session.lock.guard"
+const sessionRootGuardFile = "root.session.lock.guard"
 
 const unreadableLockStaleAfter = 5 * time.Second
 const processStartTolerance = 2 * time.Second
 
 type Lock struct {
-	path string
+	path  string
+	guard *lockGuard
 }
 
 type LockInfo struct {
@@ -44,15 +46,75 @@ func AcquireSessionLock(dir, mode string) (*Lock, error) {
 	if dir == "" {
 		return nil, nil
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	guardPath := sessionLockGuardPath(dir)
+	if err := os.MkdirAll(filepath.Dir(guardPath), 0o755); err != nil {
 		return nil, err
 	}
-	guard, err := acquireLockGuard(filepath.Join(dir, sessionLockGuardFile))
+	guard, err := acquireLockGuard(guardPath)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = guard.Close() }()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	return acquireSessionLockFile(dir, mode)
+}
 
+// WithSessionRootGuard serializes session selection and startup with deletion
+// across one Agent session root. Callers should keep the guarded section small
+// and acquire the per-session lifetime lock before returning from it.
+func WithSessionRootGuard(root string, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	if root == "" {
+		return fn()
+	}
+	guardPath := filepath.Join(filepath.Dir(root), ".locks", "sessions", sessionRootGuardFile)
+	if err := os.MkdirAll(filepath.Dir(guardPath), 0o755); err != nil {
+		return err
+	}
+	guard, err := acquireLockGuard(guardPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = guard.Close() }()
+	return fn()
+}
+
+// AcquireSessionDeleteLock serializes directory removal with session startup.
+// The returned lock retains the external guard until Close so a new opener
+// cannot recreate the session directory while deletion is in progress.
+func AcquireSessionDeleteLock(dir, mode string) (*Lock, error) {
+	if dir == "" {
+		return nil, nil
+	}
+	guardPath := sessionLockGuardPath(dir)
+	if err := os.MkdirAll(filepath.Dir(guardPath), 0o755); err != nil {
+		return nil, err
+	}
+	guard, err := acquireLockGuard(guardPath)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(dir); err != nil {
+		_ = guard.Close()
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	lock, err := acquireSessionLockFile(dir, mode)
+	if err != nil {
+		_ = guard.Close()
+		return nil, err
+	}
+	lock.guard = guard
+	return lock, nil
+}
+
+func acquireSessionLockFile(dir, mode string) (*Lock, error) {
 	path := filepath.Join(dir, sessionLockFile)
 	for attempt := 0; attempt < 2; attempt++ {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -91,6 +153,10 @@ func AcquireSessionLock(dir, mode string) (*Lock, error) {
 		return &Lock{path: path}, nil
 	}
 	return nil, &LockError{Path: path, Holder: readLockInfo(path)}
+}
+
+func sessionLockGuardPath(dir string) string {
+	return filepath.Join(filepath.Dir(filepath.Dir(dir)), ".locks", "sessions", filepath.Base(dir)+"."+sessionLockGuardFile)
 }
 
 func clearDeadProcessLock(path string) (bool, error) {
@@ -163,8 +229,14 @@ func (l *Lock) Close() error {
 	if l == nil || l.path == "" {
 		return nil
 	}
-	if err := os.Remove(l.path); err != nil && !os.IsNotExist(err) {
-		return err
+	removeErr := os.Remove(l.path)
+	if os.IsNotExist(removeErr) {
+		removeErr = nil
 	}
-	return nil
+	guardErr := l.guard.Close()
+	l.guard = nil
+	if removeErr != nil {
+		return removeErr
+	}
+	return guardErr
 }

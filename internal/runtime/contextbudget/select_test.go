@@ -142,6 +142,20 @@ func TestSelectCompactionInputNoticesDoNotDisplaceRealInputs(t *testing.T) {
 	}
 }
 
+func TestSelectCompactionInputTreatsSideSessionResultAsRealInput(t *testing.T) {
+	direct := testMsg("direct-1", llm.RoleUser, "delegate research")
+	direct.Kind = llm.MessageKindDirect
+	side := testMsg("side-1", llm.RoleUser, "Side Session result")
+	side.Kind = llm.MessageKindSideSession
+	history := []llm.Message{direct, testMsg("assistant-1", llm.RoleAssistant, "waiting"), side}
+	budget := EstimateMessageTokens([]llm.Message{direct, side})
+
+	selection := SelectInput(history, Policy{KeepRecentTokens: budget})
+	if got := selection.RetainedMessageIDs; len(got) != 2 || got[0] != "direct-1" || got[1] != "side-1" {
+		t.Fatalf("retained ids = %v, want direct and Side Session inputs", got)
+	}
+}
+
 func TestSelectCompactionInputKeepsActiveToolProtocolClosed(t *testing.T) {
 	direct := testMsg("direct-1", llm.RoleUser, "read the file")
 	direct.Kind = llm.MessageKindDirect

@@ -19,6 +19,7 @@ test("runtimeToolGroupLabel maps the builtin group taxonomy", () => {
       "skill",
       "memory",
       "session_state",
+      "side_session",
       "observable",
     ].map(runtimeToolGroupLabel),
     [
@@ -29,6 +30,7 @@ test("runtimeToolGroupLabel maps the builtin group taxonomy", () => {
       "Skill",
       "Memory",
       "Session State",
+      "Side Session",
       "Observable",
     ],
   );

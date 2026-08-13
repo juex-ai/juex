@@ -7,6 +7,7 @@ export const MESSAGE_KINDS = [
   "tool_result",
   "mcp_event",
   "observation",
+  "side_session",
   "hook_event",
   "compact",
   "runtime_context",
@@ -20,6 +21,7 @@ export const MESSAGE_GROUP_RENDERER_KEYS = [
   "default",
   "mcp_event",
   "observation",
+  "side_session",
   "hook_event",
   "model_fallback",
   "system_notice",
@@ -36,6 +38,7 @@ const messageKindRendererKeys: Record<MessageKind, MessageGroupRendererKey> = {
   tool_result: "default",
   mcp_event: "mcp_event",
   observation: "observation",
+  side_session: "side_session",
   hook_event: "hook_event",
   compact: "compact",
   runtime_context: "default",
@@ -47,6 +50,7 @@ const messageKindSet = new Set<string>(MESSAGE_KINDS);
 const userOnlyRendererKeySet = new Set<MessageGroupRendererKey>([
   "mcp_event",
   "observation",
+  "side_session",
   "model_fallback",
   "system_notice",
 ]);

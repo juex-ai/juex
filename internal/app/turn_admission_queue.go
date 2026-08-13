@@ -18,6 +18,7 @@ type turnAdmissionRuntime interface {
 	ReserveTurnID(string) error
 	ReserveCompactionTurnID(string) error
 	EnqueuePendingMessage(context.Context, llm.Message) (runtime.PendingInputStatus, error)
+	EnqueuePersistedPendingMessage(context.Context, runtime.PendingInputRecord) (runtime.PendingInputStatus, error)
 	PromotePendingInputTurn(string, string) (llm.Message, runtime.PendingInputStatus, bool)
 }
 
@@ -55,6 +56,60 @@ func (q turnAdmissionQueue) admitUser(ctx context.Context, msg llm.Message, ids 
 		errTurnAdmissionChanged,
 		lastStatus,
 	)
+}
+
+func (q turnAdmissionQueue) admitPersisted(ctx context.Context, record runtime.PendingInputRecord, ids TurnIDAllocator) TurnAdmissionResult {
+	if q.state == nil || q.engine == nil {
+		return errorResult(fmt.Errorf("turn admission: app, engine, or session is not initialized"), nil)
+	}
+	if ids == nil {
+		return errorResult(fmt.Errorf("turn admission: missing turn id allocator"), nil)
+	}
+	var lastStatus runtime.PendingInputStatus
+	for attempt := 0; attempt < maxTurnAdmissionAttempts; attempt++ {
+		result, status, retry := q.admitPersistedAttempt(ctx, record, ids)
+		if !retry {
+			return result
+		}
+		lastStatus = status
+	}
+	return conflictResult("turn changed while accepting input; retry the message", errTurnAdmissionChanged, lastStatus)
+}
+
+func (q turnAdmissionQueue) admitPersistedAttempt(ctx context.Context, record runtime.PendingInputRecord, ids TurnIDAllocator) (TurnAdmissionResult, runtime.PendingInputStatus, bool) {
+	phase, activeTurnID := q.snapshot()
+	if phase != turnAdmissionIdle {
+		return q.queuePersisted(ctx, record, phase, activeTurnID)
+	}
+	// The runtime owns durable-record freshness. Even while the App appears
+	// idle, let it reject expired records or discover a runtime-owned turn
+	// before reserving a new one.
+	if result, status, retry := q.queuePersisted(ctx, record, phase, activeTurnID); !retry {
+		return result, status, false
+	}
+	turnID := ids.NextTurnID("turn")
+	q.state.mu.Lock()
+	if q.state.phase != turnAdmissionIdle {
+		phase = q.state.phase
+		activeTurnID = q.state.turnID
+		q.state.mu.Unlock()
+		return q.queuePersisted(ctx, record, phase, activeTurnID)
+	}
+	if err := q.engine.ReserveTurnID(turnID); err != nil {
+		q.state.mu.Unlock()
+		if errors.Is(err, runtime.ErrActiveTurnExists) {
+			return q.queuePersisted(ctx, record, turnAdmissionIdle, "")
+		}
+		return conflictResult(err.Error(), err, runtime.PendingInputStatus{}), runtime.PendingInputStatus{}, false
+	}
+	q.state.phase = turnAdmissionRunning
+	q.state.turnID = turnID
+	q.state.mu.Unlock()
+	return TurnAdmissionResult{
+		Kind:   TurnAdmissionStarted,
+		TurnID: turnID,
+		Start:  &AdmittedTurn{TurnID: turnID, Message: record.Message},
+	}, runtime.PendingInputStatus{TurnID: turnID}, false
 }
 
 func (q turnAdmissionQueue) admitUserAttempt(
@@ -199,6 +254,36 @@ func (q turnAdmissionQueue) queuePending(
 		return conflictResult("turn is not accepting pending input", runtime.ErrNoActiveTurn, status), status, false
 	}
 	status, err := q.engine.EnqueuePendingMessage(ctx, msg)
+	if status.TurnID == "" {
+		status.TurnID = fallbackTurnID
+	}
+	switch {
+	case err == nil:
+		return queuedResult(status), status, false
+	case errors.Is(err, runtime.ErrPendingInputQueueFull):
+		return rejectedResult(
+			"pending_input_full",
+			fmt.Sprintf("pending input queue full (%d/%d)", status.PendingCount, status.MaxPendingInputs),
+			"wait for the active turn to drain pending input before sending more",
+			true,
+			err,
+			status,
+		), status, false
+	case errors.Is(err, runtime.ErrNoActiveTurn):
+		if phase == turnAdmissionRunning {
+			q.complete(fallbackTurnID)
+		}
+		if phase == turnAdmissionIdle || phase == turnAdmissionRunning {
+			return TurnAdmissionResult{}, status, true
+		}
+		return conflictResult("turn is not accepting pending input", err, status), status, false
+	default:
+		return errorResult(err, nil), status, false
+	}
+}
+
+func (q turnAdmissionQueue) queuePersisted(ctx context.Context, record runtime.PendingInputRecord, phase turnAdmissionPhase, fallbackTurnID string) (TurnAdmissionResult, runtime.PendingInputStatus, bool) {
+	status, err := q.engine.EnqueuePersistedPendingMessage(ctx, record)
 	if status.TurnID == "" {
 		status.TurnID = fallbackTurnID
 	}

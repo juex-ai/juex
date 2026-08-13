@@ -57,6 +57,7 @@ type historyEntry struct {
 
 // DeletePlan captures the validated inputs needed to remove one session.
 type DeletePlan struct {
+	root             string
 	dir              string
 	historyPath      string
 	id               string
@@ -445,6 +446,7 @@ func PrepareDelete(root, historyPath, id string) (*DeletePlan, error) {
 		dir = ""
 	}
 	return &DeletePlan{
+		root:             root,
 		dir:              dir,
 		historyPath:      historyPath,
 		id:               id,
@@ -457,12 +459,21 @@ func (p *DeletePlan) Commit() error {
 	if p == nil {
 		return os.ErrInvalid
 	}
-	if p.dir != "" {
-		if err := os.RemoveAll(p.dir); err != nil {
-			return err
+	return WithSessionRootGuard(p.root, func() error {
+		if p.dir != "" {
+			lock, err := AcquireSessionDeleteLock(p.dir, "delete")
+			if err != nil {
+				return err
+			}
+			if lock != nil {
+				defer func() { _ = lock.Close() }()
+				if err := os.RemoveAll(p.dir); err != nil {
+					return err
+				}
+			}
 		}
-	}
-	return removeHistory(p.historyPath, p.id, p.fallbackActiveID)
+		return removeHistory(p.historyPath, p.id, p.fallbackActiveID)
+	})
 }
 
 // Delete removes one on-disk session and drops its entry from history.

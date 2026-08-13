@@ -81,6 +81,14 @@ type Options struct {
 	// AgentRuntime reuses a process-lifetime resource and environment
 	// resolution owned by a long-running caller such as the Web server.
 	AgentRuntime *AgentRuntimeResolution
+
+	// Internal child-runtime seams for managed Side Sessions.
+	disableSideSessionTools bool
+	disableObservables      bool
+	sharedGoalState         *runtime.GoalStateStore
+	sharedNotes             *runtime.NotesStore
+	sharedObservables       *observable.Manager
+	sideSessionFactory      sideSessionFactory
 }
 
 type SessionMode string
@@ -98,6 +106,7 @@ type App struct {
 	Session        *session.Session
 	cleanup        []func() error
 	closeMu        sync.Mutex
+	lifecycleMu    sync.RWMutex
 	closeCancel    sync.Once
 	cleanupIndex   int
 	closeErr       error
@@ -113,6 +122,10 @@ type App struct {
 	mcp            MCPStatus
 	obsv           *observable.Manager
 	chunkedWrites  *tools.ChunkedWriteManager
+	sideSessions   *sideSessionManager
+	sideFactory    sideSessionFactory
+	mcpManager     *mcp.Manager
+	agentRuntime   AgentRuntimeResolution
 
 	turnAdmission turnAdmission
 
@@ -322,7 +335,7 @@ func New(opts Options) (*App, error) {
 		}
 	}
 
-	attachment, err := AttachWorkspaceSession(cfg, SessionAttachmentRequest{
+	attachment, sessLock, err := AttachAndLockWorkspaceSession(cfg, SessionAttachmentRequest{
 		ResumeDir: opts.ResumeDir,
 		Mode:      opts.SessionMode,
 		Alias:     opts.Alias,
@@ -332,11 +345,6 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 	sess := attachment.Session
-	sessLock, err := session.AcquireSessionLock(sess.Dir, attachment.LockMode)
-	if err != nil {
-		sess.Close()
-		return nil, err
-	}
 	if err := sess.ApplyAlias(opts.Alias); err != nil {
 		_ = sessLock.Close()
 		_ = sess.Close()
@@ -467,6 +475,13 @@ func New(opts Options) (*App, error) {
 		debug:              opts.Debug,
 		logLevel:           opts.LogLevel,
 		runtimeEnvironment: runtimeEnvironment,
+		sideFactory:        opts.sideSessionFactory,
+		mcpManager:         opts.MCPManager,
+		agentRuntime:       agentRuntime,
+	}
+	if opts.sharedGoalState != nil || opts.sharedNotes != nil {
+		eng.ShareSessionState(opts.sharedGoalState, opts.sharedNotes)
+		eng.SkipGoalCompletionGate = true
 	}
 	statusUnsubscribe = eventSink.AddProjection(turnAdmissionStatusProjection{
 		status:       status,
@@ -483,38 +498,61 @@ func New(opts Options) (*App, error) {
 		closeSessionResources()
 		return nil, err
 	}
+	if sess.Kind == session.KindPrimary && sess.Active && !opts.disableSideSessionTools {
+		a.sideSessions = newSideSessionManager(a)
+		if err := RegisterSideSessionTools(reg, a.sideSessions); err != nil {
+			_ = a.detachObservability()
+			closeSessionResources()
+			return nil, err
+		}
+	}
 	if err := a.attachObservability(sess); err != nil {
 		closeSessionResources()
 		return nil, err
 	}
-	obsv, err := observable.NewManager(observable.ManagerOptions{
-		ConfigPath:            cfg.ObservablesConfigPath(),
-		ReadOnlyConfigSources: observableReadOnlyConfigSources(resourceGraph.ObservableConfigs()),
-		StateDir:              cfg.ObservablesStateDir(),
-		WorkDir:               runtimePaths.WorkDir,
-		AgentStateDir:         runtimePaths.StateDir,
-		ArtifactDir:           runtimePaths.ArtifactDir,
-		Environment:           runtimeEnvironment,
-		Shell:                 cfg.Shell,
-		Sandbox:               cfg.SandboxPolicy(),
-		SandboxRunner:         sandboxRunner,
-		Bus:                   bus,
-		Deliver:               a.DeliverObservation,
-	})
+	obsv := opts.sharedObservables
+	ownedObservables := false
+	if obsv == nil && !opts.disableObservables {
+		obsv, err = observable.NewManager(observable.ManagerOptions{
+			ConfigPath:            cfg.ObservablesConfigPath(),
+			ReadOnlyConfigSources: observableReadOnlyConfigSources(resourceGraph.ObservableConfigs()),
+			StateDir:              cfg.ObservablesStateDir(),
+			WorkDir:               runtimePaths.WorkDir,
+			AgentStateDir:         runtimePaths.StateDir,
+			ArtifactDir:           runtimePaths.ArtifactDir,
+			Environment:           runtimeEnvironment,
+			Shell:                 cfg.Shell,
+			Sandbox:               cfg.SandboxPolicy(),
+			SandboxRunner:         sandboxRunner,
+			Bus:                   bus,
+			Deliver:               a.DeliverObservation,
+		})
+		ownedObservables = err == nil
+	}
 	if err != nil {
 		_ = a.detachObservability()
 		closeSessionResources()
 		return nil, err
 	}
 	a.obsv = obsv
-	if err := observable.RegisterTools(reg, obsv); err != nil {
-		_ = obsv.Close()
-		_ = a.detachObservability()
-		closeSessionResources()
-		return nil, err
+	if obsv != nil {
+		if err := observable.RegisterTools(reg, obsv); err != nil {
+			if ownedObservables {
+				_ = obsv.Close()
+			}
+			_ = a.detachObservability()
+			closeSessionResources()
+			return nil, err
+		}
 	}
 	a.mcp = buildMCPStatus(mergedMCP.MCPServers, nil, nil)
-	a.cleanup = append(a.cleanup, obsv.Close, shellSessions.Close, func() error {
+	if a.sideSessions != nil {
+		a.cleanup = append(a.cleanup, a.sideSessions.Close)
+	}
+	if ownedObservables && obsv != nil {
+		a.cleanup = append(a.cleanup, obsv.Close)
+	}
+	a.cleanup = append(a.cleanup, shellSessions.Close, func() error {
 		if err := a.detachObservability(); err != nil {
 			return err
 		}
@@ -571,6 +609,7 @@ func New(opts Options) (*App, error) {
 			return nil, err
 		}
 		a.mcp = buildMCPStatus(mergedMCP.MCPServers, mgr.ToolCounts(), startupErrors)
+		a.mcpManager = mgr
 		a.cleanup = append(a.cleanup, mgr.Close)
 	}
 	if err := eng.RunSessionStartHooks(appCtx); err != nil {
@@ -610,6 +649,8 @@ func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
 }
 
 func (a *App) SwitchToNewPrimarySession() error {
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
 	var oldInfo session.Info
 	err := a.ReadSession(func(sess *session.Session) error {
 		oldInfo = sess.Info()
@@ -621,24 +662,25 @@ func (a *App) SwitchToNewPrimarySession() error {
 	if oldInfo.Kind == session.KindSide {
 		return fmt.Errorf("side sessions cannot switch workspace active session")
 	}
-	attachment, err := AttachWorkspaceSession(a.cfg, SessionAttachmentRequest{Mode: SessionModeNewPrimary})
-	if err != nil {
-		return err
+	replace := func() error {
+		attachment, sessLock, err := AttachAndLockWorkspaceSession(a.cfg, SessionAttachmentRequest{Mode: SessionModeNewPrimary})
+		if err != nil {
+			return err
+		}
+		sess := attachment.Session
+		if err := a.replaceSession(sess, sessLock); err != nil {
+			_ = sessLock.Close()
+			_ = sess.Close()
+			cleanupErr := DeleteSession(a.cfg, sess.ID, SessionDeleteOptions{AllowMissingSession: true})
+			restoreErr := session.SetActive(a.cfg.HistoryPath(), oldInfo)
+			return errors.Join(err, cleanupErr, restoreErr)
+		}
+		return nil
 	}
-	sess := attachment.Session
-	sessLock, err := session.AcquireSessionLock(sess.Dir, attachment.LockMode)
-	if err != nil {
-		_ = sess.Close()
-		return err
+	if a.sideSessions != nil {
+		return a.sideSessions.replacePrimary(replace)
 	}
-	if err := a.replaceSession(sess, sessLock); err != nil {
-		_ = sessLock.Close()
-		_ = sess.Close()
-		cleanupErr := DeleteSession(a.cfg, sess.ID, SessionDeleteOptions{AllowMissingSession: true})
-		restoreErr := session.SetActive(a.cfg.HistoryPath(), oldInfo)
-		return errors.Join(err, cleanupErr, restoreErr)
-	}
-	return nil
+	return replace()
 }
 
 func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) error {
@@ -1385,6 +1427,8 @@ func (a *App) Close() (result error) {
 		close(done)
 		a.closeMu.Unlock()
 	}()
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
 	a.closeCancel.Do(func() {
 		if a.cancel != nil {
 			a.cancel()

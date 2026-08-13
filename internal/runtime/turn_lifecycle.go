@@ -164,14 +164,16 @@ func (l *turnLifecycle) applyFinishPolicyLocked(ctx context.Context, recorded re
 	}
 	e.queueHookRuntimeContext(stopResults)
 
-	if prompt, payload, ok, err := e.runGoalCompletionGate(l.turnID); err != nil {
-		return turnFinishOutcome{}, err
-	} else if ok {
-		if err := l.enqueueContinuationLocked(ctx, prompt); err != nil {
+	if !e.SkipGoalCompletionGate {
+		if prompt, payload, ok, err := e.runGoalCompletionGate(l.turnID); err != nil {
 			return turnFinishOutcome{}, err
+		} else if ok {
+			if err := l.enqueueContinuationLocked(ctx, prompt); err != nil {
+				return turnFinishOutcome{}, err
+			}
+			e.emit(events.Event{Type: "goal.continued", TurnID: l.turnID, Payload: payload})
+			return l.finishOrContinueLocked(finalText), nil
 		}
-		e.emit(events.Event{Type: "goal.continued", TurnID: l.turnID, Payload: payload})
-		return l.finishOrContinueLocked(finalText), nil
 	}
 
 	if prompt, ok := stopContinuation(stopResults); ok {

@@ -19,6 +19,28 @@ type SessionAttachment struct {
 	LockMode string
 }
 
+// AttachAndLockWorkspaceSession keeps discovery, load/creation, and lifetime
+// lock acquisition in one root-guarded operation so deletion cannot remove the
+// selected directory between those steps.
+func AttachAndLockWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (SessionAttachment, *session.Lock, error) {
+	var attachment SessionAttachment
+	var sessLock *session.Lock
+	err := session.WithSessionRootGuard(cfg.SessionsDir(), func() error {
+		var err error
+		attachment, err = AttachWorkspaceSession(cfg, req)
+		if err != nil {
+			return err
+		}
+		sessLock, err = session.AcquireSessionLock(attachment.Session.Dir, attachment.LockMode)
+		if err != nil {
+			_ = attachment.Session.Close()
+			attachment = SessionAttachment{}
+		}
+		return err
+	})
+	return attachment, sessLock, err
+}
+
 // AttachWorkspaceSession opens or creates the session requested by CLI/web
 // inputs and returns the lock mode that matches that attachment decision.
 func AttachWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (SessionAttachment, error) {
@@ -39,17 +61,19 @@ func AttachWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (Se
 // EnsureActivePrimarySessionRecord makes history.active point at an attachable
 // primary session, creating one when the workspace has no usable primary.
 func EnsureActivePrimarySessionRecord(cfg config.Config) error {
-	if info, ok, err := findAttachablePrimarySession(cfg); err != nil {
-		return err
-	} else if ok {
-		return session.SetActive(cfg.HistoryPath(), info)
-	}
+	return session.WithSessionRootGuard(cfg.SessionsDir(), func() error {
+		if info, ok, err := findAttachablePrimarySession(cfg); err != nil {
+			return err
+		} else if ok {
+			return session.SetActive(cfg.HistoryPath(), info)
+		}
 
-	attachment, err := newPrimaryWorkspaceSession(cfg, SessionAttachmentRequest{}, SessionModeAttachActive)
-	if err != nil {
-		return err
-	}
-	return attachment.Session.Close()
+		attachment, err := newPrimaryWorkspaceSession(cfg, SessionAttachmentRequest{}, SessionModeAttachActive)
+		if err != nil {
+			return err
+		}
+		return attachment.Session.Close()
+	})
 }
 
 // ActivePrimarySessionID returns the recorded active primary session id.
