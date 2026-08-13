@@ -356,10 +356,6 @@ func TestFleetResumeCursorPrefersLastEventIDOnReconnect(t *testing.T) {
 	}
 }
 
-func readFleetStatusEvent(t *testing.T, response *http.Response) fleetStatusEvent {
-	return readFleetStatusEventType(t, response, "")
-}
-
 func readFleetStatusEventType(t *testing.T, response *http.Response, eventType string) fleetStatusEvent {
 	t.Helper()
 	scanner := bufio.NewScanner(response.Body)
