@@ -233,7 +233,11 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		}
 		return nil, writeErr
 	}
-	committedFingerprint, fingerprintErr := s.currentTranscriptFingerprintLocked()
+	if s.convFD != nil {
+		_ = s.convFD.Close()
+		s.convFD = nil
+	}
+	committedFingerprint, _ := fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
 	if s.afterTranscriptWrite != nil {
 		s.afterTranscriptWrite()
 	}
@@ -250,9 +254,6 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		lastActiveMS = s.lastActiveMS
 	}
 	commit, inspectErr := s.inspectTranscriptCommitLocked(offset, data, committedFingerprint)
-	if inspectErr == nil && fingerprintErr != nil {
-		inspectErr = fingerprintErr
-	}
 	if commit.diverged {
 		s.adoptTranscriptCommitLocked(commit, nextTranscript, nextHistory, lastActiveMS)
 		s.mu.Unlock()
@@ -312,10 +313,8 @@ func (s *Session) inspectTranscriptCommitLocked(
 	}
 	defer snapshot.close()
 	committed, readErr := transcriptRangeMatches(snapshot.file, offset, data)
-	openFingerprint, openErr := fingerprintFromOpenFile(s.convFD)
 	expectedSize := offset + int64(len(data))
-	if committedFingerprint.strong() && committed && openErr == nil &&
-		openFingerprint == committedFingerprint && snapshot.fingerprint == committedFingerprint &&
+	if committedFingerprint.strong() && committed && snapshot.fingerprint == committedFingerprint &&
 		snapshot.fingerprint.Size == expectedSize {
 		if err := snapshot.verify(); err != nil {
 			return transcriptCommit{diverged: true}, err
@@ -756,11 +755,13 @@ func (s *Session) rollbackConversationLocked(offset int64) error {
 	// File.Truncate requires. A named truncate obtains a separate write handle
 	// while preserving atomic append semantics for the resident descriptor.
 	rollbackErr := os.Truncate(filepath.Join(s.Dir, conversationFile), offset)
-	if _, err := s.convFD.Seek(offset, io.SeekStart); rollbackErr == nil {
-		rollbackErr = err
+	if s.convFD != nil {
+		if _, err := s.convFD.Seek(offset, io.SeekStart); rollbackErr == nil {
+			rollbackErr = err
+		}
 	}
 	if rollbackErr == nil {
-		fingerprint, err := s.currentTranscriptFingerprintLocked()
+		fingerprint, err := fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
 		if err != nil {
 			return err
 		}
