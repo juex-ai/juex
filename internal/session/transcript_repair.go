@@ -37,6 +37,9 @@ func (s *Session) RepairTranscript(reason string) ([]TranscriptRepair, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.retryDerivedStateLocked(); err != nil {
+		return nil, err
+	}
 
 	if s.transcript.repairSafe {
 		return nil, nil
@@ -186,23 +189,20 @@ func (s *Session) rewriteConversationLocked(history []llm.Message) error {
 	if err != nil {
 		return err
 	}
+	s.transcript = idx
+	s.History = activeHistory
+	s.metadataDirty = true
+	s.historyDirty = s.historyPath != ""
 	convFD, err := os.OpenFile(convPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
 	if err != nil {
-		s.transcript = idx
-		s.History = activeHistory
 		return fmt.Errorf("session: reopen repaired conversation: %w", err)
 	}
 	s.convFD = convFD
-	s.transcript = idx
-	s.History = activeHistory
-	meta := s.metadataLocked()
 	if s.beforeRepairCheckpointSave != nil {
 		s.beforeRepairCheckpointSave()
 	}
-	if err := saveMetadata(s.Dir, meta); err != nil {
-		return err
-	}
-	return nil
+	metadataErr := s.persistMetadataLocked()
+	return metadataErr
 }
 
 func writeConversationMessages(path string, history []llm.Message) error {

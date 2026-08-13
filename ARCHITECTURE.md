@@ -969,6 +969,13 @@ appears after a committed write is adopted by a canonical rescan. The scan
 recognizes the exact owned batch even when an external append shifted it beyond
 its original offset, preserves complete live history independently from the
 bounded active index, and does not report an already-persisted batch as failed.
+Once a canonical append or repair is confirmed committed, failures while
+refreshing `session.json` or the global history summary become resident retry
+obligations instead of append failures. The next write repairs canonical
+metadata before mutating JSONL, the next append refreshes the latest history
+summary, and `Close` makes one final attempt at both. This avoids both silently
+abandoning derived state and inviting callers to duplicate an already committed
+message batch.
 `events.jsonl` does not use this checkpoint because safely skipping event
 prefixes would also require a durable reducer-state snapshot.
 
@@ -983,8 +990,10 @@ epoch-millisecond integers (`started_at_ms` and `last_active_at_ms`). Creation
 sets both values; each successful transcript append advances
 `last_active_at_ms` and refreshes the derived transcript checkpoint. The
 transcript write and metadata replacement occur under the Session lock, and a
-metadata failure rolls the transcript append back before in-memory indexes
-change. Session IDs retain a timestamp-like prefix
+metadata failure rolls a normal incremental append back before in-memory indexes
+change. A divergence path that has already verified the owned batch in canonical
+JSONL adopts that state and uses the retry obligation described above instead of
+attempting an unsafe rollback. Session IDs retain a timestamp-like prefix
 only for readable, naturally sorted paths; no session time is parsed from the
 ID or inferred from a file mtime. Read surfaces convert the stored epochs with
 `time.UnixMilli(...).UTC()` while keeping their existing RFC3339 contract.

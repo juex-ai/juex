@@ -50,6 +50,10 @@ type Session struct {
 	historyPath  string
 	startedAtMS  int64
 	lastActiveMS int64
+	// Canonical transcript commits cannot be retried by their callers. Keep
+	// failed derived writes resident until a later operation or Close repairs them.
+	metadataDirty bool
+	historyDirty  bool
 
 	beforeTranscriptWrite        func()
 	afterTranscriptPrewriteCheck func()
@@ -281,7 +285,13 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 	)
 	if commit.diverged {
 		s.adoptTranscriptCommitLocked(commit, nextTranscript, nextHistory, lastActiveMS)
+		historyPath, historyInfo, refreshHistory := s.prepareHistoryRefreshLocked()
+		_ = appendGuard.Close()
+		appendGuard = nil
 		s.mu.Unlock()
+		if refreshHistory {
+			_ = s.finishHistoryRefresh(historyPath, historyInfo)
+		}
 		if commit.committed {
 			return prepared, nil
 		}
@@ -302,6 +312,7 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 	meta.Transcript = buildTranscriptCheckpoint(nextTranscript, nextTranscript.fingerprint)
 	if err := saveMetadata(s.Dir, meta); err != nil {
 		rollbackErr := s.rollbackConversationLocked(offset)
+		s.metadataDirty = rollbackErr == nil
 		s.mu.Unlock()
 		if rollbackErr != nil {
 			return nil, errors.Join(err, fmt.Errorf("session: rollback conversation batch: %w", rollbackErr))
@@ -311,14 +322,16 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 	s.lastActiveMS = lastActiveMS
 	s.History = nextHistory
 	s.transcript = activeTranscriptIndex(nextTranscript)
+	s.metadataDirty = false
 	s.reopenConversationLocked()
-	info, ok := s.historyInfoLocked()
-	historyPath := s.historyPath
+	historyPath, historyInfo, refreshHistory := s.prepareHistoryRefreshLocked()
+	_ = appendGuard.Close()
+	appendGuard = nil
 	s.mu.Unlock()
-	if !ok {
-		return prepared, nil
+	if refreshHistory {
+		_ = s.finishHistoryRefresh(historyPath, historyInfo)
 	}
-	return prepared, RecordSession(historyPath, info)
+	return prepared, nil
 }
 
 type transcriptCommit struct {
@@ -504,6 +517,9 @@ func (s *Session) adoptTranscriptCommitLocked(
 	if commit.index.fingerprint != (transcriptFingerprint{}) {
 		fallbackIndex = commit.index
 		fallbackHistory = commit.history
+		if !commit.committed {
+			lastActiveMS = s.lastActiveMS
+		}
 	} else if commit.committed {
 		fallbackIndex.fingerprint = transcriptFingerprint{}
 	} else {
@@ -516,7 +532,8 @@ func (s *Session) adoptTranscriptCommitLocked(
 	s.lastActiveMS = lastActiveMS
 	s.History = fallbackHistory
 	s.transcript = fallbackIndex
-	_ = saveMetadata(s.Dir, s.metadataLocked())
+	_ = s.persistMetadataLocked()
+	s.historyDirty = s.historyPath != ""
 }
 
 func (s *Session) reopenConversationLocked() {
@@ -556,10 +573,18 @@ func (s *Session) AppendEvent(e events.Event) error {
 
 func (s *Session) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	var firstErr error
+	if s.metadataDirty {
+		if err := s.persistMetadataLocked(); err != nil {
+			firstErr = err
+		}
+	}
+	historyPath, historyInfo, refreshHistory := "", Info{}, false
+	if s.historyDirty {
+		historyPath, historyInfo, refreshHistory = s.prepareHistoryRefreshLocked()
+	}
 	if s.convFD != nil {
-		if err := s.convFD.Close(); err != nil {
+		if err := s.convFD.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 		s.convFD = nil
@@ -569,6 +594,12 @@ func (s *Session) Close() error {
 			firstErr = err
 		}
 		s.eventFD = nil
+	}
+	s.mu.Unlock()
+	if refreshHistory {
+		if err := s.finishHistoryRefresh(historyPath, historyInfo); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	return firstErr
 }
@@ -706,6 +737,9 @@ func (s *Session) ApplyAlias(alias string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.retryDerivedStateLocked(); err != nil {
+		return err
+	}
 	if s.convFD == nil {
 		s.Alias = alias
 		return nil
@@ -762,6 +796,9 @@ func (s *Session) Snapshot() (Info, []llm.Message) {
 }
 
 func (s *Session) ensureFilesLocked() error {
+	if err := s.retryDerivedStateLocked(); err != nil {
+		return err
+	}
 	if s.convFD != nil && s.eventFD != nil {
 		return nil
 	}
@@ -788,6 +825,50 @@ func (s *Session) ensureFilesLocked() error {
 		}
 		s.eventFD = eventFD
 	}
+	return nil
+}
+
+func (s *Session) retryDerivedStateLocked() error {
+	if s.metadataDirty {
+		if err := s.persistMetadataLocked(); err != nil {
+			return fmt.Errorf("session: retry derived metadata: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Session) persistMetadataLocked() error {
+	err := saveMetadata(s.Dir, s.metadataLocked())
+	s.metadataDirty = err != nil
+	return err
+}
+
+func (s *Session) prepareHistoryRefreshLocked() (string, Info, bool) {
+	if s.historyPath == "" {
+		s.historyDirty = false
+		return "", Info{}, false
+	}
+	s.historyDirty = true
+	return s.historyPath, s.infoLocked(), true
+}
+
+func (s *Session) finishHistoryRefresh(path string, info Info) error {
+	err := RecordSession(path, info)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		s.historyDirty = true
+		return err
+	}
+	current := s.infoLocked()
+	if current.transcript == info.transcript &&
+		current.transcriptDigestValid == info.transcriptDigestValid &&
+		current.transcriptDigest == info.transcriptDigest &&
+		current.Turns == info.Turns && current.Preview == info.Preview {
+		s.historyDirty = false
+		return nil
+	}
+	s.historyDirty = true
 	return nil
 }
 
@@ -827,13 +908,6 @@ func normalizeLoadedMessage(path string, line int, m llm.Message) (llm.Message, 
 	}
 	m = llm.ClassifyUserMessage(m)
 	return m, nil
-}
-
-func (s *Session) historyInfoLocked() (Info, bool) {
-	if s.historyPath == "" {
-		return Info{}, false
-	}
-	return s.infoLocked(), true
 }
 
 func (s *Session) infoLocked() Info {
