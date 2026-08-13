@@ -823,7 +823,9 @@ stream invalidates workspace, scratchpad, Observable, and process-lifetime
 runtime catalogs. Workspace or enabled user-global `AGENTS.md` guidance, Agent
 Memory, active primary Session selection, and active Session scratchpad content
 additionally invalidate the Runtime snapshot because those prompt sections are
-rebuilt dynamically; Skills, MCP, Hooks, and Extension selection remain
+rebuilt dynamically. External runtime-input directories retain a parent watch
+so rename/delete-and-recreate replacement does not detach invalidation. Skills,
+MCP, Hooks, and Extension selection remain
 Agent-startup facts. Pages then refetch their authoritative JSON snapshot.
 EventSource reconnection recalibrates these views from a current server frame.
 Commands remain ordinary HTTP requests because live invalidation is

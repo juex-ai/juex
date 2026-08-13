@@ -150,7 +150,7 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 			if _, exists := watchedRuntimeParents[parent]; exists {
 				continue
 			}
-			if err := h.addNearestExistingDirectory(watcher, parent); err != nil {
+			if err := h.addReplaceableRuntimeDirectory(watcher, parent); err != nil {
 				_ = watcher.Close()
 				h.mu.Unlock()
 				return resourceSubscription{}, err
@@ -158,7 +158,7 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 			watchedRuntimeParents[parent] = struct{}{}
 		}
 		if h.runtimeDir != "" && h.runtimeDir != "." {
-			if err := h.addNearestExistingDirectory(watcher, filepath.Dir(h.runtimeDir)); err != nil {
+			if _, err := h.addNearestExistingDirectory(watcher, filepath.Dir(h.runtimeDir)); err != nil {
 				_ = watcher.Close()
 				h.mu.Unlock()
 				return resourceSubscription{}, err
@@ -219,23 +219,37 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 	}, nil
 }
 
-func (h *resourceEventHub) addNearestExistingDirectory(watcher *fsnotify.Watcher, target string) error {
+func (h *resourceEventHub) addReplaceableRuntimeDirectory(watcher *fsnotify.Watcher, target string) error {
+	target = filepath.Clean(target)
+	watched, err := h.addNearestExistingDirectory(watcher, target)
+	if err != nil || watched != target {
+		return err
+	}
+	parent := filepath.Dir(target)
+	if parent == target {
+		return nil
+	}
+	_, err = h.addNearestExistingDirectory(watcher, parent)
+	return err
+}
+
+func (h *resourceEventHub) addNearestExistingDirectory(watcher *fsnotify.Watcher, target string) (string, error) {
 	for dir := filepath.Clean(target); ; dir = filepath.Dir(dir) {
 		info, err := os.Stat(dir)
 		if err == nil {
 			if !info.IsDir() {
-				return fmt.Errorf("runtime input ancestor %q is not a directory", dir)
+				return "", fmt.Errorf("runtime input ancestor %q is not a directory", dir)
 			}
 			if err := h.addWatch(watcher, dir); err != nil {
-				return fmt.Errorf("watch runtime input ancestor %q: %w", dir, err)
+				return "", fmt.Errorf("watch runtime input ancestor %q: %w", dir, err)
 			}
-			return nil
+			return dir, nil
 		}
 		if !os.IsNotExist(err) {
-			return fmt.Errorf("inspect runtime input ancestor %q: %w", dir, err)
+			return "", fmt.Errorf("inspect runtime input ancestor %q: %w", dir, err)
 		}
 		if parent := filepath.Dir(dir); parent == dir {
-			return fmt.Errorf("no existing directory ancestor for runtime input %q", target)
+			return "", fmt.Errorf("no existing directory ancestor for runtime input %q", target)
 		}
 	}
 }

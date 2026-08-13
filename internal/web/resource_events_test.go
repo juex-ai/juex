@@ -288,6 +288,34 @@ func TestResourceEventHubWatchesExternalGlobalAgentsFile(t *testing.T) {
 	}
 }
 
+func TestResourceEventHubReanchorsRecreatedExternalRuntimeDirectory(t *testing.T) {
+	existingRoot := t.TempDir()
+	globalAgentsDir := filepath.Join(existingRoot, ".agents")
+	if err := os.Mkdir(globalAgentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hub := newResourceEventHub(t.TempDir(), t.TempDir())
+	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md")}, "")
+	subscription, err := hub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscription.cancel()
+
+	if err := os.Rename(globalAgentsDir, globalAgentsDir+".old"); err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeInvalidation(t, subscription, "renamed external global resource directory")
+	if err := os.Mkdir(globalAgentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeInvalidation(t, subscription, "recreated external global resource directory")
+	if err := os.WriteFile(filepath.Join(globalAgentsDir, "AGENTS.md"), []byte("replacement guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeInvalidation(t, subscription, "recreated external global AGENTS.md mutation")
+}
+
 func TestResourceEventHubWatchesLateExternalGlobalAgentsDirectory(t *testing.T) {
 	existingRoot := t.TempDir()
 	globalAgentsDir := filepath.Join(existingRoot, "missing", ".agents")
