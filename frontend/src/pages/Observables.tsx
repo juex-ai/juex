@@ -11,6 +11,7 @@ import {
   stopObservable,
 } from "@/api";
 import { useShellTitle } from "@/components/AppShell";
+import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,6 +22,10 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { agentPathFromLocation } from "@/lib/fleet-routes";
+import {
+  beginLatestRequest,
+  invalidateLatestRequest,
+} from "@/lib/latest-request";
 import type { ObservableStatus } from "@/types";
 
 const observableGridColumns =
@@ -35,44 +40,43 @@ export function Observables() {
   const [busyID, setBusyID] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const refreshGeneration = useRef(0);
+  const { resourceRevision } = useFleetAgent();
   useShellTitle("Observables");
 
   const refresh = useCallback(async (
     { quiet = false }: { quiet?: boolean } = {},
   ) => {
+    const isLatest = beginLatestRequest(refreshGeneration);
     if (!quiet) {
       setRefreshing(true);
       setError(null);
     }
     try {
       const data = await listObservables();
+      if (!isLatest()) return;
       setObservables(data.observables ?? []);
       setRefreshError(null);
     } catch (e) {
+      if (!isLatest()) return;
       console.error("listObservables failed", e);
       setRefreshError(
         e instanceof Error ? e.message : "Failed to load observables.",
       );
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (isLatest()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    let live = true;
-    let timer: number | undefined;
-    const load = async () => {
-      if (!live) return;
-      await refresh({ quiet: true });
-      if (live) timer = window.setTimeout(load, 3000);
-    };
-    void load();
+    void refresh({ quiet: true });
     return () => {
-      live = false;
-      if (timer !== undefined) window.clearTimeout(timer);
+      invalidateLatestRequest(refreshGeneration);
     };
-  }, [refresh]);
+  }, [refresh, resourceRevision.observables]);
 
   async function runAction(
     id: string,

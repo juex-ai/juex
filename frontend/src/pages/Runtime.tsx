@@ -14,6 +14,7 @@ import type {
 } from "@/types";
 import { useShellTitle } from "@/components/AppShell";
 import { LoadingState } from "@/components/LoadingState";
+import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import {
   formatRuntimeTimestamp,
   formatRuntimeTokenCount,
@@ -26,13 +27,12 @@ export function Runtime() {
   const [data, setData] = useState<RuntimeStatusResponse | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { resourceRevision } = useFleetAgent();
   useShellTitle("Runtime");
 
   useEffect(() => {
     let live = true;
-    let timer: number | undefined;
-    const load = () => {
-      getRuntimeStatus()
+    void getRuntimeStatus()
         .then((status) => {
           if (!live) return;
           setData(status);
@@ -42,17 +42,11 @@ export function Runtime() {
         .catch((e) => {
           console.error("getRuntimeStatus failed", e);
           if (live) setError(e instanceof Error ? e.message : String(e));
-        })
-        .finally(() => {
-          if (live) timer = window.setTimeout(load, 3000);
         });
-    };
-    load();
     return () => {
       live = false;
-      if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, []);
+  }, [resourceRevision.runtime]);
 
   if (error && !data) {
     return (

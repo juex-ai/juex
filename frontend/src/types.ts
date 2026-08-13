@@ -1088,6 +1088,45 @@ export interface FleetAgentStatusEvent {
   activity: AgentActivity;
 }
 
+export interface FleetRosterEvent {
+  type: "fleet.roster";
+  agents: AgentStatus[];
+}
+
+export interface FleetRosterUnavailableEvent {
+  type: "fleet.roster.unavailable";
+  error: string;
+}
+
+export interface FleetProcessEvent {
+  type: "fleet.status";
+  process: ProcessUsage | null;
+}
+
+export interface AgentProcessEvent {
+  type: "agent.process";
+  agent_id: string;
+  process: ProcessUsage | null;
+}
+
+export type FleetEvent =
+  | FleetAgentStatusEvent
+  | FleetRosterEvent
+  | FleetRosterUnavailableEvent
+  | FleetProcessEvent
+  | AgentProcessEvent;
+
+export type AgentResourceName =
+  | "workspace"
+  | "scratchpad"
+  | "observables"
+  | "runtime";
+
+export interface AgentResourceEvent {
+  type: "resource.changed";
+  resources: AgentResourceName[];
+}
+
 export interface ProcessUsage {
   rss_bytes: number;
   cpu_percent?: number;

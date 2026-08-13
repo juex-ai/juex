@@ -27,6 +27,7 @@ import {
   removeAgent,
   runAgentAction,
   setAgentEnabled,
+  subscribeFleetEvents,
 } from "@/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,6 +69,7 @@ import {
   agentVisualState,
   nextFleetRosterLifecycleAction,
 } from "@/lib/fleet-shell";
+import { mergeFleetRoster } from "@/lib/fleet-roster";
 import { cn } from "@/lib/utils";
 import type { AgentStatus, DirectoryListing, FleetStatus } from "@/types";
 
@@ -86,8 +88,13 @@ export function Fleet() {
   const [addOpen, setAddOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<AgentStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rosterError, setRosterError] = useState<string | null>(null);
+  const rosterRevision = useRef(0);
+  const processRevision = useRef(0);
 
   const refresh = useCallback(async ({ quiet = false } = {}) => {
+    const rosterRequestedAt = rosterRevision.current;
+    const processRequestedAt = processRevision.current;
     if (!quiet) setRefreshing(true);
     setError(null);
     try {
@@ -96,16 +103,21 @@ export function Fleet() {
         getFleetStatus(),
       ]);
       if (agentsResult.status === "fulfilled") {
-        setAgents(agentsResult.value);
-      } else {
+        if (rosterRequestedAt === rosterRevision.current) {
+          setAgents(agentsResult.value);
+          setRosterError(null);
+        }
+      } else if (rosterRequestedAt === rosterRevision.current) {
         const cause = agentsResult.reason;
-        setError(
+        setRosterError(
           cause instanceof Error ? cause.message : "Failed to load fleet roster.",
         );
       }
       if (fleetStatusResult.status === "fulfilled") {
-        setFleetStatus(fleetStatusResult.value);
-      } else {
+        if (processRequestedAt === processRevision.current) {
+          setFleetStatus(fleetStatusResult.value);
+        }
+      } else if (processRequestedAt === processRevision.current) {
         setFleetStatus(null);
       }
     } finally {
@@ -116,9 +128,50 @@ export function Fleet() {
 
   useEffect(() => {
     void refresh({ quiet: true });
-    const timer = window.setInterval(() => void refresh({ quiet: true }), 10_000);
-    return () => window.clearInterval(timer);
   }, [refresh]);
+
+  useEffect(
+    () =>
+      subscribeFleetEvents({
+        onEvent: (event) => {
+          if (event.type === "fleet.roster") {
+            rosterRevision.current += 1;
+            setAgents((current) => mergeFleetRoster(current, event.agents));
+            setRosterError(null);
+            return;
+          }
+          if (event.type === "fleet.roster.unavailable") {
+            rosterRevision.current += 1;
+            setRosterError(event.error || "Fleet roster is unavailable.");
+            return;
+          }
+          if (event.type === "fleet.status") {
+            processRevision.current += 1;
+            setFleetStatus(event.process ? { process: event.process } : null);
+            return;
+          }
+          if (event.type === "agent.process") {
+            setAgents((current) =>
+              current.map((agent) =>
+                agent.id === event.agent_id
+                  ? { ...agent, process: event.process ?? undefined }
+                  : agent,
+              ),
+            );
+            return;
+          }
+          setAgents((current) =>
+            current.map((agent) =>
+              agent.id === event.agent_id
+                ? { ...agent, activity: event.activity }
+                : agent,
+            ),
+          );
+        },
+        onError: (event) => console.error("fleet status stream failed", event),
+      }),
+    [],
+  );
 
   useEffect(() => {
     if (searchParams.get("add") === "1") {
@@ -219,12 +272,12 @@ export function Fleet() {
             </div>
           </div>
 
-          {error ? (
+          {error ?? rosterError ? (
             <div
               role="alert"
               className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-sm text-destructive"
             >
-              {error}
+              {error ?? rosterError}
             </div>
           ) : null}
 

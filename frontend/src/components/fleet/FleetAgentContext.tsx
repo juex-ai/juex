@@ -5,7 +5,11 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import type { AgentRuntimeStatusSnapshot, AgentStatus } from "@/types";
+import type {
+  AgentResourceName,
+  AgentRuntimeStatusSnapshot,
+  AgentStatus,
+} from "@/types";
 import type { AgentViewModelStore } from "@/lib/agent-view-model-store";
 
 export type FleetAgentContextValue = {
@@ -14,6 +18,7 @@ export type FleetAgentContextValue = {
   agentsLoaded: boolean;
   statusStore: AgentViewModelStore | null;
   lifecycleBusy: boolean;
+  resourceRevision: Record<AgentResourceName, number>;
   startAgent: () => Promise<void>;
 };
 
@@ -30,6 +35,7 @@ export function useFleetAgent(): FleetAgentContextValue {
       agentsLoaded: false,
       statusStore: null,
       lifecycleBusy: false,
+      resourceRevision: { workspace: 0, scratchpad: 0, observables: 0, runtime: 0 },
       startAgent: async () => {},
     };
   }

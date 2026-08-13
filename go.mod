@@ -6,6 +6,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.38.0
 	github.com/coder/websocket v1.8.14
 	github.com/creack/pty v1.1.24
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/openai/openai-go v1.12.0
 	github.com/shirou/gopsutil/v4 v4.26.6

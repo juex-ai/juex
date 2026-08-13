@@ -13,10 +13,15 @@ This package adapts `fleet.Manager` to the loopback browser surface used by
   the Add agent workflow. The mutation requires `application/json`, so a
   cross-origin browser cannot invoke it as a CORS-safelisted form request.
 - `/api/fleet/events` aggregates healthy agents' status streams and pushes
-  `agent.status` snapshots; browser clients share one upstream stream per agent,
-  slow clients coalesce updates per agent, aggregate cursors support bounded
-  in-process resume across downstream disconnects with current-snapshot
-  fallback after restart, and roster polling only reconciles process lifecycle.
+  typed `fleet.roster`, `fleet.roster.unavailable`, `fleet.status`,
+  `agent.process`, and `agent.status` snapshots. Roster failures preserve the
+  last known snapshot and a successful reconciliation explicitly clears the
+  unavailable state. Browser
+  clients share one upstream stream per Agent, slow clients coalesce updates by
+  event key, and aggregate cursors support bounded in-process resume with a
+  current-snapshot fallback after restart. One server-side reconciliation loop
+  detects registry and process lifecycle changes instead of every browser
+  polling the roster.
 - `/agents/<id>/api/...` resolves a freshly verified runtime and proxies through
   `endpoint.Target`, preserving streaming responses without retrying requests.
 - Other GET routes reuse `web.SPAHandler` for embedded assets and client-side

@@ -53,6 +53,7 @@ type Server struct {
 	nextTurn     atomic.Uint64
 	startedAt    time.Time
 	statusStream *statusapi.ActivityStore
+	resources    *resourceEventHub
 
 	// createMu serializes live Session creation and mutation. activeSelectionMu is
 	// narrower: it makes active-id reads atomic with operations that can change
@@ -101,11 +102,14 @@ type activeSession struct {
 var errSessionInactive = errors.New("web: session is inactive")
 
 func NewServer(opts Options) *Server {
+	resources := newResourceEventHub(opts.Cfg.WorkDir, opts.Cfg.SessionsDir())
+	resources.setRuntimeInputs([]string{opts.Cfg.GlobalAgentsMDPath(), opts.Cfg.HistoryPath()}, opts.Cfg.MemoryDir())
 	return &Server{
 		opts:          opts,
 		modelHealth:   llm.NewModelHealth(llm.ModelHealthOptions{}),
 		startedAt:     time.Now().UTC(),
 		statusStream:  statusapi.NewActivityStore(),
+		resources:     resources,
 		runtimeMCPErr: map[string]string{},
 		runtimeSkills: app.NewRuntimeStatusSkillCache(),
 	}
@@ -167,6 +171,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/media", s.handleMedia)
 	mux.HandleFunc("/api/status", s.handleAgentStatus)
 	mux.HandleFunc("/api/status/events", s.handleAgentStatusEvents)
+	mux.HandleFunc("/api/resource-events", s.handleResourceEvents)
 	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
 	mux.HandleFunc("/api/observables", s.handleObservables)
 	mux.HandleFunc("/api/observables/", s.dispatchObservable)
@@ -453,6 +458,7 @@ func (s *Server) Close() {
 		return true
 	})
 	s.closeMCPManager()
+	s.resources.close()
 	s.sessions.Range(func(_, v any) bool {
 		v.(*activeSession).close()
 		return true
@@ -573,6 +579,7 @@ func (s *Server) openSessionLocked(ctx context.Context, resumeDir string, mode a
 		workCancel: workCancel,
 	}
 	as.turns = newWebTurnTransport(a)
+	a.AddEventProjection(s.resources)
 	a.AddEventProjection(browserEventProjection{
 		status: a.Status,
 		stream: as.bcast,

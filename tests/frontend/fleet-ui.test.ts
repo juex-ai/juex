@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { cn } from "../../frontend/src/lib/utils.ts";
+import { mergeFleetRoster } from "../../frontend/src/lib/fleet-roster.ts";
+import type { AgentStatus } from "../../frontend/src/types.ts";
 
 function source(path: string): string {
   return readFileSync(new URL(path, import.meta.url), "utf8");
@@ -40,6 +42,41 @@ const configSource = source("../../frontend/src/pages/AgentConfig.tsx");
 const runtimeLayoutSource = source("../../frontend/src/pages/RuntimeLayout.tsx");
 const extensionsSource = source("../../frontend/src/pages/Extensions.tsx");
 const viteSource = source("../../frontend/vite.config.ts");
+
+function fleetAgent(
+  id: string,
+  runtimeHealth: AgentStatus["runtime_health"] = "healthy",
+): AgentStatus {
+  return {
+    id,
+    enabled: true,
+    autostart: true,
+    binding: "bound",
+    runtime_health: runtimeHealth,
+    runtime_present: true,
+    process_alive: runtimeHealth === "healthy",
+    endpoint_reachable: runtimeHealth === "healthy",
+    endpoint_matched: runtimeHealth === "healthy",
+  };
+}
+
+test("fleet roster snapshots preserve only healthy streamed activity", () => {
+  const active = {
+    ...fleetAgent("active"),
+    activity: { state: "working" as const, pending_input_count: 0 },
+  };
+  const stopped = {
+    ...fleetAgent("stopped"),
+    activity: { state: "working" as const, pending_input_count: 0 },
+  };
+  const merged = mergeFleetRoster(
+    [active, stopped],
+    [fleetAgent("active"), fleetAgent("stopped", "stopped")],
+  );
+
+  assert.equal(merged[0].activity?.state, "working");
+  assert.equal(merged[1].activity, undefined);
+});
 
 test("router exposes fleet and selected-agent pages", () => {
   for (const route of [
@@ -301,8 +338,8 @@ test("stage remounts primary pages through tabs and gates offline composers", ()
   );
   assert.doesNotMatch(
     shellSource,
-    /setInterval\(\(\) => void refreshAgents/,
-    "roster polling must not overlap slow refresh requests",
+    /setInterval\(|setTimeout\(\(\) => void poll/,
+    "the shell roster must be driven by Fleet events",
   );
 });
 
@@ -389,6 +426,13 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
     fleetSource,
     /await refresh\(\{ quiet: true \}\);\s+setError\(actionError\)/,
     "roster recovery must not clear the lifecycle action error",
+  );
+  assert.match(fleetSource, /setRosterError\(null\)/);
+  assert.match(fleetSource, /event\.type === "fleet\.roster\.unavailable"/);
+  assert.doesNotMatch(
+    fleetSource,
+    /event\.type === "fleet\.roster"[\s\S]{0,220}setError\(null\)/,
+    "roster recovery must only clear the roster error",
   );
 
   assert.match(logsSource, /getAgentLogs\(agentId, lines\)/);

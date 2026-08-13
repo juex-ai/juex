@@ -37,14 +37,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-const WORKSPACE_REFRESH_INTERVAL_MS = 5_000;
-
 type FileTreePanelProps = {
   active?: boolean;
   emptyLabel?: string;
   headerAction?: ReactNode;
   loadTree?: LoadFileTree;
   refreshLabel?: string;
+  refreshRevision?: number;
   rootKey?: string;
   title?: string;
 };
@@ -55,6 +54,7 @@ export function FileTreePanel({
   headerAction,
   loadTree = getFileTree,
   refreshLabel = "Refresh workspace",
+  refreshRevision = 0,
   rootKey = "workspace",
   title = "Workspace",
 }: FileTreePanelProps) {
@@ -117,14 +117,12 @@ export function FileTreePanel({
   useEffect(() => {
     if (!active) return;
     refreshWorkspace();
-    const interval = window.setInterval(refreshWorkspace, WORKSPACE_REFRESH_INTERVAL_MS);
     return () => {
-      window.clearInterval(interval);
       refreshAbortRef.current?.abort();
       refreshAbortRef.current = null;
       previewAbortRef.current?.abort();
     };
-  }, [active, refreshWorkspace, rootKey]);
+  }, [active, refreshWorkspace, refreshRevision, rootKey]);
 
   const handleRefreshClick = () => {
     refreshWorkspace();

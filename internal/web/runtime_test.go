@@ -105,6 +105,43 @@ body`)
 	}
 }
 
+func TestRuntimeStatusReloadsWorkspaceAgentsGuidance(t *testing.T) {
+	srv := newTestServer(t)
+	agentsPath := filepath.Join(srv.opts.Cfg.WorkDir, "AGENTS.md")
+	writeAgents := func(guidance string) {
+		t.Helper()
+		mustWriteRuntimeFile(t, agentsPath, guidance)
+	}
+	readGuidance := func() string {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/runtime", nil))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+		}
+		var got runtimeStatusResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range got.SystemPrompt.Items {
+			if item.Path == agentsPath {
+				return item.Text
+			}
+		}
+		t.Fatalf("runtime system prompt missing %s: %+v", agentsPath, got.SystemPrompt.Items)
+		return ""
+	}
+
+	writeAgents("first guidance")
+	if got := readGuidance(); !strings.Contains(got, "first guidance") {
+		t.Fatalf("initial guidance = %q", got)
+	}
+	writeAgents("second guidance")
+	if got := readGuidance(); !strings.Contains(got, "second guidance") {
+		t.Fatalf("reloaded guidance = %q", got)
+	}
+}
+
 func TestRuntimeStatusReportsStableServerStartTime(t *testing.T) {
 	srv := newTestServer(t)
 	want := time.Date(2026, time.July, 17, 2, 15, 30, 123456000, time.UTC)

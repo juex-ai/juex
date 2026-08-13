@@ -115,7 +115,7 @@ test("one store projects roster and fleet updates", () => {
   assert.equal(projected.activity?.selected_status?.turn?.streaming, true);
 });
 
-test("roster polling corrects stale fleet stream activity", () => {
+test("roster snapshots correct stale fleet stream activity", () => {
   const store = new AgentViewModelStore();
   const base: AgentStatus = {
     id: "agent-1",
@@ -135,18 +135,18 @@ test("roster polling corrects stale fleet stream activity", () => {
   });
   assert.equal(store.projectAgents([base])[0].activity?.state, "working");
 
-  const polled = {
+  const snapshot = {
     ...base,
     activity: agentActivity(runtimeStatus("poll-2", "idle")),
   };
-  store.seedAgents([polled]);
+  store.seedAgents([snapshot]);
 
-  const projected = store.projectAgents([polled])[0];
+  const projected = store.projectAgents([snapshot])[0];
   assert.equal(projected.activity?.state, "idle");
   assert.equal(projected.activity?.selected_status?.cursor, "poll-2");
 });
 
-test("healthy roster polling preserves stream activity when activity is omitted", () => {
+test("healthy roster snapshots preserve stream activity when activity is omitted", () => {
   const store = new AgentViewModelStore();
   const agent: AgentStatus = {
     id: "agent-1",
@@ -172,6 +172,33 @@ test("healthy roster polling preserves stream activity when activity is omitted"
   const projected = store.projectAgents([agent])[0];
   assert.equal(projected.activity?.state, "working");
   assert.equal(projected.activity?.selected_status?.cursor, "stream-working");
+});
+
+test("roster snapshots remove state for absent agents", () => {
+  const store = new AgentViewModelStore();
+  const base: AgentStatus = {
+    id: "agent-1",
+    enabled: true,
+    autostart: true,
+    binding: "bound",
+    runtime_health: "healthy",
+    runtime_present: true,
+    process_alive: true,
+    endpoint_reachable: true,
+    endpoint_matched: true,
+  };
+  store.applyFleetEvent({
+    type: "agent.status",
+    agent_id: base.id,
+    activity: agentActivity(runtimeStatus("old", "turn_active")),
+  });
+  store.setStatus(base.id, runtimeStatus("session-old", "idle"));
+
+  store.seedAgents([]);
+  store.seedAgents([base]);
+
+  assert.equal(store.projectAgents([base])[0].activity, undefined);
+  assert.equal(store.status(base.id, "session-1"), undefined);
 });
 
 test("session streams do not replace the fleet-selected session", () => {

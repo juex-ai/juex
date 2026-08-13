@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Pause, Play, RefreshCw, Trash2, Zap } from "lucide-react";
@@ -11,6 +11,7 @@ import {
   stopObservable,
 } from "@/api";
 import { useShellTitle } from "@/components/AppShell";
+import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,6 +19,10 @@ import {
   formatObservationWindow,
 } from "@/lib/observation-time";
 import { cn } from "@/lib/utils";
+import {
+  beginLatestRequest,
+  invalidateLatestRequest,
+} from "@/lib/latest-request";
 import type { ObservableDetailResponse, ObservationRecord } from "@/types";
 import { StateBadge } from "@/pages/Observables";
 import { agentPathFromLocation } from "@/lib/fleet-routes";
@@ -31,45 +36,44 @@ export function ObservableDetail() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const refreshGeneration = useRef(0);
+  const { resourceRevision } = useFleetAgent();
   useShellTitle(data?.observable.name || data?.observable.id || "Observable");
 
   const refresh = useCallback(async (
     { quiet = false }: { quiet?: boolean } = {},
   ) => {
     if (!id) return;
+    const isLatest = beginLatestRequest(refreshGeneration);
     if (!quiet) {
       setRefreshing(true);
       setError(null);
     }
     try {
       const next = await getObservable(id);
+      if (!isLatest()) return;
       setData(next);
       setRefreshError(null);
     } catch (e) {
+      if (!isLatest()) return;
       console.error("getObservable failed", e);
       setRefreshError(
         e instanceof Error ? e.message : "Failed to load observable.",
       );
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (isLatest()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [id]);
 
   useEffect(() => {
-    let live = true;
-    let timer: number | undefined;
-    const load = async () => {
-      if (!live) return;
-      await refresh({ quiet: true });
-      if (live) timer = window.setTimeout(load, 3000);
-    };
-    void load();
+    void refresh({ quiet: true });
     return () => {
-      live = false;
-      if (timer !== undefined) window.clearTimeout(timer);
+      invalidateLatestRequest(refreshGeneration);
     };
-  }, [refresh]);
+  }, [refresh, resourceRevision.observables]);
 
   async function runAction(action: "run" | "start" | "stop" | "delete") {
     if (!id) return;

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { getRuntimeStatus } from "@/api";
 import { useShellTitle } from "@/components/AppShell";
 import { LoadingState } from "@/components/LoadingState";
+import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import { Badge } from "@/components/ui/badge";
 import { safeRuntimeExternalURL } from "@/lib/runtime-display";
 import type {
@@ -15,13 +16,12 @@ import type {
 export function Extensions() {
   const [data, setData] = useState<RuntimeStatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { resourceRevision } = useFleetAgent();
   useShellTitle("Extensions");
 
   useEffect(() => {
     let live = true;
-    let timer: number | undefined;
-    const load = () => {
-      getRuntimeStatus()
+    void getRuntimeStatus()
         .then((status) => {
           if (!live) return;
           setData(status);
@@ -32,17 +32,11 @@ export function Extensions() {
           if (live) {
             setError(cause instanceof Error ? cause.message : String(cause));
           }
-        })
-        .finally(() => {
-          if (live) timer = window.setTimeout(load, 3000);
         });
-    };
-    load();
     return () => {
       live = false;
-      if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, []);
+  }, [resourceRevision.runtime]);
 
   if (error && !data) {
     return (
