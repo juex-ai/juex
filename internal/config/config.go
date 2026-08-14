@@ -827,6 +827,10 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 	if err := dec.Decode(&fc); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
+	sandboxPresent, err := topLevelYAMLKeyPresent(data, "sandbox")
+	if err != nil {
+		return fmt.Errorf("config: parse %s: %w", source.Path, err)
+	}
 	if strings.TrimSpace(fc.Model) != "" {
 		cfg.modelRef = strings.TrimSpace(fc.Model)
 	}
@@ -870,8 +874,12 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 			return fmt.Errorf("config: parse %s: %w", source.Path, err)
 		}
 	}
-	if fc.Sandbox != nil {
-		if err := applySandboxConfig(cfg, *fc.Sandbox); err != nil {
+	if sandboxPresent {
+		sandboxLayer := sandboxConfig{}
+		if fc.Sandbox != nil {
+			sandboxLayer = *fc.Sandbox
+		}
+		if err := applySandboxConfig(cfg, sandboxLayer); err != nil {
 			return fmt.Errorf("config: parse %s: %w", source.Path, err)
 		}
 	}
@@ -1366,6 +1374,26 @@ func applyToolOutputConfig(cfg *Config, c toolOutputConfig) {
 	if c.PreviewTailBytes > 0 {
 		cfg.ToolOutput.PreviewTailBytes = c.PreviewTailBytes
 	}
+}
+
+func topLevelYAMLKeyPresent(data []byte, key string) (bool, error) {
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return false, err
+	}
+	if len(document.Content) == 0 {
+		return false, nil
+	}
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return false, nil
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == key {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
