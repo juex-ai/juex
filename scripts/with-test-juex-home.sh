@@ -6,8 +6,9 @@ if (($# == 0)); then
   exit 64
 fi
 
-temp_parent="$(cd -- "${TMPDIR:-/tmp}" && pwd -P)"
+temp_parent="${TMPDIR:-/tmp}"
 test_root="$(mktemp -d "$temp_parent/juex-test-home.XXXXXX")"
+test_root="$(cd -- "$test_root" && (pwd -W 2>/dev/null || pwd -P))"
 
 cleanup() {
   rm -rf -- "$test_root"
