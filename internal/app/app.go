@@ -101,32 +101,34 @@ const (
 )
 
 type App struct {
-	Engine         *runtime.Engine
-	Status         *runtime.StatusStore
-	Bus            *events.Bus
-	Session        *session.Session
-	cleanup        []func() error
-	closeMu        sync.Mutex
-	lifecycleMu    sync.RWMutex
-	closeCancel    sync.Once
-	cleanupIndex   int
-	closeErr       error
-	closeRunning   bool
-	closeRunDone   chan struct{}
-	closeRunResult *error
-	sessionMu      sync.RWMutex
-	ctx            context.Context
-	cancel         context.CancelFunc
-	cfg            config.Config
-	stderr         io.Writer
-	skills         []skills.Skill
-	mcp            MCPStatus
-	obsv           *observable.Manager
-	chunkedWrites  *tools.ChunkedWriteManager
-	sideSessions   *sideSessionManager
-	sideFactory    sideSessionFactory
-	mcpManager     *mcp.Manager
-	agentRuntime   AgentRuntimeResolution
+	Engine          *runtime.Engine
+	Status          *runtime.StatusStore
+	Bus             *events.Bus
+	Session         *session.Session
+	cleanup         []func() error
+	closeMu         sync.Mutex
+	lifecycleMu     sync.RWMutex
+	closeCancel     sync.Once
+	cleanupIndex    int
+	closeErr        error
+	closeRunning    bool
+	closeRunDone    chan struct{}
+	closeRunResult  *error
+	sessionMu       sync.RWMutex
+	sessionReleased chan struct{}
+	sessionRelease  sync.Once
+	ctx             context.Context
+	cancel          context.CancelFunc
+	cfg             config.Config
+	stderr          io.Writer
+	skills          []skills.Skill
+	mcp             MCPStatus
+	obsv            *observable.Manager
+	chunkedWrites   *tools.ChunkedWriteManager
+	sideSessions    *sideSessionManager
+	sideFactory     sideSessionFactory
+	mcpManager      *mcp.Manager
+	agentRuntime    AgentRuntimeResolution
 
 	turnAdmission turnAdmission
 
@@ -483,6 +485,7 @@ func New(opts Options) (*App, error) {
 		debug:              opts.Debug,
 		logLevel:           opts.LogLevel,
 		runtimeEnvironment: runtimeEnvironment,
+		sessionReleased:    make(chan struct{}),
 		sideFactory:        opts.sideSessionFactory,
 		mcpManager:         opts.MCPManager,
 		agentRuntime:       agentRuntime,
@@ -555,7 +558,7 @@ func New(opts Options) (*App, error) {
 	}
 	a.mcp = buildMCPStatus(mergedMCP.MCPServers, nil, nil)
 	if a.sideSessions != nil {
-		a.cleanup = append(a.cleanup, a.sideSessions.Close)
+		a.cleanup = append(a.cleanup, a.sideSessions.StartClose)
 	}
 	if ownedObservables && obsv != nil {
 		a.cleanup = append(a.cleanup, obsv.Close)
@@ -579,6 +582,9 @@ func New(opts Options) (*App, error) {
 		}
 		return nil
 	}, a.closeActiveSessionResources)
+	if a.sideSessions != nil {
+		a.cleanup = append(a.cleanup, a.sideSessions.WaitClose)
+	}
 	if opts.MCPManager != nil {
 		if err := opts.MCPManager.RegisterTools(reg); err != nil {
 			_ = a.detachObservability()
@@ -774,7 +780,29 @@ func (a *App) closeActiveSessionResources() error {
 	if sess != nil {
 		sessionErr = sess.Close()
 	}
+	a.sessionRelease.Do(func() {
+		if a.sessionReleased != nil {
+			close(a.sessionReleased)
+		}
+	})
 	return errors.Join(lockErr, sessionErr)
+}
+
+// WaitSessionReleased waits until final App cleanup has closed the active
+// Session and its workspace lock. Child runtimes may still be draining.
+func (a *App) WaitSessionReleased(ctx context.Context) error {
+	if a == nil || a.sessionReleased == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-a.sessionReleased:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func runtimeStatusSeed(sess *session.Session, maxPendingInputs int) runtime.StatusSeed {

@@ -352,7 +352,12 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id 
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	s.closeActiveSession(id)
+	if active, ok := s.deferCloseActiveSession(id); ok {
+		if err := active.app.WaitSessionReleased(r.Context()); err != nil {
+			writeErr(w, http.StatusRequestTimeout, "request_cancelled", err.Error())
+			return
+		}
+	}
 	if err := plan.Commit(); err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return

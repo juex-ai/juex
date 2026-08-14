@@ -39,6 +39,12 @@ type stubbornSideProvider struct {
 	release chan struct{}
 }
 
+type sideHookRunnerFunc func(context.Context, hooks.Request) ([]hooks.Result, error)
+
+func (f sideHookRunnerFunc) Run(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
+	return f(ctx, req)
+}
+
 func (p *stubbornSideProvider) Name() string { return "side-stubborn" }
 
 func (p *stubbornSideProvider) Complete(context.Context, string, []llm.Message, []llm.ToolSpec) (llm.Response, error) {
@@ -618,6 +624,103 @@ func TestSideSessionDropsPersistedNotificationAfterPrimaryLosesOwnership(t *test
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("stale Side Session notification %q was not dropped", pendingID)
+}
+
+func TestSideSessionRetriesTransientStaleNotificationDropFailure(t *testing.T) {
+	parent := newSideSessionTestApp(t, &scriptedSideProvider{})
+	identity, ok := parent.SessionIdentity()
+	if !ok {
+		t.Fatal("parent session identity unavailable")
+	}
+	record, err := parent.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "stale side result"),
+		runtime.PendingInputOptions{ID: "stale-side-result", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingPath := filepath.Join(parent.cfg.SessionsDir(), identity.ID, "pending_input.jsonl")
+	backupPath := pendingPath + ".backup"
+	if err := os.Rename(pendingPath, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(pendingPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	dropped := make(chan error, 1)
+	go func() { dropped <- parent.sideSessions.dropPersistedNotification(record.ID) }()
+	time.Sleep(75 * time.Millisecond)
+	if err := os.Remove(pendingPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(backupPath, pendingPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-dropped; err != nil {
+		t.Fatal(err)
+	}
+	records, err := parent.Engine.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[record.ID].State; got != runtime.PendingInputStateDropped {
+		t.Fatalf("record state = %q, want %q", got, runtime.PendingInputStateDropped)
+	}
+}
+
+func TestSideSessionHookDenialDropsNotificationBeforeTranscriptAppend(t *testing.T) {
+	primary := &scriptedSideProvider{}
+	child := &barrierSideProvider{started: make(chan struct{}, 1), release: make(chan struct{})}
+	parent := newSideSessionTestApp(t, primary, child)
+	failed := make(chan events.Event, 1)
+	unsubscribe := parent.Bus.Subscribe("side_session.notification_failed", func(event events.Event) { failed <- event })
+	defer unsubscribe()
+
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{"query": "finish before hook denial"})
+	id := created["session_id"].(string)
+	select {
+	case <-child.started:
+	case <-time.After(time.Second):
+		t.Fatal("side turn did not start")
+	}
+	parent.Engine.Hooks = sideHookRunnerFunc(func(_ context.Context, req hooks.Request) ([]hooks.Result, error) {
+		if req.EventName != hooks.EventUserPromptSubmit || !strings.HasPrefix(req.UserInput, "Side Session result:") {
+			return nil, nil
+		}
+		return []hooks.Result{{
+			Hook:      hooks.CommandHook{Name: "deny-side-result", Events: []hooks.EventName{hooks.EventUserPromptSubmit}},
+			EventName: hooks.EventUserPromptSubmit,
+			ExitCode:  2,
+			Stdout:    "side result denied",
+		}}, nil
+	})
+	close(child.release)
+	status := waitForSideState(t, parent, id, SideSessionStateIdle)
+
+	select {
+	case event := <-failed:
+		if !strings.Contains(fmt.Sprint(event.Payload), "side result denied") {
+			t.Fatalf("notification failure = %+v", event)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("hook-denied Side Session notification failure was not observable")
+	}
+	pendingID := "side-session-result:" + id + ":" + status.LastTurnID
+	records, err := parent.Engine.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[pendingID].State; got != runtime.PendingInputStateDropped {
+		t.Fatalf("record state = %q, want %q", got, runtime.PendingInputStateDropped)
+	}
+	primary.mu.Lock()
+	calls := primary.calls
+	primary.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("primary provider calls = %d, want 0 after hook denial", calls)
+	}
 }
 
 func TestSideSessionPermanentNotificationFailureIsObservableAndBounded(t *testing.T) {

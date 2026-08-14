@@ -248,6 +248,25 @@ func (e *Engine) DropPersistedPendingMessage(id string) error {
 	return queue.MarkDropped([]string{id})
 }
 
+// PersistedPendingMessage returns the latest durable state for id. Delivery
+// owners use this after a failed turn to distinguish a message rejected before
+// transcript append from one already consumed by the runtime.
+func (e *Engine) PersistedPendingMessage(id string) (PendingInputRecord, bool, error) {
+	if e == nil || id == "" {
+		return PendingInputRecord{}, false, nil
+	}
+	queue := e.currentPendingInputQueue()
+	if queue == nil {
+		return PendingInputRecord{}, false, nil
+	}
+	records, err := queue.Records()
+	if err != nil {
+		return PendingInputRecord{}, false, err
+	}
+	record, ok := records[id]
+	return record, ok, nil
+}
+
 // EnqueuePersistedPendingMessage attaches one already-durable record to the
 // current in-memory turn queue. Queue-full is intentionally event-free because
 // the durable record remains accepted and its owner may retry admission.
@@ -875,8 +894,8 @@ type toolCallResult struct {
 }
 
 // runToolCalls executes one assistant tool-use batch concurrently while
-// preserving provider-facing result order. Model-owned session-state tools are
-// serialized so dependent reads and writes observe provider order.
+// preserving provider-facing result order. Stateful tool groups are serialized
+// so dependent reads, writes, and lifecycle changes observe provider order.
 func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []llm.Block) []toolCallResult {
 	results := make([]toolCallResult, len(calls))
 	type indexedToolCall struct {
@@ -886,7 +905,7 @@ func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []llm.Bl
 	var sessionStateCalls []indexedToolCall
 	var wg sync.WaitGroup
 	for i, tc := range calls {
-		if isSerializedSessionStateTool(tc.ToolName) {
+		if e.isSerializedToolCall(tc.ToolName) {
 			sessionStateCalls = append(sessionStateCalls, indexedToolCall{index: i, call: tc})
 			continue
 		}
@@ -909,13 +928,15 @@ func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []llm.Bl
 	return results
 }
 
-func isSerializedSessionStateTool(name string) bool {
-	switch name {
-	case GoalToolGet, GoalToolCreate, GoalToolUpdate, NotesToolUpdate:
-		return true
-	default:
+func (e *Engine) isSerializedToolCall(name string) bool {
+	if e == nil || e.Tools == nil {
 		return false
 	}
+	tool, ok := e.Tools.Get(name)
+	if !ok {
+		return false
+	}
+	return tool.Group == tools.ToolGroupSessionState || tool.Group == tools.ToolGroupSideSession
 }
 
 func toolResultBlocks(results []toolCallResult) []llm.Block {

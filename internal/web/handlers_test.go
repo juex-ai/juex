@@ -549,6 +549,52 @@ func TestActivateSessionDoesNotWaitForStubbornPreviousPrimary(t *testing.T) {
 	close(provider.release)
 }
 
+func TestDeleteSessionDoesNotWaitForStubbornManagedSideSession(t *testing.T) {
+	provider := &stubbornWebProvider{started: make(chan struct{}, 1), release: make(chan struct{})}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(provider.release) }) }
+	t.Cleanup(release)
+	srv := newTestServer(t)
+	srv.opts.Provider = provider
+	active, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, ok := active.app.SessionIdentity()
+	if !ok {
+		t.Fatal("active primary session unavailable")
+	}
+	if _, err := active.app.Engine.Tools.Call(context.Background(), app.SideSessionToolCreate, map[string]any{
+		"query":     "ignore cancellation",
+		"subscribe": false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("managed Side Session provider did not start")
+	}
+
+	started := time.Now()
+	recorder := httptest.NewRecorder()
+	srv.handleDeleteSession(
+		recorder,
+		httptest.NewRequest(http.MethodDelete, "/api/sessions/"+identity.ID, nil),
+		identity.ID,
+	)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("delete waited %s for stubborn managed Side Session", elapsed)
+	}
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), identity.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted primary stat = %v, want not exist", err)
+	}
+	release()
+}
+
 func TestGetActiveSessionDoesNotWaitForRuntimeRestore(t *testing.T) {
 	srv := newTestServer(t)
 	active := seedWebSession(t, srv, "active")

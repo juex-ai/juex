@@ -74,6 +74,7 @@ type sideSessionChildOptions struct {
 type sideSessionFactory func(sideSessionChildOptions) (*App, error)
 
 type managedSideSession struct {
+	operationMu      sync.Mutex
 	app              *App
 	ctx              context.Context
 	deliveryCtx      context.Context
@@ -100,6 +101,10 @@ type sideSessionManager struct {
 	deliveryCancel context.CancelFunc
 	deliveryWait   *sync.WaitGroup
 	deferred       sync.WaitGroup
+	closeOnce      sync.Once
+	closeStartErr  error
+	cleanupErrMu   sync.Mutex
+	cleanupErr     error
 	turnSeq        atomic.Uint64
 }
 
@@ -334,10 +339,11 @@ func (m *sideSessionManager) Send(id, message string) (SideSessionStatus, bool, 
 	if message == "" {
 		return SideSessionStatus{}, false, errors.New("side_session_send requires a non-empty message")
 	}
-	managed, err := m.active(id)
+	managed, unlock, err := m.lockActive(id)
 	if err != nil {
 		return SideSessionStatus{}, false, err
 	}
+	defer unlock()
 	result := managed.app.admitUserTurn(
 		managed.ctx,
 		userTurnMessage(message, nil),
@@ -368,12 +374,13 @@ func (m *sideSessionManager) Subscribe(id string, subscribed bool) (SideSessionS
 	if err := m.ensureParentActive(); err != nil {
 		return SideSessionStatus{}, err
 	}
+	managed, unlock, err := m.lockActive(id)
+	if err != nil {
+		return SideSessionStatus{}, err
+	}
+	defer unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	managed := m.sessions[strings.TrimSpace(id)]
-	if managed == nil || managed.status.State == SideSessionStateStopping {
-		return SideSessionStatus{}, ErrSideSessionNotActive
-	}
 	managed.status.Subscribed = subscribed
 	managed.status.UpdatedAt = time.Now().UTC()
 	return m.snapshotLocked(managed), nil
@@ -385,9 +392,13 @@ func (m *sideSessionManager) Stop(ctx context.Context, id string) error {
 	if err := m.ensureParentActive(); err != nil {
 		return err
 	}
-	managed, err := m.remove(id)
+	managed, unlock, err := m.lockActive(id)
 	if err != nil {
 		return err
+	}
+	defer unlock()
+	if !m.removeCurrent(managed) {
+		return ErrSideSessionNotActive
 	}
 	return stopManagedSideSessionContext(ctx, managed, &m.deferred)
 }
@@ -501,16 +512,48 @@ func (m *sideSessionManager) Close() error {
 	if m == nil {
 		return nil
 	}
-	m.transitionMu.Lock()
-	defer m.transitionMu.Unlock()
-	items, deliveries, err := m.beginTransition(true)
-	if err != nil {
-		return err
+	return errors.Join(m.StartClose(), m.WaitClose())
+}
+
+// StartClose cancels owned work and schedules final child cleanup without
+// waiting. App cleanup can therefore release the Primary session resources
+// before a provider that ignores cancellation finally returns.
+func (m *sideSessionManager) StartClose() error {
+	if m == nil {
+		return nil
 	}
-	defer m.finishTransition()
-	result := m.drainTransitionContext(context.Background(), items, deliveries)
+	m.closeOnce.Do(func() {
+		m.transitionMu.Lock()
+		defer m.transitionMu.Unlock()
+		items, deliveries, err := m.beginTransition(true)
+		if err != nil {
+			m.closeStartErr = err
+			return
+		}
+		defer m.finishTransition()
+		for _, managed := range items {
+			cancelManagedSideSession(managed)
+			m.deferCleanupError(func() error {
+				managed.done.Wait()
+				return managed.app.CloseAndWait()
+			})
+		}
+		if deliveries != nil {
+			m.deferCleanup(func() { deliveries.Wait() })
+		}
+	})
+	return m.closeStartErr
+}
+
+// WaitClose joins cleanup previously started by StartClose.
+func (m *sideSessionManager) WaitClose() error {
+	if m == nil {
+		return nil
+	}
 	m.deferred.Wait()
-	return result
+	m.cleanupErrMu.Lock()
+	defer m.cleanupErrMu.Unlock()
+	return m.cleanupErr
 }
 
 func (m *sideSessionManager) startRun(ctx context.Context, managed *managedSideSession, start *AdmittedTurn) error {
@@ -633,11 +676,11 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 
 	for {
 		if err := ctx.Err(); err != nil {
-			_ = m.parent.Engine.DropPersistedPendingMessage(record.ID)
+			m.dropStaleNotification(managed, status, record.ID)
 			return
 		}
 		if err := m.ensureParentActive(); err != nil {
-			_ = m.parent.Engine.DropPersistedPendingMessage(record.ID)
+			m.dropStaleNotification(managed, status, record.ID)
 			return
 		}
 		result := m.parent.admitPersistedUserTurn(ctx, record, TurnIDFunc(func(string) string { return m.nextTurnID() }))
@@ -645,8 +688,20 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 		case TurnAdmissionQueued:
 			return
 		case TurnAdmissionStarted:
-			_, _ = m.parent.RunAdmittedTurn(ctx, result.Start.TurnID, result.Start.Message)
+			_, runErr := m.parent.RunAdmittedTurn(ctx, result.Start.TurnID, result.Start.Message)
 			m.parent.CompleteAdmittedTurn(result.Start.TurnID)
+			if runErr != nil {
+				current, ok, stateErr := m.parent.Engine.PersistedPendingMessage(record.ID)
+				if stateErr != nil {
+					dropErr := m.dropPersistedNotification(record.ID)
+					m.recordNotificationFailure(managed, status, errors.Join(runErr, stateErr, dropErr))
+					return
+				}
+				if ok && (current.State == runtime.PendingInputStatePending || current.State == runtime.PendingInputStateAdmitted) {
+					dropErr := m.dropPersistedNotification(record.ID)
+					m.recordNotificationFailure(managed, status, errors.Join(runErr, dropErr))
+				}
+			}
 			return
 		case TurnAdmissionRejected:
 			if !errors.Is(result.Err, runtime.ErrPendingInputQueueFull) {
@@ -668,11 +723,38 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 		}
 		select {
 		case <-ctx.Done():
-			_ = m.parent.Engine.DropPersistedPendingMessage(record.ID)
+			m.dropStaleNotification(managed, status, record.ID)
 			return
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+func (m *sideSessionManager) dropStaleNotification(managed *managedSideSession, status SideSessionStatus, id string) {
+	if err := m.dropPersistedNotification(id); err != nil {
+		m.recordNotificationFailure(managed, status, fmt.Errorf("drop stale side session notification: %w", err))
+	}
+}
+
+func (m *sideSessionManager) dropPersistedNotification(id string) error {
+	delay := 50 * time.Millisecond
+	var result error
+	for attempt := 0; attempt < sideSessionPersistAttempts; attempt++ {
+		result = m.parent.Engine.DropPersistedPendingMessage(id)
+		if result == nil {
+			return nil
+		}
+		if attempt+1 < sideSessionPersistAttempts {
+			time.Sleep(delay)
+			if delay < time.Second {
+				delay *= 2
+				if delay > time.Second {
+					delay = time.Second
+				}
+			}
+		}
+	}
+	return result
 }
 
 func (m *sideSessionManager) recordNotificationFailure(managed *managedSideSession, status SideSessionStatus, err error) {
@@ -688,29 +770,41 @@ func (m *sideSessionManager) recordNotificationFailure(managed *managedSideSessi
 	}})
 }
 
-func (m *sideSessionManager) active(id string) (*managedSideSession, error) {
+func (m *sideSessionManager) lockActive(id string) (*managedSideSession, func(), error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	managed := m.sessions[strings.TrimSpace(id)]
 	if managed == nil || managed.status.State == SideSessionStateStopping {
-		return nil, ErrSideSessionNotActive
+		m.mu.Unlock()
+		return nil, nil, ErrSideSessionNotActive
 	}
-	return managed, nil
+	m.mu.Unlock()
+	managed.operationMu.Lock()
+	m.mu.Lock()
+	current := m.sessions[managed.status.SessionID]
+	active := current == managed && managed.status.State != SideSessionStateStopping
+	m.mu.Unlock()
+	if !active {
+		managed.operationMu.Unlock()
+		return nil, nil, ErrSideSessionNotActive
+	}
+	return managed, managed.operationMu.Unlock, nil
 }
 
-func (m *sideSessionManager) remove(id string) (*managedSideSession, error) {
+func (m *sideSessionManager) removeCurrent(managed *managedSideSession) bool {
+	if managed == nil {
+		return false
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	id = strings.TrimSpace(id)
-	managed := m.sessions[id]
-	if managed == nil {
-		return nil, ErrSideSessionNotActive
+	id := managed.status.SessionID
+	if m.sessions[id] != managed || managed.status.State == SideSessionStateStopping {
+		return false
 	}
 	managed.status.State = SideSessionStateStopping
 	managed.status.Subscribed = false
 	managed.status.UpdatedAt = time.Now().UTC()
 	delete(m.sessions, id)
-	return managed, nil
+	return true
 }
 
 func (m *sideSessionManager) removeIfCurrent(managed *managedSideSession) {
@@ -735,12 +829,7 @@ func stopManagedSideSessionContext(ctx context.Context, managed *managedSideSess
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	managed.cancel(ErrSideSessionStopped)
-	if managed.unsubscribeState != nil {
-		managed.unsubscribeState()
-		managed.unsubscribeState = nil
-	}
-	managed.app.CancelActiveTurn(ErrSideSessionStopped)
+	cancelManagedSideSession(managed)
 	done := make(chan struct{})
 	go func() {
 		managed.done.Wait()
@@ -764,6 +853,18 @@ func stopManagedSideSessionContext(ctx context.Context, managed *managedSideSess
 	}
 }
 
+func cancelManagedSideSession(managed *managedSideSession) {
+	if managed == nil || managed.app == nil {
+		return
+	}
+	managed.cancel(ErrSideSessionStopped)
+	if managed.unsubscribeState != nil {
+		managed.unsubscribeState()
+		managed.unsubscribeState = nil
+	}
+	managed.app.CancelActiveTurn(ErrSideSessionStopped)
+}
+
 func (m *sideSessionManager) deferCleanup(cleanup func()) {
 	if cleanup == nil {
 		return
@@ -773,6 +874,19 @@ func (m *sideSessionManager) deferCleanup(cleanup func()) {
 		defer m.deferred.Done()
 		cleanup()
 	}()
+}
+
+func (m *sideSessionManager) deferCleanupError(cleanup func() error) {
+	if cleanup == nil {
+		return
+	}
+	m.deferCleanup(func() {
+		if err := cleanup(); err != nil {
+			m.cleanupErrMu.Lock()
+			m.cleanupErr = errors.Join(m.cleanupErr, err)
+			m.cleanupErrMu.Unlock()
+		}
+	})
 }
 
 func (m *sideSessionManager) snapshot(managed *managedSideSession) SideSessionStatus {

@@ -467,14 +467,27 @@ func (s *Server) Close() {
 	s.deferredCloseWG.Wait()
 }
 
-func (s *Server) closeActiveSession(id string) bool {
+func (s *Server) deferCloseActiveSession(id string) (*activeSession, bool) {
 	v, ok := s.sessions.LoadAndDelete(id)
 	if !ok {
-		return false
+		return nil, false
 	}
-	v.(*activeSession).close()
+	as := v.(*activeSession)
+	s.deferCloseSession(as)
 	s.statusStream.Publish(s.agentActivity())
-	return true
+	return as, true
+}
+
+func (s *Server) deferCloseSession(as *activeSession) {
+	if as == nil {
+		return
+	}
+	as.cancelWork()
+	s.deferredCloseWG.Add(1)
+	go func() {
+		defer s.deferredCloseWG.Done()
+		as.close()
+	}()
 }
 
 func (s *Server) closeOtherPrimarySessions(activeID string) {
@@ -494,12 +507,7 @@ func (s *Server) closeOtherPrimarySessions(activeID string) {
 		return true
 	})
 	for _, as := range stale {
-		as.cancelWork()
-		s.deferredCloseWG.Add(1)
-		go func() {
-			defer s.deferredCloseWG.Done()
-			as.close()
-		}()
+		s.deferCloseSession(as)
 	}
 	if len(stale) > 0 {
 		s.statusStream.Publish(s.agentActivity())

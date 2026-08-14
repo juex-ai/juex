@@ -4687,6 +4687,54 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 	}
 }
 
+func TestRunToolCalls_SerializesSideSessionCallsInProviderOrder(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{}, 1)
+	releaseFirst := make(chan struct{})
+	eng.Tools.MustRegister(tools.Tool{
+		Name:  "side_first",
+		Group: tools.ToolGroupSideSession,
+		Handler: func(context.Context, map[string]any) (string, error) {
+			close(firstStarted)
+			<-releaseFirst
+			return "first", nil
+		},
+	})
+	eng.Tools.MustRegister(tools.Tool{
+		Name:  "side_second",
+		Group: tools.ToolGroupSideSession,
+		Handler: func(context.Context, map[string]any) (string, error) {
+			secondStarted <- struct{}{}
+			return "second", nil
+		},
+	})
+
+	done := make(chan []toolCallResult, 1)
+	go func() {
+		done <- eng.runToolCalls(context.Background(), "turn-side-order", []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "side-1", ToolName: "side_first", Input: map[string]any{}},
+			{Type: llm.BlockToolUse, ToolUseID: "side-2", ToolName: "side_second", Input: map[string]any{}},
+		})
+	}()
+	<-firstStarted
+	select {
+	case <-secondStarted:
+		t.Fatal("second Side Session tool started before the first completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseFirst)
+	results := <-done
+	if len(results) != 2 || results[0].Block.IsError || results[1].Block.IsError {
+		t.Fatalf("results = %+v", results)
+	}
+	select {
+	case <-secondStarted:
+	default:
+		t.Fatal("second Side Session tool did not run")
+	}
+}
+
 func TestTurn_AllowsLongToolSequence(t *testing.T) {
 	const toolTurns = 30
 	script := make([]llm.Response, 0, toolTurns+1)
