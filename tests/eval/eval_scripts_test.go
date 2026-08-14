@@ -559,6 +559,48 @@ func TestTestJuexHomeWrapperOverridesAndCleans(t *testing.T) {
 	}
 }
 
+func TestTestJuexHomeWrapperUsesAbsoluteHomeWithRelativeTmpdir(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found; skipping shell wrapper test")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	launchDir := t.TempDir()
+	relativeTmp := "relative-tmp"
+	if err := os.MkdirAll(filepath.Join(launchDir, relativeTmp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	childDir := filepath.Join(launchDir, "child")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(
+		"bash",
+		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
+		"sh",
+		"-c",
+		`cd "$1"; printf '%s\n' "$JUEX_HOME"; mkdir -p "$JUEX_HOME"; touch "$JUEX_HOME/probe"`,
+		"wrapper-probe",
+		childDir,
+	)
+	cmd.Dir = launchDir
+	cmd.Env = append(os.Environ(), "TMPDIR="+relativeTmp)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run wrapper with relative TMPDIR: %v\n%s", err, out)
+	}
+	testHome := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(testHome) {
+		t.Fatalf("isolated JUEX_HOME = %q, want absolute path", testHome)
+	}
+	if _, err := os.Stat(testHome); !os.IsNotExist(err) {
+		t.Fatalf("temporary JUEX_HOME still exists after command: %v", err)
+	}
+}
+
 func TestEvalHelpersTolerateProgrammaticNone(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
