@@ -986,6 +986,54 @@ func TestManagedSideSessionSkipsSharedGoalCompletionGate(t *testing.T) {
 	}
 }
 
+func TestPrimaryGoalContinuationDefersDuringSubscribedResultHandoff(t *testing.T) {
+	primaryProvider := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
+	parent := newSideSessionTestApp(t, primaryProvider, &scriptedSideProvider{})
+	parent.Engine.MaxPendingInputs = 1
+
+	primaryDone := make(chan error, 1)
+	go func() {
+		_, err := parent.Run(context.Background(), "keep primary busy during result handoff")
+		primaryDone <- err
+	}()
+	select {
+	case <-primaryProvider.started:
+	case <-time.After(time.Second):
+		t.Fatal("primary turn did not start")
+	}
+	if _, err := parent.Engine.EnqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "occupy capacity")); err != nil {
+		t.Fatal(err)
+	}
+
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{
+		"query":     "finish while primary queue is full",
+		"subscribe": true,
+	})
+	id := created["session_id"].(string)
+	status := waitForSideState(t, parent, id, SideSessionStateIdle)
+	pendingID := "side-session-result:" + id + ":" + status.LastTurnID
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		records, err := parent.Engine.PendingInputQueue.Records()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record, ok := records[pendingID]; ok && record.State == runtime.PendingInputStatePending {
+			if !parent.sideSessions.shouldDeferGoalContinuation() {
+				t.Fatal("subscribed result awaiting admission did not defer Goal continuation")
+			}
+			close(primaryProvider.release)
+			if err := <-primaryDone; err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("side-session result was not persisted during the handoff window")
+}
+
 func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testing.T) {
 	primaryProvider := &scriptedSideProvider{}
 	firstChild := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}

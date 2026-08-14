@@ -83,6 +83,7 @@ type managedSideSession struct {
 	unsubscribeState func()
 	done             sync.WaitGroup
 	runGeneration    uint64
+	resultHandoffs   int
 
 	status SideSessionStatus
 }
@@ -346,7 +347,10 @@ func (m *sideSessionManager) shouldDeferGoalContinuation() bool {
 		return false
 	}
 	for _, managed := range m.sessions {
-		if managed.status.Subscribed && managed.status.State == SideSessionStateRunning {
+		if managed.status.State == SideSessionStateStopping {
+			continue
+		}
+		if managed.resultHandoffs > 0 || (managed.status.Subscribed && managed.status.State == SideSessionStateRunning) {
 			return true
 		}
 	}
@@ -666,19 +670,36 @@ func (m *sideSessionManager) run(managed *managedSideSession, generation uint64,
 		if subscribed && deliveryWait != nil {
 			deliveryWait.Add(1)
 			m.deliveryWriters.Add(1)
+			managed.resultHandoffs++
 		}
 		m.mu.Unlock()
 		if subscribed && deliveryWait != nil {
 			go func() {
 				defer deliveryWait.Done()
 				defer m.deliveryWriters.Done()
-				m.deliverResult(managed.deliveryCtx, managed, status)
+				m.deliverResult(managed.deliveryCtx, managed, status, m.resultHandoffFinished(managed))
 			}()
 		}
 	}()
 }
 
-func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managedSideSession, status SideSessionStatus) {
+func (m *sideSessionManager) resultHandoffFinished(managed *managedSideSession) func() {
+	finished := false
+	return func() {
+		if finished {
+			return
+		}
+		finished = true
+		m.mu.Lock()
+		if managed.resultHandoffs > 0 {
+			managed.resultHandoffs--
+		}
+		m.mu.Unlock()
+	}
+}
+
+func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managedSideSession, status SideSessionStatus, finishHandoff func()) {
+	defer finishHandoff()
 	if err := m.ensureParentActive(); err != nil {
 		return
 	}
@@ -749,8 +770,10 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 		result := m.parent.admitPersistedUserTurn(ctx, record, TurnIDFunc(func(string) string { return m.nextTurnID() }))
 		switch result.Kind {
 		case TurnAdmissionQueued:
+			finishHandoff()
 			return
 		case TurnAdmissionStarted:
+			finishHandoff()
 			_, runErr := m.parent.RunAdmittedTurn(ctx, result.Start.TurnID, result.Start.Message)
 			m.parent.CompleteAdmittedTurn(result.Start.TurnID)
 			if runErr != nil {
