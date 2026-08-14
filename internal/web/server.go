@@ -398,12 +398,22 @@ func (as *activeSession) cancelWork() {
 	as.workCancel()
 }
 
+func (as *activeSession) beginClose() {
+	if as == nil {
+		return
+	}
+	as.cancelWork()
+	if as.app != nil {
+		_ = as.app.BeginClose()
+	}
+}
+
 func (as *activeSession) close() {
 	if as == nil {
 		return
 	}
 	as.closeOnce.Do(func() {
-		as.cancelWork()
+		as.beginClose()
 		if as.statusStreamClose != nil {
 			as.statusStreamClose()
 			as.statusStreamClose = nil
@@ -455,7 +465,7 @@ func (s *Server) Close() {
 	s.closed = true
 	s.closeMu.Unlock()
 	s.sessions.Range(func(_, v any) bool {
-		v.(*activeSession).cancelWork()
+		v.(*activeSession).beginClose()
 		return true
 	})
 	s.closeMCPManager()
@@ -482,7 +492,7 @@ func (s *Server) deferCloseSession(as *activeSession) {
 	if as == nil {
 		return
 	}
-	as.cancelWork()
+	as.beginClose()
 	s.deferredCloseWG.Add(1)
 	go func() {
 		defer s.deferredCloseWG.Done()

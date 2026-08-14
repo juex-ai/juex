@@ -1467,6 +1467,23 @@ func FormatTokenUsage(usage llm.Usage) string {
 		FormatCompactTokenCount(usage.OutputTokens))
 }
 
+// BeginClose cancels App-owned work without waiting for active turns or
+// deferred cleanup to drain.
+func (a *App) BeginClose() error {
+	if a == nil {
+		return nil
+	}
+	a.closeCancel.Do(func() {
+		if a.cancel != nil {
+			a.cancel()
+		}
+	})
+	if a.sideSessions == nil {
+		return nil
+	}
+	return a.sideSessions.StartClose()
+}
+
 // Close advances cleanup until it completes or an observable close must be
 // deferred. A deferred result leaves later resources untouched so callback
 // callers can return safely and an external owner can resume cleanup.
@@ -1494,11 +1511,7 @@ func (a *App) Close() (result error) {
 	}()
 	a.lifecycleMu.Lock()
 	defer a.lifecycleMu.Unlock()
-	a.closeCancel.Do(func() {
-		if a.cancel != nil {
-			a.cancel()
-		}
-	})
+	_ = a.BeginClose()
 	for {
 		a.closeMu.Lock()
 		if a.cleanupIndex >= len(a.cleanup) {
