@@ -116,6 +116,18 @@ func (r DefaultRunner) Prepare(ctx context.Context, req Request) (ExecSpec, erro
 	if err := checkAvailabilityWithProbe(ctx, req.Policy, runtimeOS, lookPath, r.Probe); err != nil {
 		return ExecSpec{}, err
 	}
+	if err := req.FilePolicy.CheckCommandWrites(ctx); err != nil {
+		backend, _, _, _ := backendDescriptor(runtimeOS, req.Policy)
+		return ExecSpec{}, NewError(
+			ErrorCodePolicyUnavailable,
+			runtimeOS,
+			backend,
+			"hard-links",
+			req.Policy,
+			"Replace multiply linked files in the Workspace or current AgentStateDir with independent files, or explicitly set sandbox.file_system.outside_workspace: read_write.",
+			err,
+		)
+	}
 	switch runtimeOS {
 	case "darwin":
 		return prepareDarwin(lookPath, req)

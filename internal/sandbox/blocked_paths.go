@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -121,6 +122,70 @@ func (g FilePolicy) CheckWrite(path string) error {
 		}
 	}
 	return fmt.Errorf("sandbox: write path %s is outside writable roots", target)
+}
+
+func (g FilePolicy) CheckCommandWrites(ctx context.Context) error {
+	if !g.enabled || !g.restrictWrites {
+		return nil
+	}
+	for _, root := range g.commandWritableRoots() {
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			if walkErr != nil {
+				return walkErr
+			}
+			if _, _, blocked := g.blockedPath(path); blocked {
+				if entry.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+				return nil
+			}
+			multiple, err := hasMultipleHardLinks(path)
+			if err != nil {
+				return err
+			}
+			if multiple {
+				return fmt.Errorf("writable root contains file with multiple hard links: %s", path)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (g FilePolicy) commandWritableRoots() []string {
+	var roots []string
+	for _, candidate := range g.canonicalRoots {
+		covered := false
+		for _, root := range roots {
+			if pathWithinOrEqualFilesystem(root, candidate) {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			continue
+		}
+		kept := roots[:0]
+		for _, root := range roots {
+			if !pathWithinOrEqualFilesystem(candidate, root) {
+				kept = append(kept, root)
+			}
+		}
+		roots = append(kept, candidate)
+	}
+	return roots
 }
 
 func (g FilePolicy) WritableRoots() []string {

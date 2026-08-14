@@ -116,6 +116,57 @@ func TestEndToEnd_OmittedSandboxConfigFailsClosedWithoutBackend(t *testing.T) {
 	}
 }
 
+func TestEndToEnd_OmittedSandboxConfigRejectsCommandHardLinks(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skipf("default sandbox is disabled on %s", runtime.GOOS)
+	}
+	root := t.TempDir()
+	work := filepath.Join(root, "workspace")
+	outsideDir := filepath.Join(root, "outside")
+	for _, path := range []string{work, outsideDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outsideFile := filepath.Join(outsideDir, "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insideLink := filepath.Join(work, "inside-link.txt")
+	if err := os.Link(outsideFile, insideLink); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+
+	cfg := loadOmittedSandboxE2EConfig(t, root, work)
+	a, err := app.New(app.Options{
+		Config:     cfg,
+		Provider:   &bareScriptProvider{},
+		WorkDir:    work,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+
+	started := filepath.Join(work, "must-not-start.txt")
+	out, _, err := a.Engine.Tools.CallWithInfo(context.Background(), "exec_command", map[string]any{
+		"cmd": "printf started > " + shellQuoteE2E(started),
+	})
+	if err == nil {
+		t.Fatalf("exec_command unexpectedly succeeded: %s", out)
+	}
+	for _, want := range []string{"hard-links", "multiple hard links"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("exec_command error = %v, want %q", err, want)
+		}
+	}
+	if _, statErr := os.Stat(started); !os.IsNotExist(statErr) {
+		t.Fatalf("command started despite hard-link rejection: %v", statErr)
+	}
+	assertE2EFileContent(t, outsideFile, "outside")
+}
+
 func loadOmittedSandboxE2EConfig(t *testing.T, root, work string) config.Config {
 	t.Helper()
 	home := filepath.Join(root, "home")

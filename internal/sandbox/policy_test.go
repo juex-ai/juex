@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -319,5 +321,45 @@ func TestDefaultRunnerFunctionalProbeFailureFailsClosed(t *testing.T) {
 	var sandboxErr *Error
 	if !errors.As(err, &sandboxErr) || sandboxErr.Code != ErrorCodeBackendUnavailable || sandboxErr.Phase != "probe" {
 		t.Fatalf("err = %T %v, want backend_unavailable probe", err, err)
+	}
+}
+
+func TestDefaultRunnerRejectsCommandHardLinksBeforeBackendStart(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("hard-link count enforcement is supported by the sandbox platforms")
+	}
+	work := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(work, "inside.txt")
+	if err := os.Link(outside, inside); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	policy := DefaultPolicyForOS(runtime.GOOS)
+	_, err := (DefaultRunner{
+		RuntimeOS: runtime.GOOS,
+		LookPath:  sandboxLookPathForTest("/test/backend", "/test/true"),
+		Probe:     func(context.Context, string, string, Policy) error { return nil },
+	}).Prepare(context.Background(), Request{
+		Policy:     policy,
+		WorkDir:    work,
+		FilePolicy: filePolicyForTest(policy, work, work),
+		Spec:       ExecSpec{Binary: "/bin/sh", Args: []string{"-c", "echo changed > inside.txt"}},
+	})
+	if err == nil {
+		t.Fatal("expected command hard-link rejection")
+	}
+	var sandboxErr *Error
+	if !errors.As(err, &sandboxErr) || sandboxErr.Code != ErrorCodePolicyUnavailable || sandboxErr.Phase != "hard-links" {
+		t.Fatalf("err = %T %v, want policy_unavailable hard-links", err, err)
+	}
+	data, readErr := os.ReadFile(outside)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if got := string(data); got != "outside" {
+		t.Fatalf("outside file = %q, want unchanged", got)
 	}
 }

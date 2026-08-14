@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -129,6 +130,69 @@ func TestFilePolicyRejectsExistingFilesWithMultipleHardLinks(t *testing.T) {
 	guard = NewFilePolicy(FilePolicyOptions{Policy: readWrite, WorkDir: work})
 	if err := guard.CheckWrite(inside); err != nil {
 		t.Fatalf("read_write CheckWrite(%q) = %v, want allowed", inside, err)
+	}
+}
+
+func TestFilePolicyRejectsCommandWritesWhenWritableRootContainsHardLinks(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("hard-link count enforcement is supported by the sandbox platforms")
+	}
+	work := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(work, "inside.txt")
+	if err := os.Link(outside, inside); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+
+	guard := NewFilePolicy(FilePolicyOptions{
+		Policy:  DefaultPolicyForOS(runtime.GOOS),
+		WorkDir: work,
+	})
+	if err := guard.CheckCommandWrites(context.Background()); err == nil || !strings.Contains(err.Error(), "multiple hard links") {
+		t.Fatalf("CheckCommandWrites() = %v, want multiple hard links rejection", err)
+	}
+
+	readWrite := DefaultPolicyForOS(runtime.GOOS)
+	readWrite.FileSystem.OutsideWorkspace = OutsideWorkspaceReadWrite
+	guard = NewFilePolicy(FilePolicyOptions{Policy: readWrite, WorkDir: work})
+	if err := guard.CheckCommandWrites(context.Background()); err != nil {
+		t.Fatalf("read_write CheckCommandWrites() = %v, want allowed", err)
+	}
+}
+
+func TestFilePolicyCommandWriteCheckHonorsCancellation(t *testing.T) {
+	guard := NewFilePolicy(FilePolicyOptions{
+		Policy:  DefaultPolicyForOS("linux"),
+		WorkDir: t.TempDir(),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := guard.CheckCommandWrites(ctx); err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("CheckCommandWrites(cancelled) = %v, want context cancellation", err)
+	}
+}
+
+func TestFilePolicyCommandWritableRootsRemoveNestedDuplicates(t *testing.T) {
+	work := t.TempDir()
+	agentState := filepath.Join(work, ".juex", "agent")
+	if err := os.MkdirAll(agentState, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	guard := NewFilePolicy(FilePolicyOptions{
+		Policy:        DefaultPolicyForOS("linux"),
+		WorkDir:       work,
+		AgentStateDir: agentState,
+	})
+	roots := guard.commandWritableRoots()
+	want, ok := canonicalPath(work, work)
+	if !ok {
+		t.Fatalf("canonicalPath(%q) failed", work)
+	}
+	if len(roots) != 1 || roots[0] != want {
+		t.Fatalf("command writable roots = %#v, want only %q", roots, want)
 	}
 }
 
