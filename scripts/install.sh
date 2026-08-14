@@ -225,6 +225,19 @@ ensure_termux_ripgrep() {
   fi
 }
 
+warn_missing_sandbox_backend() {
+  local os_name="$1"
+  local termux_mode="$2"
+  if [[ "$os_name" != "linux" ]] || command -v bwrap >/dev/null 2>&1; then
+    return
+  fi
+  if [[ "$termux_mode" -eq 1 ]]; then
+    printf 'warning: bubblewrap (bwrap) is not on PATH; the default Linux sandbox will fail closed. On rooted Termux, run pkg install -y root-repo && pkg install -y bubblewrap; otherwise explicitly set sandbox.enabled: false. Run juex doctor after installation.\n' >&2
+    return
+  fi
+  printf 'warning: bubblewrap (bwrap) is not on PATH; the default Linux sandbox will fail closed. Install the bubblewrap package or explicitly set sandbox.enabled: false. Run juex doctor after installation.\n' >&2
+}
+
 archive_name() {
   local version="$1"
   local os_name="$2"
@@ -638,6 +651,7 @@ EOF
     cat <<EOF
 install mode: Termux bare binary
 ripgrep: system PATH (installed with pkg if missing)
+sandbox: bubblewrap (bwrap) is required by the default policy; on rooted Termux run pkg install -y root-repo && pkg install -y bubblewrap, otherwise set sandbox.enabled: false
 uninstall: rm -f ${install_target}
 EOF
   else
@@ -685,9 +699,7 @@ EOF
   fi
 
   printf 'Installed juex to %s\n' "$install_target"
-  if [[ "$os_name" == "linux" && "$termux_mode" -eq 0 ]] && ! command -v bwrap >/dev/null 2>&1; then
-    printf 'warning: bubblewrap (bwrap) is not on PATH; the default Linux sandbox will fail closed. Install the bubblewrap package or explicitly set sandbox.enabled: false. Run juex doctor after installation.\n' >&2
-  fi
+  warn_missing_sandbox_backend "$os_name" "$termux_mode"
   refresh_fleet_service "$install_target"
   if [[ ":$PATH:" != *":${install_dir}:"* ]]; then
     cat <<EOF

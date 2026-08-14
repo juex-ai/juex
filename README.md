@@ -587,7 +587,10 @@ AgentStateDir are read-only, and network access remains enabled. Windows keeps
 the sandbox disabled by default and reports unsupported if it is explicitly
 enabled. Linux requires `bwrap` (the `bubblewrap` package); run `juex doctor` to
 verify that the helper can actually start under local user-namespace and kernel
-policy, rather than relying on executable discovery alone.
+policy, rather than relying on executable discovery alone. On rooted Termux,
+run `pkg install -y root-repo && pkg install -y bubblewrap`; unrooted Termux
+users must explicitly set `sandbox.enabled: false` because no supported backend
+is available there.
 
 For compatibility, the first explicit `sandbox` section uses the historical
 `enabled: false`, `outside_workspace: read_write`, and network-enabled baseline,
