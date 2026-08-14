@@ -54,6 +54,10 @@ type PendingInputRecord struct {
 	ProcessedAt *time.Time        `json:"processed_at,omitempty"`
 }
 
+func (r PendingInputRecord) Expired(now time.Time) bool {
+	return isReplayablePendingState(r.State) && !r.ExpiresAt.IsZero() && !r.ExpiresAt.After(now)
+}
+
 type PendingInputQueue struct {
 	path string
 	now  func() time.Time
@@ -177,6 +181,16 @@ func (q *PendingInputQueue) MarkDropped(ids []string) error {
 	return q.updateStates(ids, func(record PendingInputRecord, now time.Time) (PendingInputRecord, bool) {
 		if record.State == PendingInputStatePending || record.State == PendingInputStateAdmitted {
 			record.State = PendingInputStateDropped
+			return record, true
+		}
+		return record, false
+	})
+}
+
+func (q *PendingInputQueue) MarkExpired(ids []string) error {
+	return q.updateStates(ids, func(record PendingInputRecord, _ time.Time) (PendingInputRecord, bool) {
+		if isReplayablePendingState(record.State) {
+			record.State = PendingInputStateExpired
 			return record, true
 		}
 		return record, false

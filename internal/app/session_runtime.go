@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
@@ -11,6 +12,7 @@ import (
 
 var ErrSessionUnavailable = errors.New("app: session is unavailable")
 var ErrSessionChanged = errors.New("app: session changed")
+var ErrSessionStopped = errorclass.WithKind(errorclass.KindTerminated, errors.New("app: session stopped"))
 
 type SessionIdentitySnapshot struct {
 	ID            string
@@ -172,5 +174,8 @@ func (a *App) RunAdmittedTurn(ctx context.Context, turnID string, message llm.Me
 	}
 	a.sessionMu.RLock()
 	defer a.sessionMu.RUnlock()
+	if a.Session == nil {
+		return "", ErrSessionUnavailable
+	}
 	return a.Engine.TurnMessageWithID(ctx, message, turnID)
 }

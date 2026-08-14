@@ -29,6 +29,7 @@ func TestMessageKindsMatchGolden(t *testing.T) {
 		llm.MessageKindToolResult,
 		llm.MessageKindMCPEvent,
 		llm.MessageKindObservation,
+		llm.MessageKindSideSession,
 		llm.MessageKindHookEvent,
 		llm.MessageKindCompact,
 		llm.MessageKindRuntimeContext,

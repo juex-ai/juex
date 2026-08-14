@@ -64,6 +64,7 @@ type Server struct {
 	activeSelectionMu sync.Mutex
 	closeMu           sync.Mutex
 	closed            bool
+	deferredCloseWG   sync.WaitGroup
 
 	runtimeMu     sync.Mutex
 	runtimeMCPErr map[string]string
@@ -397,12 +398,25 @@ func (as *activeSession) cancelWork() {
 	as.workCancel()
 }
 
+func (as *activeSession) beginClose() {
+	if as == nil {
+		return
+	}
+	as.cancelWork()
+	if as.turns != nil {
+		as.turns.interruptWithCause(app.ErrSessionStopped)
+	}
+	if as.app != nil {
+		_ = as.app.BeginClose()
+	}
+}
+
 func (as *activeSession) close() {
 	if as == nil {
 		return
 	}
 	as.closeOnce.Do(func() {
-		as.cancelWork()
+		as.beginClose()
 		if as.statusStreamClose != nil {
 			as.statusStreamClose()
 			as.statusStreamClose = nil
@@ -454,7 +468,7 @@ func (s *Server) Close() {
 	s.closed = true
 	s.closeMu.Unlock()
 	s.sessions.Range(func(_, v any) bool {
-		v.(*activeSession).cancelWork()
+		v.(*activeSession).beginClose()
 		return true
 	})
 	s.closeMCPManager()
@@ -463,20 +477,34 @@ func (s *Server) Close() {
 		v.(*activeSession).close()
 		return true
 	})
+	s.deferredCloseWG.Wait()
 }
 
-func (s *Server) closeActiveSession(id string) bool {
+func (s *Server) deferCloseActiveSession(id string) (*activeSession, bool) {
 	v, ok := s.sessions.LoadAndDelete(id)
 	if !ok {
-		return false
+		return nil, false
 	}
-	v.(*activeSession).close()
+	as := v.(*activeSession)
+	s.deferCloseSession(as)
 	s.statusStream.Publish(s.agentActivity())
-	return true
+	return as, true
+}
+
+func (s *Server) deferCloseSession(as *activeSession) {
+	if as == nil {
+		return
+	}
+	as.beginClose()
+	s.deferredCloseWG.Add(1)
+	go func() {
+		defer s.deferredCloseWG.Done()
+		as.close()
+	}()
 }
 
 func (s *Server) closeOtherPrimarySessions(activeID string) {
-	var ids []string
+	var stale []*activeSession
 	s.sessions.Range(func(key, value any) bool {
 		id, _ := key.(string)
 		as, _ := value.(*activeSession)
@@ -485,12 +513,17 @@ func (s *Server) closeOtherPrimarySessions(activeID string) {
 		}
 		identity, ok := as.app.SessionIdentity()
 		if ok && session.NormalizeKind(identity.Kind) == session.KindPrimary {
-			ids = append(ids, id)
+			if value, loaded := s.sessions.LoadAndDelete(id); loaded {
+				stale = append(stale, value.(*activeSession))
+			}
 		}
 		return true
 	})
-	for _, id := range ids {
-		s.closeActiveSession(id)
+	for _, as := range stale {
+		s.deferCloseSession(as)
+	}
+	if len(stale) > 0 {
+		s.statusStream.Publish(s.agentActivity())
 	}
 }
 

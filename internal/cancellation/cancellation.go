@@ -106,6 +106,11 @@ func ContextError(ctx context.Context) error {
 	if errors.Is(context.Cause(ctx), ErrRuntimeRestart) {
 		return ErrRuntimeRestart
 	}
+	if cause := context.Cause(ctx); cause != nil &&
+		!errors.Is(cause, context.Canceled) &&
+		!errors.Is(cause, context.DeadlineExceeded) {
+		return cause
+	}
 	return err
 }
 

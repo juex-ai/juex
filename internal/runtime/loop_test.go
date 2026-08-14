@@ -1355,6 +1355,48 @@ func TestTurnMessage_MCPEventContinuesAfterAutoCompactionFailure(t *testing.T) {
 	}
 }
 
+func TestTurnMessage_SideSessionContinuesAfterAutoCompactionFailure(t *testing.T) {
+	prov := &mockProviderWithErrors{
+		errs: []error{fmt.Errorf("openai codex responses: codex SSE read: context deadline exceeded")},
+		responses: []llm.Response{
+			{Message: llm.TextMessage(llm.RoleAssistant, "handled side result"), StopReason: llm.StopEndTurn},
+		},
+	}
+	eng, bus := newEngine(t, prov, false)
+	eng.ContextWindow = 100
+	eng.Compaction = DefaultCompactionPolicy()
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var compactErr string
+	bus.Subscribe("context.compact.errored", func(e events.Event) {
+		payload, _ := e.Payload.(ContextCompactErroredPayload)
+		compactErr = payload.Error
+	})
+
+	msg := llm.TextMessage(llm.RoleUser, "Side Session result: done")
+	msg.Kind = llm.MessageKindSideSession
+	out, err := eng.TurnMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "handled side result" {
+		t.Fatalf("out = %q, want handled side result", out)
+	}
+	if !strings.Contains(compactErr, "codex SSE read") {
+		t.Fatalf("compact error event = %q, want original failure", compactErr)
+	}
+	if prov.called != 2 {
+		t.Fatalf("provider calls = %d, want compact attempt plus side result turn", prov.called)
+	}
+	if len(eng.Session.History) != 3 {
+		t.Fatalf("history len = %d, want old message, side result, assistant", len(eng.Session.History))
+	}
+	if got := eng.Session.History[1]; got.Kind != llm.MessageKindSideSession || got.FirstText() != "Side Session result: done" {
+		t.Fatalf("side result not preserved: %+v", got)
+	}
+}
+
 func TestTurnMessage_MCPEventStripsRedactedReasoningWhenAutoCompactionPaused(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "handled event"), StopReason: llm.StopEndTurn},
@@ -4265,6 +4307,58 @@ func TestEngine_PendingInputBackpressure(t *testing.T) {
 	waitSignal(t, draining, PendingInputDrainingType)
 }
 
+func TestEngine_EnqueuePersistedPendingMessageExpiresBeforeIdleAdmission(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	record, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "expired external input"),
+		PendingInputOptions{ID: "expired-event", TTL: time.Millisecond},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	if _, err := eng.EnqueuePersistedPendingMessage(context.Background(), record); !errors.Is(err, ErrPendingInputExpired) {
+		t.Fatalf("enqueue expired record error = %v, want ErrPendingInputExpired", err)
+	}
+	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
+		t.Fatalf("pending status after expired admission = %+v", status)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[record.ID].State; got != PendingInputStateExpired {
+		t.Fatalf("record state = %q, want %q", got, PendingInputStateExpired)
+	}
+}
+
+func TestEngine_DropPersistedPendingMessagePreventsReplay(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	record, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "stale external input"),
+		PendingInputOptions{ID: "stale-event", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.DropPersistedPendingMessage(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePersistedPendingMessage(context.Background(), record); !errors.Is(err, ErrPendingInputHandled) {
+		t.Fatalf("enqueue dropped record error = %v, want ErrPendingInputHandled", err)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[record.ID].State; got != PendingInputStateDropped {
+		t.Fatalf("record state = %q, want %q", got, PendingInputStateDropped)
+	}
+}
+
 func TestRunToolCallEmitsRequestedRunningCompleted(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	eng.Tools.MustRegister(tools.Tool{
@@ -4590,6 +4684,54 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 	}
 	if snapshot.Status != GoalStatusSuccess || snapshot.StatusReason != "ordered update applied" {
 		t.Fatalf("goal state = %+v, want provider-ordered success update", snapshot)
+	}
+}
+
+func TestRunToolCalls_SerializesSideSessionCallsInProviderOrder(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{}, 1)
+	releaseFirst := make(chan struct{})
+	eng.Tools.MustRegister(tools.Tool{
+		Name:  "side_first",
+		Group: tools.ToolGroupSideSession,
+		Handler: func(context.Context, map[string]any) (string, error) {
+			close(firstStarted)
+			<-releaseFirst
+			return "first", nil
+		},
+	})
+	eng.Tools.MustRegister(tools.Tool{
+		Name:  "side_second",
+		Group: tools.ToolGroupSideSession,
+		Handler: func(context.Context, map[string]any) (string, error) {
+			secondStarted <- struct{}{}
+			return "second", nil
+		},
+	})
+
+	done := make(chan []toolCallResult, 1)
+	go func() {
+		done <- eng.runToolCalls(context.Background(), "turn-side-order", []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "side-1", ToolName: "side_first", Input: map[string]any{}},
+			{Type: llm.BlockToolUse, ToolUseID: "side-2", ToolName: "side_second", Input: map[string]any{}},
+		})
+	}()
+	<-firstStarted
+	select {
+	case <-secondStarted:
+		t.Fatal("second Side Session tool started before the first completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseFirst)
+	results := <-done
+	if len(results) != 2 || results[0].Block.IsError || results[1].Block.IsError {
+		t.Fatalf("results = %+v", results)
+	}
+	select {
+	case <-secondStarted:
+	default:
+		t.Fatal("second Side Session tool did not run")
 	}
 }
 

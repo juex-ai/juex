@@ -1,8 +1,10 @@
 package app
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/config"
@@ -225,6 +227,52 @@ func TestEnsureActivePrimarySessionRecordUsesDiskFallback(t *testing.T) {
 	}
 
 	assertHistoryActive(t, cfg, fallback.ID)
+}
+
+func TestAttachAndLockWorkspaceSessionRacesDeleteWithoutReturningDeletedSession(t *testing.T) {
+	for i := 0; i < 25; i++ {
+		cfg := attachmentTestConfig(t)
+		active := seedAttachmentSession(t, cfg, session.KindPrimary, "active", "active")
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		var attachment SessionAttachment
+		var lock *session.Lock
+		var attachErr error
+		var deleteErr error
+		go func() {
+			defer wg.Done()
+			<-start
+			attachment, lock, attachErr = AttachAndLockWorkspaceSession(cfg, SessionAttachmentRequest{})
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			deleteErr = DeleteSession(cfg, active.ID, SessionDeleteOptions{})
+		}()
+		close(start)
+		wg.Wait()
+
+		if attachErr != nil {
+			t.Fatalf("iteration %d attach error = %v", i, attachErr)
+		}
+		if lock == nil {
+			t.Fatalf("iteration %d returned nil lifetime lock", i)
+		}
+		if _, err := os.Stat(attachment.Session.Dir); err != nil {
+			t.Fatalf("iteration %d returned deleted session %s: %v", i, attachment.Session.ID, err)
+		}
+		var lockErr *session.LockError
+		if deleteErr != nil && !errors.As(deleteErr, &lockErr) {
+			t.Fatalf("iteration %d delete error = %v, want nil or lock conflict", i, deleteErr)
+		}
+		if err := lock.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := attachment.Session.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func attachmentTestConfig(t *testing.T) config.Config {

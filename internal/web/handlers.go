@@ -352,7 +352,12 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id 
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	s.closeActiveSession(id)
+	if active, ok := s.deferCloseActiveSession(id); ok {
+		if err := active.app.WaitSessionReleased(r.Context()); err != nil {
+			writeErr(w, http.StatusRequestTimeout, "request_cancelled", err.Error())
+			return
+		}
+	}
 	if err := plan.Commit(); err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
@@ -363,7 +368,24 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id 
 func (s *Server) handleActivateSession(w http.ResponseWriter, r *http.Request, id string) {
 	s.createMu.Lock()
 	s.activeSelectionMu.Lock()
-	info, err := session.Activate(s.opts.Cfg.SessionsDir(), s.opts.Cfg.HistoryPath(), id)
+	var info session.Info
+	var err error
+	if id == "" || filepath.Base(id) != id {
+		err = os.ErrNotExist
+	} else {
+		var candidate session.Info
+		candidate, _, err = session.LoadInfo(filepath.Join(s.opts.Cfg.SessionsDir(), id))
+		if err == nil && session.NormalizeKind(candidate.Kind) != session.KindPrimary {
+			err = fmt.Errorf("%w: %s", session.ErrCannotActivateSide, id)
+		}
+	}
+	if err == nil {
+		// Keep the old Primary selected until its App, managed children, and
+		// result deliveries have drained. This makes selection the ownership
+		// handoff instead of leaving an inactive resident App behind.
+		s.closeOtherPrimarySessions(id)
+		info, err = session.Activate(s.opts.Cfg.SessionsDir(), s.opts.Cfg.HistoryPath(), id)
+	}
 	s.activeSelectionMu.Unlock()
 	s.createMu.Unlock()
 	if err != nil {

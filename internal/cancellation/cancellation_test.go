@@ -73,6 +73,15 @@ func TestContextErrorReturnsRuntimeRestartCause(t *testing.T) {
 	}
 }
 
+func TestContextErrorReturnsExplicitNonUserCancellationCause(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	stopped := errors.New("side session stopped")
+	cancel(stopped)
+	if got := ContextError(ctx); !errors.Is(got, stopped) {
+		t.Fatalf("ContextError = %v, want explicit stop cause", got)
+	}
+}
+
 func TestNotifyContextPreservesParentCancelCause(t *testing.T) {
 	parent, cancelParent := context.WithCancelCause(context.Background())
 	ctx, stop := NotifyContext(parent, os.Interrupt)

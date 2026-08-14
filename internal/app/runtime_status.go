@@ -336,6 +336,7 @@ func (s RuntimeCatalogService) toolsStatus() (RuntimeToolsStatus, error) {
 	definitions = append(definitions, memory.ToolDefinitions()...)
 	definitions = append(definitions, juexruntime.GoalToolDefinitions()...)
 	definitions = append(definitions, juexruntime.NotesToolDefinitions()...)
+	definitions = append(definitions, SideSessionToolDefinitions()...)
 	definitions = append(definitions, observable.ToolDefinitions()...)
 	return runtimeToolsStatusFromDefinitions(definitions, durationSeconds(s.cfg.RuntimeLimits().ToolTimeout))
 }
@@ -349,6 +350,7 @@ func runtimeToolsStatusFromDefinitions(definitions []tools.ToolDefinition, defau
 		tools.ToolGroupSkill,
 		tools.ToolGroupMemory,
 		tools.ToolGroupSessionState,
+		tools.ToolGroupSideSession,
 		tools.ToolGroupObservable,
 	}
 	groups := make([]RuntimeToolGroupStatus, len(groupOrder))

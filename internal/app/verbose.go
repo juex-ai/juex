@@ -208,7 +208,7 @@ func (vp *verbosePrinter) printTurnStarted(payload runtimeevents.TurnStartedPayl
 
 func verboseTurnStartIsEvent(kind string) bool {
 	switch kind {
-	case llm.MessageKindMCPEvent, llm.MessageKindObservation:
+	case llm.MessageKindMCPEvent, llm.MessageKindObservation, llm.MessageKindSideSession:
 		return true
 	default:
 		return false
@@ -225,8 +225,31 @@ func verboseTurnStartInput(input, kind string) string {
 		if content := mcpEventContent(input); content != "" {
 			return content
 		}
+	case llm.MessageKindSideSession:
+		if content := sideSessionResultContent(input); content != "" {
+			return content
+		}
 	}
 	return input
+}
+
+func sideSessionResultContent(input string) string {
+	const prefix = "Side Session result:"
+	content := strings.TrimSpace(input)
+	if strings.HasPrefix(content, prefix) {
+		content = strings.TrimSpace(strings.TrimPrefix(content, prefix))
+	}
+	var result struct {
+		Output string `json:"output"`
+		Error  string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
+		return ""
+	}
+	if output := strings.TrimSpace(result.Output); output != "" {
+		return output
+	}
+	return strings.TrimSpace(result.Error)
 }
 
 func mcpEventContent(input string) string {

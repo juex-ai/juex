@@ -13,6 +13,7 @@ const groupLabels: Record<string, string> = {
   skill: "Skill",
   memory: "Memory",
   session_state: "Session State",
+  side_session: "Side Session",
   observable: "Observable",
 };
 

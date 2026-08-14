@@ -36,6 +36,13 @@ func (s *turnAdmissionRuntimeStub) EnqueuePendingMessage(
 	return s.enqueue(ctx, msg)
 }
 
+func (s *turnAdmissionRuntimeStub) EnqueuePersistedPendingMessage(
+	ctx context.Context,
+	record runtime.PendingInputRecord,
+) (runtime.PendingInputStatus, error) {
+	return s.enqueue(ctx, record.Message)
+}
+
 func (s *turnAdmissionRuntimeStub) PromotePendingInputTurn(
 	_, _ string,
 ) (llm.Message, runtime.PendingInputStatus, bool) {

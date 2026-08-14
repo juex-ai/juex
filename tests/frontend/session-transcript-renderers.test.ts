@@ -29,6 +29,7 @@ test("every backend message kind resolves through the renderer registry", () => 
     tool_result: "default",
     mcp_event: "mcp_event",
     observation: "observation",
+    side_session: "side_session",
     hook_event: "hook_event",
     compact: "compact",
     runtime_context: "default",
@@ -48,6 +49,7 @@ test("automated user renderers retain their role guards", () => {
   for (const kind of [
     "mcp_event",
     "observation",
+    "side_session",
     "model_change",
     "system_notice",
   ] as const) {

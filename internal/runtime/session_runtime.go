@@ -192,6 +192,24 @@ func (e *Engine) setNotesStore(store *NotesStore) {
 	e.sessionRuntimeMu.Unlock()
 }
 
+// ShareSessionState replaces the Goal and Notes stores without changing the
+// Session, transcript, scratchpad, pending-input queue, or hook identity. It is
+// used by a Primary Session to make its model-owned state authoritative for a
+// managed Side Session.
+func (e *Engine) ShareSessionState(goal *GoalStateStore, notes *NotesStore) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.sessionRuntimeMu.Lock()
+	state := e.sessionRuntimeStateLocked()
+	state.GoalState = goal
+	state.Notes = notes
+	e.publishSessionRuntimeLocked(state)
+	e.sessionRuntimeMu.Unlock()
+}
+
 func (e *Engine) sessionRuntimeStateLocked() sessionRuntimeState {
 	if e.sessionRuntime != nil {
 		return *e.sessionRuntime

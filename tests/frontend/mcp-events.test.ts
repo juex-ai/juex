@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   formatMCPEventForDisplay,
   formatObservationEventForDisplay,
+  formatSideSessionEventForDisplay,
   oneLinePreview,
   parseMCPEventText,
 } from "../../frontend/src/lib/mcp-events.ts";
@@ -88,5 +89,33 @@ test("formatObservationEventForDisplay previews observation JSON content", () =>
     content: body,
     preview: "deployment finished: build 42",
     copyText: body,
+  });
+});
+
+test("formatSideSessionEventForDisplay previews output and preserves the envelope", () => {
+  const text = `Side Session result:\n${JSON.stringify({
+    session_id: "side-1",
+    status: "completed",
+    output: "delegated answer",
+  })}`;
+  assert.deepEqual(formatSideSessionEventForDisplay(text), {
+    label: "side_session:result",
+    content: text,
+    preview: "delegated answer",
+    copyText: text,
+  });
+});
+
+test("formatSideSessionEventForDisplay previews failures", () => {
+  const text = `Side Session result:\n${JSON.stringify({
+    session_id: "side-2",
+    status: "failed",
+    error: "delegation failed",
+  })}`;
+  assert.deepEqual(formatSideSessionEventForDisplay(text), {
+    label: "side_session:result",
+    content: text,
+    preview: "delegation failed",
+    copyText: text,
   });
 });

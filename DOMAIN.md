@@ -41,11 +41,11 @@ domain boundary.
 | --- | --- |
 | Session | A resumable, ordered conversation with identity, kind, transcript, Events, usage, model-owned working state, and a single-writer lock. |
 | Primary Session | A Session eligible to be selected as the Resident Agent's active continuation target. |
-| Side Session | A durable exploratory Session that is listed and resumable but never becomes the active Session. |
+| Side Session | A durable exploratory Session that is listed and resumable but never becomes the active Session. A Primary Session may manage Side Sessions as delegated workers for its App lifetime. |
 | Active Session | The selected Primary Session used by default for CLI, Web, and external-event continuation. |
 | Turn | One user-originated or system-originated input processed through one or more Provider iterations and Tool Call batches until completion, cancellation, or error. |
 | Pending input | Accepted user steering or external input queued while a Turn or compaction phase is active. It is durable, bounded, expiring, and admitted only at a safe Provider-iteration boundary. |
-| Session state | Model-owned Goal and Notes for one Session, distinct from Agent state and from the runtime's observed execution status. |
+| Session state | Model-owned Goal and Notes for one Session, distinct from Agent state and from the runtime's observed execution status. A Primary Session remains the owner when one of its managed Side Sessions is explicitly bound to the same state. |
 | Goal | The model-owned completion contract for one Session, including its description, acceptance criteria, status, and continuation state. |
 | Notes | The model-owned, bounded working Markdown for one Session. Notes survive compaction and are recited on every Provider request. |
 | Session scratchpad | Session-local files for long drafts and intermediate work. They are managed explicitly, are not automatically placed in model context, and are removed with the Session. |
@@ -114,6 +114,19 @@ domain boundary.
    Turn only when no accepted input remains to continue it.
 5. The transcript and durable Events remain the source for resume and
    inspection after completion, cancellation, failure, or process restart.
+6. An active Primary Session may create process-managed Side Sessions for
+   delegated work. Each Side Session keeps its own transcript, scratchpad,
+   pending input, lock, and Turn lifecycle while sharing the Primary Session's
+   effective Workspace resources and explicitly bound Goal and Notes.
+7. Subscribed Side Session terminal results are accepted as durable
+   `side_session` input by the owning Primary Session. A busy Primary Session
+   queues that input at the normal safe boundary rather than dropping it.
+   Subscription is sampled when the child Turn reaches a terminal state; a
+   later unsubscribe affects later Turns, not a result already accepted for
+   delivery. A Primary `/new` ends the manager generation and cancels any
+   undelivered result from the old Primary rather than crossing that boundary.
+   Transient persistence failures retry with bounded backoff; terminal delivery
+   failure remains visible on the Side Session status and event stream.
 
 ### Pending Input
 

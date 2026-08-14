@@ -44,6 +44,7 @@ import {
 import {
   formatMCPEventForDisplay,
   formatObservationEventForDisplay,
+  formatSideSessionEventForDisplay,
 } from "@/lib/mcp-events";
 import {
   COMPACT_COPIED_TOOLTIP,
@@ -99,6 +100,7 @@ const messageGroupRendererRegistry: Record<
   default: DefaultMessageGroup,
   mcp_event: MCPEventGroup,
   observation: ObservationEventGroup,
+  side_session: SideSessionEventGroup,
   hook_event: HookEventGroup,
   model_fallback: ModelFallbackGroup,
   system_notice: SystemNoticeGroup,
@@ -152,6 +154,10 @@ function MCPEventGroup({ group }: MessageGroupRendererProps) {
 
 function ObservationEventGroup({ group }: MessageGroupRendererProps) {
   return <ExternalEventGroup group={group} eventKind="observation" />;
+}
+
+function SideSessionEventGroup({ group }: MessageGroupRendererProps) {
+  return <ExternalEventGroup group={group} eventKind="side_session" />;
 }
 
 function CompactGroup({
@@ -627,7 +633,7 @@ function ExternalEventGroup({
   eventKind,
   group,
 }: {
-  eventKind: "mcp" | "observation";
+  eventKind: "mcp" | "observation" | "side_session";
   group: MessageGroup;
 }) {
   const isEmpty = group.units.length === 0;
@@ -907,19 +913,25 @@ function ExternalEventMessage({
   eventKind,
   text,
 }: {
-  eventKind: "mcp" | "observation";
+  eventKind: "mcp" | "observation" | "side_session";
   text: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const event = useMemo(
-    () =>
-      eventKind === "observation"
-        ? formatObservationEventForDisplay(text)
-        : formatMCPEventForDisplay(text),
+    () => {
+      if (eventKind === "observation") return formatObservationEventForDisplay(text);
+      if (eventKind === "side_session") {
+        return formatSideSessionEventForDisplay(text);
+      }
+      return formatMCPEventForDisplay(text);
+    },
     [eventKind, text],
   );
-  const eventName =
-    eventKind === "observation" ? "observation event" : "MCP event";
+  const eventName = eventKind === "observation"
+    ? "observation event"
+    : eventKind === "side_session"
+      ? "Side Session result"
+      : "MCP event";
   const toggleLabel = expanded ? `Collapse ${eventName}` : `Expand ${eventName}`;
 
   return (

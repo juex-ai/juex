@@ -40,6 +40,23 @@ type blockingProvider struct {
 	release chan struct{}
 }
 
+type stubbornWebProvider struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+type activationCloseProvider struct {
+	primaryStarted chan struct{}
+	sideStarted    chan struct{}
+	sideCancelled  chan struct{}
+	releasePrimary chan struct{}
+}
+
+type sideDeliveryDeleteProvider struct {
+	deliveryStarted chan struct{}
+	releaseDelivery chan struct{}
+}
+
 func TestWriteRunOnceErrorMapsDomainErrors(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -86,6 +103,52 @@ func (p *blockingProvider) Complete(ctx context.Context, sys string, h []llm.Mes
 	case <-ctx.Done():
 		return llm.Response{}, ctx.Err()
 	}
+}
+
+func (p *stubbornWebProvider) Name() string { return "stubborn-web" }
+
+func (p *stubbornWebProvider) Complete(context.Context, string, []llm.Message, []llm.ToolSpec) (llm.Response, error) {
+	select {
+	case p.started <- struct{}{}:
+	default:
+	}
+	<-p.release
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "released"), StopReason: llm.StopEndTurn}, nil
+}
+
+func (p *activationCloseProvider) Name() string { return "activation-close" }
+
+func (p *activationCloseProvider) Complete(ctx context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
+	input := ""
+	if len(history) > 0 {
+		input = history[len(history)-1].FirstText()
+	}
+	if strings.Contains(input, "side blocks") {
+		close(p.sideStarted)
+		<-ctx.Done()
+		close(p.sideCancelled)
+		return llm.Response{}, ctx.Err()
+	}
+	close(p.primaryStarted)
+	<-p.releasePrimary
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "released"), StopReason: llm.StopEndTurn}, nil
+}
+
+func (p *sideDeliveryDeleteProvider) Name() string { return "side-delivery-delete" }
+
+func (p *sideDeliveryDeleteProvider) Complete(_ context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
+	for _, message := range history {
+		if message.Kind != llm.MessageKindSideSession {
+			continue
+		}
+		select {
+		case p.deliveryStarted <- struct{}{}:
+		default:
+		}
+		<-p.releaseDelivery
+		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "delivery completed"), StopReason: llm.StopEndTurn}, nil
+	}
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "child completed"), StopReason: llm.StopEndTurn}, nil
 }
 
 // seedSession writes a minimal conversation.jsonl under
@@ -454,7 +517,7 @@ func TestGetActiveSessionSerializesWithSessionSelectionChanges(t *testing.T) {
 	}
 }
 
-func TestActivateSessionIsNotRevertedByPreviousPrimaryAppend(t *testing.T) {
+func TestActivateSessionClosesPreviousResidentPrimary(t *testing.T) {
 	srv := newTestServer(t)
 	previous, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
 	if err != nil {
@@ -475,8 +538,8 @@ func TestActivateSessionIsNotRevertedByPreviousPrimaryAppend(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("activate status = %d, body=%s", recorder.Code, recorder.Body.String())
 	}
-	if err := previous.app.Session.Append(llm.TextMessage(llm.RoleAssistant, "late append")); err != nil {
-		t.Fatal(err)
+	if _, exists := srv.sessions.Load(previousInfo.ID); exists {
+		t.Fatalf("previous primary %q remained resident after activating %q", previousInfo.ID, next.ID)
 	}
 
 	activeID, found, err := srv.activePrimarySessionID()
@@ -484,7 +547,252 @@ func TestActivateSessionIsNotRevertedByPreviousPrimaryAppend(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !found || activeID != next.ID {
-		t.Fatalf("active session after previous append = (%q, %v), want (%q, true)", activeID, found, next.ID)
+		t.Fatalf("active session after activation = (%q, %v), want (%q, true)", activeID, found, next.ID)
+	}
+}
+
+func TestActiveSessionBeginCloseInterruptsTransportBeforeAppDrain(t *testing.T) {
+	provider := &blockingProvider{started: make(chan struct{}), release: make(chan struct{})}
+	srv := newTestServer(t)
+	srv.opts.Provider = provider
+	active, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active.turns.start("close-interrupt", llm.TextMessage(llm.RoleUser, "wait for session close"))
+	select {
+	case <-provider.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider did not start")
+	}
+
+	active.beginClose()
+	done := make(chan struct{})
+	go func() {
+		active.turns.wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("transport turn was not interrupted before App drain")
+	}
+}
+
+func TestActivateSessionDoesNotWaitForStubbornPreviousPrimary(t *testing.T) {
+	provider := &stubbornWebProvider{started: make(chan struct{}, 1), release: make(chan struct{})}
+	srv := newTestServer(t)
+	srv.opts.Provider = provider
+	previous, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousInfo, ok := previous.app.SessionInfo()
+	if !ok {
+		t.Fatal("previous primary session unavailable")
+	}
+	previous.turns.start("stubborn-turn", llm.TextMessage(llm.RoleUser, "block activation cleanup"))
+	select {
+	case <-provider.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stubborn provider did not start")
+	}
+	next := seedWebSession(t, srv, "next")
+	if err := session.SetActive(srv.opts.Cfg.HistoryPath(), previousInfo); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	recorder := httptest.NewRecorder()
+	srv.handleActivateSession(recorder, httptest.NewRequest(http.MethodPost, "/api/sessions/"+next.ID+"/activate", nil), next.ID)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("activate status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("activation waited %s for stubborn previous Primary", elapsed)
+	}
+	if _, exists := srv.sessions.Load(previousInfo.ID); exists {
+		t.Fatalf("previous primary %q remained resident", previousInfo.ID)
+	}
+	activeID, found, err := srv.activePrimarySessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || activeID != next.ID {
+		t.Fatalf("active session = (%q, %v), want (%q, true)", activeID, found, next.ID)
+	}
+	close(provider.release)
+}
+
+func TestActivateSessionCancelsManagedChildrenBeforeStubbornPrimaryDrains(t *testing.T) {
+	provider := &activationCloseProvider{
+		primaryStarted: make(chan struct{}),
+		sideStarted:    make(chan struct{}),
+		sideCancelled:  make(chan struct{}),
+		releasePrimary: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(provider.releasePrimary) }) }
+	t.Cleanup(release)
+	srv := newTestServer(t)
+	srv.opts.Provider = provider
+	previous, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousInfo, ok := previous.app.SessionInfo()
+	if !ok {
+		t.Fatal("previous primary session unavailable")
+	}
+	if _, err := previous.app.Engine.Tools.Call(context.Background(), app.SideSessionToolCreate, map[string]any{
+		"query":     "side blocks until cancellation",
+		"subscribe": false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-provider.sideStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("managed Side Session provider did not start")
+	}
+	previous.turns.start("stubborn-primary", llm.TextMessage(llm.RoleUser, "primary blocks cleanup"))
+	select {
+	case <-provider.primaryStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stubborn Primary provider did not start")
+	}
+	next := seedWebSession(t, srv, "next")
+	if err := session.SetActive(srv.opts.Cfg.HistoryPath(), previousInfo); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	srv.handleActivateSession(recorder, httptest.NewRequest(http.MethodPost, "/api/sessions/"+next.ID+"/activate", nil), next.ID)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("activate status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	select {
+	case <-provider.sideCancelled:
+	case <-time.After(time.Second):
+		t.Fatal("managed Side Session was not cancelled before stubborn Primary drain")
+	}
+	select {
+	case <-provider.releasePrimary:
+		t.Fatal("test released stubborn Primary before checking Side Session cancellation")
+	default:
+	}
+	release()
+}
+
+func TestDeleteSessionDoesNotWaitForStubbornManagedSideSession(t *testing.T) {
+	provider := &stubbornWebProvider{started: make(chan struct{}, 1), release: make(chan struct{})}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(provider.release) }) }
+	t.Cleanup(release)
+	srv := newTestServer(t)
+	srv.opts.Provider = provider
+	active, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, ok := active.app.SessionIdentity()
+	if !ok {
+		t.Fatal("active primary session unavailable")
+	}
+	if _, err := active.app.Engine.Tools.Call(context.Background(), app.SideSessionToolCreate, map[string]any{
+		"query":     "ignore cancellation",
+		"subscribe": false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("managed Side Session provider did not start")
+	}
+
+	started := time.Now()
+	recorder := httptest.NewRecorder()
+	srv.handleDeleteSession(
+		recorder,
+		httptest.NewRequest(http.MethodDelete, "/api/sessions/"+identity.ID, nil),
+		identity.ID,
+	)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("delete waited %s for stubborn managed Side Session", elapsed)
+	}
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), identity.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted primary stat = %v, want not exist", err)
+	}
+	release()
+}
+
+func TestDeleteSessionWaitsForSideResultDeliveryWriter(t *testing.T) {
+	provider := &sideDeliveryDeleteProvider{
+		deliveryStarted: make(chan struct{}, 1),
+		releaseDelivery: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(provider.releaseDelivery) }) }
+	t.Cleanup(release)
+	srv := newTestServer(t)
+	srv.opts.Provider = provider
+	active, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, ok := active.app.SessionIdentity()
+	if !ok {
+		t.Fatal("active primary session unavailable")
+	}
+	if _, err := active.app.Engine.Tools.Call(context.Background(), app.SideSessionToolCreate, map[string]any{
+		"query": "finish and deliver",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-provider.deliveryStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Side Session result delivery did not start")
+	}
+
+	type deleteResult struct {
+		code int
+		body string
+	}
+	deleted := make(chan deleteResult, 1)
+	go func() {
+		recorder := httptest.NewRecorder()
+		srv.handleDeleteSession(
+			recorder,
+			httptest.NewRequest(http.MethodDelete, "/api/sessions/"+identity.ID, nil),
+			identity.ID,
+		)
+		deleted <- deleteResult{code: recorder.Code, body: recorder.Body.String()}
+	}()
+	select {
+	case result := <-deleted:
+		t.Fatalf("delete committed before result delivery stopped: status=%d body=%s", result.code, result.body)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), identity.ID)); err != nil {
+		t.Fatalf("primary directory removed while result delivery was active: %v", err)
+	}
+
+	release()
+	select {
+	case result := <-deleted:
+		if result.code != http.StatusOK {
+			t.Fatalf("delete status = %d, body=%s", result.code, result.body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("delete did not finish after result delivery stopped")
+	}
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), identity.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted primary stat = %v, want not exist", err)
 	}
 }
 
