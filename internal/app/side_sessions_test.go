@@ -238,6 +238,18 @@ func waitForSideState(t *testing.T, a *App, id string, want SideSessionState) Si
 	return SideSessionStatus{}
 }
 
+func waitForGoalContinuationDeferral(t *testing.T, a *App, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if a.sideSessions.shouldDeferGoalContinuation() == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("goal continuation deferral = %t, want %t", a.sideSessions.shouldDeferGoalContinuation(), want)
+}
+
 func TestSideSessionToolsRegisterOnlyForActivePrimary(t *testing.T) {
 	primary := newSideSessionTestApp(t, &scriptedSideProvider{})
 	for _, name := range []string{
@@ -1184,9 +1196,7 @@ func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testin
 	if _, err := parent.sideSessions.Subscribe(second, false); err != nil {
 		t.Fatal(err)
 	}
-	if parent.sideSessions.shouldDeferGoalContinuation() {
-		t.Fatal("idle and unsubscribed Side Sessions deferred Goal continuation")
-	}
+	waitForGoalContinuationDeferral(t, parent, false)
 	if _, err := parent.sideSessions.Subscribe(second, true); err != nil {
 		t.Fatal(err)
 	}
@@ -1195,9 +1205,7 @@ func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testin
 	}
 	close(secondChild.release)
 	waitForSideState(t, parent, second, SideSessionStateIdle)
-	if parent.sideSessions.shouldDeferGoalContinuation() {
-		t.Fatal("idle Side Sessions deferred Goal continuation")
-	}
+	waitForGoalContinuationDeferral(t, parent, false)
 }
 
 func TestSideSessionCreateRejectsUnknownModel(t *testing.T) {
@@ -1212,6 +1220,8 @@ func TestSideSessionCreateRejectsUnknownModel(t *testing.T) {
 }
 
 func TestSideSessionCreateAppliesConfiguredModelOverride(t *testing.T) {
+	testHome := t.TempDir()
+	t.Setenv("JUEX_HOME", testHome)
 	workDir := t.TempDir()
 	configPath := filepath.Join(t.TempDir(), "juex.yaml")
 	if err := os.WriteFile(configPath, []byte(`model: openai:primary
@@ -1225,11 +1235,17 @@ providers:
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.LoadFromFile(configPath)
+	cfg, err := config.LoadWithOptions(config.LoadOptions{
+		WorkDir:    workDir,
+		ConfigPath: configPath,
+		AgentState: config.AgentStateNone,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.WorkDir = workDir
+	if _, err := os.Stat(filepath.Join(testHome, "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("loading test config created an Agent in JUEX_HOME: %v", err)
+	}
 	cfg.AgentStateDir = filepath.Join(workDir, ".juex")
 	var captured sideSessionChildOptions
 	parent, err := New(Options{

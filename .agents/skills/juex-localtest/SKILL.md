@@ -30,16 +30,18 @@ downloaded into `.tmp/dev-ripgrep`, cached and gitignored) and prepend it to
 setting `JUEX_RG`. Provision via `PATH`, not `JUEX_RG`: `JUEX_RG` is an override
 that short-circuits every other resolver source, so exporting it for the whole
 `go test` process would also override the resolver's own unit tests that read
-the ambient environment. When invoking another bare `go test ...` command that
-touches grep, prefix it the same way:
-`PATH="$(scripts/ensure-ripgrep.sh):$PATH" go test ...`.
+the ambient environment. All focused `go test ...` commands must run through
+`scripts/with-test-juex-home.sh` so config loading and live runtime setup cannot
+register test Agents in the developer's Fleet. When a command also touches
+grep, use:
+`PATH="$(scripts/ensure-ripgrep.sh):$PATH" ./scripts/with-test-juex-home.sh go test ...`.
 
 ## Execution Steps
 
 Run commands directly from the repository root.
 
 1. **Focused tests first** - run
-   `go test -v ./path/to/package/...` for each changed Go package
+   `./scripts/with-test-juex-home.sh go test -v ./path/to/package/...` for each changed Go package
    that has `*_test.go` files. For cross-package CLI,
    runtime, session, provider, web, MCP, shell, or eval behavior, include
    `./tests/e2e/...`.
@@ -73,10 +75,10 @@ There is no local service startup step for the current suite. Web tests use
   example:
 
   ```bash
-  GOOS=windows GOARCH=amd64 go test -c ./internal/tools -o /tmp/juex-tools-windows.test.exe
+  GOOS=windows GOARCH=amd64 ./scripts/with-test-juex-home.sh go test -c ./internal/tools -o /tmp/juex-tools-windows.test.exe
   ```
 - **Eval harness changes** - run the eval module help checks plus
-  `go test ./tests/eval -count=1`.
+  `./scripts/with-test-juex-home.sh go test ./tests/eval -count=1`.
 - **Docs or skill-only changes** - run `git diff --check`, stale-reference
   searches, and the smallest focused tests for affected command examples.
 - **Web-visible changes** - run `make build` and a browser/API

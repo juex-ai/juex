@@ -479,6 +479,128 @@ func TestEvalDevelopmentStepBuilderUsesConsistentFlags(t *testing.T) {
 	assertCommandLacks(t, compactionCmd, "--out-root")
 }
 
+func TestEvalDevelopmentGoTestsUseIsolatedJuexHome(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"from argparse import Namespace",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli",
+		"args = Namespace(",
+		"    skip_tests=False,",
+		"    no_provider_smoke=True,",
+		"    compaction_eval=False,",
+		"    run_id='unit',",
+		"    provider_timeout=7,",
+		"    provider_only='',",
+		"    provider_all_models=False,",
+		"    provider_all_config_models=False,",
+		"    compaction_all_models=False,",
+		"    compaction_only=[],",
+		")",
+		"steps, _, _ = cli.development_steps(args, Path('reports'))",
+		"print(json.dumps([{'label': label, 'command': command} for label, command in steps]))",
+	}, "\n")
+	out := runUV(t, root, "python", "-c", program)
+
+	var steps []struct {
+		Label   string   `json:"label"`
+		Command []string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(out), &steps); err != nil {
+		t.Fatalf("decode steps: %v\n%s", err, out)
+	}
+	for _, label := range []string{"go-test-e2e", "go-test-all"} {
+		command := findEvalCommand(t, steps, label)
+		if len(command) == 0 || command[0] != filepath.Join(root, "scripts", "with-test-juex-home.sh") {
+			t.Fatalf("%s command = %q, want isolated JUEX_HOME wrapper", label, command)
+		}
+	}
+}
+
+func TestTestJuexHomeWrapperOverridesAndCleans(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found; skipping shell wrapper test")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	productionHome := filepath.Join(t.TempDir(), "production-juex-home")
+	cmd := exec.Command(
+		"bash",
+		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
+		"sh",
+		"-c",
+		`printf '%s\n' "$JUEX_HOME"; mkdir -p "$JUEX_HOME"; touch "$JUEX_HOME/probe"`,
+	)
+	cmd.Env = append(os.Environ(), "JUEX_HOME="+productionHome)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run isolated test home wrapper: %v\n%s", err, out)
+	}
+	testHome := strings.TrimSpace(string(out))
+	if testHome == "" || testHome == productionHome {
+		t.Fatalf("isolated JUEX_HOME = %q, inherited production home = %q", testHome, productionHome)
+	}
+	if _, err := os.Stat(testHome); !os.IsNotExist(err) {
+		t.Fatalf("temporary JUEX_HOME still exists after command: %v", err)
+	}
+	if _, err := os.Stat(productionHome); !os.IsNotExist(err) {
+		t.Fatalf("wrapper wrote inherited production JUEX_HOME: %v", err)
+	}
+}
+
+func TestTestJuexHomeWrapperUsesAbsoluteHomeWithRelativeTmpdir(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found; skipping shell wrapper test")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	launchDir := t.TempDir()
+	relativeTmp := "relative-tmp"
+	if err := os.MkdirAll(filepath.Join(launchDir, relativeTmp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	childDir := filepath.Join(launchDir, "child")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(
+		"bash",
+		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
+		"sh",
+		"-c",
+		`cd "$1"; printf '%s\n' "$JUEX_HOME"; mkdir -p "$JUEX_HOME"; touch "$JUEX_HOME/probe"`,
+		"wrapper-probe",
+		childDir,
+	)
+	cmd.Dir = launchDir
+	cmd.Env = append(os.Environ(), "TMPDIR="+relativeTmp)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run wrapper with relative TMPDIR: %v\n%s", err, out)
+	}
+	testHome := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(testHome) {
+		t.Fatalf("isolated JUEX_HOME = %q, want absolute path", testHome)
+	}
+	if _, err := os.Stat(testHome); !os.IsNotExist(err) {
+		t.Fatalf("temporary JUEX_HOME still exists after command: %v", err)
+	}
+}
+
 func TestEvalHelpersTolerateProgrammaticNone(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")

@@ -13,6 +13,7 @@ from . import compaction, helper, rotation
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+TEST_HOME_RUNNER = str(REPO_ROOT / "scripts" / "with-test-juex-home.sh")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -189,8 +190,8 @@ def development_steps(args: argparse.Namespace, report_dir: pathlib.Path) -> tup
     if not args.skip_tests:
         steps.extend(
             [
-                ("go-test-e2e", ["go", "test", "./tests/e2e", "-count=1"]),
-                ("go-test-all", ["go", "test", "./...", "-count=1"]),
+                ("go-test-e2e", [TEST_HOME_RUNNER, "go", "test", "./tests/e2e", "-count=1"]),
+                ("go-test-all", [TEST_HOME_RUNNER, "go", "test", "./...", "-count=1"]),
             ]
         )
     steps.append(("make-build", ["make", "build"]))
