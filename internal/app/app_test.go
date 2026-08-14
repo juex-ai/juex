@@ -203,6 +203,35 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	return a, prov
 }
 
+func TestAppRunAdmittedTurnAfterCloseDoesNotReopenTranscript(t *testing.T) {
+	a, provider := newStubApp(t, llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "must not run"),
+		StopReason: llm.StopEndTurn,
+	})
+	identity, ok := a.SessionIdentity()
+	if !ok {
+		t.Fatal("missing Session identity")
+	}
+	if err := a.CloseAndWait(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := a.RunAdmittedTurn(
+		context.Background(),
+		"late-turn",
+		llm.TextMessage(llm.RoleUser, "late delivery"),
+	)
+	if !errors.Is(err, ErrSessionUnavailable) {
+		t.Fatalf("RunAdmittedTurn error = %v, want ErrSessionUnavailable", err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("provider calls after App close = %d, want 0", provider.calls)
+	}
+	if err := os.Remove(filepath.Join(identity.Dir, "conversation.jsonl")); err != nil {
+		t.Fatalf("remove closed transcript: %v", err)
+	}
+}
+
 func TestCompactWithInstructionsWithoutEligibleContextLeavesRuntimeIdle(t *testing.T) {
 	a, _ := newStubApp(t)
 

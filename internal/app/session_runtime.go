@@ -172,5 +172,8 @@ func (a *App) RunAdmittedTurn(ctx context.Context, turnID string, message llm.Me
 	}
 	a.sessionMu.RLock()
 	defer a.sessionMu.RUnlock()
+	if a.Session == nil {
+		return "", ErrSessionUnavailable
+	}
 	return a.Engine.TurnMessageWithID(ctx, message, turnID)
 }

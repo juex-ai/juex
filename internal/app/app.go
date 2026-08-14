@@ -927,6 +927,9 @@ func (a *App) runEngineTurn(ctx context.Context, input string) (string, error) {
 	}
 	a.sessionMu.RLock()
 	defer a.sessionMu.RUnlock()
+	if a.Session == nil {
+		return "", ErrSessionUnavailable
+	}
 	return a.Engine.Turn(ctx, input)
 }
 
@@ -936,6 +939,9 @@ func (a *App) runEngineTurnMessage(ctx context.Context, message llm.Message) (st
 	}
 	a.sessionMu.RLock()
 	defer a.sessionMu.RUnlock()
+	if a.Session == nil {
+		return "", ErrSessionUnavailable
+	}
 	return a.Engine.TurnMessage(ctx, message)
 }
 
@@ -963,6 +969,9 @@ func (a *App) CompactAdmittedWithInstructions(ctx context.Context, turnID, reaso
 func (a *App) compactWithTurnID(ctx context.Context, turnID, reason string, auto bool, instructions string) (runtime.CompactionResult, error) {
 	a.sessionMu.RLock()
 	defer a.sessionMu.RUnlock()
+	if a.Session == nil {
+		return runtime.CompactionResult{}, ErrSessionUnavailable
+	}
 	sections := a.Engine.PromptSections()
 	systemPrompt := prompt.JoinSections(sections)
 	result, err := a.Engine.CompactWithInstructions(ctx, turnID, systemPrompt, reason, auto, instructions)
@@ -982,6 +991,9 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	}
 	a.sessionMu.RLock()
 	defer a.sessionMu.RUnlock()
+	if a.Session == nil {
+		return ErrSessionUnavailable
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
