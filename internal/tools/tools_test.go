@@ -1470,6 +1470,9 @@ func TestBuiltins_FileWritesUseSandboxWritableRoots(t *testing.T) {
 }
 
 func TestBuiltins_FileWritesDoNotMutateExternalHardLinks(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("hard-link count enforcement is supported by the sandbox platforms")
+	}
 	tests := []struct {
 		name string
 		call func(t *testing.T, r *Registry, target string) error
