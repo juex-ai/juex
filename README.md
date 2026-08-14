@@ -601,8 +601,9 @@ The same file policy protects `write`, `edit`, `apply_patch`, chunked writes,
 current AgentStateDir (`$JUEX_HOME/agents/<id>` for a Resident Agent) are the
 only default host writable roots; `apply_patch` and chunked writes remain
 Workspace-only. `blocked_paths` overrides both roots, and canonical path checks
-reject relative traversal and symlink escapes. Linux bubblewrap uses a private
-`/tmp`; macOS points `TMPDIR` into the current AgentStateDir. Missing or
+reject relative traversal and symlink escapes. Linux and macOS point `TMPDIR`
+into the current AgentStateDir, which keeps temporary writes inside an already
+allowed root without hiding host paths used as workspaces. Missing or
 non-functional backends fail closed instead of starting the command without a
 sandbox.
 

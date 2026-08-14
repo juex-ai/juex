@@ -12,6 +12,14 @@ import (
 )
 
 func TestLinuxReadOnlyProvidesWritableDevicesAndTemp(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	agentStateDir := filepath.Join(root, "agent-state")
+	for _, path := range []string{workspace, agentStateDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	policy := DefaultPolicy()
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
@@ -20,23 +28,32 @@ func TestLinuxReadOnlyProvidesWritableDevicesAndTemp(t *testing.T) {
 		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
 	}).Prepare(context.Background(), Request{
 		Policy:     policy,
-		WorkDir:    "/work",
-		FilePolicy: filePolicyForTest(policy, "/work", "/work"),
+		WorkDir:    workspace,
+		FilePolicy: filePolicyForTest(policy, workspace, workspace, agentStateDir),
 		Spec:       ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	args := strings.Join(got.Args, "\x00")
-	for _, want := range []string{"--ro-bind\x00/\x00/", "--dev\x00/dev", "--tmpfs\x00/tmp", "--dir\x00/tmp/juex", "--bind\x00/work\x00/work"} {
+	for _, want := range []string{"--ro-bind\x00/\x00/", "--dev\x00/dev", "--bind\x00" + workspace + "\x00" + workspace, "--bind\x00" + agentStateDir + "\x00" + agentStateDir} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("args missing %q: %#v", want, got.Args)
 		}
 	}
-	for _, want := range []string{"TMPDIR=/tmp/juex", "XDG_CACHE_HOME=/tmp/juex/cache", "GOCACHE=/tmp/juex/cache/go-build"} {
+	for _, forbidden := range []string{"--tmpfs\x00/tmp", "--dir\x00/tmp/juex"} {
+		if strings.Contains(args, forbidden) {
+			t.Fatalf("args unexpectedly replace host temp path %q: %#v", forbidden, got.Args)
+		}
+	}
+	scratch := filepath.Join(agentStateDir, "tmp")
+	for _, want := range []string{"TMPDIR=" + scratch, "XDG_CACHE_HOME=" + filepath.Join(scratch, "cache"), "GOCACHE=" + filepath.Join(scratch, "cache", "go-build")} {
 		if !strings.Contains(strings.Join(got.Env, "\n"), want) {
 			t.Fatalf("sandbox environment missing %q: %#v", want, got.Env)
 		}
+	}
+	if info, err := os.Stat(scratch); err != nil || !info.IsDir() {
+		t.Fatalf("scratch directory = %q: info=%v err=%v", scratch, info, err)
 	}
 }
 

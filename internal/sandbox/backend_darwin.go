@@ -2,8 +2,6 @@ package sandbox
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -26,23 +24,12 @@ func prepareDarwin(lookPath func(string) (string, error), req Request) (ExecSpec
 	wrapped.Binary = helper
 	wrapped.Args = append([]string{"-p", profile, targetBinary}, targetArgs...)
 	wrapped.Env = launcherEnv
-	if scratch, err := darwinScratchDir(req.FilePolicy.ScratchRoot()); err != nil {
+	if scratch, err := prepareSandboxScratchDir(req.FilePolicy.ScratchRoot()); err != nil {
 		return ExecSpec{}, NewError(ErrorCodePolicyUnavailable, "darwin", "sandbox-exec", "scratch", req.Policy, "Unable to prepare a private temporary directory in AgentStateDir.", err)
 	} else if scratch != "" {
 		wrapped.Env = sandboxScratchEnvironment(wrapped.Env, scratch)
 	}
 	return wrapped, nil
-}
-
-func darwinScratchDir(agentStateDir string) (string, error) {
-	if strings.TrimSpace(agentStateDir) == "" {
-		return "", nil
-	}
-	scratch := filepath.Join(agentStateDir, "tmp")
-	if err := os.MkdirAll(scratch, 0o700); err != nil {
-		return "", err
-	}
-	return scratch, nil
 }
 
 func darwinProfile(policy Policy, workDir string, writableRoots []string) (string, error) {

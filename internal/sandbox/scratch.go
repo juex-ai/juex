@@ -1,9 +1,21 @@
 package sandbox
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 )
+
+func prepareSandboxScratchDir(agentStateDir string) (string, error) {
+	if strings.TrimSpace(agentStateDir) == "" {
+		return "", nil
+	}
+	scratch := filepath.Join(agentStateDir, "tmp")
+	if err := os.MkdirAll(scratch, 0o700); err != nil {
+		return "", err
+	}
+	return scratch, nil
+}
 
 func replaceEnvironmentValue(env []string, key, value string) []string {
 	prefix := key + "="

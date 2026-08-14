@@ -31,7 +31,7 @@ func prepareLinux(lookPath func(string) (string, error), req Request) (ExecSpec,
 		args = append(args, "--dev-bind", "/", "/")
 	case OutsideWorkspaceReadOnly:
 		args = append(args, "--ro-bind", "/", "/")
-		args = append(args, "--dev", "/dev", "--tmpfs", "/tmp", "--dir", "/tmp/juex")
+		args = append(args, "--dev", "/dev")
 		for _, root := range roots {
 			args = append(args, "--bind", root, root)
 		}
@@ -58,7 +58,11 @@ func prepareLinux(lookPath func(string) (string, error), req Request) (ExecSpec,
 	wrapped.Args = args
 	wrapped.Env = launcherEnv
 	if req.Policy.FileSystem.OutsideWorkspace == OutsideWorkspaceReadOnly {
-		wrapped.Env = sandboxScratchEnvironment(wrapped.Env, "/tmp/juex")
+		if scratch, err := prepareSandboxScratchDir(req.FilePolicy.ScratchRoot()); err != nil {
+			return ExecSpec{}, NewError(ErrorCodePolicyUnavailable, "linux", "bubblewrap", "scratch", req.Policy, "Unable to prepare a private temporary directory in AgentStateDir.", err)
+		} else if scratch != "" {
+			wrapped.Env = sandboxScratchEnvironment(wrapped.Env, scratch)
+		}
 	}
 	return wrapped, nil
 }

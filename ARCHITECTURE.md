@@ -710,9 +710,10 @@ returns a wrapped command spec that enforces the requested policy, or returns a
 fail-closed error that prevents process start. `write_stdin` never reparses
 sandbox config; it writes only to the already-created session, which keeps the
 creation-time policy. Restricted filesystem policies provide writable standard
-devices and backend-owned scratch without granting another host root: Linux
-mounts a private `/tmp`, while macOS places `TMPDIR` below the current
-AgentStateDir. `blocked_paths` is a filesystem carve-out layered on top of the
+devices and backend-owned scratch without granting another host root: Linux and
+macOS place `TMPDIR` below the current AgentStateDir. Host temporary paths stay
+read-only, so a Workspace located below one can still be mounted writable.
+`blocked_paths` is a filesystem carve-out layered on top of the
 selected preset; it is enforced by both sandbox command backends and builtin
 filesystem tools so sensitive paths stay inaccessible regardless of whether the
 broader preset is `read_write` or `read_only`. Linux bubblewrap cannot mask a
