@@ -1212,6 +1212,8 @@ func TestSideSessionCreateRejectsUnknownModel(t *testing.T) {
 }
 
 func TestSideSessionCreateAppliesConfiguredModelOverride(t *testing.T) {
+	testHome := t.TempDir()
+	t.Setenv("JUEX_HOME", testHome)
 	workDir := t.TempDir()
 	configPath := filepath.Join(t.TempDir(), "juex.yaml")
 	if err := os.WriteFile(configPath, []byte(`model: openai:primary
@@ -1225,11 +1227,17 @@ providers:
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.LoadFromFile(configPath)
+	cfg, err := config.LoadWithOptions(config.LoadOptions{
+		WorkDir:    workDir,
+		ConfigPath: configPath,
+		AgentState: config.AgentStateNone,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.WorkDir = workDir
+	if _, err := os.Stat(filepath.Join(testHome, "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("loading test config created an Agent in JUEX_HOME: %v", err)
+	}
 	cfg.AgentStateDir = filepath.Join(workDir, ".juex")
 	var captured sideSessionChildOptions
 	parent, err := New(Options{
