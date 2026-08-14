@@ -529,6 +529,34 @@ func TestActivateSessionClosesPreviousResidentPrimary(t *testing.T) {
 	}
 }
 
+func TestActiveSessionBeginCloseInterruptsTransportBeforeAppDrain(t *testing.T) {
+	provider := &blockingProvider{started: make(chan struct{}), release: make(chan struct{})}
+	srv := newTestServer(t)
+	srv.opts.Provider = provider
+	active, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active.turns.start("close-interrupt", llm.TextMessage(llm.RoleUser, "wait for session close"))
+	select {
+	case <-provider.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider did not start")
+	}
+
+	active.beginClose()
+	done := make(chan struct{})
+	go func() {
+		active.turns.wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("transport turn was not interrupted before App drain")
+	}
+}
+
 func TestActivateSessionDoesNotWaitForStubbornPreviousPrimary(t *testing.T) {
 	provider := &stubbornWebProvider{started: make(chan struct{}, 1), release: make(chan struct{})}
 	srv := newTestServer(t)

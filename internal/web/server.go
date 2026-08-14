@@ -403,6 +403,9 @@ func (as *activeSession) beginClose() {
 		return
 	}
 	as.cancelWork()
+	if as.turns != nil {
+		as.turns.interruptWithCause(app.ErrSessionStopped)
+	}
 	if as.app != nil {
 		_ = as.app.BeginClose()
 	}

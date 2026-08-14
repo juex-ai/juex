@@ -530,6 +530,102 @@ func TestSideSessionExpiredNotificationFailureIsObservable(t *testing.T) {
 	}
 }
 
+func TestSideSessionPersistedAdmissionStorageFailureIsBoundedAndObservable(t *testing.T) {
+	parentProvider := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
+	parent := newSideSessionTestApp(t, parentProvider, &scriptedSideProvider{})
+	parent.Engine.MaxPendingInputs = 1
+	failed := make(chan events.Event, 1)
+	unsubscribe := parent.Bus.Subscribe("side_session.notification_failed", func(event events.Event) { failed <- event })
+	defer unsubscribe()
+
+	parentTurnDone := make(chan error, 1)
+	go func() {
+		_, err := parent.Run(context.Background(), "keep primary busy during admission failure")
+		parentTurnDone <- err
+	}()
+	select {
+	case <-parentProvider.started:
+	case <-time.After(time.Second):
+		t.Fatal("parent turn did not start")
+	}
+	if _, err := parent.Engine.EnqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "occupy capacity")); err != nil {
+		t.Fatal(err)
+	}
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{"query": "persist before admission storage failure"})
+	id := created["session_id"].(string)
+	status := waitForSideState(t, parent, id, SideSessionStateIdle)
+	pendingID := "side-session-result:" + id + ":" + status.LastTurnID
+	identity, ok := parent.SessionIdentity()
+	if !ok {
+		t.Fatal("parent session identity unavailable")
+	}
+	pendingPath := filepath.Join(identity.Dir, "pending_input.jsonl")
+	backupPath := pendingPath + ".admission-backup"
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		records, err := parent.Engine.PendingInputQueue.Records()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := records[pendingID]; exists {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("side notification was not persisted before admission failure")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := os.Rename(pendingPath, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	restored := false
+	restore := func() error {
+		if restored {
+			return nil
+		}
+		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(backupPath, pendingPath); err != nil {
+			return err
+		}
+		restored = true
+		return nil
+	}
+	t.Cleanup(func() {
+		if err := restore(); err != nil {
+			t.Errorf("restore pending journal: %v", err)
+		}
+	})
+	if err := os.Mkdir(pendingPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case event := <-failed:
+		if !strings.Contains(fmt.Sprint(event.Payload), "admit persisted side session notification") {
+			t.Fatalf("admission failure event = %+v", event)
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("persisted admission storage failure did not terminate")
+	}
+	status, err := parent.sideSessions.Status(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status.NotificationError, "admit persisted side session notification") {
+		t.Fatalf("notification error = %q, want bounded admission failure", status.NotificationError)
+	}
+	if err := restore(); err != nil {
+		t.Fatal(err)
+	}
+	close(parentProvider.release)
+	if err := <-parentTurnDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSideSessionTerminalSubscriptionSurvivesTransientPersistenceFailureAndLaterUnsubscribe(t *testing.T) {
 	child := &barrierSideProvider{started: make(chan struct{}, 1), release: make(chan struct{})}
 	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, child)
@@ -1185,6 +1281,52 @@ func TestSideSessionCreateHonorsToolCancellationDuringStartup(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("child provider calls after cancelled create = %d, want 0", calls)
 	}
+}
+
+func TestAppBeginCloseCancelsInFlightSideCreationBeforeFactoryReturns(t *testing.T) {
+	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, &scriptedSideProvider{})
+	originalFactory := parent.sideSessions.factory
+	factoryEntered := make(chan struct{})
+	releaseFactory := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseFactory) }) }
+	t.Cleanup(release)
+	parent.sideSessions.factory = func(opts sideSessionChildOptions) (*App, error) {
+		close(factoryEntered)
+		<-releaseFactory
+		return originalFactory(opts)
+	}
+
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := parent.sideSessions.Create(context.Background(), "cancel with parent close", "", false)
+		createDone <- err
+	}()
+	<-factoryEntered
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- parent.BeginClose() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("BeginClose = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("BeginClose waited for the in-flight Side Session factory")
+	}
+	select {
+	case err := <-createDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Create error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Side Session create did not observe parent close")
+	}
+	select {
+	case <-releaseFactory:
+		t.Fatal("factory was released before close completed")
+	default:
+	}
+	release()
 }
 
 func TestSwitchToNewPrimaryStopsChildrenAndKeepsManagerUsable(t *testing.T) {

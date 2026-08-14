@@ -160,13 +160,12 @@ func (m *sideSessionManager) newChildApp(child sideSessionChildOptions) (*App, e
 }
 
 func (m *sideSessionManager) Create(ctx context.Context, query, model string, subscribe bool) (SideSessionStatus, error) {
+	ctx, cancelCreate := sideSessionCreateContext(ctx, m.parent.ctx)
+	defer cancelCreate()
 	m.lifecycleMu.RLock()
 	defer m.lifecycleMu.RUnlock()
 	if err := m.ensureParentActive(); err != nil {
 		return SideSessionStatus{}, err
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return SideSessionStatus{}, err
@@ -289,6 +288,24 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 		return SideSessionStatus{}, err
 	}
 	return m.snapshot(managed), nil
+}
+
+func sideSessionCreateContext(callCtx, parentCtx context.Context) (context.Context, context.CancelFunc) {
+	if callCtx == nil {
+		callCtx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(callCtx)
+	if parentCtx == nil {
+		return ctx, cancel
+	}
+	stopParent := context.AfterFunc(parentCtx, cancel)
+	if parentCtx.Err() != nil {
+		cancel()
+	}
+	return ctx, func() {
+		stopParent()
+		cancel()
+	}
 }
 
 func (m *sideSessionManager) List() ([]SideSessionStatus, error) {
@@ -674,6 +691,8 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 		return
 	}
 
+	admissionErrorAttempts := 0
+	admissionErrorDelay := 50 * time.Millisecond
 	for {
 		if err := ctx.Err(); err != nil {
 			m.dropStaleNotification(managed, status, record.ID)
@@ -718,14 +737,37 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 			if errors.Is(result.Err, runtime.ErrPendingInputHandled) {
 				return
 			}
+			admissionErr := result.Err
+			if admissionErr == nil {
+				message := strings.TrimSpace(result.Error.Message)
+				if message == "" {
+					message = "unknown persisted admission error"
+				}
+				admissionErr = errors.New(message)
+			}
+			admissionErrorAttempts++
+			if admissionErrorAttempts >= sideSessionPersistAttempts {
+				m.recordNotificationFailure(managed, status, fmt.Errorf("admit persisted side session notification: %w", admissionErr))
+				return
+			}
 		default:
 			return
+		}
+		delay := 100 * time.Millisecond
+		if result.Kind == TurnAdmissionError {
+			delay = admissionErrorDelay
+			if admissionErrorDelay < time.Second {
+				admissionErrorDelay *= 2
+				if admissionErrorDelay > time.Second {
+					admissionErrorDelay = time.Second
+				}
+			}
 		}
 		select {
 		case <-ctx.Done():
 			m.dropStaleNotification(managed, status, record.ID)
 			return
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(delay):
 		}
 	}
 }
