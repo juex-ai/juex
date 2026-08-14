@@ -96,6 +96,10 @@ type Engine struct {
 	// work is still running. It must be a fast, read-only callback and must not
 	// call back into this Engine.
 	ShouldDeferGoalContinuation func() bool
+	// PendingInputsAdmitted observes durable pending records when they leave the
+	// in-memory queue for provider-visible processing. It must be fast and must
+	// not call back into this Engine.
+	PendingInputsAdmitted func(recordIDs []string)
 	// ShowBuiltinHookTraces includes built-in runtime gates in UI-only hook
 	// trace messages. Command hook traces are always shown.
 	ShowBuiltinHookTraces bool
@@ -456,6 +460,9 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 	}
 	e.pendingEventAnnouncing = true
 	e.pendingMu.Unlock()
+	if item.RecordID != "" {
+		e.notifyPendingInputsAdmitted([]string{item.RecordID})
+	}
 	e.emit(events.Event{Type: PendingInputPromotedType, TurnID: nextTurnID, Payload: PendingInputPromotedPayload{
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
@@ -1352,6 +1359,7 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 			return fmt.Errorf("mark pending input admitted: %w", err)
 		}
 	}
+	e.notifyPendingInputsAdmitted(recordIDs)
 	var processedIDs []string
 	for _, item := range pending {
 		msg := item.Message
@@ -1389,6 +1397,13 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 		MaxPendingInputs: max,
 	}})
 	return nil
+}
+
+func (e *Engine) notifyPendingInputsAdmitted(recordIDs []string) {
+	if e == nil || e.PendingInputsAdmitted == nil || len(recordIDs) == 0 {
+		return
+	}
+	e.PendingInputsAdmitted(recordIDs)
 }
 
 func (e *Engine) deferPendingEventLocked(event events.Event) bool {

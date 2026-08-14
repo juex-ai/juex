@@ -150,8 +150,9 @@ domain boundary.
 2. `in_progress` means work can continue now. A finish attempt normally records
    a Goal continuation and starts another Provider iteration. An owning Primary
    may instead finish the current Turn while at least one subscribed managed
-   Side Session is still running or an accepted subscribed result is still being
-   handed off to the Primary input path. The durable subscribed result supplies
+   Side Session is still running or an accepted subscribed result has not yet
+   entered provider-visible processing. This includes a result already queued
+   behind the current Provider iteration. The durable subscribed result supplies
    the next external input without changing the Goal status or continuation
    count.
 3. `wait_for_user` means the Goal is unfinished but useful progress requires

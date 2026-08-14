@@ -1647,12 +1647,15 @@ state is visible and writable in the child, but only the owning Primary Engine
 runs the Goal completion gate. The Primary injects a read-only manager predicate
 into that gate: an `in_progress` Goal may finish the current Turn without a
 synthetic continuation while at least one subscribed child is running or a
-result accepted at the child's terminal boundary is still being handed off to
-the Primary input path. The handoff remains active until admission starts or
-the result is durably queued. The predicate only scans manager memory under its
-own mutex; it does not call back into the App, Session, or Engine. Idle children
-without an accepted result handoff, unsubscribed running children, stopping
-children, and closed children do not defer the gate.
+result accepted at the child's terminal boundary has not yet entered
+provider-visible processing. The handoff remains active while persistence or
+admission retries, and while the result is queued behind the current Provider
+iteration. The Engine synchronously reports durable record ids when pending
+input is drained or promoted; the manager then clears the matching handoff
+before that input's Provider request. Both callbacks only scan manager memory
+under its own mutex and never call back into the App, Session, or Engine. Idle
+children without an accepted result handoff, unsubscribed running children,
+stopping children, and closed children do not defer the gate.
 
 Create and idle send operations start child turns asynchronously; busy send
 uses the child's normal durable pending-input admission. Subscription is on by
@@ -2187,8 +2190,9 @@ exit `2` to request continuation. The runtime gate reads only the persisted
 goal status: `success`, `failure`, and `wait_for_user` allow finish, while
 `in_progress` records a continuation and asks the model to keep working or call
 `update_goal`, except when the owning Primary reports subscribed Side Session
-work still running or an accepted subscribed result still awaiting safe queue
-or admission handoff. That exception allows the current Turn to finish without
+work still running or an accepted subscribed result still awaiting
+provider-visible processing, including one already queued behind the current
+Provider iteration. That exception allows the current Turn to finish without
 mutating Goal state; a durable Side Session result later supplies external
 input. Continuation recording revalidates `in_progress` under the Goal store
 lock so a concurrent Side Session terminal update cannot enqueue a stale

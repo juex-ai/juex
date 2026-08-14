@@ -62,6 +62,14 @@ type sideToolDuringDeliveryProvider struct {
 	app     *App
 }
 
+type goalSideQueueProvider struct {
+	mu      sync.Mutex
+	started chan struct{}
+	release chan struct{}
+	app     *App
+	calls   int
+}
+
 func (p *sideToolDuringDeliveryProvider) Name() string { return "side-delivery-tool" }
 
 func (p *sideToolDuringDeliveryProvider) Complete(_ context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
@@ -78,6 +86,38 @@ func (p *sideToolDuringDeliveryProvider) Complete(_ context.Context, _ string, h
 		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "delivery finished"), StopReason: llm.StopEndTurn}, nil
 	}
 	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "primary"), StopReason: llm.StopEndTurn}, nil
+}
+
+func (p *goalSideQueueProvider) Name() string { return "goal-side-queue" }
+
+func (p *goalSideQueueProvider) Complete(ctx context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
+	p.mu.Lock()
+	p.calls++
+	call := p.calls
+	p.mu.Unlock()
+	if call == 1 {
+		close(p.started)
+		select {
+		case <-ctx.Done():
+			return llm.Response{}, ctx.Err()
+		case <-p.release:
+		}
+		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "waiting for subscribed result"), StopReason: llm.StopEndTurn}, nil
+	}
+	for _, message := range history {
+		if message.Kind != llm.MessageKindSideSession {
+			continue
+		}
+		reason := "subscribed result incorporated"
+		if _, err := p.app.Engine.GoalState.Update(runtime.GoalStateUpdate{
+			Status:       runtime.GoalStatusSuccess,
+			StatusReason: &reason,
+		}); err != nil {
+			return llm.Response{}, err
+		}
+		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "subscribed result incorporated"), StopReason: llm.StopEndTurn}, nil
+	}
+	return llm.Response{}, errors.New("queued Side Session result missing from provider history")
 }
 
 func (p *barrierSideProvider) Name() string { return "side-barrier" }
@@ -1032,6 +1072,59 @@ func TestPrimaryGoalContinuationDefersDuringSubscribedResultHandoff(t *testing.T
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("side-session result was not persisted during the handoff window")
+}
+
+func TestPrimaryGoalContinuationDefersWhileSubscribedResultIsQueued(t *testing.T) {
+	primaryProvider := &goalSideQueueProvider{started: make(chan struct{}), release: make(chan struct{})}
+	parent := newSideSessionTestApp(t, primaryProvider, &scriptedSideProvider{})
+	primaryProvider.app = parent
+	if _, err := parent.Engine.GoalState.Create("finish delegated work", "incorporate the subscribed result"); err != nil {
+		t.Fatal(err)
+	}
+
+	primaryDone := make(chan error, 1)
+	go func() {
+		_, err := parent.Run(context.Background(), "delegate while primary is busy")
+		primaryDone <- err
+	}()
+	select {
+	case <-primaryProvider.started:
+	case <-time.After(time.Second):
+		t.Fatal("primary turn did not start")
+	}
+
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{
+		"query":     "finish while primary provider is active",
+		"subscribe": true,
+	})
+	id := created["session_id"].(string)
+	waitForSideState(t, parent, id, SideSessionStateIdle)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if parent.Engine.PendingInputStatus().PendingCount > 0 {
+			if !parent.sideSessions.shouldDeferGoalContinuation() {
+				t.Fatal("queued subscribed result did not defer Goal continuation")
+			}
+			close(primaryProvider.release)
+			if err := <-primaryDone; err != nil {
+				t.Fatal(err)
+			}
+			goal, err := parent.Engine.GoalState.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if goal.Status != runtime.GoalStatusSuccess || goal.ContinuationCount != 0 {
+				t.Fatalf("goal state = %+v, want success without synthetic continuation", goal)
+			}
+			if parent.sideSessions.shouldDeferGoalContinuation() {
+				t.Fatal("admitted subscribed result kept Goal continuation deferred")
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("side-session result was not queued while the primary provider was active")
 }
 
 func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testing.T) {
