@@ -1693,7 +1693,10 @@ persisted message ID, allowing the browser to suppress replay content already
 represented by either the initial transcript or the current live projection
 without relying on text equality. Live user, assistant, hook, and queued-input
 projections retain those persisted IDs; tool replay uses the globally unique
-tool-use ID for the same overlap check. The initial replay cursor is stable for
+tool-use ID for the same overlap check. Transcript refreshes that preserve live
+work also remove projected messages whose stable IDs are already present in the
+new authoritative snapshot, while keeping unidentified provisional Tool and
+assistant output. The initial replay cursor is stable for
 the lifetime of the Session route, so a cursor-only transcript refresh does not
 tear down the live stream or clear canonical status. If Agent health or other
 application lifecycle state replaces the EventSource, the session read

@@ -103,7 +103,7 @@ export function projectSessionLoaded(
   opts?: { preserveLiveMessages?: boolean },
 ): SessionReadState {
   const projection = opts?.preserveLiveMessages
-    ? state.projection
+    ? reconcilePersistedLiveMessages(state.projection, data.messages)
     : clearLiveSessionTranscript(state.projection);
   return {
     ...state,
@@ -113,6 +113,24 @@ export function projectSessionLoaded(
     olderMessagesError: null,
     projection,
   };
+}
+
+function reconcilePersistedLiveMessages(
+  projection: LiveSessionProjection,
+  persistedMessages: SessionShowResponse["messages"],
+): LiveSessionProjection {
+  const persistedIDs = new Set(
+    persistedMessages
+      .map((message) => message.id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0),
+  );
+  if (persistedIDs.size === 0) return projection;
+
+  const messages = projection.messages.filter(
+    (message) => !message.id || !persistedIDs.has(message.id),
+  );
+  if (messages.length === projection.messages.length) return projection;
+  return { ...projection, messages };
 }
 
 export function projectSessionLoadFailed(
