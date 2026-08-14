@@ -720,9 +720,11 @@ broader preset is `read_write` or `read_only`. Linux bubblewrap cannot mask a
 blocked path that does not exist without creating a host-visible mountpoint, so
 that backend fails closed for missing blocked paths instead of creating them.
 `internal/sandbox.FilePolicy` resolves relative `blocked_paths`, canonicalizes
-write targets and roots, and projects the Workspace plus current AgentStateDir.
-Builtin writes, Shell, grep subprocesses, and Command Observables consume that
-same value; backend deny/mask rules are applied after broader writable grants.
+write targets and roots, rejects multiply linked existing regular files for
+restricted builtin writes, and projects the Workspace plus current
+AgentStateDir. Builtin writes, Shell, grep subprocesses, and Command Observables
+consume that same value; backend deny/mask rules are applied after broader
+writable grants.
 This grants state owned by that Agent but never another AgentStateDir. Trusted
 hooks and MCP server processes are separate execution boundaries and are not
 covered by this policy.

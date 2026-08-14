@@ -110,6 +110,13 @@ func (g FilePolicy) CheckWrite(path string) error {
 	}
 	for _, root := range g.canonicalRoots {
 		if pathWithinOrEqualFilesystem(root, target) {
+			multiple, err := hasMultipleHardLinks(target)
+			if err != nil {
+				return fmt.Errorf("sandbox: inspect write path %s: %w", target, err)
+			}
+			if multiple {
+				return fmt.Errorf("sandbox: write path %s has multiple hard links", target)
+			}
 			return nil
 		}
 	}

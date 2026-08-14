@@ -102,6 +102,36 @@ func TestFilePolicyAllowsOnlyCanonicalWritableRoots(t *testing.T) {
 	}
 }
 
+func TestFilePolicyRejectsExistingFilesWithMultipleHardLinks(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("hard-link count enforcement is supported by the sandbox platforms")
+	}
+	work := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(work, "inside.txt")
+	if err := os.Link(outside, inside); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+
+	guard := NewFilePolicy(FilePolicyOptions{
+		Policy:  DefaultPolicyForOS(runtime.GOOS),
+		WorkDir: work,
+	})
+	if err := guard.CheckWrite(inside); err == nil || !strings.Contains(err.Error(), "multiple hard links") {
+		t.Fatalf("CheckWrite(%q) = %v, want multiple hard links rejection", inside, err)
+	}
+
+	readWrite := DefaultPolicyForOS(runtime.GOOS)
+	readWrite.FileSystem.OutsideWorkspace = OutsideWorkspaceReadWrite
+	guard = NewFilePolicy(FilePolicyOptions{Policy: readWrite, WorkDir: work})
+	if err := guard.CheckWrite(inside); err != nil {
+		t.Fatalf("read_write CheckWrite(%q) = %v, want allowed", inside, err)
+	}
+}
+
 func TestFilePolicyAllowsWritableRootCaseVariantOnCaseInsensitiveFilesystem(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("case-insensitive writable-root behavior is exercised on macOS")

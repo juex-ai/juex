@@ -1469,6 +1469,99 @@ func TestBuiltins_FileWritesUseSandboxWritableRoots(t *testing.T) {
 	}
 }
 
+func TestBuiltins_FileWritesDoNotMutateExternalHardLinks(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(t *testing.T, r *Registry, target string) error
+	}{
+		{
+			name: "write",
+			call: func(t *testing.T, r *Registry, target string) error {
+				t.Helper()
+				_, err := r.Call(context.Background(), "write", map[string]any{"path": target, "content": "new\n"})
+				return err
+			},
+		},
+		{
+			name: "edit",
+			call: func(t *testing.T, r *Registry, target string) error {
+				t.Helper()
+				_, err := r.Call(context.Background(), "edit", map[string]any{"path": target, "old": "old\n", "new": "new\n"})
+				return err
+			},
+		},
+		{
+			name: "apply_patch",
+			call: func(t *testing.T, r *Registry, target string) error {
+				t.Helper()
+				patch := strings.Join([]string{
+					"*** Begin Patch",
+					"*** Update File: " + filepath.Base(target),
+					"@@",
+					"-old",
+					"+new",
+					"*** End Patch",
+				}, "\n")
+				_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": patch})
+				return err
+			},
+		},
+		{
+			name: "chunked_write",
+			call: func(t *testing.T, r *Registry, target string) error {
+				t.Helper()
+				_, err := r.Call(context.Background(), "write_begin", map[string]any{"path": target})
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			outsideDir := t.TempDir()
+			outsideFile := filepath.Join(outsideDir, "outside.txt")
+			if err := os.WriteFile(outsideFile, []byte("old\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(workDir, "inside.txt")
+			if err := os.Link(outsideFile, target); err != nil {
+				t.Skipf("hard links unavailable: %v", err)
+			}
+
+			r := NewRegistry()
+			RegisterBuiltins(r, BuiltinOptions{
+				WorkDir:       workDir,
+				AgentStateDir: t.TempDir(),
+				Shell:         fakeShellProfile(),
+				Sandbox:       sandbox.DefaultPolicyForOS("linux"),
+				SandboxRunner: &fakeSandboxRunner{},
+			})
+			if err := tt.call(t, r, target); err == nil || !strings.Contains(err.Error(), "multiple hard links") {
+				t.Fatalf("write err = %v, want multiple hard links rejection", err)
+			}
+
+			if got := string(mustReadFile(t, outsideFile)); got != "old\n" {
+				t.Fatalf("outside hard-link target = %q, want unchanged", got)
+			}
+			if got := string(mustReadFile(t, target)); got != "old\n" {
+				t.Fatalf("workspace hard link = %q, want unchanged", got)
+			}
+			outsideInfo, err := os.Stat(outsideFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			targetInfo, err := os.Stat(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !os.SameFile(outsideInfo, targetInfo) {
+				t.Fatal("rejected write unexpectedly replaced the workspace hard link")
+			}
+		})
+	}
+}
+
 func TestRegisterBuiltinsApplyPatchSchemaAndDisable(t *testing.T) {
 	r := NewRegistry()
 	registerTestBuiltins(r, t.TempDir())
