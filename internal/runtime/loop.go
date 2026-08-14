@@ -901,25 +901,36 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, polic
 		}
 	}
 	toolResults := e.runToolCalls(ctx, turnID, toolCalls)
-	for _, result := range toolResults {
-		if result.FatalError != nil {
-			return result.FatalError
+	var fatalErr error
+	for index := range toolResults {
+		result := &toolResults[index]
+		if result.FatalError == nil {
+			continue
 		}
+		fatalErr = errors.Join(fatalErr, result.FatalError)
+		if result.Block.Type == llm.BlockToolResult {
+			continue
+		}
+		call := toolCalls[index]
+		result.Block = skippedToolResultBlock(call)
+		result.Observation = toolObservationForResult(call, result.Block, tools.CallInfo{}, result.FatalError)
 	}
 	toolResults = e.normalizeGuidedToolFailureResults(toolResults)
 	results := toolResultBlocks(toolResults)
 	e.recordToolFailureBatch(turnID, toolCalls, toolResults)
 	toolResultMsg := llm.Message{Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: results}
 	projectedToolResultMsg, projection, err := e.projectMessageLocked(toolResultMsg, policy)
-	if err != nil {
-		return err
+	if err == nil {
+		toolResultMsg = projectedToolResultMsg
 	}
-	toolResultMsg = projectedToolResultMsg
-	if err := e.emitProjectionApplied(turnID, projection); err != nil {
-		return fmt.Errorf("commit tool result projection: %w", err)
+	if appendErr := e.currentSession().Append(toolResultMsg); appendErr != nil {
+		return errors.Join(fatalErr, err, fmt.Errorf("session append tool result: %w", appendErr))
 	}
-	if err := e.currentSession().Append(toolResultMsg); err != nil {
-		return fmt.Errorf("session append tool result: %w", err)
+	if fatalErr != nil || err != nil {
+		return errors.Join(fatalErr, err)
+	}
+	if emitErr := e.emitProjectionApplied(turnID, projection); emitErr != nil {
+		return fmt.Errorf("commit tool result projection: %w", emitErr)
 	}
 	return nil
 }
@@ -990,6 +1001,16 @@ func toolResultBlocks(results []toolCallResult) []llm.Block {
 		blocks[i] = result.Block
 	}
 	return blocks
+}
+
+func skippedToolResultBlock(call llm.Block) llm.Block {
+	return llm.Block{
+		Type:      llm.BlockToolResult,
+		ToolUseID: call.ToolUseID,
+		ToolName:  call.ToolName,
+		Content:   "tool execution was skipped because runtime durability failed",
+		IsError:   true,
+	}
 }
 
 func (e *Engine) normalizeGuidedToolFailureResults(results []toolCallResult) []toolCallResult {
@@ -1087,17 +1108,19 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 	postReq.ToolResult = block.Content
 	postResults, postErr := e.runHooks(ctx, postReq)
 	postErr = cancellation.NormalizeError(postErr)
+	var fatalErr error
 	if postErr != nil {
 		if isHookRequestCommitError(postErr) {
-			return toolCallResult{FatalError: postErr}
-		}
-		if isShellStructuredResult(info.StructuredResult) {
-			block.Content = appendShellRuntimeErrorContent(block.Content, postErr)
+			fatalErr = postErr
 		} else {
-			block.Content = toolErrorContent(block.Content, postErr)
+			if isShellStructuredResult(info.StructuredResult) {
+				block.Content = appendShellRuntimeErrorContent(block.Content, postErr)
+			} else {
+				block.Content = toolErrorContent(block.Content, postErr)
+			}
+			block.IsError = true
+			toolErr = postErr
 		}
-		block.IsError = true
-		toolErr = postErr
 	}
 	appendToolHookContext(&block, preResults, false)
 	appendToolHookContext(&block, postResults, true)
@@ -1110,10 +1133,12 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		}
 	}
 	observation := toolObservationForResult(call, block, info, toolErr)
-	if err := e.emitToolFinished(turnID, call, block, observation, info); err != nil {
-		return toolCallResult{FatalError: fmt.Errorf("commit tool result: %w", err)}
+	if fatalErr == nil {
+		if err := e.emitToolFinished(turnID, call, block, observation, info); err != nil {
+			fatalErr = fmt.Errorf("commit tool result: %w", err)
+		}
 	}
-	return toolCallResult{Block: block, Observation: observation}
+	return toolCallResult{Block: block, Observation: observation, FatalError: fatalErr}
 }
 
 func toolObservationForResult(call llm.Block, block llm.Block, info tools.CallInfo, err error) tools.Observation {
@@ -1211,15 +1236,15 @@ func (e *Engine) hookToolErrorResult(turnID string, call llm.Block, err error) t
 		Content:   publicErr,
 		IsError:   true,
 	}
+	observation := toolObservationForResult(call, block, tools.CallInfo{}, err)
 	if emitErr := e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), toolevents.ErroredOptions{
 		Error:     publicErr,
 		ErrorKind: string(classification.Kind),
 		RawCause:  rawCauseIfDifferent(classification.RawCause, publicErr),
 		TimedOut:  classification.TimedOut,
 	})}); emitErr != nil {
-		return toolCallResult{FatalError: fmt.Errorf("commit hook tool error: %w", emitErr)}
+		return toolCallResult{Block: block, Observation: observation, FatalError: fmt.Errorf("commit hook tool error: %w", emitErr)}
 	}
-	observation := toolObservationForResult(call, block, tools.CallInfo{}, err)
 	return toolCallResult{Block: block, Observation: observation}
 }
 

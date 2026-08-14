@@ -488,6 +488,80 @@ func TestTurn_DurableToolResultFailurePreventsNextProviderCall(t *testing.T) {
 	if prov.called != 1 {
 		t.Fatalf("provider calls = %d, want 1", prov.called)
 	}
+	history := eng.currentSession().History
+	if len(history) == 0 {
+		t.Fatal("session history is empty after the tool executed")
+	}
+	result := history[len(history)-1]
+	if result.Kind != llm.MessageKindToolResult || len(result.Blocks) != 1 || result.Blocks[0].Content != "done" {
+		t.Fatalf("last history message = %+v, want persisted tool result done", result)
+	}
+}
+
+func TestTurn_DurableToolErrorFailurePersistsActualResult(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{
+			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+				Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "side_effect",
+			}}},
+			StopReason: llm.StopToolUse,
+		},
+		{Message: llm.TextMessage(llm.RoleAssistant, "must not run"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "side_effect",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return "partial output", errors.New("side effect failed")
+		},
+	})
+	want := errors.New("journal sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: toolevents.ErroredType, err: want})
+	if _, err := eng.Turn(context.Background(), "run it"); !errors.Is(err, want) {
+		t.Fatalf("Turn() error = %v, want %v", err, want)
+	}
+	if prov.called != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.called)
+	}
+	result := eng.currentSession().History[len(eng.currentSession().History)-1]
+	if result.Kind != llm.MessageKindToolResult || len(result.Blocks) != 1 || !result.Blocks[0].IsError {
+		t.Fatalf("last history message = %+v, want persisted errored tool result", result)
+	}
+	if content := result.Blocks[0].Content; !strings.Contains(content, "partial output") || !strings.Contains(content, "side effect failed") {
+		t.Fatalf("tool result content = %q, want actual output and error", content)
+	}
+}
+
+func TestTurn_DurableToolProjectionFailurePersistsProjectedResult(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{
+			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+				Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "large_result",
+			}}},
+			StopReason: llm.StopToolUse,
+		},
+		{Message: llm.TextMessage(llm.RoleAssistant, "must not run"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.ToolOutput = ToolOutputPolicy{InlineMaxBytes: 8, PreviewHeadBytes: 4, PreviewTailBytes: 4}
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "large_result",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return "head-" + strings.Repeat("payload-", 20) + "tail", nil
+		},
+	})
+	want := errors.New("journal sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: "context.projection.applied", err: want})
+	if _, err := eng.Turn(context.Background(), "run it"); !errors.Is(err, want) {
+		t.Fatalf("Turn() error = %v, want %v", err, want)
+	}
+	if prov.called != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.called)
+	}
+	result := eng.currentSession().History[len(eng.currentSession().History)-1]
+	if result.Kind != llm.MessageKindToolResult || len(result.Blocks) != 1 || result.Blocks[0].Artifact == nil {
+		t.Fatalf("last history message = %+v, want persisted projected tool result", result)
+	}
 }
 
 func TestTurn_DurableHookRequestFailurePreventsHookRun(t *testing.T) {
