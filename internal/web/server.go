@@ -64,6 +64,7 @@ type Server struct {
 	activeSelectionMu sync.Mutex
 	closeMu           sync.Mutex
 	closed            bool
+	deferredCloseWG   sync.WaitGroup
 
 	runtimeMu     sync.Mutex
 	runtimeMCPErr map[string]string
@@ -463,6 +464,7 @@ func (s *Server) Close() {
 		v.(*activeSession).close()
 		return true
 	})
+	s.deferredCloseWG.Wait()
 }
 
 func (s *Server) closeActiveSession(id string) bool {
@@ -476,7 +478,7 @@ func (s *Server) closeActiveSession(id string) bool {
 }
 
 func (s *Server) closeOtherPrimarySessions(activeID string) {
-	var ids []string
+	var stale []*activeSession
 	s.sessions.Range(func(key, value any) bool {
 		id, _ := key.(string)
 		as, _ := value.(*activeSession)
@@ -485,12 +487,22 @@ func (s *Server) closeOtherPrimarySessions(activeID string) {
 		}
 		identity, ok := as.app.SessionIdentity()
 		if ok && session.NormalizeKind(identity.Kind) == session.KindPrimary {
-			ids = append(ids, id)
+			if value, loaded := s.sessions.LoadAndDelete(id); loaded {
+				stale = append(stale, value.(*activeSession))
+			}
 		}
 		return true
 	})
-	for _, id := range ids {
-		s.closeActiveSession(id)
+	for _, as := range stale {
+		as.cancelWork()
+		s.deferredCloseWG.Add(1)
+		go func() {
+			defer s.deferredCloseWG.Done()
+			as.close()
+		}()
+	}
+	if len(stale) > 0 {
+		s.statusStream.Publish(s.agentActivity())
 	}
 }
 

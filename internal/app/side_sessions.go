@@ -656,7 +656,11 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 			// A turn can close between admission snapshots. Retry while the
 			// subscription and owning App are still active.
 		case TurnAdmissionError:
-			if errors.Is(result.Err, runtime.ErrPendingInputExpired) || errors.Is(result.Err, runtime.ErrPendingInputHandled) {
+			if errors.Is(result.Err, runtime.ErrPendingInputExpired) {
+				m.recordNotificationFailure(managed, status, result.Err)
+				return
+			}
+			if errors.Is(result.Err, runtime.ErrPendingInputHandled) {
 				return
 			}
 		default:
@@ -664,6 +668,7 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 		}
 		select {
 		case <-ctx.Done():
+			_ = m.parent.Engine.DropPersistedPendingMessage(record.ID)
 			return
 		case <-time.After(100 * time.Millisecond):
 		}

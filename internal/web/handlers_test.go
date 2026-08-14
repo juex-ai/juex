@@ -40,6 +40,11 @@ type blockingProvider struct {
 	release chan struct{}
 }
 
+type stubbornWebProvider struct {
+	started chan struct{}
+	release chan struct{}
+}
+
 func TestWriteRunOnceErrorMapsDomainErrors(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -86,6 +91,17 @@ func (p *blockingProvider) Complete(ctx context.Context, sys string, h []llm.Mes
 	case <-ctx.Done():
 		return llm.Response{}, ctx.Err()
 	}
+}
+
+func (p *stubbornWebProvider) Name() string { return "stubborn-web" }
+
+func (p *stubbornWebProvider) Complete(context.Context, string, []llm.Message, []llm.ToolSpec) (llm.Response, error) {
+	select {
+	case p.started <- struct{}{}:
+	default:
+	}
+	<-p.release
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "released"), StopReason: llm.StopEndTurn}, nil
 }
 
 // seedSession writes a minimal conversation.jsonl under
@@ -478,9 +494,6 @@ func TestActivateSessionClosesPreviousResidentPrimary(t *testing.T) {
 	if _, exists := srv.sessions.Load(previousInfo.ID); exists {
 		t.Fatalf("previous primary %q remained resident after activating %q", previousInfo.ID, next.ID)
 	}
-	if _, ok := previous.app.SessionIdentity(); ok {
-		t.Fatalf("previous primary %q retained its App session after activation", previousInfo.ID)
-	}
 
 	activeID, found, err := srv.activePrimarySessionID()
 	if err != nil {
@@ -489,6 +502,51 @@ func TestActivateSessionClosesPreviousResidentPrimary(t *testing.T) {
 	if !found || activeID != next.ID {
 		t.Fatalf("active session after activation = (%q, %v), want (%q, true)", activeID, found, next.ID)
 	}
+}
+
+func TestActivateSessionDoesNotWaitForStubbornPreviousPrimary(t *testing.T) {
+	provider := &stubbornWebProvider{started: make(chan struct{}, 1), release: make(chan struct{})}
+	srv := newTestServer(t)
+	srv.opts.Provider = provider
+	previous, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousInfo, ok := previous.app.SessionInfo()
+	if !ok {
+		t.Fatal("previous primary session unavailable")
+	}
+	previous.turns.start("stubborn-turn", llm.TextMessage(llm.RoleUser, "block activation cleanup"))
+	select {
+	case <-provider.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stubborn provider did not start")
+	}
+	next := seedWebSession(t, srv, "next")
+	if err := session.SetActive(srv.opts.Cfg.HistoryPath(), previousInfo); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	recorder := httptest.NewRecorder()
+	srv.handleActivateSession(recorder, httptest.NewRequest(http.MethodPost, "/api/sessions/"+next.ID+"/activate", nil), next.ID)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("activate status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("activation waited %s for stubborn previous Primary", elapsed)
+	}
+	if _, exists := srv.sessions.Load(previousInfo.ID); exists {
+		t.Fatalf("previous primary %q remained resident", previousInfo.ID)
+	}
+	activeID, found, err := srv.activePrimarySessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || activeID != next.ID {
+		t.Fatalf("active session = (%q, %v), want (%q, true)", activeID, found, next.ID)
+	}
+	close(provider.release)
 }
 
 func TestGetActiveSessionDoesNotWaitForRuntimeRestore(t *testing.T) {

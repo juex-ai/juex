@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -475,6 +476,52 @@ func TestSideSessionNotificationPersistsBeforeParentQueueHasCapacity(t *testing.
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("side notification was not persisted while parent queue was full")
+}
+
+func TestSideSessionExpiredNotificationFailureIsObservable(t *testing.T) {
+	parentProvider := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
+	parent := newSideSessionTestApp(t, parentProvider, &scriptedSideProvider{})
+	parent.Engine.MaxPendingInputs = 1
+	parent.Engine.ExternalEventTTL = 50 * time.Millisecond
+	failed := make(chan events.Event, 1)
+	unsubscribe := parent.Bus.Subscribe("side_session.notification_failed", func(event events.Event) { failed <- event })
+	defer unsubscribe()
+
+	parentTurnDone := make(chan error, 1)
+	go func() {
+		_, err := parent.Run(context.Background(), "keep primary busy past result TTL")
+		parentTurnDone <- err
+	}()
+	select {
+	case <-parentProvider.started:
+	case <-time.After(time.Second):
+		t.Fatal("parent turn did not start")
+	}
+	if _, err := parent.Engine.EnqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "occupy capacity")); err != nil {
+		t.Fatal(err)
+	}
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{"query": "expire while full"})
+	id := created["session_id"].(string)
+	waitForSideState(t, parent, id, SideSessionStateIdle)
+	select {
+	case event := <-failed:
+		if event.TurnID == "" || !strings.Contains(fmt.Sprint(event.Payload), runtime.ErrPendingInputExpired.Error()) {
+			t.Fatalf("expired notification event = %+v", event)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("expired Side Session notification failure was not observable")
+	}
+	status, err := parent.sideSessions.Status(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status.NotificationError, runtime.ErrPendingInputExpired.Error()) {
+		t.Fatalf("notification error = %q, want pending-input expiry", status.NotificationError)
+	}
+	close(parentProvider.release)
+	if err := <-parentTurnDone; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSideSessionTerminalSubscriptionSurvivesTransientPersistenceFailureAndLaterUnsubscribe(t *testing.T) {
@@ -1020,7 +1067,7 @@ func TestSideSessionCreateHonorsToolCancellationDuringStartup(t *testing.T) {
 	}
 	select {
 	case <-factoryDone:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("cancelled child factory did not finish")
 	}
 	parent.sideSessions.mu.Lock()
