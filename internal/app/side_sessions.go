@@ -336,6 +336,23 @@ func (m *sideSessionManager) List() ([]SideSessionStatus, error) {
 	return items, nil
 }
 
+func (m *sideSessionManager) shouldDeferGoalContinuation() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.transitioning {
+		return false
+	}
+	for _, managed := range m.sessions {
+		if managed.status.Subscribed && managed.status.State == SideSessionStateRunning {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *sideSessionManager) Status(id string) (SideSessionStatus, error) {
 	m.lifecycleMu.RLock()
 	defer m.lifecycleMu.RUnlock()

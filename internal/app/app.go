@@ -511,6 +511,7 @@ func New(opts Options) (*App, error) {
 	}
 	if sess.Kind == session.KindPrimary && sess.Active && !opts.disableSideSessionTools {
 		a.sideSessions = newSideSessionManager(a)
+		eng.ShouldDeferGoalContinuation = a.sideSessions.shouldDeferGoalContinuation
 		if err := RegisterSideSessionTools(reg, a.sideSessions); err != nil {
 			_ = a.detachObservability()
 			closeSessionResources()

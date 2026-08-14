@@ -91,6 +91,11 @@ type Engine struct {
 	// preventing this Engine from extending turns to satisfy another Session's
 	// completion contract. Managed Side Sessions set this.
 	SkipGoalCompletionGate bool
+	// ShouldDeferGoalContinuation lets an owner temporarily allow an
+	// in-progress Goal to finish the current Turn while subscribed external
+	// work is still running. It must be a fast, read-only callback and must not
+	// call back into this Engine.
+	ShouldDeferGoalContinuation func() bool
 	// ShowBuiltinHookTraces includes built-in runtime gates in UI-only hook
 	// trace messages. Command hook traces are always shown.
 	ShowBuiltinHookTraces bool

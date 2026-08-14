@@ -147,8 +147,11 @@ domain boundary.
 
 1. A Goal is absent until the model explicitly creates its Session completion
    contract. Ordinary input does not create a Goal.
-2. `in_progress` means work can continue now. A finish attempt records a Goal
-   continuation and starts another Provider iteration.
+2. `in_progress` means work can continue now. A finish attempt normally records
+   a Goal continuation and starts another Provider iteration. An owning Primary
+   may instead finish the current Turn while at least one subscribed managed
+   Side Session is still running; the durable subscribed result supplies the
+   next external input without changing the Goal status or continuation count.
 3. `wait_for_user` means the Goal is unfinished but useful progress requires
    new external input. It allows the current Turn to finish without recording
    a continuation.

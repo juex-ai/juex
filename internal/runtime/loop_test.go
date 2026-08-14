@@ -3379,6 +3379,68 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	}
 }
 
+func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "waiting for delegated work"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	if _, err := eng.GoalState.Create("finish delegated work", "all delegated results are incorporated"); err != nil {
+		t.Fatal(err)
+	}
+	eng.ShouldDeferGoalContinuation = func() bool { return true }
+	var continued int32
+	bus.Subscribe("goal.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })
+
+	out, err := eng.Turn(context.Background(), "delegate the work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "waiting for delegated work" || len(prov.histories) != 1 {
+		t.Fatalf("out = %q, provider calls = %d", out, len(prov.histories))
+	}
+	if atomic.LoadInt32(&continued) != 0 {
+		t.Fatalf("goal.continued events = %d", continued)
+	}
+	state, err := eng.GoalState.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != GoalStatusInProgress || state.ContinuationCount != 0 {
+		t.Fatalf("goal state = %+v", state)
+	}
+}
+
+func TestTurn_DeferredGoalStillHonorsStopHookContinuation(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	if _, err := eng.GoalState.Create("finish delegated work", "all checks pass"); err != nil {
+		t.Fatal(err)
+	}
+	eng.ShouldDeferGoalContinuation = func() bool { return true }
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventStop: {
+			{ExitCode: 2, Stdout: "run the explicit stop check"},
+			{},
+		},
+	}}
+
+	out, err := eng.Turn(context.Background(), "delegate the work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "final" || len(prov.histories) != 2 {
+		t.Fatalf("out = %q, provider calls = %d", out, len(prov.histories))
+	}
+	if got := prov.histories[1][len(prov.histories[1])-2].FirstText(); got != "run the explicit stop check" {
+		t.Fatalf("stop continuation = %q", got)
+	}
+}
+
 func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
@@ -3396,6 +3458,10 @@ func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 	}
 	if err := RegisterGoalTools(eng.Tools, eng); err != nil {
 		t.Fatal(err)
+	}
+	eng.ShouldDeferGoalContinuation = func() bool {
+		t.Fatal("wait-for-user Goal consulted the continuation defer callback")
+		return true
 	}
 	var continued int32
 	bus.Subscribe("goal.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })

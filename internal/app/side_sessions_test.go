@@ -986,6 +986,79 @@ func TestManagedSideSessionSkipsSharedGoalCompletionGate(t *testing.T) {
 	}
 }
 
+func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testing.T) {
+	primaryProvider := &scriptedSideProvider{}
+	firstChild := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
+	secondChild := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
+	parent := newSideSessionTestApp(t, primaryProvider, firstChild, secondChild)
+	if _, err := parent.Engine.GoalState.Create("finish delegated work", "both worker results are incorporated"); err != nil {
+		t.Fatal(err)
+	}
+
+	first := callSideTool(t, parent, SideSessionToolCreate, map[string]any{
+		"query":     "first worker",
+		"subscribe": true,
+	})["session_id"].(string)
+	second := callSideTool(t, parent, SideSessionToolCreate, map[string]any{
+		"query":     "second worker",
+		"subscribe": true,
+	})["session_id"].(string)
+	for name, started := range map[string]<-chan string{"first": firstChild.started, "second": secondChild.started} {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatalf("%s side turn did not start", name)
+		}
+	}
+
+	if !parent.sideSessions.shouldDeferGoalContinuation() {
+		t.Fatal("subscribed running Side Sessions did not defer Goal continuation")
+	}
+	out, err := parent.Engine.Turn(context.Background(), "wait for both workers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "finish delegated work") {
+		t.Fatalf("primary output = %q", out)
+	}
+	primaryProvider.mu.Lock()
+	primaryCalls := primaryProvider.calls
+	primaryProvider.mu.Unlock()
+	if primaryCalls != 1 {
+		t.Fatalf("primary provider calls = %d, want 1 without Goal continuation", primaryCalls)
+	}
+	goal, err := parent.Engine.GoalState.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goal.Status != runtime.GoalStatusInProgress || goal.ContinuationCount != 0 {
+		t.Fatalf("goal state = %+v", goal)
+	}
+
+	close(firstChild.release)
+	waitForSideState(t, parent, first, SideSessionStateIdle)
+	if !parent.sideSessions.shouldDeferGoalContinuation() {
+		t.Fatal("idle subscribed worker hid another subscribed running worker")
+	}
+	if _, err := parent.sideSessions.Subscribe(second, false); err != nil {
+		t.Fatal(err)
+	}
+	if parent.sideSessions.shouldDeferGoalContinuation() {
+		t.Fatal("idle and unsubscribed Side Sessions deferred Goal continuation")
+	}
+	if _, err := parent.sideSessions.Subscribe(second, true); err != nil {
+		t.Fatal(err)
+	}
+	if !parent.sideSessions.shouldDeferGoalContinuation() {
+		t.Fatal("resubscribed running Side Session did not defer Goal continuation")
+	}
+	close(secondChild.release)
+	waitForSideState(t, parent, second, SideSessionStateIdle)
+	if parent.sideSessions.shouldDeferGoalContinuation() {
+		t.Fatal("idle Side Sessions deferred Goal continuation")
+	}
+}
+
 func TestSideSessionCreateRejectsUnknownModel(t *testing.T) {
 	parent := newSideSessionTestApp(t, &scriptedSideProvider{})
 	_, err := parent.Engine.Tools.Call(context.Background(), SideSessionToolCreate, map[string]any{

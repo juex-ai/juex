@@ -73,8 +73,29 @@ func (e *Engine) runGoalCompletionGate(turnID string) (string, GoalContinuedPayl
 			})
 			return "", GoalContinuedPayload{}, false, err
 		}
-		if err := store.RecordContinuation(decision); err != nil {
+		if e.ShouldDeferGoalContinuation != nil && e.ShouldDeferGoalContinuation() {
+			e.emitHookCompleted(turnID, HookCompletedPayload{
+				Name:       goalCompletionGateName,
+				Source:     "builtin",
+				EventName:  string(hooks.EventStop),
+				DurationMS: time.Since(start).Milliseconds(),
+				ExitCode:   0,
+			})
+			return "", GoalContinuedPayload{}, false, nil
+		}
+		recorded, err := store.RecordContinuation(decision)
+		if err != nil {
 			return "", GoalContinuedPayload{}, false, err
+		}
+		if !recorded {
+			e.emitHookCompleted(turnID, HookCompletedPayload{
+				Name:       goalCompletionGateName,
+				Source:     "builtin",
+				EventName:  string(hooks.EventStop),
+				DurationMS: time.Since(start).Milliseconds(),
+				ExitCode:   0,
+			})
+			return "", GoalContinuedPayload{}, false, nil
 		}
 		snapshot, _ := store.StatusSnapshot()
 		payload := goalContinuedPayload(decision, snapshot)

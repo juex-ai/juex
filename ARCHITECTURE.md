@@ -1644,7 +1644,12 @@ queue. It reuses the process Agent resource resolution and MCP manager, binds
 the Primary Session's Goal and Notes stores, and does not start another
 Observable controller or recursively register Side Session tools. Shared Goal
 state is visible and writable in the child, but only the owning Primary Engine
-runs the Goal completion gate.
+runs the Goal completion gate. The Primary injects a read-only manager predicate
+into that gate: an `in_progress` Goal may finish the current Turn without a
+synthetic continuation while at least one subscribed child is running. The
+predicate only scans manager memory under its own mutex; it does not call back
+into the App, Session, or Engine. Idle, unsubscribed, stopping, and closed
+children do not defer the gate.
 
 Create and idle send operations start child turns asynchronously; busy send
 uses the child's normal durable pending-input admission. Subscription is on by
@@ -2178,7 +2183,12 @@ tracker docs, or other workflow requirements as plain-text context or use Stop
 exit `2` to request continuation. The runtime gate reads only the persisted
 goal status: `success`, `failure`, and `wait_for_user` allow finish, while
 `in_progress` records a continuation and asks the model to keep working or call
-`update_goal`. Input admission never changes Goal status. The persisted waiting
+`update_goal`, except when the owning Primary reports subscribed Side Session
+work still running. That exception allows the current Turn to finish without
+mutating Goal state; a durable Side Session result later supplies external
+input. Continuation recording revalidates `in_progress` under the Goal store
+lock so a concurrent Side Session terminal update cannot enqueue a stale
+continuation. Input admission never changes Goal status. The persisted waiting
 contract remains in runtime context on the next Provider request, where the
 model decides whether to resume it as `in_progress`, complete it, fail it, or
 keep waiting. Goal state is exposed through `/status` and
