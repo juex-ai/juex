@@ -28,7 +28,7 @@ func TestLinuxReadOnlyProvidesWritableDevicesAndTemp(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := strings.Join(got.Args, "\x00")
-	for _, want := range []string{"--ro-bind\x00/\x00/", "--dev\x00/dev", "--tmpfs\x00/tmp", "--bind\x00/work\x00/work"} {
+	for _, want := range []string{"--ro-bind\x00/\x00/", "--dev\x00/dev", "--tmpfs\x00/tmp", "--dir\x00/tmp/juex", "--bind\x00/work\x00/work"} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("args missing %q: %#v", want, got.Args)
 		}

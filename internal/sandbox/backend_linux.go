@@ -31,7 +31,7 @@ func prepareLinux(lookPath func(string) (string, error), req Request) (ExecSpec,
 		args = append(args, "--dev-bind", "/", "/")
 	case OutsideWorkspaceReadOnly:
 		args = append(args, "--ro-bind", "/", "/")
-		args = append(args, "--dev", "/dev", "--tmpfs", "/tmp")
+		args = append(args, "--dev", "/dev", "--tmpfs", "/tmp", "--dir", "/tmp/juex")
 		for _, root := range roots {
 			args = append(args, "--bind", root, root)
 		}

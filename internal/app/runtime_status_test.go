@@ -298,8 +298,8 @@ body`)
 	if status.Provider.ID != "openai" || status.Provider.Protocol != "openai/responses" || status.Provider.Model != "gpt-test" || status.Provider.Capabilities.Tools {
 		t.Fatalf("provider = %+v", status.Provider)
 	}
-	if !status.Sandbox.Enabled || status.Sandbox.FileSystem.OutsideWorkspace != config.OutsideWorkspaceReadOnly || !status.Sandbox.Network.Enabled {
-		t.Fatalf("sandbox = %+v", status.Sandbox)
+	if want := cfg.SandboxPolicy(); !reflect.DeepEqual(status.Sandbox, want) {
+		t.Fatalf("sandbox = %+v, want %+v", status.Sandbox, want)
 	}
 	if status.Skills.Count != 4 || status.Skills.Items[0].Name != "review" || status.Skills.Items[0].Source != "project" {
 		t.Fatalf("skills = %+v", status.Skills)

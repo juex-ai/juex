@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -94,8 +95,8 @@ body`)
 	if got.Provider.ID != "openai" || got.Provider.Protocol != "openai/responses" || got.Provider.Model != "m" {
 		t.Fatalf("provider = %+v", got.Provider)
 	}
-	if !got.Sandbox.Enabled || got.Sandbox.FileSystem.OutsideWorkspace != config.OutsideWorkspaceReadOnly || !got.Sandbox.Network.Enabled {
-		t.Fatalf("sandbox = %+v", got.Sandbox)
+	if want := srv.opts.Cfg.SandboxPolicy(); !reflect.DeepEqual(got.Sandbox, want) {
+		t.Fatalf("sandbox = %+v, want %+v", got.Sandbox, want)
 	}
 	if got.WorkDir != work {
 		t.Fatalf("work_dir = %q, want %q", got.WorkDir, work)
