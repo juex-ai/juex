@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 type FilePolicyOptions struct {
@@ -16,12 +17,13 @@ type FilePolicyOptions struct {
 }
 
 type FilePolicy struct {
-	enabled        bool
-	restrictWrites bool
-	base           string
-	blockedPaths   []blockedPath
-	canonicalRoots []string
-	scratchRoot    string
+	enabled           bool
+	restrictWrites    bool
+	base              string
+	blockedPaths      []blockedPath
+	canonicalRoots    []string
+	scratchRoot       string
+	commandWriteCheck *commandWriteCheckState
 }
 
 type PathGuard = FilePolicy
@@ -70,13 +72,21 @@ func NewFilePolicy(opts FilePolicyOptions) FilePolicy {
 		roots = append(roots, blockedPath{original: trimmed, variants: variants})
 	}
 	return FilePolicy{
-		enabled:        true,
-		restrictWrites: opts.Policy.FileSystem.OutsideWorkspace != OutsideWorkspaceReadWrite,
-		base:           base,
-		blockedPaths:   roots,
-		canonicalRoots: canonicalRoots,
-		scratchRoot:    scratchRoot,
+		enabled:           true,
+		restrictWrites:    opts.Policy.FileSystem.OutsideWorkspace != OutsideWorkspaceReadWrite,
+		base:              base,
+		blockedPaths:      roots,
+		canonicalRoots:    canonicalRoots,
+		scratchRoot:       scratchRoot,
+		commandWriteCheck: &commandWriteCheckState{},
 	}
+}
+
+type commandWriteCheckState struct {
+	mu      sync.Mutex
+	safe    bool
+	running bool
+	done    chan struct{}
 }
 
 func NewPathGuard(workDir string, policy Policy) PathGuard {
@@ -111,11 +121,18 @@ func (g FilePolicy) CheckWrite(path string) error {
 	}
 	for _, root := range g.canonicalRoots {
 		if pathWithinOrEqualFilesystem(root, target) {
-			multiple, err := hasMultipleHardLinks(target)
+			metadata, multiple, err := readHardLinkMetadata(target)
 			if err != nil {
 				return fmt.Errorf("sandbox: inspect write path %s: %w", target, err)
 			}
-			if multiple {
+			if multiple && !g.commandWriteCheckKnownSafe() {
+				contained, err := g.hardLinkContained(context.Background(), metadata)
+				if err != nil {
+					return fmt.Errorf("sandbox: inspect hard links for write path %s: %w", target, err)
+				}
+				if contained {
+					return nil
+				}
 				return fmt.Errorf("sandbox: write path %s has multiple hard links", target)
 			}
 			return nil
@@ -128,6 +145,83 @@ func (g FilePolicy) CheckCommandWrites(ctx context.Context) error {
 	if !g.enabled || !g.restrictWrites {
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	state := g.commandWriteCheck
+	if state == nil {
+		return g.scanCommandHardLinks(ctx)
+	}
+	for {
+		state.mu.Lock()
+		if state.safe {
+			state.mu.Unlock()
+			return nil
+		}
+		if state.running {
+			done := state.done
+			state.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		state.running = true
+		state.done = make(chan struct{})
+		done := state.done
+		state.mu.Unlock()
+
+		err := g.scanCommandHardLinks(ctx)
+		state.mu.Lock()
+		if err == nil {
+			state.safe = true
+		}
+		state.running = false
+		close(done)
+		state.mu.Unlock()
+		return err
+	}
+}
+
+type hardLinkRecord struct {
+	links   uint64
+	aliases uint64
+	path    string
+}
+
+func (g FilePolicy) scanCommandHardLinks(ctx context.Context) error {
+	index, err := g.hardLinkIndex(ctx)
+	if err != nil {
+		return err
+	}
+	for _, record := range index {
+		if record.aliases < record.links {
+			return fmt.Errorf("writable root file with multiple hard links has %d of %d aliases inside writable roots: %s", record.aliases, record.links, record.path)
+		}
+	}
+	return nil
+}
+
+func (g FilePolicy) hardLinkContained(ctx context.Context, target hardLinkMetadata) (bool, error) {
+	index, err := g.hardLinkIndex(ctx)
+	if err != nil {
+		return false, err
+	}
+	record := index[target.identity]
+	if record == nil {
+		return false, nil
+	}
+	links := target.links
+	if record.links > links {
+		links = record.links
+	}
+	return record.aliases >= links, nil
+}
+
+func (g FilePolicy) hardLinkIndex(ctx context.Context) (map[hardLinkIdentity]*hardLinkRecord, error) {
+	index := map[hardLinkIdentity]*hardLinkRecord{}
 	for _, root := range g.commandWritableRoots() {
 		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 			if err := ctx.Err(); err != nil {
@@ -139,29 +233,42 @@ func (g FilePolicy) CheckCommandWrites(ctx context.Context) error {
 			if walkErr != nil {
 				return walkErr
 			}
-			if _, _, blocked := g.blockedPath(path); blocked {
-				if entry.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
 			if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 				return nil
 			}
-			multiple, err := hasMultipleHardLinks(path)
+			metadata, multiple, err := readHardLinkMetadata(path)
 			if err != nil {
 				return err
 			}
-			if multiple {
-				return fmt.Errorf("writable root contains file with multiple hard links: %s", path)
+			if !multiple {
+				return nil
 			}
+			record := index[metadata.identity]
+			if record == nil {
+				record = &hardLinkRecord{links: metadata.links, path: path}
+				index[metadata.identity] = record
+			}
+			if metadata.links > record.links {
+				record.links = metadata.links
+			}
+			record.aliases++
 			return nil
 		})
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return index, nil
+}
+
+func (g FilePolicy) commandWriteCheckKnownSafe() bool {
+	state := g.commandWriteCheck
+	if state == nil {
+		return false
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.safe
 }
 
 func (g FilePolicy) commandWritableRoots() []string {

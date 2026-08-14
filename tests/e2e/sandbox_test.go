@@ -167,6 +167,93 @@ func TestEndToEnd_OmittedSandboxConfigRejectsCommandHardLinks(t *testing.T) {
 	assertE2EFileContent(t, outsideFile, "outside")
 }
 
+func TestEndToEnd_OmittedSandboxConfigAllowsContainedHardLinks(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skipf("default sandbox is disabled on %s", runtime.GOOS)
+	}
+	root := t.TempDir()
+	work := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	first := filepath.Join(work, "first.txt")
+	second := filepath.Join(work, "second.txt")
+	if err := os.WriteFile(first, []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(first, second); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+
+	cfg := loadOmittedSandboxE2EConfig(t, root, work)
+	a, err := app.New(app.Options{
+		Config:     cfg,
+		Provider:   &bareScriptProvider{},
+		WorkDir:    work,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+
+	started := filepath.Join(work, "started.txt")
+	out, _, err := a.Engine.Tools.CallWithInfo(context.Background(), "exec_command", map[string]any{
+		"cmd": "printf started > " + shellQuoteE2E(started),
+	})
+	if err != nil {
+		t.Fatalf("sandboxed exec_command failed: %v\n%s", err, out)
+	}
+	assertE2EFileContent(t, started, "started")
+}
+
+func TestEndToEnd_OmittedSandboxConfigPreventsCreatingExternalHardLink(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skipf("default sandbox is disabled on %s", runtime.GOOS)
+	}
+	root := t.TempDir()
+	work := filepath.Join(root, "workspace")
+	outsideDir := filepath.Join(root, "outside")
+	for _, path := range []string{work, outsideDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outsideFile := filepath.Join(outsideDir, "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	insideLink := filepath.Join(work, "inside-link.txt")
+
+	cfg := loadOmittedSandboxE2EConfig(t, root, work)
+	a, err := app.New(app.Options{
+		Config:     cfg,
+		Provider:   &bareScriptProvider{},
+		WorkDir:    work,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+
+	command := strings.Join([]string{
+		"if ln " + shellQuoteE2E(outsideFile) + " " + shellQuoteE2E(insideLink) + " 2>/dev/null; then link=unexpected; else link=blocked; fi",
+		`printf 'link=%s\n' "$link"`,
+	}, "\n")
+	out, _, err := a.Engine.Tools.CallWithInfo(context.Background(), "exec_command", map[string]any{"cmd": command})
+	if err != nil {
+		t.Fatalf("sandboxed exec_command failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "link=blocked") {
+		t.Fatalf("exec_command output = %q, want link=blocked", out)
+	}
+	if _, statErr := os.Lstat(insideLink); !os.IsNotExist(statErr) {
+		t.Fatalf("sandbox created outside hard link: %v", statErr)
+	}
+	assertE2EFileContent(t, outsideFile, "outside")
+}
+
 func loadOmittedSandboxE2EConfig(t *testing.T, root, work string) config.Config {
 	t.Helper()
 	home := filepath.Join(root, "home")

@@ -133,6 +133,34 @@ func TestFilePolicyRejectsExistingFilesWithMultipleHardLinks(t *testing.T) {
 	}
 }
 
+func TestFilePolicyAllowsHardLinksContainedInWritableRoots(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("hard-link count enforcement is supported by the sandbox platforms")
+	}
+	work := t.TempDir()
+	first := filepath.Join(work, "first.txt")
+	second := filepath.Join(work, "second.txt")
+	if err := os.WriteFile(first, []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(first, second); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+
+	guard := NewFilePolicy(FilePolicyOptions{
+		Policy:  DefaultPolicyForOS(runtime.GOOS),
+		WorkDir: work,
+	})
+	for _, path := range []string{first, second} {
+		if err := guard.CheckWrite(path); err != nil {
+			t.Fatalf("CheckWrite(%q) = %v, want contained hard link allowed", path, err)
+		}
+	}
+	if err := guard.CheckCommandWrites(context.Background()); err != nil {
+		t.Fatalf("CheckCommandWrites() = %v, want contained hard links allowed", err)
+	}
+}
+
 func TestFilePolicyRejectsCommandWritesWhenWritableRootContainsHardLinks(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("hard-link count enforcement is supported by the sandbox platforms")
@@ -172,6 +200,56 @@ func TestFilePolicyCommandWriteCheckHonorsCancellation(t *testing.T) {
 	cancel()
 	if err := guard.CheckCommandWrites(ctx); err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
 		t.Fatalf("CheckCommandWrites(cancelled) = %v, want context cancellation", err)
+	}
+}
+
+func TestFilePolicyCachesSuccessfulCommandWriteCheck(t *testing.T) {
+	guard := NewFilePolicy(FilePolicyOptions{
+		Policy:  DefaultPolicyForOS("linux"),
+		WorkDir: t.TempDir(),
+	})
+	if err := guard.CheckCommandWrites(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	guard.commandWriteCheck.mu.Lock()
+	safe := guard.commandWriteCheck.safe
+	guard.commandWriteCheck.mu.Unlock()
+	if !safe {
+		t.Fatal("successful command write check was not cached")
+	}
+}
+
+func TestFilePolicyDoesNotCacheFailedCommandWriteCheck(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("hard-link count enforcement is supported by the sandbox platforms")
+	}
+	work := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(work, "inside.txt")
+	if err := os.Link(outside, inside); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	guard := NewFilePolicy(FilePolicyOptions{
+		Policy:  DefaultPolicyForOS(runtime.GOOS),
+		WorkDir: work,
+	})
+	if err := guard.CheckCommandWrites(context.Background()); err == nil {
+		t.Fatal("expected initial external hard-link rejection")
+	}
+	if err := os.Remove(inside); err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.CheckCommandWrites(context.Background()); err != nil {
+		t.Fatalf("CheckCommandWrites() after repair = %v, want allowed", err)
+	}
+	guard.commandWriteCheck.mu.Lock()
+	safe := guard.commandWriteCheck.safe
+	guard.commandWriteCheck.mu.Unlock()
+	if !safe {
+		t.Fatal("repaired command write check was not cached")
 	}
 }
 

@@ -2,6 +2,6 @@
 
 package sandbox
 
-func hasMultipleHardLinks(string) (bool, error) {
-	return false, nil
+func readHardLinkMetadata(string) (hardLinkMetadata, bool, error) {
+	return hardLinkMetadata{}, false, nil
 }

@@ -605,14 +605,16 @@ current AgentStateDir (`$JUEX_HOME/agents/<id>` for a Resident Agent) are the
 only default host writable roots; `apply_patch` and chunked writes remain
 Workspace-only. `blocked_paths` overrides both roots, and canonical path checks
 reject relative traversal and symlink escapes. Under the read-only preset,
-builtin writes also reject existing regular files with multiple hard links so
-an in-root pathname cannot mutate an outside inode. Command launch scans the
-writable roots and fails closed when such a file exists, protecting Shell,
-grep subprocesses, and Command Observables from the same aliasing path. Linux
-and macOS point `TMPDIR` into the current AgentStateDir, which keeps temporary
-writes inside an already allowed root without hiding host paths used as
-workspaces. Missing or non-functional backends fail closed instead of starting
-the command without a sandbox.
+builtin writes reject multiply linked regular files only when their link count
+proves that an alias exists outside the writable roots. The first restricted
+command launch for a shared file policy builds the same inode-based index and
+caches only a safe result; links contained entirely inside the writable roots
+remain usable. This protects Shell, grep subprocesses, and Command Observables
+without rescanning the trees before every command. Linux and macOS point
+`TMPDIR` into the current AgentStateDir, which keeps temporary writes inside an
+already allowed root without hiding host paths used as workspaces. Missing or
+non-functional backends fail closed instead of starting the command without a
+sandbox.
 
 This policy is host file-write isolation, not secrecy or an approval engine.
 The host remains readable except for `blocked_paths`, and network access is on

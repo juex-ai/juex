@@ -586,6 +586,51 @@ func TestRipgrepRunnerUsesSandboxRunnerAndExcludesBlockedDescendant(t *testing.T
 	}
 }
 
+func TestRipgrepRunnerUsesProvidedFilePolicy(t *testing.T) {
+	rg, err := exec.LookPath("rg")
+	if err != nil {
+		t.Skip("system rg is unavailable")
+	}
+	work := t.TempDir()
+	agentState := t.TempDir()
+	if err := os.WriteFile(filepath.Join(work, "public.txt"), []byte("needle\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	policy := sandbox.DefaultPolicyForOS("linux")
+	filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{
+		Policy:        policy,
+		WorkDir:       work,
+		AgentStateDir: agentState,
+	})
+	sandboxRunner := &fakeSandboxRunner{}
+	runner := NewRipgrepRunner(RipgrepRunnerOptions{
+		RipgrepPath:   rg,
+		WorkDir:       work,
+		Sandbox:       policy,
+		SandboxRunner: sandboxRunner,
+		FilePolicy:    &filePolicy,
+	})
+	if _, err := runner.Grep(context.Background(), GrepRequest{Pattern: "needle", Path: work}); err != nil {
+		t.Fatal(err)
+	}
+	if sandboxRunner.calls != 1 {
+		t.Fatalf("sandbox runner calls = %d, want 1", sandboxRunner.calls)
+	}
+	roots := sandboxRunner.requests[0].FilePolicy.WritableRoots()
+	want := map[string]bool{
+		canonicalPathForTest(t, work):       true,
+		canonicalPathForTest(t, agentState): true,
+	}
+	if len(roots) != len(want) {
+		t.Fatalf("grep writable roots = %v, want Workspace and AgentStateDir", roots)
+	}
+	for _, root := range roots {
+		if !want[root] {
+			t.Fatalf("grep writable roots = %v, unexpected %q", roots, root)
+		}
+	}
+}
+
 func TestParseRipgrepJSONStopsAtRecordLimit(t *testing.T) {
 	cancelled := false
 	stop := newSearchStop(func() { cancelled = true })
