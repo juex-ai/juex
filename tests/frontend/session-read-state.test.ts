@@ -145,6 +145,169 @@ test("terminal live event refreshes the persisted transcript", () => {
   assert.deepEqual(result.effects, [{ type: "refresh" }]);
 });
 
+test("compaction refresh reconciles persisted messages from the live projection", () => {
+  let state = projectSessionLoaded(
+    createSessionReadState(),
+    session("s1", []),
+  );
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-started",
+    type: "turn.started",
+    ts: "2026-08-14T00:00:00Z",
+    turn_id: "turn-1",
+    payload: {
+      input: "compact before continuing",
+      kind: "user",
+      message_id: "msg-user",
+    },
+  }).state;
+  const compacted = projectLiveBrowserEvent(state, {
+    id: "evt-compact",
+    type: "context.compact.completed",
+    ts: "2026-08-14T00:00:01Z",
+    turn_id: "turn-1",
+    payload: {
+      message_id: "msg-compact",
+      reason: "auto",
+      auto: true,
+      estimated_tokens: 900,
+      tokens_before: 900,
+      tokens_after: 40,
+      summary_chars: 20,
+      summary_model: "gpt-test",
+      context_window: 1000,
+      reserve_tokens: 100,
+      keep_recent_tokens: 100,
+    },
+  });
+
+  assert.deepEqual(compacted.effects, [
+    { type: "refresh", preserveLiveMessages: true },
+  ]);
+  state = projectSessionLoaded(
+    compacted.state,
+    session("s1", [
+      {
+        id: "msg-user",
+        role: "user",
+        turn_id: "turn-1",
+        blocks: [{ type: "text", text: "compact before continuing" }],
+      },
+      {
+        id: "msg-compact",
+        role: "user",
+        kind: "compact",
+        blocks: [{ type: "text", text: "summary" }],
+      },
+    ]),
+    { preserveLiveMessages: true },
+  );
+
+  const visible = [
+    ...(state.data?.messages ?? []),
+    ...state.projection.messages,
+  ];
+  assert.equal(
+    visible.filter((message) => message.id === "msg-user").length,
+    1,
+  );
+  assert.equal(
+    state.projection.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        message.turn_id === "turn-1" &&
+        message.pending,
+    ),
+    true,
+  );
+
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-tool",
+    type: "tool.requested",
+    ts: "2026-08-14T00:00:02Z",
+    turn_id: "turn-1",
+    payload: {
+      name: "exec_command",
+      tool_use_id: "tool-1",
+    },
+  }).state;
+  assert.equal(
+    state.projection.messages.some((message) =>
+      message.blocks?.some(
+        (block) =>
+          block.type === "tool_use" && block.tool_use_id === "tool-1",
+      ),
+    ),
+    true,
+  );
+});
+
+test("preserved refresh only reconciles exact stable message ids", () => {
+  const initial = projectSessionLoaded(
+    createSessionReadState(),
+    session("s1", []),
+  );
+  const state = {
+    ...initial,
+    projection: {
+      ...initial.projection,
+      messages: [
+        {
+          id: "persisted-user",
+          role: "user" as const,
+          turn_id: "turn-1",
+          blocks: [{ type: "text" as const, text: "same input" }],
+        },
+        {
+          id: "live-user",
+          role: "user" as const,
+          turn_id: "turn-2",
+          blocks: [{ type: "text" as const, text: "same input" }],
+        },
+        {
+          role: "assistant" as const,
+          turn_id: "turn-2",
+          pending: true,
+          blocks: [
+            {
+              type: "tool_result" as const,
+              tool_use_id: "tool-live",
+              content: "still streaming",
+              streaming: true,
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  const refreshed = projectSessionLoaded(
+    state,
+    session("s1", [
+      {
+        id: "persisted-user",
+        role: "user",
+        turn_id: "turn-1",
+        blocks: [{ type: "text", text: "same input" }],
+      },
+    ]),
+    { preserveLiveMessages: true },
+  );
+
+  assert.deepEqual(
+    refreshed.projection.messages.map((message) => message.id),
+    ["live-user", undefined],
+  );
+  assert.equal(
+    refreshed.projection.messages[1]?.blocks?.[0]?.type,
+    "tool_result",
+  );
+  assert.deepEqual(
+    projectSessionLoaded(state, session("s1", [])).projection.messages,
+    [],
+  );
+});
+
 test("replay skips transcript content already present in the initial session page", () => {
   let state = projectSessionLoaded(
     createSessionReadState(),
