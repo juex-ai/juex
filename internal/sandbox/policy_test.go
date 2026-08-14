@@ -3,21 +3,65 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestDefaultPolicy(t *testing.T) {
 	policy := DefaultPolicy()
-	if policy.Enabled {
-		t.Fatalf("enabled = true, want false")
-	}
-	if policy.FileSystem.OutsideWorkspace != OutsideWorkspaceReadWrite || !policy.Network.Enabled {
+	want := DefaultPolicyForOS(runtime.GOOS)
+	if policy.Enabled != want.Enabled || policy.FileSystem.OutsideWorkspace != want.FileSystem.OutsideWorkspace || policy.Network.Enabled != want.Network.Enabled {
 		t.Fatalf("policy = %+v", policy)
 	}
 	if len(policy.FileSystem.BlockedPaths) != 0 {
 		t.Fatalf("blocked paths = %#v, want empty", policy.FileSystem.BlockedPaths)
+	}
+}
+
+func filePolicyForTest(policy Policy, workDir string, roots ...string) FilePolicy {
+	agentStateDir := ""
+	if len(roots) > 1 {
+		agentStateDir = roots[1]
+	}
+	return NewFilePolicy(FilePolicyOptions{Policy: policy, WorkDir: workDir, AgentStateDir: agentStateDir})
+}
+
+func sandboxLookPathForTest(backend, target string) func(string) (string, error) {
+	return func(name string) (string, error) {
+		switch name {
+		case "bwrap", "sandbox-exec":
+			return backend, nil
+		case "true":
+			return target, nil
+		default:
+			return "", fmt.Errorf("unexpected sandbox executable lookup %q", name)
+		}
+	}
+}
+
+func TestDefaultPolicyForOS(t *testing.T) {
+	for _, tc := range []struct {
+		goos    string
+		enabled bool
+		outside OutsideWorkspaceAccess
+	}{
+		{goos: "linux", enabled: true, outside: OutsideWorkspaceReadOnly},
+		{goos: "darwin", enabled: true, outside: OutsideWorkspaceReadOnly},
+		{goos: "windows", enabled: false, outside: OutsideWorkspaceReadWrite},
+	} {
+		t.Run(tc.goos, func(t *testing.T) {
+			policy := DefaultPolicyForOS(tc.goos)
+			if policy.Enabled != tc.enabled || policy.FileSystem.OutsideWorkspace != tc.outside || !policy.Network.Enabled {
+				t.Fatalf("policy = %+v", policy)
+			}
+		})
 	}
 }
 
@@ -31,7 +75,7 @@ func TestValidateOutsideWorkspaceAccessRejectsDenied(t *testing.T) {
 func TestDefaultRunnerReturnsOriginalSpecWhenDisabled(t *testing.T) {
 	spec := ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}, Dir: "/work"}
 	got, err := (DefaultRunner{RuntimeOS: "windows"}).Prepare(context.Background(), Request{
-		Policy: DefaultPolicy(),
+		Policy: LegacyDefaultPolicy(),
 		Spec:   spec,
 	})
 	if err != nil {
@@ -108,7 +152,7 @@ func environmentValueForTest(env []string, key string) string {
 }
 
 func TestDefaultRunnerWindowsEnabledFailsClosed(t *testing.T) {
-	policy := DefaultPolicy()
+	policy := LegacyDefaultPolicy()
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	policy.Network.Enabled = false
@@ -134,7 +178,7 @@ func TestDefaultRunnerLinuxMissingBubblewrapFailsClosed(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("linux backend lookup is only compiled in linux builds")
 	}
-	policy := DefaultPolicy()
+	policy := LegacyDefaultPolicy()
 	policy.Enabled = true
 	_, err := (DefaultRunner{
 		RuntimeOS: "linux",
@@ -145,5 +189,177 @@ func TestDefaultRunnerLinuxMissingBubblewrapFailsClosed(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "backend=bubblewrap") || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("err = %v, want bubblewrap unavailable", err)
+	}
+}
+
+func TestCheckAvailabilityCachesFunctionalProbe(t *testing.T) {
+	resetBackendProbeCacheForTest()
+	original := runProbeCommand
+	t.Cleanup(func() {
+		runProbeCommand = original
+		resetBackendProbeCacheForTest()
+	})
+	var calls atomic.Int32
+	runProbeCommand = func(context.Context, string, ...string) error {
+		calls.Add(1)
+		return nil
+	}
+	policy := DefaultPolicyForOS("linux")
+	lookPath := sandboxLookPathForTest("/test/bwrap", "/test/true")
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := CheckAvailability(context.Background(), policy, "linux", lookPath); err != nil {
+				t.Errorf("CheckAvailability: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if calls.Load() != 1 {
+		t.Fatalf("functional probe calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestCheckAvailabilityCallerCancellationStopsWaitingForCachedProbe(t *testing.T) {
+	resetBackendProbeCacheForTest()
+	original := runProbeCommand
+	t.Cleanup(func() {
+		runProbeCommand = original
+		resetBackendProbeCacheForTest()
+	})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	runProbeCommand = func(ctx context.Context, _ string, _ ...string) error {
+		close(started)
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	policy := DefaultPolicyForOS("linux")
+	lookPath := sandboxLookPathForTest("/test/bwrap", "/test/true")
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- CheckAvailability(ctx, policy, "linux", lookPath)
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			close(release)
+			t.Fatalf("CheckAvailability error = %v, want context canceled", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		close(release)
+		<-result
+		t.Fatal("CheckAvailability kept waiting for the shared backend probe after caller cancellation")
+	}
+	close(release)
+	if err := CheckAvailability(context.Background(), policy, "linux", lookPath); err != nil {
+		t.Fatalf("cached probe did not complete for a later caller: %v", err)
+	}
+}
+
+func TestCheckAvailabilityResolvesFunctionalProbeTarget(t *testing.T) {
+	resetBackendProbeCacheForTest()
+	original := runProbeCommand
+	t.Cleanup(func() {
+		runProbeCommand = original
+		resetBackendProbeCacheForTest()
+	})
+	var gotHelper string
+	var gotArgs []string
+	runProbeCommand = func(_ context.Context, helper string, args ...string) error {
+		gotHelper = helper
+		gotArgs = append([]string(nil), args...)
+		return nil
+	}
+	lookPath := func(name string) (string, error) {
+		switch name {
+		case "bwrap":
+			return "/nix/store/bubblewrap/bin/bwrap", nil
+		case "true":
+			return "/nix/store/coreutils/bin/true", nil
+		default:
+			return "", fmt.Errorf("unexpected lookup %q", name)
+		}
+	}
+	if err := CheckAvailability(context.Background(), DefaultPolicyForOS("linux"), "linux", lookPath); err != nil {
+		t.Fatal(err)
+	}
+	if gotHelper != "/nix/store/bubblewrap/bin/bwrap" {
+		t.Fatalf("probe helper = %q", gotHelper)
+	}
+	if len(gotArgs) == 0 || gotArgs[len(gotArgs)-1] != "/nix/store/coreutils/bin/true" {
+		t.Fatalf("probe args = %#v, want resolved true target", gotArgs)
+	}
+}
+
+func TestDefaultRunnerFunctionalProbeFailureFailsClosed(t *testing.T) {
+	policy := DefaultPolicyForOS("linux")
+	_, err := (DefaultRunner{
+		RuntimeOS: "linux",
+		LookPath:  func(string) (string, error) { return "/test/bwrap", nil },
+		Probe: func(context.Context, string, string, Policy) error {
+			return fmt.Errorf("operation not permitted")
+		},
+	}).Prepare(context.Background(), Request{
+		Policy:     policy,
+		WorkDir:    "/work",
+		FilePolicy: filePolicyForTest(policy, "/work", "/work"),
+		Spec:       ExecSpec{Binary: "/bin/true"},
+	})
+	if err == nil {
+		t.Fatal("expected sandbox probe error")
+	}
+	var sandboxErr *Error
+	if !errors.As(err, &sandboxErr) || sandboxErr.Code != ErrorCodeBackendUnavailable || sandboxErr.Phase != "probe" {
+		t.Fatalf("err = %T %v, want backend_unavailable probe", err, err)
+	}
+}
+
+func TestDefaultRunnerRejectsCommandHardLinksBeforeBackendStart(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("hard-link count enforcement is supported by the sandbox platforms")
+	}
+	work := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(work, "inside.txt")
+	if err := os.Link(outside, inside); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	policy := DefaultPolicyForOS(runtime.GOOS)
+	_, err := (DefaultRunner{
+		RuntimeOS: runtime.GOOS,
+		LookPath:  sandboxLookPathForTest("/test/backend", "/test/true"),
+		Probe:     func(context.Context, string, string, Policy) error { return nil },
+	}).Prepare(context.Background(), Request{
+		Policy:     policy,
+		WorkDir:    work,
+		FilePolicy: filePolicyForTest(policy, work, work),
+		Spec:       ExecSpec{Binary: "/bin/sh", Args: []string{"-c", "echo changed > inside.txt"}},
+	})
+	if err == nil {
+		t.Fatal("expected command hard-link rejection")
+	}
+	var sandboxErr *Error
+	if !errors.As(err, &sandboxErr) || sandboxErr.Code != ErrorCodePolicyUnavailable || sandboxErr.Phase != "hard-links" {
+		t.Fatalf("err = %T %v, want policy_unavailable hard-links", err, err)
+	}
+	data, readErr := os.ReadFile(outside)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if got := string(data); got != "outside" {
+		t.Fatalf("outside file = %q, want unchanged", got)
 	}
 }

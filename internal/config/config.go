@@ -75,6 +75,7 @@ type Config struct {
 	runtimeEnvironment environment.Snapshot
 	launchEnvironment  environment.Snapshot
 	runtimeEnvStatus   EnvironmentStatus
+	sandboxConfigured  bool
 }
 
 type AgentStateMode uint8
@@ -111,7 +112,7 @@ type fileConfig struct {
 	Hooks                     hooks.FileConfig  `yaml:"hooks"`
 	Runtime                   runtimeConfig     `yaml:"runtime"`
 	Shell                     *ShellConfig      `yaml:"shell"`
-	Sandbox                   sandboxConfig     `yaml:"sandbox"`
+	Sandbox                   *sandboxConfig    `yaml:"sandbox"`
 	Skills                    skillsConfig      `yaml:"skills"`
 	Extensions                extensionsConfig  `yaml:"extensions"`
 	Fleet                     *fleetFileConfig  `yaml:"fleet"`
@@ -447,7 +448,6 @@ func loadUserConfigForWorkDir(workDir string) (Config, error) {
 		PendingInputTTL:           DefaultPendingInputTTL,
 		ExternalEventTTL:          DefaultExternalEventTTL,
 		ToolTimeout:               DefaultToolTimeout,
-		Sandbox:                   sandbox.DefaultPolicy(),
 		Skills:                    DefaultSkillsConfig(),
 		Fleet:                     FleetConfig{Addr: DefaultFleetAddr},
 		EnableUserAgentsResources: true,
@@ -827,6 +827,10 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 	if err := dec.Decode(&fc); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
+	sandboxPresent, err := topLevelYAMLKeyPresent(data, "sandbox")
+	if err != nil {
+		return fmt.Errorf("config: parse %s: %w", source.Path, err)
+	}
 	if strings.TrimSpace(fc.Model) != "" {
 		cfg.modelRef = strings.TrimSpace(fc.Model)
 	}
@@ -870,8 +874,14 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 			return fmt.Errorf("config: parse %s: %w", source.Path, err)
 		}
 	}
-	if err := applySandboxConfig(cfg, fc.Sandbox); err != nil {
-		return fmt.Errorf("config: parse %s: %w", source.Path, err)
+	if sandboxPresent {
+		sandboxLayer := sandboxConfig{}
+		if fc.Sandbox != nil {
+			sandboxLayer = *fc.Sandbox
+		}
+		if err := applySandboxConfig(cfg, sandboxLayer); err != nil {
+			return fmt.Errorf("config: parse %s: %w", source.Path, err)
+		}
 	}
 	if fc.Shell != nil {
 		cfg.shellConfig = *fc.Shell
@@ -1366,6 +1376,51 @@ func applyToolOutputConfig(cfg *Config, c toolOutputConfig) {
 	}
 }
 
+func topLevelYAMLKeyPresent(data []byte, key string) (bool, error) {
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return false, err
+	}
+	if len(document.Content) == 0 {
+		return false, nil
+	}
+	return yamlMappingKeyPresent(document.Content[0], key, map[*yaml.Node]bool{}), nil
+}
+
+func yamlMappingKeyPresent(node *yaml.Node, key string, visited map[*yaml.Node]bool) bool {
+	if node == nil || visited[node] {
+		return false
+	}
+	visited[node] = true
+	switch node.Kind {
+	case yaml.DocumentNode:
+		return len(node.Content) > 0 && yamlMappingKeyPresent(node.Content[0], key, visited)
+	case yaml.AliasNode:
+		return yamlMappingKeyPresent(node.Alias, key, visited)
+	case yaml.SequenceNode:
+		for _, child := range node.Content {
+			if yamlMappingKeyPresent(child, key, visited) {
+				return true
+			}
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if node.Content[i].Value == key {
+				return true
+			}
+		}
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			mergeKey := node.Content[i]
+			if mergeKey.Value == "<<" || mergeKey.Tag == "!!merge" {
+				if yamlMappingKeyPresent(node.Content[i+1], key, visited) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
 	if c.PendingInputTTLSet {
 		cfg.PendingInputTTL = c.PendingInputTTL
@@ -1385,6 +1440,10 @@ func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
 }
 
 func applySandboxConfig(cfg *Config, c sandboxConfig) error {
+	if !cfg.sandboxConfigured {
+		cfg.Sandbox = sandbox.LegacyDefaultPolicy()
+		cfg.sandboxConfigured = true
+	}
 	if c.Enabled.Set {
 		cfg.Sandbox.Enabled = c.Enabled.Value
 	}

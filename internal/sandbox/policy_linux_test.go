@@ -12,26 +12,53 @@ import (
 )
 
 func TestLinuxReadOnlyProvidesWritableDevicesAndTemp(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	agentStateDir := filepath.Join(root, "agent-state")
+	for _, path := range []string{workspace, agentStateDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	policy := DefaultPolicy()
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	got, err := (DefaultRunner{
 		RuntimeOS: "linux",
-		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+		LookPath:  sandboxLookPathForTest("/usr/bin/bwrap", "/bin/true"),
 	}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       "/work",
-		WritableRoots: []string{"/work"},
-		Spec:          ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}},
+		Policy:     policy,
+		WorkDir:    workspace,
+		FilePolicy: filePolicyForTest(policy, workspace, workspace, agentStateDir),
+		Spec:       ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	args := strings.Join(got.Args, "\x00")
-	for _, want := range []string{"--ro-bind\x00/\x00/", "--dev\x00/dev", "--tmpfs\x00/tmp", "--bind\x00/work\x00/work"} {
+	for _, want := range []string{"--ro-bind\x00/\x00/", "--dev\x00/dev", "--bind\x00" + workspace + "\x00" + workspace, "--bind\x00" + agentStateDir + "\x00" + agentStateDir} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("args missing %q: %#v", want, got.Args)
 		}
+	}
+	for _, forbidden := range []string{"--tmpfs\x00/tmp", "--dir\x00/tmp/juex"} {
+		if strings.Contains(args, forbidden) {
+			t.Fatalf("args unexpectedly replace host temp path %q: %#v", forbidden, got.Args)
+		}
+	}
+	scratch := filepath.Join(agentStateDir, "tmp")
+	for _, want := range []string{
+		"TMPDIR=" + scratch,
+		"XDG_CACHE_HOME=" + filepath.Join(scratch, "cache"),
+		"GOCACHE=" + filepath.Join(scratch, "cache", "go-build"),
+		"GOMODCACHE=" + filepath.Join(scratch, "cache", "go-mod"),
+	} {
+		if !strings.Contains(strings.Join(got.Env, "\n"), want) {
+			t.Fatalf("sandbox environment missing %q: %#v", want, got.Env)
+		}
+	}
+	if info, err := os.Stat(scratch); err != nil || !info.IsDir() {
+		t.Fatalf("scratch directory = %q: info=%v err=%v", scratch, info, err)
 	}
 }
 
@@ -51,12 +78,12 @@ func TestLinuxReadOnlyBindsWorkspaceAndAgentStateRoots(t *testing.T) {
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	got, err := (DefaultRunner{
 		RuntimeOS: "linux",
-		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+		LookPath:  sandboxLookPathForTest("/usr/bin/bwrap", "/bin/true"),
 	}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       workspace,
-		WritableRoots: []string{workspace, dataDir},
-		Spec:          ExecSpec{Binary: "/bin/true"},
+		Policy:     policy,
+		WorkDir:    workspace,
+		FilePolicy: filePolicyForTest(policy, workspace, workspace, dataDir),
+		Spec:       ExecSpec{Binary: "/bin/true"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,11 +108,11 @@ func TestLinuxReadOnlyBindsWorkspaceAndAgentStateRoots(t *testing.T) {
 }
 
 func TestLinuxBackendRestoresTargetEnvironmentInsideSandbox(t *testing.T) {
-	policy := DefaultPolicy()
+	policy := LegacyDefaultPolicy()
 	policy.Enabled = true
 	got, err := (DefaultRunner{
 		RuntimeOS: "linux",
-		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+		LookPath:  sandboxLookPathForTest("/usr/bin/bwrap", "/bin/true"),
 	}).Prepare(context.Background(), Request{
 		Policy: policy,
 		Spec: ExecSpec{
@@ -131,12 +158,12 @@ func TestLinuxBlockedPathsAreMasked(t *testing.T) {
 	policy.FileSystem.BlockedPaths = []string{dir, file}
 	got, err := (DefaultRunner{
 		RuntimeOS: "linux",
-		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+		LookPath:  sandboxLookPathForTest("/usr/bin/bwrap", "/bin/true"),
 	}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       "/work",
-		WritableRoots: []string{"/work"},
-		Spec:          ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}},
+		Policy:     policy,
+		WorkDir:    "/work",
+		FilePolicy: filePolicyForTest(policy, "/work", "/work"),
+		Spec:       ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -162,12 +189,12 @@ func TestLinuxBlockedPathMaskFollowsWritableAgentStateBind(t *testing.T) {
 	policy.FileSystem.BlockedPaths = []string{blocked}
 	got, err := (DefaultRunner{
 		RuntimeOS: "linux",
-		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+		LookPath:  sandboxLookPathForTest("/usr/bin/bwrap", "/bin/true"),
 	}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       workspace,
-		WritableRoots: []string{workspace, agentStateDir},
-		Spec:          ExecSpec{Binary: "/bin/true"},
+		Policy:     policy,
+		WorkDir:    workspace,
+		FilePolicy: filePolicyForTest(policy, workspace, workspace, agentStateDir),
+		Spec:       ExecSpec{Binary: "/bin/true"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -189,12 +216,12 @@ func TestLinuxBlockedPathsRejectMissingPaths(t *testing.T) {
 	policy.FileSystem.BlockedPaths = []string{missing}
 	_, err := (DefaultRunner{
 		RuntimeOS: "linux",
-		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+		LookPath:  sandboxLookPathForTest("/usr/bin/bwrap", "/bin/true"),
 	}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       "/work",
-		WritableRoots: []string{"/work"},
-		Spec:          ExecSpec{Binary: "sh"},
+		Policy:     policy,
+		WorkDir:    "/work",
+		FilePolicy: filePolicyForTest(policy, "/work", "/work"),
+		Spec:       ExecSpec{Binary: "sh"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("err = %v, want missing blocked path error", err)

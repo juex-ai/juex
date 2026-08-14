@@ -53,6 +53,7 @@ type RipgrepRunnerOptions struct {
 	Environment   environment.Snapshot
 	Sandbox       sandbox.Policy
 	SandboxRunner sandbox.Runner
+	FilePolicy    *sandbox.FilePolicy
 	MaxMatches    int
 	MaxStdout     int
 	MaxStderr     int
@@ -61,6 +62,7 @@ type RipgrepRunnerOptions struct {
 
 type RipgrepRunner struct {
 	opts         RipgrepRunnerOptions
+	filePolicy   sandbox.FilePolicy
 	resolveOnce  sync.Once
 	resolvedPath string
 	resolveErr   error
@@ -79,7 +81,11 @@ func NewRipgrepRunner(opts RipgrepRunnerOptions) *RipgrepRunner {
 	if opts.MaxRecord <= 0 {
 		opts.MaxRecord = defaultGrepRecordBytes
 	}
-	return &RipgrepRunner{opts: opts}
+	filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: opts.Sandbox, WorkDir: opts.WorkDir})
+	if opts.FilePolicy != nil {
+		filePolicy = *opts.FilePolicy
+	}
+	return &RipgrepRunner{opts: opts, filePolicy: filePolicy}
 }
 
 func (r *RipgrepRunner) Grep(ctx context.Context, req GrepRequest) (GrepResult, error) {
@@ -131,10 +137,10 @@ func (r *RipgrepRunner) Grep(ctx context.Context, req GrepRequest) (GrepResult, 
 			runner = sandbox.DefaultRunner{}
 		}
 		spec, err = runner.Prepare(ctx, sandbox.Request{
-			Policy:        r.opts.Sandbox,
-			WorkDir:       r.opts.WorkDir,
-			WritableRoots: shellWritableRoots(r.opts.WorkDir, ""),
-			Spec:          spec,
+			Policy:     r.opts.Sandbox,
+			WorkDir:    r.opts.WorkDir,
+			FilePolicy: r.filePolicy,
+			Spec:       spec,
 		})
 		if err != nil {
 			return GrepResult{}, fmt.Errorf("grep: prepare sandbox: %w", err)

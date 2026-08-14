@@ -274,7 +274,7 @@ func TestExtensionCommandExpandsRuntimeAndGetsAgentStateSandboxRoot(t *testing.T
 	if prepares.Load() != 1 {
 		t.Fatalf("prepare count = %d, want 1", prepares.Load())
 	}
-	if got := runner.last.WritableRoots; len(got) != 2 || got[0] != dir || got[1] != agentStateDir {
+	if got := runner.last.FilePolicy.WritableRoots(); len(got) != 2 || got[0] != canonicalPathForTest(t, dir) || got[1] != canonicalPathForTest(t, agentStateDir) {
 		t.Fatalf("writable roots = %v, want Workspace and AgentStateDir", got)
 	}
 	gotBinary, err := os.Stat(runner.last.Spec.Binary)
@@ -328,7 +328,7 @@ func TestProjectCommandGetsWorkspaceAndAgentStateSandboxRoots(t *testing.T) {
 	if err := mgr.Start(context.Background(), "project-runtime"); err != nil {
 		t.Fatal(err)
 	}
-	if got := runner.last.WritableRoots; len(got) != 2 || got[0] != dir || got[1] != agentStateDir {
+	if got := runner.last.FilePolicy.WritableRoots(); len(got) != 2 || got[0] != canonicalPathForTest(t, dir) || got[1] != canonicalPathForTest(t, agentStateDir) {
 		t.Fatalf("writable roots = %#v, want Workspace and AgentStateDir", got)
 	}
 }
@@ -393,7 +393,7 @@ func TestProjectCommandRejectsAndStripsExtensionEnvironment(t *testing.T) {
 	if _, ok := env["JUEX_EXT_DATA_DIR"]; ok {
 		t.Fatalf("project inherited JUEX_EXT_DATA_DIR leaked: %#v", env)
 	}
-	if got := runner.last.WritableRoots; len(got) != 1 || got[0] != dir {
+	if got := runner.last.FilePolicy.WritableRoots(); len(got) != 1 || got[0] != canonicalPathForTest(t, dir) {
 		t.Fatalf("project writable roots = %v, want only Workspace without AgentStateDir", got)
 	}
 
@@ -475,7 +475,7 @@ func TestExtensionDataDirPreparesIndependentlyFromSandboxRoots(t *testing.T) {
 	if info, statErr := os.Stat(dataDir); statErr != nil || !info.IsDir() {
 		t.Fatalf("prepared data dir stat = %+v err=%v", info, statErr)
 	}
-	if got := runner.last.WritableRoots; len(got) != 2 || got[0] != dir || got[1] != agentStateDir {
+	if got := runner.last.FilePolicy.WritableRoots(); len(got) != 2 || got[0] != canonicalPathForTest(t, dir) || got[1] != canonicalPathForTest(t, agentStateDir) {
 		t.Fatalf("writable roots = %v, want Workspace and AgentStateDir", got)
 	}
 	if got := runner.last.Policy.FileSystem.BlockedPaths; len(got) != 1 || got[0] != dataDir {
@@ -512,4 +512,29 @@ func environmentMap(entries []string) map[string]string {
 		}
 	}
 	return out
+}
+
+func canonicalPathForTest(t *testing.T, path string) string {
+	t.Helper()
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := filepath.Clean(abs)
+	var suffix []string
+	for {
+		canonical, evalErr := filepath.EvalSymlinks(current)
+		if evalErr == nil {
+			return filepath.Join(append([]string{canonical}, suffix...)...)
+		}
+		if !os.IsNotExist(evalErr) {
+			t.Fatal(evalErr)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			t.Fatal(evalErr)
+		}
+		suffix = append([]string{filepath.Base(current)}, suffix...)
+		current = parent
+	}
 }

@@ -5,11 +5,6 @@ import (
 	"strings"
 )
 
-func prepareWritableRoots(req Request) Request {
-	req.WritableRoots = normalizedRoots(req.WritableRoots)
-	return req
-}
-
 func normalizedRoots(roots []string) []string {
 	out := make([]string, 0, len(roots))
 	seen := map[string]struct{}{}

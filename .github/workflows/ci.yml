@@ -56,6 +56,17 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           version: latest
+      - name: Install and probe Linux sandbox backend
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # Ubuntu 24.04 AppArmor blocks the user namespace that bwrap needs.
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns >/dev/null
+          fi
+          bwrap --die-with-parent --ro-bind / / --dev /dev -- /bin/true
       - name: Prepare embedded web dist
         run: |
           mkdir -p internal/web/dist

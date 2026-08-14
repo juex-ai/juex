@@ -122,7 +122,7 @@ func (m *chunkWriteManager) restoreSessionFromBeginEvent(event chunkedwrite.Even
 	if err != nil {
 		return nil, false
 	}
-	if err := m.guard.Check(resolved.Absolute); err != nil {
+	if err := m.guard.CheckWrite(resolved.Absolute); err != nil {
 		return nil, false
 	}
 	fileMode := os.FileMode(event.FileMode).Perm()
@@ -332,7 +332,7 @@ func (m *chunkWriteManager) begin(path, mode string) (*chunkWriteSession, error)
 		return nil, fmt.Errorf("write_begin: %w", err)
 	}
 	rel, abs := resolved.Relative, resolved.Absolute
-	if err := m.guard.Check(abs); err != nil {
+	if err := m.guard.CheckWrite(abs); err != nil {
 		return nil, fmt.Errorf("write_begin: %w", err)
 	}
 	fileMode := os.FileMode(0o644)
@@ -452,7 +452,7 @@ func (m *chunkWriteManager) commit(writeID string, expectedChunks int, expectedH
 		m.mu.Unlock()
 		return chunkWriteCommitResult{}, fmt.Errorf("write_commit: unsafe path %q: path identity changed before commit", session.rel)
 	}
-	if err := m.guard.Check(resolved.Absolute); err != nil {
+	if err := m.guard.CheckWrite(resolved.Absolute); err != nil {
 		m.mu.Lock()
 		m.sessions[writeID] = session
 		m.mu.Unlock()

@@ -581,27 +581,47 @@ provider-visible text, conversation history, runtime events, or the Web UI with
 a compact placeholder that includes byte count, SHA-256, and first-bytes hex
 metadata.
 
-Commands started by `exec_command` may be protected by the optional top-level
-`sandbox` config. `sandbox.enabled: false` keeps the current in-place shell
-execution behavior. `sandbox.enabled: true` requires a platform sandbox backend
-before a new command starts; workspace files stay read/write, while
-`sandbox.file_system.outside_workspace` controls access outside the workspace
-with `read_write` or `read_only`, and `sandbox.network.enabled` controls
-network access. Add `sandbox.file_system.blocked_paths` to make selected paths
-inaccessible even when the surrounding filesystem preset would otherwise allow
-them. On Linux command sandboxing, blocked paths must already exist because
-bubblewrap cannot safely mask missing paths without creating host-visible
-mountpoints. Restricted modes still provide the process with standard device and
-temporary scratch paths needed by normal shell tools, but do not silently reopen
-arbitrary user paths outside the workspace. Unsupported platforms, missing
-helpers, permissions errors, or policies a backend cannot enforce fail closed
-instead of falling back to unsandboxed execution.
-Sandboxed `exec_command` and Command Observable processes receive the Workspace
-and current AgentStateDir (`$JUEX_HOME/agents/<id>` for a Resident Agent) as
-their two default writable roots. Schedules do not spawn a child process.
-`blocked_paths`, including paths matched through symlinks, remains inaccessible
-inside either root; no other AgentStateDir is granted.
-Local Extension MCP servers retain their narrower owning-Extension data root.
+Linux and macOS use the top-level `sandbox` safe default when the entire section
+is omitted: sandboxing is enabled, host paths outside the Workspace and current
+AgentStateDir are read-only, and network access remains enabled. Windows keeps
+the sandbox disabled by default and reports unsupported if it is explicitly
+enabled. Linux requires `bwrap` (the `bubblewrap` package); run `juex doctor` to
+verify that the helper can actually start under local user-namespace and kernel
+policy, rather than relying on executable discovery alone. On rooted Termux,
+run `pkg install -y root-repo && pkg install -y bubblewrap`; unrooted Termux
+users must explicitly set `sandbox.enabled: false` because no supported backend
+is available there.
+
+For compatibility, the first explicit `sandbox` section uses the historical
+`enabled: false`, `outside_workspace: read_write`, and network-enabled baseline,
+then applies only the fields present. This includes `sandbox: {}`. Existing
+partial and explicit escape-hatch configurations therefore retain their old
+meaning. New explicit safe configurations should set `enabled: true` and
+`file_system.outside_workspace: read_only` together.
+
+The same file policy protects `write`, `edit`, `apply_patch`, chunked writes,
+`exec_command`, grep subprocesses, and Command Observables. The Workspace and
+current AgentStateDir (`$JUEX_HOME/agents/<id>` for a Resident Agent) are the
+only default host writable roots; `apply_patch` and chunked writes remain
+Workspace-only. `blocked_paths` overrides both roots, and canonical path checks
+reject relative traversal and symlink escapes. Under the read-only preset,
+builtin writes reject multiply linked regular files only when their link count
+proves that an alias exists outside the writable roots. The first restricted
+command launch for a shared file policy builds the same inode-based index and
+caches only a safe result; links contained entirely inside the writable roots
+remain usable. This protects Shell, grep subprocesses, and Command Observables
+without rescanning the trees before every command. Linux and macOS point
+`TMPDIR` into the current AgentStateDir, which keeps temporary writes inside an
+already allowed root without hiding host paths used as workspaces. Missing or
+non-functional backends fail closed instead of starting the command without a
+sandbox.
+
+This policy is host file-write isolation, not secrecy or an approval engine.
+The host remains readable except for `blocked_paths`, and network access is on
+by default, so readable credentials can still be exfiltrated. Trusted lifecycle
+hooks and MCP server processes are outside this sandbox boundary. The path
+checks also do not claim to defend against a malicious local process racing
+symlink or hard-link changes between validation and the filesystem operation.
 
 Observables are configured sources that emit durable Observations. Definitions
 come from writable `.juex/observables.json` with source `project`, plus

@@ -87,6 +87,59 @@ func TestReleaseInstallScriptDryRunResolvesAssets(t *testing.T) {
 	}
 }
 
+func TestReleaseInstallScriptDryRunExplainsTermuxSandboxRequirement(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	root, script := releaseInstallScript(t)
+	cmd := exec.Command("bash", script, "--dry-run", "--version", "0.0.1", "--bin-dir", filepath.Join(t.TempDir(), "bin"))
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"ANDROID_ROOT=/system",
+		"PREFIX=/data/data/com.termux/files/usr",
+		"JUEX_INSTALL_ARCH=arm64",
+		"HOME="+t.TempDir(),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Termux dry-run failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"platform: linux/arm64",
+		"install mode: Termux bare binary",
+		"sandbox: bubblewrap (bwrap) is required by the default policy",
+		"pkg install -y root-repo && pkg install -y bubblewrap",
+		"sandbox.enabled: false",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("Termux dry-run output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestReleaseInstallScriptWarnsWhenTermuxSandboxBackendUnavailable(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	_, script := releaseInstallScript(t)
+	emptyPath := t.TempDir()
+	cmd := exec.Command("bash", "-c", `source "$SCRIPT"; PATH="$EMPTY_PATH"; warn_missing_sandbox_backend linux 1`)
+	cmd.Env = append(os.Environ(),
+		"SCRIPT="+script,
+		"EMPTY_PATH="+emptyPath,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Termux sandbox warning failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"warning: bubblewrap (bwrap) is not on PATH",
+		"Termux",
+		"pkg install -y root-repo && pkg install -y bubblewrap",
+		"sandbox.enabled: false",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("Termux sandbox warning missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestReleaseInstallScriptDryRunWorksFromStdin(t *testing.T) {
 	skipReleaseInstallScriptTestIfUnsupported(t)
 	root, script := releaseInstallScript(t)

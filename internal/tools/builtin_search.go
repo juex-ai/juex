@@ -17,11 +17,13 @@ func (SearchToolProvider) definitions(BuiltinDefinitionOptions) []ToolDefinition
 func (SearchToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	runner := ctx.SearchRunner
 	if runner == nil {
+		filePolicy := ctx.FilePolicy
 		runner = NewRipgrepRunner(RipgrepRunnerOptions{
 			WorkDir:       ctx.WorkDir,
 			Environment:   ctx.Environment,
 			Sandbox:       ctx.Sandbox,
 			SandboxRunner: ctx.SandboxRunner,
+			FilePolicy:    &filePolicy,
 		})
 	}
 	return []Tool{grepTool(ctx.WorkDir, sandbox.NewPathGuard(ctx.WorkDir, ctx.Sandbox), runner)}

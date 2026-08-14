@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/providerreadiness"
+	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/skills"
 	toolruntime "github.com/juex-ai/juex/internal/tools"
 )
@@ -160,6 +162,7 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 	checks = append(checks, doctorCredentialsCheck(cfg))
 	checks = append(checks, doctorConnectivityCheck(ctx, cfg, offline))
 	checks = append(checks, doctorShellCheck(cfg))
+	checks = append(checks, doctorSandboxCheck(ctx, cfg.SandboxPolicy(), runtime.GOOS, cfg.LaunchEnvironmentSnapshot().LookPath))
 	checks = append(checks, doctorRipgrepCheck(func() (toolruntime.ResolvedRipgrep, error) {
 		return toolruntime.ResolveRipgrepWithEnvironment(runtimeEnvironment)
 	}))
@@ -171,6 +174,32 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 		redactionEnvironment = agentRuntime.Environment()
 	}
 	return doctorResult{Status: worstDoctorStatus(checks), Checks: checks, environment: redactionEnvironment}
+}
+
+func doctorSandboxCheck(ctx context.Context, policy sandbox.Policy, runtimeOS string, lookPath func(string) (string, error)) doctorCheck {
+	capability := sandbox.InspectCapability(ctx, policy, runtimeOS, lookPath)
+	details := map[string]any{
+		"enabled":   capability.Enabled,
+		"platform":  capability.Platform,
+		"backend":   capability.Backend,
+		"available": capability.Available,
+	}
+	if capability.ErrorCode != "" {
+		details["error_code"] = capability.ErrorCode
+	}
+	if !capability.Enabled {
+		return doctorCheck{Name: "sandbox", Status: doctorStatusOK, Message: "sandbox is explicitly disabled", Details: details}
+	}
+	if capability.Available {
+		return doctorCheck{Name: "sandbox", Status: doctorStatusOK, Message: fmt.Sprintf("%s backend is functional", capability.Backend), Details: details}
+	}
+	return doctorCheck{
+		Name:       "sandbox",
+		Status:     doctorStatusFail,
+		Message:    capability.Error,
+		Suggestion: capability.Suggestion,
+		Details:    details,
+	}
 }
 
 func doctorAgentCheck(workDir string) doctorCheck {

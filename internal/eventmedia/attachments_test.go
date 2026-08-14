@@ -147,7 +147,7 @@ func TestValidateAttachmentsHonorsBlockedPathsInAgentStateDir(t *testing.T) {
 	agentStateDir := filepath.Join(t.TempDir(), "agents", "current")
 	blockedPath := filepath.Join(agentStateDir, "extensions", "wechat-wire", "private.png")
 	writeAttachmentPNG(t, blockedPath)
-	policy := sandbox.DefaultPolicy()
+	policy := sandbox.LegacyDefaultPolicy()
 	policy.Enabled = true
 	policy.FileSystem.BlockedPaths = []string{blockedPath}
 
@@ -172,7 +172,7 @@ func TestValidateAttachmentsHonorsPhysicalBlockedPathThroughAgentStateAlias(t *t
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	aliasPath := filepath.Join(aliasDir, "image.png")
-	policy := sandbox.DefaultPolicy()
+	policy := sandbox.LegacyDefaultPolicy()
 	policy.Enabled = true
 	policy.FileSystem.BlockedPaths = []string{physicalDir}
 

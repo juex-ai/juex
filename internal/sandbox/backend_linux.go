@@ -18,7 +18,7 @@ func prepareLinux(lookPath func(string) (string, error), req Request) (ExecSpec,
 	if err := ValidateOutsideWorkspaceAccess(req.Policy.FileSystem.OutsideWorkspace); err != nil {
 		return ExecSpec{}, err
 	}
-	roots := normalizedRoots(req.WritableRoots)
+	roots := normalizedRoots(req.FilePolicy.WritableRoots())
 	if req.Policy.FileSystem.OutsideWorkspace != OutsideWorkspaceReadWrite && len(roots) == 0 {
 		return ExecSpec{}, NewError(ErrorCodePolicyUnavailable, "linux", "bubblewrap", "mount", req.Policy, "A writable workspace root is required when outside_workspace is restricted.", nil)
 	}
@@ -31,7 +31,7 @@ func prepareLinux(lookPath func(string) (string, error), req Request) (ExecSpec,
 		args = append(args, "--dev-bind", "/", "/")
 	case OutsideWorkspaceReadOnly:
 		args = append(args, "--ro-bind", "/", "/")
-		args = append(args, "--dev", "/dev", "--tmpfs", "/tmp")
+		args = append(args, "--dev", "/dev")
 		for _, root := range roots {
 			args = append(args, "--bind", root, root)
 		}
@@ -57,6 +57,13 @@ func prepareLinux(lookPath func(string) (string, error), req Request) (ExecSpec,
 	wrapped.Binary = helper
 	wrapped.Args = args
 	wrapped.Env = launcherEnv
+	if req.Policy.FileSystem.OutsideWorkspace == OutsideWorkspaceReadOnly {
+		if scratch, err := prepareSandboxScratchDir(req.FilePolicy.ScratchRoot()); err != nil {
+			return ExecSpec{}, NewError(ErrorCodePolicyUnavailable, "linux", "bubblewrap", "scratch", req.Policy, "Unable to prepare a private temporary directory in AgentStateDir.", err)
+		} else if scratch != "" {
+			wrapped.Env = sandboxScratchEnvironment(wrapped.Env, scratch)
+		}
+	}
 	return wrapped, nil
 }
 

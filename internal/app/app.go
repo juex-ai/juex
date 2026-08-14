@@ -212,6 +212,9 @@ func New(opts Options) (*App, error) {
 		}
 		cfg.WorkDir = wd
 	}
+	if cfg.AgentStateDir == "" && cfg.AgentAddress.StateDir() != "" {
+		cfg.AgentStateDir = cfg.AgentAddress.StateDir()
+	}
 	runtimePaths := cfg.RuntimePaths()
 	resourcePaths := cfg.ResourcePaths()
 	runtimeLimits := cfg.RuntimeLimits()
@@ -306,7 +309,8 @@ func New(opts Options) (*App, error) {
 	reg := tools.NewRegistryWithOptions(tools.RegistryOptions{
 		DefaultTimeoutSeconds: toolTimeoutSeconds,
 	})
-	chunkedWrites := tools.NewChunkedWriteManager(runtimePaths.WorkDir, sandbox.NewPathGuard(runtimePaths.WorkDir, cfg.SandboxPolicy()))
+	filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: cfg.SandboxPolicy(), WorkDir: runtimePaths.WorkDir, AgentStateDir: runtimePaths.StateDir})
+	chunkedWrites := tools.NewChunkedWriteManager(runtimePaths.WorkDir, filePolicy)
 	runtimeEnvironment := agentRuntime.Environment()
 	sandboxRunner := sandbox.DefaultRunner{LookPath: cfg.LaunchEnvironmentSnapshot().LookPath}
 	tools.RegisterBuiltins(reg, tools.BuiltinOptions{
@@ -1088,7 +1092,7 @@ func (a *App) externalAttachmentOptions() attachmentOptions {
 		WorkDir:       paths.WorkDir,
 		AgentStateDir: paths.StateDir,
 		ArtifactDir:   paths.ArtifactDir,
-		PathGuard:     sandbox.NewPathGuard(paths.WorkDir, a.cfg.SandboxPolicy()),
+		PathGuard:     sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: a.cfg.SandboxPolicy(), WorkDir: paths.WorkDir, AgentStateDir: paths.StateDir}),
 	}
 }
 
