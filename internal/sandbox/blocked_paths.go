@@ -109,7 +109,7 @@ func (g FilePolicy) CheckWrite(path string) error {
 		return fmt.Errorf("sandbox: invalid write path %q", path)
 	}
 	for _, root := range g.canonicalRoots {
-		if pathWithinOrEqualExact(root, target) {
+		if pathWithinOrEqualFilesystem(root, target) {
 			return nil
 		}
 	}
@@ -305,6 +305,38 @@ func pathWithinOrEqualExact(root, target string) bool {
 		return false
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func pathWithinOrEqualFilesystem(root, target string) bool {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	if pathWithinOrEqualExact(root, target) {
+		return true
+	}
+	rootDepth := pathComponentCount(root)
+	targetDepth := pathComponentCount(target)
+	if targetDepth < rootDepth {
+		return false
+	}
+	candidateRoot := target
+	for range targetDepth - rootDepth {
+		candidateRoot = filepath.Dir(candidateRoot)
+	}
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		return false
+	}
+	candidateInfo, err := os.Stat(candidateRoot)
+	return err == nil && os.SameFile(rootInfo, candidateInfo)
+}
+
+func pathComponentCount(path string) int {
+	rest := strings.TrimPrefix(filepath.Clean(path), filepath.VolumeName(path))
+	rest = strings.Trim(rest, string(filepath.Separator))
+	if rest == "" {
+		return 0
+	}
+	return len(strings.Split(rest, string(filepath.Separator)))
 }
 
 func caseInsensitivePathMatch() bool {

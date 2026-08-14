@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestDefaultPolicy(t *testing.T) {
@@ -216,6 +217,50 @@ func TestCheckAvailabilityCachesFunctionalProbe(t *testing.T) {
 	wg.Wait()
 	if calls.Load() != 1 {
 		t.Fatalf("functional probe calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestCheckAvailabilityCallerCancellationStopsWaitingForCachedProbe(t *testing.T) {
+	resetBackendProbeCacheForTest()
+	original := runProbeCommand
+	t.Cleanup(func() {
+		runProbeCommand = original
+		resetBackendProbeCacheForTest()
+	})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	runProbeCommand = func(ctx context.Context, _ string, _ ...string) error {
+		close(started)
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	policy := DefaultPolicyForOS("linux")
+	lookPath := sandboxLookPathForTest("/test/bwrap", "/test/true")
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- CheckAvailability(ctx, policy, "linux", lookPath)
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			close(release)
+			t.Fatalf("CheckAvailability error = %v, want context canceled", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		close(release)
+		<-result
+		t.Fatal("CheckAvailability kept waiting for the shared backend probe after caller cancellation")
+	}
+	close(release)
+	if err := CheckAvailability(context.Background(), policy, "linux", lookPath); err != nil {
+		t.Fatalf("cached probe did not complete for a later caller: %v", err)
 	}
 }
 

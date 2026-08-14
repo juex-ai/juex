@@ -91,6 +91,43 @@ func TestDarwinBackendRestoresTargetEnvironmentInsideSandbox(t *testing.T) {
 	}
 }
 
+func TestDarwinReadWritePreservesConfiguredCacheEnvironment(t *testing.T) {
+	agentStateDir := t.TempDir()
+	workDir := t.TempDir()
+	policy := LegacyDefaultPolicy()
+	policy.Enabled = true
+	wantEnv := []string{
+		"TMPDIR=/custom/tmp",
+		"XDG_CACHE_HOME=/custom/cache",
+		"GOCACHE=/custom/go-build",
+		"GOMODCACHE=/custom/go-mod",
+	}
+	got, err := (DefaultRunner{
+		RuntimeOS: "darwin",
+		LookPath:  sandboxLookPathForTest("/usr/bin/sandbox-exec", "/usr/bin/true"),
+	}).Prepare(context.Background(), Request{
+		Policy:     policy,
+		WorkDir:    workDir,
+		FilePolicy: filePolicyForTest(policy, workDir, workDir, agentStateDir),
+		Spec: ExecSpec{
+			Binary: "/bin/true",
+			Env:    append([]string(nil), wantEnv...),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := strings.Join(got.Env, "\n")
+	for _, want := range wantEnv {
+		if !strings.Contains(env, want) {
+			t.Fatalf("read_write environment missing %q: %#v", want, got.Env)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(agentStateDir, "tmp")); !os.IsNotExist(err) {
+		t.Fatalf("read_write policy created sandbox scratch: %v", err)
+	}
+}
+
 func TestDarwinReadOnlyBackendAllowsWorkspaceWriteOnly(t *testing.T) {
 	if _, err := exec.LookPath("sandbox-exec"); err != nil {
 		t.Skip("sandbox-exec unavailable")

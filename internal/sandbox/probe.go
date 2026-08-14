@@ -26,6 +26,7 @@ type Capability struct {
 
 type probeResult struct {
 	once sync.Once
+	done chan struct{}
 	err  error
 }
 
@@ -108,14 +109,22 @@ func backendDescriptor(runtimeOS string, policy Policy) (backend, executable, su
 
 func cachedFunctionalProbe(ctx context.Context, runtimeOS, helper, target string, policy Policy) error {
 	key := fmt.Sprintf("%s\x00%s\x00%s\x00network=%t", runtimeOS, helper, target, policy.Network.Enabled)
-	value, _ := backendProbeCache.LoadOrStore(key, &probeResult{})
+	value, _ := backendProbeCache.LoadOrStore(key, &probeResult{done: make(chan struct{})})
 	result := value.(*probeResult)
 	result.once.Do(func() {
-		probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), backendProbeTimeout)
-		defer cancel()
-		result.err = functionalProbe(probeCtx, runtimeOS, helper, target, policy)
+		go func() {
+			probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), backendProbeTimeout)
+			defer cancel()
+			result.err = functionalProbe(probeCtx, runtimeOS, helper, target, policy)
+			close(result.done)
+		}()
 	})
-	return result.err
+	select {
+	case <-result.done:
+		return result.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func functionalProbe(ctx context.Context, runtimeOS, helper, target string, policy Policy) error {

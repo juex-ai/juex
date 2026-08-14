@@ -70,12 +70,16 @@ type fakeSandboxRunner struct {
 	specs    []sandbox.ExecSpec
 	requests []sandbox.Request
 	err      error
+	prepare  func(context.Context, sandbox.Request) (sandbox.ExecSpec, error)
 }
 
 func (r *fakeSandboxRunner) Prepare(ctx context.Context, req sandbox.Request) (sandbox.ExecSpec, error) {
 	r.calls++
 	r.specs = append(r.specs, req.Spec)
 	r.requests = append(r.requests, req)
+	if r.prepare != nil {
+		return r.prepare(ctx, req)
+	}
 	if r.err != nil {
 		return sandbox.ExecSpec{}, r.err
 	}
@@ -2972,6 +2976,37 @@ func TestBuiltins_ExecCommandSandboxErrorDoesNotStartCommand(t *testing.T) {
 	}
 	if strings.Contains(out, "instant done") {
 		t.Fatalf("command appears to have started despite sandbox error: %q", out)
+	}
+}
+
+func TestBuiltins_ExecCommandCanceledDuringSandboxPrepareDoesNotStartCommand(t *testing.T) {
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "instant")
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := &fakeSandboxRunner{
+		prepare: func(_ context.Context, req sandbox.Request) (sandbox.ExecSpec, error) {
+			cancel()
+			return req.Spec, nil
+		},
+	}
+	policy := sandbox.DefaultPolicy()
+	policy.Enabled = true
+	r := NewRegistry()
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir:       t.TempDir(),
+		Shell:         fakeShellProfile(),
+		Sandbox:       policy,
+		SandboxRunner: runner,
+	})
+	out, _, err := r.CallWithInfo(ctx, "exec_command", map[string]any{"cmd": "hello"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("exec_command error = %v, output = %q; want context canceled", err, out)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("sandbox runner calls = %d, want 1", runner.calls)
+	}
+	if strings.Contains(out, "instant done") {
+		t.Fatalf("command started after cancellation during sandbox prepare: %q", out)
 	}
 }
 

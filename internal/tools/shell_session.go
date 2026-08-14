@@ -347,12 +347,19 @@ func prepareShellExecSpec(ctx context.Context, req ShellStartRequest) (sandbox.E
 	if runner == nil {
 		runner = sandbox.DefaultRunner{}
 	}
-	return runner.Prepare(ctx, sandbox.Request{
+	prepared, err := runner.Prepare(ctx, sandbox.Request{
 		Policy:     req.Sandbox,
 		WorkDir:    req.WorkDir,
 		FilePolicy: req.FilePolicy,
 		Spec:       spec,
 	})
+	if err != nil {
+		return sandbox.ExecSpec{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return sandbox.ExecSpec{}, err
+	}
+	return prepared, nil
 }
 
 func (m *ShellSessionManager) List(includeCompleted bool) []ShellSessionInfo {

@@ -102,6 +102,45 @@ func TestFilePolicyAllowsOnlyCanonicalWritableRoots(t *testing.T) {
 	}
 }
 
+func TestFilePolicyAllowsWritableRootCaseVariantOnCaseInsensitiveFilesystem(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("case-insensitive writable-root behavior is exercised on macOS")
+	}
+	parent := t.TempDir()
+	work := filepath.Join(parent, "MixedCase")
+	if err := os.Mkdir(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	variant := filepath.Join(parent, "mixedcase")
+	workInfo, workErr := os.Stat(work)
+	variantInfo, variantErr := os.Stat(variant)
+	if workErr != nil || variantErr != nil || !os.SameFile(workInfo, variantInfo) {
+		t.Skip("test volume is case-sensitive")
+	}
+	guard := NewFilePolicy(FilePolicyOptions{
+		Policy:  DefaultPolicyForOS("darwin"),
+		WorkDir: work,
+	})
+	if err := guard.CheckWrite(filepath.Join(variant, "new.txt")); err != nil {
+		t.Fatalf("case-variant Workspace write = %v, want allowed", err)
+	}
+}
+
+func TestFilesystemContainmentRejectsDifferentCaseFoldedDirectory(t *testing.T) {
+	parent := t.TempDir()
+	upper := filepath.Join(parent, "Root")
+	lower := filepath.Join(parent, "root")
+	if err := os.Mkdir(upper, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(lower, 0o755); err != nil {
+		t.Skip("test volume does not permit case-distinct directories")
+	}
+	if pathWithinOrEqualFilesystem(upper, filepath.Join(lower, "new.txt")) {
+		t.Fatal("case-folded but physically distinct directory matched writable root")
+	}
+}
+
 func TestFilePolicyExposesCanonicalWritableRoots(t *testing.T) {
 	parent := t.TempDir()
 	realWork := filepath.Join(parent, "real-work")
