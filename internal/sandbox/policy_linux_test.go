@@ -47,7 +47,12 @@ func TestLinuxReadOnlyProvidesWritableDevicesAndTemp(t *testing.T) {
 		}
 	}
 	scratch := filepath.Join(agentStateDir, "tmp")
-	for _, want := range []string{"TMPDIR=" + scratch, "XDG_CACHE_HOME=" + filepath.Join(scratch, "cache"), "GOCACHE=" + filepath.Join(scratch, "cache", "go-build")} {
+	for _, want := range []string{
+		"TMPDIR=" + scratch,
+		"XDG_CACHE_HOME=" + filepath.Join(scratch, "cache"),
+		"GOCACHE=" + filepath.Join(scratch, "cache", "go-build"),
+		"GOMODCACHE=" + filepath.Join(scratch, "cache", "go-mod"),
+	} {
 		if !strings.Contains(strings.Join(got.Env, "\n"), want) {
 			t.Fatalf("sandbox environment missing %q: %#v", want, got.Env)
 		}

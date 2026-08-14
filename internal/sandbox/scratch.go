@@ -33,5 +33,6 @@ func sandboxScratchEnvironment(env []string, scratch string) []string {
 	cache := filepath.Join(scratch, "cache")
 	env = replaceEnvironmentValue(env, "TMPDIR", scratch)
 	env = replaceEnvironmentValue(env, "XDG_CACHE_HOME", cache)
-	return replaceEnvironmentValue(env, "GOCACHE", filepath.Join(cache, "go-build"))
+	env = replaceEnvironmentValue(env, "GOCACHE", filepath.Join(cache, "go-build"))
+	return replaceEnvironmentValue(env, "GOMODCACHE", filepath.Join(cache, "go-mod"))
 }

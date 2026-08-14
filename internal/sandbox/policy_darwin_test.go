@@ -199,7 +199,7 @@ func TestDefaultRunnerDarwinAllowsWorkspaceAndAgentStateRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile := strings.Join(got.Args, "\n")
-	for _, want := range []string{"TMPDIR=", "XDG_CACHE_HOME=", "GOCACHE="} {
+	for _, want := range []string{"TMPDIR=", "XDG_CACHE_HOME=", "GOCACHE=", "GOMODCACHE="} {
 		if !strings.Contains(strings.Join(got.Env, "\n"), want) {
 			t.Fatalf("sandbox environment missing %q: %#v", want, got.Env)
 		}
