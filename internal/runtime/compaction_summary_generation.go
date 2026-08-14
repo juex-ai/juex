@@ -42,14 +42,16 @@ func (e *Engine) generateCompactionSummaryLocked(
 
 		retryReason := compactionSummaryRetryReason(resp)
 		retryMaxOutputTokens := e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, policy, instructions)
-		e.emit(events.Event{Type: "context.compact.summary_retry", TurnID: turnID, Payload: ContextCompactSummaryRetryPayload{
+		if emitErr := e.emit(events.Event{Type: "context.compact.summary_retry", TurnID: turnID, Payload: ContextCompactSummaryRetryPayload{
 			Attempt:                 2,
 			Reason:                  retryReason,
 			StopReason:              resp.StopReason,
 			ReasoningOnly:           compactionResponseReasoningOnly(resp.Message),
 			PreviousMaxOutputTokens: maxOutputTokens,
 			MaxOutputTokens:         retryMaxOutputTokens,
-		}})
+		}}); emitErr != nil {
+			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage}, fmt.Errorf("commit compaction summary retry: %w", emitErr)
+		}
 		retryPolicy := policy
 		retryPolicy.SummaryMaxTokens = retryMaxOutputTokens
 		summarySystem, summaryHistory = buildCompactionSummaryRequest(baseSystem, previous, input, state, retryPolicy, instructions)
@@ -67,11 +69,13 @@ func (e *Engine) generateCompactionSummaryLocked(
 		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage}, ctxErr
 	}
 	if e.Provider != nil && provider != e.Provider {
-		e.emit(events.Event{Type: "context.compact.summary_model_fallback", TurnID: turnID, Payload: ContextCompactSummaryFallbackPayload{
+		if emitErr := e.emit(events.Event{Type: "context.compact.summary_model_fallback", TurnID: turnID, Payload: ContextCompactSummaryFallbackPayload{
 			ConfiguredModel: policy.SummaryModel,
 			FallbackModel:   e.Provider.Name(),
 			Error:           compactionSummaryFailure(resp, err),
-		}})
+		}}); emitErr != nil {
+			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage}, fmt.Errorf("commit compaction summary model fallback: %w", emitErr)
+		}
 		provider = e.Provider
 		resp, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, maxOutputTokens)
 		if err == nil {

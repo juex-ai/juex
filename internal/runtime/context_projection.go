@@ -546,9 +546,9 @@ func safeArtifactName(s string) string {
 	}, s)
 }
 
-func (e *Engine) emitProjectionApplied(turnID string, stats projectionStats) {
+func (e *Engine) emitProjectionApplied(turnID string, stats projectionStats) error {
 	if stats.empty() {
-		return
+		return nil
 	}
 	payload := map[string]any{
 		"user_inputs_externalized":  stats.UserInputsExternalized,
@@ -559,5 +559,5 @@ func (e *Engine) emitProjectionApplied(turnID string, stats projectionStats) {
 		payload["reasoning_contents_stripped"] = stats.ReasoningContentsStripped
 		payload["reasoning_content_bytes_stripped"] = stats.ReasoningContentBytesStripped
 	}
-	e.emit(events.Event{Type: "context.projection.applied", TurnID: turnID, Payload: payload})
+	return e.emit(events.Event{Type: "context.projection.applied", TurnID: turnID, Payload: payload})
 }

@@ -160,11 +160,20 @@ func seedSession(t *testing.T, work, id, body string) {
 		t.Fatal(err)
 	}
 	writeSeedSessionMetadata(t, dir, id, session.KindPrimary)
+	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), transcriptJournalFixture(t, id, body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func transcriptJournalFixture(t *testing.T, id, body string) []byte {
+	t.Helper()
 	var normalized strings.Builder
+	sequence := 0
 	for i, line := range strings.Split(body, "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
+		sequence++
 		var msg llm.Message
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
 			t.Fatal(err)
@@ -172,16 +181,52 @@ func seedSession(t *testing.T, work, id, body string) {
 		if msg.ID == "" {
 			msg.ID = fmt.Sprintf("m%d", i+1)
 		}
-		data, err := json.Marshal(msg)
+		data, err := json.Marshal(struct {
+			JournalVersion int    `json:"journal_version"`
+			Journal        string `json:"journal"`
+			SessionID      string `json:"session_id"`
+			Sequence       int    `json:"sequence"`
+			llm.Message
+		}{
+			JournalVersion: 1,
+			Journal:        "conversation",
+			SessionID:      id,
+			Sequence:       sequence,
+			Message:        msg,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		normalized.Write(data)
 		normalized.WriteByte('\n')
 	}
-	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(normalized.String()), 0o644); err != nil {
-		t.Fatal(err)
+	return []byte(normalized.String())
+}
+
+func eventJournalFixture(t *testing.T, id string, journal []events.Event) []byte {
+	t.Helper()
+	var encoded strings.Builder
+	for i, event := range journal {
+		data, err := json.Marshal(struct {
+			JournalVersion int    `json:"journal_version"`
+			Journal        string `json:"journal"`
+			SessionID      string `json:"session_id"`
+			Sequence       int    `json:"sequence"`
+			events.Event
+		}{
+			JournalVersion: 1,
+			Journal:        "events",
+			SessionID:      id,
+			Sequence:       i + 1,
+			Event:          event,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded.Write(data)
+		encoded.WriteByte('\n')
 	}
+	return []byte(encoded.String())
 }
 
 func writeSeedSessionMetadata(t *testing.T, dir, id, kind string) {
@@ -194,6 +239,8 @@ func writeSeedSessionMetadata(t *testing.T, dir, id, kind string) {
 	}
 	startedAtMS := startedAt.UnixMilli()
 	data, err := json.Marshal(map[string]any{
+		"format_version":    1,
+		"session_id":        id,
 		"kind":              kind,
 		"started_at_ms":     startedAtMS,
 		"last_active_at_ms": startedAtMS,
@@ -282,7 +329,7 @@ func TestGetSessionsListRejectsChangedTranscriptDespiteMatchingSizeAndMtime(t *t
 	mtime := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	writeSeedSessionMetadata(t, dir, id, session.KindPrimary)
 	convPath := filepath.Join(dir, "conversation.jsonl")
-	valid := []byte(`{"id":"m1","role":"user","blocks":[]}` + "\n")
+	valid := transcriptJournalFixture(t, id, `{"id":"m1","role":"user","blocks":[]}`+"\n")
 	if err := os.WriteFile(convPath, valid, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1515,12 +1562,14 @@ func TestGetSessionShow_ReturnsReplayCursorFromBeforeTranscriptRead(t *testing.T
 		t.Fatalf("active session %q not found", sessionID)
 	}
 	active := value.(*activeSession)
-	active.app.Bus.Emit(events.Event{
+	if err := active.app.Bus.Emit(events.Event{
 		ID:      "evt-before-show",
 		Type:    juexruntime.TurnAdmittedType,
 		TurnID:  "turn-1",
 		Payload: juexruntime.TurnAdmittedPayload{},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	resp, err := http.Get(ts.URL + "/api/sessions/" + sessionID)
 	if err != nil {
@@ -4422,13 +4471,15 @@ func TestSSEEvents_ReplayPreservesAuthoritativeRestartRecovery(t *testing.T) {
 		t.Fatalf("active session %q not found", sessionID)
 	}
 	active := value.(*activeSession)
-	active.app.Bus.Emit(events.Event{
+	if err := active.app.Bus.Emit(events.Event{
 		ID:      "evt-admitted",
 		Type:    juexruntime.TurnAdmittedType,
 		TurnID:  "turn-1",
 		Payload: juexruntime.TurnAdmittedPayload{},
-	})
-	active.app.Bus.Emit(events.Event{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := active.app.Bus.Emit(events.Event{
 		ID:     "evt-started",
 		Type:   "turn.started",
 		TurnID: "turn-1",
@@ -4436,7 +4487,9 @@ func TestSSEEvents_ReplayPreservesAuthoritativeRestartRecovery(t *testing.T) {
 			Input: "continue",
 			Kind:  "user",
 		},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	active.app.Status.RecoverAfterRestart()
 
 	req, err := http.NewRequest(
@@ -4492,12 +4545,14 @@ func TestSSEEvents_ExplicitEmptyCursorReplaysFromJournalStart(t *testing.T) {
 		t.Fatalf("active session %q not found", sessionID)
 	}
 	active := value.(*activeSession)
-	active.app.Bus.Emit(events.Event{
+	if err := active.app.Bus.Emit(events.Event{
 		ID:      "evt-first",
 		Type:    juexruntime.TurnAdmittedType,
 		TurnID:  "turn-1",
 		Payload: juexruntime.TurnAdmittedPayload{},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	req, err := http.NewRequest(
 		http.MethodGet,
@@ -4537,12 +4592,14 @@ func TestCaptureCommittedEventReplayBoundsJournalWithoutHoldingCommitBarrier(t *
 		t.Fatalf("active session %q not found", sessionID)
 	}
 	active := value.(*activeSession)
-	active.app.Bus.Emit(events.Event{
+	if err := active.app.Bus.Emit(events.Event{
 		ID:      "evt-first",
 		Type:    juexruntime.TurnAdmittedType,
 		TurnID:  "turn-1",
 		Payload: juexruntime.TurnAdmittedPayload{},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	replay, err := captureCommittedEventReplay(active.app, sessionID)
 	if err != nil {
@@ -4555,8 +4612,9 @@ func TestCaptureCommittedEventReplayBoundsJournalWithoutHoldingCommitBarrier(t *
 	})
 
 	commitDone := make(chan struct{})
+	commitErr := make(chan error, 1)
 	go func() {
-		active.app.Bus.Emit(events.Event{
+		if err := active.app.Bus.Emit(events.Event{
 			ID:     "evt-later",
 			Type:   "turn.started",
 			TurnID: "turn-1",
@@ -4564,11 +4622,16 @@ func TestCaptureCommittedEventReplayBoundsJournalWithoutHoldingCommitBarrier(t *
 				Input: "continue",
 				Kind:  "user",
 			},
-		})
+		}); err != nil {
+			commitErr <- err
+			return
+		}
 		close(commitDone)
 	}()
 	select {
 	case <-commitDone:
+	case err := <-commitErr:
+		t.Fatalf("commit later event: %v", err)
 	case <-time.After(time.Second):
 		t.Fatal("new commit blocked while captured replay remained unread")
 	}

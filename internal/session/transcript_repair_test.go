@@ -223,7 +223,7 @@ func TestIncrementalRepairStateMatchesFullRepairScan(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			idx := transcriptIndex{repairSafe: true, repairPrefixSafe: true, complete: true}
 			for i, message := range tt.messages {
-				idx.add(message, i, int64(i), 1)
+				idx.add(message, i, int64(i), 1, uint64(i+1))
 			}
 			_, repairs := repairTranscriptMessages(tt.messages, "test")
 			wantSafe := len(repairs) == 0

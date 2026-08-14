@@ -35,6 +35,9 @@ type DurableSink struct {
 	nextID      uint64
 	closed      bool
 	queue       []deliveryBatch
+	done        chan struct{}
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 type registeredDelivery struct {
@@ -50,6 +53,7 @@ type deliveryBatch struct {
 func NewDurableSink(journal Journal) *DurableSink {
 	s := &DurableSink{
 		journal: journal,
+		done:    make(chan struct{}),
 	}
 	s.cond = sync.NewCond(&s.mu)
 	go s.runDeliveries()
@@ -57,6 +61,7 @@ func NewDurableSink(journal Journal) *DurableSink {
 }
 
 func (s *DurableSink) runDeliveries() {
+	defer close(s.done)
 	for {
 		s.mu.Lock()
 		for len(s.queue) == 0 && !s.closed {
@@ -84,6 +89,8 @@ func (s *DurableSink) SetJournal(journal Journal) {
 	if s == nil {
 		return
 	}
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -137,13 +144,6 @@ func (s *DurableSink) AddDelivery(delivery Delivery) func() {
 		defer s.mu.Unlock()
 		s.deliveries = removeRegisteredDelivery(s.deliveries, id)
 	}
-}
-
-func (s *DurableSink) Handle(e Event) {
-	if s == nil {
-		return
-	}
-	_, _ = s.Commit(e)
 }
 
 func (s *DurableSink) Commit(e Event) (Event, error) {
@@ -221,21 +221,22 @@ func (s *DurableSink) ReadCommitted(read func() error) error {
 	return read()
 }
 
-func (s *DurableSink) Close() {
+func (s *DurableSink) Close() error {
 	if s == nil {
-		return
+		return nil
 	}
-	s.commitMu.Lock()
-	defer s.commitMu.Unlock()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return
-	}
-	s.closed = true
-	s.projections = nil
-	s.deliveries = nil
-	s.cond.Signal()
+	s.closeOnce.Do(func() {
+		s.commitMu.Lock()
+		s.mu.Lock()
+		s.closed = true
+		s.projections = nil
+		s.deliveries = nil
+		s.cond.Broadcast()
+		s.mu.Unlock()
+		s.commitMu.Unlock()
+		<-s.done
+	})
+	return s.closeErr
 }
 
 func removeRegisteredDelivery(

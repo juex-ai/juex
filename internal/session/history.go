@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/juex-ai/juex/internal/homestore"
 )
 
 const metadataFile = "session.json"
@@ -31,6 +33,8 @@ var (
 )
 
 type metadata struct {
+	FormatVersion  int                   `json:"format_version"`
+	SessionID      string                `json:"session_id"`
 	Alias          string                `json:"alias,omitempty"`
 	Kind           string                `json:"kind,omitempty"`
 	StartedAtMS    int64                 `json:"started_at_ms"`
@@ -121,10 +125,15 @@ func loadMetadata(dir string) (metadata, error) {
 	if err := validateMetadata(m); err != nil {
 		return metadata{}, fmt.Errorf("%s: %w", path, err)
 	}
+	if m.SessionID != filepath.Base(dir) {
+		return metadata{}, fmt.Errorf("%s: session identity %q does not match directory %q", path, m.SessionID, filepath.Base(dir))
+	}
 	return m, nil
 }
 
 func saveMetadata(dir string, m metadata) error {
+	m.FormatVersion = sessionJournalVersion
+	m.SessionID = filepath.Base(dir)
 	m.Kind = NormalizeKind(m.Kind)
 	if err := validateMetadata(m); err != nil {
 		return err
@@ -138,6 +147,12 @@ func saveMetadata(dir string, m metadata) error {
 }
 
 func validateMetadata(m metadata) error {
+	if m.FormatVersion != sessionJournalVersion {
+		return fmt.Errorf("unsupported session format version %d", m.FormatVersion)
+	}
+	if m.SessionID == "" {
+		return fmt.Errorf("session identity is empty")
+	}
 	if m.StartedAtMS <= 0 || m.LastActiveAtMS <= 0 {
 		return fmt.Errorf(
 			"%w: started_at_ms and last_active_at_ms must be positive",
@@ -668,26 +683,5 @@ func withHistoryLock(path string, fn func() error) error {
 }
 
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return replaceFile(tmpName, path)
+	return homestore.WriteFileAtomic(path, data, perm, 0o755)
 }

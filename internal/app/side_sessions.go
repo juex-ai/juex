@@ -258,7 +258,7 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 	}
 	managed.unsubscribeState = child.Bus.Subscribe("*", func(event events.Event) {
 		if event.Type == "goal.updated" || event.Type == "notes.updated" {
-			m.parent.Bus.Emit(event)
+			_ = m.parent.Bus.Emit(event)
 		}
 	})
 	m.mu.Lock()
@@ -886,7 +886,7 @@ func (m *sideSessionManager) recordNotificationFailure(managed *managedSideSessi
 		managed.status.UpdatedAt = time.Now().UTC()
 	}
 	m.mu.Unlock()
-	m.parent.Bus.Emit(events.Event{Type: "side_session.notification_failed", TurnID: status.LastTurnID, Payload: map[string]any{
+	_ = m.parent.Bus.Emit(events.Event{Type: "side_session.notification_failed", TurnID: status.LastTurnID, Payload: map[string]any{
 		"session_id": status.SessionID,
 		"error":      err.Error(),
 	}})

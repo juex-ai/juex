@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -38,12 +37,14 @@ type transcriptIndex struct {
 	complete           bool
 	latestCompactAt    int
 	hasLatestCompact   bool
+	lastSequence       uint64
 }
 
 type transcriptIndexEntry struct {
 	LineIndex          int
 	Offset             int64
 	Length             int
+	Sequence           uint64
 	ID                 string
 	Role               llm.Role
 	Kind               string
@@ -58,6 +59,18 @@ func scanTranscriptIndex(path string) (transcriptIndex, error) {
 }
 
 func scanTranscriptIndexFrom(path string, start int64) (transcriptIndex, error) {
+	idx, err := scanTranscriptIndexFromOnce(path, start)
+	var torn *tornJournalTailError
+	if start != 0 || !errors.As(err, &torn) {
+		return idx, err
+	}
+	if err := repairTornJournalTail(path, torn.offset, journalFileOps{}); err != nil {
+		return transcriptIndex{}, errors.Join(torn, err)
+	}
+	return scanTranscriptIndexFromOnce(path, start)
+}
+
+func scanTranscriptIndexFromOnce(path string, start int64) (transcriptIndex, error) {
 	snapshot, err := openTranscriptSnapshot(path)
 	if err != nil {
 		return transcriptIndex{}, err
@@ -75,6 +88,19 @@ func scanTranscriptIndexFrom(path string, start int64) (transcriptIndex, error) 
 }
 
 func scanTranscriptIndexFromFile(f *os.File, path string, start int64) (transcriptIndex, error) {
+	expectedSequence := uint64(1)
+	if start > 0 {
+		expectedSequence = 0
+	}
+	return scanTranscriptIndexFromFileExpected(f, path, start, expectedSequence)
+}
+
+func scanTranscriptIndexFromFileExpected(
+	f *os.File,
+	path string,
+	start int64,
+	expectedSequence uint64,
+) (transcriptIndex, error) {
 	if start < 0 {
 		return transcriptIndex{}, fmt.Errorf("session: invalid transcript offset %d", start)
 	}
@@ -90,22 +116,32 @@ func scanTranscriptIndexFromFile(f *os.File, path string, start int64) (transcri
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if len(line) > 0 {
+			if errors.Is(readErr, io.EOF) {
+				return transcriptIndex{}, &tornJournalTailError{path: path, offset: offset}
+			}
 			if start == 0 {
 				_, _ = hash.Write(line)
 			}
 			entryOffset := offset
 			offset += int64(len(line))
-			if len(bytes.TrimSuffix(line, []byte{'\n'})) > 0 {
-				var msg llm.Message
-				if err := json.Unmarshal(line, &msg); err != nil {
-					return transcriptIndex{}, fmt.Errorf("session: parse %s:%d: %w", path, lineIndex+1, err)
-				}
-				normalized, err := normalizeLoadedMessage(path, lineIndex+1, msg)
-				if err != nil {
-					return transcriptIndex{}, err
-				}
-				idx.add(normalized, lineIndex, entryOffset, len(line))
+			encoded := bytes.TrimSuffix(line, []byte{'\n'})
+			if len(encoded) == 0 {
+				return transcriptIndex{}, fmt.Errorf("session: parse %s:%d: empty journal record", path, lineIndex+1)
 			}
+			msg, header, err := decodeTranscriptJournalLine(encoded, journalRecordExpectation{
+				kind:      journalKindConversation,
+				sessionID: journalSessionID(path),
+				sequence:  expectedSequence,
+			})
+			if err != nil {
+				return transcriptIndex{}, fmt.Errorf("session: parse %s:%d: %w", path, lineIndex+1, err)
+			}
+			normalized, err := normalizeLoadedMessage(path, lineIndex+1, msg)
+			if err != nil {
+				return transcriptIndex{}, err
+			}
+			idx.add(normalized, lineIndex, entryOffset, len(line), header.Sequence)
+			expectedSequence = header.Sequence + 1
 			lineIndex++
 		}
 		if errors.Is(readErr, io.EOF) {
@@ -122,7 +158,7 @@ func scanTranscriptIndexFromFile(f *os.File, path string, start int64) (transcri
 	return idx, nil
 }
 
-func (idx *transcriptIndex) add(msg llm.Message, lineIndex int, offset int64, length int) {
+func (idx *transcriptIndex) add(msg llm.Message, lineIndex int, offset int64, length int, sequence uint64) {
 	tailStartID := ""
 	var retainedMessageIDs []string
 	if msg.Compaction != nil {
@@ -134,6 +170,7 @@ func (idx *transcriptIndex) add(msg llm.Message, lineIndex int, offset int64, le
 		LineIndex:          lineIndex,
 		Offset:             offset,
 		Length:             length,
+		Sequence:           sequence,
 		ID:                 msg.ID,
 		Role:               msg.Role,
 		Kind:               msg.Kind,
@@ -142,6 +179,7 @@ func (idx *transcriptIndex) add(msg llm.Message, lineIndex int, offset int64, le
 		ToolUseIDs:         toolUseIDs,
 		ToolResultIDs:      toolResultIDs,
 	})
+	idx.lastSequence = sequence
 	idx.addSummary(msg)
 	idx.addRepairState(msg)
 	if msg.Kind == llm.MessageKindCompact {
@@ -191,12 +229,12 @@ func transcriptToolIDs(msg llm.Message) (uses, results []string) {
 	return uses, results
 }
 
-func (idx *transcriptIndex) appendMessage(msg llm.Message, offset int64, length int) {
+func (idx *transcriptIndex) appendMessage(msg llm.Message, offset int64, length int, sequence uint64) {
 	lineIndex := 0
 	if n := len(idx.entries); n > 0 {
 		lineIndex = idx.entries[n-1].LineIndex + 1
 	}
-	idx.add(msg, lineIndex, offset, length)
+	idx.add(msg, lineIndex, offset, length, sequence)
 }
 
 func (idx *transcriptIndex) addSummary(msg llm.Message) {
@@ -347,8 +385,12 @@ func readTranscriptMessagesFromFile(f *os.File, path string, entries []transcrip
 			return nil, err
 		}
 		buf = buf[:n]
-		var msg llm.Message
-		if err := json.Unmarshal(buf, &msg); err != nil {
+		msg, _, err := decodeTranscriptJournalLine(buf, journalRecordExpectation{
+			kind:      journalKindConversation,
+			sessionID: journalSessionID(path),
+			sequence:  entry.Sequence,
+		})
+		if err != nil {
 			return nil, fmt.Errorf("session: parse %s:%d: %w", path, entry.LineIndex+1, err)
 		}
 		msg, err = normalizeLoadedMessage(path, entry.LineIndex+1, msg)
@@ -525,6 +567,7 @@ func reverseTranscriptContainsMessageID(path, id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	var newerSequence uint64
 	for {
 		line, err := reader.next()
 		if errors.Is(err, io.EOF) {
@@ -533,10 +576,14 @@ func reverseTranscriptContainsMessageID(path, id string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		message, err := decodeReverseTranscriptMessage(path, line)
+		message, header, err := decodeReverseTranscriptMessage(path, line)
 		if err != nil {
 			return false, err
 		}
+		if newerSequence != 0 && header.Sequence+1 != newerSequence {
+			return false, fmt.Errorf("session: journal sequence %d does not precede %d", header.Sequence, newerSequence)
+		}
+		newerSequence = header.Sequence
 		if message.ID == id {
 			return true, nil
 		}

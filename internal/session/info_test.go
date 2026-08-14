@@ -1,7 +1,6 @@
 package session
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -45,14 +44,11 @@ func makeSession(t *testing.T, root, id string, msgs []llm.Message, mtime time.T
 		if m.ID == "" {
 			m.ID = fmt.Sprintf("m%d", i+1)
 		}
-		buf, err := json.Marshal(m)
+		buf, err := marshalTranscriptJournalLine(id, uint64(i+1), m)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if _, err := f.Write(buf); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := f.Write([]byte{'\n'}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -73,12 +69,12 @@ func writeEvents(t *testing.T, dir string, evs []events.Event) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range evs {
-		buf, err := json.Marshal(e)
+	for i, e := range evs {
+		buf, err := marshalEventJournalLine(filepath.Base(dir), uint64(i+1), e)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := f.Write(append(buf, '\n')); err != nil {
+		if _, err := f.Write(buf); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -502,10 +498,8 @@ func TestListWithHistoryDoesNotRepairSummaryWhenTranscriptChangesDuringScan(t *t
 			}
 			message := llm.TextMessage(llm.RoleUser, "third")
 			message.ID = "m3"
-			line, err := json.Marshal(message)
-			if err == nil {
-				_, err = file.Write(append(line, '\n'))
-			}
+			line := mustTranscriptLine(t, filepath.Base(dir), 3, message)
+			_, err = file.Write(line)
 			closeErr := file.Close()
 			if err != nil {
 				return Info{}, transcriptIndex{}, err
@@ -570,7 +564,9 @@ func TestSessionMetadataWithoutOwnedTimeIsUnlistedButDirectLoadFails(t *testing.
 	if err := os.WriteFile(filepath.Join(dir, conversationFile), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, metadataFile), []byte(`{"kind":"primary"}`+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, metadataFile), []byte(
+		`{"format_version":1,"session_id":"20260729T120000-00000001","kind":"primary"}`+"\n",
+	), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -800,7 +796,8 @@ func TestListRejectsMessageWithoutID(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, conversationFile)
-	if err := os.WriteFile(path, []byte(`{"role":"user","blocks":[]}`+"\n"), 0o644); err != nil {
+	line := mustTranscriptLine(t, filepath.Base(dir), 1, llm.Message{Role: llm.RoleUser, Blocks: []llm.Block{}})
+	if err := os.WriteFile(path, line, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -862,7 +859,8 @@ func TestLoadInfo_NormalizesNullBlocks(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(`{"id":"m1","role":"assistant","blocks":null}`+"\n"), 0o644); err != nil {
+	line := mustTranscriptLine(t, filepath.Base(dir), 1, llm.Message{ID: "m1", Role: llm.RoleAssistant})
+	if err := os.WriteFile(filepath.Join(dir, conversationFile), line, 0o644); err != nil {
 		t.Fatal(err)
 	}
 

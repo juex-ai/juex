@@ -338,10 +338,10 @@ $JUEX_HOME/
         ├── logs/
         │   ├── juex.log
         │   └── debug.log
-        ├── session.json         # metadata + rebuildable transcript checkpoint
-        ├── conversation.jsonl
+        ├── session.json         # versioned metadata + rebuildable transcript checkpoint
+        ├── conversation.jsonl   # versioned, sequenced, sync-on-commit transcript journal
         ├── conversation.lock    # cross-instance transcript append guard
-        ├── events.jsonl
+        ├── events.jsonl         # versioned, sequenced, sync-on-commit runtime journal
         ├── pending_input.jsonl
         ├── notes.md
         ├── scratchpad/

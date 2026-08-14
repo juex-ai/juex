@@ -78,15 +78,15 @@ func (e *Engine) recordToolFailureBatch(turnID string, calls []llm.Block, result
 		obs := toolFailureObservationFromToolResult(call, result)
 		if result.Block.IsError {
 			payload := e.toolFailures.recordFailure(obs)
-			e.emit(events.Event{Type: "tool.failure.recorded", TurnID: turnID, Payload: payload})
+			_ = e.emit(events.Event{Type: "tool.failure.recorded", TurnID: turnID, Payload: payload})
 			continue
 		}
 		resolved, stale := e.toolFailures.recordSuccess(obs)
 		for _, payload := range resolved {
-			e.emit(events.Event{Type: "tool.failure.resolved", TurnID: turnID, Payload: payload})
+			_ = e.emit(events.Event{Type: "tool.failure.resolved", TurnID: turnID, Payload: payload})
 		}
 		for _, payload := range stale {
-			e.emit(events.Event{Type: "tool.failure.stale", TurnID: turnID, Payload: payload})
+			_ = e.emit(events.Event{Type: "tool.failure.stale", TurnID: turnID, Payload: payload})
 		}
 	}
 }

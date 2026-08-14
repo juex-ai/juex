@@ -1,7 +1,6 @@
 package session
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -62,6 +61,7 @@ func reverseTranscriptMessagePageFromFile(
 	searching := beforeID != ""
 	reversed := make([]llm.Message, 0, max(limit, 0))
 	hasMore := false
+	var newerSequence uint64
 
 	for {
 		line, err := reader.next()
@@ -75,10 +75,17 @@ func reverseTranscriptMessagePageFromFile(
 		if err != nil {
 			return MessagePage{}, err
 		}
-		message, err := decodeReverseTranscriptMessage(path, line)
+		message, header, err := decodeReverseTranscriptMessage(path, line)
 		if err != nil {
 			return MessagePage{}, err
 		}
+		if newerSequence != 0 && header.Sequence+1 != newerSequence {
+			return MessagePage{}, fmt.Errorf(
+				"session: parse %s from tail: journal sequence %d does not precede %d",
+				path, header.Sequence, newerSequence,
+			)
+		}
+		newerSequence = header.Sequence
 		if searching {
 			if message.ID == beforeID {
 				searching = false
@@ -122,12 +129,16 @@ complete:
 	return MessagePage{Messages: messages, HasMoreBefore: hasMore, OldestMessageID: oldestID}, nil
 }
 
-func decodeReverseTranscriptMessage(path string, line []byte) (llm.Message, error) {
-	var message llm.Message
-	if err := json.Unmarshal(line, &message); err != nil {
-		return llm.Message{}, fmt.Errorf("session: parse %s from tail: %w", path, err)
+func decodeReverseTranscriptMessage(path string, line []byte) (llm.Message, journalRecordHeader, error) {
+	message, header, err := decodeTranscriptJournalLine(line, journalRecordExpectation{
+		kind:      journalKindConversation,
+		sessionID: journalSessionID(path),
+	})
+	if err != nil {
+		return llm.Message{}, journalRecordHeader{}, fmt.Errorf("session: parse %s from tail: %w", path, err)
 	}
-	return normalizeLoadedMessage(path, 1, message)
+	message, err = normalizeLoadedMessage(path, 1, message)
+	return message, header, err
 }
 
 // reversed is ordered newest to oldest. Only a provider-visible Tool result

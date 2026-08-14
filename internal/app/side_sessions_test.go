@@ -1574,15 +1574,21 @@ func TestSideSessionCreateRetainsCallDeadlineAfterFactoryReturns(t *testing.T) {
 		return child, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
+	ctx := newControlledDeadlineContext()
 	createDone := make(chan error, 1)
 	go func() {
 		_, err := parent.sideSessions.Create(ctx, "deadline after factory", "", false)
 		createDone <- err
 	}()
-	child := <-childReady
-	<-ctx.Done()
+	var child *App
+	select {
+	case child = <-childReady:
+	case err := <-createDone:
+		t.Fatalf("Create returned before factory completed: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Side Session factory did not return")
+	}
+	ctx.expire()
 	child.sessionMu.Unlock()
 
 	select {
@@ -1606,6 +1612,37 @@ func TestSideSessionCreateRetainsCallDeadlineAfterFactoryReturns(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("child provider calls = %d, want 0", calls)
 	}
+}
+
+type controlledDeadlineContext struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newControlledDeadlineContext() *controlledDeadlineContext {
+	return &controlledDeadlineContext{Context: context.Background(), done: make(chan struct{})}
+}
+
+func (c *controlledDeadlineContext) Deadline() (time.Time, bool) {
+	return time.Now().Add(time.Hour), true
+}
+
+func (c *controlledDeadlineContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *controlledDeadlineContext) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (c *controlledDeadlineContext) expire() {
+	c.once.Do(func() { close(c.done) })
 }
 
 func TestSwitchToNewPrimaryStopsChildrenAndKeepsManagerUsable(t *testing.T) {

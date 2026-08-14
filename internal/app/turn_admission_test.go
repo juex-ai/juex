@@ -340,6 +340,31 @@ func TestAdmitTurnStartsWhenExternalTurnEndsBetweenReserveAndQueue(t *testing.T)
 	}
 }
 
+func TestAdmitTurnDoesNotHoldStateLockWhileReserving(t *testing.T) {
+	admission := turnAdmission{}
+	var queue turnAdmissionQueue
+	engine := &turnAdmissionRuntimeStub{
+		reserve: func(string) error {
+			queue.complete("completed-turn")
+			return nil
+		},
+		enqueue: func(context.Context, llm.Message) (runtime.PendingInputStatus, error) {
+			return runtime.PendingInputStatus{}, runtime.ErrNoActiveTurn
+		},
+	}
+	queue = turnAdmissionQueue{state: &admission, engine: engine}
+
+	result := queue.admitUser(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "avoid lock inversion"),
+		&testTurnIDs{},
+	)
+
+	if result.Kind != TurnAdmissionStarted || result.TurnID != "turn-1" {
+		t.Fatalf("result = %+v, want started turn-1", result)
+	}
+}
+
 func TestAdmitTurnReconcilesStaleRunningPhase(t *testing.T) {
 	admission := turnAdmission{phase: turnAdmissionRunning, turnID: "finished-turn"}
 	reserveCalls := 0

@@ -296,10 +296,7 @@ func TestSessionAppendNeverReportsFailureAfterPersistingBatch(t *testing.T) {
 	}
 	defer s.Close()
 	external := messageWithID(llm.TextMessage(llm.RoleUser, "external"), "external")
-	externalLine, err := marshalJSONLine(external)
-	if err != nil {
-		t.Fatal(err)
-	}
+	externalLine := mustTranscriptLine(t, s.ID, 1, external)
 	s.beforeTranscriptWrite = func() {
 		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
 		if openErr != nil {
@@ -336,10 +333,7 @@ func TestSessionAppendAdoptsCanonicalSuffixAfterCommittedRace(t *testing.T) {
 	}
 	defer s.Close()
 	external := messageWithID(llm.TextMessage(llm.RoleUser, "external"), "external-after")
-	externalLine, err := marshalJSONLine(external)
-	if err != nil {
-		t.Fatal(err)
-	}
+	externalLine := mustTranscriptLine(t, s.ID, 2, external)
 	s.afterTranscriptWrite = func() {
 		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
 		if openErr != nil {
@@ -386,10 +380,7 @@ func TestSessionAppendRetriesMetadataAfterCommittedDivergence(t *testing.T) {
 		t.Fatal(err)
 	}
 	external := messageWithID(llm.TextMessage(llm.RoleUser, "external"), "external-after")
-	externalLine, err := marshalJSONLine(external)
-	if err != nil {
-		t.Fatal(err)
-	}
+	externalLine := mustTranscriptLine(t, s.ID, 2, external)
 	s.afterTranscriptWrite = func() {
 		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
 		if openErr != nil {
@@ -628,10 +619,7 @@ func TestSessionAppendRecognizesBatchShiftedByExternalAppend(t *testing.T) {
 		t.Fatal(err)
 	}
 	external := messageWithID(llm.TextMessage(llm.RoleAssistant, "external"), "external-before")
-	externalLine, err := marshalJSONLine(external)
-	if err != nil {
-		t.Fatal(err)
-	}
+	externalLine := mustTranscriptLine(t, s.ID, 2, external)
 	s.afterTranscriptPrewriteCheck = func() {
 		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
 		if openErr != nil {
@@ -647,11 +635,11 @@ func TestSessionAppendRecognizesBatchShiftedByExternalAppend(t *testing.T) {
 	}
 
 	owned := messageWithID(llm.TextMessage(llm.RoleUser, "owned"), "owned-shifted")
-	if err := s.Append(owned); err != nil {
-		t.Fatalf("Append shifted batch = %v", err)
+	if err := s.Append(owned); !errors.Is(err, ErrTranscriptChanged) {
+		t.Fatalf("Append shifted batch error = %v, want ErrTranscriptChanged", err)
 	}
-	if got := strings.Join(messageIDsForTest(s.History), ","); got != "base,external-before,owned-shifted" {
-		t.Fatalf("resident history ids = %s, want base,external-before,owned-shifted", got)
+	if got := strings.Join(messageIDsForTest(s.History), ","); got != "base" {
+		t.Fatalf("resident history ids = %s, want unchanged base", got)
 	}
 }
 
@@ -675,10 +663,7 @@ func TestSessionAppendPreservesFullHistoryAfterCompactedDivergence(t *testing.T)
 		t.Fatal(err)
 	}
 	external := messageWithID(llm.TextMessage(llm.RoleAssistant, "external"), "m5")
-	externalLine, err := marshalJSONLine(external)
-	if err != nil {
-		t.Fatal(err)
-	}
+	externalLine := mustTranscriptLine(t, s.ID, 5, external)
 	s.afterTranscriptWrite = func() {
 		file, openErr := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_WRONLY, 0o644)
 		if openErr != nil {
@@ -713,14 +698,8 @@ func TestSessionAppendRejectsSameSizedPostWriteRewrite(t *testing.T) {
 	lastActiveMS := s.lastActiveMS
 	owned := messageWithID(llm.TextMessage(llm.RoleAssistant, "owned"), "owned-same")
 	rewritten := messageWithID(llm.TextMessage(llm.RoleAssistant, "other"), "other-same")
-	ownedLine, err := marshalJSONLine(owned)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rewrittenLine, err := marshalJSONLine(rewritten)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ownedLine := mustTranscriptLine(t, s.ID, 1, owned)
+	rewrittenLine := mustTranscriptLine(t, s.ID, 1, rewritten)
 	if len(ownedLine) != len(rewrittenLine) {
 		t.Fatalf("test rows differ in size: owned=%d rewritten=%d", len(ownedLine), len(rewrittenLine))
 	}
@@ -864,14 +843,8 @@ func TestSessionAppendAdoptsCanonicalPrefixRewriteAfterWrite(t *testing.T) {
 	defer s.Close()
 	first := messageWithID(llm.TextMessage(llm.RoleAssistant, "first"), "first-old")
 	rewritten := messageWithID(llm.TextMessage(llm.RoleAssistant, "other"), "first-new")
-	firstLine, err := marshalJSONLine(first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rewrittenLine, err := marshalJSONLine(rewritten)
-	if err != nil {
-		t.Fatal(err)
-	}
+	firstLine := mustTranscriptLine(t, s.ID, 1, first)
+	rewrittenLine := mustTranscriptLine(t, s.ID, 1, rewritten)
 	if len(firstLine) != len(rewrittenLine) {
 		t.Fatalf("test rows differ in size: first=%d rewritten=%d", len(firstLine), len(rewrittenLine))
 	}
@@ -920,14 +893,8 @@ func TestSessionAppendAdoptsPrefixRewriteAfterPrewriteDigest(t *testing.T) {
 	defer s.Close()
 	first := messageWithID(llm.TextMessage(llm.RoleAssistant, "first"), "first-old")
 	rewritten := messageWithID(llm.TextMessage(llm.RoleAssistant, "other"), "first-new")
-	firstLine, err := marshalJSONLine(first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rewrittenLine, err := marshalJSONLine(rewritten)
-	if err != nil {
-		t.Fatal(err)
-	}
+	firstLine := mustTranscriptLine(t, s.ID, 1, first)
+	rewrittenLine := mustTranscriptLine(t, s.ID, 1, rewritten)
 	if len(firstLine) != len(rewrittenLine) {
 		t.Fatalf("test rows differ in size: first=%d rewritten=%d", len(firstLine), len(rewrittenLine))
 	}
@@ -1622,10 +1589,12 @@ func TestLoadRejectsMessageWithoutID(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"id":"m1","role":"user","blocks":[{"type":"text","text":"old"}]}` + "\n" +
-		`{"role":"assistant","blocks":[{"type":"text","text":"reply"}]}` + "\n"
+	first := llm.TextMessage(llm.RoleUser, "old")
+	first.ID = "m1"
+	second := llm.TextMessage(llm.RoleAssistant, "reply")
+	body := append(mustTranscriptLine(t, filepath.Base(dir), 1, first), mustTranscriptLine(t, filepath.Base(dir), 2, second)...)
 	path := filepath.Join(dir, conversationFile)
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(path, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1642,7 +1611,7 @@ func TestLoadRejectsMessageWithoutID(t *testing.T) {
 
 func TestReadTranscriptMessagesRejectsMessageWithoutID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), conversationFile)
-	body := []byte(`{"role":"user","blocks":[]}` + "\n")
+	body := mustTranscriptLine(t, journalSessionID(path), 1, llm.Message{Role: llm.RoleUser, Blocks: []llm.Block{}})
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1651,6 +1620,7 @@ func TestReadTranscriptMessagesRejectsMessageWithoutID(t *testing.T) {
 		LineIndex: 3,
 		Offset:    0,
 		Length:    len(body),
+		Sequence:  1,
 	}})
 	if err == nil {
 		t.Fatal("readTranscriptMessages accepted a message without an id")
@@ -1779,8 +1749,12 @@ func TestSession_BusSubscription(t *testing.T) {
 	bus := events.NewBus()
 	s.SubscribeBus(bus)
 
-	bus.Emit(events.Event{Type: "x.fired"})
-	bus.Emit(events.Event{Type: "y.fired"})
+	if err := bus.Emit(events.Event{Type: "x.fired"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := bus.Emit(events.Event{Type: "y.fired"}); err != nil {
+		t.Fatal(err)
+	}
 
 	data, _ := os.ReadFile(filepath.Join(s.Dir, eventsFile))
 	if c := countLines(data); c != 2 {
@@ -1798,12 +1772,16 @@ func TestSession_BusSubscriptionSkipsTransientEvents(t *testing.T) {
 	bus := events.NewBus()
 	s.SubscribeBus(bus)
 
-	bus.Emit(events.Event{Type: "llm.output_delta", Transient: true, Payload: map[string]any{
+	if err := bus.Emit(events.Event{Type: "llm.output_delta", Transient: true, Payload: map[string]any{
 		"iter": 0,
 		"kind": "text",
 		"text": "live only",
-	}})
-	bus.Emit(events.Event{Type: "turn.completed", Payload: map[string]any{"output_len": 4}})
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := bus.Emit(events.Event{Type: "turn.completed", Payload: map[string]any{"output_len": 4}}); err != nil {
+		t.Fatal(err)
+	}
 
 	data, _ := os.ReadFile(filepath.Join(s.Dir, eventsFile))
 	if c := countLines(data); c != 1 {
@@ -1948,7 +1926,8 @@ func TestSession_LoadNormalizesNullBlocks(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, conversationFile), []byte(`{"id":"m1","role":"assistant","blocks":null}`+"\n"), 0o644); err != nil {
+	line := mustTranscriptLine(t, filepath.Base(dir), 1, llm.Message{ID: "m1", Role: llm.RoleAssistant})
+	if err := os.WriteFile(filepath.Join(dir, conversationFile), line, 0o644); err != nil {
 		t.Fatal(err)
 	}
 

@@ -1344,14 +1344,13 @@ func waitForWebTranscript(t *testing.T, baseURL, sessionID, turnID string, timeo
 	var lastErr, lastState string
 	var lastMessages []webTranscriptMessage
 	for time.Now().Before(deadline) {
+		matched := false
 		messages, err := fetchWebTranscript(client, baseURL, sessionID)
 		if err != nil {
 			lastErr = err.Error()
 		} else {
 			lastMessages = messages
-			if match(messages) {
-				return
-			}
+			matched = match(messages)
 		}
 		state, turnErr, err := fetchWebTurnState(client, baseURL, sessionID, turnID)
 		if err != nil {
@@ -1360,6 +1359,9 @@ func waitForWebTranscript(t *testing.T, baseURL, sessionID, turnID string, timeo
 			lastState = state
 			if state == "errored" {
 				t.Fatalf("turn %s errored while waiting for %s: %s", turnID, label, turnErr)
+			}
+			if matched && state == "completed" {
+				return
 			}
 		}
 		time.Sleep(25 * time.Millisecond)
@@ -1568,7 +1570,7 @@ func writeE2ETestPNG(t *testing.T, path string) {
 }
 
 func fetchWebTurnState(client *http.Client, baseURL, sessionID, turnID string) (string, string, error) {
-	resp, err := client.Get(baseURL + "/api/sessions/" + sessionID + "/turns/" + turnID)
+	resp, err := client.Get(baseURL + "/api/sessions/" + sessionID + "/status")
 	if err != nil {
 		return "", "", err
 	}
@@ -1577,12 +1579,19 @@ func fetchWebTurnState(client *http.Client, baseURL, sessionID, turnID string) (
 		body, _ := io.ReadAll(resp.Body)
 		return "", "", fmt.Errorf("turn status=%d body=%s", resp.StatusCode, body)
 	}
-	var parsed struct {
-		State string `json:"state"`
-		Error string `json:"error"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	var snapshot juexruntime.StatusSnapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
 		return "", "", err
 	}
-	return parsed.State, parsed.Error, nil
+	if snapshot.Turn == nil {
+		return "", "", fmt.Errorf("status has no turn for %s", turnID)
+	}
+	if snapshot.Turn.ID != turnID {
+		return "", "", fmt.Errorf("status turn = %s, want %s", snapshot.Turn.ID, turnID)
+	}
+	turnErr := ""
+	if snapshot.Turn.Error != nil {
+		turnErr = snapshot.Turn.Error.Message
+	}
+	return string(snapshot.Turn.State), turnErr, nil
 }

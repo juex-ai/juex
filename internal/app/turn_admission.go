@@ -77,9 +77,10 @@ const (
 )
 
 type turnAdmission struct {
-	mu     sync.Mutex
-	phase  turnAdmissionPhase
-	turnID string
+	transitionMu sync.Mutex
+	mu           sync.Mutex
+	phase        turnAdmissionPhase
+	turnID       string
 }
 
 func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmissionResult {

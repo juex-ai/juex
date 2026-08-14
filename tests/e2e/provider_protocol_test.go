@@ -439,7 +439,9 @@ providers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(conversationPath, bytes.Repeat([]byte("!"), len(conversation)), 0o644); err != nil {
+	corruptConversation := bytes.Repeat([]byte("!"), len(conversation))
+	corruptConversation[len(corruptConversation)-1] = '\n'
+	if err := os.WriteFile(conversationPath, corruptConversation, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chtimes(conversationPath, conversationInfo.ModTime(), conversationInfo.ModTime()); err != nil {

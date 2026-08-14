@@ -206,7 +206,10 @@ func (e *Engine) reserveTurnID(turnID string, payload TurnAdmittedPayload) error
 	e.activeTurnID = turnID
 	e.pendingMu.Unlock()
 	if admitted {
-		e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: payload})
+		if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: payload}); err != nil {
+			e.finishActiveTurn(turnID)
+			return fmt.Errorf("commit turn admission: %w", err)
+		}
 	}
 	return nil
 }
@@ -337,7 +340,7 @@ func (e *Engine) EnqueuePersistedPendingMessage(ctx context.Context, record Pend
 	deferred := e.deferPendingEventLocked(event)
 	e.pendingMu.Unlock()
 	if !deferred {
-		e.emit(event)
+		_ = e.emit(event)
 	}
 	return status, nil
 }
@@ -373,7 +376,7 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 		deferred := e.deferPendingEventLocked(event)
 		e.pendingMu.Unlock()
 		if !deferred {
-			e.emit(event)
+			_ = e.emit(event)
 		}
 		return status, ErrPendingInputQueueFull
 	}
@@ -410,7 +413,7 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 	deferred := e.deferPendingEventLocked(event)
 	e.pendingMu.Unlock()
 	if !deferred {
-		e.emit(event)
+		_ = e.emit(event)
 	}
 	return status, nil
 }
@@ -463,11 +466,11 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 	if item.RecordID != "" {
 		e.notifyPendingInputsAdmitted([]string{item.RecordID})
 	}
-	e.emit(events.Event{Type: PendingInputPromotedType, TurnID: nextTurnID, Payload: PendingInputPromotedPayload{
+	_ = e.emit(events.Event{Type: PendingInputPromotedType, TurnID: nextTurnID, Payload: PendingInputPromotedPayload{
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
 	}})
-	e.emit(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{}})
+	_ = e.emit(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{}})
 	e.flushPendingEvents()
 	return item.Message, status, true
 }
@@ -615,7 +618,9 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 		return preparedTurnContext{}, err
 	}
 	prepared.userMessage = projectedUserMsg
-	e.emitProjectionApplied(turnID, projection)
+	if err := e.emitProjectionApplied(turnID, projection); err != nil {
+		return preparedTurnContext{}, fmt.Errorf("commit user input projection: %w", err)
+	}
 
 	if err := e.maybeCompact(ctx, turnID, prepared.systemPrompt, prepared.tools, prepared.userMessage); err != nil {
 		if !canContinueAfterAutoCompactError(ctx, prepared.userMessage) {
@@ -633,11 +638,13 @@ func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error
 	if err := e.markPendingInputMessageProcessed(persisted); err != nil {
 		return fmt.Errorf("mark pending input user processed: %w", err)
 	}
-	e.emit(events.Event{Type: "turn.started", TurnID: turnID, Payload: TurnStartedPayload{
+	if err := e.emit(events.Event{Type: "turn.started", TurnID: turnID, Payload: TurnStartedPayload{
 		Input:     persisted.FirstText(),
 		Kind:      persisted.Kind,
 		MessageID: persisted.ID,
-	}})
+	}}); err != nil {
+		return fmt.Errorf("commit turn start: %w", err)
+	}
 	return nil
 }
 
@@ -647,10 +654,12 @@ func (e *Engine) repairTranscriptLocked(turnID, reason string) error {
 		return fmt.Errorf("session repair transcript: %w", err)
 	}
 	if len(repairs) > 0 {
-		e.emit(events.Event{Type: "transcript.repaired", TurnID: turnID, Payload: session.TranscriptRepairedPayload{
+		if err := e.emit(events.Event{Type: "transcript.repaired", TurnID: turnID, Payload: session.TranscriptRepairedPayload{
 			Reason:  reason,
 			Repairs: repairs,
-		}})
+		}}); err != nil {
+			return fmt.Errorf("commit transcript repair: %w", err)
+		}
 	}
 	return nil
 }
@@ -726,12 +735,15 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 				cooldown: skipped.CooldownRemaining,
 			}, candidate.Ref)
 		}
-		e.emit(events.Event{Type: "llm.requested", TurnID: turnID, Payload: LLMRequestedPayload{
+		if err := e.emit(events.Event{Type: "llm.requested", TurnID: turnID, Payload: LLMRequestedPayload{
 			Iter:       base.iter,
 			HistoryLen: len(request.history),
 			ToolCount:  len(prepared.tools),
 			Model:      candidate.Ref,
-		}})
+		}}); err != nil {
+			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			return providerTurnResult{request: request}, fmt.Errorf("commit provider request: %w", err)
+		}
 
 		resp, err := llm.CompleteWithOptions(ctx, candidate.Provider, prepared.systemPrompt, request.history, prepared.tools, llm.CompleteOptions{
 			Purpose:         "turn",
@@ -739,7 +751,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			CachePolicy:     e.cachePolicyLocked(),
 			RetryObserver:   e.providerRetryObserverLocked(turnID, "turn", &request.iter),
 			OnDelta: func(delta llm.StreamDelta) {
-				e.emit(events.Event{Type: "llm.output_delta", TurnID: turnID, Transient: true, Payload: LLMOutputDeltaPayload{
+				_ = e.emit(events.Event{Type: "llm.output_delta", TurnID: turnID, Transient: true, Payload: LLMOutputDeltaPayload{
 					Iter:  request.iter,
 					Model: candidate.Ref,
 					Kind:  delta.Kind,
@@ -779,7 +791,7 @@ func (e *Engine) providerRetryObserverLocked(turnID, purpose string, iter *int) 
 		iterCopy = &value
 	}
 	return func(d llm.ProviderRetryDiagnostic) {
-		e.emit(events.Event{Type: "llm.retry", TurnID: turnID, Payload: LLMRetryPayload{
+		_ = e.emit(events.Event{Type: "llm.retry", TurnID: turnID, Payload: LLMRetryPayload{
 			ProviderRetryDiagnostic: d,
 			Purpose:                 purpose,
 			Iter:                    iterCopy,
@@ -867,33 +879,64 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 		Notice:       notice,
 		MessageID:    msg.ID,
 	}
-	e.emit(events.Event{Type: "llm.responded", TurnID: turnID, Payload: payload})
+	if err := e.emit(events.Event{Type: "llm.responded", TurnID: turnID, Payload: payload}); err != nil {
+		return recordedProviderResponse{}, fmt.Errorf("commit provider response: %w", err)
+	}
 
 	toolCalls := msg.ToolCalls()
 	return recordedProviderResponse{finalText: llm.FormatBlocksForTerminal(msg.Blocks), stopReason: resp.StopReason, toolCalls: toolCalls}, nil
 }
 
 func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, policy compactionPolicy, toolCalls []llm.Block) error {
-	e.emit(events.Event{Type: TurnPhaseType, TurnID: turnID, Payload: TurnPhasePayload{Phase: TurnPhaseToolBatch}})
+	if err := e.emit(events.Event{Type: TurnPhaseType, TurnID: turnID, Payload: TurnPhasePayload{Phase: TurnPhaseToolBatch}}); err != nil {
+		return fmt.Errorf("commit tool batch phase: %w", err)
+	}
+	for _, call := range toolCalls {
+		callPayload := toolCallPayload(call)
+		if err := e.emit(events.Event{Type: toolevents.RequestedType, TurnID: turnID, Payload: toolevents.Requested(callPayload)}); err != nil {
+			return fmt.Errorf("commit tool request: %w", err)
+		}
+		if err := e.emit(events.Event{Type: toolevents.RunningType, TurnID: turnID, Payload: toolevents.Running(callPayload)}); err != nil {
+			return fmt.Errorf("commit tool running: %w", err)
+		}
+	}
 	toolResults := e.runToolCalls(ctx, turnID, toolCalls)
+	var fatalErr error
+	for index := range toolResults {
+		result := &toolResults[index]
+		if result.FatalError == nil {
+			continue
+		}
+		fatalErr = errors.Join(fatalErr, result.FatalError)
+		if result.Block.Type == llm.BlockToolResult {
+			continue
+		}
+		call := toolCalls[index]
+		result.Block = skippedToolResultBlock(call)
+		result.Observation = toolObservationForResult(call, result.Block, tools.CallInfo{}, result.FatalError)
+	}
 	toolResults = e.normalizeGuidedToolFailureResults(toolResults)
 	results := toolResultBlocks(toolResults)
 	e.recordToolFailureBatch(turnID, toolCalls, toolResults)
 	toolResultMsg := llm.Message{Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: results}
 	projectedToolResultMsg, projection, err := e.projectMessageLocked(toolResultMsg, policy)
-	if err != nil {
-		return err
+	if err == nil {
+		toolResultMsg = projectedToolResultMsg
 	}
-	toolResultMsg = projectedToolResultMsg
-	e.emitProjectionApplied(turnID, projection)
-	if err := e.currentSession().Append(toolResultMsg); err != nil {
-		return fmt.Errorf("session append tool result: %w", err)
+	if appendErr := e.currentSession().Append(toolResultMsg); appendErr != nil {
+		return errors.Join(fatalErr, err, fmt.Errorf("session append tool result: %w", appendErr))
+	}
+	if fatalErr != nil || err != nil {
+		return errors.Join(fatalErr, err)
+	}
+	if emitErr := e.emitProjectionApplied(turnID, projection); emitErr != nil {
+		return fmt.Errorf("commit tool result projection: %w", emitErr)
 	}
 	return nil
 }
 
-func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, lastText string) {
-	e.emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: TurnCompletedPayload{
+func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, lastText string) error {
+	return e.emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: TurnCompletedPayload{
 		DurationMS: time.Since(start).Milliseconds(),
 		OutputLen:  len(lastText),
 		TokenUsage: e.currentSession().TokenUsageSnapshot(),
@@ -903,6 +946,7 @@ func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, last
 type toolCallResult struct {
 	Block       llm.Block
 	Observation tools.Observation
+	FatalError  error
 }
 
 // runToolCalls executes one assistant tool-use batch concurrently while
@@ -959,6 +1003,16 @@ func toolResultBlocks(results []toolCallResult) []llm.Block {
 	return blocks
 }
 
+func skippedToolResultBlock(call llm.Block) llm.Block {
+	return llm.Block{
+		Type:      llm.BlockToolResult,
+		ToolUseID: call.ToolUseID,
+		ToolName:  call.ToolName,
+		Content:   "tool execution was skipped because runtime durability failed",
+		IsError:   true,
+	}
+}
+
 func (e *Engine) normalizeGuidedToolFailureResults(results []toolCallResult) []toolCallResult {
 	if e == nil || e.Tools == nil {
 		return results
@@ -1004,13 +1058,14 @@ func appendGuidedToolFailureHint(content, hint string) string {
 
 func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block) toolCallResult {
 	callPayload := toolCallPayload(call)
-	e.emit(events.Event{Type: toolevents.RequestedType, TurnID: turnID, Payload: toolevents.Requested(callPayload)})
-	e.emit(events.Event{Type: toolevents.RunningType, TurnID: turnID, Payload: toolevents.Running(callPayload)})
 	preReq := e.newHookRequest(hooks.EventPreToolUse, turnID)
 	preReq.ToolName = call.ToolName
 	preReq.ToolInput = call.Input
 	preResults, err := e.runHooks(ctx, preReq)
 	if err != nil {
+		if isHookRequestCommitError(err) {
+			return toolCallResult{FatalError: err}
+		}
 		return e.hookToolErrorResult(turnID, call, err)
 	}
 	if denied, reason := hookBlocked(preResults); denied {
@@ -1021,7 +1076,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		Name:      call.ToolName,
 		ToolUseID: call.ToolUseID,
 		Emit: func(delta tools.OutputDelta) {
-			e.emit(toolevents.OutputDeltaEvent(turnID, callPayload, delta))
+			_ = e.emit(toolevents.OutputDeltaEvent(turnID, callPayload, delta))
 		},
 	})
 	out, info, err := e.Tools.CallWithInfo(toolCtx, call.ToolName, call.Input)
@@ -1053,14 +1108,19 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 	postReq.ToolResult = block.Content
 	postResults, postErr := e.runHooks(ctx, postReq)
 	postErr = cancellation.NormalizeError(postErr)
+	var fatalErr error
 	if postErr != nil {
-		if isShellStructuredResult(info.StructuredResult) {
-			block.Content = appendShellRuntimeErrorContent(block.Content, postErr)
+		if isHookRequestCommitError(postErr) {
+			fatalErr = postErr
 		} else {
-			block.Content = toolErrorContent(block.Content, postErr)
+			if isShellStructuredResult(info.StructuredResult) {
+				block.Content = appendShellRuntimeErrorContent(block.Content, postErr)
+			} else {
+				block.Content = toolErrorContent(block.Content, postErr)
+			}
+			block.IsError = true
+			toolErr = postErr
 		}
-		block.IsError = true
-		toolErr = postErr
 	}
 	appendToolHookContext(&block, preResults, false)
 	appendToolHookContext(&block, postResults, true)
@@ -1073,8 +1133,12 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		}
 	}
 	observation := toolObservationForResult(call, block, info, toolErr)
-	e.emitToolFinished(turnID, call, block, observation, info)
-	return toolCallResult{Block: block, Observation: observation}
+	if fatalErr == nil {
+		if err := e.emitToolFinished(turnID, call, block, observation, info); err != nil {
+			fatalErr = fmt.Errorf("commit tool result: %w", err)
+		}
+	}
+	return toolCallResult{Block: block, Observation: observation, FatalError: fatalErr}
 }
 
 func toolObservationForResult(call llm.Block, block llm.Block, info tools.CallInfo, err error) tools.Observation {
@@ -1102,7 +1166,7 @@ func toolObservationForResult(call llm.Block, block llm.Block, info tools.CallIn
 	return obs
 }
 
-func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block, observation tools.Observation, info tools.CallInfo) {
+func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block, observation tools.Observation, info tools.CallInfo) error {
 	eventResult := observation.StructuredResult
 	terminalContent := ""
 	isShellResult := false
@@ -1147,8 +1211,7 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 		opts.ExitCode = cloneIntPtr(observation.ExitCode)
 		opts.Result = eventResult
 		opts.Media = block.Media
-		e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), opts)})
-		return
+		return e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), opts)})
 	}
 	outputLen := len(observation.Content)
 	preview := truncate(observation.Content, 200)
@@ -1159,7 +1222,7 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 	payload := toolevents.Completed(toolCallPayload(call), info.TimeoutSeconds, outputLen, preview, eventResult)
 	payload.Media = block.Media
 	payload.Content = terminalContent
-	e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: payload})
+	return e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: payload})
 }
 
 func (e *Engine) hookToolErrorResult(turnID string, call llm.Block, err error) toolCallResult {
@@ -1173,13 +1236,15 @@ func (e *Engine) hookToolErrorResult(turnID string, call llm.Block, err error) t
 		Content:   publicErr,
 		IsError:   true,
 	}
-	e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), toolevents.ErroredOptions{
+	observation := toolObservationForResult(call, block, tools.CallInfo{}, err)
+	if emitErr := e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), toolevents.ErroredOptions{
 		Error:     publicErr,
 		ErrorKind: string(classification.Kind),
 		RawCause:  rawCauseIfDifferent(classification.RawCause, publicErr),
 		TimedOut:  classification.TimedOut,
-	})})
-	observation := toolObservationForResult(call, block, tools.CallInfo{}, err)
+	})}); emitErr != nil {
+		return toolCallResult{Block: block, Observation: observation, FatalError: fmt.Errorf("commit hook tool error: %w", emitErr)}
+	}
 	return toolCallResult{Block: block, Observation: observation}
 }
 
@@ -1261,7 +1326,7 @@ func (e *Engine) beginActiveTurn(turnID string) string {
 	turnID = e.activeTurnID
 	e.pendingMu.Unlock()
 	if admitted {
-		e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{}})
+		_ = e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{}})
 	}
 	return turnID
 }
@@ -1347,7 +1412,7 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 	if len(pending) == 0 {
 		return nil
 	}
-	e.emit(events.Event{Type: PendingInputDrainingType, TurnID: turnID, Payload: PendingInputDrainingPayload{
+	_ = e.emit(events.Event{Type: PendingInputDrainingType, TurnID: turnID, Payload: PendingInputDrainingPayload{
 		Count:            len(pending),
 		PendingCount:     0,
 		MaxPendingInputs: max,
@@ -1375,7 +1440,9 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 			return fmt.Errorf("project pending input: %w", err)
 		}
 		msg = projected
-		e.emitProjectionApplied(turnID, projection)
+		if err := e.emitProjectionApplied(turnID, projection); err != nil {
+			return fmt.Errorf("commit pending input projection: %w", err)
+		}
 		if err := sess.Append(msg); err != nil {
 			return fmt.Errorf("session append pending input: %w", err)
 		}
@@ -1391,7 +1458,7 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 	e.pendingMu.Lock()
 	remaining := len(e.pendingInput)
 	e.pendingMu.Unlock()
-	e.emit(events.Event{Type: "pending_input.drained", TurnID: turnID, Payload: PendingInputDrainedPayload{
+	_ = e.emit(events.Event{Type: "pending_input.drained", TurnID: turnID, Payload: PendingInputDrainedPayload{
 		Count:            len(pending),
 		PendingCount:     remaining,
 		MaxPendingInputs: max,
@@ -1426,7 +1493,7 @@ func (e *Engine) flushPendingEvents() {
 		}
 		e.pendingMu.Unlock()
 		for _, event := range deferred {
-			e.emit(event)
+			_ = e.emit(event)
 		}
 	}
 }
@@ -1491,14 +1558,17 @@ func (e *Engine) finishActiveTurn(turnID string) {
 	e.activeTurnID = ""
 }
 
-func (e *Engine) emit(ev events.Event) {
+func (e *Engine) emit(ev events.Event) error {
 	if e.Bus != nil {
-		e.Bus.Emit(ev)
+		return e.Bus.Emit(ev)
 	}
+	return nil
 }
 
 func (e *Engine) failTurn(turnID string, err error) error {
-	e.emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: NewTurnErroredPayload(err)})
+	if emitErr := e.emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: NewTurnErroredPayload(err)}); emitErr != nil {
+		return errors.Join(err, fmt.Errorf("commit turn error: %w", emitErr))
+	}
 	return err
 }
 

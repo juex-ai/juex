@@ -24,6 +24,10 @@ type Event struct {
 
 type Handler func(Event)
 
+type Committer interface {
+	Commit(Event) (Event, error)
+}
+
 type subscription struct {
 	id      uint64
 	pattern string
@@ -31,12 +35,22 @@ type subscription struct {
 }
 
 type Bus struct {
-	mu     sync.RWMutex
-	nextID uint64
-	subs   []subscription
+	mu        sync.RWMutex
+	nextID    uint64
+	subs      []subscription
+	committer Committer
 }
 
 func NewBus() *Bus { return &Bus{} }
+
+func (b *Bus) SetCommitter(committer Committer) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.committer = committer
+	b.mu.Unlock()
+}
 
 // Subscribe registers fn for events whose Type matches pattern (path.Match
 // semantics). A pattern of "*" matches everything.
@@ -72,9 +86,27 @@ func Normalize(e Event) Event {
 // Emit dispatches e synchronously to all matching subscribers.
 // If e.ID is empty, a random one is generated.
 // If e.Timestamp is zero, time.Now().UTC() is used.
-func (b *Bus) Emit(e Event) {
-	e = Normalize(e)
+func (b *Bus) Emit(e Event) error {
+	if b == nil {
+		return nil
+	}
+	b.mu.RLock()
+	committer := b.committer
+	b.mu.RUnlock()
+	if committer != nil {
+		committed, err := committer.Commit(e)
+		if err != nil {
+			return err
+		}
+		e = committed
+	} else {
+		e = Normalize(e)
+	}
+	b.publish(e)
+	return nil
+}
 
+func (b *Bus) publish(e Event) {
 	b.mu.RLock()
 	matched := make([]Handler, 0, len(b.subs))
 	for _, s := range b.subs {

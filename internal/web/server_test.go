@@ -494,7 +494,9 @@ func TestWebEventsDeliveryFollowsJournalCommit(t *testing.T) {
 	sub := as.bcast.subscribe()
 	defer sub.unsubscribe()
 
-	as.app.Bus.Emit(events.Event{ID: "evt-committed", Type: "turn.started"})
+	if err := as.app.Bus.Emit(events.Event{ID: "evt-committed", Type: "turn.started"}); err != nil {
+		t.Fatal(err)
+	}
 
 	select {
 	case got := <-sub.ch:
@@ -532,7 +534,9 @@ func TestWebEventsSkipLiveDeliveryWhenJournalCommitFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	as.app.Bus.Emit(events.Event{ID: "evt-uncommitted", Type: "turn.started"})
+	if err := as.app.Bus.Emit(events.Event{ID: "evt-uncommitted", Type: "turn.started"}); err == nil {
+		t.Fatal("Emit() error = nil, want journal failure")
+	}
 
 	select {
 	case got := <-sub.ch:

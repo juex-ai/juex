@@ -226,8 +226,9 @@ domain boundary.
    not redefine Session, Turn, Tool, or Event meaning.
 11. **Capabilities are explicit.** Optional Provider behavior is enabled by the
    resolved Capability Set, not guessed from a model name at the call site.
-12. **Events report facts.** A durable Event is committed only after the fact
-    it represents and before live consumers treat it as authoritative.
+12. **Events gate facts and effects.** A required request Event commits before
+    its Provider, Hook, or Tool side effect; outcome Events commit after the
+    fact they represent and before live consumers treat it as authoritative.
 13. **Observable definition and state are separate.** Project definitions
     follow the Workspace and read-only Extension definitions follow the selected
     Extension; generated runs, Observations, delivery records, and schedule

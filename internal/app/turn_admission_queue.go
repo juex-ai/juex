@@ -77,6 +77,9 @@ func (q turnAdmissionQueue) admitPersisted(ctx context.Context, record runtime.P
 }
 
 func (q turnAdmissionQueue) admitPersistedAttempt(ctx context.Context, record runtime.PendingInputRecord, ids TurnIDAllocator) (TurnAdmissionResult, runtime.PendingInputStatus, bool) {
+	q.state.transitionMu.Lock()
+	defer q.state.transitionMu.Unlock()
+
 	phase, activeTurnID := q.snapshot()
 	if phase != turnAdmissionIdle {
 		return q.queuePersisted(ctx, record, phase, activeTurnID)
@@ -88,20 +91,13 @@ func (q turnAdmissionQueue) admitPersistedAttempt(ctx context.Context, record ru
 		return result, status, false
 	}
 	turnID := ids.NextTurnID("turn")
-	q.state.mu.Lock()
-	if q.state.phase != turnAdmissionIdle {
-		phase = q.state.phase
-		activeTurnID = q.state.turnID
-		q.state.mu.Unlock()
-		return q.queuePersisted(ctx, record, phase, activeTurnID)
-	}
 	if err := q.engine.ReserveTurnID(turnID); err != nil {
-		q.state.mu.Unlock()
 		if errors.Is(err, runtime.ErrActiveTurnExists) {
 			return q.queuePersisted(ctx, record, turnAdmissionIdle, "")
 		}
 		return conflictResult(err.Error(), err, runtime.PendingInputStatus{}), runtime.PendingInputStatus{}, false
 	}
+	q.state.mu.Lock()
 	q.state.phase = turnAdmissionRunning
 	q.state.turnID = turnID
 	q.state.mu.Unlock()
@@ -117,26 +113,22 @@ func (q turnAdmissionQueue) admitUserAttempt(
 	msg llm.Message,
 	ids TurnIDAllocator,
 ) (TurnAdmissionResult, runtime.PendingInputStatus, bool) {
+	q.state.transitionMu.Lock()
+	defer q.state.transitionMu.Unlock()
+
 	phase, activeTurnID := q.snapshot()
 	if phase != turnAdmissionIdle {
 		return q.queuePending(ctx, msg, phase, activeTurnID)
 	}
 
 	turnID := ids.NextTurnID("turn")
-	q.state.mu.Lock()
-	if q.state.phase != turnAdmissionIdle {
-		phase = q.state.phase
-		activeTurnID = q.state.turnID
-		q.state.mu.Unlock()
-		return q.queuePending(ctx, msg, phase, activeTurnID)
-	}
 	if err := q.engine.ReserveTurnID(turnID); err != nil {
-		q.state.mu.Unlock()
 		if errors.Is(err, runtime.ErrActiveTurnExists) {
 			return q.queuePending(ctx, msg, turnAdmissionIdle, "")
 		}
 		return conflictResult(err.Error(), err, runtime.PendingInputStatus{}), runtime.PendingInputStatus{}, false
 	}
+	q.state.mu.Lock()
 	q.state.phase = turnAdmissionRunning
 	q.state.turnID = turnID
 	q.state.mu.Unlock()
@@ -164,16 +156,22 @@ func (q turnAdmissionQueue) beginCompact(turnID string) error {
 	if q.state == nil || q.engine == nil {
 		return runtime.ErrNoActiveTurn
 	}
+	q.state.transitionMu.Lock()
+	defer q.state.transitionMu.Unlock()
+
 	q.state.mu.Lock()
-	defer q.state.mu.Unlock()
 	if q.state.phase != turnAdmissionIdle {
+		q.state.mu.Unlock()
 		return errTurnAdmissionBusy
 	}
+	q.state.mu.Unlock()
 	if err := q.engine.ReserveCompactionTurnID(turnID); err != nil {
 		return err
 	}
+	q.state.mu.Lock()
 	q.state.phase = turnAdmissionCompacting
 	q.state.turnID = turnID
+	q.state.mu.Unlock()
 	return nil
 }
 
@@ -201,6 +199,9 @@ func (q turnAdmissionQueue) beginExclusiveCommand() bool {
 	if q.state == nil {
 		return false
 	}
+	q.state.transitionMu.Lock()
+	defer q.state.transitionMu.Unlock()
+
 	q.state.mu.Lock()
 	defer q.state.mu.Unlock()
 	if q.state.phase != turnAdmissionIdle {
