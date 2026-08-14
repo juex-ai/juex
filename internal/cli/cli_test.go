@@ -21,6 +21,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/providerreadiness"
+	"github.com/juex-ai/juex/internal/sandbox"
 	toolruntime "github.com/juex-ai/juex/internal/tools"
 	"github.com/juex-ai/juex/internal/version"
 	"github.com/juex-ai/juex/internal/web"
@@ -1876,6 +1877,26 @@ func TestDoctorWorkdirCheckMissingJuexIsHealthy(t *testing.T) {
 	check := doctorWorkdirCheck(t.TempDir())
 	if check.Status != doctorStatusOK {
 		t.Fatalf("workdir status = %s, want ok: %+v", check.Status, check)
+	}
+}
+
+func TestDoctorSandboxCheckReportsDisabledAndUnavailable(t *testing.T) {
+	disabled := doctorSandboxCheck(context.Background(), sandbox.LegacyDefaultPolicy(), "windows", nil)
+	if disabled.Status != doctorStatusOK || disabled.Details["enabled"] != false {
+		t.Fatalf("disabled check = %+v", disabled)
+	}
+
+	enabled := sandbox.DefaultPolicyForOS("linux")
+	missing := doctorSandboxCheck(context.Background(), enabled, "linux", func(string) (string, error) {
+		return "", errors.New("bwrap missing")
+	})
+	if missing.Status != doctorStatusFail || missing.Details["error_code"] != sandbox.ErrorCodeBackendUnavailable || !strings.Contains(missing.Suggestion, "bubblewrap") {
+		t.Fatalf("missing check = %+v", missing)
+	}
+
+	unsupported := doctorSandboxCheck(context.Background(), sandbox.Policy{Enabled: true}, "windows", nil)
+	if unsupported.Status != doctorStatusFail || unsupported.Details["error_code"] != sandbox.ErrorCodeUnsupportedPlatform {
+		t.Fatalf("unsupported check = %+v", unsupported)
 	}
 }
 

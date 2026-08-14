@@ -213,7 +213,7 @@ implementation decisions live.
 | `internal/tools` | Tool registry and dispatch, builtin file/shell/search adapters, Tool result normalization and output hygiene | Canonical chunked-write lifecycle, Provider wire quirks, Session persistence, Observable/MCP source lifecycles |
 | `internal/chunkedwrite` | Canonical chunked-write lifecycle facts and deterministic state derivation | Tool schemas/dispatch, filesystem execution, runtime Event transport |
 | `internal/hooks` | Trusted hook config, matching, bounded command execution, and hook result facts | Lifecycle phase ordering, interpretation of deny/continue results, Tool execution |
-| `internal/sandbox` | Command sandbox policy, platform backend selection, generic writable-root projection, blocked-path enforcement, execution wrapping, structured availability errors | AgentStateDir selection, Shell Tool lifecycle, config parsing, runtime permission policy outside commands |
+| `internal/sandbox` | Shared model-triggered file policy, canonical writable-root projection, blocked-path enforcement, command backend selection, cached functional probing, execution wrapping, structured availability errors | AgentStateDir selection, Shell Tool lifecycle, config parsing, trusted hooks, MCP server lifecycle, general approval policy |
 | `internal/observable` | Tagged Command Observable/Schedule specs, project and Extension definition-source validation and ownership, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Extension discovery, Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
 | `internal/eventmedia` | Workspace/current-AgentStateDir external-event attachment validation, size gates, blocked-path enforcement, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
 | `internal/mcp` | Adapter over the official Go SDK: Claude-compatible MCP config normalization, command and Streamable HTTP sessions, static HTTP header handling, Tool discovery, staged remote readiness, custom notification preservation, and transport-specific diagnostics | Protocol framing/negotiation, Turn policy, active Session selection, Web ownership |
@@ -709,22 +709,22 @@ the sandbox runner before `exec.Command` or PTY startup. The runner either
 returns a wrapped command spec that enforces the requested policy, or returns a
 fail-closed error that prevents process start. `write_stdin` never reparses
 sandbox config; it writes only to the already-created session, which keeps the
-creation-time policy. Restricted filesystem policies may still provide writable
-standard devices and temporary scratch paths because ordinary shells and build
-tools depend on them; those exceptions are backend-owned rather than model-owned
-tool parameters. `blocked_paths` is a filesystem carve-out layered on top of the
+creation-time policy. Restricted filesystem policies provide writable standard
+devices and backend-owned scratch without granting another host root: Linux
+mounts a private `/tmp`, while macOS places `TMPDIR` below the current
+AgentStateDir. `blocked_paths` is a filesystem carve-out layered on top of the
 selected preset; it is enforced by both sandbox command backends and builtin
 filesystem tools so sensitive paths stay inaccessible regardless of whether the
 broader preset is `read_write` or `read_only`. Linux bubblewrap cannot mask a
 blocked path that does not exist without creating a host-visible mountpoint, so
 that backend fails closed for missing blocked paths instead of creating them.
-Callers provide a Workspace root for relative `blocked_paths` resolution and a
-generic writable-root set without mutating the resolved sandbox policy. Both
-platform backends normalize the roots once, then apply blocked-path deny/mask
-rules after the broader writable grants. Every `exec_command` and Command
-Observable process projects the Workspace and current AgentStateDir. This grants
-state owned by that Agent but never another AgentStateDir. Local Extension MCP
-processes retain their exact owning-Extension data directory.
+`internal/sandbox.FilePolicy` resolves relative `blocked_paths`, canonicalizes
+write targets and roots, and projects the Workspace plus current AgentStateDir.
+Builtin writes, Shell, grep subprocesses, and Command Observables consume that
+same value; backend deny/mask rules are applied after broader writable grants.
+This grants state owned by that Agent but never another AgentStateDir. Trusted
+hooks and MCP server processes are separate execution boundaries and are not
+covered by this policy.
 Sandbox helper discovery uses the inherited launch snapshot rather than a
 workspace-controlled runtime `PATH`. Dynamic-loader variables such as `LD_*`,
 `DYLD_*`, and `GLIBC_TUNABLES` are removed from the wrapper process and restored
@@ -2109,14 +2109,12 @@ are marked with `environment: wsl` but still run POSIX unless `shell.profile:
 wsl` is configured explicitly.
 
 The resolved sandbox policy is included in `juex run --dry-run --json` and
-`/api/runtime`. Defaults are disabled sandbox, `outside_workspace: read_write`,
-no blocked paths, and `network.enabled: true`. Enabling sandbox while the
-platform backend is unsupported or cannot enforce the requested
-filesystem/network policy returns a clear sandbox error instead of silently
-running the command in place. Backend wrappers are also responsible for
-preserving baseline shell usability such as `/dev/null`, `/tmp`, and DNS
-configuration when those can be provided without granting broad host filesystem
-writes.
+`/api/runtime`. With no `sandbox` section, Linux/macOS default to enabled,
+`outside_workspace: read_only`, no blocked paths, and network enabled; Windows
+defaults to disabled. The first explicit section keeps the historical sparse
+disabled/read-write baseline for configuration compatibility. Backend helpers
+must pass a cached functional probe, also reported by `juex doctor`; unsupported
+or unusable backends return a clear fail-closed error.
 
 Environment overrides include `PROVIDER_API_ID`, `PROVIDER_API_PROTOCOL`,
 `PROVIDER_API_BASE`, `PROVIDER_API_KEY`, `PROVIDER_API_MODEL`,

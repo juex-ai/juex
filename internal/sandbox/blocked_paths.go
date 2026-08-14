@@ -8,24 +8,56 @@ import (
 	"strings"
 )
 
-type PathGuard struct {
-	active bool
-	base   string
-	roots  []blockedPath
+type FilePolicyOptions struct {
+	Policy        Policy
+	WorkDir       string
+	AgentStateDir string
 }
+
+type FilePolicy struct {
+	enabled        bool
+	restrictWrites bool
+	base           string
+	blockedPaths   []blockedPath
+	canonicalRoots []string
+	scratchRoot    string
+}
+
+type PathGuard = FilePolicy
 
 type blockedPath struct {
 	original string
 	variants []string
 }
 
-func NewPathGuard(workDir string, policy Policy) PathGuard {
-	if !policy.Enabled || len(policy.FileSystem.BlockedPaths) == 0 {
-		return PathGuard{}
+func NewFilePolicy(opts FilePolicyOptions) FilePolicy {
+	if !opts.Policy.Enabled {
+		return FilePolicy{}
 	}
-	base := sandboxPathBase(workDir)
-	roots := make([]blockedPath, 0, len(policy.FileSystem.BlockedPaths))
-	for _, raw := range policy.FileSystem.BlockedPaths {
+	base := sandboxPathBase(opts.WorkDir)
+	writable := []string{opts.WorkDir}
+	if strings.TrimSpace(opts.AgentStateDir) != "" {
+		writable = append(writable, opts.AgentStateDir)
+	}
+	canonicalRoots := make([]string, 0, len(writable))
+	for _, raw := range writable {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		if canonical, ok := canonicalPath(base, raw); ok {
+			canonicalRoots = append(canonicalRoots, canonical)
+		}
+	}
+	canonicalRoots = dedupePaths(canonicalRoots)
+	scratchRoot := ""
+	if strings.TrimSpace(opts.AgentStateDir) != "" {
+		if root, ok := canonicalPath(base, opts.AgentStateDir); ok {
+			scratchRoot = root
+		}
+	}
+
+	roots := make([]blockedPath, 0, len(opts.Policy.FileSystem.BlockedPaths))
+	for _, raw := range opts.Policy.FileSystem.BlockedPaths {
 		trimmed := strings.TrimSpace(raw)
 		if trimmed == "" {
 			continue
@@ -36,13 +68,25 @@ func NewPathGuard(workDir string, policy Policy) PathGuard {
 		}
 		roots = append(roots, blockedPath{original: trimmed, variants: variants})
 	}
-	if len(roots) == 0 {
-		return PathGuard{}
+	return FilePolicy{
+		enabled:        true,
+		restrictWrites: opts.Policy.FileSystem.OutsideWorkspace != OutsideWorkspaceReadWrite,
+		base:           base,
+		blockedPaths:   roots,
+		canonicalRoots: canonicalRoots,
+		scratchRoot:    scratchRoot,
 	}
-	return PathGuard{active: true, base: base, roots: roots}
 }
 
-func (g PathGuard) Check(path string) error {
+func NewPathGuard(workDir string, policy Policy) PathGuard {
+	return NewFilePolicy(FilePolicyOptions{Policy: policy, WorkDir: workDir})
+}
+
+func (g FilePolicy) Check(path string) error {
+	return g.CheckRead(path)
+}
+
+func (g FilePolicy) CheckRead(path string) error {
 	target, blocked, ok := g.blockedPath(path)
 	if !ok {
 		return nil
@@ -50,17 +94,47 @@ func (g PathGuard) Check(path string) error {
 	return fmt.Errorf("sandbox: blocked path %s matches file_system.blocked_paths entry %s", target, blocked)
 }
 
-func (g PathGuard) IsBlocked(path string) bool {
+func (g FilePolicy) CheckWrite(path string) error {
+	if !g.enabled {
+		return nil
+	}
+	if err := g.CheckRead(path); err != nil {
+		return err
+	}
+	if !g.restrictWrites {
+		return nil
+	}
+	target, ok := canonicalPath(g.base, path)
+	if !ok {
+		return fmt.Errorf("sandbox: invalid write path %q", path)
+	}
+	for _, root := range g.canonicalRoots {
+		if pathWithinOrEqualExact(root, target) {
+			return nil
+		}
+	}
+	return fmt.Errorf("sandbox: write path %s is outside writable roots", target)
+}
+
+func (g FilePolicy) WritableRoots() []string {
+	return append([]string(nil), g.canonicalRoots...)
+}
+
+func (g FilePolicy) ScratchRoot() string {
+	return g.scratchRoot
+}
+
+func (g FilePolicy) IsBlocked(path string) bool {
 	_, _, ok := g.blockedPath(path)
 	return ok
 }
 
-func (g PathGuard) blockedPath(path string) (string, string, bool) {
-	if !g.active || strings.TrimSpace(path) == "" {
+func (g FilePolicy) blockedPath(path string) (string, string, bool) {
+	if !g.enabled || len(g.blockedPaths) == 0 || strings.TrimSpace(path) == "" {
 		return "", "", false
 	}
 	for _, target := range normalizedPathVariants(g.base, path) {
-		for _, root := range g.roots {
+		for _, root := range g.blockedPaths {
 			for _, variant := range root.variants {
 				if pathWithinOrEqual(variant, target) {
 					return target, root.original, true
@@ -69,6 +143,26 @@ func (g PathGuard) blockedPath(path string) (string, string, bool) {
 		}
 	}
 	return "", "", false
+}
+
+func canonicalPath(base, raw string) (string, bool) {
+	path := strings.TrimSpace(raw)
+	if path == "" {
+		return "", false
+	}
+	path = filepath.FromSlash(expandHomePath(path))
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(base, path)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	canonical, err := evalExistingPathPrefix(filepath.Clean(abs))
+	if err != nil {
+		return "", false
+	}
+	return canonical, true
 }
 
 func AppendBlockedPaths(existing []string, incoming []string) ([]string, error) {
@@ -196,6 +290,16 @@ func pathWithinOrEqual(root, target string) bool {
 		root = strings.ToLower(root)
 		target = strings.ToLower(target)
 	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func pathWithinOrEqualExact(root, target string) bool {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
 	rel, err := filepath.Rel(root, target)
 	if err != nil {
 		return false

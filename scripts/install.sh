@@ -685,6 +685,9 @@ EOF
   fi
 
   printf 'Installed juex to %s\n' "$install_target"
+  if [[ "$os_name" == "linux" && "$termux_mode" -eq 0 ]] && ! command -v bwrap >/dev/null 2>&1; then
+    printf 'warning: bubblewrap (bwrap) is not on PATH; the default Linux sandbox will fail closed. Install the bubblewrap package or explicitly set sandbox.enabled: false. Run juex doctor after installation.\n' >&2
+  fi
   refresh_fleet_service "$install_target"
   if [[ ":$PATH:" != *":${install_dir}:"* ]]; then
     cat <<EOF

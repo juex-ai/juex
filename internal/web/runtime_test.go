@@ -94,7 +94,7 @@ body`)
 	if got.Provider.ID != "openai" || got.Provider.Protocol != "openai/responses" || got.Provider.Model != "m" {
 		t.Fatalf("provider = %+v", got.Provider)
 	}
-	if got.Sandbox.FileSystem.OutsideWorkspace != config.OutsideWorkspaceReadWrite || !got.Sandbox.Network.Enabled {
+	if !got.Sandbox.Enabled || got.Sandbox.FileSystem.OutsideWorkspace != config.OutsideWorkspaceReadOnly || !got.Sandbox.Network.Enabled {
 		t.Fatalf("sandbox = %+v", got.Sandbox)
 	}
 	if got.WorkDir != work {

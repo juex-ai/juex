@@ -75,6 +75,7 @@ type Config struct {
 	runtimeEnvironment environment.Snapshot
 	launchEnvironment  environment.Snapshot
 	runtimeEnvStatus   EnvironmentStatus
+	sandboxConfigured  bool
 }
 
 type AgentStateMode uint8
@@ -111,7 +112,7 @@ type fileConfig struct {
 	Hooks                     hooks.FileConfig  `yaml:"hooks"`
 	Runtime                   runtimeConfig     `yaml:"runtime"`
 	Shell                     *ShellConfig      `yaml:"shell"`
-	Sandbox                   sandboxConfig     `yaml:"sandbox"`
+	Sandbox                   *sandboxConfig    `yaml:"sandbox"`
 	Skills                    skillsConfig      `yaml:"skills"`
 	Extensions                extensionsConfig  `yaml:"extensions"`
 	Fleet                     *fleetFileConfig  `yaml:"fleet"`
@@ -447,7 +448,6 @@ func loadUserConfigForWorkDir(workDir string) (Config, error) {
 		PendingInputTTL:           DefaultPendingInputTTL,
 		ExternalEventTTL:          DefaultExternalEventTTL,
 		ToolTimeout:               DefaultToolTimeout,
-		Sandbox:                   sandbox.DefaultPolicy(),
 		Skills:                    DefaultSkillsConfig(),
 		Fleet:                     FleetConfig{Addr: DefaultFleetAddr},
 		EnableUserAgentsResources: true,
@@ -870,8 +870,10 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 			return fmt.Errorf("config: parse %s: %w", source.Path, err)
 		}
 	}
-	if err := applySandboxConfig(cfg, fc.Sandbox); err != nil {
-		return fmt.Errorf("config: parse %s: %w", source.Path, err)
+	if fc.Sandbox != nil {
+		if err := applySandboxConfig(cfg, *fc.Sandbox); err != nil {
+			return fmt.Errorf("config: parse %s: %w", source.Path, err)
+		}
 	}
 	if fc.Shell != nil {
 		cfg.shellConfig = *fc.Shell
@@ -1385,6 +1387,10 @@ func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
 }
 
 func applySandboxConfig(cfg *Config, c sandboxConfig) error {
+	if !cfg.sandboxConfigured {
+		cfg.Sandbox = sandbox.LegacyDefaultPolicy()
+		cfg.sandboxConfigured = true
+	}
 	if c.Enabled.Set {
 		cfg.Sandbox.Enabled = c.Enabled.Value
 	}

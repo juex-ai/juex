@@ -399,7 +399,7 @@ func TestRipgrepRunnerSearchesHiddenIgnoredFilesAndCapsGlobally(t *testing.T) {
 	runner := NewRipgrepRunner(RipgrepRunnerOptions{
 		RipgrepPath: rg,
 		WorkDir:     root,
-		Sandbox:     sandbox.DefaultPolicy(),
+		Sandbox:     sandbox.LegacyDefaultPolicy(),
 	})
 	result, err := runner.Grep(context.Background(), GrepRequest{Pattern: "needle", Path: root})
 	if err != nil {
@@ -547,7 +547,7 @@ func TestRipgrepRunnerUsesSandboxRunnerAndExcludesBlockedDescendant(t *testing.T
 	if err := os.WriteFile(filepath.Join(blocked, "secret.txt"), []byte("needle secret\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	policy := sandbox.DefaultPolicy()
+	policy := sandbox.LegacyDefaultPolicy()
 	policy.Enabled = true
 	policy.FileSystem.BlockedPaths = []string{"private["}
 	sandboxRunner := &fakeSandboxRunner{}
@@ -574,7 +574,7 @@ func TestRipgrepRunnerUsesSandboxRunnerAndExcludesBlockedDescendant(t *testing.T
 	if sandboxRunner.calls != 1 {
 		t.Fatalf("sandbox runner calls = %d, want 1", sandboxRunner.calls)
 	}
-	if got := sandboxRunner.requests[0].WritableRoots; len(got) != 1 || got[0] != root {
+	if got := sandboxRunner.requests[0].FilePolicy.WritableRoots(); len(got) != 1 || got[0] != canonicalPathForTest(t, root) {
 		t.Fatalf("grep writable roots = %v, want only Workspace", got)
 	}
 	if got := strings.Join(sandboxRunner.specs[0].Env, "\n"); !strings.Contains(got, "GREP_RUNTIME_MARKER=from-snapshot") {

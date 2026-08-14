@@ -60,6 +60,7 @@ type BuiltinProviderContext struct {
 	ChunkedWrites      *ChunkedWriteManager
 	AgentStateDir      string
 	ArtifactDir        string
+	FilePolicy         sandbox.FilePolicy
 }
 
 func DefaultBuiltinProviders() []BuiltinProvider {
@@ -124,6 +125,11 @@ func newBuiltinProviderContext(r *Registry, opts BuiltinOptions) BuiltinProvider
 		toolTimeoutSeconds = r.defaultTimeoutSeconds
 	}
 	toolTimeoutSeconds = normalizedTimeoutSeconds(toolTimeoutSeconds)
+	filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{
+		Policy:        opts.Sandbox,
+		WorkDir:       workDir,
+		AgentStateDir: opts.AgentStateDir,
+	})
 	return BuiltinProviderContext{
 		WorkDir:            workDir,
 		Environment:        opts.Environment,
@@ -137,6 +143,7 @@ func newBuiltinProviderContext(r *Registry, opts BuiltinOptions) BuiltinProvider
 		ChunkedWrites:      opts.ChunkedWrites,
 		AgentStateDir:      opts.AgentStateDir,
 		ArtifactDir:        opts.ArtifactDir,
+		FilePolicy:         filePolicy,
 	}
 }
 

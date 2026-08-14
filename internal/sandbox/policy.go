@@ -42,6 +42,10 @@ type NetworkPolicy struct {
 }
 
 func DefaultPolicy() Policy {
+	return DefaultPolicyForOS(runtime.GOOS)
+}
+
+func LegacyDefaultPolicy() Policy {
 	return Policy{
 		Enabled: false,
 		FileSystem: FileSystemPolicy{
@@ -51,6 +55,16 @@ func DefaultPolicy() Policy {
 			Enabled: true,
 		},
 	}
+}
+
+func DefaultPolicyForOS(runtimeOS string) Policy {
+	policy := LegacyDefaultPolicy()
+	switch runtimeOS {
+	case "darwin", "linux":
+		policy.Enabled = true
+		policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
+	}
+	return policy
 }
 
 func ValidateOutsideWorkspaceAccess(value OutsideWorkspaceAccess) error {
@@ -70,10 +84,10 @@ type ExecSpec struct {
 }
 
 type Request struct {
-	Policy        Policy
-	WorkDir       string
-	WritableRoots []string
-	Spec          ExecSpec
+	Policy     Policy
+	WorkDir    string
+	FilePolicy FilePolicy
+	Spec       ExecSpec
 }
 
 type Runner interface {
@@ -83,6 +97,7 @@ type Runner interface {
 type DefaultRunner struct {
 	RuntimeOS string
 	LookPath  func(string) (string, error)
+	Probe     ProbeFunc
 }
 
 func (r DefaultRunner) Prepare(ctx context.Context, req Request) (ExecSpec, error) {
@@ -94,10 +109,12 @@ func (r DefaultRunner) Prepare(ctx context.Context, req Request) (ExecSpec, erro
 	if runtimeOS == "" {
 		runtimeOS = runtime.GOOS
 	}
-	req = prepareWritableRoots(req)
 	lookPath := r.LookPath
 	if lookPath == nil {
 		lookPath = exec.LookPath
+	}
+	if err := checkAvailabilityWithProbe(ctx, req.Policy, runtimeOS, lookPath, r.Probe); err != nil {
+		return ExecSpec{}, err
 	}
 	switch runtimeOS {
 	case "darwin":

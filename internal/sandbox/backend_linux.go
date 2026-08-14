@@ -18,7 +18,7 @@ func prepareLinux(lookPath func(string) (string, error), req Request) (ExecSpec,
 	if err := ValidateOutsideWorkspaceAccess(req.Policy.FileSystem.OutsideWorkspace); err != nil {
 		return ExecSpec{}, err
 	}
-	roots := normalizedRoots(req.WritableRoots)
+	roots := normalizedRoots(req.FilePolicy.WritableRoots())
 	if req.Policy.FileSystem.OutsideWorkspace != OutsideWorkspaceReadWrite && len(roots) == 0 {
 		return ExecSpec{}, NewError(ErrorCodePolicyUnavailable, "linux", "bubblewrap", "mount", req.Policy, "A writable workspace root is required when outside_workspace is restricted.", nil)
 	}
@@ -57,6 +57,9 @@ func prepareLinux(lookPath func(string) (string, error), req Request) (ExecSpec,
 	wrapped.Binary = helper
 	wrapped.Args = args
 	wrapped.Env = launcherEnv
+	if req.Policy.FileSystem.OutsideWorkspace == OutsideWorkspaceReadOnly {
+		wrapped.Env = sandboxScratchEnvironment(wrapped.Env, "/tmp/juex")
+	}
 	return wrapped, nil
 }
 

@@ -186,7 +186,7 @@ func planPatch(paths workspacePathResolver, ops []patchOperation, guard sandbox.
 			return patchSummary{}, fmt.Errorf("apply_patch: %w", err)
 		}
 		rel, abs, identity := resolved.Relative, resolved.Absolute, resolved.Identity
-		if err := guard.Check(abs); err != nil {
+		if err := guard.CheckWrite(abs); err != nil {
 			return patchSummary{}, fmt.Errorf("apply_patch: %w", err)
 		}
 		if touched[identity] {
@@ -210,7 +210,7 @@ func planPatch(paths workspacePathResolver, ops []patchOperation, guard sandbox.
 					return patchSummary{}, fmt.Errorf("apply_patch: %w", err)
 				}
 				moveRel, moveAbs = move.Relative, move.Absolute
-				if err := guard.Check(moveAbs); err != nil {
+				if err := guard.CheckWrite(moveAbs); err != nil {
 					return patchSummary{}, fmt.Errorf("apply_patch: %w", err)
 				}
 				if move.Identity == identity {
@@ -260,7 +260,7 @@ func validatePatchChanges(paths workspacePathResolver, changes []patchChange, gu
 			if resolved.Identity != paths.identity(target.rel) || !paths.sameAbsolute(resolved.Absolute, target.abs) {
 				return fmt.Errorf("apply_patch: unsafe path %q: path identity changed before write", target.rel)
 			}
-			if err := guard.Check(resolved.Absolute); err != nil {
+			if err := guard.CheckWrite(resolved.Absolute); err != nil {
 				return fmt.Errorf("apply_patch: %w", err)
 			}
 		}

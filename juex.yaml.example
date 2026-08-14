@@ -75,20 +75,20 @@ model: openai:gpt-4.1
 #   # args: ["-NoProfile", "-Command"]
 #   # path_style: windows
 
-# Optional OS-level sandbox for commands started by exec_command. Disabled
-# preserves the current in-place execution behavior. When enabled, commands
-# must start through a platform sandbox backend or fail closed with an
-# actionable error; Juex never silently falls back to unsandboxed execution.
-# Workspace files remain read/write. outside_workspace controls filesystem
-# access outside the workspace: read_write or read_only. blocked_paths makes
-# selected paths inaccessible even when the preset would otherwise allow them.
-# Restricted modes may still expose backend-owned device and temporary scratch
-# paths that standard shell tools require, without reopening arbitrary host
-# paths outside the workspace.
+# Omit the entire sandbox section for the platform default. Linux and macOS
+# default to enabled with read-only host access outside the Workspace and
+# current AgentStateDir; Windows defaults to disabled. Network access remains
+# enabled. Linux requires bubblewrap; use `juex doctor` to verify the backend.
+#
+# For configuration compatibility, the first explicit sandbox section starts
+# from the historical disabled/read_write/network-enabled baseline, then
+# applies its fields. Set every field below when opting into the safe policy;
+# set enabled: false or outside_workspace: read_write as an explicit escape
+# hatch. blocked_paths overrides writable roots.
 # sandbox:
-#   enabled: false
+#   enabled: true
 #   file_system:
-#     outside_workspace: read_write
+#     outside_workspace: read_only
 #     # Linux command sandboxing fails closed if a blocked path does not
 #     # already exist, because missing paths cannot be safely masked.
 #     blocked_paths:

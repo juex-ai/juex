@@ -980,11 +980,12 @@ func TestLoad_SandboxDefaultsAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Sandbox.Enabled {
-		t.Fatalf("sandbox enabled = true, want default false")
+	effective := cfg.SandboxPolicyForOS("linux")
+	if !effective.Enabled {
+		t.Fatalf("sandbox enabled = false, want platform default true")
 	}
-	if cfg.Sandbox.FileSystem.OutsideWorkspace != OutsideWorkspaceReadWrite || !cfg.Sandbox.Network.Enabled {
-		t.Fatalf("sandbox defaults = %+v", cfg.Sandbox)
+	if effective.FileSystem.OutsideWorkspace != OutsideWorkspaceReadOnly || !effective.Network.Enabled {
+		t.Fatalf("sandbox defaults = %+v", effective)
 	}
 	if len(cfg.Sandbox.FileSystem.BlockedPaths) != 0 {
 		t.Fatalf("blocked paths default = %#v, want empty", cfg.Sandbox.FileSystem.BlockedPaths)
@@ -1009,6 +1010,31 @@ func TestLoad_SandboxDefaultsAndOverrides(t *testing.T) {
 	}
 	if got, want := strings.Join(cfg.Sandbox.FileSystem.BlockedPaths, ","), "~/.ssh"; got != want {
 		t.Fatalf("blocked paths = %q, want %q", got, want)
+	}
+}
+
+func TestLoad_SandboxExplicitSectionKeepsLegacySparseDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "empty", body: "sandbox: {}\n"},
+		{name: "network-only", body: "sandbox:\n  network:\n    enabled: false\n"},
+		{name: "blocked-only", body: "sandbox:\n  file_system:\n    blocked_paths: [.env]\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepareConfigTest(t)
+			work := t.TempDir()
+			writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), tc.body)
+			cfg, err := LoadForWorkDir(work)
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := cfg.SandboxPolicyForOS("linux")
+			if policy.Enabled || policy.FileSystem.OutsideWorkspace != OutsideWorkspaceReadWrite {
+				t.Fatalf("explicit sparse policy = %+v, want legacy disabled/read_write baseline", policy)
+			}
+		})
 	}
 }
 

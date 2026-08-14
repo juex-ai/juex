@@ -19,10 +19,10 @@ func TestLinuxReadOnlyProvidesWritableDevicesAndTemp(t *testing.T) {
 		RuntimeOS: "linux",
 		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
 	}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       "/work",
-		WritableRoots: []string{"/work"},
-		Spec:          ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}},
+		Policy:     policy,
+		WorkDir:    "/work",
+		FilePolicy: filePolicyForTest(policy, "/work", "/work"),
+		Spec:       ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +31,11 @@ func TestLinuxReadOnlyProvidesWritableDevicesAndTemp(t *testing.T) {
 	for _, want := range []string{"--ro-bind\x00/\x00/", "--dev\x00/dev", "--tmpfs\x00/tmp", "--bind\x00/work\x00/work"} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("args missing %q: %#v", want, got.Args)
+		}
+	}
+	for _, want := range []string{"TMPDIR=/tmp/juex", "XDG_CACHE_HOME=/tmp/juex/cache", "GOCACHE=/tmp/juex/cache/go-build"} {
+		if !strings.Contains(strings.Join(got.Env, "\n"), want) {
+			t.Fatalf("sandbox environment missing %q: %#v", want, got.Env)
 		}
 	}
 }
@@ -53,10 +58,10 @@ func TestLinuxReadOnlyBindsWorkspaceAndAgentStateRoots(t *testing.T) {
 		RuntimeOS: "linux",
 		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
 	}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       workspace,
-		WritableRoots: []string{workspace, dataDir},
-		Spec:          ExecSpec{Binary: "/bin/true"},
+		Policy:     policy,
+		WorkDir:    workspace,
+		FilePolicy: filePolicyForTest(policy, workspace, workspace, dataDir),
+		Spec:       ExecSpec{Binary: "/bin/true"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +86,7 @@ func TestLinuxReadOnlyBindsWorkspaceAndAgentStateRoots(t *testing.T) {
 }
 
 func TestLinuxBackendRestoresTargetEnvironmentInsideSandbox(t *testing.T) {
-	policy := DefaultPolicy()
+	policy := LegacyDefaultPolicy()
 	policy.Enabled = true
 	got, err := (DefaultRunner{
 		RuntimeOS: "linux",
@@ -133,10 +138,10 @@ func TestLinuxBlockedPathsAreMasked(t *testing.T) {
 		RuntimeOS: "linux",
 		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
 	}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       "/work",
-		WritableRoots: []string{"/work"},
-		Spec:          ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}},
+		Policy:     policy,
+		WorkDir:    "/work",
+		FilePolicy: filePolicyForTest(policy, "/work", "/work"),
+		Spec:       ExecSpec{Binary: "sh", Args: []string{"-c", "echo ok"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -164,10 +169,10 @@ func TestLinuxBlockedPathMaskFollowsWritableAgentStateBind(t *testing.T) {
 		RuntimeOS: "linux",
 		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
 	}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       workspace,
-		WritableRoots: []string{workspace, agentStateDir},
-		Spec:          ExecSpec{Binary: "/bin/true"},
+		Policy:     policy,
+		WorkDir:    workspace,
+		FilePolicy: filePolicyForTest(policy, workspace, workspace, agentStateDir),
+		Spec:       ExecSpec{Binary: "/bin/true"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -191,10 +196,10 @@ func TestLinuxBlockedPathsRejectMissingPaths(t *testing.T) {
 		RuntimeOS: "linux",
 		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
 	}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       "/work",
-		WritableRoots: []string{"/work"},
-		Spec:          ExecSpec{Binary: "sh"},
+		Policy:     policy,
+		WorkDir:    "/work",
+		FilePolicy: filePolicyForTest(policy, "/work", "/work"),
+		Spec:       ExecSpec{Binary: "sh"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("err = %v, want missing blocked path error", err)

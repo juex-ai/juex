@@ -131,10 +131,10 @@ func (r *RipgrepRunner) Grep(ctx context.Context, req GrepRequest) (GrepResult, 
 			runner = sandbox.DefaultRunner{}
 		}
 		spec, err = runner.Prepare(ctx, sandbox.Request{
-			Policy:        r.opts.Sandbox,
-			WorkDir:       r.opts.WorkDir,
-			WritableRoots: shellWritableRoots(r.opts.WorkDir, ""),
-			Spec:          spec,
+			Policy:     r.opts.Sandbox,
+			WorkDir:    r.opts.WorkDir,
+			FilePolicy: sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: r.opts.Sandbox, WorkDir: r.opts.WorkDir}),
+			Spec:       spec,
 		})
 		if err != nil {
 			return GrepResult{}, fmt.Errorf("grep: prepare sandbox: %w", err)

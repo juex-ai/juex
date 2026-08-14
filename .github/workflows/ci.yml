@@ -56,6 +56,9 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           version: latest
+      - name: Install Linux sandbox backend
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - name: Prepare embedded web dist
         run: |
           mkdir -p internal/web/dist

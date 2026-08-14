@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
@@ -313,6 +314,13 @@ func (c Config) RuntimeLimits() RuntimeLimits {
 }
 
 func (c Config) SandboxPolicy() sandbox.Policy {
+	return c.SandboxPolicyForOS(runtime.GOOS)
+}
+
+func (c Config) SandboxPolicyForOS(runtimeOS string) sandbox.Policy {
+	if !c.sandboxConfigured && isZeroSandboxPolicy(c.Sandbox) {
+		return sandbox.DefaultPolicyForOS(runtimeOS)
+	}
 	policy := c.Sandbox
 	if policy.FileSystem.OutsideWorkspace == "" {
 		policy.FileSystem.OutsideWorkspace = sandbox.OutsideWorkspaceReadWrite

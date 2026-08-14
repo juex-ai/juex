@@ -1,7 +1,5 @@
 package tools
 
-import "github.com/juex-ai/juex/internal/sandbox"
-
 const chunkedWriteGuidePointer = `Guide available via skill_load("juex-chunked-write").`
 
 type ChunkedWriteToolProvider struct{}
@@ -16,7 +14,7 @@ func (ChunkedWriteToolProvider) definitions(BuiltinDefinitionOptions) []ToolDefi
 }
 
 func (ChunkedWriteToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
-	manager := newChunkWriteManager(ctx.WorkDir, sandbox.NewPathGuard(ctx.WorkDir, ctx.Sandbox))
+	manager := newChunkWriteManager(ctx.WorkDir, ctx.FilePolicy)
 	if ctx.ChunkedWrites != nil {
 		manager = ctx.ChunkedWrites
 	}

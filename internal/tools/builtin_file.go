@@ -26,7 +26,7 @@ func (FileToolProvider) definitions(opts BuiltinDefinitionOptions) []ToolDefinit
 }
 
 func (FileToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
-	guard := sandbox.NewPathGuard(ctx.WorkDir, ctx.Sandbox)
+	guard := ctx.FilePolicy
 	out := []Tool{
 		readTool(ctx.WorkDir, ctx.ArtifactDir, guard),
 		writeTool(ctx.WorkDir, guard),
@@ -115,7 +115,7 @@ func readTool(workDir, artifactDir string, guard sandbox.PathGuard) Tool {
 			return Result{}, fmt.Errorf("read: missing path")
 		}
 		path = resolveWorkPath(workDir, path)
-		if err := guard.Check(path); err != nil {
+		if err := guard.CheckRead(path); err != nil {
 			return Result{}, fmt.Errorf("read: %w", err)
 		}
 		data, err := os.ReadFile(path)
@@ -157,11 +157,14 @@ func writeTool(workDir string, guard sandbox.PathGuard) Tool {
 			return "", fmt.Errorf("write: missing path")
 		}
 		path = resolveWorkPath(workDir, path)
-		if err := guard.Check(path); err != nil {
+		if err := guard.CheckWrite(path); err != nil {
 			return "", fmt.Errorf("write: %w", err)
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return "", err
+		}
+		if err := guard.CheckWrite(path); err != nil {
+			return "", fmt.Errorf("write: %w", err)
 		}
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			return "", err
@@ -190,7 +193,7 @@ func editTool(workDir string, guard sandbox.PathGuard) Tool {
 			return "", fmt.Errorf("edit: missing required argument(s): %s (expected keys: path, old, new; received keys: %s)", strings.Join(missing, ", "), receivedArgumentKeys(in))
 		}
 		path = resolveWorkPath(workDir, path)
-		if err := guard.Check(path); err != nil {
+		if err := guard.CheckWrite(path); err != nil {
 			return "", fmt.Errorf("edit: %w", err)
 		}
 		if expectedSet && expected != 1 && !replaceAll {
@@ -217,6 +220,9 @@ func editTool(workDir string, guard sandbox.PathGuard) Tool {
 		}
 		if expectedSet && count != expected {
 			return "", fmt.Errorf("edit: %s: expected %d replacements, found %d", path, expected, count)
+		}
+		if err := guard.CheckWrite(path); err != nil {
+			return "", fmt.Errorf("edit: %w", err)
 		}
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			return "", err

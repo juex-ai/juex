@@ -27,7 +27,7 @@ func (ShellToolProvider) definitions(opts BuiltinDefinitionOptions) []ToolDefini
 
 func (ShellToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	return []Tool{
-		execCommandTool(ctx.WorkDir, ctx.AgentStateDir, ctx.Environment, ctx.Shell, ctx.ShellSessions, ctx.Sandbox, ctx.SandboxRunner),
+		execCommandTool(ctx.WorkDir, ctx.Environment, ctx.Shell, ctx.ShellSessions, ctx.Sandbox, ctx.FilePolicy, ctx.SandboxRunner),
 		listShellSessionsTool(ctx.ShellSessions),
 		writeStdinTool(ctx.ShellSessions),
 	}
@@ -113,7 +113,7 @@ func writeStdinToolDefinition() ToolDefinition {
 	}
 }
 
-func execCommandTool(defaultWorkdir, agentStateDir string, snapshot environment.Snapshot, profile ShellProfile, sessions *ShellSessionManager, sandboxPolicy sandbox.Policy, sandboxRunner sandbox.Runner) Tool {
+func execCommandTool(defaultWorkdir string, snapshot environment.Snapshot, profile ShellProfile, sessions *ShellSessionManager, sandboxPolicy sandbox.Policy, filePolicy sandbox.FilePolicy, sandboxRunner sandbox.Runner) Tool {
 	return execCommandToolDefinition(profile).BindResult(func(ctx context.Context, in map[string]any) (Result, error) {
 		cmd, _ := in["cmd"].(string)
 		if cmd == "" {
@@ -138,7 +138,7 @@ func execCommandTool(defaultWorkdir, agentStateDir string, snapshot environment.
 			Env:             snapshot.Environ(map[string]string{"PWD": workdir}),
 			Cwd:             workdir,
 			WorkDir:         defaultWorkdir,
-			WritableRoots:   shellWritableRoots(defaultWorkdir, agentStateDir),
+			FilePolicy:      filePolicy,
 			Sandbox:         sandboxPolicy,
 			SandboxRunner:   sandboxRunner,
 			Yield:           yield,
@@ -156,17 +156,6 @@ func execCommandTool(defaultWorkdir, agentStateDir string, snapshot environment.
 		}
 		return out, nil
 	})
-}
-
-func shellWritableRoots(defaultWorkdir, agentStateDir string) []string {
-	roots := make([]string, 0, 2)
-	if strings.TrimSpace(defaultWorkdir) != "" {
-		roots = append(roots, defaultWorkdir)
-	}
-	if strings.TrimSpace(agentStateDir) != "" {
-		roots = append(roots, agentStateDir)
-	}
-	return roots
 }
 
 func listShellSessionsTool(sessions *ShellSessionManager) Tool {

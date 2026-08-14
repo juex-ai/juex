@@ -32,23 +32,26 @@ type runnerOptions struct {
 }
 
 type runner struct {
-	opts    runnerOptions
-	pipe    *Pipeline
-	batcher *Batcher
-	cmd     *exec.Cmd
-	mu      sync.Mutex
-	wg      sync.WaitGroup
-	flushCh chan struct{}
+	opts       runnerOptions
+	filePolicy sandbox.FilePolicy
+	pipe       *Pipeline
+	batcher    *Batcher
+	cmd        *exec.Cmd
+	mu         sync.Mutex
+	wg         sync.WaitGroup
+	flushCh    chan struct{}
 }
 
 func newRunner(opts runnerOptions) *runner {
 	pipe, _ := newCommandPipeline(opts.spec)
+	filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: opts.sandboxPolicy, WorkDir: opts.workDir, AgentStateDir: opts.agentStateDir})
 	return &runner{
-		opts: opts,
-		pipe: pipe,
+		opts:       opts,
+		filePolicy: filePolicy,
+		pipe:       pipe,
 		batcher: newCommandBatcher(opts.spec, opts.store, BatcherOptions{
 			RunID: opts.runID, WorkDir: opts.workDir, AgentStateDir: opts.agentStateDir, ArtifactDir: opts.artifactDir,
-			PathGuard: sandbox.NewPathGuard(opts.workDir, opts.sandboxPolicy),
+			PathGuard: filePolicy,
 		}),
 	}
 }
@@ -101,10 +104,10 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 			sandboxRunner = sandbox.DefaultRunner{}
 		}
 		prepared, err := sandboxRunner.Prepare(callCtx, sandbox.Request{
-			Policy:        r.opts.sandboxPolicy,
-			WorkDir:       r.opts.workDir,
-			WritableRoots: observableWritableRoots(r.opts.workDir, r.opts.agentStateDir),
-			Spec:          spec,
+			Policy:     r.opts.sandboxPolicy,
+			WorkDir:    r.opts.workDir,
+			FilePolicy: r.filePolicy,
+			Spec:       spec,
 		})
 		if err != nil {
 			return nil, err
@@ -151,17 +154,6 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 	r.wg.Add(1)
 	go r.flushLoop(r.flushCh)
 	return cmd, nil
-}
-
-func observableWritableRoots(workDir, agentStateDir string) []string {
-	roots := make([]string, 0, 2)
-	if strings.TrimSpace(workDir) != "" {
-		roots = append(roots, workDir)
-	}
-	if strings.TrimSpace(agentStateDir) != "" {
-		roots = append(roots, agentStateDir)
-	}
-	return roots
 }
 
 func (r *runner) wait() (*int, error) {

@@ -19,9 +19,14 @@ func TestDarwinReadOnlyProfileRestrictsWritesOutsideWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"(allow default)", "(deny file-write*", "require-not", "/tmp/workspace", "/dev/null", "/private/tmp", "/var/folders"} {
+	for _, want := range []string{"(allow default)", "(deny file-write*", "require-not", "/tmp/workspace", "/dev/null"} {
 		if !strings.Contains(profile, want) {
 			t.Fatalf("profile missing %q:\n%s", want, profile)
+		}
+	}
+	for _, forbidden := range []string{"(subpath \"/private/tmp\")", "(subpath \"/private/var/folders\")"} {
+		if strings.Contains(profile, forbidden) {
+			t.Fatalf("profile grants host temp root %q:\n%s", forbidden, profile)
 		}
 	}
 }
@@ -48,7 +53,7 @@ func TestDarwinProfileBlocksConfiguredPaths(t *testing.T) {
 }
 
 func TestDarwinBackendRestoresTargetEnvironmentInsideSandbox(t *testing.T) {
-	policy := DefaultPolicy()
+	policy := LegacyDefaultPolicy()
 	policy.Enabled = true
 	got, err := (DefaultRunner{
 		RuntimeOS: "darwin",
@@ -104,9 +109,9 @@ func TestDarwinReadOnlyBackendAllowsWorkspaceWriteOnly(t *testing.T) {
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	spec, err := (DefaultRunner{RuntimeOS: "darwin"}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       work,
-		WritableRoots: []string{work},
+		Policy:     policy,
+		WorkDir:    work,
+		FilePolicy: filePolicyForTest(policy, work, work),
 		Spec: ExecSpec{
 			Binary: "sh",
 			Args: []string{
@@ -132,7 +137,7 @@ func TestDarwinReadOnlyBackendAllowsWorkspaceWriteOnly(t *testing.T) {
 	}
 }
 
-func TestDarwinReadOnlyBackendAllowsDeviceAndTempWrites(t *testing.T) {
+func TestDarwinReadOnlyBackendAllowsDeviceButDeniesHostTempWrites(t *testing.T) {
 	if _, err := exec.LookPath("sandbox-exec"); err != nil {
 		t.Skip("sandbox-exec unavailable")
 	}
@@ -143,14 +148,14 @@ func TestDarwinReadOnlyBackendAllowsDeviceAndTempWrites(t *testing.T) {
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	spec, err := (DefaultRunner{RuntimeOS: "darwin"}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       work,
-		WritableRoots: []string{work},
+		Policy:     policy,
+		WorkDir:    work,
+		FilePolicy: filePolicyForTest(policy, work, work),
 		Spec: ExecSpec{
 			Binary: "sh",
 			Args: []string{
 				"-c",
-				"echo ok >/dev/null; echo ok > " + shellPath(tempPath),
+				"echo ok >/dev/null; echo denied > " + shellPath(tempPath) + " 2>/dev/null && exit 7; exit 0",
 			},
 		},
 	})
@@ -162,8 +167,8 @@ func TestDarwinReadOnlyBackendAllowsDeviceAndTempWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sandboxed command failed: %v\n%s", err, out)
 	}
-	if _, err := os.Stat(tempPath); err != nil {
-		t.Fatalf("temp write missing: %v", err)
+	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+		t.Fatalf("host temp write = %v, want denied/missing", err)
 	}
 }
 
@@ -185,15 +190,20 @@ func TestDefaultRunnerDarwinAllowsWorkspaceAndAgentStateRoots(t *testing.T) {
 		RuntimeOS: "darwin",
 		LookPath:  func(string) (string, error) { return "/usr/bin/sandbox-exec", nil },
 	}).Prepare(context.Background(), Request{
-		Policy:        policy,
-		WorkDir:       workspace,
-		WritableRoots: []string{workspace, dataDir},
-		Spec:          ExecSpec{Binary: "/bin/true"},
+		Policy:     policy,
+		WorkDir:    workspace,
+		FilePolicy: filePolicyForTest(policy, workspace, workspace, dataDir),
+		Spec:       ExecSpec{Binary: "/bin/true"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	profile := strings.Join(got.Args, "\n")
+	for _, want := range []string{"TMPDIR=", "XDG_CACHE_HOME=", "GOCACHE="} {
+		if !strings.Contains(strings.Join(got.Env, "\n"), want) {
+			t.Fatalf("sandbox environment missing %q: %#v", want, got.Env)
+		}
+	}
 	normalized := normalizedRoots([]string{workspace, dataDir})
 	for _, want := range []string{
 		`(subpath "` + normalized[0] + `")`,

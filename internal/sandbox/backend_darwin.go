@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -11,7 +13,8 @@ func prepareDarwin(lookPath func(string) (string, error), req Request) (ExecSpec
 	if err != nil {
 		return ExecSpec{}, NewError(ErrorCodeBackendUnavailable, "darwin", "sandbox-exec", "lookup", req.Policy, "Install or enable sandbox-exec, set sandbox.enabled: false, or choose a platform backend that can enforce the requested policy.", err)
 	}
-	profile, err := darwinProfile(req.Policy, req.WorkDir, req.WritableRoots)
+	writableRoots := req.FilePolicy.WritableRoots()
+	profile, err := darwinProfile(req.Policy, req.WorkDir, writableRoots)
 	if err != nil {
 		return ExecSpec{}, err
 	}
@@ -23,7 +26,23 @@ func prepareDarwin(lookPath func(string) (string, error), req Request) (ExecSpec
 	wrapped.Binary = helper
 	wrapped.Args = append([]string{"-p", profile, targetBinary}, targetArgs...)
 	wrapped.Env = launcherEnv
+	if scratch, err := darwinScratchDir(req.FilePolicy.ScratchRoot()); err != nil {
+		return ExecSpec{}, NewError(ErrorCodePolicyUnavailable, "darwin", "sandbox-exec", "scratch", req.Policy, "Unable to prepare a private temporary directory in AgentStateDir.", err)
+	} else if scratch != "" {
+		wrapped.Env = sandboxScratchEnvironment(wrapped.Env, scratch)
+	}
 	return wrapped, nil
+}
+
+func darwinScratchDir(agentStateDir string) (string, error) {
+	if strings.TrimSpace(agentStateDir) == "" {
+		return "", nil
+	}
+	scratch := filepath.Join(agentStateDir, "tmp")
+	if err := os.MkdirAll(scratch, 0o700); err != nil {
+		return "", err
+	}
+	return scratch, nil
 }
 
 func darwinProfile(policy Policy, workDir string, writableRoots []string) (string, error) {
@@ -55,16 +74,13 @@ func darwinProfile(policy Policy, workDir string, writableRoots []string) (strin
 }
 
 func darwinWritablePathPredicate(workspaceRoots []string) string {
-	parts := make([]string, 0, len(workspaceRoots)+7)
+	parts := make([]string, 0, len(workspaceRoots)+3)
 	parts = append(parts, "require-any")
 	for _, path := range workspaceRoots {
 		parts = append(parts, "(subpath "+strconv.Quote(path)+")")
 	}
 	for _, path := range []string{"/dev/null", "/dev/zero"} {
 		parts = append(parts, "(literal "+strconv.Quote(path)+")")
-	}
-	for _, path := range []string{"/private/tmp", "/tmp", "/private/var/folders", "/var/folders"} {
-		parts = append(parts, "(subpath "+strconv.Quote(path)+")")
 	}
 	return "(" + strings.Join(parts, " ") + ")"
 }

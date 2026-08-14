@@ -1425,6 +1425,46 @@ func TestBuiltins_FileToolsRespectSandboxBlockedPaths(t *testing.T) {
 	}
 }
 
+func TestBuiltins_FileWritesUseSandboxWritableRoots(t *testing.T) {
+	workDir := t.TempDir()
+	agentStateDir := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("readable"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	policy := sandbox.DefaultPolicyForOS("linux")
+	r := NewRegistry()
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir:       workDir,
+		AgentStateDir: agentStateDir,
+		Shell:         fakeShellProfile(),
+		Sandbox:       policy,
+		SandboxRunner: &fakeSandboxRunner{},
+	})
+
+	for _, path := range []string{
+		filepath.Join(workDir, "workspace.txt"),
+		filepath.Join(agentStateDir, "memory", "agent.txt"),
+	} {
+		if _, err := r.Call(context.Background(), "write", map[string]any{"path": path, "content": "ok"}); err != nil {
+			t.Fatalf("write(%q) = %v", path, err)
+		}
+	}
+	if out, err := r.Call(context.Background(), "read", map[string]any{"path": outsideFile}); err != nil || out != "readable" {
+		t.Fatalf("outside read = %q, %v", out, err)
+	}
+	if _, err := r.Call(context.Background(), "write", map[string]any{"path": outsideFile, "content": "denied"}); err == nil || !strings.Contains(err.Error(), "outside writable roots") {
+		t.Fatalf("outside write = %v, want writable roots rejection", err)
+	}
+	if _, err := r.Call(context.Background(), "edit", map[string]any{"path": outsideFile, "old": "readable", "new": "denied"}); err == nil || !strings.Contains(err.Error(), "outside writable roots") {
+		t.Fatalf("outside edit = %v, want writable roots rejection", err)
+	}
+	if got := string(mustReadFile(t, outsideFile)); got != "readable" {
+		t.Fatalf("outside file = %q, want unchanged", got)
+	}
+}
+
 func TestRegisterBuiltinsApplyPatchSchemaAndDisable(t *testing.T) {
 	r := NewRegistry()
 	registerTestBuiltins(r, t.TempDir())
@@ -2823,7 +2863,7 @@ func TestBuiltins_ExecCommandSandboxDisabledDoesNotWrap(t *testing.T) {
 	RegisterBuiltins(r, BuiltinOptions{
 		WorkDir:       t.TempDir(),
 		Shell:         fakeShellProfile(),
-		Sandbox:       sandbox.DefaultPolicy(),
+		Sandbox:       sandbox.LegacyDefaultPolicy(),
 		SandboxRunner: runner,
 	})
 
@@ -2886,7 +2926,7 @@ func TestBuiltins_ExecCommandGrantsAgentStateDir(t *testing.T) {
 	if len(runner.requests) != 1 {
 		t.Fatalf("sandbox requests = %d", len(runner.requests))
 	}
-	if got := runner.requests[0].WritableRoots; len(got) != 2 || got[0] != workDir || got[1] != agentStateDir {
+	if got := runner.requests[0].FilePolicy.WritableRoots(); len(got) != 2 || got[0] != canonicalPathForTest(t, workDir) || got[1] != canonicalPathForTest(t, agentStateDir) {
 		t.Fatalf("writable roots = %#v, want Workspace and AgentStateDir", got)
 	}
 }
@@ -4345,4 +4385,13 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func canonicalPathForTest(t *testing.T, path string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }

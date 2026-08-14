@@ -580,7 +580,7 @@ func TestSkillLoadDoesNotTrustFilesystemSourceLabel(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := tools.NewRegistry()
-	policy := sandbox.DefaultPolicy()
+	policy := sandbox.LegacyDefaultPolicy()
 	policy.Enabled = true
 	policy.FileSystem.BlockedPaths = []string{skillDir}
 	if err := registerSkillTools(reg, loader, work, policy); err != nil {
@@ -1349,7 +1349,8 @@ func TestApp_NewStartsAllowedExtensionObservableWithoutWritingProjectConfig(t *t
 	})
 	dataDir := filepath.Join(address.StateDir(), "extensions", "demo")
 	if body, err := os.ReadFile(filepath.Join(dataDir, "started")); err != nil || string(body) != "ok" {
-		t.Fatalf("extension data marker = %q err=%v", body, err)
+		status, statusErr := a.Observables().StatusByID("extension-default-start")
+		t.Fatalf("extension data marker = %q err=%v status=%+v status_err=%v", body, err, status, statusErr)
 	}
 	if _, err := os.Stat(cfg.ObservablesConfigPath()); !os.IsNotExist(err) {
 		t.Fatalf("extension definition wrote project config, stat err = %v", err)
@@ -1400,7 +1401,8 @@ func TestAppExtensionObservableHelperProcess(t *testing.T) {
 	}
 	dataDir := os.Getenv("JUEX_EXT_DATA_DIR")
 	if err := os.WriteFile(filepath.Join(dataDir, "started"), []byte("ok"), 0o600); err != nil {
-		_, _ = os.Stderr.WriteString(err.Error())
+		payload, _ := json.Marshal(map[string]string{"type": "extension_error", "level": "error", "content": err.Error()})
+		_, _ = os.Stdout.Write(append(payload, '\n'))
 		os.Exit(2)
 	}
 	_, _ = os.Stdout.WriteString(`{"type":"extension_event","level":"info","content":"extension started"}` + "\n")
