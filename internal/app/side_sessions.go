@@ -163,14 +163,14 @@ func (m *sideSessionManager) newChildApp(child sideSessionChildOptions) (*App, e
 }
 
 func (m *sideSessionManager) Create(ctx context.Context, query, model string, subscribe bool) (SideSessionStatus, error) {
-	ctx, cancelCreate := sideSessionCreateContext(ctx, m.parent.ctx)
+	createCtx, cancelCreate := sideSessionCreateContext(ctx, m.parent.ctx)
 	defer cancelCreate()
 	m.lifecycleMu.RLock()
 	defer m.lifecycleMu.RUnlock()
 	if err := m.ensureParentActive(); err != nil {
 		return SideSessionStatus{}, err
 	}
-	if err := ctx.Err(); err != nil {
+	if err := createCtx.Err(); err != nil {
 		return SideSessionStatus{}, err
 	}
 	query = strings.TrimSpace(query)
@@ -195,7 +195,7 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 	resultCh := make(chan factoryResult, 1)
 	go func() {
 		child, err := m.factory(sideSessionChildOptions{
-			Context:           ctx,
+			Context:           createCtx,
 			Config:            cfg,
 			Model:             model,
 			UseParentProvider: useParentProvider,
@@ -210,19 +210,19 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 	select {
 	case result := <-resultCh:
 		child, err = result.child, result.err
-	case <-ctx.Done():
+	case <-createCtx.Done():
 		m.deferCleanup(func() {
 			result := <-resultCh
 			if result.child != nil {
 				_ = result.child.CloseAndWait()
 			}
 		})
-		return SideSessionStatus{}, ctx.Err()
+		return SideSessionStatus{}, createCtx.Err()
 	}
 	if err != nil {
 		return SideSessionStatus{}, fmt.Errorf("create side session: %w", err)
 	}
-	if err := ctx.Err(); err != nil {
+	if err := createCtx.Err(); err != nil {
 		_ = child.CloseAndWait()
 		return SideSessionStatus{}, err
 	}
@@ -231,11 +231,15 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 		_ = child.CloseAndWait()
 		return SideSessionStatus{}, errors.New("create side session: child runtime is not a side session")
 	}
+	if err := createCtx.Err(); err != nil {
+		_ = child.CloseAndWait()
+		return SideSessionStatus{}, err
+	}
 	now := time.Now().UTC()
-	ctx, cancel := context.WithCancelCause(child.ctx)
+	managedCtx, cancel := context.WithCancelCause(child.ctx)
 	managed := &managedSideSession{
 		app:          child,
-		ctx:          ctx,
+		ctx:          managedCtx,
 		deliveryCtx:  m.deliveryCtx,
 		deliveryWait: m.deliveryWait,
 		cancel:       cancel,
@@ -264,12 +268,12 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 	m.sessions[identity.ID] = managed
 	m.mu.Unlock()
 
-	if err := ctx.Err(); err != nil {
+	if err := createCtx.Err(); err != nil {
 		m.removeIfCurrent(managed)
 		_ = stopManagedSideSession(managed)
 		return SideSessionStatus{}, err
 	}
-	result := child.admitUserTurn(ctx, userTurnMessage(query, nil), TurnIDFunc(func(string) string { return m.nextTurnID() }))
+	result := child.admitUserTurn(createCtx, userTurnMessage(query, nil), TurnIDFunc(func(string) string { return m.nextTurnID() }))
 	if result.Kind != TurnAdmissionStarted || result.Start == nil {
 		m.removeIfCurrent(managed)
 		_ = stopManagedSideSession(managed)
@@ -278,13 +282,13 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 		}
 		return SideSessionStatus{}, fmt.Errorf("start side session: unexpected admission %q", result.Kind)
 	}
-	if err := ctx.Err(); err != nil {
+	if err := createCtx.Err(); err != nil {
 		child.CompleteAdmittedTurn(result.Start.TurnID)
 		m.removeIfCurrent(managed)
 		_ = stopManagedSideSession(managed)
 		return SideSessionStatus{}, err
 	}
-	if err := m.startRun(ctx, managed, result.Start); err != nil {
+	if err := m.startRun(createCtx, managed, result.Start); err != nil {
 		child.CompleteAdmittedTurn(result.Start.TurnID)
 		m.removeIfCurrent(managed)
 		_ = stopManagedSideSession(managed)

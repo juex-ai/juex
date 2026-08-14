@@ -1329,6 +1329,55 @@ func TestAppBeginCloseCancelsInFlightSideCreationBeforeFactoryReturns(t *testing
 	release()
 }
 
+func TestSideSessionCreateRetainsCallDeadlineAfterFactoryReturns(t *testing.T) {
+	childProvider := &scriptedSideProvider{}
+	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, childProvider)
+	originalFactory := parent.sideSessions.factory
+	childReady := make(chan *App, 1)
+	parent.sideSessions.factory = func(opts sideSessionChildOptions) (*App, error) {
+		child, err := originalFactory(opts)
+		if err != nil {
+			return nil, err
+		}
+		child.sessionMu.Lock()
+		childReady <- child
+		return child, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := parent.sideSessions.Create(ctx, "deadline after factory", "", false)
+		createDone <- err
+	}()
+	child := <-childReady
+	<-ctx.Done()
+	child.sessionMu.Unlock()
+
+	select {
+	case err := <-createDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Create error = %v, want context deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Side Session create did not return after the identity lock was released")
+	}
+	statuses, err := parent.sideSessions.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 0 {
+		t.Fatalf("managed Side Sessions = %+v, want none", statuses)
+	}
+	childProvider.mu.Lock()
+	calls := childProvider.calls
+	childProvider.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("child provider calls = %d, want 0", calls)
+	}
+}
+
 func TestSwitchToNewPrimaryStopsChildrenAndKeepsManagerUsable(t *testing.T) {
 	first := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
 	second := &scriptedSideProvider{}

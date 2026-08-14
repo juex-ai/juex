@@ -42,9 +42,9 @@ import {
   type ToolDisplayUnit,
 } from "@/lib/display-units";
 import {
-  formatExternalEventForDisplay,
   formatMCPEventForDisplay,
   formatObservationEventForDisplay,
+  formatSideSessionEventForDisplay,
 } from "@/lib/mcp-events";
 import {
   COMPACT_COPIED_TOOLTIP,
@@ -921,10 +921,7 @@ function ExternalEventMessage({
     () => {
       if (eventKind === "observation") return formatObservationEventForDisplay(text);
       if (eventKind === "side_session") {
-        return formatExternalEventForDisplay(text, {
-          fallbackLabel: "side_session:result",
-          parseColonPrefix: false,
-        });
+        return formatSideSessionEventForDisplay(text);
       }
       return formatMCPEventForDisplay(text);
     },

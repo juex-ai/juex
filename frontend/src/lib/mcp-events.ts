@@ -25,6 +25,36 @@ export function formatObservationEventForDisplay(
   });
 }
 
+export function formatSideSessionEventForDisplay(
+  text: string,
+): ExternalEventDisplay {
+  const prefix = "Side Session result:";
+  const trimmed = text.trim();
+  const payload = trimmed.startsWith(prefix)
+    ? trimmed.slice(prefix.length).trim()
+    : trimmed;
+  let previewText = payload;
+  try {
+    const value = JSON.parse(payload) as unknown;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const result = value as { output?: unknown; error?: unknown };
+      if (typeof result.output === "string" && result.output.trim()) {
+        previewText = result.output;
+      } else if (typeof result.error === "string" && result.error.trim()) {
+        previewText = result.error;
+      }
+    }
+  } catch {
+    // Keep the raw payload as the preview when an older message is not JSON.
+  }
+  return {
+    label: "side_session:result",
+    content: text,
+    preview: oneLinePreview(previewText),
+    copyText: text,
+  };
+}
+
 export function formatExternalEventForDisplay(
   text: string,
   opts: {
