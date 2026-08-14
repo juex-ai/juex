@@ -146,6 +146,34 @@ func TestVerbose_TurnStartedMCPEventUsesEventLabel(t *testing.T) {
 	}
 }
 
+func TestVerbose_TurnStartedSideSessionUsesEventLabel(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "completed", input: `Side Session result:
+{"status":"completed","output":"delegated answer"}`, want: "delegated answer"},
+		{name: "failed", input: `Side Session result:
+{"status":"failed","error":"delegation failed"}`, want: "delegation failed"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			out := emitAll([]events.Event{
+				{Type: "turn.started", Payload: runtimeevents.TurnStartedPayload{
+					Input: tt.input,
+					Kind:  llm.MessageKindSideSession,
+				}},
+			})
+			if !strings.Contains(out, "› event: "+tt.want) {
+				t.Fatalf("missing Side Session event preview in transcript:\n%s", out)
+			}
+			if strings.Contains(out, "› user:") {
+				t.Fatalf("Side Session result should not be printed as user input:\n%s", out)
+			}
+		})
+	}
+}
+
 func TestVerbose_TurnStartedEventUsesGoldTTYColor(t *testing.T) {
 	var buf bytes.Buffer
 	vp := newVerbosePrinter(&buf)

@@ -91,27 +91,30 @@ type sideSessionManager struct {
 	parent  *App
 	factory sideSessionFactory
 
-	lifecycleMu    sync.RWMutex
-	transitionMu   sync.Mutex
-	mu             sync.Mutex
-	sessions       map[string]*managedSideSession
-	closed         bool
-	transitioning  bool
-	deliveryCtx    context.Context
-	deliveryCancel context.CancelFunc
-	deliveryWait   *sync.WaitGroup
-	deferred       sync.WaitGroup
-	closeOnce      sync.Once
-	closeStartErr  error
-	cleanupErrMu   sync.Mutex
-	cleanupErr     error
-	turnSeq        atomic.Uint64
+	lifecycleMu     sync.RWMutex
+	transitionMu    sync.Mutex
+	mu              sync.Mutex
+	sessions        map[string]*managedSideSession
+	closed          bool
+	transitioning   bool
+	deliveryCtx     context.Context
+	deliveryCancel  context.CancelFunc
+	deliveryWait    *sync.WaitGroup
+	deliveryWriters sync.WaitGroup
+	deliveryDone    chan struct{}
+	deferred        sync.WaitGroup
+	closeOnce       sync.Once
+	closeStartErr   error
+	cleanupErrMu    sync.Mutex
+	cleanupErr      error
+	turnSeq         atomic.Uint64
 }
 
 func newSideSessionManager(parent *App) *sideSessionManager {
 	m := &sideSessionManager{
-		parent:   parent,
-		sessions: map[string]*managedSideSession{},
+		parent:       parent,
+		sessions:     map[string]*managedSideSession{},
+		deliveryDone: make(chan struct{}),
 	}
 	baseCtx := context.Background()
 	if parent != nil && parent.ctx != nil {
@@ -542,7 +545,7 @@ func (m *sideSessionManager) StartClose() error {
 	m.closeOnce.Do(func() {
 		m.transitionMu.Lock()
 		defer m.transitionMu.Unlock()
-		items, deliveries, err := m.beginTransition(true)
+		items, _, err := m.beginTransition(true)
 		if err != nil {
 			m.closeStartErr = err
 			return
@@ -555,11 +558,29 @@ func (m *sideSessionManager) StartClose() error {
 				return managed.app.CloseAndWait()
 			})
 		}
-		if deliveries != nil {
-			m.deferCleanup(func() { deliveries.Wait() })
-		}
+		m.deferCleanup(func() {
+			m.deliveryWriters.Wait()
+			close(m.deliveryDone)
+		})
 	})
 	return m.closeStartErr
+}
+
+// WaitDeliveryWriters waits until no Side Session result can write the owning
+// Primary Session directory. Child runtimes may still be draining.
+func (m *sideSessionManager) WaitDeliveryWriters(ctx context.Context) error {
+	if m == nil || m.deliveryDone == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-m.deliveryDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // WaitClose joins cleanup previously started by StartClose.
@@ -623,11 +644,13 @@ func (m *sideSessionManager) run(managed *managedSideSession, generation uint64,
 		deliveryWait := managed.deliveryWait
 		if subscribed && deliveryWait != nil {
 			deliveryWait.Add(1)
+			m.deliveryWriters.Add(1)
 		}
 		m.mu.Unlock()
 		if subscribed && deliveryWait != nil {
 			go func() {
 				defer deliveryWait.Done()
+				defer m.deliveryWriters.Done()
 				m.deliverResult(managed.deliveryCtx, managed, status)
 			}()
 		}

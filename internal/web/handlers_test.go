@@ -52,6 +52,11 @@ type activationCloseProvider struct {
 	releasePrimary chan struct{}
 }
 
+type sideDeliveryDeleteProvider struct {
+	deliveryStarted chan struct{}
+	releaseDelivery chan struct{}
+}
+
 func TestWriteRunOnceErrorMapsDomainErrors(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -127,6 +132,23 @@ func (p *activationCloseProvider) Complete(ctx context.Context, _ string, histor
 	close(p.primaryStarted)
 	<-p.releasePrimary
 	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "released"), StopReason: llm.StopEndTurn}, nil
+}
+
+func (p *sideDeliveryDeleteProvider) Name() string { return "side-delivery-delete" }
+
+func (p *sideDeliveryDeleteProvider) Complete(_ context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
+	for _, message := range history {
+		if message.Kind != llm.MessageKindSideSession {
+			continue
+		}
+		select {
+		case p.deliveryStarted <- struct{}{}:
+		default:
+		}
+		<-p.releaseDelivery
+		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "delivery completed"), StopReason: llm.StopEndTurn}, nil
+	}
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "child completed"), StopReason: llm.StopEndTurn}, nil
 }
 
 // seedSession writes a minimal conversation.jsonl under
@@ -706,6 +728,72 @@ func TestDeleteSessionDoesNotWaitForStubbornManagedSideSession(t *testing.T) {
 		t.Fatalf("deleted primary stat = %v, want not exist", err)
 	}
 	release()
+}
+
+func TestDeleteSessionWaitsForSideResultDeliveryWriter(t *testing.T) {
+	provider := &sideDeliveryDeleteProvider{
+		deliveryStarted: make(chan struct{}, 1),
+		releaseDelivery: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(provider.releaseDelivery) }) }
+	t.Cleanup(release)
+	srv := newTestServer(t)
+	srv.opts.Provider = provider
+	active, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, ok := active.app.SessionIdentity()
+	if !ok {
+		t.Fatal("active primary session unavailable")
+	}
+	if _, err := active.app.Engine.Tools.Call(context.Background(), app.SideSessionToolCreate, map[string]any{
+		"query": "finish and deliver",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-provider.deliveryStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Side Session result delivery did not start")
+	}
+
+	type deleteResult struct {
+		code int
+		body string
+	}
+	deleted := make(chan deleteResult, 1)
+	go func() {
+		recorder := httptest.NewRecorder()
+		srv.handleDeleteSession(
+			recorder,
+			httptest.NewRequest(http.MethodDelete, "/api/sessions/"+identity.ID, nil),
+			identity.ID,
+		)
+		deleted <- deleteResult{code: recorder.Code, body: recorder.Body.String()}
+	}()
+	select {
+	case result := <-deleted:
+		t.Fatalf("delete committed before result delivery stopped: status=%d body=%s", result.code, result.body)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), identity.ID)); err != nil {
+		t.Fatalf("primary directory removed while result delivery was active: %v", err)
+	}
+
+	release()
+	select {
+	case result := <-deleted:
+		if result.code != http.StatusOK {
+			t.Fatalf("delete status = %d, body=%s", result.code, result.body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("delete did not finish after result delivery stopped")
+	}
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), identity.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted primary stat = %v, want not exist", err)
+	}
 }
 
 func TestGetActiveSessionDoesNotWaitForRuntimeRestore(t *testing.T) {

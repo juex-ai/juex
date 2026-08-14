@@ -789,7 +789,8 @@ func (a *App) closeActiveSessionResources() error {
 }
 
 // WaitSessionReleased waits until final App cleanup has closed the active
-// Session and its workspace lock. Child runtimes may still be draining.
+// Session and its workspace lock, and until Side Session result deliveries can
+// no longer write its directory. Child runtimes may still be draining.
 func (a *App) WaitSessionReleased(ctx context.Context) error {
 	if a == nil || a.sessionReleased == nil {
 		return nil
@@ -799,10 +800,13 @@ func (a *App) WaitSessionReleased(ctx context.Context) error {
 	}
 	select {
 	case <-a.sessionReleased:
-		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	if a.sideSessions == nil {
+		return nil
+	}
+	return a.sideSessions.WaitDeliveryWriters(ctx)
 }
 
 func runtimeStatusSeed(sess *session.Session, maxPendingInputs int) runtime.StatusSeed {
