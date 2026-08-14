@@ -79,13 +79,15 @@ func (e *Engine) maybeCompact(ctx context.Context, turnID, systemPrompt string, 
 	}
 	if e.autoCompactFailures >= policy.MaxAutoFailures {
 		err := fmt.Errorf("auto compaction paused after %d consecutive failures; run /compact with focus instructions or start a new session", policy.MaxAutoFailures)
-		e.emit(events.Event{Type: "context.compact.skipped", TurnID: turnID, Payload: ContextCompactSkippedPayload{
+		if emitErr := e.emit(events.Event{Type: "context.compact.skipped", TurnID: turnID, Payload: ContextCompactSkippedPayload{
 			Reason:              "failure_circuit_breaker",
 			Auto:                true,
 			ConsecutiveFailures: e.autoCompactFailures,
 			MaxAutoFailures:     policy.MaxAutoFailures,
 			Error:               err.Error(),
-		}})
+		}}); emitErr != nil {
+			return errors.Join(err, fmt.Errorf("commit compaction skip: %w", emitErr))
+		}
 		return err
 	}
 
@@ -130,12 +132,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	summaryState, err := e.compactionSummaryStateLocked()
 	if err != nil {
 		compactErr := newCompactionError(ctx, err)
-		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
-			Reason: reason,
-			Auto:   auto,
-			Error:  compactErr.Error(),
-		}})
-		return CompactionResult{}, compactErr
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
 	}
 	preReq := e.newHookRequest(hooks.EventPreCompact, turnID)
 	preReq.CompactReason = reason
@@ -143,42 +140,30 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	preResults, err := e.runHooks(ctx, preReq)
 	if err != nil {
 		compactErr := newCompactionError(ctx, err)
-		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
-			Reason: reason,
-			Auto:   auto,
-			Error:  compactErr.Error(),
-		}})
-		return CompactionResult{}, compactErr
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
 	}
 	instructions = mergeCompactInstructions(policy.Instructions, instructions)
 	instructions = appendCompactHookInstructions(instructions, preResults)
 	summaryInput, retainedInputReferences, projection, err := e.projectOversizedCompactionInputsLocked(selection.SummaryInput, selection.OversizedInputIDs, policy)
 	if err != nil {
 		compactErr := newCompactionError(ctx, err)
-		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
-			Reason: reason,
-			Auto:   auto,
-			Error:  compactErr.Error(),
-		}})
-		return CompactionResult{}, compactErr
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
 	}
-	e.emitProjectionApplied(turnID, projection)
+	if err := e.emitProjectionApplied(turnID, projection); err != nil {
+		compactErr := newCompactionError(ctx, fmt.Errorf("commit compaction input projection: %w", err))
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
+	}
 	retainedInputReferences, err = e.carryCompactionInputReferencesLocked(selection.PreviousSummary, retainedInputReferences, policy)
 	if err != nil {
 		compactErr := newCompactionError(ctx, err)
-		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
-			Reason: reason,
-			Auto:   auto,
-			Error:  compactErr.Error(),
-		}})
-		return CompactionResult{}, compactErr
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
 	}
 
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
 	}
 	tokensBefore := e.estimateContextTokens(systemPrompt, tools, e.activeContextLocked().Messages)
-	e.emit(events.Event{Type: "context.compact.started", TurnID: turnID, Payload: ContextCompactStartedPayload{
+	if err := e.emit(events.Event{Type: "context.compact.started", TurnID: turnID, Payload: ContextCompactStartedPayload{
 		Reason:           reason,
 		Auto:             auto,
 		EstimatedTokens:  tokensBefore,
@@ -186,19 +171,16 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		ContextWindow:    contextWindow,
 		ReserveTokens:    policy.ReserveTokens,
 		KeepRecentTokens: policy.KeepRecentTokens,
-	}})
+	}}); err != nil {
+		return CompactionResult{}, fmt.Errorf("commit compaction start: %w", err)
+	}
 
 	previousModelSummary := compactionModelSummary(selection.PreviousSummary)
 	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, previousModelSummary, summaryInput, summaryState, policy, instructions)
 	if err != nil {
 		sess.RecordResponseUsage(generation.Usage, nil)
 		compactErr := newCompactionError(ctx, err)
-		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
-			Reason: reason,
-			Auto:   auto,
-			Error:  compactErr.Error(),
-		}})
-		return CompactionResult{}, compactErr
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
 	}
 	resp := generation.Response
 	summaryProvider := generation.Provider
@@ -206,12 +188,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	summary := appendCompactionInputReferences(generation.Summary, retainedInputReferences)
 	if contextErr := cancellation.ContextError(ctx); contextErr != nil {
 		compactErr := newCompactionError(ctx, contextErr)
-		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
-			Reason: reason,
-			Auto:   auto,
-			Error:  compactErr.Error(),
-		}})
-		return CompactionResult{}, compactErr
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
 	}
 
 	model := resp.Message.Model
@@ -245,12 +222,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		}
 		return nil
 	}); err != nil {
-		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
-			Reason: reason,
-			Auto:   auto,
-			Error:  err.Error(),
-		}})
-		return CompactionResult{}, err
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, err)
 	}
 	e.autoCompactFailures = 0
 	if len(sess.History) > 0 {
@@ -277,7 +249,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		},
 	}
 	sess.RecordResponseUsage(generation.Usage, &contextUsage)
-	e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: ContextCompactCompletedPayload{
+	if err := e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: ContextCompactCompletedPayload{
 		MessageID:          result.MessageID,
 		Reason:             result.Reason,
 		Auto:               result.Auto,
@@ -291,15 +263,32 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		ReserveTokens:      policy.ReserveTokens,
 		KeepRecentTokens:   policy.KeepRecentTokens,
 		ContextUsage:       &contextUsage,
-	}})
+	}}); err != nil {
+		return result, fmt.Errorf("commit compaction completion: %w", err)
+	}
 	postReq := e.newHookRequest(hooks.EventPostCompact, turnID)
 	postReq.CompactReason = reason
 	postReq.CompactAuto = auto
-	postResults, _ := e.runHooks(ctx, postReq)
+	postResults, postErr := e.runHooks(ctx, postReq)
 	// Hook failures are observational after commit; keep context produced by
 	// earlier successful hooks when a later hook fails.
 	e.queueHookRuntimeContext(postResults)
+	if isHookRequestCommitError(postErr) {
+		return result, postErr
+	}
 	return result, nil
+}
+
+func (e *Engine) reportCompactionError(turnID, reason string, auto bool, compactErr error) error {
+	emitErr := e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+		Reason: reason,
+		Auto:   auto,
+		Error:  compactErr.Error(),
+	}})
+	if emitErr != nil {
+		return errors.Join(compactErr, fmt.Errorf("commit compaction error: %w", emitErr))
+	}
+	return compactErr
 }
 
 func (e *Engine) commitCompactionMarker(ctx context.Context, operationGeneration uint64, commit func() error) error {

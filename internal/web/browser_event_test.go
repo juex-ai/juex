@@ -170,7 +170,7 @@ func TestBrowserEventProjectionCapturesEachResultingStatus(t *testing.T) {
 	t.Cleanup(sub.unsubscribe)
 
 	sink := events.NewDurableSink(browserProjectionJournal{})
-	t.Cleanup(sink.Close)
+	t.Cleanup(func() { _ = sink.Close() })
 	sink.AddProjection(status)
 	sink.AddProjection(browserEventProjection{status: status, stream: stream})
 
@@ -266,7 +266,7 @@ func TestBrowserProjectionKeepsLateToolOutputInJournalOnly(t *testing.T) {
 	t.Cleanup(sub.unsubscribe)
 	journal := &recordingBrowserProjectionJournal{}
 	sink := events.NewDurableSink(journal)
-	t.Cleanup(sink.Close)
+	t.Cleanup(func() { _ = sink.Close() })
 	sink.AddProjection(status)
 	sink.AddProjection(browserEventProjection{status: status, stream: stream})
 	for _, event := range journalEvents {

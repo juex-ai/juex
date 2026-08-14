@@ -13,20 +13,17 @@ import (
 
 func TestReadEvents(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, eventsFile), []byte(
-		"{\"id\":\"1\",\"type\":\"turn.started\",\"turn_id\":\"turn-1\"}\n"+
-			"{\"id\":\"2\",\"type\":\"turn.completed\",\"turn_id\":\"turn-1\"}\n",
-	), 0o600); err != nil {
+	want := []events.Event{
+		{ID: "1", Type: "turn.started", TurnID: "turn-1"},
+		{ID: "2", Type: "turn.completed", TurnID: "turn-1"},
+	}
+	if err := os.WriteFile(filepath.Join(dir, eventsFile), eventJournalBytes(t, filepath.Base(dir), want), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	got, err := ReadEvents(dir)
 	if err != nil {
 		t.Fatal(err)
-	}
-	want := []events.Event{
-		{ID: "1", Type: "turn.started", TurnID: "turn-1"},
-		{ID: "2", Type: "turn.completed", TurnID: "turn-1"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("events = %d, want %d", len(got), len(want))
@@ -40,10 +37,11 @@ func TestReadEvents(t *testing.T) {
 
 func TestReplayEventsMatchesReadEvents(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, eventsFile), []byte(
-		"{\"id\":\"1\",\"type\":\"turn.started\",\"turn_id\":\"turn-1\"}\n"+
-			"{\"id\":\"2\",\"type\":\"turn.completed\",\"turn_id\":\"turn-1\"}\n",
-	), 0o600); err != nil {
+	eventsOnDisk := []events.Event{
+		{ID: "1", Type: "turn.started", TurnID: "turn-1"},
+		{ID: "2", Type: "turn.completed", TurnID: "turn-1"},
+	}
+	if err := os.WriteFile(filepath.Join(dir, eventsFile), eventJournalBytes(t, filepath.Base(dir), eventsOnDisk), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -65,7 +63,7 @@ func TestReplayEventsMatchesReadEvents(t *testing.T) {
 func TestReplayEventsRepairsOversizedTailAfterValidPrefix(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, eventsFile)
-	valid := []byte("{\"id\":\"1\",\"type\":\"turn.started\",\"turn_id\":\"turn-1\"}\n")
+	valid := eventJournalBytes(t, filepath.Base(dir), []events.Event{{ID: "1", Type: "turn.started", TurnID: "turn-1"}})
 	oversized := []byte(strings.Repeat("x", maxEventLineBytes+1))
 	if err := os.WriteFile(path, append(valid, oversized...), 0o600); err != nil {
 		t.Fatal(err)
@@ -75,9 +73,8 @@ func TestReplayEventsRepairsOversizedTailAfterValidPrefix(t *testing.T) {
 	err := ReplayEvents(dir, func(event events.Event) {
 		got = append(got, event)
 	})
-	if err == nil || !strings.Contains(err.Error(), errEventLineTooLong.Error()) ||
-		!strings.Contains(err.Error(), "repaired corrupt tail") {
-		t.Fatalf("ReplayEvents() error = %v, want repaired oversized-tail error", err)
+	if err != nil {
+		t.Fatalf("ReplayEvents() error = %v, want repaired oversized tail", err)
 	}
 	if len(got) != 1 || got[0].ID != "1" {
 		t.Fatalf("partial events = %+v, want first valid event", got)
@@ -98,8 +95,7 @@ func TestReplayEventsReadOnlyMalformedTailPreservesBytes(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, eventsFile)
 	contents := []byte(
-		"{\"id\":\"1\",\"type\":\"turn.started\",\"turn_id\":\"turn-1\"}\n" +
-			"not-json\n",
+		string(eventJournalBytes(t, filepath.Base(dir), []events.Event{{ID: "1", Type: "turn.started", TurnID: "turn-1"}})) + "not-json\n",
 	)
 	if err := os.WriteFile(path, contents, 0o400); err != nil {
 		t.Fatal(err)
@@ -130,13 +126,14 @@ func TestReplayEventsReadOnlyMalformedTailPreservesBytes(t *testing.T) {
 	}
 }
 
-func TestReplayEventsReadOnlyValidTailWithoutNewlineSucceeds(t *testing.T) {
+func TestReplayEventsReadOnlyTornTailFailsWithoutPublishing(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("read-only file mode fallback is not portable to Windows")
 	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, eventsFile)
-	contents := []byte("{\"id\":\"1\",\"type\":\"turn.started\",\"turn_id\":\"turn-1\"}")
+	contents := eventJournalBytes(t, filepath.Base(dir), []events.Event{{ID: "1", Type: "turn.started", TurnID: "turn-1"}})
+	contents = contents[:len(contents)-1]
 	if err := os.WriteFile(path, contents, 0o400); err != nil {
 		t.Fatal(err)
 	}
@@ -148,13 +145,14 @@ func TestReplayEventsReadOnlyValidTailWithoutNewlineSucceeds(t *testing.T) {
 	requireReadOnlyJournal(t, path)
 
 	var got []events.Event
-	if err := ReplayEvents(dir, func(event events.Event) {
+	err := ReplayEvents(dir, func(event events.Event) {
 		got = append(got, event)
-	}); err != nil {
-		t.Fatal(err)
+	})
+	if err == nil || !strings.Contains(err.Error(), "torn journal tail") {
+		t.Fatalf("ReplayEvents() error = %v, want torn journal tail", err)
 	}
-	if len(got) != 1 || got[0].ID != "1" {
-		t.Fatalf("events = %+v, want first valid event", got)
+	if len(got) != 0 {
+		t.Fatalf("events = %+v, want none from incomplete record", got)
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {
@@ -190,12 +188,8 @@ func TestReadEventsMissingJournal(t *testing.T) {
 func TestReadEventsAcceptsWorstCaseEscapedTerminalContent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, eventsFile)
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
 	content := strings.Repeat("<", 1<<20)
-	if err := writeJSONL(file, events.Event{
+	eventsOnDisk := []events.Event{{
 		ID:     "1",
 		Type:   "tool.completed",
 		TurnID: "turn-1",
@@ -204,15 +198,8 @@ func TestReadEventsAcceptsWorstCaseEscapedTerminalContent(t *testing.T) {
 			"tool_use_id": "call-1",
 			"content":     content,
 		},
-	}); err != nil {
-		file.Close()
-		t.Fatal(err)
-	}
-	if err := writeJSONL(file, events.Event{ID: "2", Type: "turn.completed", TurnID: "turn-1"}); err != nil {
-		file.Close()
-		t.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
+	}, {ID: "2", Type: "turn.completed", TurnID: "turn-1"}}
+	if err := os.WriteFile(path, eventJournalBytes(t, filepath.Base(dir), eventsOnDisk), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -239,9 +226,8 @@ func TestReadEventsAcceptsWorstCaseEscapedTerminalContent(t *testing.T) {
 
 func TestReadEventsRejectsMalformedJournal(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, eventsFile), []byte(
-		"{\"id\":\"1\",\"type\":\"turn.started\",\"turn_id\":\"turn-1\"}\nnot-json\n",
-	), 0o600); err != nil {
+	valid := eventJournalBytes(t, filepath.Base(dir), []events.Event{{ID: "1", Type: "turn.started", TurnID: "turn-1"}})
+	if err := os.WriteFile(filepath.Join(dir, eventsFile), append(valid, []byte("not-json\n")...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got, err := ReadEvents(dir)
@@ -256,10 +242,8 @@ func TestReadEventsRejectsMalformedJournal(t *testing.T) {
 func TestReadEventsRepairsMalformedTailBeforeAppend(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, eventsFile)
-	if err := os.WriteFile(path, []byte(
-		"{\"id\":\"1\",\"type\":\"turn.started\",\"turn_id\":\"turn-1\"}\n"+
-			"{\"id\":\"partial\"",
-	), 0o600); err != nil {
+	valid := eventJournalBytes(t, filepath.Base(dir), []events.Event{{ID: "1", Type: "turn.started", TurnID: "turn-1"}})
+	if err := os.WriteFile(path, append(valid, []byte(`{"journal_version":1`)...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	appendFD, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
@@ -269,17 +253,21 @@ func TestReadEventsRepairsMalformedTailBeforeAppend(t *testing.T) {
 	defer appendFD.Close()
 
 	got, err := ReadEvents(dir)
-	if err == nil {
-		t.Fatal("ReadEvents() error = nil")
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].ID != "1" {
 		t.Fatalf("partial events = %+v, want first valid event", got)
 	}
-	if err := writeJSONL(appendFD, events.Event{
+	next, err := marshalEventJournalLine(filepath.Base(dir), 2, events.Event{
 		ID:     "2",
 		Type:   "turn.completed",
 		TurnID: "turn-1",
-	}); err != nil {
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := appendFD.Write(next); err != nil {
 		t.Fatal(err)
 	}
 
@@ -292,12 +280,12 @@ func TestReadEventsRepairsMalformedTailBeforeAppend(t *testing.T) {
 	}
 }
 
-func TestReadEventsTerminatesValidTailBeforeAppend(t *testing.T) {
+func TestReadEventsDiscardsCompleteJSONWithoutCommitNewlineBeforeAppend(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, eventsFile)
-	if err := os.WriteFile(path, []byte(
-		"{\"id\":\"1\",\"type\":\"turn.started\",\"turn_id\":\"turn-1\"}",
-	), 0o600); err != nil {
+	torn := eventJournalBytes(t, filepath.Base(dir), []events.Event{{ID: "1", Type: "turn.started", TurnID: "turn-1"}})
+	torn = torn[:len(torn)-1]
+	if err := os.WriteFile(path, torn, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	appendFD, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
@@ -310,14 +298,18 @@ func TestReadEventsTerminatesValidTailBeforeAppend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].ID != "1" {
-		t.Fatalf("events = %+v, want first valid event", got)
+	if len(got) != 0 {
+		t.Fatalf("events = %+v, want torn record discarded", got)
 	}
-	if err := writeJSONL(appendFD, events.Event{
+	next, err := marshalEventJournalLine(filepath.Base(dir), 1, events.Event{
 		ID:     "2",
 		Type:   "turn.completed",
 		TurnID: "turn-1",
-	}); err != nil {
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := appendFD.Write(next); err != nil {
 		t.Fatal(err)
 	}
 
@@ -325,7 +317,20 @@ func TestReadEventsTerminatesValidTailBeforeAppend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadEvents() after append error = %v", err)
 	}
-	if len(got) != 2 || got[0].ID != "1" || got[1].ID != "2" {
-		t.Fatalf("events after terminate and append = %+v, want ids 1 and 2", got)
+	if len(got) != 1 || got[0].ID != "2" {
+		t.Fatalf("events after repair and append = %+v, want only id 2", got)
 	}
+}
+
+func eventJournalBytes(t *testing.T, sessionID string, journalEvents []events.Event) []byte {
+	t.Helper()
+	var data []byte
+	for i, event := range journalEvents {
+		line, err := marshalEventJournalLine(sessionID, uint64(i+1), event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = append(data, line...)
+	}
+	return data
 }

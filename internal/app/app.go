@@ -378,14 +378,15 @@ func New(opts Options) (*App, error) {
 			eventUnsubscribe = nil
 		}
 		if eventSink != nil {
-			eventSink.Close()
+			_ = eventSink.Close()
 			eventSink = nil
 		}
 		_ = sessLock.Close()
 		_ = sess.Close()
 	}
 	eventSink = events.NewDurableSink(sess)
-	eventUnsubscribe = bus.Subscribe("*", eventSink.Handle)
+	bus.SetCommitter(eventSink)
+	eventUnsubscribe = func() { bus.SetCommitter(nil) }
 	status, statusReplayErr := runtime.NewStatusStoreFromReplay(
 		runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput),
 		func(visit func(events.Event)) error {
@@ -584,7 +585,7 @@ func New(opts Options) (*App, error) {
 			a.eventUnsubscribe = nil
 		}
 		if a.eventSink != nil {
-			a.eventSink.Close()
+			return a.eventSink.Close()
 		}
 		return nil
 	}, a.closeActiveSessionResources)
@@ -756,7 +757,7 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 	if err := a.attachObservability(sess); err != nil {
 		// Session switching happens after startup. Surface recorder failures as
 		// a runtime event so callers still receive a usable session.
-		a.Bus.Emit(events.Event{Type: "turn.errored", Payload: runtime.TurnErroredPayload{Error: err.Error()}})
+		_ = a.Bus.Emit(events.Event{Type: "turn.errored", Payload: runtime.TurnErroredPayload{Error: err.Error()}})
 	}
 	if oldLock != nil {
 		_ = oldLock.Close()
@@ -962,7 +963,9 @@ func (a *App) CompactWithInstructions(ctx context.Context, reason string, auto b
 	admitted := events.Normalize(events.Event{Type: runtime.TurnAdmittedType, Payload: runtime.TurnAdmittedPayload{}})
 	turnID := "compact-" + admitted.ID
 	admitted.TurnID = turnID
-	a.Bus.Emit(admitted)
+	if err := a.Bus.Emit(admitted); err != nil {
+		return runtime.CompactionResult{}, fmt.Errorf("commit compaction admission: %w", err)
+	}
 	return a.compactWithTurnID(ctx, turnID, reason, auto, instructions)
 }
 
@@ -986,12 +989,16 @@ func (a *App) compactWithTurnID(ctx context.Context, turnID, reason string, auto
 	systemPrompt := prompt.JoinSections(sections)
 	result, err := a.Engine.CompactWithInstructions(ctx, turnID, systemPrompt, reason, auto, instructions)
 	if err != nil {
-		a.Bus.Emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: runtime.NewTurnErroredPayload(err)})
+		if emitErr := a.Bus.Emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: runtime.NewTurnErroredPayload(err)}); emitErr != nil {
+			return result, errors.Join(err, fmt.Errorf("commit compaction error: %w", emitErr))
+		}
 		return result, err
 	}
-	a.Bus.Emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: runtime.TurnCompletedPayload{
+	if err := a.Bus.Emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: runtime.TurnCompletedPayload{
 		TokenUsage: a.Session.TokenUsageSnapshot(),
-	}})
+	}}); err != nil {
+		return result, fmt.Errorf("commit compaction completion: %w", err)
+	}
 	return result, nil
 }
 
@@ -1334,7 +1341,7 @@ func (a *App) markObservationAttachmentError(record observable.ObservationRecord
 	record.AttachmentErrors = append([]string(nil), messages...)
 	record.Error = strings.Join(messages, "; ")
 	if a.Bus != nil {
-		a.Bus.Emit(events.Event{
+		_ = a.Bus.Emit(events.Event{
 			Type: observable.EventObservationErrored,
 			Payload: observable.ObservationEventPayload{
 				Observation: record,

@@ -145,10 +145,7 @@ func TestLoadInfoPageKeepsSummaryAndPageOnSameTranscriptRevision(t *testing.T) {
 			name: "checkpoint fallback",
 			append: func(t *testing.T, _ *Session, path string, message llm.Message) {
 				t.Helper()
-				line, err := marshalJSONLine(message)
-				if err != nil {
-					t.Fatal(err)
-				}
+				line := mustTranscriptLine(t, journalSessionID(path), 2, message)
 				file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 				if err != nil {
 					t.Fatal(err)
@@ -237,18 +234,10 @@ func TestCheckpointPageKeepsFastPathForOversizedTranscriptRow(t *testing.T) {
 func TestCheckpointRecentPageDoesNotScanCompleteSuffix(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, conversationFile)
-	compactLine, err := marshalJSONLine(messageWithID(compactTestMessage("summary"), "m1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	middleLine, err := marshalJSONLine(messageWithID(llm.TextMessage(llm.RoleAssistant, "middle"), "m2"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	latestLine, err := marshalJSONLine(messageWithID(llm.TextMessage(llm.RoleUser, "latest"), "m3"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	sessionID := filepath.Base(dir)
+	compactLine := mustTranscriptLine(t, sessionID, 1, messageWithID(compactTestMessage("summary"), "m1"))
+	middleLine := mustTranscriptLine(t, sessionID, 2, messageWithID(llm.TextMessage(llm.RoleAssistant, "middle"), "m2"))
+	latestLine := mustTranscriptLine(t, sessionID, 3, messageWithID(llm.TextMessage(llm.RoleUser, "latest"), "m3"))
 	data := append([]byte{}, compactLine...)
 	data = append(data, []byte("not-json\n")...)
 	data = append(data, middleLine...)
@@ -264,7 +253,7 @@ func TestCheckpointRecentPageDoesNotScanCompleteSuffix(t *testing.T) {
 		Version:       transcriptCheckpointVersion,
 		Fingerprint:   fingerprint,
 		RepairSafe:    true,
-		LatestCompact: &transcriptCheckpointEntry{ID: "m1", Offset: 0, Length: len(compactLine)},
+		LatestCompact: &transcriptCheckpointEntry{ID: "m1", Offset: 0, Length: len(compactLine), Sequence: 1},
 	}
 	digest := sha256.Sum256(data)
 	checkpoint.ContentSHA256 = hex.EncodeToString(digest[:])
@@ -317,33 +306,24 @@ func TestStaleTranscriptCheckpointFallsBackToStrictScan(t *testing.T) {
 }
 
 func TestSameSizeTimestampPreservingRewriteInvalidatesCheckpoint(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	unsafeMessage := toolUseMessage("m1", "call-hidden", "read")
-	unsafeLine, err := marshalJSONLine(unsafeMessage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	unsafeLine := mustTranscriptLine(t, s.ID, 1, unsafeMessage)
 	baseSafeMessage := messageWithID(llm.TextMessage(llm.RoleAssistant, "x"), "m1")
-	baseSafeLine, err := marshalJSONLine(baseSafeMessage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	baseSafeLine := mustTranscriptLine(t, s.ID, 1, baseSafeMessage)
 	padding := len(unsafeLine) - len(baseSafeLine)
 	if padding < 0 {
 		t.Fatalf("unsafe line is %d bytes, shorter than safe line %d", len(unsafeLine), len(baseSafeLine))
 	}
 	safeMessage := messageWithID(llm.TextMessage(llm.RoleAssistant, "x"+strings.Repeat("x", padding)), "m1")
-	safeLine, err := marshalJSONLine(safeMessage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	safeLine := mustTranscriptLine(t, s.ID, 1, safeMessage)
 	if len(safeLine) != len(unsafeLine) {
 		t.Fatalf("safe line is %d bytes, want %d", len(safeLine), len(unsafeLine))
 	}
 
-	s, err := New(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, message := range []llm.Message{
 		safeMessage,
 		messageWithID(compactTestMessage("summary"), "m2"),
@@ -571,7 +551,7 @@ func TestWeakFingerprintCannotBuildOrValidateCheckpoint(t *testing.T) {
 	}
 }
 
-func TestLegacyTranscriptGainsCheckpointOnNextAppend(t *testing.T) {
+func TestTranscriptWithoutCheckpointGainsOneOnNextAppend(t *testing.T) {
 	root := t.TempDir()
 	id := "20260812T120000-legacy01"
 	dir := makeSession(t, root, id, []llm.Message{
@@ -605,7 +585,7 @@ func TestLegacyTranscriptGainsCheckpointOnNextAppend(t *testing.T) {
 	}
 }
 
-func TestLegacyCompactedTranscriptWithRepairLoadsOnlyActiveWindow(t *testing.T) {
+func TestTailStartCompactedTranscriptWithRepairLoadsOnlyActiveWindow(t *testing.T) {
 	root := t.TempDir()
 	compact := messageWithID(compactTestMessage("summary"), "m3")
 	compact.Compaction = &llm.CompactionMetadata{TailStartMessageID: "m2"}
@@ -870,7 +850,7 @@ func TestCheckpointRepairFlagsMustMatchCanonicalCompactMarker(t *testing.T) {
 	}
 }
 
-func TestCheckpointLegacyTailMustRetainEveryCanonicalRow(t *testing.T) {
+func TestCheckpointTailStartMustRetainEveryCanonicalRow(t *testing.T) {
 	s, err := New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -911,7 +891,7 @@ func TestCheckpointLegacyTailMustRetainEveryCanonicalRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if checkpointed {
-		t.Fatal("active transcript accepted a legacy retained tail with a canonical hole")
+		t.Fatal("active transcript accepted a retained tail with a canonical hole")
 	}
 	if got := strings.Join(transcriptEntryIDs(idx.entries), ","); got != "m2,m3,m4,m5" {
 		t.Fatalf("active index ids = %s, want m2,m3,m4,m5", got)

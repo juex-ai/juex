@@ -56,7 +56,7 @@ func (e *Engine) emitGoalUpdated(turnID string) {
 	if err != nil || snapshot == nil {
 		return
 	}
-	e.emit(events.Event{Type: "goal.updated", TurnID: turnID, Payload: goalUpdatedPayload(snapshot)})
+	_ = e.emit(events.Event{Type: "goal.updated", TurnID: turnID, Payload: goalUpdatedPayload(snapshot)})
 }
 
 func goalUpdatedPayload(snapshot *GoalStatusSnapshot) GoalUpdatedPayload {

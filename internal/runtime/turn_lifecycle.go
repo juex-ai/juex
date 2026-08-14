@@ -73,7 +73,9 @@ func (l *turnLifecycle) runLocked(ctx context.Context) (turnLifecycleResult, err
 		}
 	}
 
-	l.engine.recordTurnCompletionLocked(l.turnID, l.start, l.lastText)
+	if err := l.engine.recordTurnCompletionLocked(l.turnID, l.start, l.lastText); err != nil {
+		return turnLifecycleResult{}, fmt.Errorf("commit turn completion: %w", err)
+	}
 	return turnLifecycleResult{output: l.lastText}, nil
 }
 
@@ -85,10 +87,12 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 		return err
 	}
 	iterCopy := iter
-	l.engine.emit(events.Event{Type: TurnPhaseType, TurnID: l.turnID, Payload: TurnPhasePayload{
+	if err := l.engine.emit(events.Event{Type: TurnPhaseType, TurnID: l.turnID, Payload: TurnPhasePayload{
 		Phase: TurnPhaseProviderIteration,
 		Iter:  &iterCopy,
-	}})
+	}}); err != nil {
+		return fmt.Errorf("commit provider iteration phase: %w", err)
+	}
 
 	request, err := l.engine.prepareProviderRequestLocked(l.turnID, iter, l.prepared)
 	if err != nil {
@@ -153,7 +157,7 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 func (l *turnLifecycle) applyFinishPolicyLocked(ctx context.Context, recorded recordedProviderResponse) (turnFinishOutcome, error) {
 	e := l.engine
 	finalText := recorded.finalText
-	e.emit(events.Event{Type: "finish.attempted", TurnID: l.turnID, Payload: FinishAttemptedPayload{
+	_ = e.emit(events.Event{Type: "finish.attempted", TurnID: l.turnID, Payload: FinishAttemptedPayload{
 		StopReason: recorded.stopReason,
 		OutputLen:  len(finalText),
 	}})
@@ -171,7 +175,7 @@ func (l *turnLifecycle) applyFinishPolicyLocked(ctx context.Context, recorded re
 			if err := l.enqueueContinuationLocked(ctx, prompt); err != nil {
 				return turnFinishOutcome{}, err
 			}
-			e.emit(events.Event{Type: "goal.continued", TurnID: l.turnID, Payload: payload})
+			_ = e.emit(events.Event{Type: "goal.continued", TurnID: l.turnID, Payload: payload})
 			return l.finishOrContinueLocked(finalText), nil
 		}
 	}

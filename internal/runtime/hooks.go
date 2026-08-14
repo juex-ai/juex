@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,23 @@ import (
 )
 
 const goalCompletionGateName = "goal-completion-gate"
+
+type hookRequestCommitError struct {
+	err error
+}
+
+func (e *hookRequestCommitError) Error() string {
+	return "commit hook request: " + e.err.Error()
+}
+
+func (e *hookRequestCommitError) Unwrap() error {
+	return e.err
+}
+
+func isHookRequestCommitError(err error) bool {
+	var target *hookRequestCommitError
+	return errors.As(err, &target)
+}
 
 func (e *Engine) newHookRequest(event hooks.EventName, turnID string) hooks.Request {
 	runtime := e.SessionRuntimeSnapshot()
@@ -32,6 +50,18 @@ func (e *Engine) runHooks(ctx context.Context, req hooks.Request) ([]hooks.Resul
 	if e.Hooks == nil {
 		return nil, nil
 	}
+	if matcher, ok := e.Hooks.(interface {
+		Matching(hooks.EventName, string) []hooks.CommandHook
+	}); ok && len(matcher.Matching(req.EventName, req.ToolName)) == 0 {
+		return nil, nil
+	}
+	if err := e.emit(events.Event{Type: "hook.requested", TurnID: req.TurnID, Payload: HookStartedPayload{
+		Source:    "runtime",
+		EventName: string(req.EventName),
+		ToolName:  req.ToolName,
+	}}); err != nil {
+		return nil, &hookRequestCommitError{err: err}
+	}
 	results, err := e.Hooks.Run(ctx, req)
 	if err != nil {
 		return results, err
@@ -45,7 +75,7 @@ func (e *Engine) runGoalCompletionGate(turnID string) (string, GoalContinuedPayl
 		return "", GoalContinuedPayload{}, false, nil
 	}
 	start := time.Now()
-	e.emit(events.Event{Type: "hook.started", TurnID: turnID, Payload: HookStartedPayload{
+	_ = e.emit(events.Event{Type: "hook.started", TurnID: turnID, Payload: HookStartedPayload{
 		Name:      goalCompletionGateName,
 		Source:    "builtin",
 		EventName: string(hooks.EventStop),
@@ -198,7 +228,7 @@ func (o hookObserver) HookStarted(hook hooks.CommandHook, req hooks.Request) {
 	if o.engine == nil {
 		return
 	}
-	o.engine.emit(events.Event{Type: "hook.started", TurnID: o.turnID, Payload: HookStartedPayload{
+	_ = o.engine.emit(events.Event{Type: "hook.started", TurnID: o.turnID, Payload: HookStartedPayload{
 		Name:      hook.Name,
 		Source:    hook.Source,
 		EventName: string(req.EventName),
@@ -266,7 +296,7 @@ func (e *Engine) emitHookCompleted(turnID string, payload HookCompletedPayload) 
 	if e == nil {
 		return
 	}
-	e.emit(events.Event{Type: "hook.completed", TurnID: turnID, Payload: payload})
+	_ = e.emit(events.Event{Type: "hook.completed", TurnID: turnID, Payload: payload})
 	e.appendHookTraceMessage(turnID, hookCompletedTraceText(payload, e.ShowBuiltinHookTraces))
 }
 
@@ -274,7 +304,7 @@ func (e *Engine) emitHookErrored(turnID string, payload HookErroredPayload) {
 	if e == nil {
 		return
 	}
-	e.emit(events.Event{Type: "hook.errored", TurnID: turnID, Payload: payload})
+	_ = e.emit(events.Event{Type: "hook.errored", TurnID: turnID, Payload: payload})
 	e.appendHookTraceMessage(turnID, hookErroredTraceText(payload, e.ShowBuiltinHookTraces))
 }
 
@@ -292,7 +322,7 @@ func (e *Engine) appendHookTraceMessage(turnID, text string) {
 	if err != nil {
 		return
 	}
-	e.emit(events.Event{Type: "hook.trace", TurnID: turnID, Payload: HookTracePayload{
+	_ = e.emit(events.Event{Type: "hook.trace", TurnID: turnID, Payload: HookTracePayload{
 		Text:      text,
 		MessageID: persisted.ID,
 	}})

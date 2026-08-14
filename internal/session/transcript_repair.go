@@ -3,7 +3,6 @@ package session
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/juex-ai/juex/internal/llm"
@@ -193,7 +192,7 @@ func (s *Session) rewriteConversationLocked(history []llm.Message) error {
 	s.History = activeHistory
 	s.metadataDirty = true
 	s.historyDirty = s.historyPath != ""
-	convFD, err := os.OpenFile(convPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
+	convFD, err := openJournalForAppend(convPath, true)
 	if err != nil {
 		return fmt.Errorf("session: reopen repaired conversation: %w", err)
 	}
@@ -207,8 +206,8 @@ func (s *Session) rewriteConversationLocked(history []llm.Message) error {
 
 func writeConversationMessages(path string, history []llm.Message) error {
 	var data []byte
-	for _, msg := range history {
-		buf, err := marshalJSONLine(msg)
+	for i, msg := range history {
+		buf, err := marshalTranscriptJournalLine(journalSessionID(path), uint64(i+1), msg)
 		if err != nil {
 			return err
 		}

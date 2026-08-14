@@ -648,7 +648,7 @@ func TestApp_DefaultAttachesActivePrimary(t *testing.T) {
 	}
 }
 
-func TestAppResumeContinuesWithPartialRuntimeStatusJournal(t *testing.T) {
+func TestAppResumeRepairsTornRuntimeStatusJournal(t *testing.T) {
 	work := t.TempDir()
 	cfg := config.Config{
 		ProviderID:                "openai",
@@ -671,9 +671,11 @@ func TestAppResumeContinuesWithPartialRuntimeStatusJournal(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "events.jsonl"), []byte(
-		"{\"id\":\"1\",\"type\":\"turn.admitted\",\"turn_id\":\"turn-1\"}\nnot-json\n",
-	), 0o600); err != nil {
+	eventRecord := fmt.Sprintf(
+		`{"journal_version":1,"journal":"events","session_id":%q,"sequence":1,"id":"1","type":"turn.admitted","turn_id":"turn-1"}`+"\n",
+		sessionID,
+	)
+	if err := os.WriteFile(filepath.Join(sessionDir, "events.jsonl"), []byte(eventRecord+`{"journal_version":1`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -693,11 +695,18 @@ func TestAppResumeContinuesWithPartialRuntimeStatusJournal(t *testing.T) {
 	if resumed.Session.ID != sessionID || resumed.Status == nil {
 		t.Fatalf("resumed session/status = %q/%v, want %q/non-nil", resumed.Session.ID, resumed.Status, sessionID)
 	}
-	if snapshot := resumed.Status.Snapshot(); snapshot.Cursor != "1" {
-		t.Fatalf("status cursor = %q, want recovered cursor 1", snapshot.Cursor)
+	if snapshot := resumed.Status.Snapshot(); snapshot.Cursor == "" {
+		t.Fatalf("status cursor is empty after recovered replay")
 	}
-	if !strings.Contains(stderr.String(), "juex: warning: restore runtime status:") {
-		t.Fatalf("stderr missing runtime status warning:\n%s", stderr.String())
+	replayed, err := session.ReadEvents(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) == 0 || replayed[0].ID != "1" {
+		t.Fatalf("replayed events = %+v, want repaired prefix starting with id 1", replayed)
+	}
+	if strings.Contains(stderr.String(), "restore runtime status") {
+		t.Fatalf("stderr contains warning after successful torn-tail repair:\n%s", stderr.String())
 	}
 }
 
@@ -2516,6 +2525,8 @@ func TestNew_ResumeDirReusesExistingSession(t *testing.T) {
 	}
 	startedAtMS := time.Date(2026, 5, 6, 10, 35, 0, 0, time.UTC).UnixMilli()
 	meta, err := json.Marshal(map[string]any{
+		"format_version":    1,
+		"session_id":        id,
 		"kind":              session.KindPrimary,
 		"started_at_ms":     startedAtMS,
 		"last_active_at_ms": startedAtMS,
@@ -2526,8 +2537,11 @@ func TestNew_ResumeDirReusesExistingSession(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "session.json"), append(meta, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"id":"m1","role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n" +
-		`{"id":"m2","role":"assistant","blocks":[{"type":"text","text":"hello"}]}` + "\n"
+	body := fmt.Sprintf(
+		`{"journal_version":1,"journal":"conversation","session_id":%q,"sequence":1,"id":"m1","role":"user","blocks":[{"type":"text","text":"hi"}]}`+"\n"+
+			`{"journal_version":1,"journal":"conversation","session_id":%q,"sequence":2,"id":"m2","role":"assistant","blocks":[{"type":"text","text":"hello"}]}`+"\n",
+		id, id,
+	)
 	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}

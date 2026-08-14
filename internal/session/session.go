@@ -3,8 +3,8 @@
 //
 // File layout under <root>/<session_id>/:
 //
-//	conversation.jsonl   one llm.Message per line
-//	events.jsonl         one events.Event per line
+//	conversation.jsonl   versioned, sequenced transcript records
+//	events.jsonl         versioned, sequenced runtime event records
 //
 // The CLI and web server use Load to resume existing sessions.
 package session
@@ -54,6 +54,12 @@ type Session struct {
 	// failed derived writes resident until a later operation or Close repairs them.
 	metadataDirty bool
 	historyDirty  bool
+	eventSequence uint64
+	journalOps    journalFileOps
+	journalErr    error
+	closed        bool
+	closeOnce     sync.Once
+	closeErr      error
 
 	beforeTranscriptWrite        func()
 	afterTranscriptPrewriteCheck func()
@@ -122,11 +128,11 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 	}); err != nil {
 		return nil, err
 	}
-	convFD, err := os.OpenFile(filepath.Join(dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
+	convFD, err := openJournalForAppend(filepath.Join(dir, conversationFile), true)
 	if err != nil {
 		return nil, err
 	}
-	eventFD, err := os.OpenFile(filepath.Join(dir, eventsFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	eventFD, err := openJournalForAppend(filepath.Join(dir, eventsFile), true)
 	if err != nil {
 		convFD.Close()
 		return nil, err
@@ -175,12 +181,22 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 		return nil, nil
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("session: closed")
+	}
+	if s.journalErr != nil {
+		err := s.journalErr
+		s.mu.Unlock()
+		return nil, err
+	}
 	prepared := make([]llm.Message, len(messages))
 	lines := make([][]byte, len(messages))
 	var data []byte
 	for i, message := range messages {
 		prepared[i] = prepareNewMessage(message)
-		line, err := marshalJSONLine(prepared[i])
+		sequence := s.transcript.lastSequence + uint64(i) + 1
+		line, err := marshalTranscriptJournalLine(s.ID, sequence, prepared[i])
 		if err != nil {
 			s.mu.Unlock()
 			return nil, err
@@ -244,16 +260,11 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 	if s.afterTranscriptPrewriteCheck != nil {
 		s.afterTranscriptPrewriteCheck()
 	}
-	written, writeErr := s.convFD.Write(data)
-	if writeErr == nil && written != len(data) {
-		writeErr = io.ErrShortWrite
-	}
+	conversationPath := filepath.Join(s.Dir, conversationFile)
+	writeErr := appendJournalBytesDurably(s.convFD, conversationPath, offset, data, s.journalOps)
 	if writeErr != nil {
-		rollbackErr := s.rollbackConversationLocked(offset)
+		s.recordJournalFailureLocked(writeErr)
 		s.mu.Unlock()
-		if rollbackErr != nil {
-			return nil, errors.Join(writeErr, fmt.Errorf("session: rollback conversation batch: %w", rollbackErr))
-		}
 		return nil, writeErr
 	}
 	if s.convFD != nil {
@@ -269,7 +280,8 @@ func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, er
 	nextHistory := append(s.History, prepared...)
 	entryOffset := offset
 	for i, message := range prepared {
-		nextTranscript.appendMessage(message, entryOffset, len(lines[i]))
+		sequence := s.transcript.lastSequence + uint64(i) + 1
+		nextTranscript.appendMessage(message, entryOffset, len(lines[i]), sequence)
 		entryOffset += int64(len(lines[i]))
 	}
 	lastActiveMS := time.Now().UTC().UnixMilli()
@@ -441,7 +453,7 @@ func (s *Session) inspectDivergedTranscriptCommitLocked(
 	result := transcriptCommit{diverged: true, fingerprint: snapshot.fingerprint}
 	idx, err := scanTranscriptIndexFromFile(snapshot.file, path, 0)
 	if err != nil {
-		return result, err
+		return result, errors.Join(ErrTranscriptChanged, err)
 	}
 	idx.fingerprint = snapshot.fingerprint
 	active := activeTranscriptIndex(idx)
@@ -541,7 +553,7 @@ func (s *Session) reopenConversationLocked() {
 		_ = s.convFD.Close()
 		s.convFD = nil
 	}
-	if replacement, err := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_APPEND|os.O_RDWR, 0o644); err == nil {
+	if replacement, err := openJournalForAppend(filepath.Join(s.Dir, conversationFile), false); err == nil {
 		s.convFD = replacement
 	}
 }
@@ -559,11 +571,17 @@ func newEmptyTranscriptIndex() transcriptIndex {
 // AppendEvent persists e to events.jsonl. Unlike Append, the event itself
 // is not retained in memory.
 func (s *Session) AppendEvent(e events.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("session: closed")
+	}
+	if s.journalErr != nil {
+		return s.journalErr
+	}
 	if e.Transient {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	// Event journaling is canonical in its own right. Retry transcript-derived
 	// metadata opportunistically, but never drop an event because that retry failed.
 	_ = s.retryDerivedStateLocked()
@@ -571,15 +589,38 @@ func (s *Session) AppendEvent(e events.Event) error {
 		return err
 	}
 	e = events.Normalize(e)
-	return writeJSONL(s.eventFD, e)
+	sequence := s.eventSequence + 1
+	line, err := marshalEventJournalLine(s.ID, sequence, e)
+	if err != nil {
+		return err
+	}
+	offset, err := s.eventFD.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(s.Dir, eventsFile)
+	if err := appendJournalBytesDurably(s.eventFD, path, offset, line, s.journalOps); err != nil {
+		s.recordJournalFailureLocked(err)
+		return err
+	}
+	s.eventSequence = sequence
+	return nil
 }
 
 func (s *Session) Close() error {
+	s.closeOnce.Do(func() {
+		s.closeErr = s.close()
+	})
+	return s.closeErr
+}
+
+func (s *Session) close() error {
 	s.mu.Lock()
-	var firstErr error
+	s.closed = true
+	closeErr := s.journalErr
 	if s.metadataDirty {
 		if err := s.persistMetadataLocked(); err != nil {
-			firstErr = err
+			closeErr = errors.Join(closeErr, err)
 		}
 	}
 	historyPath, historyInfo, refreshHistory := "", Info{}, false
@@ -587,24 +628,40 @@ func (s *Session) Close() error {
 		historyPath, historyInfo, refreshHistory = s.prepareHistoryRefreshLocked()
 	}
 	if s.convFD != nil {
-		if err := s.convFD.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := completeJournalFileOps(s.journalOps).sync(s.convFD); err != nil {
+			closeErr = errors.Join(closeErr, fmt.Errorf("session: sync conversation journal on close: %w", err))
+		}
+		if err := s.convFD.Close(); err != nil {
+			closeErr = errors.Join(closeErr, err)
 		}
 		s.convFD = nil
 	}
 	if s.eventFD != nil {
-		if err := s.eventFD.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := completeJournalFileOps(s.journalOps).sync(s.eventFD); err != nil {
+			closeErr = errors.Join(closeErr, fmt.Errorf("session: sync events journal on close: %w", err))
+		}
+		if err := s.eventFD.Close(); err != nil {
+			closeErr = errors.Join(closeErr, err)
 		}
 		s.eventFD = nil
 	}
 	s.mu.Unlock()
 	if refreshHistory {
-		if err := s.finishHistoryRefresh(historyPath, historyInfo); err != nil && firstErr == nil {
-			firstErr = err
+		if err := s.finishHistoryRefresh(historyPath, historyInfo); err != nil {
+			closeErr = errors.Join(closeErr, err)
 		}
 	}
-	return firstErr
+	return closeErr
+}
+
+func (s *Session) recordJournalFailureLocked(err error) {
+	var rollbackErr *journalRollbackError
+	if !errors.As(err, &rollbackErr) {
+		return
+	}
+	if s.journalErr == nil {
+		s.journalErr = fmt.Errorf("session: journal unavailable after failed rollback: %w", err)
+	}
 }
 
 // Load reads conversation.jsonl from dir and returns the assembled session.
@@ -654,31 +711,37 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 	if err := ensureScratchpadDir(dir); err != nil {
 		return nil, err
 	}
-	convFD, err := os.OpenFile(convPath, os.O_APPEND|os.O_RDWR, 0o644)
+	convFD, err := openJournalForAppend(convPath, false)
 	if err != nil {
 		return nil, err
 	}
-	eventFD, err := os.OpenFile(filepath.Join(dir, eventsFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	eventSequence, err := replayEventJournal(dir, nil)
+	if err != nil {
+		convFD.Close()
+		return nil, err
+	}
+	eventFD, err := openJournalForAppend(filepath.Join(dir, eventsFile), true)
 	if err != nil {
 		convFD.Close()
 		return nil, err
 	}
 	tokenUsage, contextUsage, _ := loadLatestSessionUsage(dir)
 	sess := &Session{
-		ID:           id,
-		Dir:          dir,
-		Alias:        alias,
-		Kind:         kind,
-		Active:       opts.Active,
-		History:      history,
-		TokenUsage:   tokenUsage,
-		ContextUsage: contextUsage,
-		convFD:       convFD,
-		eventFD:      eventFD,
-		transcript:   idx,
-		historyPath:  opts.HistoryPath,
-		startedAtMS:  meta.StartedAtMS,
-		lastActiveMS: meta.LastActiveAtMS,
+		ID:            id,
+		Dir:           dir,
+		Alias:         alias,
+		Kind:          kind,
+		Active:        opts.Active,
+		History:       history,
+		TokenUsage:    tokenUsage,
+		ContextUsage:  contextUsage,
+		convFD:        convFD,
+		eventFD:       eventFD,
+		transcript:    idx,
+		historyPath:   opts.HistoryPath,
+		startedAtMS:   meta.StartedAtMS,
+		lastActiveMS:  meta.LastActiveAtMS,
+		eventSequence: eventSequence,
 	}
 	if opts.RepairTranscript {
 		repairs, err := sess.RepairTranscript("load")
@@ -699,29 +762,41 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 			sess.History = activeHistory
 		}
 		if len(repairs) > 0 {
-			_ = writeJSONL(eventFD, events.Normalize(events.Event{
+			if err := sess.AppendEvent(events.Normalize(events.Event{
 				Type:    "transcript.repaired",
 				Payload: TranscriptRepairedPayload{Reason: "load", Repairs: repairs},
-			}))
+			})); err != nil {
+				_ = sess.Close()
+				return nil, err
+			}
 		}
 	}
 	return sess, nil
 }
 
-// SubscribeBus wires every event emitted on bus through to AppendEvent. App
-// runtime wiring uses events.DurableSink so live deliveries only see committed
-// events; this helper remains for lower-level callers and tests. The returned
-// function removes the subscription.
+// SubscribeBus installs this Session as the bus commit boundary. App runtime
+// wiring uses events.DurableSink for additional projections and deliveries.
 func (s *Session) SubscribeBus(bus *events.Bus) func() {
 	if bus == nil {
 		return func() {}
 	}
-	return bus.Subscribe("*", func(e events.Event) {
-		if e.Transient {
-			return
-		}
-		_ = s.AppendEvent(e)
-	})
+	bus.SetCommitter(sessionEventCommitter{session: s})
+	return func() { bus.SetCommitter(nil) }
+}
+
+type sessionEventCommitter struct {
+	session *Session
+}
+
+func (c sessionEventCommitter) Commit(event events.Event) (events.Event, error) {
+	event = events.Normalize(event)
+	if c.session == nil || event.Transient {
+		return event, nil
+	}
+	if err := c.session.AppendEvent(event); err != nil {
+		return events.Event{}, err
+	}
+	return event, nil
 }
 
 // Info returns a summary of the in-memory session.
@@ -815,14 +890,14 @@ func (s *Session) ensureFilesLocked() error {
 		return err
 	}
 	if s.convFD == nil {
-		convFD, err := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
+		convFD, err := openJournalForAppend(filepath.Join(s.Dir, conversationFile), true)
 		if err != nil {
 			return err
 		}
 		s.convFD = convFD
 	}
 	if s.eventFD == nil {
-		eventFD, err := os.OpenFile(filepath.Join(s.Dir, eventsFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		eventFD, err := openJournalForAppend(filepath.Join(s.Dir, eventsFile), true)
 		if err != nil {
 			return err
 		}
@@ -848,7 +923,7 @@ func (s *Session) ensureEventFileLocked() error {
 		}
 		if s.convFD == nil {
 			conversationPath := filepath.Join(s.Dir, conversationFile)
-			conversation, err := os.OpenFile(conversationPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
+			conversation, err := openJournalForAppend(conversationPath, true)
 			if err != nil {
 				return err
 			}
@@ -857,7 +932,7 @@ func (s *Session) ensureEventFileLocked() error {
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	eventFD, err := os.OpenFile(filepath.Join(s.Dir, eventsFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	eventFD, err := openJournalForAppend(filepath.Join(s.Dir, eventsFile), true)
 	if err != nil {
 		return err
 	}
@@ -907,18 +982,6 @@ func (s *Session) finishHistoryRefresh(path string, info Info) error {
 	}
 	s.historyDirty = true
 	return nil
-}
-
-func writeJSONL(w *os.File, v any) error {
-	if w == nil {
-		return fmt.Errorf("session: file closed")
-	}
-	buf, err := marshalJSONLine(v)
-	if err != nil {
-		return err
-	}
-	_, err = w.Write(buf)
-	return err
 }
 
 func prepareNewMessage(m llm.Message) llm.Message {
@@ -997,15 +1060,8 @@ func (s *Session) metadataLocked() metadata {
 }
 
 func (s *Session) rollbackConversationLocked(offset int64) error {
-	// Windows O_APPEND handles intentionally lack FILE_WRITE_DATA, which
-	// File.Truncate requires. A named truncate obtains a separate write handle
-	// while preserving atomic append semantics for the resident descriptor.
-	rollbackErr := os.Truncate(filepath.Join(s.Dir, conversationFile), offset)
-	if s.convFD != nil {
-		if _, err := s.convFD.Seek(offset, io.SeekStart); rollbackErr == nil {
-			rollbackErr = err
-		}
-	}
+	path := filepath.Join(s.Dir, conversationFile)
+	rollbackErr := repairTornJournalTail(path, offset, s.journalOps)
 	if rollbackErr == nil {
 		fingerprint, err := fingerprintFromPath(filepath.Join(s.Dir, conversationFile))
 		if err != nil {

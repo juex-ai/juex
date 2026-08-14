@@ -1246,7 +1246,7 @@ func (m *Manager) emitObservable(eventType string, status ObservableStatus) {
 	if m == nil || m.opts.Bus == nil {
 		return
 	}
-	m.opts.Bus.Emit(events.Event{
+	_ = m.opts.Bus.Emit(events.Event{
 		Type: eventType,
 		Payload: ObservableEventPayload{
 			ID:       status.ID,
@@ -1265,7 +1265,7 @@ func (m *Manager) emitObservation(eventType string, record ObservationRecord, er
 	if m == nil || m.opts.Bus == nil {
 		return
 	}
-	m.opts.Bus.Emit(events.Event{
+	_ = m.opts.Bus.Emit(events.Event{
 		Type:    eventType,
 		Payload: ObservationEventPayload{Observation: record, Error: errText},
 	})

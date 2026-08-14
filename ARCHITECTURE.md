@@ -804,15 +804,16 @@ type Event struct {
 type Bus struct { ... }
 func Normalize(e Event) Event                         // fill stable id/timestamp defaults
 func (b *Bus) Subscribe(pattern string, fn func(Event))  // glob: "tool.*"
-func (b *Bus) Emit(e Event)                              // synchronous fan-out
+func (b *Bus) SetCommitter(c Committer)
+func (b *Bus) Emit(e Event) error                        // commit, then synchronous fan-out
 
 type Journal interface { AppendEvent(Event) error }
 type Delivery interface { Publish(Event) }
 type DurableSink struct { ... }
 func NewDurableSink(journal Journal) *DurableSink
 func (s *DurableSink) Commit(e Event) (Event, error)
-func (s *DurableSink) Handle(e Event)
 func (s *DurableSink) AddDelivery(d Delivery) func()
+func (s *DurableSink) Close() error
 ```
 
 Standard event families include `turn.started/completed/errored`,
@@ -837,13 +838,15 @@ structs next to their emitters while the bus and JSONL/SSE wire shape stay
 generic through `Payload any`.
 
 Durable browser-visible runtime facts flow through `events.DurableSink`.
-`internal/app` subscribes one sink to the app bus, using the session as the
-journal adapter. The sink normalizes each event once, appends it to
+`internal/app` installs one sink as the app bus commit boundary, using the
+session as the journal adapter. The sink normalizes each event once, appends it to
 `events.jsonl`, then runs registered projections in deterministic order before
 handing their results to asynchronous delivery adapters. The runtime-status
 projection runs first; the web projection then combines the committed event
 with that exact resulting status snapshot in a `BrowserEvent`. If journal
-append fails, projection and live delivery are skipped. Events marked
+append fails, `Emit` returns the error and projection and live delivery are
+skipped. Required request events gate Provider, Hook, and Tool calls, so a
+durability failure prevents the corresponding external side effect. Events marked
 `Transient` bypass the journal and are delivered only to current subscribers.
 Their SSE frames omit an `id` so the browser retains the last durable replay
 cursor. The public SSE cursor remains the durable event ID; replay rebuilds
@@ -914,10 +917,25 @@ type Info struct {
 }
 ```
 
-Each `Append(msg)` writes one JSON line to `conversation.jsonl`; each
-`AppendEvent(e)` writes a normalized event with id and timestamp to
-`events.jsonl`. In the app runtime path, event append is driven by the durable
-event sink before any live delivery sees the event. Runtime callers resume
+`conversation.jsonl` and `events.jsonl` are independent, versioned Session
+Journals. Every record carries its journal kind, session identity, and a
+contiguous per-journal sequence. Writers encode a complete batch before
+appending it, append only newline-terminated records, then synchronize the
+file. A write or synchronization failure truncates back to the previous offset
+and synchronizes that rollback before returning an error. Replay discards and
+durably truncates an incomplete final record while preserving the valid prefix;
+an unknown version, wrong identity, sequence discontinuity, or corrupt complete
+record is a hard error. Metadata, checkpoints, history summaries, and journal
+rewrites use `homestore.WriteFileAtomic`, which synchronizes the temporary file,
+replaces the target atomically, and synchronizes the parent directory.
+
+In the app runtime path, the event sink is the Bus commit boundary: a durable
+event must reach `events.jsonl` before projections or live deliveries see it.
+Provider, Hook, and Tool side effects are gated by their required request event,
+so a journal failure stops the effect instead of publishing an uncommitted
+fact. `Close` rejects new commits, drains queued live deliveries, synchronizes
+open journals, and returns a stable result across repeated calls. Runtime
+callers resume
 sessions with
 `session.LoadWithOptions(dir, opts)` so aliases, lazy transcript creation, and
 explicit transcript repair policy are applied consistently; `session.Load` is
@@ -930,10 +948,10 @@ conversation continues, then records `transcript.repaired` evidence in
 individual messages. Agent startup, active-session replacement, and historical
 Web status reads stream this journal through `session.ReplayEvents` into a
 runtime status projection, retaining only the bounded status history instead
-of materializing the complete event journal. A damaged suffix still delivers
-its valid prefix before the existing repair warning is returned. `ReadEvents`
-remains the slice-based compatibility adapter for callers that explicitly need
-all events.
+of materializing the complete event journal. A torn final record is removed
+before replay succeeds; corruption in a complete record stops replay after the
+valid prefix. `ReadEvents` remains the slice-based adapter for callers that
+explicitly need all events.
 
 `conversation.jsonl` remains the canonical, inspectable transcript. A bounded
 derived checkpoint in `session.json` records the transcript fingerprint and
@@ -960,8 +978,8 @@ The token detects ordinary in-place edits (including restored mtimes), file
 replacement, and accidental concurrent writes; it is not a cryptographic
 tamper proof against an actor capable of forging filesystem change metadata.
 The checkpoint checksum likewise detects ordinary metadata edits rather than
-an actor deliberately recomputing the checksum. Legacy tail-start checkpoints
-also verify every canonical row from the retained tail start through the
+an actor deliberately recomputing the checksum. Tail-start checkpoints also
+verify every canonical row from the retained tail start through the
 compact marker, so a checksum-consistent retained tail cannot contain holes.
 Resident sessions compare both their open file and the canonical path before
 append, hash the adopted canonical prefix before writing, and verify that same

@@ -414,6 +414,108 @@ func TestTurn_PassesMaxOutputTokensToProvider(t *testing.T) {
 	}
 }
 
+func TestTurn_DurableProviderRequestFailurePreventsProviderCall(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	want := errors.New("journal sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: "llm.requested", err: want})
+	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, want) {
+		t.Fatalf("Turn() error = %v, want %v", err, want)
+	}
+	if prov.called != 0 {
+		t.Fatalf("provider calls = %d, want 0", prov.called)
+	}
+}
+
+func TestTurn_DurableToolRequestFailurePreventsToolCall(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "side_effect",
+		}}},
+		StopReason: llm.StopToolUse,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	toolCalls := 0
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "side_effect",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			toolCalls++
+			return "done", nil
+		},
+	})
+	want := errors.New("journal sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: toolevents.RequestedType, err: want})
+	if _, err := eng.Turn(context.Background(), "run it"); !errors.Is(err, want) {
+		t.Fatalf("Turn() error = %v, want %v", err, want)
+	}
+	if toolCalls != 0 {
+		t.Fatalf("tool calls = %d, want 0", toolCalls)
+	}
+	if prov.called != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.called)
+	}
+}
+
+func TestTurn_DurableToolResultFailurePreventsNextProviderCall(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{
+			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+				Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "side_effect",
+			}}},
+			StopReason: llm.StopToolUse,
+		},
+		{Message: llm.TextMessage(llm.RoleAssistant, "must not run"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	toolCalls := 0
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "side_effect",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			toolCalls++
+			return "done", nil
+		},
+	})
+	want := errors.New("journal sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: toolevents.CompletedType, err: want})
+	if _, err := eng.Turn(context.Background(), "run it"); !errors.Is(err, want) {
+		t.Fatalf("Turn() error = %v, want %v", err, want)
+	}
+	if toolCalls != 1 {
+		t.Fatalf("tool calls = %d, want 1", toolCalls)
+	}
+	if prov.called != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.called)
+	}
+}
+
+func TestTurn_DurableHookRequestFailurePreventsHookRun(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	runner := &fakeHookRunner{}
+	eng.Hooks = runner
+	want := errors.New("journal sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: "hook.requested", err: want})
+	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, want) {
+		t.Fatalf("Turn() error = %v, want %v", err, want)
+	}
+	if len(runner.requests) != 0 {
+		t.Fatalf("hook requests = %d, want 0", len(runner.requests))
+	}
+}
+
+type selectiveFailCommitter struct {
+	eventType string
+	err       error
+}
+
+func (c selectiveFailCommitter) Commit(event events.Event) (events.Event, error) {
+	if event.Type == c.eventType {
+		return events.Event{}, c.err
+	}
+	return events.Normalize(event), nil
+}
+
 func TestTurn_ReturnsImagePlaceholderForImageOnlyResponse(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{
@@ -4443,14 +4545,14 @@ func TestRunToolCallEmitsRequestedRunningCompleted(t *testing.T) {
 		bus.Subscribe(eventType, func(events.Event) { sequence <- eventType })
 	}
 
-	results := eng.runToolCalls(context.Background(), "turn-1", []llm.Block{{
+	calls := []llm.Block{{
 		Type:      llm.BlockToolUse,
 		ToolUseID: "tool-1",
 		ToolName:  "echo_status_test",
 		Input:     map[string]any{"text": "hello"},
-	}})
-	if len(results) != 1 || results[0].Block.IsError {
-		t.Fatalf("results = %+v", results)
+	}}
+	if err := eng.recordToolBatchLocked(context.Background(), "turn-1", compactionPolicy{}, calls); err != nil {
+		t.Fatal(err)
 	}
 	for _, want := range []string{
 		toolevents.RequestedType,
@@ -5337,7 +5439,9 @@ func TestEmitToolFinishedHandlesPointerShellResult(t *testing.T) {
 	block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.ToolName, Content: "finalized bounded output"}
 	observation := tools.NewObservation(tools.ObservationOptions{Content: "earlier output", StructuredResult: original})
 
-	eng.emitToolFinished("turn-1", call, block, observation, tools.CallInfo{})
+	if err := eng.emitToolFinished("turn-1", call, block, observation, tools.CallInfo{}); err != nil {
+		t.Fatal(err)
+	}
 
 	result, ok := completed.Result.(*tools.ShellResult)
 	if !ok {

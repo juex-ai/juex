@@ -74,7 +74,7 @@ func (e *Engine) recordNotesContextError(store *NotesStore, err error) {
 	e.notesContextErrorKey = errorKey
 	e.notesContextErrorMu.Unlock()
 	if emit {
-		e.emit(events.Event{Type: "notes.errored", TurnID: e.PendingInputStatus().TurnID, Payload: NotesErroredPayload{
+		_ = e.emit(events.Event{Type: "notes.errored", TurnID: e.PendingInputStatus().TurnID, Payload: NotesErroredPayload{
 			Error: errorText,
 			Path:  notesPath,
 		}})
@@ -100,7 +100,7 @@ func (e *Engine) emitNotesUpdated(turnID string, snapshot NotesSnapshot) {
 		return
 	}
 	e.clearNotesContextError()
-	e.emit(events.Event{Type: "notes.updated", TurnID: turnID, Payload: NotesUpdatedPayload{
+	_ = e.emit(events.Event{Type: "notes.updated", TurnID: turnID, Payload: NotesUpdatedPayload{
 		Content:   snapshot.Content,
 		UpdatedAt: snapshot.UpdatedAt,
 	}})

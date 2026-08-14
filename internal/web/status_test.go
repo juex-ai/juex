@@ -188,13 +188,15 @@ func TestSessionStatusStreamResumesAfterSnapshotCursor(t *testing.T) {
 	}
 	defer response.Body.Close()
 
-	as.app.Bus.Emit(events.Event{
+	if err := as.app.Bus.Emit(events.Event{
 		Type:   juexruntime.TurnPhaseType,
 		TurnID: "turn-1",
 		Payload: juexruntime.TurnPhasePayload{
 			Phase: juexruntime.TurnPhaseToolBatch,
 		},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	scanner := bufio.NewScanner(response.Body)
 	var snapshot juexruntime.StatusSnapshot
 	for scanner.Scan() {
@@ -258,9 +260,13 @@ func TestHistoricalSessionStatusDoesNotActivateIt(t *testing.T) {
 	if _, loaded := srv.sessions.Load(historicalID); loaded {
 		t.Fatal("historical primary remained active in memory")
 	}
-	if err := os.WriteFile(filepath.Join(historicalDir, "events.jsonl"), []byte(
-		"{\"id\":\"status-1\",\"type\":\"turn.admitted\",\"turn_id\":\"turn-1\"}\nnot-json\n",
-	), 0o600); err != nil {
+	eventData := eventJournalFixture(t, historicalID, []events.Event{{
+		ID:     "status-1",
+		Type:   "turn.admitted",
+		TurnID: "turn-1",
+	}})
+	eventData = append(eventData, []byte("not-json")...)
+	if err := os.WriteFile(filepath.Join(historicalDir, "events.jsonl"), eventData, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -312,10 +318,9 @@ func TestHistoricalSessionStatusRetainsBoundedReplayHistory(t *testing.T) {
 		t.Fatal("historical primary remained active in memory")
 	}
 
-	var journal strings.Builder
-	encoder := json.NewEncoder(&journal)
+	journal := make([]events.Event, 0, 600)
 	for index := 1; index <= 600; index++ {
-		if err := encoder.Encode(events.Event{
+		journal = append(journal, events.Event{
 			ID:     fmt.Sprintf("status-%03d", index),
 			Type:   "pending_input.queued",
 			TurnID: "turn-1",
@@ -323,13 +328,11 @@ func TestHistoricalSessionStatusRetainsBoundedReplayHistory(t *testing.T) {
 				PendingCount:     index,
 				MaxPendingInputs: 1000,
 			},
-		}); err != nil {
-			t.Fatal(err)
-		}
+		})
 	}
 	if err := os.WriteFile(
 		filepath.Join(historicalDir, "events.jsonl"),
-		[]byte(journal.String()),
+		eventJournalFixture(t, historicalID, journal),
 		0o600,
 	); err != nil {
 		t.Fatal(err)

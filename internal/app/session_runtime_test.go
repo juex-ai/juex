@@ -155,12 +155,14 @@ func TestReplaceSessionPublishesOnlyRestartRecoveredStatus(t *testing.T) {
 	if _, ok := stream.Next(context.Background()); !ok {
 		t.Fatal("stream omitted initial status")
 	}
-	a.Bus.Emit(events.Event{
+	if err := a.Bus.Emit(events.Event{
 		ID:      "old-1",
 		Type:    runtime.TurnAdmittedType,
 		TurnID:  "turn-old",
 		Payload: runtime.TurnAdmittedPayload{},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	sess, err := session.New(a.cfg.SessionsDir())
 	if err != nil {

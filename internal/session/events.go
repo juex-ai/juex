@@ -2,7 +2,6 @@ package session
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,9 +17,6 @@ import (
 const maxEventLineBytes = 8 * 1024 * 1024
 
 // ReadEvents loads the durable event journal for status and replay projections.
-// A corrupt suffix is truncated after the valid prefix before the error is
-// returned, so later appends remain replayable. Lazy sessions may not have
-// created the journal yet.
 func ReadEvents(dir string) ([]events.Event, error) {
 	var result []events.Event
 	err := ReplayEvents(dir, func(event events.Event) {
@@ -29,10 +25,15 @@ func ReadEvents(dir string) ([]events.Event, error) {
 	return result, err
 }
 
-// ReplayEvents visits the durable event journal in order without retaining it
-// in memory. Valid prefix events are delivered before a corrupt suffix is
-// repaired and reported. Lazy sessions may not have created the journal yet.
+// ReplayEvents visits complete committed records in order. An incomplete final
+// record is truncated and synced before replay succeeds; corruption in any
+// complete record is a hard error and leaves the journal unchanged.
 func ReplayEvents(dir string, visit func(events.Event)) error {
+	_, err := replayEventJournal(dir, visit)
+	return err
+}
+
+func replayEventJournal(dir string, visit func(events.Event)) (uint64, error) {
 	path := filepath.Join(dir, eventsFile)
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	canRepair := true
@@ -42,55 +43,82 @@ func ReplayEvents(dir string, visit func(events.Event)) error {
 	}
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return 0, nil
 		}
-		return err
+		return 0, err
 	}
 	defer file.Close()
 
 	reader := bufio.NewReaderSize(file, 64*1024)
 	var validOffset int64
+	var sequence uint64
 	for line := 1; ; line++ {
 		raw, complete, err := readEventLine(reader)
 		if err != nil {
-			readErr := fmt.Errorf("session: read events.jsonl line %d: %w", line, err)
-			if canRepair && errors.Is(err, errEventLineTooLong) {
-				readErr = repairEventJournalTail(file, validOffset, readErr)
+			if errors.Is(err, errEventLineTooLong) {
+				terminated, drainErr := discardEventLineRemainder(reader)
+				if drainErr != nil {
+					return sequence, fmt.Errorf("session: read events.jsonl line %d: %w", line, drainErr)
+				}
+				if !terminated && canRepair {
+					if repairErr := truncateJournalTailDurably(file, path, validOffset, journalFileOps{}); repairErr != nil {
+						return sequence, errors.Join(err, repairErr)
+					}
+					return sequence, nil
+				}
 			}
-			return readErr
+			return sequence, fmt.Errorf("session: read events.jsonl line %d: %w", line, err)
 		}
 		if len(raw) == 0 && !complete {
-			return nil
+			return sequence, nil
 		}
-		encoded := raw
-		if complete {
+		if !complete {
+			if !canRepair {
+				return sequence, &tornJournalTailError{path: path, offset: validOffset}
+			}
+			if err := truncateJournalTailDurably(file, path, validOffset, journalFileOps{}); err != nil {
+				return sequence, errors.Join(
+					&tornJournalTailError{path: path, offset: validOffset},
+					fmt.Errorf("session: repair torn events journal: %w", err),
+				)
+			}
+			return sequence, nil
+		}
+		encoded := raw[:len(raw)-1]
+		if len(encoded) > 0 && encoded[len(encoded)-1] == '\r' {
 			encoded = encoded[:len(encoded)-1]
-			if len(encoded) > 0 && encoded[len(encoded)-1] == '\r' {
-				encoded = encoded[:len(encoded)-1]
-			}
 		}
-		var event events.Event
-		if err := json.Unmarshal(encoded, &event); err != nil {
-			decodeErr := fmt.Errorf("session: decode events.jsonl line %d: %w", line, err)
-			if canRepair {
-				decodeErr = repairEventJournalTail(file, validOffset, decodeErr)
-			}
-			return decodeErr
+		if len(encoded) == 0 {
+			return sequence, fmt.Errorf("session: decode events.jsonl line %d: empty journal record", line)
 		}
+		event, header, err := decodeEventJournalLine(encoded, journalRecordExpectation{
+			kind:      journalKindEvents,
+			sessionID: filepath.Base(dir),
+			sequence:  sequence + 1,
+		})
+		if err != nil {
+			return sequence, fmt.Errorf("session: decode events.jsonl line %d: %w", line, err)
+		}
+		sequence = header.Sequence
 		if visit != nil {
 			visit(event)
 		}
 		validOffset += int64(len(raw))
-		if !complete {
-			if canRepair {
-				if _, err := file.WriteAt([]byte{'\n'}, validOffset); err != nil {
-					return fmt.Errorf("session: terminate events.jsonl line %d: %w", line, err)
-				}
-				if err := file.Sync(); err != nil {
-					return fmt.Errorf("session: sync events.jsonl line %d repair: %w", line, err)
-				}
-			}
-			return nil
+	}
+}
+
+func discardEventLineRemainder(reader *bufio.Reader) (bool, error) {
+	for {
+		_, err := reader.ReadSlice('\n')
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case errors.Is(err, io.EOF):
+			return false, nil
+		default:
+			return false, err
 		}
 	}
 }
@@ -116,14 +144,4 @@ func readEventLine(reader *bufio.Reader) ([]byte, bool, error) {
 			return nil, false, err
 		}
 	}
-}
-
-func repairEventJournalTail(file *os.File, validOffset int64, cause error) error {
-	if err := file.Truncate(validOffset); err != nil {
-		return errors.Join(cause, fmt.Errorf("session: truncate corrupt events.jsonl tail: %w", err))
-	}
-	if err := file.Sync(); err != nil {
-		return errors.Join(cause, fmt.Errorf("session: sync repaired events.jsonl: %w", err))
-	}
-	return fmt.Errorf("%w; repaired corrupt tail at byte %d", cause, validOffset)
 }

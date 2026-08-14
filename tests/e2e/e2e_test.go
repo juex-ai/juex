@@ -1385,14 +1385,16 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 	}
 	sessionDir := first.Session.Dir
 	timestamp := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
-	first.Bus.Emit(events.Event{
+	if err := first.Bus.Emit(events.Event{
 		ID:        "1",
 		Type:      runtime.TurnAdmittedType,
 		TurnID:    "turn-1",
 		Timestamp: timestamp,
 		Payload:   runtime.TurnAdmittedPayload{},
-	})
-	first.Bus.Emit(events.Event{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Bus.Emit(events.Event{
 		ID:        "2",
 		Type:      "llm.responded",
 		TurnID:    "turn-1",
@@ -1405,8 +1407,10 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 				TotalTokens: 21,
 			},
 		},
-	})
-	first.Bus.Emit(events.Event{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Bus.Emit(events.Event{
 		ID:        "3",
 		Type:      "pending_input.queued",
 		TurnID:    "turn-1",
@@ -1414,8 +1418,10 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 		Payload: runtime.PendingInputQueuedPayload{
 			PendingCount: 1, MaxPendingInputs: 2,
 		},
-	})
-	first.Bus.Emit(events.Event{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Bus.Emit(events.Event{
 		ID:        "4",
 		Type:      toolevents.RequestedType,
 		TurnID:    "turn-1",
@@ -1423,8 +1429,10 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 		Payload: toolevents.RequestedPayload{
 			Name: "exec_command", ToolUseID: "tool-1",
 		},
-	})
-	first.Bus.Emit(events.Event{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Bus.Emit(events.Event{
 		ID:        "5",
 		Type:      toolevents.RunningType,
 		TurnID:    "turn-1",
@@ -1432,7 +1440,9 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 		Payload: toolevents.RunningPayload{
 			Name: "exec_command", ToolUseID: "tool-1",
 		},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -1442,7 +1452,7 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := appendFile.WriteString("not-json\n"); err != nil {
+	if _, err := appendFile.WriteString("not-json"); err != nil {
 		_ = appendFile.Close()
 		t.Fatal(err)
 	}
@@ -1479,9 +1489,8 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 		snapshot.ContextUsage.Model != "resume-model" {
 		t.Fatalf("recovered usage = %+v / %+v", snapshot.TokenUsage, snapshot.ContextUsage)
 	}
-	if !strings.Contains(stderr.String(), "warning: restore runtime status:") ||
-		!strings.Contains(stderr.String(), "repaired corrupt tail") {
-		t.Fatalf("stderr missing replay repair warning:\n%s", stderr.String())
+	if strings.Contains(stderr.String(), "warning: restore runtime status:") {
+		t.Fatalf("torn final event record should be repaired without a replay warning:\n%s", stderr.String())
 	}
 	repaired, err := os.ReadFile(eventsPath)
 	if err != nil {

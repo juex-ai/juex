@@ -43,10 +43,12 @@ func seedSession(t *testing.T, work, id string, jsonlBody string) string {
 	}
 	writeSessionMetadata(t, dir, id, session.KindPrimary)
 	var normalized strings.Builder
+	sequence := 0
 	for i, line := range strings.Split(jsonlBody, "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
+		sequence++
 		var msg llm.Message
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
 			t.Fatal(err)
@@ -54,7 +56,19 @@ func seedSession(t *testing.T, work, id string, jsonlBody string) string {
 		if msg.ID == "" {
 			msg.ID = fmt.Sprintf("m%d", i+1)
 		}
-		data, err := json.Marshal(msg)
+		data, err := json.Marshal(struct {
+			JournalVersion int    `json:"journal_version"`
+			Journal        string `json:"journal"`
+			SessionID      string `json:"session_id"`
+			Sequence       int    `json:"sequence"`
+			llm.Message
+		}{
+			JournalVersion: 1,
+			Journal:        "conversation",
+			SessionID:      id,
+			Sequence:       sequence,
+			Message:        msg,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -77,6 +91,8 @@ func writeSessionMetadata(t *testing.T, dir, id, kind string) {
 	}
 	startedAtMS := startedAt.UnixMilli()
 	data, err := json.Marshal(map[string]any{
+		"format_version":    1,
+		"session_id":        id,
 		"kind":              kind,
 		"started_at_ms":     startedAtMS,
 		"last_active_at_ms": startedAtMS,
@@ -182,7 +198,11 @@ func TestSessionsListRejectsChangedTranscriptDespiteMatchingSizeAndMtime(t *test
 	if err := session.RecordSession(historyPath, info); err != nil {
 		t.Fatal(err)
 	}
-	malformed := bytes.Repeat([]byte{'x'}, len(valid))
+	original, err := os.ReadFile(convPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformed := bytes.Repeat([]byte{'x'}, len(original))
 	malformed[len(malformed)-1] = '\n'
 	if err := os.WriteFile(convPath, malformed, 0o644); err != nil {
 		t.Fatal(err)

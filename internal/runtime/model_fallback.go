@@ -112,9 +112,13 @@ func (e *Engine) projectCandidateHistoryLocked(turnID string, prepared preparedT
 	if err != nil {
 		return providerTurnRequest{}, err
 	}
-	e.emitProjectionApplied(turnID, projection)
+	if err := e.emitProjectionApplied(turnID, projection); err != nil {
+		return providerTurnRequest{}, fmt.Errorf("commit candidate history projection: %w", err)
+	}
 	projected, projection = stripRedactedReasoningForProviderBudget(prepared.systemPrompt, prepared.tools, projected, policy)
-	e.emitProjectionApplied(turnID, projection)
+	if err := e.emitProjectionApplied(turnID, projection); err != nil {
+		return providerTurnRequest{}, fmt.Errorf("commit candidate reasoning projection: %w", err)
+	}
 	if notice != nil {
 		projected = append(projected, *notice)
 	}
@@ -185,7 +189,7 @@ func modelRefIndex(chain []string, ref string) int {
 }
 
 func (e *Engine) emitModelFallback(turnID string, transition modelFallbackTransition, to string) {
-	e.emit(events.Event{Type: "llm.fallback", TurnID: turnID, Payload: LLMFallbackPayload{
+	_ = e.emit(events.Event{Type: "llm.fallback", TurnID: turnID, Payload: LLMFallbackPayload{
 		From:       transition.from,
 		To:         to,
 		Reason:     transition.reason,

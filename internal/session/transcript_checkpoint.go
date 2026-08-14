@@ -9,7 +9,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 )
 
-const transcriptCheckpointVersion = 4
+const transcriptCheckpointVersion = 5
 
 // transcriptCheckpoint is a bounded, derived index over conversation.jsonl.
 // The transcript fingerprint makes the JSONL file authoritative whenever the
@@ -28,17 +28,18 @@ type transcriptCheckpoint struct {
 }
 
 type transcriptCheckpointEntry struct {
-	ID     string `json:"id"`
-	Offset int64  `json:"offset"`
-	Length int    `json:"length"`
+	ID       string `json:"id"`
+	Offset   int64  `json:"offset"`
+	Length   int    `json:"length"`
+	Sequence uint64 `json:"sequence"`
 }
 
 func checkpointEntry(entry transcriptIndexEntry) transcriptCheckpointEntry {
-	return transcriptCheckpointEntry{ID: entry.ID, Offset: entry.Offset, Length: entry.Length}
+	return transcriptCheckpointEntry{ID: entry.ID, Offset: entry.Offset, Length: entry.Length, Sequence: entry.Sequence}
 }
 
 func checkpointIndexEntry(entry transcriptCheckpointEntry) transcriptIndexEntry {
-	return transcriptIndexEntry{ID: entry.ID, Offset: entry.Offset, Length: entry.Length}
+	return transcriptIndexEntry{ID: entry.ID, Offset: entry.Offset, Length: entry.Length, Sequence: entry.Sequence}
 }
 
 func transcriptCheckpointValid(checkpoint *transcriptCheckpoint, fingerprint transcriptFingerprint) bool {
@@ -150,7 +151,7 @@ func transcriptCheckpointChecksum(checkpoint *transcriptCheckpoint) string {
 }
 
 func validCheckpointEntry(entry transcriptCheckpointEntry, ceiling int64) bool {
-	return entry.ID != "" && entry.Offset >= 0 && entry.Length > 0 &&
+	return entry.ID != "" && entry.Sequence > 0 && entry.Offset >= 0 && entry.Length > 0 &&
 		entry.Offset+int64(entry.Length) <= ceiling
 }
 
@@ -256,9 +257,11 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 		if len(messages) != 1 || messages[0].ID != retained.ID {
 			return scanActiveTranscriptIndex(path)
 		}
-		idx.add(messages[0], 0, retained.Offset, retained.Length)
+		idx.add(messages[0], 0, retained.Offset, retained.Length, retained.Sequence)
 	}
-	suffix, err := scanTranscriptIndexFromFile(snapshot.file, path, checkpoint.LatestCompact.Offset)
+	suffix, err := scanTranscriptIndexFromFileExpected(
+		snapshot.file, path, checkpoint.LatestCompact.Offset, checkpoint.LatestCompact.Sequence,
+	)
 	if err != nil {
 		return scanActiveTranscriptIndex(path)
 	}
@@ -288,6 +291,7 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 	idx.complete = false
 	idx.latestCompactAt = latestCompactAt
 	idx.hasLatestCompact = true
+	idx.lastSequence = suffix.lastSequence
 	if err := snapshot.verify(); err != nil {
 		return scanActiveTranscriptIndex(path)
 	}
@@ -299,6 +303,7 @@ func loadActiveTranscriptIndex(path string, checkpoint *transcriptCheckpoint) (t
 
 func checkpointNamesLatestCompact(suffix transcriptIndex, checkpoint transcriptCheckpointEntry) bool {
 	return len(suffix.entries) > 0 && suffix.entries[0].ID == checkpoint.ID &&
+		suffix.entries[0].Sequence == checkpoint.Sequence &&
 		suffix.entries[0].Kind == llm.MessageKindCompact && suffix.latestCompact() == 0
 }
 
@@ -309,7 +314,7 @@ func retainedEntriesMatchCompact(
 	compact transcriptIndexEntry,
 ) (bool, error) {
 	if len(compact.RetainedMessageIDs) == 0 && compact.TailStartMessageID != "" {
-		return legacyRetainedTailMatches(file, path, entries, compact)
+		return retainedTailMatches(file, path, entries, compact)
 	}
 	expected, ok := retainedTranscriptEntries(entries, compact)
 	if !ok || len(expected) != len(entries) {
@@ -323,7 +328,7 @@ func retainedEntriesMatchCompact(
 	return true, nil
 }
 
-func legacyRetainedTailMatches(
+func retainedTailMatches(
 	file *os.File,
 	path string,
 	entries []transcriptIndexEntry,
@@ -332,7 +337,7 @@ func legacyRetainedTailMatches(
 	if len(entries) == 0 || entries[0].ID != compact.TailStartMessageID {
 		return false, nil
 	}
-	canonical, err := scanTranscriptIndexFromFile(file, path, entries[0].Offset)
+	canonical, err := scanTranscriptIndexFromFileExpected(file, path, entries[0].Offset, entries[0].Sequence)
 	if err != nil {
 		return false, err
 	}
@@ -354,7 +359,7 @@ func legacyRetainedTailMatches(
 	}
 	for i, entry := range entries {
 		canonicalEntry := canonical.entries[i]
-		if entry.ID != canonicalEntry.ID || entry.Offset != canonicalEntry.Offset || entry.Length != canonicalEntry.Length {
+		if entry.ID != canonicalEntry.ID || entry.Sequence != canonicalEntry.Sequence || entry.Offset != canonicalEntry.Offset || entry.Length != canonicalEntry.Length {
 			return false, nil
 		}
 	}

@@ -12,7 +12,7 @@ func TestDurableSink_CommitsBeforeDelivery(t *testing.T) {
 	journal := &recordingJournal{}
 	delivery := &recordingDelivery{}
 	sink := NewDurableSink(journal)
-	t.Cleanup(sink.Close)
+	t.Cleanup(func() { _ = sink.Close() })
 	sink.AddDelivery(delivery)
 
 	committed, err := sink.Commit(Event{Type: "turn.started"})
@@ -42,7 +42,7 @@ func TestDurableSink_DoesNotDeliverWhenJournalFails(t *testing.T) {
 	journal := &recordingJournal{err: journalErr}
 	delivery := &recordingDelivery{}
 	sink := NewDurableSink(journal)
-	t.Cleanup(sink.Close)
+	t.Cleanup(func() { _ = sink.Close() })
 	sink.AddDelivery(delivery)
 
 	_, err := sink.Commit(Event{Type: "turn.started"})
@@ -57,7 +57,7 @@ func TestDurableSink_DoesNotDeliverWhenJournalFails(t *testing.T) {
 func TestDurableSink_RequiresJournal(t *testing.T) {
 	delivery := &recordingDelivery{}
 	sink := NewDurableSink(nil)
-	t.Cleanup(sink.Close)
+	t.Cleanup(func() { _ = sink.Close() })
 	sink.AddDelivery(delivery)
 
 	_, err := sink.Commit(Event{Type: "turn.started"})
@@ -72,7 +72,7 @@ func TestDurableSink_RequiresJournal(t *testing.T) {
 func TestDurableSink_DeliversTransientEventWithoutJournal(t *testing.T) {
 	delivery := &recordingDelivery{}
 	sink := NewDurableSink(nil)
-	t.Cleanup(sink.Close)
+	t.Cleanup(func() { _ = sink.Close() })
 	sink.AddDelivery(delivery)
 
 	committed, err := sink.Commit(Event{Type: "llm.output_delta", Transient: true})
@@ -91,7 +91,7 @@ func TestDurableSink_DeliversTransientEventWithoutJournal(t *testing.T) {
 func TestDurableSink_ProjectsSynchronouslyAfterJournalCommit(t *testing.T) {
 	journal := &recordingJournal{}
 	sink := NewDurableSink(journal)
-	t.Cleanup(sink.Close)
+	t.Cleanup(func() { _ = sink.Close() })
 
 	var projected []Event
 	sink.AddProjection(DeliveryFunc(func(event Event) {
@@ -112,7 +112,7 @@ func TestDurableSink_ProjectsSynchronouslyAfterJournalCommit(t *testing.T) {
 
 func TestDurableSink_ProjectsInRegistrationOrder(t *testing.T) {
 	sink := NewDurableSink(&recordingJournal{})
-	t.Cleanup(sink.Close)
+	t.Cleanup(func() { _ = sink.Close() })
 
 	var projected []string
 	sink.AddProjection(DeliveryFunc(func(Event) {
@@ -132,7 +132,7 @@ func TestDurableSink_ProjectsInRegistrationOrder(t *testing.T) {
 
 func TestDurableSink_ReadCommittedWaitsForSynchronousProjection(t *testing.T) {
 	sink := NewDurableSink(&recordingJournal{})
-	t.Cleanup(sink.Close)
+	t.Cleanup(func() { _ = sink.Close() })
 	projectionStarted := make(chan struct{})
 	releaseProjection := make(chan struct{})
 	sink.AddProjection(DeliveryFunc(func(Event) {
@@ -181,7 +181,7 @@ func TestDurableSink_ReadCommittedWaitsForSynchronousProjection(t *testing.T) {
 
 func TestDurableSink_DoesNotProjectFailedJournalCommit(t *testing.T) {
 	sink := NewDurableSink(&recordingJournal{err: errors.New("disk full")})
-	t.Cleanup(sink.Close)
+	t.Cleanup(func() { _ = sink.Close() })
 
 	projected := 0
 	sink.AddProjection(DeliveryFunc(func(Event) { projected++ }))
@@ -198,7 +198,7 @@ func TestDurableSink_PreservesDeliveryOrderFromJournalOrder(t *testing.T) {
 	journal := &recordingJournal{}
 	delivery := &recordingDelivery{}
 	sink := NewDurableSink(journal)
-	t.Cleanup(sink.Close)
+	t.Cleanup(func() { _ = sink.Close() })
 	sink.AddDelivery(delivery)
 
 	var wg sync.WaitGroup
@@ -232,7 +232,7 @@ func TestDurableSink_DoesNotBlockCommitsOrStateWhileDelivering(t *testing.T) {
 	journal := &recordingJournal{}
 	delivery := &blockingDelivery{started: make(chan struct{}), release: make(chan struct{})}
 	sink := NewDurableSink(journal)
-	t.Cleanup(sink.Close)
+	t.Cleanup(func() { _ = sink.Close() })
 	sink.AddDelivery(delivery)
 
 	errCh := make(chan error, 1)
@@ -296,7 +296,7 @@ func TestDurableSink_UnsubscribeAndClose(t *testing.T) {
 	journal := &recordingJournal{}
 	delivery := &recordingDelivery{}
 	sink := NewDurableSink(journal)
-	t.Cleanup(sink.Close)
+	t.Cleanup(func() { _ = sink.Close() })
 	unsubscribe := sink.AddDelivery(delivery)
 
 	if _, err := sink.Commit(Event{Type: "one"}); err != nil {
@@ -313,9 +313,47 @@ func TestDurableSink_UnsubscribeAndClose(t *testing.T) {
 		t.Fatalf("delivery events = %+v, want only first event", delivered)
 	}
 
-	sink.Close()
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := sink.Commit(Event{Type: "three"}); !errors.Is(err, ErrDurableSinkClosed) {
 		t.Fatalf("err = %v, want ErrDurableSinkClosed", err)
+	}
+}
+
+func TestDurableSink_CloseDrainsQueuedDeliveriesAndIsStable(t *testing.T) {
+	delivery := &blockingDelivery{started: make(chan struct{}), release: make(chan struct{})}
+	sink := NewDurableSink(&recordingJournal{})
+	sink.AddDelivery(delivery)
+
+	if _, err := sink.Commit(Event{Type: "turn.completed"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-delivery.started:
+	case <-time.After(time.Second):
+		t.Fatal("delivery did not start")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- sink.Close() }()
+	select {
+	case err := <-closed:
+		t.Fatalf("Close() returned before queued delivery completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(delivery.release)
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not return after queued delivery completed")
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
 	}
 }
 
@@ -323,7 +361,7 @@ func TestDurableSink_SetJournal(t *testing.T) {
 	first := &recordingJournal{}
 	second := &recordingJournal{}
 	sink := NewDurableSink(first)
-	t.Cleanup(sink.Close)
+	t.Cleanup(func() { _ = sink.Close() })
 
 	if _, err := sink.Commit(Event{Type: "one"}); err != nil {
 		t.Fatal(err)
@@ -340,9 +378,74 @@ func TestDurableSink_SetJournal(t *testing.T) {
 	}
 }
 
+func TestDurableSink_SetJournalWaitsForInFlightCommit(t *testing.T) {
+	first := &blockingJournal{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	second := &recordingJournal{}
+	sink := NewDurableSink(first)
+	t.Cleanup(func() { _ = sink.Close() })
+
+	commitDone := make(chan error, 1)
+	go func() {
+		_, err := sink.Commit(Event{Type: "one"})
+		commitDone <- err
+	}()
+	select {
+	case <-first.started:
+	case <-time.After(time.Second):
+		t.Fatal("first journal commit did not start")
+	}
+
+	switchDone := make(chan struct{})
+	go func() {
+		sink.SetJournal(second)
+		close(switchDone)
+	}()
+	select {
+	case <-switchDone:
+		t.Fatal("SetJournal crossed an in-flight commit")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(first.release)
+	if err := <-commitDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-switchDone:
+	case <-time.After(time.Second):
+		t.Fatal("SetJournal did not resume after the commit")
+	}
+	if _, err := sink.Commit(Event{Type: "two"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.events) != 1 || first.events[0].Type != "one" {
+		t.Fatalf("first journal = %+v, want event one", first.events)
+	}
+	if len(second.events) != 1 || second.events[0].Type != "two" {
+		t.Fatalf("second journal = %+v, want event two", second.events)
+	}
+}
+
 type recordingJournal struct {
 	err    error
 	events []Event
+}
+
+type blockingJournal struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	events  []Event
+}
+
+func (j *blockingJournal) AppendEvent(event Event) error {
+	j.once.Do(func() { close(j.started) })
+	<-j.release
+	j.events = append(j.events, event)
+	return nil
 }
 
 func (j *recordingJournal) AppendEvent(e Event) error {
