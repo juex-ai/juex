@@ -238,6 +238,18 @@ func waitForSideState(t *testing.T, a *App, id string, want SideSessionState) Si
 	return SideSessionStatus{}
 }
 
+func waitForGoalContinuationDeferral(t *testing.T, a *App, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if a.sideSessions.shouldDeferGoalContinuation() == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("goal continuation deferral = %t, want %t", a.sideSessions.shouldDeferGoalContinuation(), want)
+}
+
 func TestSideSessionToolsRegisterOnlyForActivePrimary(t *testing.T) {
 	primary := newSideSessionTestApp(t, &scriptedSideProvider{})
 	for _, name := range []string{
@@ -1184,9 +1196,7 @@ func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testin
 	if _, err := parent.sideSessions.Subscribe(second, false); err != nil {
 		t.Fatal(err)
 	}
-	if parent.sideSessions.shouldDeferGoalContinuation() {
-		t.Fatal("idle and unsubscribed Side Sessions deferred Goal continuation")
-	}
+	waitForGoalContinuationDeferral(t, parent, false)
 	if _, err := parent.sideSessions.Subscribe(second, true); err != nil {
 		t.Fatal(err)
 	}
@@ -1195,9 +1205,7 @@ func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testin
 	}
 	close(secondChild.release)
 	waitForSideState(t, parent, second, SideSessionStateIdle)
-	if parent.sideSessions.shouldDeferGoalContinuation() {
-		t.Fatal("idle Side Sessions deferred Goal continuation")
-	}
+	waitForGoalContinuationDeferral(t, parent, false)
 }
 
 func TestSideSessionCreateRejectsUnknownModel(t *testing.T) {
