@@ -30,6 +30,19 @@ func filePolicyForTest(policy Policy, workDir string, roots ...string) FilePolic
 	return NewFilePolicy(FilePolicyOptions{Policy: policy, WorkDir: workDir, AgentStateDir: agentStateDir})
 }
 
+func sandboxLookPathForTest(backend, target string) func(string) (string, error) {
+	return func(name string) (string, error) {
+		switch name {
+		case "bwrap", "sandbox-exec":
+			return backend, nil
+		case "true":
+			return target, nil
+		default:
+			return "", fmt.Errorf("unexpected sandbox executable lookup %q", name)
+		}
+	}
+}
+
 func TestDefaultPolicyForOS(t *testing.T) {
 	for _, tc := range []struct {
 		goos    string
@@ -189,7 +202,7 @@ func TestCheckAvailabilityCachesFunctionalProbe(t *testing.T) {
 		return nil
 	}
 	policy := DefaultPolicyForOS("linux")
-	lookPath := func(string) (string, error) { return "/test/bwrap", nil }
+	lookPath := sandboxLookPathForTest("/test/bwrap", "/test/true")
 	var wg sync.WaitGroup
 	for range 16 {
 		wg.Add(1)
@@ -203,6 +216,41 @@ func TestCheckAvailabilityCachesFunctionalProbe(t *testing.T) {
 	wg.Wait()
 	if calls.Load() != 1 {
 		t.Fatalf("functional probe calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestCheckAvailabilityResolvesFunctionalProbeTarget(t *testing.T) {
+	resetBackendProbeCacheForTest()
+	original := runProbeCommand
+	t.Cleanup(func() {
+		runProbeCommand = original
+		resetBackendProbeCacheForTest()
+	})
+	var gotHelper string
+	var gotArgs []string
+	runProbeCommand = func(_ context.Context, helper string, args ...string) error {
+		gotHelper = helper
+		gotArgs = append([]string(nil), args...)
+		return nil
+	}
+	lookPath := func(name string) (string, error) {
+		switch name {
+		case "bwrap":
+			return "/nix/store/bubblewrap/bin/bwrap", nil
+		case "true":
+			return "/nix/store/coreutils/bin/true", nil
+		default:
+			return "", fmt.Errorf("unexpected lookup %q", name)
+		}
+	}
+	if err := CheckAvailability(context.Background(), DefaultPolicyForOS("linux"), "linux", lookPath); err != nil {
+		t.Fatal(err)
+	}
+	if gotHelper != "/nix/store/bubblewrap/bin/bwrap" {
+		t.Fatalf("probe helper = %q", gotHelper)
+	}
+	if len(gotArgs) == 0 || gotArgs[len(gotArgs)-1] != "/nix/store/coreutils/bin/true" {
+		t.Fatalf("probe args = %#v, want resolved true target", gotArgs)
 	}
 }
 

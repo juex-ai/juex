@@ -1021,6 +1021,8 @@ func TestLoad_SandboxExplicitSectionKeepsLegacySparseDefaults(t *testing.T) {
 		{name: "empty", body: "sandbox: {}\n"},
 		{name: "implicit-null", body: "sandbox:\n"},
 		{name: "explicit-null", body: "sandbox: null\n"},
+		{name: "merged", body: "<<: &defaults {sandbox: {enabled: false}}\n"},
+		{name: "merged-null", body: "<<: &defaults {sandbox: null}\n"},
 		{name: "network-only", body: "sandbox:\n  network:\n    enabled: false\n"},
 		{name: "blocked-only", body: "sandbox:\n  file_system:\n    blocked_paths: [.env]\n"},
 	} {

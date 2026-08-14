@@ -78,7 +78,14 @@ func checkAvailabilityWithProbe(ctx context.Context, policy Policy, runtimeOS st
 		return NewError(ErrorCodeBackendUnavailable, runtimeOS, backend, "lookup", policy, suggestion, err)
 	}
 	if probe == nil {
-		probe = cachedFunctionalProbe
+		target, targetErr := lookPath("true")
+		if targetErr != nil {
+			return NewError(ErrorCodeBackendUnavailable, runtimeOS, backend, "probe", policy, suggestion, fmt.Errorf("resolve probe target true: %w", targetErr))
+		}
+		if err := cachedFunctionalProbe(ctx, runtimeOS, helper, target, policy); err != nil {
+			return NewError(ErrorCodeBackendUnavailable, runtimeOS, backend, "probe", policy, suggestion, err)
+		}
+		return nil
 	}
 	if err := probe(ctx, runtimeOS, helper, policy); err != nil {
 		return NewError(ErrorCodeBackendUnavailable, runtimeOS, backend, "probe", policy, suggestion, err)
@@ -99,19 +106,19 @@ func backendDescriptor(runtimeOS string, policy Policy) (backend, executable, su
 	}
 }
 
-func cachedFunctionalProbe(ctx context.Context, runtimeOS, helper string, policy Policy) error {
-	key := fmt.Sprintf("%s\x00%s\x00network=%t", runtimeOS, helper, policy.Network.Enabled)
+func cachedFunctionalProbe(ctx context.Context, runtimeOS, helper, target string, policy Policy) error {
+	key := fmt.Sprintf("%s\x00%s\x00%s\x00network=%t", runtimeOS, helper, target, policy.Network.Enabled)
 	value, _ := backendProbeCache.LoadOrStore(key, &probeResult{})
 	result := value.(*probeResult)
 	result.once.Do(func() {
 		probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), backendProbeTimeout)
 		defer cancel()
-		result.err = functionalProbe(probeCtx, runtimeOS, helper, policy)
+		result.err = functionalProbe(probeCtx, runtimeOS, helper, target, policy)
 	})
 	return result.err
 }
 
-func functionalProbe(ctx context.Context, runtimeOS, helper string, policy Policy) error {
+func functionalProbe(ctx context.Context, runtimeOS, helper, target string, policy Policy) error {
 	var args []string
 	switch runtimeOS {
 	case "linux":
@@ -119,9 +126,9 @@ func functionalProbe(ctx context.Context, runtimeOS, helper string, policy Polic
 		if !policy.Network.Enabled {
 			args = append(args, "--unshare-net")
 		}
-		args = append(args, "--ro-bind", "/", "/", "--dev", "/dev", "--", "/bin/true")
+		args = append(args, "--ro-bind", "/", "/", "--dev", "/dev", "--", target)
 	case "darwin":
-		args = []string{"-p", "(version 1)\n(allow default)\n", "/usr/bin/true"}
+		args = []string{"-p", "(version 1)\n(allow default)\n", target}
 	default:
 		return fmt.Errorf("unsupported probe platform %q", runtimeOS)
 	}

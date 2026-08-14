@@ -57,7 +57,7 @@ func TestDarwinBackendRestoresTargetEnvironmentInsideSandbox(t *testing.T) {
 	policy.Enabled = true
 	got, err := (DefaultRunner{
 		RuntimeOS: "darwin",
-		LookPath:  func(string) (string, error) { return "/usr/bin/sandbox-exec", nil },
+		LookPath:  sandboxLookPathForTest("/usr/bin/sandbox-exec", "/usr/bin/true"),
 	}).Prepare(context.Background(), Request{
 		Policy: policy,
 		Spec: ExecSpec{
@@ -188,7 +188,7 @@ func TestDefaultRunnerDarwinAllowsWorkspaceAndAgentStateRoots(t *testing.T) {
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	got, err := (DefaultRunner{
 		RuntimeOS: "darwin",
-		LookPath:  func(string) (string, error) { return "/usr/bin/sandbox-exec", nil },
+		LookPath:  sandboxLookPathForTest("/usr/bin/sandbox-exec", "/usr/bin/true"),
 	}).Prepare(context.Background(), Request{
 		Policy:     policy,
 		WorkDir:    workspace,

@@ -25,7 +25,7 @@ func TestLinuxReadOnlyProvidesWritableDevicesAndTemp(t *testing.T) {
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	got, err := (DefaultRunner{
 		RuntimeOS: "linux",
-		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+		LookPath:  sandboxLookPathForTest("/usr/bin/bwrap", "/bin/true"),
 	}).Prepare(context.Background(), Request{
 		Policy:     policy,
 		WorkDir:    workspace,
@@ -73,7 +73,7 @@ func TestLinuxReadOnlyBindsWorkspaceAndAgentStateRoots(t *testing.T) {
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	got, err := (DefaultRunner{
 		RuntimeOS: "linux",
-		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+		LookPath:  sandboxLookPathForTest("/usr/bin/bwrap", "/bin/true"),
 	}).Prepare(context.Background(), Request{
 		Policy:     policy,
 		WorkDir:    workspace,
@@ -107,7 +107,7 @@ func TestLinuxBackendRestoresTargetEnvironmentInsideSandbox(t *testing.T) {
 	policy.Enabled = true
 	got, err := (DefaultRunner{
 		RuntimeOS: "linux",
-		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+		LookPath:  sandboxLookPathForTest("/usr/bin/bwrap", "/bin/true"),
 	}).Prepare(context.Background(), Request{
 		Policy: policy,
 		Spec: ExecSpec{
@@ -153,7 +153,7 @@ func TestLinuxBlockedPathsAreMasked(t *testing.T) {
 	policy.FileSystem.BlockedPaths = []string{dir, file}
 	got, err := (DefaultRunner{
 		RuntimeOS: "linux",
-		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+		LookPath:  sandboxLookPathForTest("/usr/bin/bwrap", "/bin/true"),
 	}).Prepare(context.Background(), Request{
 		Policy:     policy,
 		WorkDir:    "/work",
@@ -184,7 +184,7 @@ func TestLinuxBlockedPathMaskFollowsWritableAgentStateBind(t *testing.T) {
 	policy.FileSystem.BlockedPaths = []string{blocked}
 	got, err := (DefaultRunner{
 		RuntimeOS: "linux",
-		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+		LookPath:  sandboxLookPathForTest("/usr/bin/bwrap", "/bin/true"),
 	}).Prepare(context.Background(), Request{
 		Policy:     policy,
 		WorkDir:    workspace,
@@ -211,7 +211,7 @@ func TestLinuxBlockedPathsRejectMissingPaths(t *testing.T) {
 	policy.FileSystem.BlockedPaths = []string{missing}
 	_, err := (DefaultRunner{
 		RuntimeOS: "linux",
-		LookPath:  func(string) (string, error) { return "/usr/bin/bwrap", nil },
+		LookPath:  sandboxLookPathForTest("/usr/bin/bwrap", "/bin/true"),
 	}).Prepare(context.Background(), Request{
 		Policy:     policy,
 		WorkDir:    "/work",

@@ -1384,16 +1384,41 @@ func topLevelYAMLKeyPresent(data []byte, key string) (bool, error) {
 	if len(document.Content) == 0 {
 		return false, nil
 	}
-	root := document.Content[0]
-	if root.Kind != yaml.MappingNode {
-		return false, nil
+	return yamlMappingKeyPresent(document.Content[0], key, map[*yaml.Node]bool{}), nil
+}
+
+func yamlMappingKeyPresent(node *yaml.Node, key string, visited map[*yaml.Node]bool) bool {
+	if node == nil || visited[node] {
+		return false
 	}
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == key {
-			return true, nil
+	visited[node] = true
+	switch node.Kind {
+	case yaml.DocumentNode:
+		return len(node.Content) > 0 && yamlMappingKeyPresent(node.Content[0], key, visited)
+	case yaml.AliasNode:
+		return yamlMappingKeyPresent(node.Alias, key, visited)
+	case yaml.SequenceNode:
+		for _, child := range node.Content {
+			if yamlMappingKeyPresent(child, key, visited) {
+				return true
+			}
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if node.Content[i].Value == key {
+				return true
+			}
+		}
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			mergeKey := node.Content[i]
+			if mergeKey.Value == "<<" || mergeKey.Tag == "!!merge" {
+				if yamlMappingKeyPresent(node.Content[i+1], key, visited) {
+					return true
+				}
+			}
 		}
 	}
-	return false, nil
+	return false
 }
 
 func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
