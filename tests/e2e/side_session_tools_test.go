@@ -12,27 +12,59 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 )
 
 type sideSessionToolProvider struct {
-	childAnswered chan struct{}
-	answerOnce    sync.Once
+	childStarted chan struct{}
+	releaseChild chan struct{}
+	startOnce    sync.Once
 }
 
 func (p *sideSessionToolProvider) Name() string { return "side-session-tool-e2e" }
 
 func (p *sideSessionToolProvider) Complete(ctx context.Context, _ string, history []llm.Message, specs []llm.ToolSpec) (llm.Response, error) {
 	if historyHasKind(history, llm.MessageKindSideSession) {
+		if !historyHasToolResult(history, "finish-goal") {
+			return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+				Type:      llm.BlockToolUse,
+				ToolUseID: "finish-goal",
+				ToolName:  juexruntime.GoalToolUpdate,
+				Input: map[string]any{
+					"status":        string(juexruntime.GoalStatusSuccess),
+					"status_reason": "subscribed worker result received",
+				},
+			}}}, StopReason: llm.StopToolUse}, nil
+		}
 		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "PRIMARY_SAW_SIDE_OK"), StopReason: llm.StopEndTurn}, nil
 	}
 	last := lastDirectUserText(history)
 	if last == "Reply with exactly SIDE_OK" {
-		p.answerOnce.Do(func() { close(p.childAnswered) })
-		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "SIDE_OK"), StopReason: llm.StopEndTurn}, nil
+		p.startOnce.Do(func() { close(p.childStarted) })
+		select {
+		case <-ctx.Done():
+			return llm.Response{}, ctx.Err()
+		case <-p.releaseChild:
+			return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "SIDE_OK"), StopReason: llm.StopEndTurn}, nil
+		}
 	}
 	if last != "delegate through a Side Session" {
 		return llm.Response{}, fmt.Errorf("unexpected provider history: %+v", history)
+	}
+	if !historyHasToolResult(history, "create-goal") {
+		if !toolSpecExists(specs, juexruntime.GoalToolCreate) {
+			return llm.Response{}, fmt.Errorf("primary tool catalog missing %s", juexruntime.GoalToolCreate)
+		}
+		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type:      llm.BlockToolUse,
+			ToolUseID: "create-goal",
+			ToolName:  juexruntime.GoalToolCreate,
+			Input: map[string]any{
+				"description": "finish delegated work",
+				"acceptance":  "the subscribed worker result is incorporated",
+			},
+		}}}, StopReason: llm.StopToolUse}, nil
 	}
 	if !historyHasToolResult(history, "create-side") {
 		if !toolSpecExists(specs, app.SideSessionToolCreate) {
@@ -47,18 +79,16 @@ func (p *sideSessionToolProvider) Complete(ctx context.Context, _ string, histor
 			},
 		}}}, StopReason: llm.StopToolUse}, nil
 	}
-	select {
-	case <-ctx.Done():
-		return llm.Response{}, ctx.Err()
-	case <-p.childAnswered:
-		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "waiting for subscribed result"), StopReason: llm.StopEndTurn}, nil
-	}
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "waiting for subscribed result"), StopReason: llm.StopEndTurn}, nil
 }
 
 func TestEndToEnd_SideSessionToolDelegation(t *testing.T) {
 	workDir := t.TempDir()
 	stateDir := filepath.Join(workDir, ".juex")
-	provider := &sideSessionToolProvider{childAnswered: make(chan struct{})}
+	provider := &sideSessionToolProvider{
+		childStarted: make(chan struct{}),
+		releaseChild: make(chan struct{}),
+	}
 	a, err := app.New(app.Options{
 		Config: config.Config{
 			ProviderID:    "openai",
@@ -79,13 +109,44 @@ func TestEndToEnd_SideSessionToolDelegation(t *testing.T) {
 		}
 	})
 
-	if _, err := a.Run(context.Background(), "delegate through a Side Session"); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := a.Run(ctx, "delegate through a Side Session")
+	if err != nil {
 		t.Fatal(err)
 	}
+	if out != "waiting for subscribed result" {
+		t.Fatalf("initial primary output = %q", out)
+	}
+	select {
+	case <-provider.childStarted:
+	case <-time.After(time.Second):
+		t.Fatal("side worker did not start")
+	}
+	goal, err := a.Engine.GoalState.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goal.Status != juexruntime.GoalStatusInProgress || goal.ContinuationCount != 0 {
+		t.Fatalf("waiting Goal = %+v", goal)
+	}
+	close(provider.releaseChild)
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		_, history, ok := a.SessionSnapshot()
 		if ok && historyHasKind(history, llm.MessageKindSideSession) && historyHasAssistantText(history, "PRIMARY_SAW_SIDE_OK") {
+			for _, message := range history {
+				if message.Kind == llm.MessageKindContinuation {
+					t.Fatalf("unexpected Goal continuation in history: %+v", message)
+				}
+			}
+			goal, err := a.Engine.GoalState.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if goal.Status != juexruntime.GoalStatusSuccess || goal.ContinuationCount != 0 {
+				t.Fatalf("completed Goal = %+v", goal)
+			}
 			infos, err := session.List(filepath.Join(stateDir, "sessions"))
 			if err != nil {
 				t.Fatal(err)

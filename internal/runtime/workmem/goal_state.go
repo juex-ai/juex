@@ -200,22 +200,25 @@ func (s *GoalStateStore) CompletionGateDecision() (GoalGateDecision, error) {
 	}, nil
 }
 
-func (s *GoalStateStore) RecordContinuation(decision GoalGateDecision) error {
+func (s *GoalStateStore) RecordContinuation(decision GoalGateDecision) (bool, error) {
 	if s == nil || !decision.BlockStop {
-		return nil
+		return false, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state, err := s.loadLocked()
 	if err != nil {
-		return err
+		return false, err
 	}
-	if state.StatusSnapshot() == nil {
-		return nil
+	if state.StatusSnapshot() == nil || state.Status != GoalStatusInProgress {
+		return false, nil
 	}
 	state.ContinuationCount++
 	state.UpdatedAt = s.now()
-	return s.saveLocked(state)
+	if err := s.saveLocked(state); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *GoalStateStore) StatusSnapshot() (*GoalStatusSnapshot, error) {

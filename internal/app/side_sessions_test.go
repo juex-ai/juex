@@ -62,6 +62,14 @@ type sideToolDuringDeliveryProvider struct {
 	app     *App
 }
 
+type goalSideQueueProvider struct {
+	mu      sync.Mutex
+	started chan struct{}
+	release chan struct{}
+	app     *App
+	calls   int
+}
+
 func (p *sideToolDuringDeliveryProvider) Name() string { return "side-delivery-tool" }
 
 func (p *sideToolDuringDeliveryProvider) Complete(_ context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
@@ -78,6 +86,38 @@ func (p *sideToolDuringDeliveryProvider) Complete(_ context.Context, _ string, h
 		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "delivery finished"), StopReason: llm.StopEndTurn}, nil
 	}
 	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "primary"), StopReason: llm.StopEndTurn}, nil
+}
+
+func (p *goalSideQueueProvider) Name() string { return "goal-side-queue" }
+
+func (p *goalSideQueueProvider) Complete(ctx context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
+	p.mu.Lock()
+	p.calls++
+	call := p.calls
+	p.mu.Unlock()
+	if call == 1 {
+		close(p.started)
+		select {
+		case <-ctx.Done():
+			return llm.Response{}, ctx.Err()
+		case <-p.release:
+		}
+		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "waiting for subscribed result"), StopReason: llm.StopEndTurn}, nil
+	}
+	for _, message := range history {
+		if message.Kind != llm.MessageKindSideSession {
+			continue
+		}
+		reason := "subscribed result incorporated"
+		if _, err := p.app.Engine.GoalState.Update(runtime.GoalStateUpdate{
+			Status:       runtime.GoalStatusSuccess,
+			StatusReason: &reason,
+		}); err != nil {
+			return llm.Response{}, err
+		}
+		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "subscribed result incorporated"), StopReason: llm.StopEndTurn}, nil
+	}
+	return llm.Response{}, errors.New("queued Side Session result missing from provider history")
 }
 
 func (p *barrierSideProvider) Name() string { return "side-barrier" }
@@ -983,6 +1023,180 @@ func TestManagedSideSessionSkipsSharedGoalCompletionGate(t *testing.T) {
 	child.mu.Unlock()
 	if calls != 1 {
 		t.Fatalf("side provider calls = %d, want one without shared goal continuation", calls)
+	}
+}
+
+func TestPrimaryGoalContinuationDefersDuringSubscribedResultHandoff(t *testing.T) {
+	primaryProvider := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
+	parent := newSideSessionTestApp(t, primaryProvider, &scriptedSideProvider{})
+	parent.Engine.MaxPendingInputs = 1
+
+	primaryDone := make(chan error, 1)
+	go func() {
+		_, err := parent.Run(context.Background(), "keep primary busy during result handoff")
+		primaryDone <- err
+	}()
+	select {
+	case <-primaryProvider.started:
+	case <-time.After(time.Second):
+		t.Fatal("primary turn did not start")
+	}
+	if _, err := parent.Engine.EnqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "occupy capacity")); err != nil {
+		t.Fatal(err)
+	}
+
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{
+		"query":     "finish while primary queue is full",
+		"subscribe": true,
+	})
+	id := created["session_id"].(string)
+	status := waitForSideState(t, parent, id, SideSessionStateIdle)
+	pendingID := "side-session-result:" + id + ":" + status.LastTurnID
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		records, err := parent.Engine.PendingInputQueue.Records()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record, ok := records[pendingID]; ok && record.State == runtime.PendingInputStatePending {
+			if !parent.sideSessions.shouldDeferGoalContinuation() {
+				t.Fatal("subscribed result awaiting admission did not defer Goal continuation")
+			}
+			close(primaryProvider.release)
+			if err := <-primaryDone; err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("side-session result was not persisted during the handoff window")
+}
+
+func TestPrimaryGoalContinuationDefersWhileSubscribedResultIsQueued(t *testing.T) {
+	primaryProvider := &goalSideQueueProvider{started: make(chan struct{}), release: make(chan struct{})}
+	parent := newSideSessionTestApp(t, primaryProvider, &scriptedSideProvider{})
+	primaryProvider.app = parent
+	if _, err := parent.Engine.GoalState.Create("finish delegated work", "incorporate the subscribed result"); err != nil {
+		t.Fatal(err)
+	}
+
+	primaryDone := make(chan error, 1)
+	go func() {
+		_, err := parent.Run(context.Background(), "delegate while primary is busy")
+		primaryDone <- err
+	}()
+	select {
+	case <-primaryProvider.started:
+	case <-time.After(time.Second):
+		t.Fatal("primary turn did not start")
+	}
+
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{
+		"query":     "finish while primary provider is active",
+		"subscribe": true,
+	})
+	id := created["session_id"].(string)
+	waitForSideState(t, parent, id, SideSessionStateIdle)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if parent.Engine.PendingInputStatus().PendingCount > 0 {
+			if !parent.sideSessions.shouldDeferGoalContinuation() {
+				t.Fatal("queued subscribed result did not defer Goal continuation")
+			}
+			close(primaryProvider.release)
+			if err := <-primaryDone; err != nil {
+				t.Fatal(err)
+			}
+			goal, err := parent.Engine.GoalState.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if goal.Status != runtime.GoalStatusSuccess || goal.ContinuationCount != 0 {
+				t.Fatalf("goal state = %+v, want success without synthetic continuation", goal)
+			}
+			if parent.sideSessions.shouldDeferGoalContinuation() {
+				t.Fatal("admitted subscribed result kept Goal continuation deferred")
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("side-session result was not queued while the primary provider was active")
+}
+
+func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testing.T) {
+	primaryProvider := &scriptedSideProvider{}
+	firstChild := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
+	secondChild := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
+	parent := newSideSessionTestApp(t, primaryProvider, firstChild, secondChild)
+	if _, err := parent.Engine.GoalState.Create("finish delegated work", "both worker results are incorporated"); err != nil {
+		t.Fatal(err)
+	}
+
+	first := callSideTool(t, parent, SideSessionToolCreate, map[string]any{
+		"query":     "first worker",
+		"subscribe": true,
+	})["session_id"].(string)
+	second := callSideTool(t, parent, SideSessionToolCreate, map[string]any{
+		"query":     "second worker",
+		"subscribe": true,
+	})["session_id"].(string)
+	for name, started := range map[string]<-chan string{"first": firstChild.started, "second": secondChild.started} {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatalf("%s side turn did not start", name)
+		}
+	}
+
+	if !parent.sideSessions.shouldDeferGoalContinuation() {
+		t.Fatal("subscribed running Side Sessions did not defer Goal continuation")
+	}
+	out, err := parent.Engine.Turn(context.Background(), "wait for both workers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "finish delegated work") {
+		t.Fatalf("primary output = %q", out)
+	}
+	primaryProvider.mu.Lock()
+	primaryCalls := primaryProvider.calls
+	primaryProvider.mu.Unlock()
+	if primaryCalls != 1 {
+		t.Fatalf("primary provider calls = %d, want 1 without Goal continuation", primaryCalls)
+	}
+	goal, err := parent.Engine.GoalState.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goal.Status != runtime.GoalStatusInProgress || goal.ContinuationCount != 0 {
+		t.Fatalf("goal state = %+v", goal)
+	}
+
+	close(firstChild.release)
+	waitForSideState(t, parent, first, SideSessionStateIdle)
+	if !parent.sideSessions.shouldDeferGoalContinuation() {
+		t.Fatal("idle subscribed worker hid another subscribed running worker")
+	}
+	if _, err := parent.sideSessions.Subscribe(second, false); err != nil {
+		t.Fatal(err)
+	}
+	if parent.sideSessions.shouldDeferGoalContinuation() {
+		t.Fatal("idle and unsubscribed Side Sessions deferred Goal continuation")
+	}
+	if _, err := parent.sideSessions.Subscribe(second, true); err != nil {
+		t.Fatal(err)
+	}
+	if !parent.sideSessions.shouldDeferGoalContinuation() {
+		t.Fatal("resubscribed running Side Session did not defer Goal continuation")
+	}
+	close(secondChild.release)
+	waitForSideState(t, parent, second, SideSessionStateIdle)
+	if parent.sideSessions.shouldDeferGoalContinuation() {
+		t.Fatal("idle Side Sessions deferred Goal continuation")
 	}
 }
 

@@ -108,8 +108,12 @@ func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 		!strings.Contains(decision.ContinuePrompt, "go test ./... passes") {
 		t.Fatalf("in-progress decision = %+v", decision)
 	}
-	if err := store.RecordContinuation(decision); err != nil {
+	recorded, err := store.RecordContinuation(decision)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !recorded {
+		t.Fatal("in-progress continuation was not recorded")
 	}
 	state, err := store.Snapshot()
 	if err != nil {
@@ -130,8 +134,12 @@ func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 	if decision.BlockStop || decision.Status != GoalStatusWaitForUser {
 		t.Fatalf("wait-for-user should allow finish: %+v", decision)
 	}
-	if err := store.RecordContinuation(decision); err != nil {
+	recorded, err = store.RecordContinuation(decision)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if recorded {
+		t.Fatal("wait-for-user continuation was recorded")
 	}
 	state, err = store.Snapshot()
 	if err != nil {
@@ -150,6 +158,37 @@ func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 	}
 	if decision.BlockStop {
 		t.Fatalf("terminal failure should allow finish: %+v", decision)
+	}
+}
+
+func TestGoalStateStoreRejectsStaleContinuationAfterTerminalUpdate(t *testing.T) {
+	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
+	if _, err := store.Create("finish delegated work", "all worker results arrive"); err != nil {
+		t.Fatal(err)
+	}
+	decision, err := store.CompletionGateDecision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decision.BlockStop {
+		t.Fatalf("in-progress decision = %+v", decision)
+	}
+	if _, err := store.Update(GoalStateUpdate{Status: GoalStatusSuccess}); err != nil {
+		t.Fatal(err)
+	}
+	recorded, err := store.RecordContinuation(decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorded {
+		t.Fatal("stale continuation was recorded after Goal success")
+	}
+	state, err := store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != GoalStatusSuccess || state.ContinuationCount != 0 {
+		t.Fatalf("goal state = %+v", state)
 	}
 }
 

@@ -83,6 +83,7 @@ type managedSideSession struct {
 	unsubscribeState func()
 	done             sync.WaitGroup
 	runGeneration    uint64
+	resultHandoffs   int
 
 	status SideSessionStatus
 }
@@ -102,6 +103,7 @@ type sideSessionManager struct {
 	deliveryWait    *sync.WaitGroup
 	deliveryWriters sync.WaitGroup
 	deliveryDone    chan struct{}
+	resultHandoffs  map[string]*managedSideSession
 	deferred        sync.WaitGroup
 	closeOnce       sync.Once
 	closeStartErr   error
@@ -112,9 +114,10 @@ type sideSessionManager struct {
 
 func newSideSessionManager(parent *App) *sideSessionManager {
 	m := &sideSessionManager{
-		parent:       parent,
-		sessions:     map[string]*managedSideSession{},
-		deliveryDone: make(chan struct{}),
+		parent:         parent,
+		sessions:       map[string]*managedSideSession{},
+		deliveryDone:   make(chan struct{}),
+		resultHandoffs: map[string]*managedSideSession{},
 	}
 	baseCtx := context.Background()
 	if parent != nil && parent.ctx != nil {
@@ -336,6 +339,26 @@ func (m *sideSessionManager) List() ([]SideSessionStatus, error) {
 	return items, nil
 }
 
+func (m *sideSessionManager) shouldDeferGoalContinuation() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.transitioning {
+		return false
+	}
+	for _, managed := range m.sessions {
+		if managed.status.State == SideSessionStateStopping {
+			continue
+		}
+		if managed.resultHandoffs > 0 || (managed.status.Subscribed && managed.status.State == SideSessionStateRunning) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *sideSessionManager) Status(id string) (SideSessionStatus, error) {
 	m.lifecycleMu.RLock()
 	defer m.lifecycleMu.RUnlock()
@@ -487,9 +510,11 @@ func (m *sideSessionManager) beginTransition(closing bool) ([]*managedSideSessio
 	for id, managed := range m.sessions {
 		managed.status.State = SideSessionStateStopping
 		managed.status.Subscribed = false
+		managed.resultHandoffs = 0
 		items = append(items, managed)
 		delete(m.sessions, id)
 	}
+	clear(m.resultHandoffs)
 	m.mu.Unlock()
 	return items, deliveries, nil
 }
@@ -646,22 +671,49 @@ func (m *sideSessionManager) run(managed *managedSideSession, generation uint64,
 		subscribed := managed.status.Subscribed
 		status := managed.status
 		deliveryWait := managed.deliveryWait
+		handoffID := "side-session-result:" + status.SessionID + ":" + status.LastTurnID
 		if subscribed && deliveryWait != nil {
 			deliveryWait.Add(1)
 			m.deliveryWriters.Add(1)
+			managed.resultHandoffs++
+			m.resultHandoffs[handoffID] = managed
 		}
 		m.mu.Unlock()
 		if subscribed && deliveryWait != nil {
 			go func() {
 				defer deliveryWait.Done()
 				defer m.deliveryWriters.Done()
-				m.deliverResult(managed.deliveryCtx, managed, status)
+				m.deliverResult(managed.deliveryCtx, managed, status, handoffID)
 			}()
 		}
 	}()
 }
 
-func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managedSideSession, status SideSessionStatus) {
+func (m *sideSessionManager) finishResultHandoffs(ids []string) {
+	if m == nil || len(ids) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, id := range ids {
+		managed := m.resultHandoffs[id]
+		if managed == nil {
+			continue
+		}
+		delete(m.resultHandoffs, id)
+		if managed.resultHandoffs > 0 {
+			managed.resultHandoffs--
+		}
+	}
+}
+
+func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managedSideSession, status SideSessionStatus, handoffID string) {
+	finishOnReturn := true
+	defer func() {
+		if finishOnReturn {
+			m.finishResultHandoffs([]string{handoffID})
+		}
+	}()
 	if err := m.ensureParentActive(); err != nil {
 		return
 	}
@@ -680,14 +732,13 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 	data, _ := json.Marshal(payload)
 	msg := llm.TextMessage(llm.RoleUser, "Side Session result:\n"+string(data))
 	msg.Kind = llm.MessageKindSideSession
-	pendingID := "side-session-result:" + status.SessionID + ":" + status.LastTurnID
 	var record runtime.PendingInputRecord
 	delay := 50 * time.Millisecond
 	var persistErr error
 	for attempt := 0; attempt < sideSessionPersistAttempts; attempt++ {
 		var err error
 		record, err = m.parent.Engine.PersistPendingMessageWithOptions(ctx, msg, runtime.PendingInputOptions{
-			ID:  pendingID,
+			ID:  handoffID,
 			TTL: m.parent.Engine.ExternalEventTTL,
 		})
 		if err == nil {
@@ -732,8 +783,10 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 		result := m.parent.admitPersistedUserTurn(ctx, record, TurnIDFunc(func(string) string { return m.nextTurnID() }))
 		switch result.Kind {
 		case TurnAdmissionQueued:
+			finishOnReturn = false
 			return
 		case TurnAdmissionStarted:
+			m.finishResultHandoffs([]string{handoffID})
 			_, runErr := m.parent.RunAdmittedTurn(ctx, result.Start.TurnID, result.Start.Message)
 			m.parent.CompleteAdmittedTurn(result.Start.TurnID)
 			if runErr != nil {
@@ -872,6 +925,12 @@ func (m *sideSessionManager) removeCurrent(managed *managedSideSession) bool {
 	managed.status.State = SideSessionStateStopping
 	managed.status.Subscribed = false
 	managed.status.UpdatedAt = time.Now().UTC()
+	for handoffID, owner := range m.resultHandoffs {
+		if owner == managed {
+			delete(m.resultHandoffs, handoffID)
+		}
+	}
+	managed.resultHandoffs = 0
 	delete(m.sessions, id)
 	return true
 }
