@@ -14,7 +14,8 @@ func TestBuildRequestEpochDigestTracksEffectiveEnvelope(t *testing.T) {
 		Purpose: "turn",
 		Provider: SafeProvider{
 			ID: "openai", Protocol: llm.ProtocolOpenAIResponses, Model: "gpt-test",
-			ThinkingEffort: "high", Capabilities: llm.ProviderCapabilities{Tools: true, Streaming: true},
+			EndpointDigest: "endpoint-a", ThinkingEffort: "high",
+			Capabilities: llm.ProviderCapabilities{Tools: true, Streaming: true},
 		},
 		ContextWindow:   128000,
 		MaxOutputTokens: 4096,
@@ -51,6 +52,7 @@ func TestBuildRequestEpochDigestTracksEffectiveEnvelope(t *testing.T) {
 
 	mutations := map[string]func(*RequestInput){
 		"provider": func(in *RequestInput) { in.Provider.Model = "gpt-other" },
+		"endpoint": func(in *RequestInput) { in.Provider.EndpointDigest = "endpoint-b" },
 		"system":   func(in *RequestInput) { in.SystemPrompt += " changed" },
 		"tool":     func(in *RequestInput) { in.Tools[0].Description += " changed" },
 		"history":  func(in *RequestInput) { in.History[1].Blocks[0].Text += " changed" },
@@ -77,13 +79,14 @@ func TestBuildRequestEpochDigestTracksEffectiveEnvelope(t *testing.T) {
 
 func TestSafeProviderFromProfileExcludesSecrets(t *testing.T) {
 	const secret = "provider-secret-sentinel"
-	descriptor := SafeProviderFromProfile(llm.ProviderProfile{
-		ID: "custom", Protocol: llm.ProtocolOpenAIChat, BaseURL: "https://example.test/" + secret,
+	profile := llm.ProviderProfile{
+		ID: "custom", Protocol: llm.ProtocolOpenAIChat, BaseURL: "https://user:" + secret + "@EXAMPLE.test/v1/" + secret + "?token=" + secret + "#fragment",
 		APIKey: secret, Model: "model", ThinkingEffort: "medium",
 		Headers: map[string]string{"Authorization": secret}, Query: map[string]string{"token": secret},
 		Capabilities: llm.ProviderCapabilities{Tools: true},
 		Compat:       llm.CompatOptions{ReasoningReplayFields: []string{"reasoning_content"}, CodexTransport: "sse"},
-	})
+	}
+	descriptor := SafeProviderFromProfile(profile)
 	raw, err := json.Marshal(descriptor)
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +96,20 @@ func TestSafeProviderFromProfileExcludesSecrets(t *testing.T) {
 	}
 	if descriptor.ID != "custom" || descriptor.Model != "model" || descriptor.Protocol != llm.ProtocolOpenAIChat {
 		t.Fatalf("safe provider = %+v", descriptor)
+	}
+	if descriptor.EndpointDigest == "" {
+		t.Fatal("safe provider endpoint digest is empty")
+	}
+
+	credentialsChanged := profile
+	credentialsChanged.BaseURL = "https://other:changed@example.test/v1/" + secret + "?token=changed#other"
+	if got := SafeProviderFromProfile(credentialsChanged).EndpointDigest; got != descriptor.EndpointDigest {
+		t.Fatalf("credential/query-only endpoint change altered digest: %s != %s", got, descriptor.EndpointDigest)
+	}
+	serviceChanged := profile
+	serviceChanged.BaseURL = "https://example.test/v2/" + secret
+	if got := SafeProviderFromProfile(serviceChanged).EndpointDigest; got == descriptor.EndpointDigest {
+		t.Fatalf("service endpoint change retained digest %s", got)
 	}
 }
 

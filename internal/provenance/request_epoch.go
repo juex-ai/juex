@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/juex-ai/juex/internal/events"
@@ -28,6 +30,7 @@ type SafeProvider struct {
 	ID                    string                   `json:"id,omitempty"`
 	Protocol              llm.Protocol             `json:"protocol,omitempty"`
 	Model                 string                   `json:"model,omitempty"`
+	EndpointDigest        string                   `json:"endpoint_digest,omitempty"`
 	ThinkingEffort        string                   `json:"thinking_effort,omitempty"`
 	Capabilities          llm.ProviderCapabilities `json:"capabilities"`
 	ReasoningReplayFields []string                 `json:"reasoning_replay_fields,omitempty"`
@@ -39,11 +42,29 @@ func SafeProviderFromProfile(profile llm.ProviderProfile) SafeProvider {
 		ID:                    profile.ID,
 		Protocol:              profile.Protocol,
 		Model:                 profile.Model,
+		EndpointDigest:        safeEndpointDigest(profile.BaseURL),
 		ThinkingEffort:        profile.ThinkingEffort,
 		Capabilities:          profile.Capabilities,
 		ReasoningReplayFields: append([]string(nil), profile.Compat.ReasoningReplayFields...),
 		CodexTransport:        profile.Compat.CodexTransport,
 	}
+}
+
+func safeEndpointDigest(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if parsed, err := url.Parse(raw); err == nil {
+		parsed.User = nil
+		parsed.RawQuery = ""
+		parsed.ForceQuery = false
+		parsed.Fragment = ""
+		parsed.Scheme = strings.ToLower(parsed.Scheme)
+		parsed.Host = strings.ToLower(parsed.Host)
+		raw = parsed.String()
+	}
+	return digest([]byte(raw))
 }
 
 type Snapshot struct {

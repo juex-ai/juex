@@ -857,8 +857,9 @@ the epoch consumes its included one-shot hook-context IDs; replay reduces
 queued batches minus committed epoch consumption. `llm.requested` declares
 dispatch after that checkpoint, while `llm.responded` and turn-scoped
 `llm.retry` carry the same epoch ID and reconstructed request digest. Provider
-credentials, arbitrary headers/query values, and raw wire requests never enter
-the epoch schema.
+credentials, arbitrary headers/query values, raw endpoint URLs, and raw wire
+requests never enter the epoch schema; only the normalized endpoint digest is
+retained for request identity.
 
 `llm.output_delta` and `tool.output_delta` are cataloged live-only signals and
 are not appended to the session journal or logs. CLI and browser

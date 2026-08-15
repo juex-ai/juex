@@ -481,6 +481,7 @@ export interface ProviderRequestEpochPayload {
       id?: string;
       protocol?: string;
       model?: string;
+      endpoint_digest?: string;
       thinking_effort?: string;
       capabilities: Record<string, boolean>;
       reasoning_replay_fields?: string[];
