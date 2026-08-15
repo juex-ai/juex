@@ -68,28 +68,19 @@ func (e *Engine) ReplaceSessionRuntime(sess *session.Session) error {
 }
 
 func recoverSessionProvenance(dir string) (*provenance.Tracker, error) {
-	var journal []events.Event
+	tracker := provenance.NewTracker()
+	var replayErr error
 	if err := session.ReplayEvents(dir, func(event events.Event) {
-		if isProviderProvenanceEvent(event.Type) {
-			journal = append(journal, event)
+		if replayErr == nil {
+			replayErr = tracker.ReplayEvent(event)
 		}
 	}); err != nil {
 		return nil, err
 	}
-	return provenance.Recover(journal)
-}
-
-func isProviderProvenanceEvent(eventType string) bool {
-	switch eventType {
-	case provenance.HookContextQueuedType,
-		provenance.RequestEpochType,
-		"llm.requested",
-		"llm.responded",
-		"llm.retry":
-		return true
-	default:
-		return false
+	if replayErr != nil {
+		return nil, replayErr
 	}
+	return tracker, nil
 }
 
 // SessionRuntimeSnapshot returns one coherent copy of the current

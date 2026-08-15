@@ -19,6 +19,7 @@ func TestBuildRequestEpochDigestTracksEffectiveEnvelope(t *testing.T) {
 		},
 		ContextWindow:   128000,
 		MaxOutputTokens: 4096,
+		CachePolicy:     SafeCachePolicyFrom(llm.CachePolicy{StablePrefixKey: "juex:session-a", Retention: "1h"}),
 		SystemPrompt:    "system",
 		Tools: []llm.ToolSpec{{
 			Name: "read", Description: "read a file", Schema: map[string]any{"type": "object"},
@@ -51,11 +52,15 @@ func TestBuildRequestEpochDigestTracksEffectiveEnvelope(t *testing.T) {
 	}
 
 	mutations := map[string]func(*RequestInput){
+		"purpose":  func(in *RequestInput) { in.Purpose = "compaction" },
 		"provider": func(in *RequestInput) { in.Provider.Model = "gpt-other" },
 		"endpoint": func(in *RequestInput) { in.Provider.EndpointDigest = "endpoint-b" },
-		"system":   func(in *RequestInput) { in.SystemPrompt += " changed" },
-		"tool":     func(in *RequestInput) { in.Tools[0].Description += " changed" },
-		"history":  func(in *RequestInput) { in.History[1].Blocks[0].Text += " changed" },
+		"cache": func(in *RequestInput) {
+			in.CachePolicy = SafeCachePolicyFrom(llm.CachePolicy{StablePrefixKey: "juex:session-b", Retention: "1h"})
+		},
+		"system":  func(in *RequestInput) { in.SystemPrompt += " changed" },
+		"tool":    func(in *RequestInput) { in.Tools[0].Description += " changed" },
+		"history": func(in *RequestInput) { in.History[1].Blocks[0].Text += " changed" },
 		"selection": func(in *RequestInput) {
 			in.History = append([]llm.Message(nil), in.History[1:]...)
 		},
@@ -74,6 +79,22 @@ func TestBuildRequestEpochDigestTracksEffectiveEnvelope(t *testing.T) {
 				t.Fatalf("digest did not change for %s", name)
 			}
 		})
+	}
+}
+
+func TestSafeCachePolicyExcludesRawValues(t *testing.T) {
+	const secret = "cache-secret-sentinel"
+	policy := SafeCachePolicyFrom(llm.CachePolicy{StablePrefixKey: "juex:" + secret, Retention: secret})
+	raw, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), secret) || policy.StablePrefixKeyDigest == "" || policy.RetentionDigest == "" {
+		t.Fatalf("safe cache policy = %s", raw)
+	}
+	changed := SafeCachePolicyFrom(llm.CachePolicy{StablePrefixKey: "juex:other", Retention: secret})
+	if changed.StablePrefixKeyDigest == policy.StablePrefixKeyDigest {
+		t.Fatal("cache key change retained digest")
 	}
 }
 
@@ -235,26 +256,69 @@ func TestRecoverValidatesEpochRequestResponseLinkage(t *testing.T) {
 		t.Fatal(err)
 	}
 	epoch.EpochID = "epoch-1"
-	link := map[string]any{"epoch_id": epoch.EpochID, "request_digest": epoch.RequestDigest}
+	requestLink := map[string]any{"purpose": "turn", "epoch_id": epoch.EpochID, "request_digest": epoch.RequestDigest}
+	outcomeLink := map[string]any{"epoch_id": epoch.EpochID, "request_digest": epoch.RequestDigest}
 	if _, err := Recover([]events.Event{
 		{Type: RequestEpochType, Payload: RequestEpochPayload{Epoch: epoch}},
-		{Type: "llm.requested", Payload: link},
-		{Type: "llm.retry", Payload: link},
-		{Type: "llm.responded", Payload: link},
+		{Type: "llm.requested", Payload: requestLink},
+		{Type: "llm.retry", Payload: requestLink},
+		{Type: "llm.responded", Payload: outcomeLink},
 	}); err != nil {
 		t.Fatalf("Recover() valid chain error = %v", err)
 	}
 	if _, err := Recover([]events.Event{
 		{Type: RequestEpochType, Payload: RequestEpochPayload{Epoch: epoch}},
-		{Type: "llm.responded", Payload: link},
+		{Type: "llm.responded", Payload: outcomeLink},
 	}); err == nil || !strings.Contains(err.Error(), "before llm.requested") {
 		t.Fatalf("Recover() response-before-request error = %v", err)
 	}
 	if _, err := Recover([]events.Event{
 		{Type: RequestEpochType, Payload: RequestEpochPayload{Epoch: epoch}},
-		{Type: "llm.requested", Payload: map[string]any{"epoch_id": epoch.EpochID, "request_digest": strings.Repeat("0", 64)}},
+		{Type: "llm.requested", Payload: map[string]any{"purpose": "turn", "epoch_id": epoch.EpochID, "request_digest": strings.Repeat("0", 64)}},
 	}); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("Recover() mismatched digest error = %v", err)
+	}
+	if _, err := Recover([]events.Event{
+		{Type: RequestEpochType, Payload: RequestEpochPayload{Epoch: epoch}},
+		{Type: "llm.requested", Payload: map[string]any{"purpose": "compaction", "epoch_id": epoch.EpochID, "request_digest": epoch.RequestDigest}},
+	}); err == nil || !strings.Contains(err.Error(), "purpose") {
+		t.Fatalf("Recover() mismatched purpose error = %v", err)
+	}
+}
+
+func TestRecoverValidatesCompactionRequestOutcomeLinkage(t *testing.T) {
+	epoch, err := BuildRequestEpoch(RequestInput{
+		Purpose:  "compaction",
+		Provider: SafeProvider{ID: "test", Model: "model"},
+		History:  []llm.Message{message("summary-input-1", llm.MessageKindDirect, "hello")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch.EpochID = "epoch-compaction-1"
+	requestLink := map[string]any{"purpose": "compaction", "epoch_id": epoch.EpochID, "request_digest": epoch.RequestDigest}
+	outcomeLink := map[string]any{"epoch_id": epoch.EpochID, "request_digest": epoch.RequestDigest}
+	if _, err := Recover([]events.Event{
+		{Type: RequestEpochType, Payload: RequestEpochPayload{Epoch: epoch}},
+		{Type: "llm.requested", Payload: requestLink},
+		{Type: "llm.retry", Payload: requestLink},
+		{Type: "context.compact.summary_responded", Payload: outcomeLink},
+	}); err != nil {
+		t.Fatalf("Recover() compaction chain error = %v", err)
+	}
+	if _, err := Recover([]events.Event{
+		{Type: RequestEpochType, Payload: RequestEpochPayload{Epoch: epoch}},
+		{Type: "llm.requested", Payload: requestLink},
+		{Type: "context.compact.summary_errored", Payload: outcomeLink},
+		{Type: "context.compact.summary_responded", Payload: outcomeLink},
+	}); err == nil || !strings.Contains(err.Error(), "terminal") {
+		t.Fatalf("Recover() duplicate compaction outcome error = %v", err)
+	}
+	if _, err := Recover([]events.Event{
+		{Type: RequestEpochType, Payload: RequestEpochPayload{Epoch: epoch}},
+		{Type: "llm.responded", Payload: outcomeLink},
+	}); err == nil || !strings.Contains(err.Error(), "requires turn epoch") {
+		t.Fatalf("Recover() wrong outcome family error = %v", err)
 	}
 }
 

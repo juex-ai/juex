@@ -10,7 +10,13 @@ import (
 type compactionSummaryState = contextbudget.SummaryState
 
 func buildCompactionSummaryRequest(base string, previous llm.Message, input []llm.Message, state compactionSummaryState, policy compactionPolicy, instructions string) (string, []llm.Message) {
-	return contextbudget.BuildCompactionSummaryRequest(base, previous, input, state, policy, instructions)
+	system, history := contextbudget.BuildCompactionSummaryRequest(base, previous, input, state, policy, instructions)
+	for index := range history {
+		if history[index].ID == "" {
+			history[index].ID = stableProvenanceMessageID("compaction-input-", index, history[index])
+		}
+	}
+	return system, history
 }
 
 func buildCompactionSummaryBody(previous llm.Message, input []llm.Message, state compactionSummaryState, maxChars, omitted int) string {

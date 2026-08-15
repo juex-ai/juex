@@ -146,21 +146,6 @@ func TestRecoverSessionProvenanceDoesNotMaterializeUnrelatedEvents(t *testing.T)
 	if len(pending) != 1 || pending[0].ID != queued.ID {
 		t.Fatalf("recovered hook context = %+v, want %q", pending, queued.ID)
 	}
-
-	for _, eventType := range []string{
-		provenance.HookContextQueuedType,
-		provenance.RequestEpochType,
-		"llm.requested",
-		"llm.responded",
-		"llm.retry",
-	} {
-		if !isProviderProvenanceEvent(eventType) {
-			t.Fatalf("isProviderProvenanceEvent(%q) = false", eventType)
-		}
-	}
-	if isProviderProvenanceEvent("tool.output") {
-		t.Fatal("tool.output must not be retained for provenance recovery")
-	}
 }
 
 func provenanceRuntimeContextMessage(id, text string) llm.Message {

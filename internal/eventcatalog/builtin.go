@@ -44,12 +44,12 @@ func builtinDefinitions() []Definition {
 		required(juexruntime.TurnPhaseType, func() any { return &juexruntime.TurnPhasePayload{} }, true),
 		required("turn.completed", func() any { return &juexruntime.TurnCompletedPayload{} }, true),
 		required("turn.errored", func() any { return &juexruntime.TurnErroredPayload{} }, true),
-		requiredValidated("llm.requested", 2, func() any { return &juexruntime.LLMRequestedPayload{} }, true, validateLLMRequestedPayload),
+		requiredValidated("llm.requested", 3, func() any { return &juexruntime.LLMRequestedPayload{} }, true, validateLLMRequestedPayload),
 		requiredValidated("llm.responded", 3, func() any { return &juexruntime.LLMRespondedPayload{} }, true, validateLLMRespondedPayload),
 		requiredValidated(provenance.RequestEpochType, 1, func() any { return &provenance.RequestEpochPayload{} }, true, validateRequestEpochPayload),
 		requiredValidated(provenance.HookContextQueuedType, 1, func() any { return &provenance.HookContextQueuedPayload{} }, false, validateHookContextQueuedPayload),
 		transient("llm.output_delta", func() any { return &juexruntime.LLMOutputDeltaPayload{} }),
-		requiredValidated("llm.retry", 2, func() any { return &juexruntime.LLMRetryPayload{} }, true, validateLLMRetryPayload),
+		requiredValidated("llm.retry", 3, func() any { return &juexruntime.LLMRetryPayload{} }, true, validateLLMRetryPayload),
 		required("llm.fallback", func() any { return &juexruntime.LLMFallbackPayload{} }, true),
 		requiredToolEvent(toolevents.RequestedType, func() any { return &toolevents.RequestedPayload{} }, validateRequestedPayload),
 		requiredToolEvent(toolevents.RunningType, func() any { return &toolevents.RunningPayload{} }, validateRunningPayload),
@@ -85,8 +85,10 @@ func builtinDefinitions() []Definition {
 		required("context.compact.started", func() any { return &juexruntime.ContextCompactStartedPayload{} }, true),
 		required("context.compact.completed", func() any { return &juexruntime.ContextCompactCompletedPayload{} }, true),
 		required("context.compact.errored", func() any { return &juexruntime.ContextCompactErroredPayload{} }, true),
-		ignorable("context.compact.summary_retry", func() any { return &juexruntime.ContextCompactSummaryRetryPayload{} }, true),
-		ignorable("context.compact.summary_model_fallback", func() any { return &juexruntime.ContextCompactSummaryFallbackPayload{} }, true),
+		ignorableValidated("context.compact.summary_retry", func() any { return &juexruntime.ContextCompactSummaryRetryPayload{} }, true, validateCompactionSummaryRetryPayload),
+		ignorableValidated("context.compact.summary_model_fallback", func() any { return &juexruntime.ContextCompactSummaryFallbackPayload{} }, true, validateCompactionSummaryFallbackPayload),
+		requiredValidated("context.compact.summary_responded", 1, func() any { return &juexruntime.ContextCompactSummaryRespondedPayload{} }, false, validateCompactionSummaryRespondedPayload),
+		requiredValidated("context.compact.summary_errored", 1, func() any { return &juexruntime.ContextCompactSummaryErroredPayload{} }, false, validateCompactionSummaryErroredPayload),
 		ignorable("context.projection.applied", func() any { return &ContextProjectionAppliedPayload{} }, true),
 		ignorable("finish.attempted", func() any { return &juexruntime.FinishAttemptedPayload{} }, false),
 		ignorable("tool.failure.recorded", func() any { return &juexruntime.ToolFailureRecordedPayload{} }, false),
@@ -107,6 +109,13 @@ func ignorable(eventType string, factory func() any, browserVisible bool) Defini
 	return Definition{
 		Type: eventType, Version: 1, ReplayPolicy: events.ReplayIgnorable,
 		BrowserVisible: browserVisible, NewPayload: factory,
+	}
+}
+
+func ignorableValidated(eventType string, factory func() any, browserVisible bool, validate func(any) error) Definition {
+	return Definition{
+		Type: eventType, Version: 1, ReplayPolicy: events.ReplayIgnorable,
+		BrowserVisible: browserVisible, NewPayload: factory, Validate: validate,
 	}
 }
 
@@ -169,8 +178,11 @@ func validateLLMRequestedPayload(payload any) error {
 	if !ok {
 		return fmt.Errorf("unexpected llm requested payload %T", payload)
 	}
+	if value.Purpose != "turn" && value.Purpose != "compaction" {
+		return fmt.Errorf("llm requested purpose must be turn or compaction")
+	}
 	if value.Iter < 0 || value.EpochID == "" || value.RequestDigest == "" {
-		return fmt.Errorf("llm requested identity requires epoch_id, request_digest, and a non-negative iter")
+		return fmt.Errorf("llm requested identity requires purpose, epoch_id, request_digest, and a non-negative iter")
 	}
 	return nil
 }
@@ -180,8 +192,62 @@ func validateLLMRetryPayload(payload any) error {
 	if !ok {
 		return fmt.Errorf("unexpected llm retry payload %T", payload)
 	}
-	if value.Purpose == "turn" && (value.Iter == nil || value.EpochID == "" || value.RequestDigest == "") {
-		return fmt.Errorf("turn llm retry requires iter, epoch_id, and request_digest")
+	if value.Purpose != "turn" && value.Purpose != "compaction" {
+		return fmt.Errorf("llm retry purpose must be turn or compaction")
+	}
+	if value.EpochID == "" || value.RequestDigest == "" {
+		return fmt.Errorf("llm retry requires epoch_id and request_digest")
+	}
+	if value.Purpose == "turn" && value.Iter == nil {
+		return fmt.Errorf("turn llm retry requires iter")
+	}
+	if value.Purpose == "compaction" && value.Iter != nil {
+		return fmt.Errorf("compaction llm retry must not declare a turn iter")
+	}
+	return nil
+}
+
+func validateCompactionSummaryRetryPayload(payload any) error {
+	value, ok := payload.(juexruntime.ContextCompactSummaryRetryPayload)
+	if !ok {
+		return fmt.Errorf("unexpected compaction summary retry payload %T", payload)
+	}
+	return validateCompactionSummaryLink(value.EpochID, value.RequestDigest)
+}
+
+func validateCompactionSummaryFallbackPayload(payload any) error {
+	value, ok := payload.(juexruntime.ContextCompactSummaryFallbackPayload)
+	if !ok {
+		return fmt.Errorf("unexpected compaction summary fallback payload %T", payload)
+	}
+	return validateCompactionSummaryLink(value.EpochID, value.RequestDigest)
+}
+
+func validateCompactionSummaryRespondedPayload(payload any) error {
+	value, ok := payload.(juexruntime.ContextCompactSummaryRespondedPayload)
+	if !ok {
+		return fmt.Errorf("unexpected compaction summary responded payload %T", payload)
+	}
+	if value.Attempt <= 0 {
+		return fmt.Errorf("compaction summary responded attempt must be positive")
+	}
+	return validateCompactionSummaryLink(value.EpochID, value.RequestDigest)
+}
+
+func validateCompactionSummaryErroredPayload(payload any) error {
+	value, ok := payload.(juexruntime.ContextCompactSummaryErroredPayload)
+	if !ok {
+		return fmt.Errorf("unexpected compaction summary errored payload %T", payload)
+	}
+	if value.Attempt <= 0 || value.Error == "" {
+		return fmt.Errorf("compaction summary errored requires a positive attempt and error")
+	}
+	return validateCompactionSummaryLink(value.EpochID, value.RequestDigest)
+}
+
+func validateCompactionSummaryLink(epochID, requestDigest string) error {
+	if epochID == "" || requestDigest == "" {
+		return fmt.Errorf("compaction summary provenance requires epoch_id and request_digest")
 	}
 	return nil
 }

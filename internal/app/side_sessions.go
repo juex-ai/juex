@@ -142,6 +142,7 @@ func (m *sideSessionManager) newChildApp(child sideSessionChildOptions) (*App, e
 		Config:                  child.Config,
 		ModelHealth:             parent.Engine.ModelHealth,
 		SummaryProvider:         parent.Engine.SummaryProvider,
+		SummaryProvenance:       parent.Engine.SummaryProvenance,
 		Verbose:                 false,
 		Debug:                   parent.debug,
 		LogLevel:                parent.logLevel,

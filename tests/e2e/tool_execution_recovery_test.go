@@ -48,7 +48,7 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 	})
 	appendCatalogEvent(t, sess, events.Event{
 		Type: "llm.requested", TurnID: "turn-before-crash",
-		Payload: runtime.LLMRequestedPayload{Iter: 3, EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest},
+		Payload: runtime.LLMRequestedPayload{Iter: 3, Purpose: "turn", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest},
 	})
 	appendCatalogEvent(t, sess, events.Event{
 		Type: "llm.responded", TurnID: "turn-before-crash",

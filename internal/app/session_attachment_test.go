@@ -563,7 +563,7 @@ func seedStartedDanglingToolUseSession(t *testing.T, cfg config.Config) session.
 	for _, event := range []events.Event{
 		{Type: provenance.RequestEpochType, TurnID: "attach-turn", Payload: provenance.RequestEpochPayload{Epoch: epoch}},
 		{Type: "llm.requested", TurnID: "attach-turn", Payload: juexruntime.LLMRequestedPayload{
-			Iter: 1, EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
+			Iter: 1, Purpose: "turn", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
 		}},
 		{Type: "llm.responded", TurnID: "attach-turn", Payload: juexruntime.LLMRespondedPayload{
 			Iter: 1, MessageID: assistant.ID, EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest, Blocks: assistant.Blocks,

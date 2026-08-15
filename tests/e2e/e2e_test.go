@@ -1415,7 +1415,7 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 		TurnID:    "turn-1",
 		Timestamp: timestamp.Add(200 * time.Millisecond),
 		Payload: runtime.LLMRequestedPayload{
-			Iter: 0, EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
+			Iter: 0, Purpose: "turn", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
 		},
 	}); err != nil {
 		t.Fatal(err)

@@ -233,7 +233,7 @@
   {
     "id": "evt-llm-retry",
     "type": "llm.retry",
-    "schema_version": 2,
+    "schema_version": 3,
     "ts": "2026-06-15T00:00:01.5Z",
     "turn_id": "turn-1",
     "payload": {
@@ -1191,7 +1191,9 @@
       "stop_reason": "max_tokens",
       "reasoning_only": true,
       "previous_max_output_tokens": 2048,
-      "max_output_tokens": 4096
+      "max_output_tokens": 4096,
+      "epoch_id": "epoch-compact-1",
+      "request_digest": "request-digest-compact-1"
     },
     "status": {
       "cursor": "evt-compact-summary-retry",

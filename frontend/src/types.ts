@@ -402,6 +402,7 @@ export interface TurnErroredPayload {
 
 export interface LLMRequestedPayload {
   iter: number;
+  purpose: "turn" | "compaction";
   history_len: number;
   tool_count: number;
   model?: string;
@@ -418,10 +419,10 @@ export interface LLMOutputDeltaPayload {
 }
 
 export interface LLMRetryPayload {
-  purpose?: string;
+  purpose: "turn" | "compaction";
   iter?: number;
-  epoch_id?: string;
-  request_digest?: string;
+  epoch_id: string;
+  request_digest: string;
   provider: string;
   model: string;
   protocol?: string;
@@ -489,6 +490,10 @@ export interface ProviderRequestEpochPayload {
     };
     context_window?: number;
     max_output_tokens?: number;
+    cache_policy?: {
+      stable_prefix_key_digest?: string;
+      retention_digest?: string;
+    };
     system_prompt: ProviderRequestSnapshot;
     tool_catalog: ProviderRequestSnapshot;
     history_digest: string;
@@ -803,6 +808,8 @@ export interface ContextCompactSummaryFallbackPayload {
   configured_model?: string;
   fallback_model?: string;
   error: string;
+  epoch_id: string;
+  request_digest: string;
 }
 
 export interface ContextCompactSummaryRetryPayload {
@@ -812,6 +819,8 @@ export interface ContextCompactSummaryRetryPayload {
   reasoning_only?: boolean;
   previous_max_output_tokens: number;
   max_output_tokens: number;
+  epoch_id: string;
+  request_digest: string;
 }
 
 export interface ContextCompactCompletedPayload {

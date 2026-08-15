@@ -17,28 +17,39 @@ func (e *Engine) checkpointProviderRequestLocked(
 	prepared preparedTurnContext,
 	request providerTurnRequest,
 	candidate ModelCandidate,
+	cachePolicy llm.CachePolicy,
 	attempt int,
 ) (provenance.RequestEpoch, error) {
 	hookIDs := make([]string, 0, len(request.hookContext))
 	for _, message := range request.hookContext {
 		hookIDs = append(hookIDs, message.ID)
 	}
-	epoch, err := provenance.BuildRequestEpoch(provenance.RequestInput{
+	return e.checkpointProviderRequestEpochLocked(turnID, request.iter, attempt, provenance.RequestInput{
 		Purpose:               "turn",
 		Provider:              candidateProvenance(candidate),
 		ContextWindow:         candidateContextWindow(candidate, e.ContextWindow),
 		MaxOutputTokens:       candidateMaxOutputTokens(candidate, e.MaxOutputTokens),
+		CachePolicy:           provenance.SafeCachePolicyFrom(cachePolicy),
 		SystemPrompt:          prepared.systemPrompt,
 		Tools:                 prepared.tools,
 		History:               request.history,
 		Compaction:            requestCompactionSelection(request.history),
 		HookContextMessageIDs: hookIDs,
 	})
+}
+
+func (e *Engine) checkpointProviderRequestEpochLocked(
+	turnID string,
+	iter int,
+	attempt int,
+	input provenance.RequestInput,
+) (provenance.RequestEpoch, error) {
+	epoch, err := provenance.BuildRequestEpoch(input)
 	if err != nil {
 		return provenance.RequestEpoch{}, err
 	}
 	epoch.EpochID = randomProvenanceID("epoch-")
-	epoch.Iter = request.iter
+	epoch.Iter = iter
 	epoch.Attempt = attempt
 	tracker := e.requestProvenanceTracker()
 	tracker.PrepareEpoch(&epoch)
@@ -57,6 +68,25 @@ func (e *Engine) checkpointProviderRequestLocked(
 	tracker.CommitEpoch(epoch)
 	e.syncPendingHookContextFromTracker(tracker)
 	return epoch, nil
+}
+
+func (e *Engine) providerProvenanceLocked(provider llm.Provider) provenance.SafeProvider {
+	for _, candidate := range e.ModelCandidates {
+		if candidate.Provider == provider {
+			return candidateProvenance(candidate)
+		}
+	}
+	if provider == e.SummaryProvider {
+		descriptor := e.SummaryProvenance
+		if descriptor.ID != "" || descriptor.Model != "" || descriptor.EndpointDigest != "" {
+			return descriptor
+		}
+	}
+	if provider == nil {
+		return provenance.SafeProvider{}
+	}
+	name := provider.Name()
+	return provenance.SafeProvider{ID: name, Model: name}
 }
 
 func randomProvenanceID(prefix string) string {
@@ -101,6 +131,16 @@ func providerNoticeMessageID(turnID string, iter int, model string, message llm.
 	}{TurnID: turnID, Iter: iter, Model: model, Message: message})
 	sum := sha256.Sum256(raw)
 	return "runtime-model-change-" + hex.EncodeToString(sum[:12])
+}
+
+func stableProvenanceMessageID(prefix string, index int, message llm.Message) string {
+	message.ID = ""
+	raw, _ := json.Marshal(struct {
+		Index   int         `json:"index"`
+		Message llm.Message `json:"message"`
+	}{Index: index, Message: message})
+	sum := sha256.Sum256(raw)
+	return prefix + hex.EncodeToString(sum[:12])
 }
 
 func (e *Engine) requestProvenanceTracker() *provenance.Tracker {

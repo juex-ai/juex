@@ -354,6 +354,18 @@ func TestStatusSnapshotResumeIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestStatusCompactionRequestPreservesCompactingPhase(t *testing.T) {
+	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: 4})
+	store.Publish(statusEvent("1", TurnAdmittedType, "compact-turn", TurnAdmittedPayload{Operation: "compact"}))
+	store.Publish(statusEvent("2", "context.compact.started", "compact-turn", ContextCompactStartedPayload{}))
+	store.Publish(statusEvent("3", "llm.requested", "compact-turn", LLMRequestedPayload{Purpose: "compaction"}))
+
+	snapshot := store.Snapshot()
+	if snapshot.Turn == nil || snapshot.Turn.Phase != TurnPhaseCompacting || !snapshot.Turn.Streaming {
+		t.Fatalf("compaction request status = %+v", snapshot.Turn)
+	}
+}
+
 func TestStatusStreamReturnsTransientStateAtSameDurableCursor(t *testing.T) {
 	store := NewStatusStore(StatusSeed{SessionID: "session-1"})
 	store.Publish(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))

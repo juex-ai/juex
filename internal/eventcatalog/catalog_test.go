@@ -119,10 +119,28 @@ func TestDefaultCatalogValidatesProviderRequestProvenance(t *testing.T) {
 	if prepared.SchemaVersion != 1 || prepared.ReplayPolicy != events.ReplayRequired {
 		t.Fatalf("request epoch schema = v%d/%q", prepared.SchemaVersion, prepared.ReplayPolicy)
 	}
-	if _, err := Default().Prepare(events.Event{Type: "llm.requested", Payload: juexruntime.LLMRequestedPayload{
-		Iter: 0, EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
-	}}); err != nil {
+	requested, err := Default().Prepare(events.Event{Type: "llm.requested", Payload: juexruntime.LLMRequestedPayload{
+		Iter: 0, Purpose: "turn", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
+	}})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if requested.SchemaVersion != 3 {
+		t.Fatalf("llm.requested schema = %d, want 3", requested.SchemaVersion)
+	}
+	if _, err := Default().Prepare(events.Event{Type: "llm.requested", Payload: juexruntime.LLMRequestedPayload{
+		Iter: 0, Purpose: "unknown", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
+	}}); err == nil {
+		t.Fatal("llm.requested with unknown purpose was accepted")
+	}
+	compactionRetry, err := Default().Prepare(events.Event{Type: "llm.retry", Payload: juexruntime.LLMRetryPayload{
+		Purpose: "compaction", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compactionRetry.SchemaVersion != 3 {
+		t.Fatalf("llm.retry schema = %d, want 3", compactionRetry.SchemaVersion)
 	}
 	if _, err := Default().Prepare(events.Event{Type: provenance.RequestEpochType, Payload: provenance.RequestEpochPayload{}}); err == nil {
 		t.Fatal("empty request epoch was accepted")

@@ -82,6 +82,25 @@ type CompactionSelection struct {
 	RetainedMessageIDs []string `json:"retained_message_ids,omitempty"`
 }
 
+type SafeCachePolicy struct {
+	StablePrefixKeyDigest string `json:"stable_prefix_key_digest,omitempty"`
+	RetentionDigest       string `json:"retention_digest,omitempty"`
+}
+
+func SafeCachePolicyFrom(policy llm.CachePolicy) SafeCachePolicy {
+	return SafeCachePolicy{
+		StablePrefixKeyDigest: optionalDigest(policy.StablePrefixKey),
+		RetentionDigest:       optionalDigest(policy.Retention),
+	}
+}
+
+func optionalDigest(value string) string {
+	if value == "" {
+		return ""
+	}
+	return digest([]byte(value))
+}
+
 type MessageRef struct {
 	ID            string `json:"id"`
 	Source        string `json:"source"`
@@ -93,6 +112,7 @@ type RequestInput struct {
 	Provider              SafeProvider        `json:"provider"`
 	ContextWindow         int                 `json:"context_window,omitempty"`
 	MaxOutputTokens       int                 `json:"max_output_tokens,omitempty"`
+	CachePolicy           SafeCachePolicy     `json:"cache_policy,omitempty"`
 	SystemPrompt          string              `json:"system_prompt,omitempty"`
 	Tools                 []llm.ToolSpec      `json:"tools,omitempty"`
 	History               []llm.Message       `json:"history"`
@@ -108,6 +128,7 @@ type RequestEpoch struct {
 	Provider              SafeProvider        `json:"provider"`
 	ContextWindow         int                 `json:"context_window,omitempty"`
 	MaxOutputTokens       int                 `json:"max_output_tokens,omitempty"`
+	CachePolicy           SafeCachePolicy     `json:"cache_policy,omitempty"`
 	SystemPromptSnapshot  Snapshot            `json:"system_prompt"`
 	ToolCatalogSnapshot   Snapshot            `json:"tool_catalog"`
 	HistoryDigest         string              `json:"history_digest"`
@@ -132,6 +153,7 @@ type digestEnvelope struct {
 	Provider              SafeProvider        `json:"provider"`
 	ContextWindow         int                 `json:"context_window,omitempty"`
 	MaxOutputTokens       int                 `json:"max_output_tokens,omitempty"`
+	CachePolicy           SafeCachePolicy     `json:"cache_policy,omitempty"`
 	SystemPromptDigest    string              `json:"system_prompt_digest"`
 	ToolCatalogDigest     string              `json:"tool_catalog_digest"`
 	HistoryDigest         string              `json:"history_digest"`
@@ -145,6 +167,9 @@ func BuildRequestEpoch(input RequestInput) (RequestEpoch, error) {
 	purpose := input.Purpose
 	if purpose == "" {
 		purpose = "turn"
+	}
+	if purpose != "turn" && purpose != "compaction" {
+		return RequestEpoch{}, fmt.Errorf("provenance: request purpose must be turn or compaction")
 	}
 	historyIDs := make([]string, len(input.History))
 	messageRefs := make([]MessageRef, len(input.History))
@@ -182,6 +207,7 @@ func BuildRequestEpoch(input RequestInput) (RequestEpoch, error) {
 		Provider:              cloneSafeProvider(input.Provider),
 		ContextWindow:         input.ContextWindow,
 		MaxOutputTokens:       input.MaxOutputTokens,
+		CachePolicy:           input.CachePolicy,
 		SystemPromptDigest:    systemSnapshot.Digest,
 		ToolCatalogDigest:     toolSnapshot.Digest,
 		HistoryDigest:         historyDigest,
@@ -195,6 +221,7 @@ func BuildRequestEpoch(input RequestInput) (RequestEpoch, error) {
 		Provider:              envelope.Provider,
 		ContextWindow:         input.ContextWindow,
 		MaxOutputTokens:       input.MaxOutputTokens,
+		CachePolicy:           input.CachePolicy,
 		SystemPromptSnapshot:  systemSnapshot,
 		ToolCatalogSnapshot:   toolSnapshot,
 		HistoryDigest:         historyDigest,
@@ -217,6 +244,7 @@ func requestDigest(epoch RequestEpoch) (string, error) {
 		Provider:              cloneSafeProvider(epoch.Provider),
 		ContextWindow:         epoch.ContextWindow,
 		MaxOutputTokens:       epoch.MaxOutputTokens,
+		CachePolicy:           epoch.CachePolicy,
 		SystemPromptDigest:    epoch.SystemPromptSnapshot.Digest,
 		ToolCatalogDigest:     epoch.ToolCatalogSnapshot.Digest,
 		HistoryDigest:         epoch.HistoryDigest,
@@ -293,8 +321,9 @@ type Tracker struct {
 	consumed  map[string]struct{}
 	known     map[string]struct{}
 	epochs    map[string]string
+	purposes  map[string]string
 	requested map[string]struct{}
-	responded map[string]struct{}
+	terminal  map[string]string
 }
 
 func NewTracker() *Tracker {
@@ -302,59 +331,76 @@ func NewTracker() *Tracker {
 		consumed:  make(map[string]struct{}),
 		known:     make(map[string]struct{}),
 		epochs:    make(map[string]string),
+		purposes:  make(map[string]string),
 		requested: make(map[string]struct{}),
-		responded: make(map[string]struct{}),
+		terminal:  make(map[string]string),
 	}
 }
 
 func Recover(journal []events.Event) (*Tracker, error) {
 	tracker := NewTracker()
 	for _, event := range journal {
-		switch event.Type {
-		case HookContextQueuedType:
-			var payload HookContextQueuedPayload
-			if err := decodePayload(event.Payload, &payload); err != nil {
-				return nil, fmt.Errorf("provenance: recover queued hook context: %w", err)
-			}
-			if err := ValidateHookContextQueued(payload); err != nil {
-				return nil, err
-			}
-			for _, message := range payload.Messages {
-				if tracker.hasQueuedIDLocked(message.ID) {
-					return nil, fmt.Errorf("provenance: duplicate queued hook context id %q", message.ID)
-				}
-				tracker.queued = append(tracker.queued, message)
-			}
-		case RequestEpochType:
-			var payload RequestEpochPayload
-			if err := decodePayload(event.Payload, &payload); err != nil {
-				return nil, fmt.Errorf("provenance: recover request epoch: %w", err)
-			}
-			if err := ValidateRequestEpoch(payload); err != nil {
-				return nil, err
-			}
-			if err := tracker.validateSnapshotReferencesLocked(payload.Epoch); err != nil {
-				return nil, err
-			}
-			if _, duplicate := tracker.epochs[payload.Epoch.EpochID]; duplicate {
-				return nil, fmt.Errorf("provenance: duplicate request epoch id %q", payload.Epoch.EpochID)
-			}
-			tracker.recordEpochLocked(payload.Epoch)
-		case "llm.requested":
-			if err := tracker.recordRequestLinkLocked(event.Payload); err != nil {
-				return nil, err
-			}
-		case "llm.responded":
-			if err := tracker.recordResponseLinkLocked(event.Payload); err != nil {
-				return nil, err
-			}
-		case "llm.retry":
-			if err := tracker.validateRetryLinkLocked(event.Payload); err != nil {
-				return nil, err
-			}
+		if err := tracker.ReplayEvent(event); err != nil {
+			return nil, err
 		}
 	}
 	return tracker, nil
+}
+
+func (t *Tracker) ReplayEvent(event events.Event) error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	switch event.Type {
+	case HookContextQueuedType:
+		var payload HookContextQueuedPayload
+		if err := decodePayload(event.Payload, &payload); err != nil {
+			return fmt.Errorf("provenance: recover queued hook context: %w", err)
+		}
+		if err := ValidateHookContextQueued(payload); err != nil {
+			return err
+		}
+		for _, message := range payload.Messages {
+			if t.hasQueuedIDLocked(message.ID) {
+				return fmt.Errorf("provenance: duplicate queued hook context id %q", message.ID)
+			}
+			t.queued = append(t.queued, message)
+		}
+	case RequestEpochType:
+		var payload RequestEpochPayload
+		if err := decodePayload(event.Payload, &payload); err != nil {
+			return fmt.Errorf("provenance: recover request epoch: %w", err)
+		}
+		if err := ValidateRequestEpoch(payload); err != nil {
+			return err
+		}
+		if err := t.validateSnapshotReferencesLocked(payload.Epoch); err != nil {
+			return err
+		}
+		if _, duplicate := t.epochs[payload.Epoch.EpochID]; duplicate {
+			return fmt.Errorf("provenance: duplicate request epoch id %q", payload.Epoch.EpochID)
+		}
+		t.recordEpochLocked(payload.Epoch)
+	case "llm.requested":
+		if err := t.recordRequestLinkLocked(event.Payload); err != nil {
+			return err
+		}
+	case "llm.responded":
+		if err := t.recordResponseLinkLocked(event.Payload); err != nil {
+			return err
+		}
+	case "llm.retry":
+		if err := t.validateRetryLinkLocked(event.Payload); err != nil {
+			return err
+		}
+	case "context.compact.summary_responded", "context.compact.summary_errored":
+		if err := t.recordTerminalLinkLocked(event.Type, event.Payload, "compaction"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func decodePayload(input any, output any) error {
@@ -437,6 +483,7 @@ func (t *Tracker) CommitEpoch(epoch RequestEpoch) {
 
 func (t *Tracker) recordEpochLocked(epoch RequestEpoch) {
 	t.epochs[epoch.EpochID] = epoch.RequestDigest
+	t.purposes[epoch.EpochID] = epoch.Purpose
 	if epoch.SystemPromptSnapshot.Digest != "" {
 		t.known[epoch.SystemPromptSnapshot.Digest] = struct{}{}
 	}
@@ -462,6 +509,9 @@ func (t *Tracker) recordRequestLinkLocked(payload any) error {
 	if err := t.validateKnownEpochLinkLocked("llm.requested", link); err != nil {
 		return err
 	}
+	if err := t.validatePurposeLocked("llm.requested", link.EpochID, link.Purpose); err != nil {
+		return err
+	}
 	if _, duplicate := t.requested[link.EpochID]; duplicate {
 		return fmt.Errorf("provenance: duplicate llm.requested for epoch %q", link.EpochID)
 	}
@@ -470,43 +520,44 @@ func (t *Tracker) recordRequestLinkLocked(payload any) error {
 }
 
 func (t *Tracker) recordResponseLinkLocked(payload any) error {
-	link, err := decodeEpochLink(payload)
-	if err != nil {
-		return fmt.Errorf("provenance: decode llm.responded link: %w", err)
-	}
-	if err := t.validateKnownEpochLinkLocked("llm.responded", link); err != nil {
-		return err
-	}
-	if _, requested := t.requested[link.EpochID]; !requested {
-		return fmt.Errorf("provenance: llm.responded references epoch %q before llm.requested", link.EpochID)
-	}
-	if _, duplicate := t.responded[link.EpochID]; duplicate {
-		return fmt.Errorf("provenance: duplicate llm.responded for epoch %q", link.EpochID)
-	}
-	t.responded[link.EpochID] = struct{}{}
-	return nil
+	return t.recordTerminalLinkLocked("llm.responded", payload, "turn")
 }
 
 func (t *Tracker) validateRetryLinkLocked(payload any) error {
-	var link epochLink
-	if err := decodePayload(payload, &link); err != nil {
+	link, err := decodeEpochLink(payload)
+	if err != nil {
 		return fmt.Errorf("provenance: decode llm.retry link: %w", err)
 	}
-	if link.EpochID == "" && link.RequestDigest == "" {
-		if link.Purpose == "turn" {
-			return fmt.Errorf("provenance: turn llm.retry requires epoch_id and request_digest")
-		}
-		return nil
-	}
-	if link.EpochID == "" || link.RequestDigest == "" {
-		return fmt.Errorf("provenance: llm.retry epoch_id and request_digest must be set together")
-	}
 	if err := t.validateKnownEpochLinkLocked("llm.retry", link); err != nil {
+		return err
+	}
+	if err := t.validatePurposeLocked("llm.retry", link.EpochID, link.Purpose); err != nil {
 		return err
 	}
 	if _, requested := t.requested[link.EpochID]; !requested {
 		return fmt.Errorf("provenance: llm.retry references epoch %q before llm.requested", link.EpochID)
 	}
+	return nil
+}
+
+func (t *Tracker) recordTerminalLinkLocked(eventType string, payload any, expectedPurpose string) error {
+	link, err := decodeEpochLink(payload)
+	if err != nil {
+		return fmt.Errorf("provenance: decode %s link: %w", eventType, err)
+	}
+	if err := t.validateKnownEpochLinkLocked(eventType, link); err != nil {
+		return err
+	}
+	if err := t.validateExpectedPurposeLocked(eventType, link.EpochID, expectedPurpose); err != nil {
+		return err
+	}
+	if _, requested := t.requested[link.EpochID]; !requested {
+		return fmt.Errorf("provenance: %s references epoch %q before llm.requested", eventType, link.EpochID)
+	}
+	if previous, duplicate := t.terminal[link.EpochID]; duplicate {
+		return fmt.Errorf("provenance: %s duplicates terminal event %s for epoch %q", eventType, previous, link.EpochID)
+	}
+	t.terminal[link.EpochID] = eventType
 	return nil
 }
 
@@ -528,6 +579,22 @@ func (t *Tracker) validateKnownEpochLinkLocked(eventType string, link epochLink)
 	}
 	if digest != link.RequestDigest {
 		return fmt.Errorf("provenance: %s digest does not match epoch %q", eventType, link.EpochID)
+	}
+	return nil
+}
+
+func (t *Tracker) validatePurposeLocked(eventType, epochID, actual string) error {
+	expected := t.purposes[epochID]
+	if actual == "" || actual != expected {
+		return fmt.Errorf("provenance: %s purpose %q does not match epoch %q purpose %q", eventType, actual, epochID, expected)
+	}
+	return nil
+}
+
+func (t *Tracker) validateExpectedPurposeLocked(eventType, epochID, expected string) error {
+	actual := t.purposes[epochID]
+	if actual != expected {
+		return fmt.Errorf("provenance: %s requires %s epoch, got %q for epoch %q", eventType, expected, actual, epochID)
 	}
 	return nil
 }
@@ -583,6 +650,9 @@ func ValidateRequestEpoch(payload RequestEpochPayload) error {
 	epoch := payload.Epoch
 	if epoch.EpochID == "" || epoch.Iter < 0 || epoch.RequestDigest == "" || epoch.HistoryDigest == "" {
 		return fmt.Errorf("provenance: request epoch requires epoch_id, non-negative iter, request_digest, and history_digest")
+	}
+	if epoch.Purpose != "turn" && epoch.Purpose != "compaction" {
+		return fmt.Errorf("provenance: request epoch purpose must be turn or compaction")
 	}
 	if len(epoch.HistoryMessageIDs) == 0 || len(epoch.Messages) != len(epoch.HistoryMessageIDs) {
 		return fmt.Errorf("provenance: request epoch requires matching history message ids and message refs")

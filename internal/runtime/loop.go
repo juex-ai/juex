@@ -55,12 +55,13 @@ const (
 )
 
 type Engine struct {
-	Provider        llm.Provider
-	SummaryProvider llm.Provider
-	ModelCandidates []ModelCandidate
-	ModelHealth     *llm.ModelHealth
-	Tools           *tools.Registry
-	Bus             *events.Bus
+	Provider          llm.Provider
+	SummaryProvider   llm.Provider
+	SummaryProvenance provenance.SafeProvider
+	ModelCandidates   []ModelCandidate
+	ModelHealth       *llm.ModelHealth
+	Tools             *tools.Registry
+	Bus               *events.Bus
 	// Session, Prompt, HookContext, PendingInputQueue, Notes, and GoalState
 	// are constructor/test compatibility fields. Concurrent production code
 	// must use the synchronized session-runtime methods instead of reading or
@@ -772,7 +773,8 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 				cooldown: skipped.CooldownRemaining,
 			}, candidate.Ref)
 		}
-		epoch, err := e.checkpointProviderRequestLocked(turnID, prepared, request, candidate, attempt)
+		cachePolicy := e.cachePolicyLocked()
+		epoch, err := e.checkpointProviderRequestLocked(turnID, prepared, request, candidate, cachePolicy, attempt)
 		if err != nil {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
 			return providerTurnResult{request: request}, err
@@ -781,6 +783,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		request.requestDigest = epoch.RequestDigest
 		if err := e.emit(events.Event{Type: "llm.requested", TurnID: turnID, Payload: LLMRequestedPayload{
 			Iter:          base.iter,
+			Purpose:       "turn",
 			HistoryLen:    len(request.history),
 			ToolCount:     len(prepared.tools),
 			Model:         candidate.Ref,
@@ -794,7 +797,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		resp, err := llm.CompleteWithOptions(ctx, candidate.Provider, prepared.systemPrompt, request.history, prepared.tools, llm.CompleteOptions{
 			Purpose:         "turn",
 			MaxOutputTokens: candidateMaxOutputTokens(candidate, e.MaxOutputTokens),
-			CachePolicy:     e.cachePolicyLocked(),
+			CachePolicy:     cachePolicy,
 			RetryObserver:   e.providerRetryObserverForEpochLocked(turnID, "turn", &request.iter, request.epochID, request.requestDigest),
 			OnDelta: func(delta llm.StreamDelta) {
 				_ = e.emit(events.Event{Type: "llm.output_delta", TurnID: turnID, Transient: true, Payload: LLMOutputDeltaPayload{
@@ -830,10 +833,6 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		base.hookContext = e.pendingHookRuntimeContextSnapshot()
 		base.history = e.activeContextLockedWithHookContext(base.hookContext).Messages
 	}
-}
-
-func (e *Engine) providerRetryObserverLocked(turnID, purpose string, iter *int) func(llm.ProviderRetryDiagnostic) {
-	return e.providerRetryObserverForEpochLocked(turnID, purpose, iter, "", "")
 }
 
 func (e *Engine) providerRetryObserverForEpochLocked(turnID, purpose string, iter *int, epochID, requestDigest string) func(llm.ProviderRetryDiagnostic) {

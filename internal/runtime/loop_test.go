@@ -468,6 +468,16 @@ func TestTurn_RequestEpochCheckpointConsumesHookContextAndLinksResponse(t *testi
 	if epoch.Epoch.EpochID == "" || epoch.Epoch.RequestDigest == "" {
 		t.Fatalf("epoch = %+v", epoch)
 	}
+	if epoch.Epoch.CachePolicy.StablePrefixKeyDigest == "" {
+		t.Fatalf("epoch cache policy = %+v", epoch.Epoch.CachePolicy)
+	}
+	rawEpoch, err := json.Marshal(epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rawEpoch), "juex:"+eng.Session.ID) {
+		t.Fatalf("epoch leaked raw cache key: %s", rawEpoch)
+	}
 	if requested.EpochID != epoch.Epoch.EpochID || requested.RequestDigest != epoch.Epoch.RequestDigest {
 		t.Fatalf("requested = %+v, epoch = %+v", requested, epoch.Epoch)
 	}
@@ -2641,8 +2651,9 @@ func TestCompactStartedIncludesToolSchemaBudget(t *testing.T) {
 func TestCompactUsesSummaryProviderWhenConfigured(t *testing.T) {
 	main := &namedCompactionProvider{name: "main:model", text: "main summary"}
 	summary := &namedCompactionProvider{name: "summary:model", text: "custom summary"}
-	eng, _ := newEngine(t, main, false)
+	eng, bus := newEngine(t, main, false)
 	eng.SummaryProvider = summary
+	eng.SummaryProvenance = provenance.SafeProvider{ID: "summary", Model: "summary:model", EndpointDigest: "summary-endpoint"}
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
@@ -2651,6 +2662,10 @@ func TestCompactUsesSummaryProviderWhenConfigured(t *testing.T) {
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
 		t.Fatal(err)
 	}
+	var epoch provenance.RequestEpoch
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epoch = event.Payload.(provenance.RequestEpochPayload).Epoch
+	})
 
 	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
 	if err != nil {
@@ -2661,6 +2676,33 @@ func TestCompactUsesSummaryProviderWhenConfigured(t *testing.T) {
 	}
 	if result.SummaryModel != "summary:model" {
 		t.Fatalf("summary model = %q", result.SummaryModel)
+	}
+	if epoch.Provider.ID != "summary" || epoch.Provider.EndpointDigest != "summary-endpoint" {
+		t.Fatalf("summary provider provenance = %+v", epoch.Provider)
+	}
+}
+
+func TestCompactRequestEpochFailurePreventsSummaryProviderAndFallbackCalls(t *testing.T) {
+	main := &namedCompactionProvider{name: "main:model", text: "main summary"}
+	summary := &namedCompactionProvider{name: "summary:model", text: "custom summary"}
+	eng, bus := newEngine(t, main, false)
+	eng.SummaryProvider = summary
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("epoch sync failed")
+	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session, eventType: provenance.RequestEpochType, err: want})
+
+	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); !errors.Is(err, want) {
+		t.Fatalf("Compact() error = %v, want %v", err, want)
+	}
+	if summary.calls != 0 || main.calls != 0 {
+		t.Fatalf("provider calls: summary=%d main=%d, want 0/0", summary.calls, main.calls)
 	}
 }
 
@@ -2680,6 +2722,14 @@ func TestCompactFallsBackToMainProviderWhenSummaryProviderFails(t *testing.T) {
 	}
 	var fallback ContextCompactSummaryFallbackPayload
 	var retries int
+	var epochs []provenance.RequestEpoch
+	var summaryError ContextCompactSummaryErroredPayload
+	bus.Subscribe(provenance.RequestEpochType, func(e events.Event) {
+		epochs = append(epochs, e.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+	bus.Subscribe("context.compact.summary_errored", func(e events.Event) {
+		summaryError = e.Payload.(ContextCompactSummaryErroredPayload)
+	})
 	bus.Subscribe("context.compact.summary_model_fallback", func(e events.Event) {
 		fallback = e.Payload.(ContextCompactSummaryFallbackPayload)
 	})
@@ -2702,6 +2752,15 @@ func TestCompactFallsBackToMainProviderWhenSummaryProviderFails(t *testing.T) {
 	}
 	if retries != 0 {
 		t.Fatalf("summary retries = %d, want no semantic retry for transport error", retries)
+	}
+	if len(epochs) != 2 || epochs[0].Attempt != 1 || epochs[1].Attempt != 2 || epochs[0].Purpose != "compaction" || epochs[1].Purpose != "compaction" {
+		t.Fatalf("fallback epochs = %+v", epochs)
+	}
+	if fallback.EpochID != epochs[0].EpochID || fallback.RequestDigest != epochs[0].RequestDigest {
+		t.Fatalf("fallback link = %+v, failed epoch = %+v", fallback, epochs[0])
+	}
+	if summaryError.EpochID != epochs[0].EpochID || summaryError.RequestDigest != epochs[0].RequestDigest {
+		t.Fatalf("summary error link = %+v, failed epoch = %+v", summaryError, epochs[0])
 	}
 }
 
@@ -2754,6 +2813,65 @@ func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	usage := eng.Session.TokenUsageSnapshot()
 	if usage != (llm.Usage{InputTokens: 21, OutputTokens: 5}) {
 		t.Fatalf("token usage = %+v, want aggregate retry usage", usage)
+	}
+}
+
+func TestCompactCheckpointsEachSummaryAttemptAndLinksOutcomes(t *testing.T) {
+	provider := &scriptedCompactionProvider{
+		name: "thinking:model",
+		attempts: []scriptedCompactionAttempt{
+			{response: llm.Response{
+				Message:    llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockReasoning, Text: "first budget"}}},
+				StopReason: llm.StopMaxTokens,
+				Usage:      llm.Usage{InputTokens: 10, OutputTokens: 2},
+			}},
+			{response: llm.Response{
+				Message:    llm.TextMessage(llm.RoleAssistant, "summary"),
+				StopReason: llm.StopEndTurn,
+				Usage:      llm.Usage{InputTokens: 11, OutputTokens: 3},
+			}},
+		},
+	}
+	eng, bus := newEngine(t, provider, false)
+	configureCompactionRetryTest(t, eng, 30, 2000)
+	eng.ContextWindow = 5000
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 1000
+	var epochs []provenance.RequestEpoch
+	var outcomes []ContextCompactSummaryRespondedPayload
+	var retry ContextCompactSummaryRetryPayload
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+	bus.Subscribe("context.compact.summary_responded", func(event events.Event) {
+		outcomes = append(outcomes, event.Payload.(ContextCompactSummaryRespondedPayload))
+	})
+	bus.Subscribe("context.compact.summary_retry", func(event events.Event) {
+		retry = event.Payload.(ContextCompactSummaryRetryPayload)
+	})
+
+	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(epochs) != 2 || len(outcomes) != 2 {
+		t.Fatalf("epochs/outcomes = %d/%d, want 2/2", len(epochs), len(outcomes))
+	}
+	for index, epoch := range epochs {
+		if epoch.Purpose != "compaction" || epoch.Attempt != index+1 || epoch.EpochID == "" || epoch.RequestDigest == "" {
+			t.Fatalf("epoch %d = %+v", index, epoch)
+		}
+		if epoch.CachePolicy.StablePrefixKeyDigest == "" || len(epoch.HistoryMessageIDs) != 1 || epoch.HistoryMessageIDs[0] == "" {
+			t.Fatalf("epoch %d cache/history = %+v/%v", index, epoch.CachePolicy, epoch.HistoryMessageIDs)
+		}
+		if outcomes[index].EpochID != epoch.EpochID || outcomes[index].RequestDigest != epoch.RequestDigest || outcomes[index].Attempt != index+1 {
+			t.Fatalf("outcome %d = %+v, epoch = %+v", index, outcomes[index], epoch)
+		}
+	}
+	if epochs[0].EpochID == epochs[1].EpochID || epochs[0].RequestDigest == epochs[1].RequestDigest {
+		t.Fatalf("semantic retry reused epoch/digest: %+v", epochs)
+	}
+	if retry.EpochID != epochs[0].EpochID || retry.RequestDigest != epochs[0].RequestDigest {
+		t.Fatalf("retry link = %+v, first epoch = %+v", retry, epochs[0])
 	}
 }
 

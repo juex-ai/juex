@@ -371,9 +371,14 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		}
 		turn.Streaming = false
 	case "llm.requested":
+		payload := payloadAs[LLMRequestedPayload](event.Payload)
 		turn := ensureTurnStatus(&next, event)
 		turn.State = TurnLifecycleActive
-		turn.Phase = TurnPhaseProviderIteration
+		if payload.Purpose == "compaction" {
+			turn.Phase = TurnPhaseCompacting
+		} else {
+			turn.Phase = TurnPhaseProviderIteration
+		}
 		turn.Streaming = true
 	case "llm.responded":
 		payload := payloadAs[LLMRespondedPayload](event.Payload)
