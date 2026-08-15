@@ -52,6 +52,7 @@ type Config struct {
 	Shell                     ShellProfile
 	Sandbox                   sandbox.Policy
 	Skills                    SkillsConfig
+	Modules                   ModulesConfig
 	Extensions                ExtensionPolicy
 	Fleet                     FleetConfig
 	EnableUserAgentsResources bool
@@ -115,6 +116,7 @@ type fileConfig struct {
 	Shell                     *ShellConfig      `yaml:"shell"`
 	Sandbox                   *sandboxConfig    `yaml:"sandbox"`
 	Skills                    skillsConfig      `yaml:"skills"`
+	Modules                   modulesConfig     `yaml:"modules"`
 	Extensions                extensionsConfig  `yaml:"extensions"`
 	Fleet                     *fleetFileConfig  `yaml:"fleet"`
 	Environment               environmentConfig `yaml:"environment"`
@@ -279,6 +281,23 @@ type skillsConfig struct {
 	Include           *[]string `yaml:"include"`
 	Exclude           *[]string `yaml:"exclude"`
 	PromptBudgetChars int       `yaml:"prompt_budget_chars"`
+}
+
+type ModulesConfig struct {
+	Memory ModuleConfig
+}
+
+type ModuleConfig struct {
+	Enabled    bool
+	Configured bool
+}
+
+type modulesConfig struct {
+	Memory moduleConfig `yaml:"memory"`
+}
+
+type moduleConfig struct {
+	Enabled optionalBool `yaml:"enabled"`
 }
 
 // ExtensionPolicy is the effective logical-name allowlist after durable config
@@ -459,6 +478,7 @@ func loadUserConfigForWorkDir(workDir string) (Config, error) {
 		ExternalEventTTL:          DefaultExternalEventTTL,
 		ToolTimeout:               DefaultToolTimeout,
 		Skills:                    DefaultSkillsConfig(),
+		Modules:                   DefaultModulesConfig(),
 		Fleet:                     FleetConfig{Addr: DefaultFleetAddr},
 		EnableUserAgentsResources: true,
 		providerConfigs:           map[string]providerConfig{},
@@ -870,6 +890,7 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 	applyCompactionConfig(cfg, fc.Compaction)
 	applyToolOutputConfig(cfg, fc.ToolOutput)
 	applyRuntimeConfig(cfg, fc.Runtime)
+	applyModulesConfig(cfg, fc.Modules)
 	if err := applySkillsConfig(cfg, fc.Skills); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
@@ -996,6 +1017,26 @@ func parseRuntimePositiveInt(field string, node *yaml.Node) (int, error) {
 
 func DefaultSkillsConfig() SkillsConfig {
 	return SkillsConfig{PromptBudgetChars: DefaultSkillPromptBudgetChars}
+}
+
+func DefaultModulesConfig() ModulesConfig {
+	return ModulesConfig{Memory: ModuleConfig{Enabled: true, Configured: true}}
+}
+
+func (c Config) MemoryModuleEnabled() bool {
+	if !c.Modules.Memory.Configured {
+		return true
+	}
+	return c.Modules.Memory.Enabled
+}
+
+func applyModulesConfig(cfg *Config, modules modulesConfig) {
+	if modules.Memory.Enabled.Set {
+		cfg.Modules.Memory = ModuleConfig{
+			Enabled:    modules.Memory.Enabled.Value,
+			Configured: true,
+		}
+	}
 }
 
 func applySkillsConfig(cfg *Config, fileSkills skillsConfig) error {

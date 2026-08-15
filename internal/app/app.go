@@ -1,5 +1,5 @@
 // Package app wires process-level runtime dependencies: config -> provider ->
-// registry -> tools -> MCP -> skills -> memory -> session -> prompt -> engine.
+// registry -> tools -> MCP -> skills -> runtime modules -> session -> prompt -> engine.
 //
 // It also owns application policies shared by transports, such as workspace
 // session attachment, slash commands, MCP notification routing, and turn
@@ -31,7 +31,6 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/memory"
 	"github.com/juex-ai/juex/internal/observability"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/prompt"
@@ -341,8 +340,11 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 
-	memStore := memory.NewStore(runtimePaths.MemoryDir)
-	if err := memStore.RegisterTools(reg); err != nil {
+	moduleRegistry, err := newRuntimeModuleRegistry(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := moduleRegistry.RegisterTools(reg); err != nil {
 		return nil, err
 	}
 
@@ -405,13 +407,13 @@ func New(opts Options) (*App, error) {
 		fmt.Fprintf(stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", statusReplayErr)
 	}
 	pb := &prompt.Builder{
-		GlobalAgentsMDPath: resourcePaths.GlobalAgentsMDPath,
-		AgentsMDDirs:       resourcePaths.AgentsMDDirs,
-		Memory:             memStore,
-		Skills:             skillLoader,
-		ScratchpadDir:      sess.ScratchpadDir(),
-		WorkDir:            runtimePaths.WorkDir,
-		Shell:              prompt.ShellProfileFromConfig(cfg.Shell),
+		GlobalAgentsMDPath:  resourcePaths.GlobalAgentsMDPath,
+		AgentsMDDirs:        resourcePaths.AgentsMDDirs,
+		Skills:              skillLoader,
+		ModulePromptContext: moduleRegistry.PromptContext,
+		ScratchpadDir:       sess.ScratchpadDir(),
+		WorkDir:             runtimePaths.WorkDir,
+		Shell:               prompt.ShellProfileFromConfig(cfg.Shell),
 		RuntimeSections: func() []prompt.Section {
 			text := tools.FormatActiveShellSessionsPrompt(shellSessions.List(false))
 			if text == "" {
@@ -1001,7 +1003,10 @@ func (a *App) compactWithTurnID(ctx context.Context, turnID, reason string, auto
 	if a.Session == nil {
 		return runtime.CompactionResult{}, ErrSessionUnavailable
 	}
-	sections := a.Engine.PromptSections()
+	sections, err := a.Engine.PromptSectionsWithError()
+	if err != nil {
+		return runtime.CompactionResult{}, fmt.Errorf("app: build compaction prompt: %w", err)
+	}
 	systemPrompt := prompt.JoinSections(sections)
 	result, err := a.Engine.CompactWithInstructions(ctx, turnID, systemPrompt, reason, auto, instructions)
 	if err != nil {

@@ -77,6 +77,17 @@ environment:
     NODE_ENV: production
 ```
 
+Built-in Runtime Modules are configured separately from external Extensions.
+Memory is enabled by default; disabling it removes the Memory prompt context
+and `memory_write`, `memory_search`, and `memory_delete` Tools while leaving its
+existing files untouched:
+
+```yaml
+modules:
+  memory:
+    enabled: false
+```
+
 Environment precedence is selected Extension manifest defaults, default-home
 YAML, a distinct instance-home YAML, workspace `.env`, workspace YAML,
 explicit `--config` YAML, the environment inherited at launch, child-local

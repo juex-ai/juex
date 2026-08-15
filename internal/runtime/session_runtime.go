@@ -99,21 +99,35 @@ func (e *Engine) SessionRuntimeSnapshot() SessionRuntimeSnapshot {
 // PromptSections builds the prompt from the same immutable prompt builder and
 // scratchpad selection that were published with the session runtime.
 func (e *Engine) PromptSections() []prompt.Section {
+	sections, _ := e.PromptSectionsWithError()
+	return sections
+}
+
+func (e *Engine) PromptSectionsWithError() ([]prompt.Section, error) {
 	if e == nil {
-		return nil
+		return nil, nil
 	}
 	e.sessionRuntimeMu.RLock()
 	state := e.sessionRuntimeStateLocked()
 	builder := state.prompt
 	e.sessionRuntimeMu.RUnlock()
 	if builder == nil {
-		return nil
+		return nil, nil
 	}
-	return builder.Sections()
+	return builder.SectionsWithError()
 }
 
 func (e *Engine) SystemPrompt() string {
-	return prompt.JoinSections(e.PromptSections())
+	system, _ := e.SystemPromptWithError()
+	return system
+}
+
+func (e *Engine) SystemPromptWithError() (string, error) {
+	sections, err := e.PromptSectionsWithError()
+	if err != nil {
+		return "", err
+	}
+	return prompt.JoinSections(sections), nil
 }
 
 func (e *Engine) PromptSkillStatus() (skills.PromptBudgetReport, int, bool) {

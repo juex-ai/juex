@@ -18,6 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/prompt"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
@@ -354,8 +355,12 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 	}
 	defer func() { _ = a.CloseAndWait() }()
 
-	system := a.Engine.SystemPrompt()
-	sections := a.Engine.PromptSections()
+	sections, err := a.Engine.PromptSectionsWithError()
+	if err != nil {
+		return emit(jsonOut, cmd.ErrOrStderr(), err,
+			"dry-run prompt assembly failed; check enabled runtime modules", false)
+	}
+	system := prompt.JoinSections(sections)
 	toolList := a.Engine.Tools.List()
 	tools := make([]string, len(toolList))
 	for i, t := range toolList {

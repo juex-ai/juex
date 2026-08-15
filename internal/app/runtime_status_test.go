@@ -67,6 +67,27 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 	}
 }
 
+func TestRuntimeCatalogServiceOmitsDisabledMemoryModule(t *testing.T) {
+	cfg := config.Config{
+		WorkDir: t.TempDir(),
+		Modules: config.ModulesConfig{Memory: config.ModuleConfig{Configured: true}},
+	}
+	status, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, group := range status.Tools.Groups {
+		if group.Group == string(tools.ToolGroupMemory) && len(group.Tools) != 0 {
+			t.Fatalf("disabled Memory Module tools = %#v", group.Tools)
+		}
+	}
+	for _, section := range status.SystemPrompt.Items {
+		if section.Key == "memory_files" {
+			t.Fatalf("disabled Memory Module prompt section = %#v", section)
+		}
+	}
+}
+
 func TestRuntimeStatusTierTwoToolsUseBuiltinGuidesWithinBudget(t *testing.T) {
 	status, err := NewRuntimeCatalogService(config.Config{WorkDir: t.TempDir()}).Snapshot(RuntimeStatusOptions{})
 	if err != nil {

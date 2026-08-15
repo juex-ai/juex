@@ -617,8 +617,12 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 	}
 	userMsg = appendHookAdditionalContext(userMsg, userHookResults)
 
+	promptSections, err := e.PromptSectionsWithError()
+	if err != nil {
+		return preparedTurnContext{}, fmt.Errorf("runtime: build prompt context: %w", err)
+	}
 	prepared := preparedTurnContext{
-		promptSections: e.PromptSections(),
+		promptSections: promptSections,
 		tools:          e.Tools.Specs(),
 		policy:         effectiveCompactionPolicy(e.Compaction, e.ContextWindow),
 	}

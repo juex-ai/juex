@@ -1,6 +1,7 @@
 package prompt
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/memory"
+	memorymodule "github.com/juex-ai/juex/internal/memory/module"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/skills"
 )
 
@@ -50,17 +53,18 @@ func TestBuilder_AllSourcesPresent(t *testing.T) {
 	}
 
 	// memory store
-	store := memory.NewStore(t.TempDir())
+	memoryDir := t.TempDir()
+	store := memory.NewStore(memoryDir)
 	if err := store.Write(memory.Entry{Name: "no-emoji", Description: "Never use emoji", Type: "feedback", Body: "Reason."}); err != nil {
 		t.Fatal(err)
 	}
 
 	b := &Builder{
-		GlobalAgentsMDPath: globalAgents,
-		AgentsMDDirs:       []string{root, subdir},
-		Memory:             store,
-		Skills:             loader,
-		Now:                func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+		GlobalAgentsMDPath:  globalAgents,
+		AgentsMDDirs:        []string{root, subdir},
+		ModulePromptContext: memorymodule.New(memoryDir).PromptContext,
+		Skills:              loader,
+		Now:                 func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
 	}
 
 	got := b.Build()
@@ -360,7 +364,8 @@ func TestBuilder_OperatingContextNormalizesRelativeWorkDir(t *testing.T) {
 }
 
 func TestBuilder_MemorySectionRendersAllEntries(t *testing.T) {
-	store := memory.NewStore(t.TempDir())
+	memoryDir := t.TempDir()
+	store := memory.NewStore(memoryDir)
 	if err := store.Write(memory.Entry{Name: "one", Description: "first desc", Type: "feedback", Body: "b"}); err != nil {
 		t.Fatal(err)
 	}
@@ -372,9 +377,9 @@ func TestBuilder_MemorySectionRendersAllEntries(t *testing.T) {
 	}
 
 	b := &Builder{
-		AgentsMDDirs: []string{t.TempDir()},
-		Memory:       store,
-		Now:          func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+		AgentsMDDirs:        []string{t.TempDir()},
+		ModulePromptContext: memorymodule.New(memoryDir).PromptContext,
+		Now:                 func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
 	}
 	got := b.Build()
 	for _, want := range []string{"## Memory", "first desc", "second desc", "third desc", "feedback", "user", "project"} {
@@ -403,11 +408,12 @@ func TestBuilder_SectionsSeparatedByDivider(t *testing.T) {
 func TestBuilder_RebuildsFreshEachCall(t *testing.T) {
 	// Memory writes between Build() calls must be reflected.
 	root := t.TempDir()
-	store := memory.NewStore(t.TempDir())
+	memoryDir := t.TempDir()
+	store := memory.NewStore(memoryDir)
 	b := &Builder{
-		AgentsMDDirs: []string{root},
-		Memory:       store,
-		Now:          func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+		AgentsMDDirs:        []string{root},
+		ModulePromptContext: memorymodule.New(memoryDir).PromptContext,
+		Now:                 func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
 	}
 
 	first := b.Build()
@@ -420,6 +426,17 @@ func TestBuilder_RebuildsFreshEachCall(t *testing.T) {
 	second := b.Build()
 	if !strings.Contains(second, "added-after") {
 		t.Fatalf("rebuild missed new memory entry:\n%s", second)
+	}
+}
+
+func TestBuilderBuildWithErrorReturnsModuleContextFailure(t *testing.T) {
+	b := &Builder{
+		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+			return nil, errors.New("context unavailable")
+		},
+	}
+	if _, err := b.BuildWithError(); err == nil || !strings.Contains(err.Error(), "prompt: module context: context unavailable") {
+		t.Fatalf("BuildWithError() error = %v", err)
 	}
 }
 
