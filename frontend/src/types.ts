@@ -502,6 +502,7 @@ export interface ProviderRequestEpochPayload {
       id: string;
       source: string;
       content_digest: string;
+      snapshot?: ProviderRequestSnapshot;
     }>;
     compaction?: {
       marker_message_id?: string;
@@ -520,6 +521,8 @@ export interface ProviderRequestSnapshot {
   content?: unknown;
   omitted?: string;
   reused?: boolean;
+  parts?: ProviderRequestSnapshot[];
+  joiner?: string;
 }
 
 export interface ToolRequestedPayload {

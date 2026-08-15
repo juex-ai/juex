@@ -853,9 +853,14 @@ while Web owns status attachment and SSE framing.
 it enters provider-visible memory. `provider.request_epoch` records the final
 projected message IDs and content digests, compaction marker, safe Provider
 descriptor, hashed cache-policy identity, and bounded system/tool snapshots or
-digest references. Committing the epoch consumes its included one-shot
-hook-context IDs. Session attachment streams the journal through the provenance
-reducer, which ignores unrelated Events and derives queued batches minus
+digest references. System prompt snapshots preserve the ordered section
+composition, so stable guidance is reused by digest while a changing Operating
+Context contributes only its small section body. Provider-visible context
+synthesized outside the transcript, including Goal, Notes, and model-change
+notices, carries a bounded full-message snapshot; one-shot hook context instead
+resolves through its queued Event. Committing the epoch consumes its included
+one-shot hook-context IDs. Session attachment streams the journal through the
+provenance reducer, which ignores unrelated Events and derives queued batches minus
 committed epoch consumption without materializing the journal.
 
 `llm.requested` declares either `turn` or `compaction` dispatch after the epoch

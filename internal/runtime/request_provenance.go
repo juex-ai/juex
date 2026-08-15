@@ -9,6 +9,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
 )
 
@@ -31,11 +32,23 @@ func (e *Engine) checkpointProviderRequestLocked(
 		MaxOutputTokens:       candidateMaxOutputTokens(candidate, e.MaxOutputTokens),
 		CachePolicy:           provenance.SafeCachePolicyFrom(cachePolicy),
 		SystemPrompt:          prepared.systemPrompt,
+		SystemPromptParts:     promptSectionTexts(prepared.promptSections),
+		SystemPromptJoiner:    prompt.SectionSeparator,
 		Tools:                 prepared.tools,
 		History:               request.history,
 		Compaction:            requestCompactionSelection(request.history),
 		HookContextMessageIDs: hookIDs,
 	})
+}
+
+func promptSectionTexts(sections []prompt.Section) []string {
+	texts := make([]string, 0, len(sections))
+	for _, section := range sections {
+		if section.Text != "" {
+			texts = append(texts, section.Text)
+		}
+	}
+	return texts
 }
 
 func (e *Engine) checkpointProviderRequestEpochLocked(

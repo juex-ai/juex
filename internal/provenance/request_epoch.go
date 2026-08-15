@@ -73,6 +73,8 @@ type Snapshot struct {
 	Content json.RawMessage `json:"content,omitempty"`
 	Omitted string          `json:"omitted,omitempty"`
 	Reused  bool            `json:"reused,omitempty"`
+	Parts   []Snapshot      `json:"parts,omitempty"`
+	Joiner  string          `json:"joiner,omitempty"`
 }
 
 type CompactionSelection struct {
@@ -102,9 +104,10 @@ func optionalDigest(value string) string {
 }
 
 type MessageRef struct {
-	ID            string `json:"id"`
-	Source        string `json:"source"`
-	ContentDigest string `json:"content_digest"`
+	ID            string    `json:"id"`
+	Source        string    `json:"source"`
+	ContentDigest string    `json:"content_digest"`
+	Snapshot      *Snapshot `json:"snapshot,omitempty"`
 }
 
 type RequestInput struct {
@@ -114,6 +117,8 @@ type RequestInput struct {
 	MaxOutputTokens       int                 `json:"max_output_tokens,omitempty"`
 	CachePolicy           SafeCachePolicy     `json:"cache_policy,omitempty"`
 	SystemPrompt          string              `json:"system_prompt,omitempty"`
+	SystemPromptParts     []string            `json:"system_prompt_parts,omitempty"`
+	SystemPromptJoiner    string              `json:"system_prompt_joiner,omitempty"`
 	Tools                 []llm.ToolSpec      `json:"tools,omitempty"`
 	History               []llm.Message       `json:"history"`
 	Compaction            CompactionSelection `json:"compaction,omitempty"`
@@ -158,9 +163,15 @@ type digestEnvelope struct {
 	ToolCatalogDigest     string              `json:"tool_catalog_digest"`
 	HistoryDigest         string              `json:"history_digest"`
 	HistoryMessageIDs     []string            `json:"history_message_ids"`
-	Messages              []MessageRef        `json:"messages"`
+	Messages              []messageDigestRef  `json:"messages"`
 	Compaction            CompactionSelection `json:"compaction,omitempty"`
 	HookContextMessageIDs []string            `json:"hook_context_message_ids,omitempty"`
+}
+
+type messageDigestRef struct {
+	ID            string `json:"id"`
+	Source        string `json:"source"`
+	ContentDigest string `json:"content_digest"`
 }
 
 func BuildRequestEpoch(input RequestInput) (RequestEpoch, error) {
@@ -182,13 +193,20 @@ func BuildRequestEpoch(input RequestInput) (RequestEpoch, error) {
 			return RequestEpoch{}, fmt.Errorf("provenance: history message id is required at index %d", index)
 		}
 		historyIDs[index] = message.ID
-		messageRaw, err := json.Marshal(message)
+		messageSnapshot, err := newSnapshot(message)
 		if err != nil {
 			return RequestEpoch{}, fmt.Errorf("provenance: history message digest at index %d: %w", index, err)
 		}
-		messageRefs[index] = MessageRef{ID: message.ID, Source: messageSource(message, hookIDs), ContentDigest: digest(messageRaw)}
+		source := messageSource(message, hookIDs)
+		messageRefs[index] = MessageRef{ID: message.ID, Source: source, ContentDigest: messageSnapshot.Digest}
+		if messageSnapshotRequired(source) {
+			if messageSnapshot.Omitted != "" {
+				return RequestEpoch{}, fmt.Errorf("provenance: derived message snapshot at index %d exceeds %d bytes", index, MaxInlineSnapshotBytes)
+			}
+			messageRefs[index].Snapshot = &messageSnapshot
+		}
 	}
-	systemSnapshot, err := newSnapshot(input.SystemPrompt)
+	systemSnapshot, err := newSystemPromptSnapshot(input.SystemPrompt, input.SystemPromptParts, input.SystemPromptJoiner)
 	if err != nil {
 		return RequestEpoch{}, fmt.Errorf("provenance: system prompt snapshot: %w", err)
 	}
@@ -212,7 +230,7 @@ func BuildRequestEpoch(input RequestInput) (RequestEpoch, error) {
 		ToolCatalogDigest:     toolSnapshot.Digest,
 		HistoryDigest:         historyDigest,
 		HistoryMessageIDs:     append([]string(nil), historyIDs...),
-		Messages:              append([]MessageRef(nil), messageRefs...),
+		Messages:              messageDigestRefs(messageRefs),
 		Compaction:            cloneCompaction(input.Compaction),
 		HookContextMessageIDs: append([]string(nil), input.HookContextMessageIDs...),
 	}
@@ -249,7 +267,7 @@ func requestDigest(epoch RequestEpoch) (string, error) {
 		ToolCatalogDigest:     epoch.ToolCatalogSnapshot.Digest,
 		HistoryDigest:         epoch.HistoryDigest,
 		HistoryMessageIDs:     append([]string(nil), epoch.HistoryMessageIDs...),
-		Messages:              append([]MessageRef(nil), epoch.Messages...),
+		Messages:              messageDigestRefs(epoch.Messages),
 		Compaction:            cloneCompaction(epoch.Compaction),
 		HookContextMessageIDs: append([]string(nil), epoch.HookContextMessageIDs...),
 	}
@@ -258,6 +276,18 @@ func requestDigest(epoch RequestEpoch) (string, error) {
 		return "", fmt.Errorf("provenance: request digest: %w", err)
 	}
 	return digest(canonical), nil
+}
+
+func messageDigestRefs(messages []MessageRef) []messageDigestRef {
+	refs := make([]messageDigestRef, len(messages))
+	for index, message := range messages {
+		refs[index] = messageDigestRef{
+			ID:            message.ID,
+			Source:        message.Source,
+			ContentDigest: message.ContentDigest,
+		}
+	}
+	return refs
 }
 
 func messageSource(message llm.Message, hookIDs map[string]struct{}) string {
@@ -274,6 +304,10 @@ func messageSource(message llm.Message, hookIDs map[string]struct{}) string {
 	default:
 		return "transcript"
 	}
+}
+
+func messageSnapshotRequired(source string) bool {
+	return source == "runtime_context" || source == "model_change"
 }
 
 func newSnapshot(value any) (Snapshot, error) {
@@ -298,6 +332,48 @@ func newSnapshot(value any) (Snapshot, error) {
 	}
 	snapshot.Content = append(json.RawMessage(nil), raw...)
 	return snapshot, nil
+}
+
+func newSystemPromptSnapshot(prompt string, parts []string, joiner string) (Snapshot, error) {
+	if len(parts) == 0 {
+		return newSnapshot(prompt)
+	}
+	if strings.Join(parts, joiner) != prompt {
+		return Snapshot{}, fmt.Errorf("system prompt parts do not reconstruct the provider prompt")
+	}
+	plain, err := newSnapshot(prompt)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if plain.Omitted != "" {
+		return plain, nil
+	}
+	partSnapshots := make([]Snapshot, len(parts))
+	partDigests := make([]string, len(parts))
+	for index, part := range parts {
+		snapshot, err := newSnapshot(part)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if snapshot.Omitted != "" {
+			return Snapshot{}, fmt.Errorf("system prompt part at index %d exceeds %d bytes", index, MaxInlineSnapshotBytes)
+		}
+		partSnapshots[index] = snapshot
+		partDigests[index] = snapshot.Digest
+	}
+	composition, err := json.Marshal(struct {
+		Parts  []string `json:"parts"`
+		Joiner string   `json:"joiner"`
+	}{Parts: partDigests, Joiner: joiner})
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return Snapshot{
+		Digest: digest(composition),
+		Bytes:  plain.Bytes,
+		Parts:  partSnapshots,
+		Joiner: joiner,
+	}, nil
 }
 
 func digest(raw []byte) string {
@@ -459,6 +535,11 @@ func (t *Tracker) PrepareEpoch(epoch *RequestEpoch) {
 	defer t.mu.Unlock()
 	markSnapshotReused(&epoch.SystemPromptSnapshot, t.known)
 	markSnapshotReused(&epoch.ToolCatalogSnapshot, t.known)
+	for index := range epoch.Messages {
+		if epoch.Messages[index].Snapshot != nil {
+			markSnapshotReused(epoch.Messages[index].Snapshot, t.known)
+		}
+	}
 }
 
 func markSnapshotReused(snapshot *Snapshot, known map[string]struct{}) {
@@ -466,9 +547,14 @@ func markSnapshotReused(snapshot *Snapshot, known map[string]struct{}) {
 		return
 	}
 	if _, ok := known[snapshot.Digest]; !ok {
+		for index := range snapshot.Parts {
+			markSnapshotReused(&snapshot.Parts[index], known)
+		}
 		return
 	}
 	snapshot.Content = nil
+	snapshot.Parts = nil
+	snapshot.Joiner = ""
 	snapshot.Reused = true
 }
 
@@ -484,14 +570,24 @@ func (t *Tracker) CommitEpoch(epoch RequestEpoch) {
 func (t *Tracker) recordEpochLocked(epoch RequestEpoch) {
 	t.epochs[epoch.EpochID] = epoch.RequestDigest
 	t.purposes[epoch.EpochID] = epoch.Purpose
-	if epoch.SystemPromptSnapshot.Digest != "" {
-		t.known[epoch.SystemPromptSnapshot.Digest] = struct{}{}
-	}
-	if epoch.ToolCatalogSnapshot.Digest != "" {
-		t.known[epoch.ToolCatalogSnapshot.Digest] = struct{}{}
+	recordKnownSnapshot(epoch.SystemPromptSnapshot, t.known)
+	recordKnownSnapshot(epoch.ToolCatalogSnapshot, t.known)
+	for _, message := range epoch.Messages {
+		if message.Snapshot != nil {
+			recordKnownSnapshot(*message.Snapshot, t.known)
+		}
 	}
 	for _, id := range epoch.HookContextMessageIDs {
 		t.consumed[id] = struct{}{}
+	}
+}
+
+func recordKnownSnapshot(snapshot Snapshot, known map[string]struct{}) {
+	if snapshot.Digest != "" {
+		known[snapshot.Digest] = struct{}{}
+	}
+	for _, part := range snapshot.Parts {
+		recordKnownSnapshot(part, known)
 	}
 }
 
@@ -604,24 +700,78 @@ func (t *Tracker) validateSnapshotReferencesLocked(epoch RequestEpoch) error {
 		"system_prompt": epoch.SystemPromptSnapshot,
 		"tool_catalog":  epoch.ToolCatalogSnapshot,
 	} {
-		if len(snapshot.Content) > 0 {
-			if actual := digest(snapshot.Content); actual != snapshot.Digest {
-				return fmt.Errorf("provenance: %s snapshot digest mismatch: got %s want %s", name, actual, snapshot.Digest)
+		if err := validateSnapshotReference(snapshot, t.known); err != nil {
+			return fmt.Errorf("provenance: %s snapshot: %w", name, err)
+		}
+	}
+	for index, message := range epoch.Messages {
+		if !messageSnapshotRequired(message.Source) {
+			if message.Snapshot != nil {
+				return fmt.Errorf("provenance: message snapshot at index %d is only valid for derived messages", index)
 			}
 			continue
 		}
-		if snapshot.Omitted != "" {
-			continue
+		if message.Snapshot == nil {
+			return fmt.Errorf("provenance: derived message snapshot at index %d is missing", index)
 		}
-		if snapshot.Reused {
-			if _, ok := t.known[snapshot.Digest]; ok {
-				continue
-			}
-			return fmt.Errorf("provenance: %s snapshot references unknown digest %q", name, snapshot.Digest)
+		if err := validateSnapshotReference(*message.Snapshot, t.known); err != nil {
+			return fmt.Errorf("provenance: derived message snapshot at index %d: %w", index, err)
 		}
-		return fmt.Errorf("provenance: %s snapshot content is missing", name)
 	}
 	return nil
+}
+
+func validateSnapshotReference(snapshot Snapshot, known map[string]struct{}) error {
+	if err := validateSnapshotShape(snapshot); err != nil {
+		return err
+	}
+	if len(snapshot.Content) > 0 {
+		if actual := digest(snapshot.Content); actual != snapshot.Digest {
+			return fmt.Errorf("digest mismatch: got %s want %s", actual, snapshot.Digest)
+		}
+		return nil
+	}
+	if snapshot.Omitted != "" {
+		return nil
+	}
+	if snapshot.Reused {
+		if _, ok := known[snapshot.Digest]; ok {
+			return nil
+		}
+		return fmt.Errorf("references unknown digest %q", snapshot.Digest)
+	}
+	if len(snapshot.Parts) > 0 {
+		for index, part := range snapshot.Parts {
+			if err := validateSnapshotReference(part, known); err != nil {
+				return fmt.Errorf("part %d: %w", index, err)
+			}
+		}
+		if actual, err := compositeSnapshotDigest(snapshot.Parts, snapshot.Joiner); err != nil {
+			return err
+		} else if actual != snapshot.Digest {
+			return fmt.Errorf("composition digest mismatch: got %s want %s", actual, snapshot.Digest)
+		}
+		return nil
+	}
+	return fmt.Errorf("content is missing")
+}
+
+func compositeSnapshotDigest(parts []Snapshot, joiner string) (string, error) {
+	partDigests := make([]string, len(parts))
+	for index, part := range parts {
+		if part.Digest == "" {
+			return "", fmt.Errorf("part %d digest is missing", index)
+		}
+		partDigests[index] = part.Digest
+	}
+	composition, err := json.Marshal(struct {
+		Parts  []string `json:"parts"`
+		Joiner string   `json:"joiner"`
+	}{Parts: partDigests, Joiner: joiner})
+	if err != nil {
+		return "", err
+	}
+	return digest(composition), nil
 }
 
 func ValidateHookContextQueued(payload HookContextQueuedPayload) error {
@@ -658,8 +808,16 @@ func ValidateRequestEpoch(payload RequestEpochPayload) error {
 		return fmt.Errorf("provenance: request epoch requires matching history message ids and message refs")
 	}
 	for index, id := range epoch.HistoryMessageIDs {
-		if id == "" || epoch.Messages[index].ID != id || epoch.Messages[index].ContentDigest == "" {
+		message := epoch.Messages[index]
+		if id == "" || message.ID != id || message.ContentDigest == "" {
 			return fmt.Errorf("provenance: request epoch history message ref is invalid")
+		}
+		if messageSnapshotRequired(message.Source) {
+			if message.Snapshot == nil || message.Snapshot.Digest != message.ContentDigest {
+				return fmt.Errorf("provenance: request epoch derived message snapshot is required and must match message content")
+			}
+		} else if message.Snapshot != nil {
+			return fmt.Errorf("provenance: request epoch message snapshots are only valid for derived messages")
 		}
 	}
 	if raw, err := json.Marshal(payload); err != nil {
@@ -678,10 +836,16 @@ func VerifyRequestEpoch(epoch RequestEpoch) error {
 		"system_prompt": epoch.SystemPromptSnapshot,
 		"tool_catalog":  epoch.ToolCatalogSnapshot,
 	} {
-		if len(snapshot.Content) > 0 {
-			if actual := digest(snapshot.Content); actual != snapshot.Digest {
-				return fmt.Errorf("provenance: %s snapshot digest mismatch: got %s want %s", name, actual, snapshot.Digest)
-			}
+		if err := verifySnapshot(snapshot); err != nil {
+			return fmt.Errorf("provenance: %s snapshot: %w", name, err)
+		}
+	}
+	for index, message := range epoch.Messages {
+		if message.Snapshot == nil {
+			continue
+		}
+		if err := verifySnapshot(*message.Snapshot); err != nil {
+			return fmt.Errorf("provenance: message snapshot at index %d: %w", index, err)
 		}
 	}
 	reconstructed, err := requestDigest(epoch)
@@ -690,6 +854,55 @@ func VerifyRequestEpoch(epoch RequestEpoch) error {
 	}
 	if reconstructed != epoch.RequestDigest {
 		return fmt.Errorf("provenance: request digest mismatch: got %s want %s", reconstructed, epoch.RequestDigest)
+	}
+	return nil
+}
+
+func verifySnapshot(snapshot Snapshot) error {
+	if err := validateSnapshotShape(snapshot); err != nil {
+		return err
+	}
+	if len(snapshot.Content) > 0 {
+		if actual := digest(snapshot.Content); actual != snapshot.Digest {
+			return fmt.Errorf("digest mismatch: got %s want %s", actual, snapshot.Digest)
+		}
+	}
+	if len(snapshot.Parts) > 0 {
+		for index, part := range snapshot.Parts {
+			if err := verifySnapshot(part); err != nil {
+				return fmt.Errorf("part %d: %w", index, err)
+			}
+		}
+		actual, err := compositeSnapshotDigest(snapshot.Parts, snapshot.Joiner)
+		if err != nil {
+			return err
+		}
+		if actual != snapshot.Digest {
+			return fmt.Errorf("composition digest mismatch: got %s want %s", actual, snapshot.Digest)
+		}
+	}
+	return nil
+}
+
+func validateSnapshotShape(snapshot Snapshot) error {
+	representations := 0
+	if len(snapshot.Content) > 0 {
+		representations++
+	}
+	if snapshot.Omitted != "" {
+		representations++
+	}
+	if snapshot.Reused {
+		representations++
+	}
+	if len(snapshot.Parts) > 0 {
+		representations++
+	}
+	if representations != 1 {
+		return fmt.Errorf("must have exactly one content, omitted, reused, or parts representation")
+	}
+	if len(snapshot.Parts) == 0 && snapshot.Joiner != "" {
+		return fmt.Errorf("joiner requires snapshot parts")
 	}
 	return nil
 }

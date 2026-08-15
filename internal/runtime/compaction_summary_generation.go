@@ -135,13 +135,14 @@ func (e *Engine) completeCompactionSummary(
 	cachePolicy := e.cachePolicyLocked()
 	descriptor := e.providerProvenanceLocked(provider)
 	epoch, err := e.checkpointProviderRequestEpochLocked(turnID, 0, attempt, provenance.RequestInput{
-		Purpose:         "compaction",
-		Provider:        descriptor,
-		ContextWindow:   e.ContextWindow,
-		MaxOutputTokens: maxOutputTokens,
-		CachePolicy:     provenance.SafeCachePolicyFrom(cachePolicy),
-		SystemPrompt:    system,
-		History:         history,
+		Purpose:           "compaction",
+		Provider:          descriptor,
+		ContextWindow:     e.ContextWindow,
+		MaxOutputTokens:   maxOutputTokens,
+		CachePolicy:       provenance.SafeCachePolicyFrom(cachePolicy),
+		SystemPrompt:      system,
+		SystemPromptParts: []string{system},
+		History:           history,
 	})
 	if err != nil {
 		return llm.Response{}, provenance.RequestEpoch{}, &compactionSummaryJournalError{err: err}

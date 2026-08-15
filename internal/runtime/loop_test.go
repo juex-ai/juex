@@ -450,6 +450,10 @@ func TestTurn_RequestEpochCheckpointConsumesHookContextAndLinksResponse(t *testi
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
 	}}}
 	eng, bus := newEngine(t, prov, false)
+	eng.Notes = NewNotesStore(eng.Session.Dir)
+	if _, err := eng.Notes.Update("- [ ] retain the exact runtime note"); err != nil {
+		t.Fatal(err)
+	}
 	if err := eng.queueHookRuntimeContext([]hooks.Result{{
 		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
 	}}); err != nil {
@@ -470,6 +474,23 @@ func TestTurn_RequestEpochCheckpointConsumesHookContextAndLinksResponse(t *testi
 	}
 	if epoch.Epoch.CachePolicy.StablePrefixKeyDigest == "" {
 		t.Fatalf("epoch cache policy = %+v", epoch.Epoch.CachePolicy)
+	}
+	if len(epoch.Epoch.SystemPromptSnapshot.Parts) == 0 {
+		t.Fatalf("system prompt was not captured as section snapshots: %+v", epoch.Epoch.SystemPromptSnapshot)
+	}
+	derivedBodies := map[string]string{}
+	for _, message := range epoch.Epoch.Messages {
+		if message.Snapshot == nil {
+			continue
+		}
+		var body llm.Message
+		if err := json.Unmarshal(message.Snapshot.Content, &body); err != nil {
+			t.Fatal(err)
+		}
+		derivedBodies[message.ID] = body.FirstText()
+	}
+	if !strings.Contains(derivedBodies["runtime-notes"], "retain the exact runtime note") {
+		t.Fatalf("derived runtime context bodies = %+v", derivedBodies)
 	}
 	rawEpoch, err := json.Marshal(epoch)
 	if err != nil {

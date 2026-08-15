@@ -150,6 +150,166 @@ func TestBuildRequestEpochBoundsSnapshots(t *testing.T) {
 	if epoch.SystemPromptSnapshot.Bytes <= MaxInlineSnapshotBytes {
 		t.Fatalf("system snapshot bytes = %d", epoch.SystemPromptSnapshot.Bytes)
 	}
+	structured, err := BuildRequestEpoch(RequestInput{
+		Provider:           SafeProvider{ID: "test", Model: "model"},
+		SystemPrompt:       strings.Repeat("a", MaxInlineSnapshotBytes/2) + "|" + strings.Repeat("b", MaxInlineSnapshotBytes/2),
+		SystemPromptParts:  []string{strings.Repeat("a", MaxInlineSnapshotBytes/2), strings.Repeat("b", MaxInlineSnapshotBytes/2)},
+		SystemPromptJoiner: "|",
+		Tools:              []llm.ToolSpec{},
+		History:            []llm.Message{message("user-1", llm.MessageKindDirect, "hello")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if structured.SystemPromptSnapshot.Omitted != "size_limit" || len(structured.SystemPromptSnapshot.Parts) != 0 {
+		t.Fatalf("oversized structured system snapshot = %+v", structured.SystemPromptSnapshot)
+	}
+}
+
+func TestSystemPromptSnapshotsDeduplicateStableSections(t *testing.T) {
+	const joiner = "\n\n---\n\n"
+	build := func(operatingContext string) RequestEpoch {
+		parts := []string{"stable project guidance", operatingContext}
+		epoch, err := BuildRequestEpoch(RequestInput{
+			Provider:           SafeProvider{ID: "test", Model: "model"},
+			SystemPrompt:       strings.Join(parts, joiner),
+			SystemPromptParts:  parts,
+			SystemPromptJoiner: joiner,
+			History:            []llm.Message{message("user-1", llm.MessageKindDirect, "hello")},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return epoch
+	}
+
+	first := build("time: 2026-08-15T06:00:00Z")
+	if len(first.SystemPromptSnapshot.Parts) != 2 || first.SystemPromptSnapshot.Parts[0].Reused {
+		t.Fatalf("first system snapshot = %+v", first.SystemPromptSnapshot)
+	}
+	tracker := NewTracker()
+	first.EpochID = "epoch-1"
+	tracker.CommitEpoch(first)
+
+	second := build("time: 2026-08-15T06:01:00Z")
+	second.EpochID = "epoch-2"
+	tracker.PrepareEpoch(&second)
+	if second.SystemPromptSnapshot.Reused || len(second.SystemPromptSnapshot.Parts) != 2 {
+		t.Fatalf("second system snapshot = %+v", second.SystemPromptSnapshot)
+	}
+	if !second.SystemPromptSnapshot.Parts[0].Reused || len(second.SystemPromptSnapshot.Parts[0].Content) != 0 {
+		t.Fatalf("stable section was not reused: %+v", second.SystemPromptSnapshot.Parts[0])
+	}
+	if second.SystemPromptSnapshot.Parts[1].Reused || len(second.SystemPromptSnapshot.Parts[1].Content) == 0 {
+		t.Fatalf("operating context was not inlined: %+v", second.SystemPromptSnapshot.Parts[1])
+	}
+	serialized, err := json.Marshal(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(serialized), "stable project guidance") {
+		t.Fatalf("stable section was duplicated: %s", serialized)
+	}
+	if err := tracker.ReplayEvent(events.Event{Type: RequestEpochType, Payload: RequestEpochPayload{Epoch: second}}); err != nil {
+		t.Fatalf("ReplayEvent() structured snapshot error = %v", err)
+	}
+	third := build("time: 2026-08-15T06:01:00Z")
+	tracker.PrepareEpoch(&third)
+	if !third.SystemPromptSnapshot.Reused || len(third.SystemPromptSnapshot.Parts) != 0 {
+		t.Fatalf("identical structured prompt was not reused: %+v", third.SystemPromptSnapshot)
+	}
+	tampered := first
+	tampered.SystemPromptSnapshot.Joiner = "\n"
+	if err := VerifyRequestEpoch(tampered); err == nil || !strings.Contains(err.Error(), "composition digest mismatch") {
+		t.Fatalf("VerifyRequestEpoch() tampered composition error = %v", err)
+	}
+}
+
+func TestBuildRequestEpochPersistsDerivedRuntimeContextBodies(t *testing.T) {
+	goal := message("runtime-goal-contract", llm.MessageKindRuntimeContext, "Goal: preserve this exact state")
+	modelChange := message("runtime-model-change", llm.MessageKindModelChange, "The serving model changed")
+	epoch, err := BuildRequestEpoch(RequestInput{
+		Provider: SafeProvider{ID: "test", Model: "model"},
+		History: []llm.Message{
+			message("user-1", llm.MessageKindDirect, "hello"),
+			goal,
+			modelChange,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if epoch.Messages[0].Snapshot != nil {
+		t.Fatalf("transcript message unexpectedly inlined: %+v", epoch.Messages[0])
+	}
+	derived := epoch.Messages[1]
+	if derived.Source != "runtime_context" || derived.Snapshot == nil || derived.Snapshot.Digest != derived.ContentDigest {
+		t.Fatalf("derived message ref = %+v", derived)
+	}
+	var recovered llm.Message
+	if err := json.Unmarshal(derived.Snapshot.Content, &recovered); err != nil {
+		t.Fatal(err)
+	}
+	if recovered.ID != goal.ID || recovered.FirstText() != goal.FirstText() {
+		t.Fatalf("recovered runtime context = %+v", recovered)
+	}
+	if epoch.Messages[2].Source != "model_change" || epoch.Messages[2].Snapshot == nil || epoch.Messages[2].Snapshot.Digest != epoch.Messages[2].ContentDigest {
+		t.Fatalf("model change message ref = %+v", epoch.Messages[2])
+	}
+
+	epoch.EpochID = "epoch-derived-1"
+	tracker := NewTracker()
+	tracker.CommitEpoch(epoch)
+	repeated, err := BuildRequestEpoch(RequestInput{
+		Provider: SafeProvider{ID: "test", Model: "model"},
+		History:  []llm.Message{message("user-1", llm.MessageKindDirect, "hello"), goal, modelChange},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker.PrepareEpoch(&repeated)
+	if repeated.Messages[1].Snapshot == nil || !repeated.Messages[1].Snapshot.Reused || len(repeated.Messages[1].Snapshot.Content) != 0 {
+		t.Fatalf("repeated runtime context snapshot = %+v", repeated.Messages[1].Snapshot)
+	}
+	changedGoal := message("runtime-goal-contract", llm.MessageKindRuntimeContext, "Goal: changed authoritative state")
+	changed, err := BuildRequestEpoch(RequestInput{
+		Provider: SafeProvider{ID: "test", Model: "model"},
+		History:  []llm.Message{message("user-1", llm.MessageKindDirect, "hello"), changedGoal},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker.PrepareEpoch(&changed)
+	if changed.Messages[1].Snapshot == nil || changed.Messages[1].Snapshot.Reused || len(changed.Messages[1].Snapshot.Content) == 0 {
+		t.Fatalf("changed runtime context snapshot = %+v", changed.Messages[1].Snapshot)
+	}
+	tampered := epoch
+	tampered.Messages[1].Snapshot.Content = json.RawMessage(`{"id":"runtime-goal-contract"}`)
+	if err := VerifyRequestEpoch(tampered); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("VerifyRequestEpoch() tampered runtime context error = %v", err)
+	}
+}
+
+func TestBuildRequestEpochRejectsOversizedDerivedRuntimeContext(t *testing.T) {
+	_, err := BuildRequestEpoch(RequestInput{
+		Provider: SafeProvider{ID: "test", Model: "model"},
+		History:  []llm.Message{message("runtime-notes", llm.MessageKindRuntimeContext, strings.Repeat("x", MaxInlineSnapshotBytes+1))},
+	})
+	if err == nil || !strings.Contains(err.Error(), "derived message snapshot") {
+		t.Fatalf("BuildRequestEpoch() error = %v", err)
+	}
+}
+
+func TestBuildRequestEpochRejectsMismatchedSystemPromptParts(t *testing.T) {
+	_, err := BuildRequestEpoch(RequestInput{
+		Provider:          SafeProvider{ID: "test", Model: "model"},
+		SystemPrompt:      "provider-visible prompt",
+		SystemPromptParts: []string{"different prompt"},
+		History:           []llm.Message{message("user-1", llm.MessageKindDirect, "hello")},
+	})
+	if err == nil || !strings.Contains(err.Error(), "do not reconstruct") {
+		t.Fatalf("BuildRequestEpoch() error = %v", err)
+	}
 }
 
 func TestTrackerRecoversQueuedMinusCheckpointedHookContextAndDeduplicatesSnapshots(t *testing.T) {
