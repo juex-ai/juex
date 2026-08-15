@@ -168,14 +168,22 @@ func TestResolveRuntimeResourceGraphExcludesUserResourcesWhenDisabled(t *testing
 
 func TestResolveRuntimeResourceGraphExtensionMetadataAndHooks(t *testing.T) {
 	work := t.TempDir()
+	home := t.TempDir()
+	address, err := agentstate.NewAgentAddress(home, "abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	mustWriteRuntimeStatusFile(t, filepath.Join(work, ".juex", "extensions", "demo", "hooks.yaml"), `trusted: true
 commands:
   - name: demo-hook
     events: [Stop]
-    command: ["python3", "demo.py"]
+    command: ["${JUEX_EXT_DIR}/demo.py", "${JUEX_EXT_DATA_DIR}"]
 `)
 
-	graph, err := ResolveRuntimeResourceGraph(config.Config{WorkDir: work, Extensions: allowExtensions("demo")})
+	graph, err := ResolveRuntimeResourceGraph(config.Config{WorkDir: work, AgentAddress: address, Extensions: allowExtensions("demo")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,6 +195,11 @@ commands:
 	hook := hookConfig.Commands[0]
 	if hook.Name != "demo-hook" || hook.Source != "ext:demo" {
 		t.Fatalf("hook = %+v", hook)
+	}
+	extensionDir := filepath.Join(work, ".juex", "extensions", "demo")
+	dataDir := filepath.Join(address.StateDir(), "extensions", "demo")
+	if hook.Runtime.ExtensionDir != extensionDir || hook.Runtime.ExtensionDataDir != dataDir || hook.Runtime.PrepareExtensionDataDir == nil {
+		t.Fatalf("hook runtime = %+v, want %s / %s", hook.Runtime, extensionDir, dataDir)
 	}
 
 	var hookNode RuntimeResourceNode

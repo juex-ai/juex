@@ -4,7 +4,7 @@
 //
 //  1. AGENTS.md hierarchy (user-global -> project root -> cwd subdir)
 //  2. Skills index (descriptions only)
-//  3. Runtime Module prompt context (including built-in Memory)
+//  3. Runtime Module prompt context
 //  4. Session scratchpad guidance
 //  5. Tool list (auto-supplied to the provider, not duplicated here)
 //  6. Operating context (cwd, time, OS)
@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/memory"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/skills"
 )
@@ -87,7 +86,7 @@ func (b *Builder) Sections() []Section {
 
 func (b *Builder) SectionsWithError() ([]Section, error) {
 	var sections []Section
-	for _, agents := range memory.LoadAgentsMDFiles(b.GlobalAgentsMDPath, b.AgentsMDDirs) {
+	for _, agents := range loadAgentsMDFiles(b.GlobalAgentsMDPath, b.AgentsMDDirs) {
 		sections = append(sections, Section{
 			Key:    "agents",
 			Label:  b.agentsSectionLabel(agents.Path),
@@ -129,6 +128,38 @@ func (b *Builder) SectionsWithError() ([]Section, error) {
 
 	sections = append(sections, Section{Key: "operating_context", Label: "Operating Context", Source: "runtime", Text: b.operatingContext()})
 	return sections, nil
+}
+
+type agentsMDFile struct {
+	Path string
+	Text string
+}
+
+func loadAgentsMDFiles(globalPath string, dirs []string) []agentsMDFile {
+	var files []agentsMDFile
+	files = appendAgentsMDFile(files, globalPath)
+	for _, dir := range dirs {
+		files = appendAgentsMDFile(files, filepath.Join(dir, "AGENTS.md"))
+	}
+	return files
+}
+
+func appendAgentsMDFile(files []agentsMDFile, path string) []agentsMDFile {
+	if path == "" {
+		return files
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return files
+	}
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return files
+	}
+	return append(files, agentsMDFile{
+		Path: path,
+		Text: fmt.Sprintf("# AGENTS.md (%s)\n\n%s", path, content),
+	})
 }
 
 func (b *Builder) scratchpadSection() (Section, bool) {

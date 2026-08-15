@@ -40,7 +40,6 @@ const (
 	ToolGroupShell        ToolGroup = "shell"
 	ToolGroupSearch       ToolGroup = "search"
 	ToolGroupSkill        ToolGroup = "skill"
-	ToolGroupMemory       ToolGroup = "memory"
 	ToolGroupSessionState ToolGroup = "session_state"
 	ToolGroupSideSession  ToolGroup = "side_session"
 	ToolGroupObservable   ToolGroup = "observable"

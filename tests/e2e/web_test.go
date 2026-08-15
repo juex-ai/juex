@@ -209,7 +209,7 @@ func TestWeb_RuntimeToolCatalogIncludesMCPDescriptorsWithoutSession(t *testing.T
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Tools.Count != 34 || len(got.Tools.Groups) != 9 {
+	if got.Tools.Count != 31 || len(got.Tools.Groups) != 8 {
 		t.Fatalf("builtin catalog = %+v", got.Tools)
 	}
 	var observableToolNames []string

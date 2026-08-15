@@ -67,7 +67,6 @@ func ContextUsageSnapshot(model string, contextWindow, defaultContextWindow int,
 		{Key: "system_prompt", Label: "System prompt", Tokens: EstimateSystemPromptTokens(sections)},
 		{Key: "system_tools", Label: "System tools", Tokens: EstimateToolTokens(systemTools)},
 		{Key: "mcp_tools", Label: "MCP tools", Tokens: EstimateToolTokens(mcpTools)},
-		{Key: "memory_files", Label: "Memory files", Tokens: EstimateSectionTokens(sections, "memory_files")},
 		{Key: "skills", Label: "Skills", Tokens: EstimateSectionTokens(sections, "skills")},
 		{Key: "compact_summary", Label: "Compact summary", Tokens: EstimateCompactSummaryTokens(history)},
 		{Key: "context_artifacts", Label: "Context artifact references", Tokens: EstimateContextArtifactTokens(history)},
@@ -158,7 +157,7 @@ func EstimateSystemPromptTokens(sections []prompt.Section) int {
 	filtered := make([]prompt.Section, 0, len(sections))
 	for _, section := range sections {
 		switch section.Key {
-		case "memory_files", "skills":
+		case "skills":
 			continue
 		default:
 			filtered = append(filtered, section)

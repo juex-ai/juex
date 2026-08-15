@@ -5,7 +5,6 @@
 //
 //   - AGENTS.md hierarchy loading (project + subdir + global)
 //   - Skill loading (path appears in system prompt; model loads body via `read`)
-//   - Work-local memory entries -> system prompt + memory_write/search round-trip
 //   - MCP stdio client -> registered as mcp__<server>__<tool> in the registry
 //   - Builtin tools end-to-end: write, read, edit, apply_patch, grep, exec_command
 //   - Parallel tool calls in a single response
@@ -37,8 +36,6 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/memory"
-	memorymodule "github.com/juex-ai/juex/internal/memory/module"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
@@ -74,8 +71,6 @@ func (p *scriptProvider) Complete(ctx context.Context, sys string, hist []llm.Me
 			"project rule: respond like a senior engineer",
 			"Available Skills",
 			"trim-tool",
-			"## Memory",
-			"prefer-yaml",
 			"Operating Context",
 		} {
 			if !strings.Contains(sys, marker) {
@@ -87,7 +82,7 @@ func (p *scriptProvider) Complete(ctx context.Context, sys string, hist []llm.Me
 		for _, t := range tools {
 			toolNames[t.Name] = true
 		}
-		for _, want := range []string{"read", "write", "edit", "apply_patch", "write_begin", "write_chunk", "write_commit", "write_abort", "exec_command", "write_stdin", "grep", "memory_write", "memory_search", "memory_delete", "mcp__local__echo"} {
+		for _, want := range []string{"read", "write", "edit", "apply_patch", "write_begin", "write_chunk", "write_commit", "write_abort", "exec_command", "write_stdin", "grep", "mcp__local__echo"} {
 			if !toolNames[want] {
 				p.t.Errorf("tool %q missing from registry; have %v", want, keys(toolNames))
 			}
@@ -166,18 +161,6 @@ func TestEndToEnd_FullStack(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Memory entry (work-local)
-	memoryDir := filepath.Join(root, ".juex", "memory")
-	memStore := memory.NewStore(memoryDir)
-	if err := memStore.Write(memory.Entry{
-		Name:        "prefer-yaml",
-		Description: "Prefer YAML over JSON in config files",
-		Type:        "feedback",
-		Body:        "Reason: easier to comment.\nHow to apply: pick YAML when both work.",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
 	// MCP server config — points to this test binary in fake-server mode.
 	mcpConfig := mcp.Config{MCPServers: map[string]mcp.ServerSpec{
 		"local": {Command: os.Args[0], Env: map[string]string{"JUEX_E2E_MCP": "1"}},
@@ -198,9 +181,6 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: root, Shell: e2eToolShellProfile()})
 	skillLoader := skills.NewLoader(filepath.Join(homeAgents, "skills"), filepath.Join(projectAgents, "skills"))
 	if err := skillLoader.Load(); err != nil {
-		t.Fatal(err)
-	}
-	if err := memStore.RegisterTools(reg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -227,21 +207,19 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	sess.SubscribeBus(bus)
 
 	pb := &prompt.Builder{
-		GlobalAgentsMDPath:  filepath.Join(homeAgents, "AGENTS.md"),
-		AgentsMDDirs:        []string{root, projectAgents},
-		ModulePromptContext: memorymodule.New(memoryDir).PromptContext,
-		Skills:              skillLoader,
-		WorkDir:             root,
-		Shell:               e2ePromptShellProfile(),
-		Now:                 func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
+		GlobalAgentsMDPath: filepath.Join(homeAgents, "AGENTS.md"),
+		AgentsMDDirs:       []string{root, projectAgents},
+		Skills:             skillLoader,
+		WorkDir:            root,
+		Shell:              e2ePromptShellProfile(),
+		Now:                func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
 	}
 
 	// -- Script the model --
 	// Step 1: parallel calls to read AGENTS.md, write a new file, ping MCP.
 	// Step 2: edit the demo file then grep for the new content + shell check.
-	// Step 3: write a new memory entry then read the trim-tool skill.
-	// Step 4: a search of memory.
-	// Step 5: end with text only -> turn ends.
+	// Step 3: read the trim-tool skill.
+	// Step 4: end with text only -> turn ends.
 	prov := &scriptProvider{
 		t: t,
 		steps: []llm.Response{
@@ -265,11 +243,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 			},
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockText, Text: "persist findings + load skill"},
-					{Type: llm.BlockToolUse, ToolUseID: "t7", ToolName: "memory_write", Input: map[string]any{
-						"name": "demo-finding", "description": "demo file now ends with FINAL",
-						"type": "project", "body": "edited via e2e",
-					}},
+					{Type: llm.BlockText, Text: "load skill"},
 					// The model loads a skill body via the standard `read` tool;
 					// the absolute path was advertised in the system prompt's
 					// "Available Skills" section.
@@ -278,14 +252,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 				StopReason: llm.StopToolUse,
 			},
 			{
-				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockText, Text: "double-check memory"},
-					{Type: llm.BlockToolUse, ToolUseID: "t9", ToolName: "memory_search", Input: map[string]any{"query": "FINAL"}},
-				}},
-				StopReason: llm.StopToolUse,
-			},
-			{
-				Message:    llm.TextMessage(llm.RoleAssistant, "TASK COMPLETE: demo.txt edited, memory persisted, MCP echoed"),
+				Message:    llm.TextMessage(llm.RoleAssistant, "TASK COMPLETE: demo.txt edited, skill loaded, MCP echoed"),
 				StopReason: llm.StopEndTurn,
 			},
 		},
@@ -327,31 +294,13 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	if err != nil || !strings.Contains(string(demoData), "FINAL") || strings.Contains(string(demoData), "placeholder") {
 		t.Fatalf("demo.txt: data=%q err=%v", demoData, err)
 	}
-	// 3. memory_write persisted demo-finding
-	mems, err := memStore.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	hasFinding := false
-	for _, m := range mems {
-		if m.Name == "demo-finding" {
-			hasFinding = true
-			if !strings.Contains(m.Body, "edited via e2e") {
-				t.Errorf("memory body lost: %+v", m)
-			}
-		}
-	}
-	if !hasFinding {
-		t.Fatalf("demo-finding memory not persisted; entries: %+v", mems)
-	}
-
 	// -- jsonl assertions --
 	convPath := filepath.Join(sess.Dir, "conversation.jsonl")
 	convLines := readLines(t, convPath)
-	// History layout for 5 scripted assistant responses (4 with tool calls + 1 text-only):
-	//   u(prompt) + [a + u(tool_results)] x4 + a(final) = 1 + 8 + 1 = 10 messages.
-	if len(convLines) != 10 {
-		t.Errorf("conversation.jsonl line count = %d; want 10", len(convLines))
+	// History layout for 4 scripted assistant responses (3 with tool calls + 1 text-only):
+	//   u(prompt) + [a + u(tool_results)] x3 + a(final) = 8 messages.
+	if len(convLines) != 8 {
+		t.Errorf("conversation.jsonl line count = %d; want 8", len(convLines))
 	}
 	for i, line := range convLines {
 		var m llm.Message
@@ -957,17 +906,6 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	memoryDir := filepath.Join(root, ".juex", "memory")
-	memStore := memory.NewStore(memoryDir)
-	if err := memStore.Write(memory.Entry{
-		Name:        "prefer-yaml",
-		Description: "Prefer YAML over JSON in config files",
-		Type:        "feedback",
-		Body:        "Reason: easier to comment.\nHow to apply: pick YAML when both work.",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
 	mcpConfig := mcp.Config{MCPServers: map[string]mcp.ServerSpec{
 		"local": {Command: os.Args[0], Env: map[string]string{"JUEX_E2E_MCP": "1"}},
 	}}
@@ -985,9 +923,6 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: root, Shell: e2eToolShellProfile()})
 	skillLoader := skills.NewLoader(filepath.Join(homeAgents, "skills"), filepath.Join(projectAgents, "skills"))
 	if err := skillLoader.Load(); err != nil {
-		t.Fatal(err)
-	}
-	if err := memStore.RegisterTools(reg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1012,13 +947,12 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 	sess.SubscribeBus(bus)
 
 	pb := &prompt.Builder{
-		GlobalAgentsMDPath:  filepath.Join(homeAgents, "AGENTS.md"),
-		AgentsMDDirs:        []string{root, projectAgents},
-		ModulePromptContext: memorymodule.New(memoryDir).PromptContext,
-		Skills:              skillLoader,
-		WorkDir:             root,
-		Shell:               e2ePromptShellProfile(),
-		Now:                 func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
+		GlobalAgentsMDPath: filepath.Join(homeAgents, "AGENTS.md"),
+		AgentsMDDirs:       []string{root, projectAgents},
+		Skills:             skillLoader,
+		WorkDir:            root,
+		Shell:              e2ePromptShellProfile(),
+		Now:                func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
 	}
 
 	prov := &scriptProvider{
@@ -1043,24 +977,13 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 			},
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockText, Text: "portable persist"},
-					{Type: llm.BlockToolUse, ToolUseID: "p6", ToolName: "memory_write", Input: map[string]any{
-						"name": "portable-finding", "description": "portable e2e edited demo file",
-						"type": "project", "body": "edited via portable e2e",
-					}},
+					{Type: llm.BlockText, Text: "portable load skill"},
 					{Type: llm.BlockToolUse, ToolUseID: "p7", ToolName: "read", Input: map[string]any{"path": filepath.Join(projectAgents, "skills", "trim-tool", "SKILL.md")}},
 				}},
 				StopReason: llm.StopToolUse,
 			},
 			{
-				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockText, Text: "portable verify memory"},
-					{Type: llm.BlockToolUse, ToolUseID: "p8", ToolName: "memory_search", Input: map[string]any{"query": "portable"}},
-				}},
-				StopReason: llm.StopToolUse,
-			},
-			{
-				Message:    llm.TextMessage(llm.RoleAssistant, "PORTABLE COMPLETE: demo.txt edited, memory persisted, MCP echoed"),
+				Message:    llm.TextMessage(llm.RoleAssistant, "PORTABLE COMPLETE: demo.txt edited, skill loaded, MCP echoed"),
 				StopReason: llm.StopEndTurn,
 			},
 		},
@@ -1097,26 +1020,9 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 	if err != nil || !strings.Contains(string(demoData), "PORTABLE") || strings.Contains(string(demoData), "placeholder") {
 		t.Fatalf("demo.txt: data=%q err=%v", demoData, err)
 	}
-	mems, err := memStore.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	hasFinding := false
-	for _, m := range mems {
-		if m.Name == "portable-finding" {
-			hasFinding = true
-			if !strings.Contains(m.Body, "edited via portable e2e") {
-				t.Errorf("memory body lost: %+v", m)
-			}
-		}
-	}
-	if !hasFinding {
-		t.Fatalf("portable-finding memory not persisted; entries: %+v", mems)
-	}
-
 	convLines := readLines(t, filepath.Join(sess.Dir, "conversation.jsonl"))
-	if len(convLines) != 10 {
-		t.Errorf("conversation.jsonl line count = %d; want 10", len(convLines))
+	if len(convLines) != 8 {
+		t.Errorf("conversation.jsonl line count = %d; want 8", len(convLines))
 	}
 	for i, line := range convLines {
 		var m llm.Message

@@ -60,7 +60,7 @@ body`)
 	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "alpha" || got.MCP.Servers[0].Type != "stdio" || got.MCP.Servers[0].URL != "" || got.MCP.Servers[0].Command != os.Args[0] || got.MCP.Servers[0].Status != "connected" || got.MCP.Servers[0].ToolCount != 1 {
 		t.Fatalf("servers = %+v", got.MCP.Servers)
 	}
-	if got.Tools.Count != 34 || len(got.Tools.Groups) != 9 {
+	if got.Tools.Count != 31 || len(got.Tools.Groups) != 8 {
 		t.Fatalf("tools = %+v", got.Tools)
 	}
 	var observableToolNames []string

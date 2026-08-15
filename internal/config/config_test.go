@@ -1518,48 +1518,6 @@ func TestLoad_EnableUserAgentsResourcesDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
-func TestLoad_MemoryModuleDefaultsEnabledAndCanBeDisabled(t *testing.T) {
-	prepareConfigTest(t)
-	work := t.TempDir()
-
-	cfg, err := LoadForWorkDir(work)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cfg.MemoryModuleEnabled() {
-		t.Fatal("Memory Module should be enabled by default")
-	}
-
-	path := filepath.Join(work, ".juex", "juex.yaml")
-	writeTextFile(t, path, "modules:\n  memory:\n    enabled: false\n")
-	cfg, err = LoadForWorkDir(work)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.MemoryModuleEnabled() {
-		t.Fatal("modules.memory.enabled=false should disable the Memory Module")
-	}
-
-	override := filepath.Join(work, "override.yaml")
-	writeTextFile(t, override, "modules:\n  memory:\n    enabled: true\n")
-	cfg, err = LoadFromFileForWorkDir(override, work)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cfg.MemoryModuleEnabled() {
-		t.Fatal("explicit config should re-enable the Memory Module")
-	}
-}
-
-func TestMemoryModuleEnabledTreatsUnconfiguredProgrammaticConfigAsDefault(t *testing.T) {
-	if !(Config{}).MemoryModuleEnabled() {
-		t.Fatal("zero Config should preserve the default-enabled Memory Module")
-	}
-	if (Config{Modules: ModulesConfig{Memory: ModuleConfig{Configured: true}}}).MemoryModuleEnabled() {
-		t.Fatal("configured false should disable the Memory Module")
-	}
-}
-
 func TestLoadFromFile_EnableUserAgentsResourcesBoolValues(t *testing.T) {
 	cases := map[string]bool{
 		"true":  true,
@@ -1662,8 +1620,7 @@ func TestLoadForWorkDirUsesJUEXHomeForAgentState(t *testing.T) {
 		cfg.AgentAddress.EndpointLockPath() != filepath.Join(canonicalHome, ".locks", "endpoints", cfg.AgentID+".lock") {
 		t.Fatalf("agent address = id %q state %q endpoint lock %q", cfg.AgentAddress.ID(), cfg.AgentAddress.StateDir(), cfg.AgentAddress.EndpointLockPath())
 	}
-	if cfg.MemoryDir() != filepath.Join(cfg.AgentStateDir, "memory") ||
-		cfg.SessionsDir() != filepath.Join(cfg.AgentStateDir, "sessions") ||
+	if cfg.SessionsDir() != filepath.Join(cfg.AgentStateDir, "sessions") ||
 		cfg.HistoryPath() != filepath.Join(cfg.AgentStateDir, "history.json") ||
 		cfg.ObservablesStateDir() != filepath.Join(cfg.AgentStateDir, "observables") {
 		t.Fatalf("runtime paths = %+v", cfg.RuntimePaths())
@@ -1765,9 +1722,6 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 	if len(skills) != 2 || skills[0] != wantUserSkills || skills[1] != wantProjSkills {
 		t.Fatalf("skills = %v", skills)
 	}
-	if want := filepath.Join("/proj", ".juex", "memory"); cfg.MemoryDir() != want {
-		t.Fatalf("memory dir = %q, want %q", cfg.MemoryDir(), want)
-	}
 	if want := filepath.Join("/proj", ".juex", "sessions"); cfg.SessionsDir() != want {
 		t.Fatalf("sessions dir = %q, want %q", cfg.SessionsDir(), want)
 	}
@@ -1798,7 +1752,7 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 		t.Fatalf("extension dirs = home %q project %q", cfg.HomeExtensionsDir(), cfg.ProjectExtensionsDir())
 	}
 	runtimePaths := cfg.RuntimePaths()
-	if runtimePaths.WorkDir != filepath.Join("/proj") || runtimePaths.MemoryDir != cfg.MemoryDir() || runtimePaths.HistoryPath != cfg.HistoryPath() {
+	if runtimePaths.WorkDir != filepath.Join("/proj") || runtimePaths.HistoryPath != cfg.HistoryPath() {
 		t.Fatalf("runtime paths = %+v", runtimePaths)
 	}
 	resourcePaths := cfg.ResourcePaths()
@@ -1809,7 +1763,7 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 
 func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
 	cfg := Config{HomeAgentsDir: filepath.Join("/u", ".agents"), HomeJuexDir: filepath.Join("/u", ".juex"), EnableUserAgentsResources: true}
-	if cfg.MemoryDir() != "" || cfg.SessionsDir() != "" || cfg.HistoryPath() != "" || cfg.RuntimeConfigPath() != "" || cfg.ProjectAgentsDir() != "" {
+	if cfg.SessionsDir() != "" || cfg.HistoryPath() != "" || cfg.RuntimeConfigPath() != "" || cfg.ProjectAgentsDir() != "" {
 		t.Fatalf("empty WorkDir should yield empty work-local paths: %+v", cfg)
 	}
 	if cfg.ProjectExtensionsDir() != "" {

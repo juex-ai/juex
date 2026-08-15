@@ -180,6 +180,7 @@ type RuntimeHookInfo struct {
 	Events         []string
 	Tools          []string
 	Command        []string
+	Required       bool
 	TimeoutSeconds int
 	MaxOutputBytes int
 }
@@ -332,10 +333,7 @@ func (s RuntimeCatalogService) toolsStatus() (RuntimeToolsStatus, error) {
 		Shell: toolsShellProfile(s.cfg.Shell),
 	})
 	definitions = append(definitions, skillToolDefinitions()...)
-	moduleRegistry, err := newRuntimeModuleRegistry(s.cfg)
-	if err != nil {
-		return RuntimeToolsStatus{}, err
-	}
+	moduleRegistry := newRuntimeModuleRegistry()
 	moduleTools := tools.NewRegistry()
 	if err := moduleRegistry.RegisterTools(moduleTools); err != nil {
 		return RuntimeToolsStatus{}, err
@@ -357,7 +355,6 @@ func runtimeToolsStatusFromDefinitions(definitions []tools.ToolDefinition, defau
 		tools.ToolGroupShell,
 		tools.ToolGroupSearch,
 		tools.ToolGroupSkill,
-		tools.ToolGroupMemory,
 		tools.ToolGroupSessionState,
 		tools.ToolGroupSideSession,
 		tools.ToolGroupObservable,
@@ -423,6 +420,7 @@ func hooksStatus(cfg hooks.Config) RuntimeHooksStatus {
 			Events:         events,
 			Tools:          append([]string(nil), command.Tools...),
 			Command:        append([]string(nil), command.Command...),
+			Required:       command.Required,
 			TimeoutSeconds: timeoutSeconds,
 			MaxOutputBytes: maxOutputBytes,
 		})
@@ -431,10 +429,7 @@ func hooksStatus(cfg hooks.Config) RuntimeHooksStatus {
 }
 
 func (s RuntimeCatalogService) systemPromptStatus(skillLoader *skills.Loader, scratchpadDir string) (RuntimeSystemPromptStatus, error) {
-	moduleRegistry, err := newRuntimeModuleRegistry(s.cfg)
-	if err != nil {
-		return RuntimeSystemPromptStatus{}, err
-	}
+	moduleRegistry := newRuntimeModuleRegistry()
 	builder := &prompt.Builder{
 		GlobalAgentsMDPath:  s.cfg.GlobalAgentsMDPath(),
 		AgentsMDDirs:        s.cfg.AgentsMDDirs(),

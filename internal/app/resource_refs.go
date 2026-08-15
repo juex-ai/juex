@@ -84,13 +84,13 @@ func ResolveRuntimeResourceGraph(cfg config.Config) (RuntimeResourceGraph, error
 		return RuntimeResourceGraph{}, err
 	}
 
-	hookConfig, err := appendExtensionHooks(cfg.Hooks, extResources.HookFiles)
+	runtimeContexts := extensionRuntimeContexts(cfg, extResources.Extensions)
+	hookConfig, err := appendExtensionHooks(cfg.Hooks, extResources.HookFiles, runtimeContexts)
 	if err != nil {
 		return RuntimeResourceGraph{}, err
 	}
 
 	skillDirs := skillDirRefs(paths, extResources.SkillDirs)
-	runtimeContexts := extensionRuntimeContexts(cfg, extResources.Extensions)
 	mcpConfigs := mcpConfigRefs(paths, extResources.MCPConfigs, runtimeContexts)
 	observableConfigs := observableConfigRefs(extResources.ObservableConfigs, runtimeContexts)
 	return RuntimeResourceGraph{
@@ -360,7 +360,7 @@ func extensionRuntimeContexts(cfg config.Config, selected []extensions.Extension
 	return contexts
 }
 
-func appendExtensionHooks(base hooks.Config, refs []extensions.ResourceRef) (hooks.Config, error) {
+func appendExtensionHooks(base hooks.Config, refs []extensions.ResourceRef, runtimeContexts map[string]ExtensionRuntimeContext) (hooks.Config, error) {
 	out := hooks.Config{Commands: append([]hooks.CommandHook(nil), base.Commands...)}
 	names := map[string]string{}
 	for _, command := range out.Commands {
@@ -373,7 +373,13 @@ func appendExtensionHooks(base hooks.Config, refs []extensions.ResourceRef) (hoo
 		if err != nil {
 			return hooks.Config{}, err
 		}
+		runtimeContext := runtimeContexts[ref.ExtensionName]
 		for _, command := range cfg.Commands {
+			command.Runtime = hooks.RuntimeContext{
+				ExtensionDir:            runtimeContext.ExtensionDir,
+				ExtensionDataDir:        runtimeContext.DataDir,
+				PrepareExtensionDataDir: runtimeContext.PrepareDataDir,
+			}
 			if prev, ok := names[command.Name]; ok {
 				return hooks.Config{}, fmt.Errorf("extensions: duplicate hook %q from %s and %s", command.Name, prev, command.Source)
 			}

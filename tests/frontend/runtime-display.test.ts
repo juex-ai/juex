@@ -152,6 +152,7 @@ test("runtimeHooksSummaryLabel pluralizes configured hooks", () => {
           name: "guard",
           events: ["PreToolUse"],
           command: ["python3", "guard.py"],
+          required: false,
           timeout_seconds: 10,
           max_output_bytes: 65536,
         },

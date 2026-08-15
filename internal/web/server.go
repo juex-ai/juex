@@ -104,7 +104,7 @@ var errSessionInactive = errors.New("web: session is inactive")
 
 func NewServer(opts Options) *Server {
 	resources := newResourceEventHub(opts.Cfg.WorkDir, opts.Cfg.SessionsDir())
-	resources.setRuntimeInputs([]string{opts.Cfg.GlobalAgentsMDPath(), opts.Cfg.HistoryPath()}, opts.Cfg.MemoryDir())
+	resources.setRuntimeInputs([]string{opts.Cfg.GlobalAgentsMDPath(), opts.Cfg.HistoryPath()})
 	return &Server{
 		opts:          opts,
 		modelHealth:   llm.NewModelHealth(llm.ModelHealthOptions{}),
