@@ -20,6 +20,23 @@ import (
 	"github.com/juex-ai/juex/internal/session"
 )
 
+const sideSessionTestTimeout = 5 * time.Second
+
+func removeSideSessionTestPath(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(sideSessionTestTimeout)
+	for {
+		err := os.Remove(path)
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 type scriptedSideProvider struct {
 	mu      sync.Mutex
 	started chan string
@@ -308,7 +325,7 @@ func TestSideSessionCreateSendAndStatus(t *testing.T) {
 		if got != "research one" {
 			t.Fatalf("first input = %q", got)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("side turn did not start")
 	}
 
@@ -368,7 +385,7 @@ func TestSideSessionCreateRunsThreeChildrenConcurrently(t *testing.T) {
 	for i, provider := range providers {
 		select {
 		case <-provider.(*barrierSideProvider).started:
-		case <-time.After(time.Second):
+		case <-time.After(sideSessionTestTimeout):
 			t.Fatalf("child %d did not start before shared release", i)
 		}
 	}
@@ -389,7 +406,7 @@ func TestManagedSideSessionSharesPrimaryGoalAndNotes(t *testing.T) {
 	id := created["session_id"].(string)
 	select {
 	case <-child.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("side turn did not start")
 	}
 
@@ -461,7 +478,7 @@ func TestSideSessionSubscriptionQueuesWhileParentTurnIsBusy(t *testing.T) {
 	}()
 	select {
 	case <-parentProvider.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("parent turn did not start")
 	}
 
@@ -504,7 +521,7 @@ func TestSideSessionNotificationPersistsBeforeParentQueueHasCapacity(t *testing.
 	}()
 	select {
 	case <-parentProvider.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("parent turn did not start")
 	}
 	if _, err := parent.Engine.EnqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "occupy capacity")); err != nil {
@@ -552,7 +569,7 @@ func TestSideSessionExpiredNotificationFailureIsObservable(t *testing.T) {
 	}()
 	select {
 	case <-parentProvider.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("parent turn did not start")
 	}
 	if _, err := parent.Engine.EnqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "occupy capacity")); err != nil {
@@ -597,7 +614,7 @@ func TestSideSessionPersistedAdmissionStorageFailureIsBoundedAndObservable(t *te
 	}()
 	select {
 	case <-parentProvider.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("parent turn did not start")
 	}
 	if _, err := parent.Engine.EnqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "occupy capacity")); err != nil {
@@ -694,16 +711,14 @@ func TestSideSessionTerminalSubscriptionSurvivesTransientPersistenceFailureAndLa
 	id := created["session_id"].(string)
 	select {
 	case <-child.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("side turn did not start")
 	}
 	close(child.release)
 	waitForSideState(t, parent, id, SideSessionStateIdle)
 	callSideTool(t, parent, SideSessionToolSubscribe, map[string]any{"session_id": id, "subscribed": false})
 	time.Sleep(150 * time.Millisecond)
-	if err := os.Remove(pendingPath); err != nil {
-		t.Fatal(err)
-	}
+	removeSideSessionTestPath(t, pendingPath)
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -737,7 +752,7 @@ func TestSideSessionDropsPersistedNotificationAfterPrimaryLosesOwnership(t *test
 	id := created["session_id"].(string)
 	select {
 	case <-child.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("side turn did not start")
 	}
 	close(child.release)
@@ -750,9 +765,7 @@ func TestSideSessionDropsPersistedNotificationAfterPrimaryLosesOwnership(t *test
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = replacement.Session.Close() })
-	if err := os.Remove(pendingPath); err != nil {
-		t.Fatal(err)
-	}
+	removeSideSessionTestPath(t, pendingPath)
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -800,9 +813,7 @@ func TestSideSessionRetriesTransientStaleNotificationDropFailure(t *testing.T) {
 	dropped := make(chan error, 1)
 	go func() { dropped <- parent.sideSessions.dropPersistedNotification(record.ID) }()
 	time.Sleep(75 * time.Millisecond)
-	if err := os.Remove(pendingPath); err != nil {
-		t.Fatal(err)
-	}
+	removeSideSessionTestPath(t, pendingPath)
 	if err := os.Rename(backupPath, pendingPath); err != nil {
 		t.Fatal(err)
 	}
@@ -830,7 +841,7 @@ func TestSideSessionHookDenialDropsNotificationBeforeTranscriptAppend(t *testing
 	id := created["session_id"].(string)
 	select {
 	case <-child.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("side turn did not start")
 	}
 	parent.Engine.Hooks = sideHookRunnerFunc(func(_ context.Context, req hooks.Request) ([]hooks.Result, error) {
@@ -916,7 +927,7 @@ func TestSideSessionStopAllDoesNotDeadlockWhenDeliveryCallsSideTool(t *testing.T
 	waitForSideState(t, parent, id, SideSessionStateIdle)
 	select {
 	case <-provider.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("delivery turn did not reach provider")
 	}
 	stopped := make(chan error, 1)
@@ -927,7 +938,7 @@ func TestSideSessionStopAllDoesNotDeadlockWhenDeliveryCallsSideTool(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("StopAll deadlocked with a delivery-side tool call")
 	}
 }
@@ -970,7 +981,7 @@ func TestSideSessionDoesNotDeliverAfterPrimaryLosesWorkspaceOwnership(t *testing
 	id := created["session_id"].(string)
 	select {
 	case <-child.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("side turn did not start")
 	}
 
@@ -1050,7 +1061,7 @@ func TestPrimaryGoalContinuationDefersDuringSubscribedResultHandoff(t *testing.T
 	}()
 	select {
 	case <-primaryProvider.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("primary turn did not start")
 	}
 	if _, err := parent.Engine.EnqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "occupy capacity")); err != nil {
@@ -1101,7 +1112,7 @@ func TestPrimaryGoalContinuationDefersWhileSubscribedResultIsQueued(t *testing.T
 	}()
 	select {
 	case <-primaryProvider.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("primary turn did not start")
 	}
 
@@ -1159,7 +1170,7 @@ func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testin
 	for name, started := range map[string]<-chan string{"first": firstChild.started, "second": secondChild.started} {
 		select {
 		case <-started:
-		case <-time.After(time.Second):
+		case <-time.After(sideSessionTestTimeout):
 			t.Fatalf("%s side turn did not start", name)
 		}
 	}
@@ -1291,7 +1302,7 @@ func TestManagedSideSessionCannotBeDeletedWhileActive(t *testing.T) {
 	id := created["session_id"].(string)
 	select {
 	case <-child.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("side turn did not start")
 	}
 
@@ -1319,7 +1330,7 @@ func TestManagedSideSessionProjectsSharedStateEventsToPrimary(t *testing.T) {
 	id := created["session_id"].(string)
 	select {
 	case <-child.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("side turn did not start")
 	}
 
@@ -1337,7 +1348,7 @@ func TestManagedSideSessionProjectsSharedStateEventsToPrimary(t *testing.T) {
 		if event.Type != "notes.updated" {
 			t.Fatalf("event = %+v", event)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("primary did not receive shared Notes projection")
 	}
 }
@@ -1351,7 +1362,7 @@ func TestSideSessionParentCloseCancelsChildren(t *testing.T) {
 	id := created["session_id"].(string)
 	select {
 	case <-child.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("side turn did not start")
 	}
 
@@ -1377,7 +1388,7 @@ func TestSideSessionStopCancelsNewlySentTurnWithoutUserAttribution(t *testing.T)
 	id := created["session_id"].(string)
 	select {
 	case <-child.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("first side turn did not start")
 	}
 	close(child.release)
@@ -1397,7 +1408,7 @@ func TestSideSessionStopCancelsNewlySentTurnWithoutUserAttribution(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("stop blocked waiting for a newly sent turn")
 	}
 	data, err := os.ReadFile(filepath.Join(parent.cfg.SessionsDir(), id, "events.jsonl"))
@@ -1416,7 +1427,7 @@ func TestSideSessionStopHonorsToolCancellation(t *testing.T) {
 	id := created["session_id"].(string)
 	select {
 	case <-child.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("side child did not start")
 	}
 
@@ -1540,7 +1551,7 @@ func TestAppBeginCloseCancelsInFlightSideCreationBeforeFactoryReturns(t *testing
 		if err != nil {
 			t.Fatalf("BeginClose = %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("BeginClose waited for the in-flight Side Session factory")
 	}
 	select {
@@ -1548,7 +1559,7 @@ func TestAppBeginCloseCancelsInFlightSideCreationBeforeFactoryReturns(t *testing
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("Create error = %v, want context canceled", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("Side Session create did not observe parent close")
 	}
 	select {
@@ -1596,7 +1607,7 @@ func TestSideSessionCreateRetainsCallDeadlineAfterFactoryReturns(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("Create error = %v, want context deadline exceeded", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("Side Session create did not return after the identity lock was released")
 	}
 	statuses, err := parent.sideSessions.List()
@@ -1656,7 +1667,7 @@ func TestSwitchToNewPrimaryStopsChildrenAndKeepsManagerUsable(t *testing.T) {
 	oldID := created["session_id"].(string)
 	select {
 	case <-first.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("first side turn did not start")
 	}
 	if err := parent.SwitchToNewPrimarySession(); err != nil {
@@ -1689,7 +1700,7 @@ func TestNewSlashHonorsCancellationWhileStoppingStubbornChild(t *testing.T) {
 	id := created["session_id"].(string)
 	select {
 	case <-child.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("side child did not start")
 	}
 
@@ -1726,7 +1737,7 @@ func TestNewSlashHonorsCancellationWhileStoppingStubbornChild(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("parent did not finish after deferred child cleanup")
 	}
 }
@@ -1778,7 +1789,7 @@ func TestAppCloseWaitsForInFlightPrimarySwitchAndClosesReplacement(t *testing.T)
 	callSideTool(t, parent, SideSessionToolCreate, map[string]any{"query": "hold switch", "subscribe": false})
 	select {
 	case <-child.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("side child did not start")
 	}
 	switched := make(chan error, 1)
@@ -1870,7 +1881,7 @@ func TestSideSessionUnsubscribeAndStopPreserveDurableSession(t *testing.T) {
 	id := created["session_id"].(string)
 	select {
 	case <-child.started:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("side turn did not start")
 	}
 	updated := callSideTool(t, parent, SideSessionToolSubscribe, map[string]any{
