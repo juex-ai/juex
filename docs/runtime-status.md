@@ -143,7 +143,9 @@ turn.errored(other cause) -> errored
 ```
 
 `llm.requested` sets provider streaming; `llm.responded` and `llm.errored`
-clear it.
+clear it. `context.compact.summary_responded` and
+`context.compact.summary_errored` clear summary streaming while preserving the
+`compacting` phase for retries and final compaction persistence.
 Compaction records its previous lifecycle and phase internally so completion
 can resume an enclosing turn. Standalone compaction terminates through an
 explicit turn event.

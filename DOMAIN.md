@@ -255,7 +255,8 @@ domain boundary.
     one-shot hook context; `llm.requested` then declares dispatch.
     `llm.responded` or `llm.errored` terminates a Turn epoch, while a
     compaction-summary outcome terminates a compaction epoch. Transport retries
-    retain the same epoch.
+    retain the same epoch. A Provider response discarded after cancellation
+    terminates through `llm.errored` rather than becoming transcript history.
 13. **Observable definition and state are separate.** Project definitions
     follow the Workspace and read-only Extension definitions follow the selected
     Extension; generated runs, Observations, delivery records, and schedule

@@ -370,6 +370,19 @@ func TestStatusCompactionRequestPreservesCompactingPhase(t *testing.T) {
 	if snapshot.Turn == nil || snapshot.Turn.Phase != TurnPhaseCompacting || !snapshot.Turn.Streaming {
 		t.Fatalf("compaction request status = %+v", snapshot.Turn)
 	}
+
+	store.Publish(statusEvent("4", "context.compact.summary_responded", "compact-turn", ContextCompactSummaryRespondedPayload{}))
+	snapshot = store.Snapshot()
+	if snapshot.Turn == nil || snapshot.Turn.Phase != TurnPhaseCompacting || snapshot.Turn.Streaming {
+		t.Fatalf("compaction response status = %+v", snapshot.Turn)
+	}
+
+	store.Publish(statusEvent("5", "llm.requested", "compact-turn", LLMRequestedPayload{Purpose: "compaction"}))
+	store.Publish(statusEvent("6", "context.compact.summary_errored", "compact-turn", ContextCompactSummaryErroredPayload{}))
+	snapshot = store.Snapshot()
+	if snapshot.Turn == nil || snapshot.Turn.Phase != TurnPhaseCompacting || snapshot.Turn.Streaming {
+		t.Fatalf("compaction error status = %+v", snapshot.Turn)
+	}
 }
 
 func TestStatusStreamReturnsTransientStateAtSameDurableCursor(t *testing.T) {

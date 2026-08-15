@@ -871,8 +871,10 @@ checkpoint. `llm.responded` and `llm.errored` terminate successful and failed
 Turn epochs respectively; compaction summaries use dedicated required
 response/error outcomes. Provider transport retries carry the same epoch ID and
 reconstructed request digest. A model fallback records `llm.errored` before
-checkpointing the next candidate's epoch. A semantic summary retry or
-summary-model fallback checkpoints a new epoch before the next Provider call.
+checkpointing the next candidate's epoch. A Provider response returned after
+request cancellation is discarded and records `llm.errored` before the Turn
+stops. A semantic summary retry or summary-model fallback checkpoints a new
+epoch before the next Provider call.
 Provider credentials, arbitrary headers/query values, raw cache keys and
 retention values, raw endpoint URLs, and raw wire requests never enter the
 epoch schema.

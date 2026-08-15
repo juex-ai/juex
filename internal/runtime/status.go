@@ -397,6 +397,11 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		turn.State = TurnLifecycleActive
 		turn.Phase = TurnPhaseProviderIteration
 		turn.Streaming = false
+	case "context.compact.summary_responded", "context.compact.summary_errored":
+		turn := ensureTurnStatus(&next, event)
+		turn.State = TurnLifecycleActive
+		turn.Phase = TurnPhaseCompacting
+		turn.Streaming = false
 	case toolevents.RequestedType:
 		payload := payloadAs[toolevents.RequestedPayload](event.Payload)
 		upsertToolStatus(&next, event, payload.ToolUseID, payload.Name, ToolCallRequested, nil)

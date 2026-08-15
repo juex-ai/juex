@@ -810,17 +810,18 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			},
 		})
 		if err == nil {
+			if contextErr := cancellation.ContextError(ctx); contextErr != nil {
+				health.Complete(selection.Ticket, llm.ModelHealthSuccess, "")
+				discardErr := fmt.Errorf("provider response discarded: %w", contextErr)
+				if emitErr := e.emitProviderTurnErrored(turnID, request, candidate.Ref, discardErr); emitErr != nil {
+					return providerTurnResult{request: request}, fmt.Errorf("commit discarded provider response: %w", emitErr)
+				}
+				return providerTurnResult{request: request}, context.Canceled
+			}
 			health.Complete(selection.Ticket, llm.ModelHealthSuccess, "")
 			return providerTurnResult{response: resp, request: request, candidate: candidate, notice: notice}, nil
 		}
-		if emitErr := e.emit(events.Event{Type: "llm.errored", TurnID: turnID, Payload: LLMErroredPayload{
-			Iter:          request.iter,
-			Purpose:       "turn",
-			Model:         candidate.Ref,
-			Error:         err.Error(),
-			EpochID:       request.epochID,
-			RequestDigest: request.requestDigest,
-		}}); emitErr != nil {
+		if emitErr := e.emitProviderTurnErrored(turnID, request, candidate.Ref, err); emitErr != nil {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
 			return providerTurnResult{request: request}, &modelRequestError{
 				err:           errors.Join(err, fmt.Errorf("commit provider error: %w", emitErr)),
@@ -847,6 +848,17 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		base.hookContext = e.pendingHookRuntimeContextSnapshot()
 		base.history = e.activeContextLockedWithHookContext(base.hookContext).Messages
 	}
+}
+
+func (e *Engine) emitProviderTurnErrored(turnID string, request providerTurnRequest, model string, cause error) error {
+	return e.emit(events.Event{Type: "llm.errored", TurnID: turnID, Payload: LLMErroredPayload{
+		Iter:          request.iter,
+		Purpose:       "turn",
+		Model:         model,
+		Error:         cause.Error(),
+		EpochID:       request.epochID,
+		RequestDigest: request.requestDigest,
+	}})
 }
 
 func (e *Engine) providerRetryObserverForEpochLocked(turnID, purpose string, iter *int, epochID, requestDigest string) func(llm.ProviderRetryDiagnostic) {

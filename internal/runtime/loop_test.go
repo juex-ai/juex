@@ -5645,7 +5645,15 @@ func TestTurn_SignalCancellationEventPayload(t *testing.T) {
 func TestTurn_DoesNotDispatchToolAfterProviderCancelsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	prov := &cancelBeforeToolProvider{cancel: cancel}
-	eng, _ := newEngine(t, prov, false)
+	eng, bus := newEngine(t, prov, false)
+	var epoch provenance.RequestEpoch
+	var errored LLMErroredPayload
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epoch = event.Payload.(provenance.RequestEpochPayload).Epoch
+	})
+	bus.Subscribe("llm.errored", func(event events.Event) {
+		errored = event.Payload.(LLMErroredPayload)
+	})
 	var toolCalls atomic.Int32
 	eng.Tools.MustRegister(tools.Tool{
 		Name:   "should_not_run",
@@ -5665,6 +5673,9 @@ func TestTurn_DoesNotDispatchToolAfterProviderCancelsContext(t *testing.T) {
 	}
 	if got := toolCalls.Load(); got != 0 {
 		t.Fatalf("tool calls = %d, want 0 after cancellation", got)
+	}
+	if errored.EpochID != epoch.EpochID || errored.RequestDigest != epoch.RequestDigest || !strings.Contains(errored.Error, "response discarded") {
+		t.Fatalf("llm.errored = %+v, epoch = %+v", errored, epoch)
 	}
 }
 
