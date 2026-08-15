@@ -547,6 +547,7 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	var fallbackEvents []LLMFallbackPayload
+	var erroredEvents []LLMErroredPayload
 	var epochs []provenance.RequestEpoch
 	bus.Subscribe("llm.fallback", func(event events.Event) {
 		if payload, ok := event.Payload.(LLMFallbackPayload); ok {
@@ -556,6 +557,11 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
 		if payload, ok := event.Payload.(provenance.RequestEpochPayload); ok {
 			epochs = append(epochs, payload.Epoch)
+		}
+	})
+	bus.Subscribe("llm.errored", func(event events.Event) {
+		if payload, ok := event.Payload.(LLMErroredPayload); ok {
+			erroredEvents = append(erroredEvents, payload)
 		}
 	})
 
@@ -568,6 +574,9 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 	}
 	if len(epochs) != 2 || epochs[0].Attempt != 1 || epochs[1].Attempt != 2 || epochs[0].EpochID == epochs[1].EpochID {
 		t.Fatalf("fallback epochs = %+v", epochs)
+	}
+	if len(erroredEvents) != 1 || erroredEvents[0].EpochID != epochs[0].EpochID || erroredEvents[0].RequestDigest != epochs[0].RequestDigest || erroredEvents[0].Model != "primary:model" || !strings.Contains(erroredEvents[0].Error, "503") {
+		t.Fatalf("errored events = %+v, failed epoch = %+v", erroredEvents, epochs[0])
 	}
 	if got := messagesText(primary.histories[0]); !strings.Contains(got, "one-shot fallback context") {
 		t.Fatalf("primary request missing hook context:\n%s", got)
@@ -615,7 +624,7 @@ func TestTurnFallsBackAfterStreamedDelta(t *testing.T) {
 	}
 	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
 	var modelEvents []string
-	for _, eventType := range []string{"llm.requested", "llm.output_delta", "llm.fallback", "llm.responded"} {
+	for _, eventType := range []string{"llm.requested", "llm.output_delta", "llm.errored", "llm.fallback", "llm.responded"} {
 		bus.Subscribe(eventType, func(event events.Event) {
 			modelEvents = append(modelEvents, event.Type)
 		})
@@ -628,7 +637,7 @@ func TestTurnFallsBackAfterStreamedDelta(t *testing.T) {
 	if primary.calls != 1 || backup.calls != 1 {
 		t.Fatalf("calls primary=%d backup=%d", primary.calls, backup.calls)
 	}
-	wantEvents := []string{"llm.requested", "llm.output_delta", "llm.fallback", "llm.requested", "llm.responded"}
+	wantEvents := []string{"llm.requested", "llm.output_delta", "llm.errored", "llm.fallback", "llm.requested", "llm.responded"}
 	if !slices.Equal(modelEvents, wantEvents) {
 		t.Fatalf("model events = %v, want %v", modelEvents, wantEvents)
 	}
@@ -636,6 +645,28 @@ func TestTurnFallsBackAfterStreamedDelta(t *testing.T) {
 		if strings.Contains(message.FirstText(), "partial") {
 			t.Fatalf("abandoned provisional output persisted: %+v", eng.Session.History)
 		}
+	}
+}
+
+func TestTurnDoesNotFallbackWhenErrorOutcomeCannotCommit(t *testing.T) {
+	primary := &fallbackProvider{name: "primary:model", results: []fallbackProviderResult{{err: errors.New("status 503: unavailable")}}}
+	backup := &fallbackProvider{name: "backup:model", results: []fallbackProviderResult{{response: llm.Response{
+		Message: llm.TextMessage(llm.RoleAssistant, "must not run"), StopReason: llm.StopEndTurn,
+	}}}}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
+	}
+	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	want := errors.New("outcome sync failed")
+	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session, eventType: "llm.errored", err: want})
+
+	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, want) {
+		t.Fatalf("Turn() error = %v, want %v", err, want)
+	}
+	if primary.calls != 1 || backup.calls != 0 {
+		t.Fatalf("provider calls primary=%d backup=%d, want 1/0", primary.calls, backup.calls)
 	}
 }
 

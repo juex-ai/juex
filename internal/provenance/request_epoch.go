@@ -483,6 +483,10 @@ func (t *Tracker) ReplayEvent(event events.Event) error {
 		if err := t.recordResponseLinkLocked(event.Payload); err != nil {
 			return err
 		}
+	case "llm.errored":
+		if err := t.recordTerminalLinkLocked("llm.errored", event.Payload, "turn"); err != nil {
+			return err
+		}
 	case "llm.retry":
 		if err := t.validateRetryLinkLocked(event.Payload); err != nil {
 			return err
@@ -547,6 +551,9 @@ func (t *Tracker) PrepareEpoch(epoch *RequestEpoch) {
 
 func markSnapshotReused(snapshot *Snapshot, known map[string]struct{}) {
 	if snapshot == nil || snapshot.Digest == "" {
+		return
+	}
+	if snapshot.Omitted != "" {
 		return
 	}
 	if _, ok := known[snapshot.Digest]; !ok {

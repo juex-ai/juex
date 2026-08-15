@@ -813,6 +813,20 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			health.Complete(selection.Ticket, llm.ModelHealthSuccess, "")
 			return providerTurnResult{response: resp, request: request, candidate: candidate, notice: notice}, nil
 		}
+		if emitErr := e.emit(events.Event{Type: "llm.errored", TurnID: turnID, Payload: LLMErroredPayload{
+			Iter:          request.iter,
+			Purpose:       "turn",
+			Model:         candidate.Ref,
+			Error:         err.Error(),
+			EpochID:       request.epochID,
+			RequestDigest: request.requestDigest,
+		}}); emitErr != nil {
+			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			return providerTurnResult{request: request}, &modelRequestError{
+				err:           errors.Join(err, fmt.Errorf("commit provider error: %w", emitErr)),
+				contextWindow: candidateContextWindow(candidate, e.ContextWindow),
+			}
+		}
 		reason, eligible := llm.ClassifyFallbackError(err)
 		if !eligible {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")

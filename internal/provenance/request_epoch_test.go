@@ -176,6 +176,25 @@ func TestBuildRequestEpochBoundsSnapshots(t *testing.T) {
 	if epoch.SystemPromptSnapshot.Bytes <= MaxInlineSnapshotBytes {
 		t.Fatalf("system snapshot bytes = %d", epoch.SystemPromptSnapshot.Bytes)
 	}
+	tracker := NewTracker()
+	tracker.CommitEpoch(epoch)
+	repeated, err := BuildRequestEpoch(RequestInput{
+		Provider:     SafeProvider{ID: "test", Model: "model"},
+		SystemPrompt: strings.Repeat("x", MaxInlineSnapshotBytes+1),
+		Tools:        []llm.ToolSpec{},
+		History:      []llm.Message{message("user-1", llm.MessageKindDirect, "hello")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated.EpochID = "epoch-oversized-repeat"
+	tracker.PrepareEpoch(&repeated)
+	if repeated.SystemPromptSnapshot.Omitted != "size_limit" || repeated.SystemPromptSnapshot.Reused {
+		t.Fatalf("repeated oversized system snapshot = %+v", repeated.SystemPromptSnapshot)
+	}
+	if err := ValidateRequestEpoch(RequestEpochPayload{Epoch: repeated}); err != nil {
+		t.Fatalf("ValidateRequestEpoch() repeated oversized snapshot error = %v", err)
+	}
 	structured, err := BuildRequestEpoch(RequestInput{
 		Provider:           SafeProvider{ID: "test", Model: "model"},
 		SystemPrompt:       strings.Repeat("a", MaxInlineSnapshotBytes/2) + "|" + strings.Repeat("b", MaxInlineSnapshotBytes/2),
@@ -454,9 +473,17 @@ func TestRecoverValidatesEpochRequestResponseLinkage(t *testing.T) {
 		{Type: RequestEpochType, Payload: RequestEpochPayload{Epoch: epoch}},
 		{Type: "llm.requested", Payload: requestLink},
 		{Type: "llm.retry", Payload: requestLink},
-		{Type: "llm.responded", Payload: outcomeLink},
+		{Type: "llm.errored", Payload: outcomeLink},
 	}); err != nil {
-		t.Fatalf("Recover() valid chain error = %v", err)
+		t.Fatalf("Recover() valid errored chain error = %v", err)
+	}
+	if _, err := Recover([]events.Event{
+		{Type: RequestEpochType, Payload: RequestEpochPayload{Epoch: epoch}},
+		{Type: "llm.requested", Payload: requestLink},
+		{Type: "llm.errored", Payload: outcomeLink},
+		{Type: "llm.responded", Payload: outcomeLink},
+	}); err == nil || !strings.Contains(err.Error(), "terminal") {
+		t.Fatalf("Recover() duplicate turn outcome error = %v", err)
 	}
 	if _, err := Recover([]events.Event{
 		{Type: RequestEpochType, Payload: RequestEpochPayload{Epoch: epoch}},

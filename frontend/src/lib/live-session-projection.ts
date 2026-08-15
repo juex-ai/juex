@@ -257,6 +257,9 @@ export function projectLiveSessionEvent(
     case "llm.responded":
       next = applyAssistantResponse(next, event);
       break;
+    case "llm.errored":
+      next = resetPendingAssistantOutput(next, event.turn_id, true);
+      break;
     case "llm.retry":
       if (event.payload.purpose !== "compaction") {
         next = resetPendingAssistantOutput(

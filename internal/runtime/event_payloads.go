@@ -135,6 +135,15 @@ type LLMRespondedPayload struct {
 	RequestDigest string                       `json:"request_digest,omitempty"`
 }
 
+type LLMErroredPayload struct {
+	Iter          int    `json:"iter"`
+	Purpose       string `json:"purpose"`
+	Model         string `json:"model,omitempty"`
+	Error         string `json:"error"`
+	EpochID       string `json:"epoch_id"`
+	RequestDigest string `json:"request_digest"`
+}
+
 type LLMOutputDeltaPayload struct {
 	Iter  int    `json:"iter"`
 	Model string `json:"model,omitempty"`

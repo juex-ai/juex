@@ -115,6 +115,12 @@ func TestStatusStoreProjectsLayeredTransitions(t *testing.T) {
 	snapshot = apply("3", "llm.requested", "turn-1", LLMRequestedPayload{Iter: 0})
 	assertTurnStatus(t, snapshot, TurnLifecycleActive, TurnPhaseProviderIteration, true)
 
+	snapshot = apply("3-error", "llm.errored", "turn-1", LLMErroredPayload{Iter: 0, Purpose: "turn", Error: "status 503"})
+	assertTurnStatus(t, snapshot, TurnLifecycleActive, TurnPhaseProviderIteration, false)
+
+	snapshot = apply("3-fallback", "llm.requested", "turn-1", LLMRequestedPayload{Iter: 0})
+	assertTurnStatus(t, snapshot, TurnLifecycleActive, TurnPhaseProviderIteration, true)
+
 	snapshot = apply("4", "llm.responded", "turn-1", LLMRespondedPayload{
 		TokenUsage: llm.Usage{InputTokens: 5, OutputTokens: 2},
 		ContextUsage: &llm.ContextUsage{

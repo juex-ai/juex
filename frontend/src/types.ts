@@ -318,6 +318,7 @@ export const BROWSER_EVENT_TYPES = [
   "turn.errored",
   "llm.requested",
   "llm.responded",
+  "llm.errored",
   "provider.request_epoch",
   "llm.output_delta",
   "llm.retry",
@@ -416,6 +417,15 @@ export interface LLMOutputDeltaPayload {
   kind: string;
   index: number;
   text: string;
+}
+
+export interface LLMErroredPayload {
+  iter: number;
+  purpose: "turn";
+  model?: string;
+  error: string;
+  epoch_id: string;
+  request_digest: string;
 }
 
 export interface LLMRetryPayload {
@@ -868,6 +878,7 @@ export type BrowserEvent =
   | (BrowserEventBase<"turn.errored"> & { payload: TurnErroredPayload })
   | (BrowserEventBase<"llm.requested"> & { payload: LLMRequestedPayload })
   | (BrowserEventBase<"llm.responded"> & { payload: LLMRespondedPayload })
+  | (BrowserEventBase<"llm.errored"> & { payload: LLMErroredPayload })
   | (BrowserEventBase<"provider.request_epoch"> & {
       payload: ProviderRequestEpochPayload;
     })

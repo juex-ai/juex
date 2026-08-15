@@ -230,6 +230,21 @@ test("projectLiveSessionEvent clears abandoned deltas when the model falls back"
     payload: { iter: 0, model: "primary:model", kind: "text", index: 0, text: "abandoned" },
   });
   state = apply(state, {
+    id: "primary-error",
+    type: "llm.errored",
+    ts: "2026-06-15T00:00:01.500Z",
+    turn_id: "turn-fallback-stream",
+    payload: {
+      iter: 0,
+      purpose: "turn",
+      model: "primary:model",
+      error: "status 503",
+      epoch_id: "epoch-primary",
+      request_digest: "digest-primary",
+    },
+  });
+  assert.deepEqual(state.messages[1].blocks, []);
+  state = apply(state, {
     id: "fallback",
     type: "llm.fallback",
     ts: "2026-06-15T00:00:02Z",

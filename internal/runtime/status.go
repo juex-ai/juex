@@ -392,6 +392,11 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		if payload.ContextUsage != nil {
 			next.ContextUsage = cloneContextUsage(payload.ContextUsage)
 		}
+	case "llm.errored":
+		turn := ensureTurnStatus(&next, event)
+		turn.State = TurnLifecycleActive
+		turn.Phase = TurnPhaseProviderIteration
+		turn.Streaming = false
 	case toolevents.RequestedType:
 		payload := payloadAs[toolevents.RequestedPayload](event.Payload)
 		upsertToolStatus(&next, event, payload.ToolUseID, payload.Name, ToolCallRequested, nil)

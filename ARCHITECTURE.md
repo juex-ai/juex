@@ -838,7 +838,7 @@ required-or-ignorable replay policy.
 
 Standard cataloged families include `turn.started/completed/errored`,
 `provider.request_epoch`, `provider.hook_context.queued`,
-`llm.requested/output_delta/responded`,
+`llm.requested/output_delta/responded/errored`,
 `tool.requested/running/output_delta/completed/errored/outcome_unknown`,
 `transcript.repaired`, `pending_input.*`, `context.compact.*`, and
 `context.projection.applied`.
@@ -867,9 +867,11 @@ and derives queued batches minus committed epoch consumption without materializi
 the journal.
 
 `llm.requested` declares either `turn` or `compaction` dispatch after the epoch
-checkpoint. `llm.responded` terminates Turn epochs; compaction summaries use
-dedicated required response/error outcomes. Provider transport retries carry
-the same epoch ID and reconstructed request digest. A semantic summary retry or
+checkpoint. `llm.responded` and `llm.errored` terminate successful and failed
+Turn epochs respectively; compaction summaries use dedicated required
+response/error outcomes. Provider transport retries carry the same epoch ID and
+reconstructed request digest. A model fallback records `llm.errored` before
+checkpointing the next candidate's epoch. A semantic summary retry or
 summary-model fallback checkpoints a new epoch before the next Provider call.
 Provider credentials, arbitrary headers/query values, raw cache keys and
 retention values, raw endpoint URLs, and raw wire requests never enter the
@@ -878,9 +880,9 @@ epoch schema.
 `llm.output_delta` and `tool.output_delta` are cataloged live-only signals and
 are not appended to the session journal or logs. CLI and browser
 subscribers may render them provisionally; the following durable
-`llm.responded`, `tool.completed`, or `tool.errored` event is authoritative and
-replaces the matching provisional content. Terminal Tool Events include the
-exact Provider-visible Tool Result block and its result-message id under
+`llm.responded`, `llm.errored`, `tool.completed`, or `tool.errored` event is
+authoritative and replaces the matching provisional content. Terminal Tool
+Events include the exact Provider-visible Tool Result block and its result-message id under
 `payload.outcome`, while preview, error, and structured result fields remain
 diagnostic projections. The `internal/toolevents`
 constructor fixes `tool.output_delta` as transient, while persistence

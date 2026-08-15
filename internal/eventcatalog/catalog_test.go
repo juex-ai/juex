@@ -133,6 +133,21 @@ func TestDefaultCatalogValidatesProviderRequestProvenance(t *testing.T) {
 	}}); err == nil {
 		t.Fatal("llm.requested with unknown purpose was accepted")
 	}
+	errored, err := Default().Prepare(events.Event{Type: "llm.errored", Payload: juexruntime.LLMErroredPayload{
+		Iter: 0, Purpose: "turn", Model: "test:model", Error: "status 503",
+		EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errored.SchemaVersion != 1 || errored.ReplayPolicy != events.ReplayRequired {
+		t.Fatalf("llm.errored schema = v%d/%q", errored.SchemaVersion, errored.ReplayPolicy)
+	}
+	if _, err := Default().Prepare(events.Event{Type: "llm.errored", Payload: juexruntime.LLMErroredPayload{
+		Iter: 0, Purpose: "turn", Error: "status 503",
+	}}); err == nil {
+		t.Fatal("llm.errored without epoch identity was accepted")
+	}
 	compactionRetry, err := Default().Prepare(events.Event{Type: "llm.retry", Payload: juexruntime.LLMRetryPayload{
 		Purpose: "compaction", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
 	}})

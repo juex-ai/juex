@@ -46,6 +46,7 @@ func builtinDefinitions() []Definition {
 		required("turn.errored", func() any { return &juexruntime.TurnErroredPayload{} }, true),
 		requiredValidated("llm.requested", 3, func() any { return &juexruntime.LLMRequestedPayload{} }, true, validateLLMRequestedPayload),
 		requiredValidated("llm.responded", 3, func() any { return &juexruntime.LLMRespondedPayload{} }, true, validateLLMRespondedPayload),
+		requiredValidated("llm.errored", 1, func() any { return &juexruntime.LLMErroredPayload{} }, true, validateLLMErroredPayload),
 		requiredValidated(provenance.RequestEpochType, 1, func() any { return &provenance.RequestEpochPayload{} }, true, validateRequestEpochPayload),
 		requiredValidated(provenance.HookContextQueuedType, 1, func() any { return &provenance.HookContextQueuedPayload{} }, false, validateHookContextQueuedPayload),
 		transient("llm.output_delta", func() any { return &juexruntime.LLMOutputDeltaPayload{} }),
@@ -169,6 +170,20 @@ func validateLLMRespondedPayload(payload any) error {
 			return fmt.Errorf("llm responded tool_use_id %q is duplicated", call.ToolUseID)
 		}
 		seen[call.ToolUseID] = struct{}{}
+	}
+	return nil
+}
+
+func validateLLMErroredPayload(payload any) error {
+	value, ok := payload.(juexruntime.LLMErroredPayload)
+	if !ok {
+		return fmt.Errorf("unexpected llm errored payload %T", payload)
+	}
+	if value.Purpose != "turn" {
+		return fmt.Errorf("llm errored purpose must be turn")
+	}
+	if value.Iter < 0 || value.Error == "" || value.EpochID == "" || value.RequestDigest == "" {
+		return fmt.Errorf("llm errored identity requires error, epoch_id, request_digest, and a non-negative iter")
 	}
 	return nil
 }
