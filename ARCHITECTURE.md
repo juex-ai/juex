@@ -852,16 +852,19 @@ while Web owns status attachment and SSE framing.
 `provider.hook_context.queued` durably records an ordered, bounded batch before
 it enters provider-visible memory. `provider.request_epoch` records the final
 projected message IDs and content digests, compaction marker, safe Provider
-descriptor, hashed cache-policy identity, and bounded system/tool snapshots or
+descriptor with hashed endpoint/header/query identities, hashed cache-policy
+identity, and bounded system/tool snapshots or
 digest references. System prompt snapshots preserve the ordered section
 composition, so stable guidance is reused by digest while a changing Operating
 Context contributes only its small section body. Provider-visible context
-synthesized outside the transcript, including Goal, Notes, and model-change
-notices, carries a bounded full-message snapshot; one-shot hook context instead
-resolves through its queued Event. Committing the epoch consumes its included
-one-shot hook-context IDs. Session attachment streams the journal through the
-provenance reducer, which ignores unrelated Events and derives queued batches minus
-committed epoch consumption without materializing the journal.
+synthesized outside the transcript, including Goal, Notes, model-change notices,
+and synthesized compaction input, carries a bounded full-message snapshot;
+one-shot hook context instead resolves through its queued Event. Committing the
+epoch consumes its included one-shot hook-context IDs and releases their in-memory
+bodies while retaining compact duplicate-validation IDs. Session attachment
+streams the journal through the provenance reducer, which ignores unrelated Events
+and derives queued batches minus committed epoch consumption without materializing
+the journal.
 
 `llm.requested` declares either `turn` or `compaction` dispatch after the epoch
 checkpoint. `llm.responded` terminates Turn epochs; compaction summaries use

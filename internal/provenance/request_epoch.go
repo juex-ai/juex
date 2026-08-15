@@ -31,6 +31,8 @@ type SafeProvider struct {
 	Protocol              llm.Protocol             `json:"protocol,omitempty"`
 	Model                 string                   `json:"model,omitempty"`
 	EndpointDigest        string                   `json:"endpoint_digest,omitempty"`
+	HeaderDigest          string                   `json:"header_digest,omitempty"`
+	QueryDigest           string                   `json:"query_digest,omitempty"`
 	ThinkingEffort        string                   `json:"thinking_effort,omitempty"`
 	Capabilities          llm.ProviderCapabilities `json:"capabilities"`
 	ReasoningReplayFields []string                 `json:"reasoning_replay_fields,omitempty"`
@@ -43,11 +45,21 @@ func SafeProviderFromProfile(profile llm.ProviderProfile) SafeProvider {
 		Protocol:              profile.Protocol,
 		Model:                 profile.Model,
 		EndpointDigest:        safeEndpointDigest(profile.BaseURL),
+		HeaderDigest:          safeStringMapDigest(profile.Headers),
+		QueryDigest:           safeStringMapDigest(profile.Query),
 		ThinkingEffort:        profile.ThinkingEffort,
 		Capabilities:          profile.Capabilities,
 		ReasoningReplayFields: append([]string(nil), profile.Compat.ReasoningReplayFields...),
 		CodexTransport:        profile.Compat.CodexTransport,
 	}
+}
+
+func safeStringMapDigest(values map[string]string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	raw, _ := json.Marshal(values)
+	return digest(raw)
 }
 
 func safeEndpointDigest(raw string) string {
@@ -197,7 +209,7 @@ func BuildRequestEpoch(input RequestInput) (RequestEpoch, error) {
 		if err != nil {
 			return RequestEpoch{}, fmt.Errorf("provenance: history message digest at index %d: %w", index, err)
 		}
-		source := messageSource(message, hookIDs)
+		source := messageSource(message, hookIDs, purpose)
 		messageRefs[index] = MessageRef{ID: message.ID, Source: source, ContentDigest: messageSnapshot.Digest}
 		if messageSnapshotRequired(source) {
 			if messageSnapshot.Omitted != "" {
@@ -290,9 +302,12 @@ func messageDigestRefs(messages []MessageRef) []messageDigestRef {
 	return refs
 }
 
-func messageSource(message llm.Message, hookIDs map[string]struct{}) string {
+func messageSource(message llm.Message, hookIDs map[string]struct{}, purpose string) string {
 	if _, ok := hookIDs[message.ID]; ok {
 		return "hook_context"
+	}
+	if purpose == "compaction" {
+		return "compaction_input"
 	}
 	switch message.Kind {
 	case llm.MessageKindRuntimeContext:
@@ -307,7 +322,7 @@ func messageSource(message llm.Message, hookIDs map[string]struct{}) string {
 }
 
 func messageSnapshotRequired(source string) bool {
-	return source == "runtime_context" || source == "model_change"
+	return source == "runtime_context" || source == "model_change" || source == "compaction_input"
 }
 
 func newSnapshot(value any) (Snapshot, error) {
@@ -394,7 +409,7 @@ func cloneCompaction(selection CompactionSelection) CompactionSelection {
 type Tracker struct {
 	mu        sync.Mutex
 	queued    []llm.Message
-	consumed  map[string]struct{}
+	hookIDs   map[string]struct{}
 	known     map[string]struct{}
 	epochs    map[string]string
 	purposes  map[string]string
@@ -404,7 +419,7 @@ type Tracker struct {
 
 func NewTracker() *Tracker {
 	return &Tracker{
-		consumed:  make(map[string]struct{}),
+		hookIDs:   make(map[string]struct{}),
 		known:     make(map[string]struct{}),
 		epochs:    make(map[string]string),
 		purposes:  make(map[string]string),
@@ -439,9 +454,10 @@ func (t *Tracker) ReplayEvent(event events.Event) error {
 			return err
 		}
 		for _, message := range payload.Messages {
-			if t.hasQueuedIDLocked(message.ID) {
+			if _, duplicate := t.hookIDs[message.ID]; duplicate {
 				return fmt.Errorf("provenance: duplicate queued hook context id %q", message.ID)
 			}
+			t.hookIDs[message.ID] = struct{}{}
 			t.queued = append(t.queued, message)
 		}
 	case RequestEpochType:
@@ -492,17 +508,9 @@ func (t *Tracker) AddQueued(message llm.Message) {
 		return
 	}
 	t.mu.Lock()
+	t.hookIDs[message.ID] = struct{}{}
 	t.queued = append(t.queued, message)
 	t.mu.Unlock()
-}
-
-func (t *Tracker) hasQueuedIDLocked(id string) bool {
-	for _, message := range t.queued {
-		if message.ID == id {
-			return true
-		}
-	}
-	return false
 }
 
 func (t *Tracker) PendingHookContext() []llm.Message {
@@ -516,12 +524,7 @@ func (t *Tracker) PendingHookContext() []llm.Message {
 
 func (t *Tracker) pendingHookContextLocked() []llm.Message {
 	pending := make([]llm.Message, 0, len(t.queued))
-	for _, message := range t.queued {
-		if _, ok := t.consumed[message.ID]; ok {
-			continue
-		}
-		pending = append(pending, message)
-	}
+	pending = append(pending, t.queued...)
 	return pending
 }
 
@@ -577,9 +580,27 @@ func (t *Tracker) recordEpochLocked(epoch RequestEpoch) {
 			recordKnownSnapshot(*message.Snapshot, t.known)
 		}
 	}
-	for _, id := range epoch.HookContextMessageIDs {
-		t.consumed[id] = struct{}{}
+	t.releaseConsumedHookContextLocked(epoch.HookContextMessageIDs)
+}
+
+func (t *Tracker) releaseConsumedHookContextLocked(ids []string) {
+	if len(ids) == 0 || len(t.queued) == 0 {
+		return
 	}
+	consumed := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		consumed[id] = struct{}{}
+	}
+	write := 0
+	for _, message := range t.queued {
+		if _, ok := consumed[message.ID]; ok {
+			continue
+		}
+		t.queued[write] = message
+		write++
+	}
+	clear(t.queued[write:])
+	t.queued = t.queued[:write]
 }
 
 func recordKnownSnapshot(snapshot Snapshot, known map[string]struct{}) {

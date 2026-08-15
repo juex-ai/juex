@@ -14,7 +14,7 @@ func TestBuildRequestEpochDigestTracksEffectiveEnvelope(t *testing.T) {
 		Purpose: "turn",
 		Provider: SafeProvider{
 			ID: "openai", Protocol: llm.ProtocolOpenAIResponses, Model: "gpt-test",
-			EndpointDigest: "endpoint-a", ThinkingEffort: "high",
+			EndpointDigest: "endpoint-a", HeaderDigest: "headers-a", QueryDigest: "query-a", ThinkingEffort: "high",
 			Capabilities: llm.ProviderCapabilities{Tools: true, Streaming: true},
 		},
 		ContextWindow:   128000,
@@ -55,6 +55,8 @@ func TestBuildRequestEpochDigestTracksEffectiveEnvelope(t *testing.T) {
 		"purpose":  func(in *RequestInput) { in.Purpose = "compaction" },
 		"provider": func(in *RequestInput) { in.Provider.Model = "gpt-other" },
 		"endpoint": func(in *RequestInput) { in.Provider.EndpointDigest = "endpoint-b" },
+		"headers":  func(in *RequestInput) { in.Provider.HeaderDigest = "headers-b" },
+		"query":    func(in *RequestInput) { in.Provider.QueryDigest = "query-b" },
 		"cache": func(in *RequestInput) {
 			in.CachePolicy = SafeCachePolicyFrom(llm.CachePolicy{StablePrefixKey: "juex:session-b", Retention: "1h"})
 		},
@@ -121,6 +123,9 @@ func TestSafeProviderFromProfileExcludesSecrets(t *testing.T) {
 	if descriptor.EndpointDigest == "" {
 		t.Fatal("safe provider endpoint digest is empty")
 	}
+	if descriptor.HeaderDigest == "" || descriptor.QueryDigest == "" {
+		t.Fatalf("safe provider request-option digests = %q/%q", descriptor.HeaderDigest, descriptor.QueryDigest)
+	}
 
 	credentialsChanged := profile
 	credentialsChanged.BaseURL = "https://other:changed@example.test/v1/" + secret + "?token=changed#other"
@@ -131,6 +136,27 @@ func TestSafeProviderFromProfileExcludesSecrets(t *testing.T) {
 	serviceChanged.BaseURL = "https://example.test/v2/" + secret
 	if got := SafeProviderFromProfile(serviceChanged).EndpointDigest; got == descriptor.EndpointDigest {
 		t.Fatalf("service endpoint change retained digest %s", got)
+	}
+	headerChanged := profile
+	headerChanged.Headers = map[string]string{"Authorization": "other-secret"}
+	if got := SafeProviderFromProfile(headerChanged); got.HeaderDigest == descriptor.HeaderDigest || got.QueryDigest != descriptor.QueryDigest {
+		t.Fatalf("header-only change produced descriptor %+v from %+v", got, descriptor)
+	}
+	queryChanged := profile
+	queryChanged.Query = map[string]string{"token": "other-secret"}
+	if got := SafeProviderFromProfile(queryChanged); got.QueryDigest == descriptor.QueryDigest || got.HeaderDigest != descriptor.HeaderDigest {
+		t.Fatalf("query-only change produced descriptor %+v from %+v", got, descriptor)
+	}
+	reordered := profile
+	reordered.Headers = make(map[string]string)
+	reordered.Headers["X-Route"] = "stable"
+	reordered.Headers["Authorization"] = secret
+	ordered := profile
+	ordered.Headers = make(map[string]string)
+	ordered.Headers["Authorization"] = secret
+	ordered.Headers["X-Route"] = "stable"
+	if got, want := SafeProviderFromProfile(reordered).HeaderDigest, SafeProviderFromProfile(ordered).HeaderDigest; got != want {
+		t.Fatalf("canonical header digests differ: %s != %s", got, want)
 	}
 }
 
@@ -336,6 +362,12 @@ func TestTrackerRecoversQueuedMinusCheckpointedHookContextAndDeduplicatesSnapsho
 	pending := tracker.PendingHookContext()
 	if len(pending) != 1 || pending[0].ID != "hook-2" {
 		t.Fatalf("pending hook context = %+v", pending)
+	}
+	if len(tracker.queued) != 1 || tracker.queued[0].ID != "hook-2" {
+		t.Fatalf("retained hook context bodies = %+v", tracker.queued)
+	}
+	if err := tracker.ReplayEvent(events.Event{Type: HookContextQueuedType, Payload: queued}); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("ReplayEvent() consumed duplicate hook error = %v", err)
 	}
 
 	repeated := epoch

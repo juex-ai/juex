@@ -47,11 +47,11 @@ func (e *Engine) generateCompactionSummaryLocked(
 	attempt := 1
 	resp, epoch, err := e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, maxOutputTokens, attempt)
 	var usage llm.Usage
+	usage.Add(resp.Usage)
 	if isCompactionSummaryJournalError(err) {
 		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
 	}
 	if err == nil {
-		usage.Add(resp.Usage)
 		if summary, ok := completeCompactionSummaryText(resp); ok {
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
 		}
@@ -76,11 +76,11 @@ func (e *Engine) generateCompactionSummaryLocked(
 		maxOutputTokens = retryMaxOutputTokens
 		attempt++
 		resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, maxOutputTokens, attempt)
+		usage.Add(resp.Usage)
 		if isCompactionSummaryJournalError(err) {
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
 		}
 		if err == nil {
-			usage.Add(resp.Usage)
 			if summary, ok := completeCompactionSummaryText(resp); ok {
 				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
 			}
@@ -103,11 +103,11 @@ func (e *Engine) generateCompactionSummaryLocked(
 		provider = e.Provider
 		attempt++
 		resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, maxOutputTokens, attempt)
+		usage.Add(resp.Usage)
 		if isCompactionSummaryJournalError(err) {
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
 		}
 		if err == nil {
-			usage.Add(resp.Usage)
 			if summary, ok := completeCompactionSummaryText(resp); ok {
 				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
 			}

@@ -58,7 +58,7 @@ domain boundary.
 | --- | --- |
 | Provider | A model service adapter that exchanges Juex's canonical messages, Tool definitions, usage, and stop reasons with an external model service. |
 | Provider Profile | The resolved Provider identity, model, Protocol, endpoint and credential inputs, compatibility options, and Capability Set used for a request. |
-| Request Epoch | A durable, secret-safe identity for one effective Provider request envelope. It records safe Provider settings including hashed endpoint and cache-policy identities, section-deduplicated system snapshots, bounded tool and derived runtime-context snapshots, ordered message IDs and content digests, compaction selection, and one-shot hook context without duplicating the transcript or wire request. |
+| Request Epoch | A durable, secret-safe identity for one effective Provider request envelope. It records safe Provider settings including hashed endpoint, header, query, and cache-policy identities, section-deduplicated system snapshots, bounded tool and derived runtime-context snapshots, ordered message IDs and content digests, compaction selection, and one-shot hook context without duplicating the transcript or wire request. |
 | Protocol | A Provider wire contract, such as Anthropic Messages, OpenAI Responses, OpenAI Codex Responses, or OpenAI-compatible Chat. |
 | Capability Set | Explicit gates describing which optional behaviors a Provider Profile supports, including tools, vision, streaming, reasoning controls/replay, and output-token control. |
 | Tool | A named, schema-described operation available to the model. Builtin, skill, memory, Observable, model-state, and MCP tools share one runtime catalog and result contract. |

@@ -2887,12 +2887,47 @@ func TestCompactCheckpointsEachSummaryAttemptAndLinksOutcomes(t *testing.T) {
 		if outcomes[index].EpochID != epoch.EpochID || outcomes[index].RequestDigest != epoch.RequestDigest || outcomes[index].Attempt != index+1 {
 			t.Fatalf("outcome %d = %+v, epoch = %+v", index, outcomes[index], epoch)
 		}
+		if len(epoch.Messages) != 1 || epoch.Messages[0].Source != "compaction_input" || epoch.Messages[0].Snapshot == nil {
+			t.Fatalf("epoch %d synthesized summary history = %+v", index, epoch.Messages)
+		}
+		var reconstructed llm.Message
+		if err := json.Unmarshal(epoch.Messages[0].Snapshot.Content, &reconstructed); err != nil {
+			t.Fatal(err)
+		}
+		if reconstructed.FirstText() != provider.histories[index][0].FirstText() {
+			t.Fatalf("epoch %d summary history body was not reconstructable", index)
+		}
 	}
 	if epochs[0].EpochID == epochs[1].EpochID || epochs[0].RequestDigest == epochs[1].RequestDigest {
 		t.Fatalf("semantic retry reused epoch/digest: %+v", epochs)
 	}
 	if retry.EpochID != epochs[0].EpochID || retry.RequestDigest != epochs[0].RequestDigest {
 		t.Fatalf("retry link = %+v, first epoch = %+v", retry, epochs[0])
+	}
+}
+
+func TestCompactRetainsProviderUsageWhenSummaryOutcomeCommitFails(t *testing.T) {
+	provider := &scriptedCompactionProvider{
+		name: "thinking:model",
+		attempts: []scriptedCompactionAttempt{{response: llm.Response{
+			Message:    llm.TextMessage(llm.RoleAssistant, "summary"),
+			StopReason: llm.StopEndTurn,
+			Usage:      llm.Usage{InputTokens: 13, OutputTokens: 5},
+		}}},
+	}
+	eng, bus := newEngine(t, provider, false)
+	configureCompactionRetryTest(t, eng, 30, 2000)
+	want := errors.New("summary outcome sync failed")
+	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session, eventType: "context.compact.summary_responded", err: want})
+
+	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); !errors.Is(err, want) {
+		t.Fatalf("Compact() error = %v, want %v", err, want)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", provider.calls)
+	}
+	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 13, OutputTokens: 5}) {
+		t.Fatalf("token usage = %+v, want dispatched provider usage", usage)
 	}
 }
 
@@ -2964,7 +2999,8 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 			{response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "recovered summary")}},
 		},
 	}
-	eng, _ = newEngine(t, provider, false)
+	var bus *events.Bus
+	eng, bus = newEngine(t, provider, false)
 	configureCompactionRetryTest(t, eng, 30, 2000)
 	eng.ContextWindow = 5000
 	eng.Compaction.ReserveTokens = 1000
@@ -2977,12 +3013,19 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 	if _, err := eng.Notes.Update("- [ ] original compact note"); err != nil {
 		t.Fatal(err)
 	}
+	var epochs []provenance.RequestEpoch
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
 
 	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); err != nil {
 		t.Fatal(err)
 	}
 	if len(provider.histories) != 2 {
 		t.Fatalf("summary requests = %d, want 2", len(provider.histories))
+	}
+	if len(epochs) != len(provider.histories) {
+		t.Fatalf("request epochs = %d, want %d", len(epochs), len(provider.histories))
 	}
 	for i, history := range provider.histories {
 		body := history[0].FirstText()
@@ -2993,6 +3036,16 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 		}
 		if strings.Contains(body, "Mutated after") || strings.Contains(body, "mutated after") {
 			t.Fatalf("request %d used state mutated during retry:\n%s", i+1, body)
+		}
+		if len(epochs[i].Messages) != 1 || epochs[i].Messages[0].Snapshot == nil {
+			t.Fatalf("request %d epoch message = %+v", i+1, epochs[i].Messages)
+		}
+		var reconstructed llm.Message
+		if err := json.Unmarshal(epochs[i].Messages[0].Snapshot.Content, &reconstructed); err != nil {
+			t.Fatal(err)
+		}
+		if reconstructed.FirstText() != body {
+			t.Fatalf("request %d epoch did not preserve authoritative summary state", i+1)
 		}
 	}
 }
