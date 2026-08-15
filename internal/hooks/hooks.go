@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -46,13 +47,23 @@ type FileConfig struct {
 }
 
 type CommandHook struct {
-	Name           string      `json:"name" yaml:"name"`
-	Events         []EventName `json:"events" yaml:"events"`
-	Tools          []string    `json:"tools,omitempty" yaml:"tools"`
-	Command        []string    `json:"command" yaml:"command"`
-	TimeoutSeconds int         `json:"timeout_seconds,omitempty" yaml:"timeout_seconds"`
-	MaxOutputBytes int         `json:"max_output_bytes,omitempty" yaml:"max_output_bytes"`
-	Source         string      `json:"source,omitempty" yaml:"-"`
+	Name           string         `json:"name" yaml:"name"`
+	Events         []EventName    `json:"events" yaml:"events"`
+	Tools          []string       `json:"tools,omitempty" yaml:"tools"`
+	Command        []string       `json:"command" yaml:"command"`
+	TimeoutSeconds int            `json:"timeout_seconds,omitempty" yaml:"timeout_seconds"`
+	MaxOutputBytes int            `json:"max_output_bytes,omitempty" yaml:"max_output_bytes"`
+	Required       bool           `json:"required,omitempty" yaml:"required"`
+	Source         string         `json:"source,omitempty" yaml:"-"`
+	Runtime        RuntimeContext `json:"-" yaml:"-"`
+}
+
+// RuntimeContext carries private execution paths for a command hook supplied
+// by an Extension. It stays out of hooks.yaml and is attached by App assembly.
+type RuntimeContext struct {
+	ExtensionDir            string
+	ExtensionDataDir        string
+	PrepareExtensionDataDir func() error
 }
 
 func (h CommandHook) Matches(event EventName, toolName string) bool {
@@ -171,11 +182,13 @@ func (r *Runner) Run(ctx context.Context, req Request) ([]Result, error) {
 			if req.Observer != nil {
 				req.Observer.HookErrored(result, err)
 			}
-			var exitErr *commandExitError
-			if errors.As(err, &exitErr) {
-				continue
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return results, ctxErr
 			}
-			return results, err
+			if hook.Required {
+				return results, err
+			}
+			continue
 		}
 		results = append(results, result)
 		if req.Observer != nil {
@@ -236,15 +249,33 @@ func runCommandHook(parent context.Context, hook CommandHook, req Request, snaps
 	if err != nil {
 		return result, fmt.Errorf("hooks: encode input for %q: %w", hook.Name, err)
 	}
-	command, err := snapshot.LookPathInDir(hook.Command[0], req.CWD)
+	commandLine, reserved, extension, err := prepareCommandRuntime(hook, req.CWD)
 	if err != nil {
-		return result, fmt.Errorf("hooks: %s executable %q: %w", hook.Name, hook.Command[0], err)
+		return result, err
 	}
-	cmd := exec.CommandContext(ctx, command, hook.Command[1:]...)
+	command, err := snapshot.LookPathInDir(commandLine[0], req.CWD)
+	if err != nil {
+		return result, fmt.Errorf("hooks: %s executable %q: %w", hook.Name, commandLine[0], err)
+	}
+	if hook.Runtime.ExtensionDataDir != "" {
+		if hook.Runtime.PrepareExtensionDataDir == nil {
+			return result, fmt.Errorf("hooks: %s extension data directory has no prepare callback", hook.Name)
+		}
+		if err := parent.Err(); err != nil {
+			return result, err
+		}
+		if err := hook.Runtime.PrepareExtensionDataDir(); err != nil {
+			return result, fmt.Errorf("hooks: %s prepare extension data directory: %w", hook.Name, err)
+		}
+	}
+	cmd := exec.CommandContext(ctx, command, commandLine[1:]...)
 	if req.CWD != "" {
 		cmd.Dir = req.CWD
 	}
-	cmd.Env = snapshot.Environ()
+	cmd.Env = snapshot.Environ(reserved)
+	if !extension {
+		cmd.Env = stripExtensionEnvironment(cmd.Env)
+	}
 	cmd.Stdin = bytes.NewReader(input)
 	limit := hook.MaxOutputBytes
 	if limit <= 0 {
@@ -289,6 +320,74 @@ func runCommandHook(parent context.Context, hook CommandHook, req Request, snaps
 		return result, fmt.Errorf("hooks: %s failed: %w%s", hook.Name, err, stderrSuffix(result.Stderr))
 	}
 	return result, nil
+}
+
+var hookRuntimeVariablePattern = regexp.MustCompile(`\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))`)
+
+func prepareCommandRuntime(hook CommandHook, workDir string) ([]string, map[string]string, bool, error) {
+	command := append([]string(nil), hook.Command...)
+	extension := strings.TrimSpace(hook.Runtime.ExtensionDir) != ""
+	reserved := map[string]string{
+		"WORKDIR":      workDir,
+		"JUEX_WORKDIR": workDir,
+	}
+	if extension {
+		reserved["JUEX_EXT_DIR"] = hook.Runtime.ExtensionDir
+		reserved["JUEX_EXT_DATA_DIR"] = hook.Runtime.ExtensionDataDir
+	}
+	for index, value := range command {
+		expanded, err := expandRuntimeValue(value, reserved, extension)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("hooks: %s command: %w", hook.Name, err)
+		}
+		command[index] = expanded
+	}
+	return command, reserved, extension, nil
+}
+
+func expandRuntimeValue(value string, variables map[string]string, extension bool) (string, error) {
+	var expansionErr error
+	out := hookRuntimeVariablePattern.ReplaceAllStringFunc(value, func(token string) string {
+		matches := hookRuntimeVariablePattern.FindStringSubmatch(token)
+		name := matches[1]
+		if name == "" {
+			name = matches[2]
+		}
+		switch name {
+		case "JUEX_EXT_DIR", "JUEX_EXT_DATA_DIR":
+			if !extension {
+				expansionErr = fmt.Errorf("%s is only available to extension definitions", name)
+				return token
+			}
+			resolved := variables[name]
+			if resolved == "" {
+				expansionErr = fmt.Errorf("%s is unavailable for this extension definition", name)
+				return token
+			}
+			return resolved
+		default:
+			if resolved, ok := variables[name]; ok {
+				return resolved
+			}
+			return token
+		}
+	})
+	return out, expansionErr
+}
+
+func stripExtensionEnvironment(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, item := range env {
+		key := item
+		if index := strings.IndexByte(item, '='); index >= 0 {
+			key = item[:index]
+		}
+		if strings.EqualFold(key, "JUEX_EXT_DIR") || strings.EqualFold(key, "JUEX_EXT_DATA_DIR") {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 type commandExitError struct {

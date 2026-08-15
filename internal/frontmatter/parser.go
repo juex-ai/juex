@@ -1,5 +1,4 @@
-// Package frontmatter parses the frontmatter fields that memory entries and
-// skill files use.
+// Package frontmatter parses the frontmatter fields used by skill files.
 //
 // Supported:
 //   - leading `---` line, terminating `---` line

@@ -238,7 +238,7 @@ Recommended prompt order:
 tool schemas
 global and project instructions
 stable workspace context
-memory entries
+selected Extension guidance
 latest compact summary
 retained recent tail
 volatile incoming message
@@ -386,7 +386,6 @@ Session `ContextUsage` records:
 - `system_prompt`
 - `system_tools`
 - `mcp_tools`
-- `memory_files`
 - `skills`
 - `compact_summary`
 - `context_artifacts`

@@ -3,7 +3,8 @@
 Juex is a small Go agent runtime distributed as a managed CLI package. It provides a CLI,
 a local web UI, Anthropic and OpenAI-compatible providers, builtin file/shell
 tools, workspace Observables, local and remote MCP tools, skills and hooks from
-local resource bundles, Agent-owned memory, and resumable session history.
+local resource bundles, optional Agent-owned Extension data, and resumable
+session history.
 
 The project is intentionally narrow: it is a runtime for experimenting with
 agent loops, not a hosted service or an all-in-one integration framework.
@@ -77,16 +78,20 @@ environment:
     NODE_ENV: production
 ```
 
-Built-in Runtime Modules are configured separately from external Extensions.
-Memory is enabled by default; disabling it removes the Memory prompt context
-and `memory_write`, `memory_search`, and `memory_delete` Tools while leaving its
-existing files untouched:
+First-party Memory is an external Extension distributed by the
+`juex-extensions` repository. Install its `memory` bundle into an Extension
+root, then select it with the standard allowlist:
 
 ```yaml
-modules:
-  memory:
-    enabled: false
+extensions:
+  allow:
+    - memory
 ```
+
+The selected bundle contributes the `mcp__memory__memory_search`,
+`mcp__memory__memory_write`, and `mcp__memory__memory_delete` tools, an
+`ext:memory` Skill, and lightweight index-maintenance Hooks. Deselecting it
+removes all of those resources without deleting its Agent-private data.
 
 Environment precedence is selected Extension manifest defaults, default-home
 YAML, a distinct instance-home YAML, workspace `.env`, workspace YAML,
@@ -345,7 +350,6 @@ $JUEX_HOME/
     │   ├── read-media/
     │   └── sessions/<id>/       # media, user-inputs, and tool-results
     ├── extensions/<name>/       # Agent-owned persistent extension data
-    ├── memory/
     ├── observables/             # generated runs, observations, and schedule state
     └── sessions/<id>/
         ├── logs/
@@ -471,11 +475,11 @@ lists declared requirements with their names, descriptions, and external
 links. It also lists only Extension-declared Agent environment variable names, sources,
 and effective, shadowed, or deduplicated status; values are never returned.
 `juex doctor` exposes the same value-free declaration diagnostics.
-Local extension MCP servers receive `JUEX_EXT_DIR`, the selected installation
-root, and `JUEX_EXT_DATA_DIR`, the private persistent directory at
+Local extension MCP servers and Hooks receive `JUEX_EXT_DIR`, the selected
+installation root, and `JUEX_EXT_DATA_DIR`, the private persistent directory at
 `$JUEX_HOME/agents/<id>/extensions/<name>`, alongside `WORKDIR` and
 `JUEX_WORKDIR`. The data directory is created with private permissions only
-immediately before a selected local MCP process connects; configuration
+immediately before a selected local MCP or Hook process starts; configuration
 discovery, status, doctor inspection, remote-only extensions, and state-free
 resource previews do not create it. Extension data survives runtime restarts,
 Workspace moves, allowlist changes, and Extension removal, and is removed with
@@ -750,7 +754,11 @@ checks. Default-home and instance-home hooks are trusted by location;
 project-local hooks must set `hooks.trusted: true` before Juex executes them.
 Hooks receive JSON on stdin and respond with plain stdout plus an exit code:
 `0` allows, `2` requests the event-specific block/correction, and other exit
-codes report a non-blocking hook error. JSON-looking stdout is treated as text.
+codes report a hook error. Command lookup, timeout, output-limit, data-directory,
+and nonzero-exit failures are observable and non-blocking by default; set
+`required: true` on a command to propagate those failures into the owning
+runtime action. Parent cancellation always propagates. JSON-looking stdout is
+treated as text.
 Set `runtime.show_builtin_hook_traces: true` to mirror built-in hook/gate
 completions and failures into the conversation as UI-only hook trace rows.
 

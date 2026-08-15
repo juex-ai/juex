@@ -20,7 +20,7 @@ The `juex` runtime executable completes the following loop:
 
 ```
 user types a prompt in the CLI
-  -> assemble system prompt from AGENTS.md + skills + memory entries + bounded runtime sections
+  -> assemble system prompt from AGENTS.md + skills + Module context + bounded runtime sections
   -> call the LLM (Anthropic or OpenAI-compatible)
   -> execute independent tool calls in parallel and model-owned state calls in provider order
   -> persist conversation + emit events
@@ -118,9 +118,6 @@ juex/
 │   │   ├── sdk_remote_notification.go
 │   │   └── sdk_secret.go
 │   ├── skills/     loader.go     # SKILL.md frontmatter loader
-│   ├── memory/                   # AGENTS.md hierarchy + entry store
-│   │   ├── memory.go
-│   │   └── module/               # built-in Memory Runtime Module adapter
 │   ├── frontmatter/parser.go     # shared YAML frontmatter parser
 │   ├── prompt/     prompt.go     # system prompt assembly
 │   ├── session/                  # conversation history, info, locks, history index
@@ -224,9 +221,8 @@ implementation decisions live.
 | `internal/observable` | Tagged Command Observable/Schedule specs, project and Extension definition-source validation and ownership, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Extension discovery, Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
 | `internal/eventmedia` | Workspace/current-AgentStateDir external-event attachment validation, size gates, blocked-path enforcement, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
 | `internal/mcp` | Adapter over the official Go SDK: Claude-compatible MCP config normalization, command and Streamable HTTP sessions, static HTTP header handling, Tool discovery, staged remote readiness, custom notification preservation, and transport-specific diagnostics | Protocol framing/negotiation, Turn policy, active Session selection, Web ownership |
-| `internal/memory` | `AGENTS.md` hierarchy loading, Agent-owned Memory Entry storage, Memory Tool behavior and the built-in Memory Module adapter | Final prompt-section ordering, Module enablement, Session history, Skill loading |
 | `internal/skills` | `SKILL.md` frontmatter loading, Skill metadata, catalog prompt rendering, compression, and budget selection | Final system-prompt section assembly, task execution policy, Tool dispatch |
-| `internal/prompt` | System-prompt section assembly from guidance, Skills, Runtime Module context, runtime metadata, and shell profile | Provider wire formatting, Session persistence, resource discovery policy |
+| `internal/prompt` | AGENTS.md hierarchy loading and system-prompt section assembly from guidance, Skills, Runtime Module context, runtime metadata, and shell profile | Provider wire formatting, Session persistence, resource discovery policy |
 | `internal/artifact` | Workspace-rooted path safety, atomic byte storage, content addressing, bounded reads, integrity verification | Media format policy, Provider encoding, context preview policy, retention |
 | `internal/usermedia` | User image validation, per-turn limits, Session namespace policy, media-reference verification | Artifact filesystem mechanics, HTTP multipart parsing, Provider encoding |
 | `internal/app` | Process composition, Agent-scoped extension runtime context, Session attachment, Turn admission, external input Session selection/delivery, application slash commands | Cobra grammar, HTTP parsing, Provider SDK behavior, Observation state machine |
@@ -286,19 +282,18 @@ stable. Disabled Modules are absent, duplicate or invalid names fail
 registration, Tool registration errors fail startup, and prompt-context errors
 abort the request or status snapshot with the Module name attached.
 
-The built-in file-backed Memory implementation is the first ordinary Runtime
-Module. `modules.memory.enabled` defaults to `true`; disabling it removes both
-the `memory_files` prompt section and all `memory_*` Tools without changing the
-Memory file format or the rest of runtime assembly. Generic App and prompt
-paths consume the Registry interfaces rather than a Memory-specific field.
+No Runtime Module is registered by default. The Registry and its generic
+prompt/tool interfaces remain available for trusted capabilities that must run
+inside the JueX process, but optional product capabilities should prefer
+standard Extension resources when those boundaries are sufficient.
 
 Runtime Modules and external Extensions are different boundaries. A Module is
 trusted in-process implementation code shipped with JueX. An Extension remains
 a selected manifest and resource bundle that contributes Skills, MCP servers,
 Hooks, Observables, environment declarations, and private extension data. JueX
 does not load Extension Go plugins or dynamic libraries. New Module interfaces
-should follow demonstrated cross-capability needs; there is no Memory-specific
-slot.
+should follow demonstrated cross-capability needs; there is no capability-
+specific slot for external Extensions.
 
 The current runtime lifecycle is:
 
@@ -592,7 +587,7 @@ overriding the provider default. DeepSeek uses the OpenAI Chat
 
 ```go
 // internal/tools/registry.go
-type ToolGroup string // file | chunked_write | shell | search | skill | memory | session_state | observable | mcp
+type ToolGroup string // file | chunked_write | shell | search | skill | session_state | observable | mcp
 
 type ToolDefinition struct {
     Name           string
@@ -649,7 +644,7 @@ its lifecycle.
 provider-facing `llm.ToolSpec`.
 
 The runtime registry combines all registered JueX tools across the `file`,
-`chunked_write`, `shell`, `search`, `skill`, `memory`, `session_state`,
+`chunked_write`, `shell`, `search`, `skill`, `session_state`,
 `observable`, and `mcp` groups.
 Skills themselves remain markdown resource packages rather than executable
 tool definitions: the prompt exposes a compact catalog, `skill_search`
@@ -678,9 +673,6 @@ error rather than mixing guidance into diagnostics.
 | `grep` | killable ripgrep subprocess; bounded `path:line:content` output (defaults to WorkDir) |
 | `skill_search` | search loaded skill metadata, including entries omitted from the prompt budget |
 | `skill_load` | load one skill's full SKILL.md, source, and path by name; filesystem paths are sandbox-validated and authenticated builtin content uses a virtual path |
-| `memory_write` | persist a memory entry |
-| `memory_search` | substring match |
-| `memory_delete` | remove an entry by name |
 
 `tools.RegisterBuiltins` receives `BuiltinOptions` fields for `WorkDir`,
 `Shell`, `ShellSessions`, `SearchRunner`, `Sandbox`, `ToolTimeoutSeconds`, and
@@ -836,7 +828,7 @@ MCP servers are optional runtime extensions. Startup is attempted per
 configured server: servers that connect successfully register
 `mcp__<server>__<tool>` tools, while servers that fail to start or list tools
 are recorded as runtime diagnostics instead of preventing CLI or web sessions
-from using builtin tools, skills, memory, or other healthy MCP servers.
+from using builtin tools, skills, or other healthy MCP servers.
 
 ### 3.3 Events
 
@@ -964,31 +956,21 @@ fixed prefix after releasing the barrier. This makes the replay snapshot and
 browser publish sequence comparable without holding the commit path during
 disk reads or projection reconstruction.
 
-### 3.4 Memory
+### 3.4 Guidance And External Memory
 
-Layer 1 (AGENTS.md hierarchy: optional user-global + project + project subdir)
-is read directly by the prompt builder. Layer 2 (memory entries with
-frontmatter + `MEMORY.md` index) is owned by the resident agent's Store.
+The AGENTS.md hierarchy (optional user-global, project root, then project
+resource directory) is read directly by `internal/prompt`. It is stable
+guidance, independent of any Memory implementation.
 
-```go
-// internal/memory/memory.go
-type Entry struct {
-    Name        string
-    Description string
-    Type        string  // user | feedback | project | reference
-    Body        string
-    CreatedAt   time.Time
-    UpdatedAt   time.Time
-}
+First-party Memory is a standard external bundle maintained in
+`juex-extensions`. When selected, its Skill supplies model guidance, its MCP
+server supplies search/write/delete tools, and its command Hooks maintain the
+file index. JueX core sees only those generic resources with source
+`ext:memory`; it has no Memory store, Tool group, prompt section, config branch,
+or in-process Module. Mutable entries and indexes live below the Extension's
+Agent-private `JUEX_EXT_DATA_DIR`.
 
-type Store struct { dir string; ... }   // dir = $JUEX_HOME/agents/<id>/memory
-func (s *Store) Write(e Entry) error
-func (s *Store) Load() ([]Entry, error)
-func (s *Store) Search(q string) []Entry
-func (s *Store) Delete(name string) error
-```
-
-Sessions and memory are identity-owned runtime data under
+Sessions and Extension data are identity-owned runtime data under
 `$JUEX_HOME/agents/<id>/`.
 Skills, mcp.json, and AGENTS.md still live under `.agents` and come from
 project-local scope. User-global `~/.agents` resources are also loaded by
@@ -2033,7 +2015,7 @@ exposes this capability.
                        +----------------------+
                        | Prompt.Sections      | <--- AGENTS.md hierarchy
                        | + prompt.JoinSections| <--- skills descriptions
-                       |                      | <--- memory entries
+                       |                      | <--- Runtime Module context
                        |                      | <--- tool specs
                        |                      | <--- operating context
                        +----------+-----------+
@@ -2289,7 +2271,10 @@ labels, conversation/event log paths, current `goal_state`, and event-specific
 fields such as tool input/result or compaction reason. Hook commands return
 plain text on stdout: exit `0` allows the action and exposes non-empty stdout
 as model context, exit `2` requests the event-specific block or correction,
-and any other exit code records a non-blocking hook error. For exit `2`, stderr
+and any other exit code records a hook error. Command lookup, timeout,
+output-limit, Extension data preparation, and nonzero-exit failures are
+non-blocking by default; `required: true` propagates them to the owning runtime
+action. Parent cancellation always propagates. For exit `2`, stderr
 is used as the text only when stdout is empty; otherwise stderr is diagnostic.
 JSON-looking stdout is still plain text. Hook requests may include the current
 goal as read-only context, but hook output cannot mutate Goal or Notes.
@@ -2511,7 +2496,6 @@ $JUEX_HOME/
     │   ├── read-media/           # content-addressed read-tool media
     │   └── sessions/<id>/        # media, user-inputs, and tool-results
     ├── extensions/<name>/        # Agent-owned persistent extension data
-    ├── memory/
     ├── observables/              # generated runs, observations, oversized payload files, and schedule state
     └── sessions/<id>/            # conversation history and session sidecars
 
@@ -2632,7 +2616,11 @@ For every selected Extension, `internal/app` derives an extension runtime contex
 from the resolved Agent Address. Its persistent data directory is
 `<AgentAddress.StateDir()>/extensions/<name>`; state-free resource projections
 carry no data directory. Discovery remains installation-only and never creates
-runtime state.
+runtime state. Local Extension MCP servers, Hooks, and Observables receive the
+selected installation root as `JUEX_EXT_DIR` and the Agent-private directory as
+`JUEX_EXT_DATA_DIR`; each child prepares the private directory only immediately
+before it starts. Runtime status exposes Hook `required` policy without
+executing the command or creating data.
 
 The Web stage has only Chat and Runtime as primary tabs. Runtime is a nested
 layout with canonical Overview, Extensions, Observables, Logs, and Config
@@ -2927,8 +2915,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `tools` | registry duplicate, read/write/edit/apply_patch/chunked_write/grep/exec_command/write_stdin/list_shell_sessions, regex grep, command timeout/session yield, default WorkDir |
 | `mcp` | round-trip, tool errors, env propagation, no-schema default, multi-server, layered project-over-user, ctx cancellation |
 | `skills` | fail-loud embedded builtin catalog, private builtin provenance, prompt exclusion, filter immunity, dir scan, project-over-user, strict-name collisions, name-fallback, malformed filesystem skill skip, sort, reload, missing dir |
-| `memory` | round-trip all fields, body-with-fence, write-twice update, idempotent delete, case-insensitive search, index shape, AGENTS.md three-layer |
-| `prompt` | all sources, only-global, only-project, ops context, memory rendering, divider, fresh rebuild |
+| `prompt` | AGENTS.md hierarchy, all sources, only-global, only-project, Module context, ops context, divider, fresh rebuild |
 | `session` | append → jsonl line counts, event subscription, load round-trip, alias metadata, history index, delete |
 | `runtime` | mock-provider script, parallel tool calls, long tool follow-up turn, ctx cancel, unknown-tool, provider error, multi-turn |
 | `observability` | log-level parsing, stable log creation, transient filtering, retry status, redaction, timeout/signal metadata, close idempotence |
@@ -2936,7 +2923,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, AgentStateDir sessions, observability log wiring, history update, missing-key fail, default-cwd |
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flags including model, debug, and log-level |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
-| `tests/e2e` | full-stack tempdir scenario, apply_patch builtin flow, resume round-trip, canonical session journals and debug logs, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
+| `tests/e2e` | full-stack tempdir scenario, installed Extension enable/disable flow, apply_patch builtin flow, resume round-trip, canonical session journals and debug logs, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
 | `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracles for conversation/event/tool and Schedule persistence artifacts; retry-isolated live Schedule routing; live-model rotation; eval shell wrappers; development step flags; report directory defaults |
 
 Run the deterministic suite with `make test`.
@@ -2999,7 +2986,7 @@ provider replay, or long-session behavior changes.
 ## 12. One-Sentence Summary
 
 **Juex is a Go binary with a cobra CLI, React web UI, builtin and MCP tools,
-AGENTS.md/skills/memory loading, a synchronous turn loop, AgentStateDir JSONL
+AGENTS.md/Skill/Extension loading, a synchronous turn loop, AgentStateDir JSONL
 persistence with Workspace-local artifacts and configuration, an event bus,
 cross-platform releases via goreleaser, and GitHub Actions CI.** Stdlib-first;
 modules stay small enough to test and explain.

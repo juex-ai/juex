@@ -340,10 +340,7 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 
-	moduleRegistry, err := newRuntimeModuleRegistry(cfg)
-	if err != nil {
-		return nil, err
-	}
+	moduleRegistry := newRuntimeModuleRegistry()
 	if err := moduleRegistry.RegisterTools(reg); err != nil {
 		return nil, err
 	}

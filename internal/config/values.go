@@ -166,7 +166,6 @@ type RuntimePaths struct {
 	JuexDir                      string
 	StateDir                     string
 	ArtifactDir                  string
-	MemoryDir                    string
 	SessionsDir                  string
 	HistoryPath                  string
 	RuntimeConfigPath            string
@@ -184,7 +183,6 @@ func (c Config) RuntimePaths() RuntimePaths {
 			// package tests and embedding callers that do not load config.
 			paths.StateDir = paths.JuexDir
 		}
-		paths.MemoryDir = filepath.Join(paths.StateDir, "memory")
 		paths.SessionsDir = filepath.Join(paths.StateDir, "sessions")
 		paths.HistoryPath = filepath.Join(paths.StateDir, "history.json")
 		if c.AgentStateDir != "" {

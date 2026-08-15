@@ -159,7 +159,7 @@ func TestToolGroupGuideSkill(t *testing.T) {
 func TestToolDefinitionBindsHandlersAndSpecsStayProviderFacing(t *testing.T) {
 	definition := ToolDefinition{
 		Name:           "classified",
-		Group:          ToolGroupMemory,
+		Group:          ToolGroupSearch,
 		Description:    "A classified tool.",
 		Schema:         map[string]any{"type": "object"},
 		TimeoutPolicy:  ToolTimeoutDefault,

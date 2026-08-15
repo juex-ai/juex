@@ -1140,6 +1140,7 @@ export interface RuntimeHookInfo {
   events: string[];
   tools?: string[];
   command: string[];
+  required: boolean;
   timeout_seconds: number;
   max_output_bytes: number;
 }

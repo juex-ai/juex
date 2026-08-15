@@ -1152,8 +1152,8 @@ function RemoveAgentDialog({
         <DialogHeader>
           <DialogTitle>Remove {agent.name || agent.id}</DialogTitle>
           <DialogDescription>
-            This permanently deletes the agent's sessions, memory, logs, and
-            registry state. The workspace files remain.
+            This permanently deletes the agent's sessions, artifacts, logs,
+            Extension data, and registry state. The workspace files remain.
           </DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={(event) => void submit(event)}>

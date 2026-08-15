@@ -170,6 +170,7 @@ func TestRunnerRunResultCarriesTriggeredTool(t *testing.T) {
 }
 
 func TestRunnerRunTimeout(t *testing.T) {
+	observer := &recordingObserver{}
 	r, err := NewRunner(Config{Commands: []CommandHook{
 		{Name: "slow", Events: []EventName{EventPreToolUse}, Command: helperCommand("sleep"), TimeoutSeconds: 1},
 	}})
@@ -177,9 +178,135 @@ func TestRunnerRunTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	results, err := r.Run(context.Background(), Request{EventName: EventPreToolUse, ToolName: "exec_command", Observer: observer})
+	if err != nil {
+		t.Fatalf("optional timeout error = %v", err)
+	}
+	if len(results) != 0 || len(observer.errors) != 1 || !strings.Contains(observer.errors[0].err.Error(), "timed out") {
+		t.Fatalf("results = %+v, observer errors = %+v", results, observer.errors)
+	}
+}
+
+func TestRunnerRunRequiredTimeoutFails(t *testing.T) {
+	r, err := NewRunner(Config{Commands: []CommandHook{{
+		Name: "slow", Events: []EventName{EventPreToolUse}, Command: helperCommand("sleep"), TimeoutSeconds: 1, Required: true,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	_, err = r.Run(context.Background(), Request{EventName: EventPreToolUse, ToolName: "exec_command"})
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("err = %v, want timeout", err)
+		t.Fatalf("err = %v, want required timeout", err)
+	}
+}
+
+func TestRunnerRunRequiredExitErrorFails(t *testing.T) {
+	r, err := NewRunner(Config{Commands: []CommandHook{
+		{Name: "broken", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("exit-seven"), Required: true},
+		{Name: "unreached", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("stdout:unreached")},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := r.Run(context.Background(), Request{EventName: EventUserPromptSubmit})
+	if err == nil || !strings.Contains(err.Error(), "exited with code 7") {
+		t.Fatalf("err = %v, want required exit error", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("results = %+v, want no completed hooks", results)
+	}
+}
+
+func TestRunnerRunExtensionRuntimeExpandsPathsAndPreparesData(t *testing.T) {
+	extensionDir := t.TempDir()
+	dataDir := filepath.Join(t.TempDir(), "agent", "extensions", "demo")
+	helper := copyHookHelperExecutable(t, extensionDir)
+	prepared := false
+	snapshot := environment.FromEnviron(append(os.Environ(),
+		"JUEX_EXT_DIR=/spoofed-extension",
+		"JUEX_EXT_DATA_DIR=/spoofed-data",
+	))
+	r, err := NewRunnerWithOptions(Config{Commands: []CommandHook{{
+		Name:     "extension",
+		Events:   []EventName{EventSessionStart},
+		Command:  []string{"${JUEX_EXT_DIR}/" + filepath.Base(helper), "-test.run=TestHookHelperProcess", "--", "extension-environment"},
+		Required: true,
+		Runtime: RuntimeContext{
+			ExtensionDir:     extensionDir,
+			ExtensionDataDir: dataDir,
+			PrepareExtensionDataDir: func() error {
+				prepared = true
+				return os.MkdirAll(dataDir, 0o700)
+			},
+		},
+	}}}, RunnerOptions{Environment: snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := r.Run(context.Background(), Request{EventName: EventSessionStart, CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prepared {
+		t.Fatal("extension data directory was not prepared")
+	}
+	if len(results) != 1 || results[0].Stdout != extensionDir+"|"+dataDir {
+		t.Fatalf("results = %+v", results)
+	}
+}
+
+func TestRunnerRunNonExtensionStripsExtensionEnvironment(t *testing.T) {
+	snapshot := environment.FromEnviron(append(os.Environ(),
+		"JUEX_EXT_DIR=/spoofed-extension",
+		"JUEX_EXT_DATA_DIR=/spoofed-data",
+	))
+	r, err := NewRunnerWithOptions(Config{Commands: []CommandHook{{
+		Name:    "workspace",
+		Events:  []EventName{EventSessionStart},
+		Command: helperCommand("extension-environment"),
+	}}}, RunnerOptions{Environment: snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := r.Run(context.Background(), Request{EventName: EventSessionStart})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Stdout != "|" {
+		t.Fatalf("results = %+v, want stripped extension environment", results)
+	}
+}
+
+func TestRunnerRunOptionalExtensionPrepareFailureContinues(t *testing.T) {
+	observer := &recordingObserver{}
+	r, err := NewRunner(Config{Commands: []CommandHook{
+		{
+			Name: "broken-extension", Events: []EventName{EventSessionStart}, Command: helperCommand("stdout:unused"),
+			Runtime: RuntimeContext{
+				ExtensionDir:            t.TempDir(),
+				ExtensionDataDir:        filepath.Join(t.TempDir(), "data"),
+				PrepareExtensionDataDir: func() error { return errors.New("prepare failed") },
+			},
+		},
+		{Name: "last", Events: []EventName{EventSessionStart}, Command: helperCommand("stdout:last")},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := r.Run(context.Background(), Request{EventName: EventSessionStart, Observer: observer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Hook.Name != "last" {
+		t.Fatalf("results = %+v", results)
+	}
+	if len(observer.errors) != 1 || !strings.Contains(observer.errors[0].err.Error(), "prepare failed") {
+		t.Fatalf("observer errors = %+v", observer.errors)
 	}
 }
 
@@ -210,6 +337,7 @@ func TestNewRunnerRejectsTimeoutAboveMax(t *testing.T) {
 }
 
 func TestRunnerRunOutputLimit(t *testing.T) {
+	observer := &recordingObserver{}
 	r, err := NewRunner(Config{Commands: []CommandHook{
 		{Name: "large", Events: []EventName{EventPostToolUse}, Command: helperCommand("large"), MaxOutputBytes: 8},
 	}})
@@ -217,9 +345,12 @@ func TestRunnerRunOutputLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = r.Run(context.Background(), Request{EventName: EventPostToolUse, ToolName: "read"})
-	if err == nil || !strings.Contains(err.Error(), "stdout exceeded") {
-		t.Fatalf("err = %v, want output limit", err)
+	results, err := r.Run(context.Background(), Request{EventName: EventPostToolUse, ToolName: "read", Observer: observer})
+	if err != nil {
+		t.Fatalf("optional output limit error = %v", err)
+	}
+	if len(results) != 0 || len(observer.errors) != 1 || !strings.Contains(observer.errors[0].err.Error(), "stdout exceeded") {
+		t.Fatalf("results = %+v, observer errors = %+v", results, observer.errors)
 	}
 }
 
@@ -283,6 +414,8 @@ func TestHookHelperProcess(t *testing.T) {
 		_, _ = os.Stdout.WriteString(strings.Repeat("x", 32))
 	case mode == "environment":
 		_, _ = os.Stdout.WriteString(os.Getenv("HOOK_RUNTIME_MARKER"))
+	case mode == "extension-environment":
+		_, _ = os.Stdout.WriteString(os.Getenv("JUEX_EXT_DIR") + "|" + os.Getenv("JUEX_EXT_DATA_DIR"))
 	}
 	os.Exit(0)
 }

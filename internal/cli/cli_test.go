@@ -442,53 +442,10 @@ providers:
 	}
 }
 
-func TestLoadConfigForCommandKeepsWorkspaceStateSilent(t *testing.T) {
-	setHomeForCLITest(t)
-	work := t.TempDir()
-	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	workspaceMemory := filepath.Join(work, ".juex", "memory", "MEMORY.md")
-	if err := writeTextFile(workspaceMemory, "# workspace\n"); err != nil {
-		t.Fatal(err)
-	}
-	root := newRootCmd()
-	var stderr bytes.Buffer
-	root.SetErr(&stderr)
-	runCmd, _, err := root.Find([]string{"run"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := loadConfigForCommand(runCmd, &persistentFlags{cwd: work})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("config load stderr = %q, want empty", stderr.String())
-	}
-	if data, err := os.ReadFile(workspaceMemory); err != nil || string(data) != "# workspace\n" {
-		t.Fatalf("workspace memory = %q, err = %v", data, err)
-	}
-	if _, err := os.Stat(filepath.Join(cfg.AgentStateDir, "memory", "MEMORY.md")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("workspace memory unexpectedly copied into agent state: %v", err)
-	}
-	stderr.Reset()
-	if _, err := loadConfigForCommand(runCmd, &persistentFlags{cwd: work}); err != nil {
-		t.Fatal(err)
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("idempotent config load stderr = %q", stderr.String())
-	}
-}
-
 func TestDoctorDoesNotCreateAgentState(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
 	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeTextFile(filepath.Join(work, ".juex", "memory", "MEMORY.md"), "# workspace\n"); err != nil {
 		t.Fatal(err)
 	}
 	root := newRootCmd()
@@ -511,9 +468,6 @@ func TestDoctorDoesNotCreateAgentState(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(work, ".juex", "juex.local.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("doctor created marker: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(work, ".juex", "memory", "MEMORY.md")); err != nil {
-		t.Fatalf("doctor changed workspace memory: %v", err)
 	}
 }
 

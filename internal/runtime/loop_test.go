@@ -2279,7 +2279,7 @@ func TestTurn_RecordsContextUsageForAssistantResponse(t *testing.T) {
 		t.Fatalf("event context usage = %+v, want %+v", eventContext, *got)
 	}
 	parts := contextPartsByKey(got.Breakdown)
-	for _, key := range []string{"system_prompt", "system_tools", "mcp_tools", "memory_files", "skills", "messages", "response"} {
+	for _, key := range []string{"system_prompt", "system_tools", "mcp_tools", "skills", "messages", "response"} {
 		if _, ok := parts[key]; !ok {
 			t.Fatalf("missing context breakdown part %q in %+v", key, got.Breakdown)
 		}

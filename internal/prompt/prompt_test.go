@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/memory"
-	memorymodule "github.com/juex-ai/juex/internal/memory/module"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/skills"
 )
@@ -52,19 +50,14 @@ func TestBuilder_AllSourcesPresent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// memory store
-	memoryDir := t.TempDir()
-	store := memory.NewStore(memoryDir)
-	if err := store.Write(memory.Entry{Name: "no-emoji", Description: "Never use emoji", Type: "feedback", Body: "Reason."}); err != nil {
-		t.Fatal(err)
-	}
-
 	b := &Builder{
-		GlobalAgentsMDPath:  globalAgents,
-		AgentsMDDirs:        []string{root, subdir},
-		ModulePromptContext: memorymodule.New(memoryDir).PromptContext,
-		Skills:              loader,
-		Now:                 func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+		GlobalAgentsMDPath: globalAgents,
+		AgentsMDDirs:       []string{root, subdir},
+		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+			return []runtimemodule.PromptSection{{Key: "demo", Label: "Demo Module", Source: "runtime", Text: "## Demo Module\nmodule context"}}, nil
+		},
+		Skills: loader,
+		Now:    func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
 	}
 
 	got := b.Build()
@@ -73,8 +66,8 @@ func TestBuilder_AllSourcesPresent(t *testing.T) {
 	mustContain(t, got, "global rule")
 	mustContain(t, got, "Available Skills")
 	mustContain(t, got, "do X")
-	mustContain(t, got, "Memory")
-	mustContain(t, got, "no-emoji")
+	mustContain(t, got, "Demo Module")
+	mustContain(t, got, "module context")
 	mustContain(t, got, "Operating Context")
 	mustContain(t, got, "2026-05-01")
 }
@@ -87,9 +80,6 @@ func TestBuilder_EmptySourcesSkipped(t *testing.T) {
 	got := b.Build()
 	if strings.Contains(got, "Available Skills") {
 		t.Errorf("should not have skills section: %q", got)
-	}
-	if strings.Contains(got, "## Memory") {
-		t.Errorf("should not have memory section")
 	}
 	mustContain(t, got, "Operating Context") // always present
 }
@@ -363,26 +353,18 @@ func TestBuilder_OperatingContextNormalizesRelativeWorkDir(t *testing.T) {
 	}
 }
 
-func TestBuilder_MemorySectionRendersAllEntries(t *testing.T) {
-	memoryDir := t.TempDir()
-	store := memory.NewStore(memoryDir)
-	if err := store.Write(memory.Entry{Name: "one", Description: "first desc", Type: "feedback", Body: "b"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Write(memory.Entry{Name: "two", Description: "second desc", Type: "user", Body: "b"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Write(memory.Entry{Name: "three", Description: "third desc", Type: "project", Body: "b"}); err != nil {
-		t.Fatal(err)
-	}
-
+func TestBuilder_ModuleSectionRendersProvidedContent(t *testing.T) {
 	b := &Builder{
-		AgentsMDDirs:        []string{t.TempDir()},
-		ModulePromptContext: memorymodule.New(memoryDir).PromptContext,
-		Now:                 func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+		AgentsMDDirs: []string{t.TempDir()},
+		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+			return []runtimemodule.PromptSection{{
+				Key: "example", Label: "Example Module", Source: "runtime", Text: "## Example Module\nfirst desc\nsecond desc\nthird desc",
+			}}, nil
+		},
+		Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
 	}
 	got := b.Build()
-	for _, want := range []string{"## Memory", "first desc", "second desc", "third desc", "feedback", "user", "project"} {
+	for _, want := range []string{"Example Module", "first desc", "second desc", "third desc"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
@@ -406,26 +388,24 @@ func TestBuilder_SectionsSeparatedByDivider(t *testing.T) {
 }
 
 func TestBuilder_RebuildsFreshEachCall(t *testing.T) {
-	// Memory writes between Build() calls must be reflected.
 	root := t.TempDir()
-	memoryDir := t.TempDir()
-	store := memory.NewStore(memoryDir)
+	moduleText := "before"
 	b := &Builder{
-		AgentsMDDirs:        []string{root},
-		ModulePromptContext: memorymodule.New(memoryDir).PromptContext,
-		Now:                 func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+		AgentsMDDirs: []string{root},
+		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+			return []runtimemodule.PromptSection{{Key: "dynamic", Label: "Dynamic", Source: "runtime", Text: moduleText}}, nil
+		},
+		Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
 	}
 
 	first := b.Build()
-	if strings.Contains(first, "added-after") {
-		t.Fatal("entry should not be present yet")
+	if !strings.Contains(first, "before") {
+		t.Fatalf("initial module context missing:\n%s", first)
 	}
-	if err := store.Write(memory.Entry{Name: "added-after", Description: "added-after", Type: "feedback", Body: "b"}); err != nil {
-		t.Fatal(err)
-	}
+	moduleText = "added-after"
 	second := b.Build()
 	if !strings.Contains(second, "added-after") {
-		t.Fatalf("rebuild missed new memory entry:\n%s", second)
+		t.Fatalf("rebuild missed new module context:\n%s", second)
 	}
 }
 

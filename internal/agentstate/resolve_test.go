@@ -33,10 +33,20 @@ func TestResolveCreatesAndReusesWorkspaceIdentity(t *testing.T) {
 	for _, path := range []string{
 		first.Address.StateDir(),
 		filepath.Join(first.Address.StateDir(), "sessions"),
-		filepath.Join(first.Address.StateDir(), "memory"),
 		filepath.Join(first.Address.StateDir(), "logs"),
 	} {
 		assertDir(t, path)
+	}
+	entries, err := os.ReadDir(first.Address.StateDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if got, want := strings.Join(names, ","), "agent.json,history.json,logs,sessions"; got != want {
+		t.Fatalf("new Agent state entries = %q, want %q", got, want)
 	}
 	for _, path := range []string{
 		filepath.Join(first.Address.StateDir(), "agent.json"),
@@ -192,10 +202,9 @@ func TestResolveIgnoresWorkspaceRuntimeState(t *testing.T) {
 	workspaceStateDir := filepath.Join(workDir, ".juex")
 	files := map[string]string{
 		filepath.Join("sessions", "s1", "conversation.jsonl"): "{\"id\":\"m1\",\"role\":\"user\"}\n",
-		filepath.Join("memory", "MEMORY.md"):                  "# workspace state\n",
-		"history.json":                                        "{\"sessions\":[{\"id\":\"s1\"}]}\n",
-		filepath.Join("logs", "listen.log"):                   "ready\n",
-		filepath.Join("observables", "observations.jsonl"):    "{\"id\":\"o1\"}\n",
+		"history.json":                                     "{\"sessions\":[{\"id\":\"s1\"}]}\n",
+		filepath.Join("logs", "listen.log"):                "ready\n",
+		filepath.Join("observables", "observations.jsonl"): "{\"id\":\"o1\"}\n",
 		"juex.yaml":        "model: local:test\n",
 		"observables.json": "[]\n",
 	}
@@ -212,7 +221,6 @@ func TestResolveIgnoresWorkspaceRuntimeState(t *testing.T) {
 	}
 	for _, rel := range []string{
 		filepath.Join("sessions", "s1", "conversation.jsonl"),
-		filepath.Join("memory", "MEMORY.md"),
 		filepath.Join("logs", "listen.log"),
 		filepath.Join("observables", "observations.jsonl"),
 	} {

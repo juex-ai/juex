@@ -80,9 +80,8 @@ func TestResourceEventHubClassifiesExternalRuntimeInputs(t *testing.T) {
 	workDir := t.TempDir()
 	globalAgentsDir := t.TempDir()
 	historyPath := filepath.Join(t.TempDir(), "history.json")
-	memoryDir := filepath.Join(t.TempDir(), "memory")
 	hub := newResourceEventHub(workDir, t.TempDir())
-	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md"), historyPath}, memoryDir)
+	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md"), historyPath})
 
 	tests := []struct {
 		path string
@@ -91,36 +90,12 @@ func TestResourceEventHubClassifiesExternalRuntimeInputs(t *testing.T) {
 		{path: globalAgentsDir, want: []string{resourceRuntime}},
 		{path: filepath.Join(globalAgentsDir, "AGENTS.md"), want: []string{resourceRuntime}},
 		{path: historyPath, want: []string{resourceRuntime}},
-		{path: memoryDir, want: []string{resourceRuntime}},
-		{path: filepath.Join(memoryDir, "facts.md"), want: []string{resourceRuntime}},
 		{path: filepath.Join(globalAgentsDir, "skills", "demo", "SKILL.md")},
 	}
 	for _, test := range tests {
 		if got := hub.resourcesForPath(test.path); !reflect.DeepEqual(got, test.want) {
 			t.Errorf("resourcesForPath(%q) = %v, want %v", test.path, got, test.want)
 		}
-	}
-}
-
-func TestResourceEventHubProjectsMemoryToolEvents(t *testing.T) {
-	hub := newResourceEventHub(t.TempDir(), t.TempDir())
-	subscription, err := hub.subscribe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer subscription.cancel()
-
-	hub.Publish(events.Event{
-		Type:    toolevents.CompletedType,
-		Payload: toolevents.CompletedPayload{Name: "memory_write"},
-	})
-	select {
-	case <-subscription.updates:
-		if got := subscription.take().Resources; !reflect.DeepEqual(got, []string{resourceRuntime}) {
-			t.Fatalf("resources = %v, want runtime", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("memory tool event did not invalidate runtime")
 	}
 }
 
@@ -268,7 +243,7 @@ func TestResourceEventHubWatchesLateAgentsDirectory(t *testing.T) {
 func TestResourceEventHubWatchesExternalGlobalAgentsFile(t *testing.T) {
 	globalAgentsDir := t.TempDir()
 	hub := newResourceEventHub(t.TempDir(), t.TempDir())
-	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md")}, "")
+	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md")})
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -295,7 +270,7 @@ func TestResourceEventHubReanchorsRecreatedExternalRuntimeDirectory(t *testing.T
 		t.Fatal(err)
 	}
 	hub := newResourceEventHub(t.TempDir(), t.TempDir())
-	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md")}, "")
+	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md")})
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -320,7 +295,7 @@ func TestResourceEventHubWatchesLateExternalGlobalAgentsDirectory(t *testing.T) 
 	existingRoot := t.TempDir()
 	globalAgentsDir := filepath.Join(existingRoot, "missing", ".agents")
 	hub := newResourceEventHub(t.TempDir(), t.TempDir())
-	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md")}, "")
+	hub.setRuntimeInputs([]string{filepath.Join(globalAgentsDir, "AGENTS.md")})
 	subscription, err := hub.subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -379,29 +354,6 @@ func TestResourceEventHubWatchesExternalActiveSessionChange(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("external active Session change did not invalidate runtime")
-	}
-}
-
-func TestResourceEventHubWatchesLateMemoryDirectory(t *testing.T) {
-	memoryDir := filepath.Join(t.TempDir(), "memory")
-	hub := newResourceEventHub(t.TempDir(), t.TempDir())
-	hub.setRuntimeInputs(nil, memoryDir)
-	subscription, err := hub.subscribe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer subscription.cancel()
-
-	if err := os.Mkdir(memoryDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-subscription.updates:
-		if got := subscription.take().Resources; !reflect.DeepEqual(got, []string{resourceRuntime}) {
-			t.Fatalf("resources = %v, want runtime", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("late memory directory was not observed")
 	}
 }
 

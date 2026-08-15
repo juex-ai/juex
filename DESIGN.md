@@ -421,7 +421,7 @@ system prompt uses a semantic table for label, source, path, and approximate
 token count; each row expands to the full text. The provider profile follows,
 including protocol, model, base URL, and capability gates. `Tools` follows
 Provider and precedes MCP. It keeps the fixed `file`, `chunked_write`, `shell`,
-`search`, `skill`, `memory`, `session_state`, and `observable` groups in
+`search`, `skill`, `session_state`, and `observable` groups in
 two-level semantic tables: a group row exposes its count and tool-name preview,
 then each tool row expands to its description, semantic timeout, top-level
 parameter table, and a separately disclosed raw JSON schema. A bounded timeout
@@ -690,7 +690,7 @@ successful provider request. The total uses provider-reported
 provider omits input usage, it falls back to the estimated input breakdown plus
 the reported response tokens. Its tooltip shows model, configured context window,
 percent used, and an estimated breakdown across system prompt, system tools, MCP
-tools, memory files, skills, messages, and response. `TokenUsageLabel` is a
+tools, skills, messages, and response. `TokenUsageLabel` is a
 compact `tokens <total>` chip for cumulative conversation usage; its tooltip
 shows the input/output split.
 
@@ -821,8 +821,8 @@ the last known roster while surfacing reconciliation failures; the next
 successful roster snapshot clears that failure even when its contents did not
 change. The selected Agent's `/api/resource-events`
 stream invalidates workspace, scratchpad, Observable, and process-lifetime
-runtime catalogs. Workspace or enabled user-global `AGENTS.md` guidance, Agent
-Memory, active primary Session selection, and active Session scratchpad content
+runtime catalogs. Workspace or enabled user-global `AGENTS.md` guidance,
+active primary Session selection, and active Session scratchpad content
 additionally invalidate the Runtime snapshot because those prompt sections are
 rebuilt dynamically. External runtime-input directories retain a parent watch
 so rename/delete-and-recreate replacement does not detach invalidation. Skills,

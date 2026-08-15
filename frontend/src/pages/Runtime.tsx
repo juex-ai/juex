@@ -341,13 +341,14 @@ export function Runtime() {
                   <th className="px-3 py-2 font-medium">Events</th>
                   <th className="px-3 py-2 font-medium">Tools</th>
                   <th className="px-3 py-2 font-medium">Command</th>
+                  <th className="px-3 py-2 font-medium">Policy</th>
                   <th className="px-3 py-2 font-medium">Limits</th>
                 </tr>
               </thead>
               <tbody>
                 {hookCommands.length === 0 ? (
                   <tr>
-                    <td className="text-muted-foreground px-3 py-3" colSpan={6}>
+                    <td className="text-muted-foreground px-3 py-3" colSpan={7}>
                       No hooks configured.
                     </td>
                   </tr>
@@ -386,6 +387,11 @@ function HookRow({ hook }: { hook: RuntimeHookInfo }) {
       </td>
       <td className="max-w-[28rem] break-all px-3 py-2 font-mono text-xs">
         {runtimeHookCommandLabel(hook.command)}
+      </td>
+      <td className="px-3 py-2">
+        <Badge variant="outline" className="font-mono text-[11px]">
+          {hook.required ? "required" : "optional"}
+        </Badge>
       </td>
       <td className="whitespace-nowrap px-3 py-2 font-mono text-xs">
         {hook.timeout_seconds}s / {hook.max_output_bytes} bytes

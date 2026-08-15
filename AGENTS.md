@@ -30,8 +30,10 @@ the Juex binary plus a pinned ripgrep executable. It currently includes:
 - a React web UI served by `juex fleet serve`
 - Anthropic and OpenAI-compatible providers through official SDKs
 - builtin tools: `read`, `write`, `edit`, `apply_patch`, `grep`,
-  `exec_command`, `write_stdin`, chunked write tools, and memory tools
+  `exec_command`, `write_stdin`, and chunked write tools
 - an MCP stdio client that registers tools as `mcp__<server>__<tool>`
+- optional external Extensions, including first-party Memory tools and lifecycle
+  hooks installed from `juex-extensions`
 - skills loaded from `.agents/skills/<name>/SKILL.md`
 - Agent-owned runtime state under `$JUEX_HOME/agents/<id>`
 - work-local identity, configuration, extensions, Observable definitions, and

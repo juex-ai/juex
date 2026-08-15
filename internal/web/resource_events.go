@@ -81,7 +81,6 @@ type resourceEventHub struct {
 	workDir      string
 	sessionsDir  string
 	runtimeFiles map[string]struct{}
-	runtimeDir   string
 
 	mu            sync.Mutex
 	subscribers   map[uint64]*resourceSubscriber
@@ -112,14 +111,13 @@ func newResourceEventHub(workDir, sessionsDir string) *resourceEventHub {
 	}
 }
 
-func (h *resourceEventHub) setRuntimeInputs(files []string, dir string) {
+func (h *resourceEventHub) setRuntimeInputs(files []string) {
 	for _, file := range files {
 		file = filepath.Clean(file)
 		if file != "" && file != "." {
 			h.runtimeFiles[file] = struct{}{}
 		}
 	}
-	h.runtimeDir = filepath.Clean(dir)
 }
 
 func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
@@ -156,18 +154,6 @@ func (h *resourceEventHub) subscribe() (resourceSubscription, error) {
 				return resourceSubscription{}, err
 			}
 			watchedRuntimeParents[parent] = struct{}{}
-		}
-		if h.runtimeDir != "" && h.runtimeDir != "." {
-			if _, err := h.addNearestExistingDirectory(watcher, filepath.Dir(h.runtimeDir)); err != nil {
-				_ = watcher.Close()
-				h.mu.Unlock()
-				return resourceSubscription{}, err
-			}
-		}
-		if err := h.addRoot(watcher, h.runtimeDir); err != nil {
-			_ = watcher.Close()
-			h.mu.Unlock()
-			return resourceSubscription{}, err
 		}
 		observableDir := filepath.Join(h.workDir, ".juex")
 		if info, statErr := os.Stat(observableDir); statErr == nil && info.IsDir() {
@@ -372,7 +358,7 @@ func (h *resourceEventHub) runWatcher(
 
 func (h *resourceEventHub) shouldWatchCreatedDirectory(path string) bool {
 	path = filepath.Clean(path)
-	if pathWithin(h.workDir, path) || pathWithin(h.sessionsDir, path) || pathWithin(h.runtimeDir, path) {
+	if pathWithin(h.workDir, path) || pathWithin(h.sessionsDir, path) {
 		return true
 	}
 	for file := range h.runtimeFiles {
@@ -458,9 +444,6 @@ func (h *resourceEventHub) isMutableRuntimeInput(path string) bool {
 			return true
 		}
 	}
-	if h.runtimeDir != "" && h.runtimeDir != "." && pathWithin(h.runtimeDir, path) {
-		return true
-	}
 	relative, err := filepath.Rel(h.workDir, path)
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return false
@@ -502,8 +485,6 @@ func (h *resourceEventHub) Publish(event events.Event) {
 		switch name {
 		case "write", "edit", "apply_patch", "write_commit":
 			h.invalidate(resourceWorkspace, resourceScratchpad, resourceRuntime)
-		case "memory_write", "memory_delete":
-			h.invalidate(resourceRuntime)
 		}
 	}
 }

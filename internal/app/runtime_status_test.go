@@ -34,7 +34,6 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 		tools.ToolGroupShell,
 		tools.ToolGroupSearch,
 		tools.ToolGroupSkill,
-		tools.ToolGroupMemory,
 		tools.ToolGroupSessionState,
 		tools.ToolGroupSideSession,
 		tools.ToolGroupObservable,
@@ -62,29 +61,8 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 		}
 		count += len(group.Tools)
 	}
-	if status.Tools.Count != count || count != 34 {
-		t.Fatalf("tool count = %d, grouped=%d, want 34", status.Tools.Count, count)
-	}
-}
-
-func TestRuntimeCatalogServiceOmitsDisabledMemoryModule(t *testing.T) {
-	cfg := config.Config{
-		WorkDir: t.TempDir(),
-		Modules: config.ModulesConfig{Memory: config.ModuleConfig{Configured: true}},
-	}
-	status, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, group := range status.Tools.Groups {
-		if group.Group == string(tools.ToolGroupMemory) && len(group.Tools) != 0 {
-			t.Fatalf("disabled Memory Module tools = %#v", group.Tools)
-		}
-	}
-	for _, section := range status.SystemPrompt.Items {
-		if section.Key == "memory_files" {
-			t.Fatalf("disabled Memory Module prompt section = %#v", section)
-		}
+	if status.Tools.Count != count || count != 31 {
+		t.Fatalf("tool count = %d, grouped=%d, want 31", status.Tools.Count, count)
 	}
 }
 

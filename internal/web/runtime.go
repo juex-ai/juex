@@ -151,6 +151,7 @@ type hookInfo struct {
 	Events         []string `json:"events"`
 	Tools          []string `json:"tools,omitempty"`
 	Command        []string `json:"command"`
+	Required       bool     `json:"required"`
 	TimeoutSeconds int      `json:"timeout_seconds"`
 	MaxOutputBytes int      `json:"max_output_bytes"`
 }
@@ -438,6 +439,7 @@ func hooksStatusFromApp(status app.RuntimeHooksStatus) hooksStatus {
 			Events:         append([]string(nil), command.Events...),
 			Tools:          append([]string(nil), command.Tools...),
 			Command:        append([]string(nil), command.Command...),
+			Required:       command.Required,
 			TimeoutSeconds: command.TimeoutSeconds,
 			MaxOutputBytes: command.MaxOutputBytes,
 		})

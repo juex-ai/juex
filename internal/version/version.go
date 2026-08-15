@@ -15,11 +15,8 @@ var (
 	BuildTime = "unknown"
 )
 
-// Info bundles build metadata together with runtime context that the CLI
-// layer fills in. Only inputs that cannot be derived from each other show
-// up here: paths like sessions_dir / memory_dir / home_agents are always
-// `<work_dir>/.juex/{sessions,memory}` and `~/.agents` respectively, so
-// they are intentionally omitted to keep the surface tight.
+// Info bundles build metadata together with the runtime context selected by
+// the CLI. Runtime-owned storage paths remain behind their owning modules.
 type Info struct {
 	Name      string `json:"name"`
 	Version   string `json:"version"`

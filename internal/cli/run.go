@@ -55,8 +55,7 @@ const externalStopSuggestion = "The run was stopped externally; check the termin
 
 // dryRunPlan is the JSON shape emitted by `juex run --dry-run`.
 //
-// Derivable paths (memory_dir / sessions_dir under <work_dir>/.juex)
-// are intentionally omitted — readers can reconstruct them from work_dir.
+// Runtime-owned state paths are intentionally omitted from this wiring view.
 type dryRunPlan struct {
 	ProviderID      string               `json:"provider_id,omitempty"`
 	Protocol        string               `json:"protocol,omitempty"`
@@ -351,7 +350,7 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 	})
 	if err != nil {
 		return emit(jsonOut, cmd.ErrOrStderr(), err,
-			"dry-run wiring failed; check skills/MCP/memory config", false)
+			"dry-run wiring failed; check skills, MCP, and Extension config", false)
 	}
 	defer func() { _ = a.CloseAndWait() }()
 

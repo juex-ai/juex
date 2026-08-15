@@ -50,8 +50,8 @@ func TestVerbose_WithRuntimeContext(t *testing.T) {
 			t.Errorf("Verbose() missing %q in:\n%s", want, out)
 		}
 	}
-	// Derived paths must NOT appear — they are reconstructible from work_dir.
-	for _, mustNot := range []string{"sessions_dir:", "memory_dir:", "home_agents:"} {
+	// Runtime-owned paths stay behind their owning modules.
+	for _, mustNot := range []string{"sessions_dir:", "home_agents:"} {
 		if strings.Contains(out, mustNot) {
 			t.Errorf("Verbose() should not contain derived path %q; got:\n%s", mustNot, out)
 		}
@@ -62,7 +62,7 @@ func TestJSON_OmitsDerivedPaths(t *testing.T) {
 	info := Build()
 	info.WorkDir = "/tmp/x"
 	js := info.JSON()
-	for _, mustNot := range []string{"sessions_dir", "memory_dir", "home_agents_dir"} {
+	for _, mustNot := range []string{"sessions_dir", "home_agents_dir"} {
 		if strings.Contains(js, mustNot) {
 			t.Errorf("JSON should not contain derived path %q in:\n%s", mustNot, js)
 		}
