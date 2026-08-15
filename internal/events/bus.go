@@ -14,12 +14,15 @@ import (
 )
 
 type Event struct {
-	ID        string    `json:"id"`
-	Type      string    `json:"type"`
-	Timestamp time.Time `json:"ts"`
-	TurnID    string    `json:"turn_id,omitempty"`
-	Payload   any       `json:"payload,omitempty"`
-	Transient bool      `json:"-"` // bypasses journals while remaining eligible for live delivery
+	ID            string       `json:"id"`
+	Type          string       `json:"type"`
+	SchemaVersion int          `json:"schema_version,omitempty"`
+	ReplayPolicy  ReplayPolicy `json:"replay_policy,omitempty"`
+	Timestamp     time.Time    `json:"ts"`
+	TurnID        string       `json:"turn_id,omitempty"`
+	Payload       any          `json:"payload,omitempty"`
+	Transient     bool         `json:"-"` // bypasses journals while remaining eligible for live delivery
+	Opaque        bool         `json:"-"` // replay retained the fact but its schema is intentionally not projected
 }
 
 type Handler func(Event)

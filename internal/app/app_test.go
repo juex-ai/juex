@@ -672,7 +672,7 @@ func TestAppResumeRepairsTornRuntimeStatusJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventRecord := fmt.Sprintf(
-		`{"journal_version":1,"journal":"events","session_id":%q,"sequence":1,"id":"1","type":"turn.admitted","turn_id":"turn-1"}`+"\n",
+		`{"journal_version":1,"journal":"events","session_id":%q,"sequence":1,"id":"1","type":"turn.admitted","schema_version":1,"replay_policy":"required","turn_id":"turn-1","payload":{}}`+"\n",
 		sessionID,
 	)
 	if err := os.WriteFile(filepath.Join(sessionDir, "events.jsonl"), []byte(eventRecord+`{"journal_version":1`), 0o600); err != nil {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/statusapi"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
@@ -13,9 +14,10 @@ import (
 func TestWriteSSEFrame_FormatsExpectedFields(t *testing.T) {
 	var buf bytes.Buffer
 	err := writeBrowserSSEFrame(&buf, mustBrowserEvent(t, events.Event{
-		ID:     "evt-1",
-		Type:   "turn.started",
-		TurnID: "t-7",
+		ID:      "evt-1",
+		Type:    "turn.started",
+		TurnID:  "t-7",
+		Payload: runtime.TurnStartedPayload{},
 	}))
 	if err != nil {
 		t.Fatal(err)

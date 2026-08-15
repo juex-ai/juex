@@ -255,7 +255,10 @@ func TestLoadWithRepairTranscriptWritesCompleteEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repaired, err := LoadWithOptions(dir, Options{RepairTranscript: true})
+	repaired, err := LoadWithOptions(dir, Options{
+		RepairTranscript: true,
+		EventCatalog:     sessionTestEventCatalog{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

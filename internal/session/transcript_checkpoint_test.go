@@ -377,7 +377,10 @@ func TestSameSizeTimestampPreservingRewriteInvalidatesCheckpoint(t *testing.T) {
 			meta.Transcript, afterFingerprint)
 	}
 
-	loaded, err := LoadWithOptions(dir, Options{RepairTranscript: true})
+	loaded, err := LoadWithOptions(dir, Options{
+		RepairTranscript: true,
+		EventCatalog:     sessionTestEventCatalog{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,7 +599,10 @@ func TestTailStartCompactedTranscriptWithRepairLoadsOnlyActiveWindow(t *testing.
 		messageWithID(llm.TextMessage(llm.RoleUser, "latest"), "m4"),
 	}, time.Now())
 
-	s, err := LoadWithOptions(dir, Options{RepairTranscript: true})
+	s, err := LoadWithOptions(dir, Options{
+		RepairTranscript: true,
+		EventCatalog:     sessionTestEventCatalog{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,7 +632,10 @@ func TestCheckpointedCompactedTranscriptRepairsUnretainedToolUse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repaired, err := LoadWithOptions(dir, Options{RepairTranscript: true})
+	repaired, err := LoadWithOptions(dir, Options{
+		RepairTranscript: true,
+		EventCatalog:     sessionTestEventCatalog{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,7 +842,10 @@ func TestCheckpointRepairFlagsMustMatchCanonicalCompactMarker(t *testing.T) {
 		t.Fatal("checkpoint accepted repair flags changed without a matching checksum")
 	}
 
-	loaded, err := LoadWithOptions(dir, Options{RepairTranscript: true})
+	loaded, err := LoadWithOptions(dir, Options{
+		RepairTranscript: true,
+		EventCatalog:     sessionTestEventCatalog{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

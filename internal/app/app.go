@@ -25,6 +25,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
+	"github.com/juex-ai/juex/internal/eventcatalog"
 	"github.com/juex-ai/juex/internal/eventmedia"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
@@ -135,6 +136,7 @@ type App struct {
 	sessionLock       *session.Lock
 	sessionResource   *session.Session
 	eventSink         *events.DurableSink
+	eventCatalog      events.SchemaCatalog
 	eventUnsubscribe  func()
 	statusUnsubscribe func()
 
@@ -384,13 +386,15 @@ func New(opts Options) (*App, error) {
 		_ = sessLock.Close()
 		_ = sess.Close()
 	}
+	eventCatalog := eventcatalog.Default()
 	eventSink = events.NewDurableSink(sess)
+	eventSink.SetCatalog(eventCatalog)
 	bus.SetCommitter(eventSink)
 	eventUnsubscribe = func() { bus.SetCommitter(nil) }
 	status, statusReplayErr := runtime.NewStatusStoreFromReplay(
 		runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput),
 		func(visit func(events.Event)) error {
-			return session.ReplayEvents(sess.Dir, visit)
+			return session.ReplayEventsWithCatalog(sess.Dir, eventCatalog, visit)
 		},
 	)
 	if statusReplayErr != nil {
@@ -485,6 +489,7 @@ func New(opts Options) (*App, error) {
 		sessionLock:        sessLock,
 		sessionResource:    sess,
 		eventSink:          eventSink,
+		eventCatalog:       eventCatalog,
 		eventUnsubscribe:   eventUnsubscribe,
 		statusUnsubscribe:  statusUnsubscribe,
 		debug:              opts.Debug,
@@ -747,7 +752,7 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 		err := a.Status.ResetFromReplayWithRestartRecovery(
 			runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput),
 			func(visit func(events.Event)) error {
-				return session.ReplayEvents(sess.Dir, visit)
+				return session.ReplayEventsWithCatalog(sess.Dir, a.eventCatalog, visit)
 			},
 		)
 		if err != nil {

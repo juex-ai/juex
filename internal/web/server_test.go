@@ -494,7 +494,11 @@ func TestWebEventsDeliveryFollowsJournalCommit(t *testing.T) {
 	sub := as.bcast.subscribe()
 	defer sub.unsubscribe()
 
-	if err := as.app.Bus.Emit(events.Event{ID: "evt-committed", Type: "turn.started"}); err != nil {
+	if err := as.app.Bus.Emit(events.Event{
+		ID:      "evt-committed",
+		Type:    "turn.started",
+		Payload: runtime.TurnStartedPayload{},
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -502,6 +506,9 @@ func TestWebEventsDeliveryFollowsJournalCommit(t *testing.T) {
 	case got := <-sub.ch:
 		if got.ID != "evt-committed" {
 			t.Fatalf("delivered event id = %q, want evt-committed", got.ID)
+		}
+		if got.SchemaVersion != 1 {
+			t.Fatalf("delivered schema version = %d, want 1", got.SchemaVersion)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for live event")
@@ -512,6 +519,10 @@ func TestWebEventsDeliveryFollowsJournalCommit(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"id":"evt-committed"`) {
 		t.Fatalf("events.jsonl does not contain committed event:\n%s", data)
+	}
+	if !strings.Contains(string(data), `"schema_version":1`) ||
+		!strings.Contains(string(data), `"replay_policy":"required"`) {
+		t.Fatalf("events.jsonl does not contain the Catalog replay contract:\n%s", data)
 	}
 }
 
@@ -534,7 +545,11 @@ func TestWebEventsSkipLiveDeliveryWhenJournalCommitFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := as.app.Bus.Emit(events.Event{ID: "evt-uncommitted", Type: "turn.started"}); err == nil {
+	if err := as.app.Bus.Emit(events.Event{
+		ID:      "evt-uncommitted",
+		Type:    "turn.started",
+		Payload: runtime.TurnStartedPayload{},
+	}); err == nil {
 		t.Fatal("Emit() error = nil, want journal failure")
 	}
 

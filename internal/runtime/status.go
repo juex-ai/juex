@@ -342,6 +342,9 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 	if !event.Timestamp.IsZero() {
 		next.UpdatedAt = event.Timestamp
 	}
+	if event.Opaque {
+		return next
+	}
 
 	switch event.Type {
 	case TurnAdmittedType:

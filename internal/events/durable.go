@@ -29,6 +29,7 @@ type DurableSink struct {
 	mu       sync.Mutex
 	cond     *sync.Cond
 	journal  Journal
+	catalog  SchemaCatalog
 
 	projections []registeredDelivery
 	deliveries  []registeredDelivery
@@ -99,6 +100,20 @@ func (s *DurableSink) SetJournal(journal Journal) {
 	s.journal = journal
 }
 
+func (s *DurableSink) SetCatalog(catalog SchemaCatalog) {
+	if s == nil {
+		return
+	}
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.catalog = catalog
+}
+
 // AddProjection registers a synchronous post-commit projection. Projections
 // run only after a durable event is appended successfully and before
 // asynchronous live deliveries are queued.
@@ -161,11 +176,19 @@ func (s *DurableSink) Commit(e Event) (Event, error) {
 		return Event{}, ErrDurableSinkClosed
 	}
 	journal := s.journal
+	catalog := s.catalog
 	if journal == nil && !e.Transient {
 		s.mu.Unlock()
 		return Event{}, ErrDurableJournalMissing
 	}
 	s.mu.Unlock()
+	if catalog != nil {
+		var err error
+		e, err = catalog.Prepare(e)
+		if err != nil {
+			return Event{}, err
+		}
+	}
 
 	if !e.Transient {
 		if err := journal.AppendEvent(e); err != nil {

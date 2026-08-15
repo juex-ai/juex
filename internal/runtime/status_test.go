@@ -382,6 +382,26 @@ func TestStatusStreamReturnsTransientStateAtSameDurableCursor(t *testing.T) {
 	}
 }
 
+func TestStatusProjectionRetainsOpaqueCursorWithoutApplyingPayload(t *testing.T) {
+	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: 4})
+	store.Publish(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
+	before := store.Snapshot()
+
+	opaque := statusEvent("2", "pending_input.queued", "turn-1", map[string]any{
+		"pending_count": 99,
+	})
+	opaque.Opaque = true
+	store.Publish(opaque)
+
+	after := store.Snapshot()
+	if after.Cursor != "2" {
+		t.Fatalf("cursor = %q, want opaque event cursor", after.Cursor)
+	}
+	if after.Session.PendingCount != before.Session.PendingCount || !reflect.DeepEqual(after.Turn, before.Turn) {
+		t.Fatalf("opaque event changed semantic status\nbefore: %+v\nafter:  %+v", before, after)
+	}
+}
+
 func TestStatusReplayKeepsTransientStateWithEqualTimestamp(t *testing.T) {
 	store := NewStatusStore(StatusSeed{SessionID: "session-1"})
 	admitted := statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{})
