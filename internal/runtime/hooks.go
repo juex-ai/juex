@@ -10,6 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/provenance"
 )
 
 const goalCompletionGateName = "goal-completion-gate"
@@ -185,8 +186,7 @@ func (e *Engine) RunSessionStartHooks(ctx context.Context) error {
 	if denied, reason := hookBlocked(results); denied {
 		return hookDeniedError(hooks.EventSessionStart, reason)
 	}
-	e.queueHookRuntimeContext(results)
-	return nil
+	return e.queueHookRuntimeContext(results)
 }
 
 func appendHookAdditionalContext(msg llm.Message, results []hooks.Result) llm.Message {
@@ -395,9 +395,9 @@ func hookContextLabel(result hooks.Result, kind string) string {
 	return "Hook " + kind + " (" + name + "):\n"
 }
 
-func (e *Engine) queueHookRuntimeContext(results []hooks.Result) {
+func (e *Engine) queueHookRuntimeContext(results []hooks.Result) error {
 	if e == nil {
-		return
+		return nil
 	}
 	var messages []llm.Message
 	for _, result := range results {
@@ -409,15 +409,29 @@ func (e *Engine) queueHookRuntimeContext(results []hooks.Result) {
 			continue
 		}
 		msg := llm.TextMessage(llm.RoleUser, hookContextLabel(result, "additional context")+text)
+		msg.ID = randomProvenanceID("hook-context-")
 		msg.Kind = llm.MessageKindRuntimeContext
 		messages = append(messages, msg)
 	}
 	if len(messages) == 0 {
-		return
+		return nil
+	}
+	turnID := e.PendingInputStatus().TurnID
+	payload := provenance.HookContextQueuedPayload{Messages: messages}
+	if err := provenance.ValidateHookContextQueued(payload); err != nil {
+		return err
+	}
+	if err := e.emit(events.Event{Type: provenance.HookContextQueuedType, TurnID: turnID, Payload: payload}); err != nil {
+		return fmt.Errorf("commit hook runtime context: %w", err)
+	}
+	tracker := e.requestProvenanceTracker()
+	for _, message := range messages {
+		tracker.AddQueued(message)
 	}
 	e.hookRuntimeContextMu.Lock()
 	e.pendingHookRuntimeContext = append(e.pendingHookRuntimeContext, messages...)
 	e.hookRuntimeContextMu.Unlock()
+	return nil
 }
 
 func (e *Engine) pendingHookRuntimeContextSnapshot() []llm.Message {
@@ -427,20 +441,6 @@ func (e *Engine) pendingHookRuntimeContextSnapshot() []llm.Message {
 	e.hookRuntimeContextMu.Lock()
 	defer e.hookRuntimeContextMu.Unlock()
 	return append([]llm.Message(nil), e.pendingHookRuntimeContext...)
-}
-
-func (e *Engine) consumePendingHookRuntimeContext(count int) {
-	if e == nil || count <= 0 {
-		return
-	}
-	e.hookRuntimeContextMu.Lock()
-	defer e.hookRuntimeContextMu.Unlock()
-	if count >= len(e.pendingHookRuntimeContext) {
-		e.pendingHookRuntimeContext = nil
-		return
-	}
-	clear(e.pendingHookRuntimeContext[:count])
-	e.pendingHookRuntimeContext = e.pendingHookRuntimeContext[count:]
 }
 
 func appendToolHookContext(block *llm.Block, results []hooks.Result, includeExitTwo bool) {

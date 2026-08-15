@@ -13,6 +13,7 @@ import (
 	"github.com/juex-ai/juex/internal/eventcatalog"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/provenance"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
@@ -551,9 +552,21 @@ func seedStartedDanglingToolUseSession(t *testing.T, cfg config.Config) session.
 		Name: "mcp__remote__send", ToolUseID: "attach_started", Iter: 1,
 		CallIndex: 0, MessageID: assistant.ID,
 	}
+	epoch, err := provenance.BuildRequestEpoch(provenance.RequestInput{
+		Provider: provenance.SafeProvider{ID: "test", Model: "model"},
+		History:  []llm.Message{sess.History[0]},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch.EpochID = "epoch-attach"
 	for _, event := range []events.Event{
+		{Type: provenance.RequestEpochType, TurnID: "attach-turn", Payload: provenance.RequestEpochPayload{Epoch: epoch}},
+		{Type: "llm.requested", TurnID: "attach-turn", Payload: juexruntime.LLMRequestedPayload{
+			Iter: 1, Purpose: "turn", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
+		}},
 		{Type: "llm.responded", TurnID: "attach-turn", Payload: juexruntime.LLMRespondedPayload{
-			Iter: 1, MessageID: assistant.ID, Blocks: assistant.Blocks,
+			Iter: 1, MessageID: assistant.ID, EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest, Blocks: assistant.Blocks,
 			ToolCalls: []toolevents.ToolCallPayload{call},
 		}},
 		{Type: toolevents.RequestedType, TurnID: "attach-turn", Payload: toolevents.Requested(call)},

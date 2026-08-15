@@ -249,12 +249,16 @@ export function projectLiveSessionEvent(
       break;
     }
     case "llm.requested":
+    case "provider.request_epoch":
       break;
     case "llm.output_delta":
       next = applyAssistantOutputDelta(next, event);
       break;
     case "llm.responded":
       next = applyAssistantResponse(next, event);
+      break;
+    case "llm.errored":
+      next = resetPendingAssistantOutput(next, event.turn_id, true);
       break;
     case "llm.retry":
       if (event.payload.purpose !== "compaction") {

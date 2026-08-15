@@ -18,7 +18,54 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
+	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/provenance"
 )
+
+func TestCreateUnredactedBundleDoesNotLeakProviderSecretsThroughProvenance(t *testing.T) {
+	const secret = "provider-provenance-secret-sentinel"
+	work := t.TempDir()
+	sessionID := "20260815T120000-provenance"
+	message := llm.TextMessage(llm.RoleUser, "hello")
+	message.ID = "user-1"
+	epoch, err := provenance.BuildRequestEpoch(provenance.RequestInput{
+		Provider: provenance.SafeProviderFromProfile(llm.ProviderProfile{
+			ID: "custom", Protocol: llm.ProtocolOpenAIChat, BaseURL: "https://" + secret + "@example.test/" + secret,
+			APIKey: secret, Model: "model", Headers: map[string]string{"Authorization": secret, "Cookie": secret},
+			Query: map[string]string{"token": secret}, Capabilities: llm.ProviderCapabilities{Tools: true},
+		}),
+		SystemPrompt: "safe system prompt",
+		History:      []llm.Message{message},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch.EpochID = "epoch-safe"
+	eventRaw, err := json.Marshal(events.Event{Type: provenance.RequestEpochType, Payload: provenance.RequestEpochPayload{Epoch: epoch}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedBundleSession(t, work, sessionID, map[string]string{
+		"session.json":       `{"alias":"debug","kind":"primary"}`,
+		"conversation.jsonl": `{"role":"user","blocks":[{"type":"text","text":"hello"}]}` + "\n",
+		"events.jsonl":       string(eventRaw) + "\n",
+	})
+	out := filepath.Join(work, "provenance.tar.gz")
+	if _, err := Create(Options{
+		WorkDir: work, SessionID: sessionID, OutPath: out, Redact: false, Now: fixedBundleTime,
+		Config: config.Config{ProviderID: "custom", ProviderProtocol: "openai/chat", BaseURL: "https://example.test", APIKey: secret, Model: "model", WorkDir: work},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	all := string(joinBundleFiles(readBundleArchive(t, out)))
+	if strings.Contains(all, secret) {
+		t.Fatalf("unredacted bundle leaked provider secret through provenance:\n%s", all)
+	}
+	if !strings.Contains(all, epoch.RequestDigest) || !strings.Contains(all, epoch.EpochID) {
+		t.Fatalf("bundle omitted request provenance:\n%s", all)
+	}
+}
 
 func TestCreateIncludesSessionFilesManifestAndRedacts(t *testing.T) {
 	work := t.TempDir()

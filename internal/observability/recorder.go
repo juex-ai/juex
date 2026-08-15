@@ -301,6 +301,11 @@ func summaryFor(event string, p map[string]any) map[string]any {
 		add("usage")
 		add("token_usage")
 		add("text")
+	case "llm.errored":
+		add("purpose")
+		add("iter")
+		add("model")
+		add("error")
 	case "llm.retry":
 		add("purpose")
 		add("iter")

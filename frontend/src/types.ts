@@ -318,6 +318,8 @@ export const BROWSER_EVENT_TYPES = [
   "turn.errored",
   "llm.requested",
   "llm.responded",
+  "llm.errored",
+  "provider.request_epoch",
   "llm.output_delta",
   "llm.retry",
   "llm.fallback",
@@ -401,9 +403,12 @@ export interface TurnErroredPayload {
 
 export interface LLMRequestedPayload {
   iter: number;
+  purpose: "turn" | "compaction";
   history_len: number;
   tool_count: number;
   model?: string;
+  epoch_id: string;
+  request_digest: string;
 }
 
 export interface LLMOutputDeltaPayload {
@@ -414,9 +419,20 @@ export interface LLMOutputDeltaPayload {
   text: string;
 }
 
+export interface LLMErroredPayload {
+  iter: number;
+  purpose: "turn";
+  model?: string;
+  error: string;
+  epoch_id: string;
+  request_digest: string;
+}
+
 export interface LLMRetryPayload {
-  purpose?: string;
+  purpose: "turn" | "compaction";
   iter?: number;
+  epoch_id: string;
+  request_digest: string;
   provider: string;
   model: string;
   protocol?: string;
@@ -462,6 +478,63 @@ export interface LLMRespondedPayload {
   context_usage?: ContextUsage;
   notice?: Message;
   message_id: string;
+  epoch_id: string;
+  request_digest: string;
+}
+
+export interface ProviderRequestEpochPayload {
+  epoch: {
+    epoch_id: string;
+    purpose: string;
+    iter: number;
+    attempt: number;
+    provider: {
+      id?: string;
+      protocol?: string;
+      model?: string;
+      endpoint_digest?: string;
+      header_digest?: string;
+      query_digest?: string;
+      thinking_effort?: string;
+      capabilities: Record<string, boolean>;
+      reasoning_replay_fields?: string[];
+      codex_transport?: string;
+    };
+    context_window?: number;
+    max_output_tokens?: number;
+    cache_policy?: {
+      stable_prefix_key_digest?: string;
+      retention_digest?: string;
+    };
+    system_prompt: ProviderRequestSnapshot;
+    tool_catalog: ProviderRequestSnapshot;
+    history_digest: string;
+    history_message_ids: string[];
+    messages: Array<{
+      id: string;
+      source: string;
+      content_digest: string;
+      snapshot?: ProviderRequestSnapshot;
+    }>;
+    compaction?: {
+      marker_message_id?: string;
+      previous_summary_id?: string;
+      tail_start_message_id?: string;
+      retained_message_ids?: string[];
+    };
+    hook_context_message_ids?: string[];
+    request_digest: string;
+  };
+}
+
+export interface ProviderRequestSnapshot {
+  digest: string;
+  bytes: number;
+  content?: unknown;
+  omitted?: string;
+  reused?: boolean;
+  parts?: ProviderRequestSnapshot[];
+  joiner?: string;
 }
 
 export interface ToolRequestedPayload {
@@ -750,6 +823,8 @@ export interface ContextCompactSummaryFallbackPayload {
   configured_model?: string;
   fallback_model?: string;
   error: string;
+  epoch_id: string;
+  request_digest: string;
 }
 
 export interface ContextCompactSummaryRetryPayload {
@@ -759,6 +834,8 @@ export interface ContextCompactSummaryRetryPayload {
   reasoning_only?: boolean;
   previous_max_output_tokens: number;
   max_output_tokens: number;
+  epoch_id: string;
+  request_digest: string;
 }
 
 export interface ContextCompactCompletedPayload {
@@ -801,6 +878,10 @@ export type BrowserEvent =
   | (BrowserEventBase<"turn.errored"> & { payload: TurnErroredPayload })
   | (BrowserEventBase<"llm.requested"> & { payload: LLMRequestedPayload })
   | (BrowserEventBase<"llm.responded"> & { payload: LLMRespondedPayload })
+  | (BrowserEventBase<"llm.errored"> & { payload: LLMErroredPayload })
+  | (BrowserEventBase<"provider.request_epoch"> & {
+      payload: ProviderRequestEpochPayload;
+    })
   | (BrowserEventBase<"llm.output_delta"> & { payload: LLMOutputDeltaPayload })
   | (BrowserEventBase<"llm.retry"> & { payload: LLMRetryPayload })
   | (BrowserEventBase<"llm.fallback"> & { payload: LLMFallbackPayload })

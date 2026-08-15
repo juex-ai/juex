@@ -26,6 +26,8 @@ import (
 	"github.com/juex-ai/juex/internal/skills"
 )
 
+const SectionSeparator = "\n\n---\n\n"
+
 type Builder struct {
 	GlobalAgentsMDPath string   // optional; e.g. ~/.agents/AGENTS.md
 	AgentsMDDirs       []string // loaded after global AGENTS.md, in caller-provided order
@@ -168,7 +170,7 @@ func JoinSections(sections []Section) string {
 			parts = append(parts, section.Text)
 		}
 	}
-	return strings.Join(parts, "\n\n---\n\n")
+	return strings.Join(parts, SectionSeparator)
 }
 
 func (b *Builder) operatingContext() string {

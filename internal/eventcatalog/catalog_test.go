@@ -8,6 +8,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/provenance"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
@@ -63,18 +64,18 @@ func TestDefaultCatalogValidatesToolExecutionIdentityAndOutcome(t *testing.T) {
 		MessageID: "assistant-1",
 	}
 	responded, err := Default().Prepare(events.Event{Type: "llm.responded", Payload: juexruntime.LLMRespondedPayload{
-		Iter: 2, MessageID: "assistant-1", ToolCalls: []toolevents.ToolCallPayload{call},
+		Iter: 2, MessageID: "assistant-1", EpochID: "epoch-1", RequestDigest: strings.Repeat("a", 64), ToolCalls: []toolevents.ToolCallPayload{call},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if responded.SchemaVersion != 2 {
-		t.Fatalf("llm.responded schema = %d, want 2", responded.SchemaVersion)
+	if responded.SchemaVersion != 3 {
+		t.Fatalf("llm.responded schema = %d, want 3", responded.SchemaVersion)
 	}
 
 	call.MessageID = "different-assistant"
 	if _, err := Default().Prepare(events.Event{Type: "llm.responded", Payload: juexruntime.LLMRespondedPayload{
-		Iter: 2, MessageID: "assistant-1", ToolCalls: []toolevents.ToolCallPayload{call},
+		Iter: 2, MessageID: "assistant-1", EpochID: "epoch-1", RequestDigest: strings.Repeat("a", 64), ToolCalls: []toolevents.ToolCallPayload{call},
 	}}); err == nil {
 		t.Fatal("llm.responded mismatched tool identity was accepted")
 	}
@@ -97,6 +98,67 @@ func TestDefaultCatalogValidatesToolExecutionIdentityAndOutcome(t *testing.T) {
 	}
 	if prepared.SchemaVersion != 2 {
 		t.Fatalf("tool.completed schema = %d, want 2", prepared.SchemaVersion)
+	}
+}
+
+func TestDefaultCatalogValidatesProviderRequestProvenance(t *testing.T) {
+	message := llm.TextMessage(llm.RoleUser, "hello")
+	message.ID = "user-1"
+	epoch, err := provenance.BuildRequestEpoch(provenance.RequestInput{
+		Provider: provenance.SafeProvider{ID: "test", Model: "model"},
+		History:  []llm.Message{message},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch.EpochID = "epoch-1"
+	prepared, err := Default().Prepare(events.Event{Type: provenance.RequestEpochType, Payload: provenance.RequestEpochPayload{Epoch: epoch}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.SchemaVersion != 1 || prepared.ReplayPolicy != events.ReplayRequired {
+		t.Fatalf("request epoch schema = v%d/%q", prepared.SchemaVersion, prepared.ReplayPolicy)
+	}
+	requested, err := Default().Prepare(events.Event{Type: "llm.requested", Payload: juexruntime.LLMRequestedPayload{
+		Iter: 0, Purpose: "turn", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requested.SchemaVersion != 3 {
+		t.Fatalf("llm.requested schema = %d, want 3", requested.SchemaVersion)
+	}
+	if _, err := Default().Prepare(events.Event{Type: "llm.requested", Payload: juexruntime.LLMRequestedPayload{
+		Iter: 0, Purpose: "unknown", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
+	}}); err == nil {
+		t.Fatal("llm.requested with unknown purpose was accepted")
+	}
+	errored, err := Default().Prepare(events.Event{Type: "llm.errored", Payload: juexruntime.LLMErroredPayload{
+		Iter: 0, Purpose: "turn", Model: "test:model", Error: "status 503",
+		EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errored.SchemaVersion != 1 || errored.ReplayPolicy != events.ReplayRequired {
+		t.Fatalf("llm.errored schema = v%d/%q", errored.SchemaVersion, errored.ReplayPolicy)
+	}
+	if _, err := Default().Prepare(events.Event{Type: "llm.errored", Payload: juexruntime.LLMErroredPayload{
+		Iter: 0, Purpose: "turn", Error: "status 503",
+	}}); err == nil {
+		t.Fatal("llm.errored without epoch identity was accepted")
+	}
+	compactionRetry, err := Default().Prepare(events.Event{Type: "llm.retry", Payload: juexruntime.LLMRetryPayload{
+		Purpose: "compaction", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compactionRetry.SchemaVersion != 3 {
+		t.Fatalf("llm.retry schema = %d, want 3", compactionRetry.SchemaVersion)
+	}
+	if _, err := Default().Prepare(events.Event{Type: provenance.RequestEpochType, Payload: provenance.RequestEpochPayload{}}); err == nil {
+		t.Fatal("empty request epoch was accepted")
 	}
 }
 

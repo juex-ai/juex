@@ -39,6 +39,7 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
+	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
@@ -54,12 +55,13 @@ const (
 )
 
 type Engine struct {
-	Provider        llm.Provider
-	SummaryProvider llm.Provider
-	ModelCandidates []ModelCandidate
-	ModelHealth     *llm.ModelHealth
-	Tools           *tools.Registry
-	Bus             *events.Bus
+	Provider          llm.Provider
+	SummaryProvider   llm.Provider
+	SummaryProvenance provenance.SafeProvider
+	ModelCandidates   []ModelCandidate
+	ModelHealth       *llm.ModelHealth
+	Tools             *tools.Registry
+	Bus               *events.Bus
 	// Session, Prompt, HookContext, PendingInputQueue, Notes, and GoalState
 	// are constructor/test compatibility fields. Concurrent production code
 	// must use the synchronized session-runtime methods instead of reading or
@@ -139,6 +141,7 @@ type Engine struct {
 
 	hookRuntimeContextMu      sync.Mutex
 	pendingHookRuntimeContext []llm.Message
+	provenanceTracker         *provenance.Tracker
 
 	autoCompactFailures int
 	toolFailures        *toolFailureLedger
@@ -572,12 +575,14 @@ type providerTurnRequest struct {
 	history              []llm.Message
 	estimatedInputTokens int
 	hookContext          []llm.Message
-	hookContextCount     int
+	epochID              string
+	requestDigest        string
 }
 
 type ModelCandidate struct {
 	Ref             string
 	Provider        llm.Provider
+	Provenance      provenance.SafeProvider
 	ContextWindow   int
 	MaxOutputTokens int
 }
@@ -698,10 +703,9 @@ func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared 
 	hookContext := e.pendingHookRuntimeContextSnapshot()
 	requestHistory := e.activeContextLockedWithHookContext(hookContext).Messages
 	return providerTurnRequest{
-		iter:             iter,
-		history:          requestHistory,
-		hookContext:      hookContext,
-		hookContextCount: len(hookContext),
+		iter:        iter,
+		history:     requestHistory,
+		hookContext: hookContext,
 	}, nil
 }
 
@@ -724,6 +728,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 	var failures []modelAttemptFailure
 	var skipped []llm.ModelHealthSkip
 	var pending *modelFallbackTransition
+	attempt := 0
 
 	for {
 		selection, ok := health.Acquire(refs, attempted)
@@ -745,15 +750,18 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			return providerTurnResult{request: base}, modelChainError(failures, skipped)
 		}
 		candidate := candidates[selection.Index]
+		attempt++
 		attempted[candidate.Ref] = struct{}{}
 		notice := modelSwitchNotice(previousModel, candidate.Ref, refs, selection, pending, failures, skipped)
+		if notice != nil {
+			notice.ID = providerNoticeMessageID(turnID, base.iter, candidate.Ref, *notice)
+		}
 		request, err := e.prepareCandidateRequestLocked(ctx, turnID, prepared, base, candidate, notice, selection.Index > 0)
 		if err != nil {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
 			return providerTurnResult{request: request}, err
 		}
 		base.hookContext = request.hookContext
-		base.hookContextCount = request.hookContextCount
 		base.history = e.activeContextLockedWithHookContext(base.hookContext).Messages
 		if pending != nil {
 			e.emitModelFallback(turnID, *pending, candidate.Ref)
@@ -765,11 +773,22 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 				cooldown: skipped.CooldownRemaining,
 			}, candidate.Ref)
 		}
+		cachePolicy := e.cachePolicyLocked()
+		epoch, err := e.checkpointProviderRequestLocked(turnID, prepared, request, candidate, cachePolicy, attempt)
+		if err != nil {
+			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			return providerTurnResult{request: request}, err
+		}
+		request.epochID = epoch.EpochID
+		request.requestDigest = epoch.RequestDigest
 		if err := e.emit(events.Event{Type: "llm.requested", TurnID: turnID, Payload: LLMRequestedPayload{
-			Iter:       base.iter,
-			HistoryLen: len(request.history),
-			ToolCount:  len(prepared.tools),
-			Model:      candidate.Ref,
+			Iter:          base.iter,
+			Purpose:       "turn",
+			HistoryLen:    len(request.history),
+			ToolCount:     len(prepared.tools),
+			Model:         candidate.Ref,
+			EpochID:       request.epochID,
+			RequestDigest: request.requestDigest,
 		}}); err != nil {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
 			return providerTurnResult{request: request}, fmt.Errorf("commit provider request: %w", err)
@@ -778,8 +797,8 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		resp, err := llm.CompleteWithOptions(ctx, candidate.Provider, prepared.systemPrompt, request.history, prepared.tools, llm.CompleteOptions{
 			Purpose:         "turn",
 			MaxOutputTokens: candidateMaxOutputTokens(candidate, e.MaxOutputTokens),
-			CachePolicy:     e.cachePolicyLocked(),
-			RetryObserver:   e.providerRetryObserverLocked(turnID, "turn", &request.iter),
+			CachePolicy:     cachePolicy,
+			RetryObserver:   e.providerRetryObserverForEpochLocked(turnID, "turn", &request.iter, request.epochID, request.requestDigest),
 			OnDelta: func(delta llm.StreamDelta) {
 				_ = e.emit(events.Event{Type: "llm.output_delta", TurnID: turnID, Transient: true, Payload: LLMOutputDeltaPayload{
 					Iter:  request.iter,
@@ -791,8 +810,23 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			},
 		})
 		if err == nil {
+			if contextErr := cancellation.ContextError(ctx); contextErr != nil {
+				health.Complete(selection.Ticket, llm.ModelHealthSuccess, "")
+				discardErr := fmt.Errorf("provider response discarded: %w", contextErr)
+				if emitErr := e.emitProviderTurnErrored(turnID, request, candidate.Ref, discardErr); emitErr != nil {
+					return providerTurnResult{request: request}, fmt.Errorf("commit discarded provider response: %w", emitErr)
+				}
+				return providerTurnResult{request: request}, context.Canceled
+			}
 			health.Complete(selection.Ticket, llm.ModelHealthSuccess, "")
 			return providerTurnResult{response: resp, request: request, candidate: candidate, notice: notice}, nil
+		}
+		if emitErr := e.emitProviderTurnErrored(turnID, request, candidate.Ref, err); emitErr != nil {
+			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			return providerTurnResult{request: request}, &modelRequestError{
+				err:           errors.Join(err, fmt.Errorf("commit provider error: %w", emitErr)),
+				contextWindow: candidateContextWindow(candidate, e.ContextWindow),
+			}
 		}
 		reason, eligible := llm.ClassifyFallbackError(err)
 		if !eligible {
@@ -811,10 +845,23 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			cooldown: transition.Cooldown,
 			probe:    selection.Ticket.Probe,
 		}
+		base.hookContext = e.pendingHookRuntimeContextSnapshot()
+		base.history = e.activeContextLockedWithHookContext(base.hookContext).Messages
 	}
 }
 
-func (e *Engine) providerRetryObserverLocked(turnID, purpose string, iter *int) func(llm.ProviderRetryDiagnostic) {
+func (e *Engine) emitProviderTurnErrored(turnID string, request providerTurnRequest, model string, cause error) error {
+	return e.emit(events.Event{Type: "llm.errored", TurnID: turnID, Payload: LLMErroredPayload{
+		Iter:          request.iter,
+		Purpose:       "turn",
+		Model:         model,
+		Error:         cause.Error(),
+		EpochID:       request.epochID,
+		RequestDigest: request.requestDigest,
+	}})
+}
+
+func (e *Engine) providerRetryObserverForEpochLocked(turnID, purpose string, iter *int, epochID, requestDigest string) func(llm.ProviderRetryDiagnostic) {
 	var iterCopy *int
 	if iter != nil {
 		value := *iter
@@ -825,11 +872,13 @@ func (e *Engine) providerRetryObserverLocked(turnID, purpose string, iter *int) 
 			ProviderRetryDiagnostic: d,
 			Purpose:                 purpose,
 			Iter:                    iterCopy,
+			EpochID:                 epochID,
+			RequestDigest:           requestDigest,
 		}})
 	}
 }
 
-func (e *Engine) continueAfterProviderFailure(ctx context.Context, turnID string, iter int, err error) bool {
+func (e *Engine) continueAfterProviderFailure(ctx context.Context, turnID string, request providerTurnRequest, err error) bool {
 	if err == nil || cancellation.ContextError(ctx) != nil || !llm.IsRetryableProviderError(err) {
 		return false
 	}
@@ -847,7 +896,7 @@ func (e *Engine) continueAfterProviderFailure(ctx context.Context, turnID string
 	if e.Provider != nil {
 		provider = e.Provider.Name()
 	}
-	e.providerRetryObserverLocked(turnID, "turn", &iter)(llm.ProviderRetryDiagnostic{
+	e.providerRetryObserverForEpochLocked(turnID, "turn", &request.iter, request.epochID, request.requestDigest)(llm.ProviderRetryDiagnostic{
 		Provider:    provider,
 		Model:       provider,
 		Operation:   "turn.pending_input",
@@ -896,18 +945,20 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 	// the conversation log. Bounded by what the LLM returned in this
 	// single turn, so payload size is reasonable.
 	payload := LLMRespondedPayload{
-		Iter:         request.iter,
-		StopReason:   resp.StopReason,
-		Usage:        resp.Usage,
-		TokenUsage:   totalUsage,
-		Blocks:       msg.Blocks,
-		Text:         responseText(msg),
-		Thinking:     responseThinking(msg),
-		ToolCalls:    responseToolCalls(msg, request.iter),
-		Model:        msg.Model,
-		ContextUsage: contextUsage,
-		Notice:       notice,
-		MessageID:    msg.ID,
+		Iter:          request.iter,
+		StopReason:    resp.StopReason,
+		Usage:         resp.Usage,
+		TokenUsage:    totalUsage,
+		Blocks:        msg.Blocks,
+		Text:          responseText(msg),
+		Thinking:      responseThinking(msg),
+		ToolCalls:     responseToolCalls(msg, request.iter),
+		Model:         msg.Model,
+		ContextUsage:  contextUsage,
+		Notice:        notice,
+		MessageID:     msg.ID,
+		EpochID:       request.epochID,
+		RequestDigest: request.requestDigest,
 	}
 	if err := e.emit(events.Event{Type: "llm.responded", TurnID: turnID, Payload: payload}); err != nil {
 		return recordedProviderResponse{}, fmt.Errorf("commit provider response: %w", err)

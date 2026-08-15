@@ -371,9 +371,14 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		}
 		turn.Streaming = false
 	case "llm.requested":
+		payload := payloadAs[LLMRequestedPayload](event.Payload)
 		turn := ensureTurnStatus(&next, event)
 		turn.State = TurnLifecycleActive
-		turn.Phase = TurnPhaseProviderIteration
+		if payload.Purpose == "compaction" {
+			turn.Phase = TurnPhaseCompacting
+		} else {
+			turn.Phase = TurnPhaseProviderIteration
+		}
 		turn.Streaming = true
 	case "llm.responded":
 		payload := payloadAs[LLMRespondedPayload](event.Payload)
@@ -387,6 +392,16 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		if payload.ContextUsage != nil {
 			next.ContextUsage = cloneContextUsage(payload.ContextUsage)
 		}
+	case "llm.errored":
+		turn := ensureTurnStatus(&next, event)
+		turn.State = TurnLifecycleActive
+		turn.Phase = TurnPhaseProviderIteration
+		turn.Streaming = false
+	case "context.compact.summary_responded", "context.compact.summary_errored":
+		turn := ensureTurnStatus(&next, event)
+		turn.State = TurnLifecycleActive
+		turn.Phase = TurnPhaseCompacting
+		turn.Streaming = false
 	case toolevents.RequestedType:
 		payload := payloadAs[toolevents.RequestedPayload](event.Payload)
 		upsertToolStatus(&next, event, payload.ToolUseID, payload.Name, ToolCallRequested, nil)

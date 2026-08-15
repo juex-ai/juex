@@ -109,25 +109,39 @@ type HookTracePayload struct {
 }
 
 type LLMRequestedPayload struct {
-	Iter       int    `json:"iter"`
-	HistoryLen int    `json:"history_len"`
-	ToolCount  int    `json:"tool_count"`
-	Model      string `json:"model,omitempty"`
+	Iter          int    `json:"iter"`
+	Purpose       string `json:"purpose"`
+	HistoryLen    int    `json:"history_len"`
+	ToolCount     int    `json:"tool_count"`
+	Model         string `json:"model,omitempty"`
+	EpochID       string `json:"epoch_id,omitempty"`
+	RequestDigest string `json:"request_digest,omitempty"`
 }
 
 type LLMRespondedPayload struct {
-	Iter         int                          `json:"iter"`
-	StopReason   llm.StopReason               `json:"stop_reason"`
-	Usage        llm.Usage                    `json:"usage"`
-	TokenUsage   llm.Usage                    `json:"token_usage"`
-	Blocks       []llm.Block                  `json:"blocks"`
-	Text         string                       `json:"text"`
-	Thinking     string                       `json:"thinking"`
-	ToolCalls    []toolevents.ToolCallPayload `json:"tool_calls"`
-	Model        string                       `json:"model"`
-	ContextUsage *llm.ContextUsage            `json:"context_usage,omitempty"`
-	Notice       *llm.Message                 `json:"notice,omitempty"`
-	MessageID    string                       `json:"message_id"`
+	Iter          int                          `json:"iter"`
+	StopReason    llm.StopReason               `json:"stop_reason"`
+	Usage         llm.Usage                    `json:"usage"`
+	TokenUsage    llm.Usage                    `json:"token_usage"`
+	Blocks        []llm.Block                  `json:"blocks"`
+	Text          string                       `json:"text"`
+	Thinking      string                       `json:"thinking"`
+	ToolCalls     []toolevents.ToolCallPayload `json:"tool_calls"`
+	Model         string                       `json:"model"`
+	ContextUsage  *llm.ContextUsage            `json:"context_usage,omitempty"`
+	Notice        *llm.Message                 `json:"notice,omitempty"`
+	MessageID     string                       `json:"message_id"`
+	EpochID       string                       `json:"epoch_id,omitempty"`
+	RequestDigest string                       `json:"request_digest,omitempty"`
+}
+
+type LLMErroredPayload struct {
+	Iter          int    `json:"iter"`
+	Purpose       string `json:"purpose"`
+	Model         string `json:"model,omitempty"`
+	Error         string `json:"error"`
+	EpochID       string `json:"epoch_id"`
+	RequestDigest string `json:"request_digest"`
 }
 
 type LLMOutputDeltaPayload struct {
@@ -140,8 +154,10 @@ type LLMOutputDeltaPayload struct {
 
 type LLMRetryPayload struct {
 	llm.ProviderRetryDiagnostic
-	Purpose string `json:"purpose,omitempty"`
-	Iter    *int   `json:"iter,omitempty"`
+	Purpose       string `json:"purpose"`
+	Iter          *int   `json:"iter,omitempty"`
+	EpochID       string `json:"epoch_id"`
+	RequestDigest string `json:"request_digest"`
 }
 
 type LLMFallbackPayload struct {
@@ -307,6 +323,8 @@ type ContextCompactSummaryFallbackPayload struct {
 	ConfiguredModel string `json:"configured_model,omitempty"`
 	FallbackModel   string `json:"fallback_model,omitempty"`
 	Error           string `json:"error"`
+	EpochID         string `json:"epoch_id"`
+	RequestDigest   string `json:"request_digest"`
 }
 
 type ContextCompactSummaryRetryPayload struct {
@@ -316,6 +334,25 @@ type ContextCompactSummaryRetryPayload struct {
 	ReasoningOnly           bool           `json:"reasoning_only,omitempty"`
 	PreviousMaxOutputTokens int            `json:"previous_max_output_tokens"`
 	MaxOutputTokens         int            `json:"max_output_tokens"`
+	EpochID                 string         `json:"epoch_id"`
+	RequestDigest           string         `json:"request_digest"`
+}
+
+type ContextCompactSummaryRespondedPayload struct {
+	Attempt       int            `json:"attempt"`
+	Model         string         `json:"model,omitempty"`
+	StopReason    llm.StopReason `json:"stop_reason,omitempty"`
+	Usage         llm.Usage      `json:"usage"`
+	EpochID       string         `json:"epoch_id"`
+	RequestDigest string         `json:"request_digest"`
+}
+
+type ContextCompactSummaryErroredPayload struct {
+	Attempt       int    `json:"attempt"`
+	Model         string `json:"model,omitempty"`
+	Error         string `json:"error"`
+	EpochID       string `json:"epoch_id"`
+	RequestDigest string `json:"request_digest"`
 }
 
 type ContextCompactCompletedPayload struct {

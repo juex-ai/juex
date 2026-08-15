@@ -10,6 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
+	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
@@ -40,10 +41,19 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 		Name: "mcp__remote__send", ToolUseID: "remote-call", Iter: 3,
 		CallIndex: 0, MessageID: assistant.ID,
 	}
+	epoch := testRequestEpoch(t, []llm.Message{sess.History[0]}, "recovery-epoch-1")
+	appendCatalogEvent(t, sess, events.Event{
+		Type: provenance.RequestEpochType, TurnID: "turn-before-crash",
+		Payload: provenance.RequestEpochPayload{Epoch: epoch},
+	})
+	appendCatalogEvent(t, sess, events.Event{
+		Type: "llm.requested", TurnID: "turn-before-crash",
+		Payload: runtime.LLMRequestedPayload{Iter: 3, Purpose: "turn", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest},
+	})
 	appendCatalogEvent(t, sess, events.Event{
 		Type: "llm.responded", TurnID: "turn-before-crash",
 		Payload: runtime.LLMRespondedPayload{
-			Iter: 3, MessageID: assistant.ID, Blocks: assistant.Blocks,
+			Iter: 3, MessageID: assistant.ID, EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest, Blocks: assistant.Blocks,
 			ToolCalls: []toolevents.ToolCallPayload{call},
 		},
 	})

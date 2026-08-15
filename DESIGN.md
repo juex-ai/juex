@@ -802,7 +802,8 @@ the authoritative snapshot attached to each BrowserEvent and is applied by the
 session read controller. Assistant deltas accumulate in provisional blocks
 keyed by provider block index; `llm.responded` then replaces them with the
 canonical ordered blocks so retries or protocol-specific chunking cannot
-duplicate the final transcript.
+duplicate the final transcript. `llm.errored` clears provisional blocks from a
+failed provider attempt before model fallback or terminal Turn failure.
 The compact session-state control near the composer shows Goal first, followed
 by model-owned Notes. Notes render as Markdown; when they contain task items,
 the tooltip shows completed/total counts and a thin progress indicator. The

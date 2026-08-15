@@ -111,7 +111,7 @@
   {
     "id": "evt-llm-responded",
     "type": "llm.responded",
-    "schema_version": 2,
+    "schema_version": 3,
     "ts": "2026-06-15T00:00:01Z",
     "turn_id": "turn-1",
     "payload": {
@@ -140,7 +140,9 @@
         "output_tokens": 5,
         "total_tokens": 15
       },
-      "message_id": "msg-assistant-1"
+      "message_id": "msg-assistant-1",
+      "epoch_id": "epoch-turn-1-0",
+      "request_digest": "request-digest-turn-1-0"
     },
     "status": {
       "cursor": "evt-llm-responded",
@@ -231,7 +233,7 @@
   {
     "id": "evt-llm-retry",
     "type": "llm.retry",
-    "schema_version": 1,
+    "schema_version": 3,
     "ts": "2026-06-15T00:00:01.5Z",
     "turn_id": "turn-1",
     "payload": {
@@ -247,7 +249,9 @@
       "raw_error": "codex SSE read: stream error",
       "will_retry": true,
       "purpose": "turn",
-      "iter": 0
+      "iter": 0,
+      "epoch_id": "epoch-turn-1-0",
+      "request_digest": "request-digest-turn-1-0"
     },
     "status": {
       "cursor": "evt-llm-retry",
@@ -1187,7 +1191,9 @@
       "stop_reason": "max_tokens",
       "reasoning_only": true,
       "previous_max_output_tokens": 2048,
-      "max_output_tokens": 4096
+      "max_output_tokens": 4096,
+      "epoch_id": "epoch-compact-1",
+      "request_digest": "request-digest-compact-1"
     },
     "status": {
       "cursor": "evt-compact-summary-retry",

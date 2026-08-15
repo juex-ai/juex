@@ -39,6 +39,7 @@ import (
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/memory"
 	"github.com/juex-ai/juex/internal/prompt"
+	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
@@ -1385,6 +1386,11 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 	}
 	sessionDir := first.Session.Dir
 	timestamp := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	input, err := first.Session.AppendAssigned(llm.TextMessage(llm.RoleUser, "interrupted request"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch := testRequestEpoch(t, []llm.Message{input}, "resume-epoch-1")
 	if err := first.Bus.Emit(events.Event{
 		ID:        "1",
 		Type:      runtime.TurnAdmittedType,
@@ -1395,12 +1401,32 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 		t.Fatal(err)
 	}
 	if err := first.Bus.Emit(events.Event{
+		ID:        "epoch-event-1",
+		Type:      provenance.RequestEpochType,
+		TurnID:    "turn-1",
+		Timestamp: timestamp.Add(100 * time.Millisecond),
+		Payload:   provenance.RequestEpochPayload{Epoch: epoch},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Bus.Emit(events.Event{
+		ID:        "request-event-1",
+		Type:      "llm.requested",
+		TurnID:    "turn-1",
+		Timestamp: timestamp.Add(200 * time.Millisecond),
+		Payload: runtime.LLMRequestedPayload{
+			Iter: 0, Purpose: "turn", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Bus.Emit(events.Event{
 		ID:        "2",
 		Type:      "llm.responded",
 		TurnID:    "turn-1",
 		Timestamp: timestamp.Add(time.Second),
 		Payload: runtime.LLMRespondedPayload{
-			MessageID:  "resume-assistant-1",
+			MessageID: "resume-assistant-1", EpochID: epoch.EpochID, RequestDigest: epoch.RequestDigest,
 			TokenUsage: llm.Usage{InputTokens: 21, OutputTokens: 8},
 			ContextUsage: &llm.ContextUsage{
 				Model:       "resume-model",
@@ -1513,15 +1539,28 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 		}
 		replay = append(replay, next)
 	}
-	if len(replay) != 5 {
-		t.Fatalf("status replay snapshots = %d, want events 2-5 plus restart recovery", len(replay))
+	if len(replay) != 7 {
+		t.Fatalf("status replay snapshots = %d, want epoch/request events, events 2-5, plus restart recovery", len(replay))
 	}
-	if replay[0].Cursor != "2" ||
+	if replay[0].Cursor != "epoch-event-1" ||
 		replay[len(replay)-1].Cursor != "5" ||
 		replay[len(replay)-1].Turn == nil ||
 		replay[len(replay)-1].Turn.State != runtime.TurnLifecycleCancelled {
 		t.Fatalf("status replay ordering = %+v", replay)
 	}
+}
+
+func testRequestEpoch(t *testing.T, history []llm.Message, epochID string) provenance.RequestEpoch {
+	t.Helper()
+	epoch, err := provenance.BuildRequestEpoch(provenance.RequestInput{
+		Provider: provenance.SafeProvider{ID: "test", Model: "model"},
+		History:  history,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch.EpochID = epochID
+	return epoch
 }
 
 func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {

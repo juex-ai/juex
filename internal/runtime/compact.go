@@ -272,7 +272,9 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	postResults, postErr := e.runHooks(ctx, postReq)
 	// Hook failures are observational after commit; keep context produced by
 	// earlier successful hooks when a later hook fails.
-	e.queueHookRuntimeContext(postResults)
+	if err := e.queueHookRuntimeContext(postResults); err != nil {
+		return result, err
+	}
 	if isHookRequestCommitError(postErr) {
 		return result, postErr
 	}

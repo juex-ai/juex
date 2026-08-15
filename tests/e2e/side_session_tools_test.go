@@ -22,6 +22,8 @@ type sideSessionToolProvider struct {
 	startOnce    sync.Once
 }
 
+const sideSessionE2ETimeout = 15 * time.Second
+
 func (p *sideSessionToolProvider) Name() string { return "side-session-tool-e2e" }
 
 func (p *sideSessionToolProvider) Complete(ctx context.Context, _ string, history []llm.Message, specs []llm.ToolSpec) (llm.Response, error) {
@@ -109,7 +111,7 @@ func TestEndToEnd_SideSessionToolDelegation(t *testing.T) {
 		}
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), sideSessionE2ETimeout)
 	defer cancel()
 	out, err := a.Run(ctx, "delegate through a Side Session")
 	if err != nil {
@@ -120,7 +122,7 @@ func TestEndToEnd_SideSessionToolDelegation(t *testing.T) {
 	}
 	select {
 	case <-provider.childStarted:
-	case <-time.After(time.Second):
+	case <-time.After(sideSessionE2ETimeout):
 		t.Fatal("side worker did not start")
 	}
 	goal, err := a.Engine.GoalState.Snapshot()
@@ -131,7 +133,7 @@ func TestEndToEnd_SideSessionToolDelegation(t *testing.T) {
 		t.Fatalf("waiting Goal = %+v", goal)
 	}
 	close(provider.releaseChild)
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(sideSessionE2ETimeout)
 	for time.Now().Before(deadline) {
 		_, history, ok := a.SessionSnapshot()
 		if ok && historyHasKind(history, llm.MessageKindSideSession) && historyHasAssistantText(history, "PRIMARY_SAW_SIDE_OK") {

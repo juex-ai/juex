@@ -115,6 +115,12 @@ func TestStatusStoreProjectsLayeredTransitions(t *testing.T) {
 	snapshot = apply("3", "llm.requested", "turn-1", LLMRequestedPayload{Iter: 0})
 	assertTurnStatus(t, snapshot, TurnLifecycleActive, TurnPhaseProviderIteration, true)
 
+	snapshot = apply("3-error", "llm.errored", "turn-1", LLMErroredPayload{Iter: 0, Purpose: "turn", Error: "status 503"})
+	assertTurnStatus(t, snapshot, TurnLifecycleActive, TurnPhaseProviderIteration, false)
+
+	snapshot = apply("3-fallback", "llm.requested", "turn-1", LLMRequestedPayload{Iter: 0})
+	assertTurnStatus(t, snapshot, TurnLifecycleActive, TurnPhaseProviderIteration, true)
+
 	snapshot = apply("4", "llm.responded", "turn-1", LLMRespondedPayload{
 		TokenUsage: llm.Usage{InputTokens: 5, OutputTokens: 2},
 		ContextUsage: &llm.ContextUsage{
@@ -351,6 +357,31 @@ func TestStatusSnapshotResumeIsDeterministic(t *testing.T) {
 	}
 	if !reflect.DeepEqual(resumed.Snapshot(), direct.Snapshot()) {
 		t.Fatalf("resumed = %#v\ndirect = %#v", resumed.Snapshot(), direct.Snapshot())
+	}
+}
+
+func TestStatusCompactionRequestPreservesCompactingPhase(t *testing.T) {
+	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: 4})
+	store.Publish(statusEvent("1", TurnAdmittedType, "compact-turn", TurnAdmittedPayload{Operation: "compact"}))
+	store.Publish(statusEvent("2", "context.compact.started", "compact-turn", ContextCompactStartedPayload{}))
+	store.Publish(statusEvent("3", "llm.requested", "compact-turn", LLMRequestedPayload{Purpose: "compaction"}))
+
+	snapshot := store.Snapshot()
+	if snapshot.Turn == nil || snapshot.Turn.Phase != TurnPhaseCompacting || !snapshot.Turn.Streaming {
+		t.Fatalf("compaction request status = %+v", snapshot.Turn)
+	}
+
+	store.Publish(statusEvent("4", "context.compact.summary_responded", "compact-turn", ContextCompactSummaryRespondedPayload{}))
+	snapshot = store.Snapshot()
+	if snapshot.Turn == nil || snapshot.Turn.Phase != TurnPhaseCompacting || snapshot.Turn.Streaming {
+		t.Fatalf("compaction response status = %+v", snapshot.Turn)
+	}
+
+	store.Publish(statusEvent("5", "llm.requested", "compact-turn", LLMRequestedPayload{Purpose: "compaction"}))
+	store.Publish(statusEvent("6", "context.compact.summary_errored", "compact-turn", ContextCompactSummaryErroredPayload{}))
+	snapshot = store.Snapshot()
+	if snapshot.Turn == nil || snapshot.Turn.Phase != TurnPhaseCompacting || snapshot.Turn.Streaming {
+		t.Fatalf("compaction error status = %+v", snapshot.Turn)
 	}
 }
 

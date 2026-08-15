@@ -202,6 +202,7 @@ implementation decisions live.
 | `internal/environment` | Portable environment-name validation, deterministic dotenv parsing, immutable effective snapshots, low-priority child-runtime defaults, child overlays, value-free metadata, controlled single-workspace activation | Config-file discovery, Extension discovery, subprocess ownership, runtime policy, diagnostic presentation |
 | `internal/providerreadiness` | Provider selection, credential, construction, and connectivity readiness checks | Provider Protocol semantics, runtime fallback, CLI presentation |
 | `internal/llm` | Canonical messages and blocks, Provider interfaces/profiles, Protocol and Capability resolution, wire/SDK adapters, provider transport/API/stream retry, model health | Model-chain fallback, Session lifecycle, Tool execution, CLI/HTTP DTOs |
+| `internal/provenance` | Request Epoch schema, canonical digests, safe Provider descriptors, bounded snapshot deduplication, and incremental journal replay reduction | Provider call timing, complete Provider profiles or credentials, transcript/Event storage, UI projection |
 | `internal/runtime` | Turn lifecycle, Provider-iteration and Tool Call ordering, pending-input queue, model-chain fallback and Turn-level retry, active context, compaction, context projection, runtime fact emission | Provider SDK and transport retry, Session discovery, MCP process lifecycle, transport parsing |
 | `internal/session` | Session identity and kind, transcript/Event persistence, metadata and history index, active metadata, usage snapshots, scratchpad path, single-writer locks | Prompt assembly, Provider calls, Tool dispatch, Session attachment orchestration |
 | `internal/cancellation` | Typed user, signal, and runtime-restart cancellation causes plus signal-aware contexts | Transport Stop admission, Turn reaction policy, user-facing status DTOs |
@@ -836,7 +837,8 @@ use, but their envelope must explicitly declare a positive schema version and
 required-or-ignorable replay policy.
 
 Standard cataloged families include `turn.started/completed/errored`,
-`llm.requested/output_delta/responded`,
+`provider.request_epoch`, `provider.hook_context.queued`,
+`llm.requested/output_delta/responded/errored`,
 `tool.requested/running/output_delta/completed/errored/outcome_unknown`,
 `transcript.repaired`, `pending_input.*`, `context.compact.*`, and
 `context.projection.applied`.
@@ -847,12 +849,42 @@ Events. BrowserEvent is a separate transport projection DTO: the Catalog
 selects browser-visible stable facts and supplies their normalized payload,
 while Web owns status attachment and SSE framing.
 
+`provider.hook_context.queued` durably records an ordered, bounded batch before
+it enters provider-visible memory. `provider.request_epoch` records the final
+projected message IDs and content digests, compaction marker, safe Provider
+descriptor with hashed endpoint/header/query identities, hashed cache-policy
+identity, and bounded system/tool snapshots or
+digest references. System prompt snapshots preserve the ordered section
+composition, so stable guidance is reused by digest while a changing Operating
+Context contributes only its small section body. Provider-visible context
+synthesized outside the transcript, including Goal, Notes, model-change notices,
+and synthesized compaction input, carries a bounded full-message snapshot;
+one-shot hook context instead resolves through its queued Event. Committing the
+epoch consumes its included one-shot hook-context IDs and releases their in-memory
+bodies while retaining compact duplicate-validation IDs. Session attachment
+streams the journal through the provenance reducer, which ignores unrelated Events
+and derives queued batches minus committed epoch consumption without materializing
+the journal.
+
+`llm.requested` declares either `turn` or `compaction` dispatch after the epoch
+checkpoint. `llm.responded` and `llm.errored` terminate successful and failed
+Turn epochs respectively; compaction summaries use dedicated required
+response/error outcomes. Provider transport retries carry the same epoch ID and
+reconstructed request digest. A model fallback records `llm.errored` before
+checkpointing the next candidate's epoch. A Provider response returned after
+request cancellation is discarded and records `llm.errored` before the Turn
+stops. A semantic summary retry or summary-model fallback checkpoints a new
+epoch before the next Provider call.
+Provider credentials, arbitrary headers/query values, raw cache keys and
+retention values, raw endpoint URLs, and raw wire requests never enter the
+epoch schema.
+
 `llm.output_delta` and `tool.output_delta` are cataloged live-only signals and
 are not appended to the session journal or logs. CLI and browser
 subscribers may render them provisionally; the following durable
-`llm.responded`, `tool.completed`, or `tool.errored` event is authoritative and
-replaces the matching provisional content. Terminal Tool Events include the
-exact Provider-visible Tool Result block and its result-message id under
+`llm.responded`, `llm.errored`, `tool.completed`, or `tool.errored` event is
+authoritative and replaces the matching provisional content. Terminal Tool
+Events include the exact Provider-visible Tool Result block and its result-message id under
 `payload.outcome`, while preview, error, and structured result fields remain
 diagnostic projections. The `internal/toolevents`
 constructor fixes `tool.output_delta` as transient, while persistence

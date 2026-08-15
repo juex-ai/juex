@@ -35,6 +35,7 @@ import (
 	"github.com/juex-ai/juex/internal/observability"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/prompt"
+	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
@@ -53,12 +54,13 @@ type Options struct {
 	ModelHealth     *llm.ModelHealth
 	// SummaryProvider, when set, overrides compaction.summary_model provider
 	// construction. It is primarily useful for tests and embedded callers.
-	SummaryProvider llm.Provider
-	Verbose         bool
-	Debug           bool
-	LogLevel        string
-	Stderr          io.Writer
-	WorkDir         string // if set, overrides Config.WorkDir
+	SummaryProvider   llm.Provider
+	SummaryProvenance provenance.SafeProvider
+	Verbose           bool
+	Debug             bool
+	LogLevel          string
+	Stderr            io.Writer
+	WorkDir           string // if set, overrides Config.WorkDir
 	// MCPManager, when set, provides process-scoped MCP clients owned by
 	// the caller. App registers proxy tools into its per-session registry
 	// but does not close the manager.
@@ -264,6 +266,7 @@ func New(opts Options) (*App, error) {
 			modelCandidates = append(modelCandidates, runtime.ModelCandidate{
 				Ref:             resolved.Ref,
 				Provider:        candidateProvider,
+				Provenance:      provenance.SafeProviderFromProfile(profile),
 				ContextWindow:   resolved.ContextWindow,
 				MaxOutputTokens: resolved.MaxOutputTokens,
 			})
@@ -275,6 +278,7 @@ func New(opts Options) (*App, error) {
 		modelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
 	}
 	summaryProvider := opts.SummaryProvider
+	summaryProvenance := opts.SummaryProvenance
 	if summaryProvider == nil && !providerInjected && strings.TrimSpace(runtimeLimits.Compaction.SummaryModel) != "" {
 		selection, err := cfg.ProviderSelectionForModelRef(runtimeLimits.Compaction.SummaryModel)
 		if err != nil {
@@ -290,6 +294,7 @@ func New(opts Options) (*App, error) {
 			return nil, fmt.Errorf("app: compaction.summary_model: %w", err)
 		}
 		summaryProvider = p
+		summaryProvenance = provenance.SafeProviderFromProfile(profile)
 	}
 
 	bus := events.NewBus()
@@ -437,17 +442,18 @@ func New(opts Options) (*App, error) {
 	}
 
 	eng := &runtime.Engine{
-		Provider:        provider,
-		SummaryProvider: summaryProvider,
-		ModelCandidates: modelCandidates,
-		ModelHealth:     modelHealth,
-		Tools:           reg,
-		Bus:             bus,
-		Session:         sess,
-		Prompt:          pb,
-		WorkDir:         runtimePaths.WorkDir,
-		ArtifactDir:     runtimePaths.ArtifactDir,
-		Hooks:           hookRunner,
+		Provider:          provider,
+		SummaryProvider:   summaryProvider,
+		SummaryProvenance: summaryProvenance,
+		ModelCandidates:   modelCandidates,
+		ModelHealth:       modelHealth,
+		Tools:             reg,
+		Bus:               bus,
+		Session:           sess,
+		Prompt:            pb,
+		WorkDir:           runtimePaths.WorkDir,
+		ArtifactDir:       runtimePaths.ArtifactDir,
+		Hooks:             hookRunner,
 		HookContext: hooks.Request{
 			CWD:              runtimePaths.WorkDir,
 			WorkspaceRoots:   []string{runtimePaths.WorkDir},
