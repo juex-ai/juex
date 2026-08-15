@@ -821,8 +821,8 @@ the last known roster while surfacing reconciliation failures; the next
 successful roster snapshot clears that failure even when its contents did not
 change. The selected Agent's `/api/resource-events`
 stream invalidates workspace, scratchpad, Observable, and process-lifetime
-runtime catalogs. Workspace or enabled user-global `AGENTS.md` guidance, Agent
-Memory, active primary Session selection, and active Session scratchpad content
+runtime catalogs. Workspace or enabled user-global `AGENTS.md` guidance,
+active primary Session selection, and active Session scratchpad content
 additionally invalidate the Runtime snapshot because those prompt sections are
 rebuilt dynamically. External runtime-input directories retain a parent watch
 so rename/delete-and-recreate replacement does not detach invalidation. Skills,
