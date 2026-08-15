@@ -398,6 +398,15 @@ func TestTurnStopsBeforeProviderWhenModulePromptContextFails(t *testing.T) {
 	if prov.called != 0 {
 		t.Fatalf("provider calls = %d, want 0", prov.called)
 	}
+	reloaded, err := session.Load(eng.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reloaded.Close() })
+	if len(reloaded.History) != 1 || reloaded.History[0].Role != llm.RoleUser ||
+		reloaded.History[0].FirstText() != "hello" {
+		t.Fatalf("durable history = %#v, want accepted user input", reloaded.History)
+	}
 }
 
 func TestTurn_PassesMaxOutputTokensToProvider(t *testing.T) {
