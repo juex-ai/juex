@@ -1819,9 +1819,14 @@ agent's status store. Every EventSource open calibrates again for reconnect
 recovery. A failed calibration does not block the stream, a failed connection
 does not block status loading, and an intervening streamed snapshot invalidates
 an older refresh response. The transcript cursor is captured before its message
-page is read so concurrent events may replay but cannot be skipped. The server deduplicates
-queued durable frames already covered by the replay tail before continuing live
-delivery. It captures an open journal descriptor and byte boundary behind the
+page is read so concurrent events may replay but cannot be skipped. During
+runtime restoration, the disk fallback briefly shares the event journal commit
+lock with append, then derives that cursor from the latest newline-terminated
+record without repairing an incomplete journal tail. This prevents the cursor
+from observing bytes before their append has synced or rolled back. The server
+deduplicates queued durable frames already covered by the
+replay tail before continuing live delivery. It captures an open journal
+descriptor and byte boundary behind the
 durable commit barrier, ensuring every event in the snapshot has completed
 browser projection, then reads that fixed prefix after releasing the barrier.
 Private broadcaster publish sequences then define the handoff boundary from

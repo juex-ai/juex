@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,95 @@ func ReadEvents(dir string) ([]events.Event, error) {
 // each complete journal record before returning it to cross-module consumers.
 func ReadEventsWithCatalog(dir string, catalog events.SchemaCatalog) ([]events.Event, error) {
 	return readEvents(dir, catalog)
+}
+
+// ReadLatestCommittedEventID returns the final durably appended event without
+// replaying or repairing the journal. Bytes after the final newline are not a
+// complete record and are ignored.
+func ReadLatestCommittedEventID(dir string) (string, error) {
+	path := filepath.Join(dir, eventsFile)
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	guard, err := acquireEventJournalLock(dir)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = guard.Close() }()
+	return readLatestCommittedEventID(path, filepath.Base(dir))
+}
+
+func readLatestCommittedEventID(path, sessionID string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	defer file.Close()
+
+	st, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+	lastNewline, err := findLastEventNewline(file, st.Size())
+	if err != nil {
+		return "", fmt.Errorf("session: locate latest committed event: %w", err)
+	}
+	if lastNewline < 0 {
+		return "", nil
+	}
+	previousNewline, err := findLastEventNewline(file, lastNewline)
+	if err != nil {
+		return "", fmt.Errorf("session: locate latest committed event start: %w", err)
+	}
+	start := previousNewline + 1
+	recordBytes := lastNewline + 1 - start
+	if recordBytes > int64(maxEventLineBytes) {
+		return "", fmt.Errorf("session: read latest events.jsonl record: %w", errEventLineTooLong)
+	}
+	raw := make([]byte, int(recordBytes))
+	if _, err := io.ReadFull(io.NewSectionReader(file, start, recordBytes), raw); err != nil {
+		return "", fmt.Errorf("session: read latest events.jsonl record: %w", err)
+	}
+	line := raw[:len(raw)-1]
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		line = line[:len(line)-1]
+	}
+	if len(line) == 0 {
+		return "", errors.New("session: decode latest events.jsonl record: empty journal record")
+	}
+	event, _, err := decodeEventJournalLine(line, journalRecordExpectation{
+		kind:      journalKindEvents,
+		sessionID: sessionID,
+	})
+	if err != nil {
+		return "", fmt.Errorf("session: decode latest events.jsonl record: %w", err)
+	}
+	if event.ID == "" {
+		return "", errors.New("session: latest events.jsonl record has no event id")
+	}
+	return event.ID, nil
+}
+
+func findLastEventNewline(file *os.File, end int64) (int64, error) {
+	buf := make([]byte, reverseLineBlockBytes)
+	for end > 0 {
+		start := max(int64(0), end-int64(len(buf)))
+		n, err := file.ReadAt(buf[:end-start], start)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return 0, err
+		}
+		if newline := bytes.LastIndexByte(buf[:n], '\n'); newline >= 0 {
+			return start + int64(newline), nil
+		}
+		end = start
+	}
+	return -1, nil
 }
 
 func readEvents(dir string, catalog events.SchemaCatalog) ([]events.Event, error) {

@@ -15,6 +15,14 @@ import (
 
 const sessionJournalVersion = 1
 
+func acquireEventJournalLock(dir string) (*homestore.Lock, error) {
+	guard, err := homestore.AcquireLock(filepath.Join(dir, eventAppendLock), homestore.LockWait)
+	if err != nil {
+		return nil, fmt.Errorf("session: lock event journal: %w", err)
+	}
+	return guard, nil
+}
+
 type journalKind string
 
 const (
