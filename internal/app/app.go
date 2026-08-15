@@ -1001,19 +1001,16 @@ func (a *App) compactWithTurnID(ctx context.Context, turnID, reason string, auto
 	a.sessionMu.RLock()
 	defer a.sessionMu.RUnlock()
 	if a.Session == nil {
-		return runtime.CompactionResult{}, ErrSessionUnavailable
+		return runtime.CompactionResult{}, a.emitCompactionError(turnID, ErrSessionUnavailable)
 	}
 	sections, err := a.Engine.PromptSectionsWithError()
 	if err != nil {
-		return runtime.CompactionResult{}, fmt.Errorf("app: build compaction prompt: %w", err)
+		return runtime.CompactionResult{}, a.emitCompactionError(turnID, fmt.Errorf("app: build compaction prompt: %w", err))
 	}
 	systemPrompt := prompt.JoinSections(sections)
 	result, err := a.Engine.CompactWithInstructions(ctx, turnID, systemPrompt, reason, auto, instructions)
 	if err != nil {
-		if emitErr := a.Bus.Emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: runtime.NewTurnErroredPayload(err)}); emitErr != nil {
-			return result, errors.Join(err, fmt.Errorf("commit compaction error: %w", emitErr))
-		}
-		return result, err
+		return result, a.emitCompactionError(turnID, err)
 	}
 	if err := a.Bus.Emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: runtime.TurnCompletedPayload{
 		TokenUsage: a.Session.TokenUsageSnapshot(),
@@ -1021,6 +1018,13 @@ func (a *App) compactWithTurnID(ctx context.Context, turnID, reason string, auto
 		return result, fmt.Errorf("commit compaction completion: %w", err)
 	}
 	return result, nil
+}
+
+func (a *App) emitCompactionError(turnID string, err error) error {
+	if emitErr := a.Bus.Emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: runtime.NewTurnErroredPayload(err)}); emitErr != nil {
+		return errors.Join(err, fmt.Errorf("commit compaction error: %w", emitErr))
+	}
+	return err
 }
 
 func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) error {

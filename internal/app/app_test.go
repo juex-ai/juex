@@ -29,6 +29,7 @@ import (
 	"github.com/juex-ai/juex/internal/memory"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
@@ -248,6 +249,31 @@ func TestCompactWithInstructionsWithoutEligibleContextLeavesRuntimeIdle(t *testi
 		snapshot.Turn == nil ||
 		snapshot.Turn.State != runtime.TurnLifecycleCompleted ||
 		!strings.HasPrefix(snapshot.Turn.ID, "compact-") {
+		t.Fatalf("runtime status = %+v", snapshot)
+	}
+}
+
+func TestCompactWithInstructionsPromptFailureTerminatesAdmittedTurn(t *testing.T) {
+	a, provider := newStubApp(t)
+	a.Engine.Prompt.ModulePromptContext = func() ([]runtimemodule.PromptSection, error) {
+		return nil, errors.New("memory unavailable")
+	}
+
+	_, err := a.CompactWithInstructions(context.Background(), "manual", false, "")
+	if err == nil || !strings.Contains(err.Error(), "app: build compaction prompt") ||
+		!strings.Contains(err.Error(), "memory unavailable") {
+		t.Fatalf("CompactWithInstructions() error = %v", err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("provider calls = %d, want 0", provider.calls)
+	}
+	snapshot := a.Status.Snapshot()
+	if snapshot.Session.State != runtime.SessionRuntimeFailed ||
+		snapshot.Turn == nil ||
+		snapshot.Turn.State != runtime.TurnLifecycleErrored ||
+		!strings.HasPrefix(snapshot.Turn.ID, "compact-") ||
+		snapshot.Turn.Error == nil ||
+		!strings.Contains(snapshot.Turn.Error.Message, "memory unavailable") {
 		t.Fatalf("runtime status = %+v", snapshot)
 	}
 }
