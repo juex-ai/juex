@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -43,6 +44,12 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	enabledClosed := false
+	t.Cleanup(func() {
+		if !enabledClosed {
+			_ = enabled.CloseAndWait()
+		}
+	})
 
 	for _, name := range []string{
 		"mcp__memory__memory_write",
@@ -99,6 +106,7 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	if err := enabled.CloseAndWait(); err != nil {
 		t.Fatal(err)
 	}
+	enabledClosed = true
 	if err := os.Remove(filepath.Join(dataDir, "hook-ran")); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +182,11 @@ Use the external Memory MCP tools.
 	if err != nil {
 		t.Fatal(err)
 	}
-	write("memory-helper", string(body), 0o700)
+	helperName := "memory-helper"
+	if runtime.GOOS == "windows" {
+		helperName += ".exe"
+	}
+	write(helperName, string(body), 0o700)
 }
 
 func TestExternalMemoryHookHelperProcess(t *testing.T) {
