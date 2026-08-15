@@ -31,7 +31,6 @@ const (
 	conversationFile     = "conversation.jsonl"
 	transcriptAppendLock = "conversation.lock"
 	eventsFile           = "events.jsonl"
-	eventAppendLock      = "events.lock"
 )
 
 type Session struct {

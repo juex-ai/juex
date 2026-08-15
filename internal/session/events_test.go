@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -341,6 +342,54 @@ func TestReadLatestCommittedEventIDWaitsForEventSync(t *testing.T) {
 	}
 	if got.id != "evt-after-sync" {
 		t.Fatalf("cursor after Sync = %q, want evt-after-sync", got.id)
+	}
+}
+
+func TestReadLatestCommittedEventIDDoesNotRecreateDeletedSession(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "20260815T120000-delete-race")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, eventsFile), eventJournalBytes(t, filepath.Base(dir), []events.Event{{
+		ID: "evt-before-delete", Type: "turn.started", TurnID: "turn-1",
+	}}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deleteLock, err := AcquireSessionDeleteLock(dir, "delete")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		id  string
+		err error
+	}
+	readDone := make(chan result, 1)
+	go func() {
+		id, err := ReadLatestCommittedEventID(dir)
+		readDone <- result{id: id, err: err}
+	}()
+	select {
+	case got := <-readDone:
+		t.Fatalf("cursor read completed before delete lock released: %+v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := deleteLock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got := <-readDone
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if got.id != "" {
+		t.Fatalf("cursor after delete = %q, want empty", got.id)
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted Session directory stat error = %v, want not exist", err)
 	}
 }
 
