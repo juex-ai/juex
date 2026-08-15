@@ -644,10 +644,9 @@ func TestLiveBinary_IgnoresWorkspaceStateAndRebindsAgent(t *testing.T) {
 	staleSessionID := "20260717T120000-stale001"
 	workspaceFiles := map[string]string{
 		filepath.Join("sessions", staleSessionID, "conversation.jsonl"): `{"id":"stale-message","role":"user","blocks":[{"type":"text","text":"workspace state"}]}` + "\n",
-		filepath.Join("memory", "MEMORY.md"):                            "# workspace memory\n",
-		"history.json":                                                  `{"sessions":[{"id":"20260717T120000-stale001"}]}` + "\n",
-		filepath.Join("logs", "listen.log"):                             "workspace log\n",
-		filepath.Join("observables", "observations.jsonl"):              `{"id":"workspace-observation"}` + "\n",
+		"history.json":                                     `{"sessions":[{"id":"20260717T120000-stale001"}]}` + "\n",
+		filepath.Join("logs", "listen.log"):                "workspace log\n",
+		filepath.Join("observables", "observations.jsonl"): `{"id":"workspace-observation"}` + "\n",
 		"juex.yaml": strings.ReplaceAll(`model: local-chat:chat-test
 providers:
   - id: local-chat
@@ -710,7 +709,6 @@ providers:
 	}
 	for _, rel := range []string{
 		filepath.Join("sessions", staleSessionID, "conversation.jsonl"),
-		filepath.Join("memory", "MEMORY.md"),
 		filepath.Join("logs", "listen.log"),
 		filepath.Join("observables", "observations.jsonl"),
 	} {

@@ -4,8 +4,8 @@
 //
 // Behaviour highlights:
 //
-//   - System prompt sections are rebuilt every turn so memory, skills, and
-//     AGENTS.md changes propagate immediately.
+//   - System prompt sections are rebuilt every turn so dynamic guidance and
+//     Session state changes propagate immediately.
 //   - Context projection externalizes oversized user inputs and tool results
 //     before provider submission while preserving recoverable session history.
 //   - Automatic and manual compaction keep active context bounded with compact

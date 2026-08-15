@@ -21,7 +21,7 @@ func publishNewAgent(address AgentAddress, agent Agent) (err error) {
 		}
 	}()
 
-	for _, name := range []string{"sessions", "memory", "logs"} {
+	for _, name := range []string{"sessions", "logs"} {
 		if err := os.MkdirAll(filepath.Join(stageDir, name), 0o755); err != nil {
 			return err
 		}

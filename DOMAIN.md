@@ -29,10 +29,10 @@ domain boundary.
 | Ephemeral Agent | A process-local Agent identity with private temporary Agent state. It uses the normal Workspace and user configuration/resources but has no Workspace marker, is not registered with Fleet, and is deleted on exit unless explicitly kept. |
 | Workspace marker | `.juex/juex.local.json`, the narrow binding from a Workspace to its Resident Agent id. A marker is identity, not configuration or a copyable cache. |
 | Agent Address | The value that binds a resolved Agent id to its identity-owned state directory and endpoint guard. Consumers use the address rather than deriving identity or Juex-home layout from directory names. |
-| Agent State Directory (`AgentStateDir`) | The stable state root owned by one Agent identity. A Resident Agent uses `$JUEX_HOME/agents/<id>`; an Ephemeral Agent uses a private temporary directory. It contains the registry record, Sessions, history, memory, Artifacts, logs, extension data, and generated Observable state, and survives Runtime Instance replacement. |
+| Agent State Directory (`AgentStateDir`) | The stable state root owned by one Agent identity. A Resident Agent uses `$JUEX_HOME/agents/<id>`; an Ephemeral Agent uses a private temporary directory. It contains the registry record, Sessions, history, Artifacts, logs, Extension data, and generated Observable state, and survives Runtime Instance replacement. |
 | Runtime Instance | One serving process incarnation for an Agent, identified independently from the Agent id and described by its instance id, process id, endpoint, start time, and binary version. Restarting changes the Runtime Instance without changing the Agent. |
 | Workspace-local state | User-authored configuration and resources under the Workspace. Project-owned Observable definitions are workspace-local; selected extension definitions remain in their bundle; generated Observable state is not Workspace-local. |
-| Agent state | Runtime state owned by an Agent identity, including Session history, memory, Artifacts, logs, and generated Observable state. It lives in that identity's AgentStateDir and is distinct from the Workspace and Runtime Instance. |
+| Agent state | Runtime state owned by an Agent identity, including Session history, Artifacts, logs, Extension data, and generated Observable state. It lives in that identity's AgentStateDir and is distinct from the Workspace and Runtime Instance. |
 | Fleet | The control surface for Resident Agents registered under one effective Juex home. It projects binding and runtime health and manages lifecycle without owning user-authored Workspace content. |
 
 ### Sessions And Turns
@@ -61,7 +61,7 @@ domain boundary.
 | Request Epoch | A durable, secret-safe identity for one effective Provider request envelope. It records safe Provider settings including hashed endpoint, header, query, and cache-policy identities, section-deduplicated system snapshots, bounded tool and derived runtime-context snapshots, ordered message IDs and content digests, compaction selection, and one-shot hook context without duplicating the transcript or wire request. |
 | Protocol | A Provider wire contract, such as Anthropic Messages, OpenAI Responses, OpenAI Codex Responses, or OpenAI-compatible Chat. |
 | Capability Set | Explicit gates describing which optional behaviors a Provider Profile supports, including tools, vision, streaming, reasoning controls/replay, and output-token control. |
-| Tool | A named, schema-described operation available to the model. Builtin, skill, memory, Observable, model-state, and MCP tools share one runtime catalog and result contract. |
+| Tool | A named, schema-described operation available to the model. Builtin, skill, Observable, model-state, and MCP tools share one runtime catalog and result contract. |
 | Tool Group | A stable classification used to inspect and present related Tools without changing their names or execution contract. |
 | Tool Call | A Provider-requested Tool operation identified within an assistant message. Its result is persisted in provider order and remains adjacent to the call in valid model context. |
 | MCP Server | A configured stdio process that contributes Tools and may emit external notifications. One failed MCP Server does not disable healthy servers or builtin Tools. |
@@ -70,8 +70,7 @@ domain boundary.
 | Extension allowlist | The exact logical Extension names permitted for one Fleet or Workspace-bound Agent. An omitted layer inherits, an explicit layer replaces, and no effective allowlist selects no Extensions. It is not publisher or source authentication. |
 | Extension data directory | Private persistent state owned by one Agent and one logical Extension at `<AgentStateDir>/extensions/<name>`. It is distinct from the selected Extension installation and survives Runtime Instance or Workspace lifecycle changes until the Agent is deleted. |
 | Skill | A Markdown instruction package discovered from configured resource scopes and made available to the model through prompt metadata and Tool access. |
-| Memory Entry | Reusable Agent-owned context managed through memory Tools and stored with Agent state. It is distinct from work-local or user-global `AGENTS.md` guidance. |
-| Prompt Section | A named part of the assembled system prompt, such as guidance, available Skills, Memory, runtime state, or shell context. |
+| Prompt Section | A named part of the assembled system prompt, such as guidance, available Skills, runtime state, or shell context. |
 
 ### External Signals And Durable Content
 
@@ -222,7 +221,7 @@ domain boundary.
 4. **Storage follows ownership.** Workspace-authored configuration, resources,
    and project Observable definitions stay with the Workspace; Extension
    Observable definitions stay in the selected Extension. Identity-owned
-   Sessions, memory, history, Artifacts, logs, and generated Observable
+   Sessions, history, Artifacts, logs, Extension data, and generated Observable
    state stay with the Agent. The default `~/.juex/juex.yaml` may supply shared
    configuration, but a non-default Juex home never writes runtime state or
    instance configuration back to the default home.

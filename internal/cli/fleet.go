@@ -667,7 +667,7 @@ func newFleetRemoveCmd(_ *persistentFlags) *cobra.Command {
 			if !yes {
 				fmt.Fprintf(
 					cmd.OutOrStdout(),
-					"Permanently remove agent %q and delete its sessions and memory? [y/N] ",
+					"Permanently remove agent %q and delete all of its runtime state? [y/N] ",
 					args[0],
 				)
 				line, readErr := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
