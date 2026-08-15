@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -1119,6 +1120,14 @@ func mustActiveSessionID(t *testing.T, srv *Server) string {
 func TestSessionReadRemainsAvailableWhileLiveEndpointsWaitForRuntimeRestore(t *testing.T) {
 	srv := newTestServer(t)
 	active := seedWebSession(t, srv, "active")
+	if err := os.WriteFile(filepath.Join(active.Dir, "events.jsonl"), eventJournalFixture(t, active.ID, []events.Event{{
+		ID:      "evt-before-restore",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	}}), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -1146,19 +1155,22 @@ func TestSessionReadRemainsAvailableWhileLiveEndpointsWaitForRuntimeRestore(t *t
 	if shown.ID != active.ID {
 		t.Fatalf("session show id = %q, want %q", shown.ID, active.ID)
 	}
+	if shown.EventCursor != "evt-before-restore" {
+		t.Fatalf("session show event cursor = %q, want evt-before-restore", shown.EventCursor)
+	}
 
-	events := make(chan *http.Response, 1)
+	eventResponses := make(chan *http.Response, 1)
 	eventsErr := make(chan error, 1)
 	go func() {
-		resp, err := http.Get(ts.URL + "/api/sessions/" + active.ID + "/events")
+		resp, err := http.Get(ts.URL + "/api/sessions/" + active.ID + "/events?since=" + shown.EventCursor)
 		if err != nil {
 			eventsErr <- err
 			return
 		}
-		events <- resp
+		eventResponses <- resp
 	}()
 	select {
-	case resp := <-events:
+	case resp := <-eventResponses:
 		resp.Body.Close()
 		t.Fatal("live event stream opened before runtime restoration completed")
 	case err := <-eventsErr:
@@ -1168,12 +1180,46 @@ func TestSessionReadRemainsAvailableWhileLiveEndpointsWaitForRuntimeRestore(t *t
 
 	srv.createMu.Unlock()
 	locked = false
+	waitUntilWeb(t, 5*time.Second, func() bool {
+		_, ok := srv.sessions.Load(active.ID)
+		return ok
+	})
+	value, ok := srv.sessions.Load(active.ID)
+	if !ok {
+		t.Fatalf("restored session %q unavailable", active.ID)
+	}
+	if err := value.(*activeSession).app.Bus.Emit(events.Event{
+		ID:     "evt-after-restore",
+		Type:   "turn.started",
+		TurnID: "turn-2",
+		Payload: juexruntime.TurnStartedPayload{
+			Input: "after restore",
+			Kind:  "user",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	select {
-	case resp := <-events:
+	case resp := <-eventResponses:
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
 			t.Fatalf("event stream status = %d, body=%s", resp.StatusCode, body)
+		}
+		reader := bufio.NewReader(resp.Body)
+		var frame strings.Builder
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("read first event frame: %v", err)
+			}
+			frame.WriteString(line)
+			if line == "\n" {
+				break
+			}
+		}
+		if strings.Contains(frame.String(), "evt-before-restore") || !strings.Contains(frame.String(), "evt-after-restore") {
+			t.Fatalf("first event frame = %q, want only post-restore event", frame.String())
 		}
 	case err := <-eventsErr:
 		t.Fatal(err)

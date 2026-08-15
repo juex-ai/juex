@@ -598,6 +598,11 @@ func (s *Session) AppendEvent(e events.Event) error {
 	if err != nil {
 		return err
 	}
+	guard, err := acquireEventJournalLock(s.Dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = guard.Close() }()
 	offset, err := s.eventFD.Seek(0, io.SeekEnd)
 	if err != nil {
 		return err

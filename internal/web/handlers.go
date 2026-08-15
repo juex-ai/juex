@@ -281,6 +281,11 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 		}
 	}
 	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
+	cursor, err := session.ReadLatestCommittedEventID(dir)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
 	info, page, err := session.LoadInfoPage(dir, window.Before, window.Limit)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -304,6 +309,7 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 		Info:            info,
 		Messages:        messagesForSessionResponse(page.Messages),
 		Model:           s.opts.Cfg.Model,
+		EventCursor:     cursor,
 		HasMoreBefore:   page.HasMoreBefore,
 		OldestMessageID: page.OldestMessageID,
 		Goal:            goal,
