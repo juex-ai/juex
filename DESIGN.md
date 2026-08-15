@@ -690,7 +690,7 @@ successful provider request. The total uses provider-reported
 provider omits input usage, it falls back to the estimated input breakdown plus
 the reported response tokens. Its tooltip shows model, configured context window,
 percent used, and an estimated breakdown across system prompt, system tools, MCP
-tools, memory files, skills, messages, and response. `TokenUsageLabel` is a
+tools, skills, messages, and response. `TokenUsageLabel` is a
 compact `tokens <total>` chip for cumulative conversation usage; its tooltip
 shows the input/output split.
 
