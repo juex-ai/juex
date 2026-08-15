@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
@@ -50,11 +51,7 @@ func (e *Engine) ReplaceSessionRuntime(sess *session.Session) error {
 	if e.activeTurnID != "" || len(e.pendingInput) > 0 {
 		return ErrSessionRuntimeBusy
 	}
-	journal, err := session.ReadEvents(sess.Dir)
-	if err != nil {
-		return fmt.Errorf("runtime: read provider provenance: %w", err)
-	}
-	tracker, err := provenance.Recover(journal)
+	tracker, err := recoverSessionProvenance(sess.Dir)
 	if err != nil {
 		return fmt.Errorf("runtime: recover provider provenance: %w", err)
 	}
@@ -68,6 +65,31 @@ func (e *Engine) ReplaceSessionRuntime(sess *session.Session) error {
 	e.pendingHookRuntimeContext = pendingHookContext
 	e.hookRuntimeContextMu.Unlock()
 	return nil
+}
+
+func recoverSessionProvenance(dir string) (*provenance.Tracker, error) {
+	var journal []events.Event
+	if err := session.ReplayEvents(dir, func(event events.Event) {
+		if isProviderProvenanceEvent(event.Type) {
+			journal = append(journal, event)
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return provenance.Recover(journal)
+}
+
+func isProviderProvenanceEvent(eventType string) bool {
+	switch eventType {
+	case provenance.HookContextQueuedType,
+		provenance.RequestEpochType,
+		"llm.requested",
+		"llm.responded",
+		"llm.retry":
+		return true
+	default:
+		return false
+	}
 }
 
 // SessionRuntimeSnapshot returns one coherent copy of the current

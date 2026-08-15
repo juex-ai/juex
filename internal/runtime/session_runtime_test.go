@@ -111,6 +111,58 @@ func TestReplaceSessionRuntimeRecoversUnconsumedHookContext(t *testing.T) {
 	}
 }
 
+func TestRecoverSessionProvenanceDoesNotMaterializeUnrelatedEvents(t *testing.T) {
+	root := t.TempDir()
+	sess := newSessionRuntimeTestSession(t, root)
+	queued := provenanceRuntimeContextMessage("hook-streamed", "pending")
+
+	for index := 0; index < 128; index++ {
+		if err := sess.AppendEvent(events.Normalize(events.Event{
+			Type:          "tool.output",
+			ReplayPolicy:  events.ReplayIgnorable,
+			SchemaVersion: 1,
+			Payload: map[string]any{
+				"index": index,
+				"body":  strings.Repeat("x", 32*1024),
+			},
+		})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sess.AppendEvent(events.Normalize(events.Event{
+		Type:          provenance.HookContextQueuedType,
+		ReplayPolicy:  events.ReplayRequired,
+		SchemaVersion: 1,
+		Payload:       provenance.HookContextQueuedPayload{Messages: []llm.Message{queued}},
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	tracker, err := recoverSessionProvenance(sess.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := tracker.PendingHookContext()
+	if len(pending) != 1 || pending[0].ID != queued.ID {
+		t.Fatalf("recovered hook context = %+v, want %q", pending, queued.ID)
+	}
+
+	for _, eventType := range []string{
+		provenance.HookContextQueuedType,
+		provenance.RequestEpochType,
+		"llm.requested",
+		"llm.responded",
+		"llm.retry",
+	} {
+		if !isProviderProvenanceEvent(eventType) {
+			t.Fatalf("isProviderProvenanceEvent(%q) = false", eventType)
+		}
+	}
+	if isProviderProvenanceEvent("tool.output") {
+		t.Fatal("tool.output must not be retained for provenance recovery")
+	}
+}
+
 func provenanceRuntimeContextMessage(id, text string) llm.Message {
 	message := llm.TextMessage(llm.RoleUser, text)
 	message.ID = id
