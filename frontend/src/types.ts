@@ -318,6 +318,7 @@ export const BROWSER_EVENT_TYPES = [
   "turn.errored",
   "llm.requested",
   "llm.responded",
+  "provider.request_epoch",
   "llm.output_delta",
   "llm.retry",
   "llm.fallback",
@@ -404,6 +405,8 @@ export interface LLMRequestedPayload {
   history_len: number;
   tool_count: number;
   model?: string;
+  epoch_id: string;
+  request_digest: string;
 }
 
 export interface LLMOutputDeltaPayload {
@@ -417,6 +420,8 @@ export interface LLMOutputDeltaPayload {
 export interface LLMRetryPayload {
   purpose?: string;
   iter?: number;
+  epoch_id?: string;
+  request_digest?: string;
   provider: string;
   model: string;
   protocol?: string;
@@ -462,6 +467,53 @@ export interface LLMRespondedPayload {
   context_usage?: ContextUsage;
   notice?: Message;
   message_id: string;
+  epoch_id: string;
+  request_digest: string;
+}
+
+export interface ProviderRequestEpochPayload {
+  epoch: {
+    epoch_id: string;
+    purpose: string;
+    iter: number;
+    attempt: number;
+    provider: {
+      id?: string;
+      protocol?: string;
+      model?: string;
+      thinking_effort?: string;
+      capabilities: Record<string, boolean>;
+      reasoning_replay_fields?: string[];
+      codex_transport?: string;
+    };
+    context_window?: number;
+    max_output_tokens?: number;
+    system_prompt: ProviderRequestSnapshot;
+    tool_catalog: ProviderRequestSnapshot;
+    history_digest: string;
+    history_message_ids: string[];
+    messages: Array<{
+      id: string;
+      source: string;
+      content_digest: string;
+    }>;
+    compaction?: {
+      marker_message_id?: string;
+      previous_summary_id?: string;
+      tail_start_message_id?: string;
+      retained_message_ids?: string[];
+    };
+    hook_context_message_ids?: string[];
+    request_digest: string;
+  };
+}
+
+export interface ProviderRequestSnapshot {
+  digest: string;
+  bytes: number;
+  content?: unknown;
+  omitted?: string;
+  reused?: boolean;
 }
 
 export interface ToolRequestedPayload {
@@ -801,6 +853,9 @@ export type BrowserEvent =
   | (BrowserEventBase<"turn.errored"> & { payload: TurnErroredPayload })
   | (BrowserEventBase<"llm.requested"> & { payload: LLMRequestedPayload })
   | (BrowserEventBase<"llm.responded"> & { payload: LLMRespondedPayload })
+  | (BrowserEventBase<"provider.request_epoch"> & {
+      payload: ProviderRequestEpochPayload;
+    })
   | (BrowserEventBase<"llm.output_delta"> & { payload: LLMOutputDeltaPayload })
   | (BrowserEventBase<"llm.retry"> & { payload: LLMRetryPayload })
   | (BrowserEventBase<"llm.fallback"> & { payload: LLMFallbackPayload })

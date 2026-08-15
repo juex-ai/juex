@@ -1954,10 +1954,12 @@ func TestTurn_CompactRetryFailureConsumesHookContext(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 10000
 	eng.Compaction = DefaultCompactionPolicy()
-	eng.queueHookRuntimeContext([]hooks.Result{{
+	if err := eng.queueHookRuntimeContext([]hooks.Result{{
 		Hook:   hooks.CommandHook{Name: "one-shot"},
 		Stdout: "one-shot compact context",
-	}})
+	}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
 		t.Fatal(err)
 	}
@@ -4072,10 +4074,12 @@ func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
 		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}
 	eng, bus := newEngine(t, prov, false)
-	eng.queueHookRuntimeContext([]hooks.Result{{
+	if err := eng.queueHookRuntimeContext([]hooks.Result{{
 		Hook:   hooks.CommandHook{Name: "provider-retry"},
 		Stdout: "preserve retry context",
-	}})
+	}}); err != nil {
+		t.Fatal(err)
+	}
 	var retries []LLMRetryPayload
 	var turnErrors int32
 	bus.Subscribe("llm.retry", func(e events.Event) {
@@ -4143,10 +4147,12 @@ func TestTurn_TerminalProviderFailureConsumesHookContext(t *testing.T) {
 		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "recovered later"), StopReason: llm.StopEndTurn},
 	}
 	eng, _ := newEngine(t, prov, false)
-	eng.queueHookRuntimeContext([]hooks.Result{{
+	if err := eng.queueHookRuntimeContext([]hooks.Result{{
 		Hook:   hooks.CommandHook{Name: "one-shot"},
 		Stdout: "one-shot provider context",
-	}})
+	}}); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := eng.Turn(context.Background(), "failing turn"); err == nil {
 		t.Fatal("first turn error = nil, want provider failure")
