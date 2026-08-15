@@ -74,6 +74,7 @@ type Options struct {
 	HistoryPath      string
 	Lazy             bool
 	RepairTranscript bool
+	EventCatalog     events.SchemaCatalog
 }
 
 const scratchpadDirectory = "scratchpad"
@@ -672,6 +673,9 @@ func Load(dir string) (*Session, error) {
 }
 
 func LoadWithOptions(dir string, opts Options) (*Session, error) {
+	if opts.RepairTranscript && opts.EventCatalog == nil {
+		return nil, errors.New("session: transcript repair requires an event catalog")
+	}
 	id := filepath.Base(dir)
 	meta, err := loadMetadata(dir)
 	if err != nil {
@@ -762,10 +766,15 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 			sess.History = activeHistory
 		}
 		if len(repairs) > 0 {
-			if err := sess.AppendEvent(events.Normalize(events.Event{
+			repairEvent, err := opts.EventCatalog.Prepare(events.Normalize(events.Event{
 				Type:    "transcript.repaired",
 				Payload: TranscriptRepairedPayload{Reason: "load", Repairs: repairs},
-			})); err != nil {
+			}))
+			if err != nil {
+				_ = sess.Close()
+				return nil, err
+			}
+			if err := sess.AppendEvent(repairEvent); err != nil {
 				_ = sess.Close()
 				return nil, err
 			}

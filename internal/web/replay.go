@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/eventcatalog"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
@@ -61,7 +62,17 @@ func captureCommittedEventReplay(runtimeApp *app.App, sessionID string) (*commit
 }
 
 func (r *committedEventReplay) readJournal() ([]events.Event, error) {
-	return replaySince(io.NewSectionReader(r.source, 0, r.size), "")
+	journal, err := replaySince(io.NewSectionReader(r.source, 0, r.size), "")
+	if err != nil {
+		return journal, err
+	}
+	for index := range journal {
+		journal[index], err = eventcatalog.Default().Decode(journal[index])
+		if err != nil {
+			return journal[:index], err
+		}
+	}
+	return journal, nil
 }
 
 func (r *committedEventReplay) Close() error {

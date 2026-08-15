@@ -261,9 +261,10 @@ func TestHistoricalSessionStatusDoesNotActivateIt(t *testing.T) {
 		t.Fatal("historical primary remained active in memory")
 	}
 	eventData := eventJournalFixture(t, historicalID, []events.Event{{
-		ID:     "status-1",
-		Type:   "turn.admitted",
-		TurnID: "turn-1",
+		ID:      "status-1",
+		Type:    "turn.admitted",
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
 	}})
 	eventData = append(eventData, []byte("not-json")...)
 	if err := os.WriteFile(filepath.Join(historicalDir, "events.jsonl"), eventData, 0o600); err != nil {

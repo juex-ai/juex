@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/eventcatalog"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
@@ -995,7 +996,7 @@ func (s *Server) historicalStatusStore(id string) (*runtime.StatusStore, error) 
 	// Historical reads preserve the valid-prefix projection when replay repairs
 	// and reports a malformed journal suffix.
 	status, _ := runtime.NewStatusStoreFromReplay(seed, func(visit func(events.Event)) error {
-		return session.ReplayEvents(dir, visit)
+		return session.ReplayEventsWithCatalog(dir, eventcatalog.Default(), visit)
 	})
 	status.RecoverAfterRestart()
 	return status, nil

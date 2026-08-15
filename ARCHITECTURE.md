@@ -72,7 +72,8 @@ juex/
 │   ├── providerreadiness/        # provider selection, credentials, and hello-probe readiness checks
 │   ├── chunkedwrite/             # canonical chunked write lifecycle facts and derived state
 │   ├── bundle/                   # portable debug bundle tar.gz creation
-│   ├── events/                   # in-process EventBus + durable commit sink
+│   ├── events/                   # open Event envelope, EventBus, Catalog interface, durable sink
+│   ├── eventcatalog/             # stable event schemas, codecs, validation, replay policy
 │   ├── hooks/                    # trusted lifecycle command hook execution
 │   ├── observable/               # Observable source adapters plus durable Observation lifecycle/store/tools
 │   ├── observability/            # redacted session-local event logs
@@ -207,8 +208,9 @@ implementation decisions live.
 | `internal/errorclass` | Shared timeout/cancellation/auth/permission/connectivity/wrong-endpoint/retryable/error classification and public error wording | Retry decisions, cancellation sources, transport rendering |
 | `internal/statusapi` | Transport-neutral runtime status DTOs, projection from runtime snapshots, and the current-only Agent Activity stream adapter | Runtime state transitions, Session persistence, HTTP/SSE routing, multi-Agent Fleet replay |
 | `internal/statusstream` | Replaceable snapshot storage, optional bounded cursor replay, sequential replay-to-live streams, latest-value coalescing, and subscription cleanup | Runtime projection rules, HTTP cursor extraction, SSE framing, Fleet roster/generation semantics |
-| `internal/events` | Generic Event envelope, normalization, synchronous subscriptions, durable commit-before-delivery boundary | Producer-specific Event vocabulary, Session journal implementation, UI projection |
-| `internal/toolevents` | Stable Tool Event names, payloads, and constructors shared by producers and consumers | Tool execution, Event dispatch, Event persistence and log projection |
+| `internal/events` | Generic Event envelope and schema-catalog interface, normalization, synchronous subscriptions, durable commit-before-delivery boundary | Concrete stable Event schemas, producer-specific vocabulary, Session journal implementation, UI projection |
+| `internal/eventcatalog` | Built-in stable Event type/version registry, payload codecs and validation, durability, browser visibility, and required-or-ignorable replay policy | Open plugin/Extension Event vocabulary, Event dispatch, Session storage, runtime and Web projection behavior |
+| `internal/toolevents` | Tool Event names, typed payloads, and producer constructors shared with the Event Catalog | Tool execution, schema version/replay policy, Event dispatch, Event persistence and log projection |
 | `internal/observability` | Redacted human-readable Session logs projected from Events | Authoritative transcript/Event state, runtime decisions, Web presentation |
 | `internal/tools` | Tool registry and dispatch, builtin file/shell/search adapters, Tool result normalization and output hygiene | Canonical chunked-write lifecycle, Provider wire quirks, Session persistence, Observable/MCP source lifecycles |
 | `internal/chunkedwrite` | Canonical chunked-write lifecycle facts and deterministic state derivation | Tool schemas/dispatch, filesystem execution, runtime Event transport |
@@ -794,11 +796,15 @@ from using builtin tools, skills, memory, or other healthy MCP servers.
 ```go
 // internal/events/bus.go
 type Event struct {
-    ID        string
-    Type      string
-    Timestamp time.Time
-    TurnID    string
-    Payload   any
+    ID            string
+    Type          string
+    SchemaVersion int
+    ReplayPolicy  ReplayPolicy
+    Timestamp     time.Time
+    TurnID        string
+    Payload       any
+    Transient     bool
+    Opaque        bool
 }
 
 type Bus struct { ... }
@@ -811,17 +817,36 @@ type Journal interface { AppendEvent(Event) error }
 type Delivery interface { Publish(Event) }
 type DurableSink struct { ... }
 func NewDurableSink(journal Journal) *DurableSink
+func (s *DurableSink) SetCatalog(c SchemaCatalog)
 func (s *DurableSink) Commit(e Event) (Event, error)
 func (s *DurableSink) AddDelivery(d Delivery) func()
 func (s *DurableSink) Close() error
 ```
 
-Standard event families include `turn.started/completed/errored`,
+`internal/eventcatalog` is the one interpreter for stable cross-module Event
+schemas. Each immutable entry owns the type, current schema version, payload
+constructor/codec and validation, durability, browser visibility, and replay
+policy. `events.DurableSink` prepares and validates cataloged Events before
+commit; Session, runtime-status, and browser replay decode through the same
+Catalog. Required unknown types or versions fail closed. Ignorable unknown
+types or versions remain ordered opaque journal facts and are skipped by typed
+projections. Uncataloged durable Events remain possible for local or Extension
+use, but their envelope must explicitly declare a positive schema version and
+required-or-ignorable replay policy.
+
+Standard cataloged families include `turn.started/completed/errored`,
 `llm.requested/output_delta/responded`,
 `tool.requested/output_delta/completed/errored`,
 `transcript.repaired`, `pending_input.*`, `context.compact.*`, and
 `context.projection.applied`.
-`llm.output_delta` and `tool.output_delta` are live-only projection events and
+Payload structs and producer constructors may remain next to the domain module
+that emits them; only the Catalog assigns their stable wire interpretation.
+The Bus remains open and never becomes a closed union of plugin and built-in
+Events. BrowserEvent is a separate transport projection DTO: the Catalog
+selects browser-visible stable facts and supplies their normalized payload,
+while Web owns status attachment and SSE framing.
+
+`llm.output_delta` and `tool.output_delta` are cataloged live-only signals and
 are not appended to the session journal or logs. CLI and browser
 subscribers may render them provisionally; the following durable
 `llm.responded`, `tool.completed`, or `tool.errored` event is authoritative and
@@ -830,16 +855,14 @@ constructor fixes `tool.output_delta` as transient, while persistence
 boundaries reject every event carrying the transient property.
 `llm.responded` includes the assistant message's ordered `blocks` plus summary
 fields (`text`, `thinking`, `tool_calls`) for older consumers.
-The live tool event family is owned by `internal/toolevents`: event name
-constants, payload shapes, and constructor helpers live there so runtime,
-tools, observability, SSE tests, frontend fixtures, and eval smoke helpers use
-one field vocabulary. Other stable runtime event families use typed payload
-structs next to their emitters while the bus and JSONL/SSE wire shape stay
-generic through `Payload any`.
+The Tool Event payload vocabulary and producer helpers are owned by
+`internal/toolevents`; their stable schema metadata and codec registration are
+owned by `internal/eventcatalog`.
 
 Durable browser-visible runtime facts flow through `events.DurableSink`.
-`internal/app` installs one sink as the app bus commit boundary, using the
-session as the journal adapter. The sink normalizes each event once, appends it to
+`internal/app` installs one Catalog-backed sink as the app bus commit boundary,
+using the Session as the raw journal adapter. The sink normalizes and prepares
+each event once, appends it to
 `events.jsonl`, then runs registered projections in deterministic order before
 handing their results to asynchronous delivery adapters. The runtime-status
 projection runs first; the web projection then combines the committed event
@@ -936,9 +959,9 @@ so a journal failure stops the effect instead of publishing an uncommitted
 fact. `Close` rejects new commits, drains queued live deliveries, synchronizes
 open journals, and returns a stable result across repeated calls. Runtime
 callers resume
-sessions with
-`session.LoadWithOptions(dir, opts)` so aliases, lazy transcript creation, and
-explicit transcript repair policy are applied consistently; `session.Load` is
+sessions with `session.LoadWithOptions(dir, opts)` so aliases, lazy transcript
+creation, explicit transcript repair policy, and Catalog preparation of repair
+Events are applied consistently; `session.Load` is
 only the no-option convenience wrapper. When repair is enabled, session loading
 or turn startup inserts explicit error `tool_result` messages for persisted
 assistant `tool_use` blocks that no longer have a matching result before normal
@@ -946,12 +969,13 @@ conversation continues, then records `transcript.repaired` evidence in
 `events.jsonl`. The latest `token_usage` and `context_usage` are restored from
 `llm.responded` events and exposed through session `Info`, not through
 individual messages. Agent startup, active-session replacement, and historical
-Web status reads stream this journal through `session.ReplayEvents` into a
-runtime status projection, retaining only the bounded status history instead
-of materializing the complete event journal. A torn final record is removed
-before replay succeeds; corruption in a complete record stops replay after the
-valid prefix. `ReadEvents` remains the slice-based adapter for callers that
-explicitly need all events.
+Web status reads stream this journal through
+`session.ReplayEventsWithCatalog` into a runtime status projection, retaining
+only the bounded status history instead of materializing the complete event
+journal. A torn final record is removed before replay succeeds; corruption in a
+complete record or a required schema failure stops replay after the valid
+prefix. `ReplayEvents` and `ReadEvents` remain raw storage adapters;
+cross-module semantic consumers use their `WithCatalog` counterparts.
 
 `conversation.jsonl` remains the canonical, inspectable transcript. A bounded
 derived checkpoint in `session.json` records the transcript fingerprint and

@@ -1891,7 +1891,10 @@ func TestLoadWithRepairTranscript_PreservesMessagesBeforeWindow(t *testing.T) {
 	latest.ID = "m3"
 	dir := makeSession(t, root, "20260515T010203-repair", []llm.Message{assistant, compact, latest}, time.Now())
 
-	s, err := LoadWithOptions(dir, Options{RepairTranscript: true})
+	s, err := LoadWithOptions(dir, Options{
+		RepairTranscript: true,
+		EventCatalog:     sessionTestEventCatalog{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1911,6 +1914,24 @@ func TestLoadWithRepairTranscript_PreservesMessagesBeforeWindow(t *testing.T) {
 		t.Fatalf("active history ids = %v, want m2,m3", got)
 	}
 }
+
+type sessionTestEventCatalog struct{}
+
+func (sessionTestEventCatalog) Prepare(event events.Event) (events.Event, error) {
+	event.SchemaVersion = 1
+	event.ReplayPolicy = events.ReplayIgnorable
+	return event, nil
+}
+
+func (sessionTestEventCatalog) Decode(event events.Event) (events.Event, error) {
+	return event, nil
+}
+
+func (sessionTestEventCatalog) BrowserPayload(event events.Event) (events.Event, json.RawMessage, bool, error) {
+	return event, nil, false, nil
+}
+
+func (sessionTestEventCatalog) BrowserTypes() []string { return nil }
 
 func TestSession_LoadNormalizesNullBlocks(t *testing.T) {
 	root := t.TempDir()

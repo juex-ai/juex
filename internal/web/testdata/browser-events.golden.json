@@ -2,6 +2,7 @@
   {
     "id": "evt-turn-admitted",
     "type": "turn.admitted",
+    "schema_version": 1,
     "ts": "2026-06-14T23:59:59Z",
     "turn_id": "turn-1",
     "payload": {},
@@ -35,6 +36,7 @@
   {
     "id": "evt-turn-started",
     "type": "turn.started",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:00Z",
     "turn_id": "turn-1",
     "payload": {
@@ -72,6 +74,7 @@
   {
     "id": "evt-turn-provider-phase",
     "type": "turn.phase",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:00.5Z",
     "turn_id": "turn-1",
     "payload": {
@@ -108,6 +111,7 @@
   {
     "id": "evt-llm-responded",
     "type": "llm.responded",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:01Z",
     "turn_id": "turn-1",
     "payload": {
@@ -172,6 +176,7 @@
   {
     "id": "evt-tool-running",
     "type": "tool.running",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:02.5Z",
     "turn_id": "turn-1",
     "payload": {
@@ -222,6 +227,7 @@
   {
     "id": "evt-llm-retry",
     "type": "llm.retry",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:01.5Z",
     "turn_id": "turn-1",
     "payload": {
@@ -282,6 +288,7 @@
   {
     "id": "evt-llm-delta",
     "type": "llm.output_delta",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:01.75Z",
     "turn_id": "turn-1",
     "payload": {
@@ -292,7 +299,7 @@
       "text": "streaming "
     },
     "status": {
-      "cursor": "evt-llm-delta",
+      "cursor": "evt-llm-retry",
       "updated_at": "2026-06-15T00:00:01.75Z",
       "session": {
         "id": "session-1",
@@ -334,6 +341,7 @@
   {
     "id": "evt-llm-fallback",
     "type": "llm.fallback",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:01.8Z",
     "turn_id": "turn-1",
     "payload": {
@@ -385,6 +393,7 @@
   {
     "id": "evt-tool-requested",
     "type": "tool.requested",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:02Z",
     "turn_id": "turn-1",
     "payload": {
@@ -438,6 +447,7 @@
   {
     "id": "evt-tool-delta",
     "type": "tool.output_delta",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:03Z",
     "turn_id": "turn-1",
     "payload": {
@@ -450,7 +460,7 @@
       "truncated": true
     },
     "status": {
-      "cursor": "evt-tool-delta",
+      "cursor": "evt-tool-requested",
       "updated_at": "2026-06-15T00:00:03Z",
       "session": {
         "id": "session-1",
@@ -492,6 +502,7 @@
   {
     "id": "evt-tool-completed",
     "type": "tool.completed",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:04Z",
     "turn_id": "turn-1",
     "payload": {
@@ -547,6 +558,7 @@
   {
     "id": "evt-hook-trace",
     "type": "hook.trace",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:05Z",
     "turn_id": "turn-1",
     "payload": {
@@ -596,6 +608,7 @@
   {
     "id": "evt-pending-queued",
     "type": "pending_input.queued",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:06Z",
     "turn_id": "turn-1",
     "payload": {
@@ -648,6 +661,7 @@
   {
     "id": "evt-pending-draining",
     "type": "pending_input.draining",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:06.5Z",
     "turn_id": "turn-1",
     "payload": {
@@ -698,6 +712,7 @@
   {
     "id": "evt-pending-drained",
     "type": "pending_input.drained",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:07Z",
     "turn_id": "turn-1",
     "payload": {
@@ -748,6 +763,7 @@
   {
     "id": "evt-goal-updated",
     "type": "goal.updated",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:07.2Z",
     "turn_id": "turn-1",
     "payload": {
@@ -800,6 +816,7 @@
   {
     "id": "evt-notes-updated",
     "type": "notes.updated",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:07.3Z",
     "turn_id": "turn-1",
     "payload": {
@@ -849,6 +866,7 @@
   {
     "id": "evt-notes-errored",
     "type": "notes.errored",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:07.4Z",
     "turn_id": "turn-1",
     "payload": {
@@ -898,6 +916,7 @@
   {
     "id": "evt-observable-started",
     "type": "observable.started",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:07.5Z",
     "payload": {
       "id": "lark-events",
@@ -949,6 +968,7 @@
   {
     "id": "evt-observation-delivered",
     "type": "observation.delivered",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:08Z",
     "payload": {
       "observation": {
@@ -1009,6 +1029,7 @@
   {
     "id": "evt-observation-errored",
     "type": "observation.errored",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:08.5Z",
     "payload": {
       "observation": {
@@ -1080,6 +1101,7 @@
   {
     "id": "evt-compact-started",
     "type": "context.compact.started",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:09Z",
     "turn_id": "turn-1",
     "payload": {
@@ -1134,6 +1156,7 @@
   {
     "id": "evt-compact-summary-retry",
     "type": "context.compact.summary_retry",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:09.5Z",
     "turn_id": "turn-1",
     "payload": {
@@ -1187,6 +1210,7 @@
   {
     "id": "evt-compact-completed",
     "type": "context.compact.completed",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:10Z",
     "turn_id": "turn-1",
     "payload": {
@@ -1255,6 +1279,7 @@
   {
     "id": "evt-projection-applied",
     "type": "context.projection.applied",
+    "schema_version": 1,
     "ts": "2026-06-15T00:00:11Z",
     "turn_id": "turn-1",
     "payload": {

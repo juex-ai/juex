@@ -25,6 +25,7 @@ import (
 	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/eventcatalog"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
@@ -207,6 +208,11 @@ func eventJournalFixture(t *testing.T, id string, journal []events.Event) []byte
 	t.Helper()
 	var encoded strings.Builder
 	for i, event := range journal {
+		var err error
+		event, err = eventcatalog.Default().Prepare(event)
+		if err != nil {
+			t.Fatal(err)
+		}
 		data, err := json.Marshal(struct {
 			JournalVersion int    `json:"journal_version"`
 			Journal        string `json:"journal"`

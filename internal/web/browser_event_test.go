@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/eventcatalog"
 	"github.com/juex-ai/juex/internal/eventmedia"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
@@ -44,6 +45,47 @@ func TestBrowserEventFixturesMatchGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertGoldenJSON(t, "browser-events.golden.json", fixtures)
+}
+
+func TestBrowserEventFixturesRoundTripThroughCatalog(t *testing.T) {
+	catalog := eventcatalog.Default()
+	for _, event := range browserEventFixtureEvents() {
+		t.Run(event.Type, func(t *testing.T) {
+			prepared, err := catalog.Prepare(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantPayload, err := json.Marshal(prepared.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if prepared.Transient {
+				if prepared.ReplayPolicy != "" {
+					t.Fatalf("transient replay policy = %q", prepared.ReplayPolicy)
+				}
+				return
+			}
+			wire, err := json.Marshal(prepared)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var raw events.Event
+			if err := json.Unmarshal(wire, &raw); err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := catalog.Decode(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotPayload, err := json.Marshal(decoded.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(gotPayload, wantPayload) {
+				t.Fatalf("payload changed across round trip\nwant: %s\ngot:  %s", wantPayload, gotPayload)
+			}
+		})
+	}
 }
 
 func TestBrowserEventFromRuntimeSkipsRuntimeOnlyEvents(t *testing.T) {
@@ -119,15 +161,16 @@ func TestBrowserEventFromRuntimeValidatesKnownPayload(t *testing.T) {
 	}
 }
 
-func TestBrowserPayloadJSONAcceptsTypedPayloadFastPath(t *testing.T) {
-	raw, err := browserPayloadJSON("hook.trace", juexruntime.HookTracePayload{Text: "visible"}, func() any {
-		return &juexruntime.HookTracePayload{}
-	})
+func TestBrowserEventAcceptsTypedPayload(t *testing.T) {
+	event, visible, err := browserEventFromRuntime(events.Event{
+		Type:    "hook.trace",
+		Payload: juexruntime.HookTracePayload{Text: "visible"},
+	}, statusapi.Snapshot{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(raw) != `{"text":"visible"}` {
-		t.Fatalf("raw = %s", raw)
+	if !visible || string(event.Payload) != `{"text":"visible"}` {
+		t.Fatalf("visible = %v, payload = %s", visible, event.Payload)
 	}
 }
 
@@ -239,7 +282,7 @@ func TestProjectBrowserEventsReplayMatchesUninterruptedProjection(t *testing.T) 
 	}
 }
 
-func TestBrowserProjectionKeepsLateToolOutputInJournalOnly(t *testing.T) {
+func TestBrowserProjectionDropsLateTransientToolOutput(t *testing.T) {
 	seed := juexruntime.StatusSeed{
 		SessionID:        "session-1",
 		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
@@ -252,11 +295,11 @@ func TestBrowserProjectionKeepsLateToolOutputInJournalOnly(t *testing.T) {
 	journalEvents := []events.Event{
 		{ID: "evt-admitted", Type: juexruntime.TurnAdmittedType, TurnID: "turn-1", Payload: juexruntime.TurnAdmittedPayload{}},
 		{ID: "evt-requested", Type: toolevents.RequestedType, TurnID: "turn-1", Payload: toolevents.Requested(tool)},
-		{ID: "evt-delta", Type: toolevents.OutputDeltaType, TurnID: "turn-1", Payload: toolevents.Delta(tool, toolevents.OutputDelta{Text: "started"})},
+		{ID: "evt-delta", Type: toolevents.OutputDeltaType, TurnID: "turn-1", Transient: true, Payload: toolevents.Delta(tool, toolevents.OutputDelta{Text: "started"})},
 		{ID: "evt-completed", Type: toolevents.CompletedType, TurnID: "turn-1", Payload: toolevents.Completed(tool, 30, 7, "started", map[string]any{"running": true})},
-		{ID: "evt-late-active", Type: toolevents.OutputDeltaType, TurnID: "turn-1", Payload: toolevents.Delta(tool, toolevents.OutputDelta{Text: "late while turn active"})},
+		{ID: "evt-late-active", Type: toolevents.OutputDeltaType, TurnID: "turn-1", Transient: true, Payload: toolevents.Delta(tool, toolevents.OutputDelta{Text: "late while turn active"})},
 		{ID: "evt-turn-completed", Type: "turn.completed", TurnID: "turn-1", Payload: juexruntime.TurnCompletedPayload{}},
-		{ID: "evt-late-terminal", Type: toolevents.OutputDeltaType, TurnID: "turn-1", Payload: toolevents.Delta(tool, toolevents.OutputDelta{Text: "late after turn completed"})},
+		{ID: "evt-late-terminal", Type: toolevents.OutputDeltaType, TurnID: "turn-1", Transient: true, Payload: toolevents.Delta(tool, toolevents.OutputDelta{Text: "late after turn completed"})},
 	}
 
 	status := juexruntime.NewStatusStore(seed)
@@ -266,6 +309,7 @@ func TestBrowserProjectionKeepsLateToolOutputInJournalOnly(t *testing.T) {
 	t.Cleanup(sub.unsubscribe)
 	journal := &recordingBrowserProjectionJournal{}
 	sink := events.NewDurableSink(journal)
+	sink.SetCatalog(eventcatalog.Default())
 	t.Cleanup(func() { _ = sink.Close() })
 	sink.AddProjection(status)
 	sink.AddProjection(browserEventProjection{status: status, stream: stream})
@@ -293,10 +337,16 @@ func TestBrowserProjectionKeepsLateToolOutputInJournalOnly(t *testing.T) {
 	default:
 	}
 	gotJournal := journal.Events()
-	if len(gotJournal) != len(journalEvents) {
-		t.Fatalf("durable journal events = %d, want %d including late output", len(gotJournal), len(journalEvents))
+	wantJournal := []events.Event{
+		journalEvents[0],
+		journalEvents[1],
+		journalEvents[3],
+		journalEvents[5],
 	}
-	for index, want := range journalEvents {
+	if len(gotJournal) != len(wantJournal) {
+		t.Fatalf("durable journal events = %d, want %d without transient output", len(gotJournal), len(wantJournal))
+	}
+	for index, want := range wantJournal {
 		if gotJournal[index].ID != want.ID || gotJournal[index].Type != want.Type {
 			t.Fatalf("durable journal event %d = %+v, want ID %q type %q", index, gotJournal[index], want.ID, want.Type)
 		}
@@ -521,6 +571,7 @@ func browserEventFixtureEvents() []events.Event {
 			Type:      "llm.output_delta",
 			Timestamp: ts.Add(1750 * time.Millisecond),
 			TurnID:    "turn-1",
+			Transient: true,
 			Payload: juexruntime.LLMOutputDeltaPayload{
 				Iter:  0,
 				Model: "gpt-test",
@@ -558,6 +609,7 @@ func browserEventFixtureEvents() []events.Event {
 			Type:      toolevents.OutputDeltaType,
 			Timestamp: ts.Add(3 * time.Second),
 			TurnID:    "turn-1",
+			Transient: true,
 			Payload: toolevents.OutputDeltaPayload{
 				Name:      "exec_command",
 				ToolUseID: "tool-1",
@@ -778,7 +830,7 @@ func browserEventFixtureEvents() []events.Event {
 			Type:      "context.projection.applied",
 			Timestamp: ts.Add(11 * time.Second),
 			TurnID:    "turn-1",
-			Payload: BrowserContextProjectionAppliedPayload{
+			Payload: eventcatalog.ContextProjectionAppliedPayload{
 				UserInputsExternalized:        1,
 				ToolResultsExternalized:       2,
 				BytesExternalized:             3000,

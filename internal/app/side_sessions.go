@@ -886,10 +886,16 @@ func (m *sideSessionManager) recordNotificationFailure(managed *managedSideSessi
 		managed.status.UpdatedAt = time.Now().UTC()
 	}
 	m.mu.Unlock()
-	_ = m.parent.Bus.Emit(events.Event{Type: "side_session.notification_failed", TurnID: status.LastTurnID, Payload: map[string]any{
-		"session_id": status.SessionID,
-		"error":      err.Error(),
-	}})
+	_ = m.parent.Bus.Emit(events.Event{
+		Type:          "side_session.notification_failed",
+		SchemaVersion: 1,
+		ReplayPolicy:  events.ReplayIgnorable,
+		TurnID:        status.LastTurnID,
+		Payload: map[string]any{
+			"session_id": status.SessionID,
+			"error":      err.Error(),
+		},
+	})
 }
 
 func (m *sideSessionManager) lockActive(id string) (*managedSideSession, func(), error) {

@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/eventcatalog"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -110,6 +111,7 @@ func resumeWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (Se
 		Active:           active,
 		HistoryPath:      cfg.HistoryPath(),
 		RepairTranscript: true,
+		EventCatalog:     eventcatalog.Default(),
 	})
 	if err != nil {
 		return SessionAttachment{}, err
@@ -140,6 +142,7 @@ func attachActiveWorkspaceSession(cfg config.Config, req SessionAttachmentReques
 		Active:           true,
 		HistoryPath:      cfg.HistoryPath(),
 		RepairTranscript: true,
+		EventCatalog:     eventcatalog.Default(),
 	})
 	if err != nil {
 		return SessionAttachment{}, err

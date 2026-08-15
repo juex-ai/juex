@@ -361,6 +361,7 @@ export type BrowserEventType = (typeof BROWSER_EVENT_TYPES)[number];
 interface BrowserEventBase<TType extends BrowserEventType> {
   id: string;
   type: TType;
+  schema_version: number;
   ts: string;
   turn_id?: string;
   status: AgentRuntimeStatusSnapshot;
