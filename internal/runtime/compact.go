@@ -273,7 +273,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	// Hook failures are observational after commit; keep context produced by
 	// earlier successful hooks when a later hook fails.
 	if err := e.queueHookRuntimeContext(postResults); err != nil {
-		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, err)
+		return result, err
 	}
 	if isHookRequestCommitError(postErr) {
 		return result, postErr

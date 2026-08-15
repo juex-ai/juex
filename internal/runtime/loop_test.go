@@ -3138,6 +3138,44 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 	}
 }
 
+func TestCompactPreservesCommittedResultWhenPostHookContextCannotBeQueued(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	var eventTypes []string
+	unsub := bus.Subscribe("context.compact.*", func(ev events.Event) {
+		eventTypes = append(eventTypes, ev.Type)
+	})
+	defer unsub()
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventPreCompact:  {{}},
+		hooks.EventPostCompact: {{Stdout: strings.Repeat("x", provenance.MaxHookContextBatchBytes)}},
+	}}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err == nil || !strings.Contains(err.Error(), "queued hook context exceeds") {
+		t.Fatalf("error = %v, want hook context queue size failure", err)
+	}
+	if result.MessageID == "" {
+		t.Fatalf("result = %+v, want committed compaction result", result)
+	}
+	if !slices.Contains(eventTypes, "context.compact.completed") {
+		t.Fatalf("events = %+v, want completed event", eventTypes)
+	}
+	if slices.Contains(eventTypes, "context.compact.errored") {
+		t.Fatalf("events = %+v, committed compaction must not emit compact error", eventTypes)
+	}
+}
+
 func TestTurn_AutoCompactionBoundsOversizedSummaryRequest(t *testing.T) {
 	prov := &budgetedCompactionProvider{compactionLimit: 800}
 	eng, _ := newEngine(t, prov, false)
