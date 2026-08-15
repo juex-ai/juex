@@ -6,11 +6,12 @@ import (
 )
 
 const (
-	RequestedType   = "tool.requested"
-	RunningType     = "tool.running"
-	OutputDeltaType = "tool.output_delta"
-	CompletedType   = "tool.completed"
-	ErroredType     = "tool.errored"
+	RequestedType      = "tool.requested"
+	RunningType        = "tool.running"
+	OutputDeltaType    = "tool.output_delta"
+	CompletedType      = "tool.completed"
+	ErroredType        = "tool.errored"
+	OutcomeUnknownType = "tool.outcome_unknown"
 )
 
 type ToolCallPayload struct {
@@ -18,6 +19,9 @@ type ToolCallPayload struct {
 	Name           string         `json:"name"`
 	Input          map[string]any `json:"input"`
 	TimeoutSeconds int            `json:"timeout_seconds"`
+	Iter           int            `json:"iter"`
+	CallIndex      int            `json:"call_index"`
+	MessageID      string         `json:"message_id"`
 }
 
 type RequestedPayload struct {
@@ -25,12 +29,18 @@ type RequestedPayload struct {
 	Input          map[string]any `json:"input"`
 	ToolUseID      string         `json:"tool_use_id"`
 	TimeoutSeconds int            `json:"timeout_seconds"`
+	Iter           int            `json:"iter"`
+	CallIndex      int            `json:"call_index"`
+	MessageID      string         `json:"message_id"`
 }
 
 type RunningPayload struct {
 	Name           string `json:"name"`
 	ToolUseID      string `json:"tool_use_id"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
+	Iter           int    `json:"iter"`
+	CallIndex      int    `json:"call_index"`
+	MessageID      string `json:"message_id"`
 }
 
 type OutputDelta struct {
@@ -59,33 +69,58 @@ type OutputDeltaPayload struct {
 	BinaryBytes   int    `json:"binary_bytes,omitempty"`
 	BinarySHA256  string `json:"binary_sha256,omitempty"`
 	FirstBytesHex string `json:"first_bytes_hex,omitempty"`
+	Iter          int    `json:"iter"`
+	CallIndex     int    `json:"call_index"`
+	MessageID     string `json:"message_id"`
+}
+
+type RecordedOutcome struct {
+	MessageID string    `json:"message_id"`
+	Block     llm.Block `json:"block"`
 }
 
 type CompletedPayload struct {
-	Name           string        `json:"name"`
-	ToolUseID      string        `json:"tool_use_id"`
-	TimeoutSeconds int           `json:"timeout_seconds"`
-	Len            int           `json:"len"`
-	Preview        string        `json:"preview"`
-	Result         any           `json:"result,omitempty"`
-	Media          *llm.MediaRef `json:"media,omitempty"`
-	Content        string        `json:"content,omitempty"`
+	Name           string           `json:"name"`
+	ToolUseID      string           `json:"tool_use_id"`
+	TimeoutSeconds int              `json:"timeout_seconds"`
+	Len            int              `json:"len"`
+	Preview        string           `json:"preview"`
+	Result         any              `json:"result,omitempty"`
+	Media          *llm.MediaRef    `json:"media,omitempty"`
+	Content        string           `json:"content,omitempty"`
+	Iter           int              `json:"iter"`
+	CallIndex      int              `json:"call_index"`
+	MessageID      string           `json:"message_id"`
+	Outcome        *RecordedOutcome `json:"outcome,omitempty"`
 }
 
 type ErroredPayload struct {
-	Name           string        `json:"name"`
-	ToolUseID      string        `json:"tool_use_id"`
-	Error          string        `json:"error"`
-	ErrorKind      string        `json:"error_kind,omitempty"`
-	RawCause       string        `json:"raw_cause,omitempty"`
-	TimeoutSeconds int           `json:"timeout_seconds"`
-	Len            int           `json:"len,omitempty"`
-	Preview        string        `json:"preview,omitempty"`
-	TimedOut       bool          `json:"timed_out,omitempty"`
-	ExitCode       *int          `json:"exit_code,omitempty"`
-	Result         any           `json:"result,omitempty"`
-	Media          *llm.MediaRef `json:"media,omitempty"`
-	Content        string        `json:"content,omitempty"`
+	Name           string           `json:"name"`
+	ToolUseID      string           `json:"tool_use_id"`
+	Error          string           `json:"error"`
+	ErrorKind      string           `json:"error_kind,omitempty"`
+	RawCause       string           `json:"raw_cause,omitempty"`
+	TimeoutSeconds int              `json:"timeout_seconds"`
+	Len            int              `json:"len,omitempty"`
+	Preview        string           `json:"preview,omitempty"`
+	TimedOut       bool             `json:"timed_out,omitempty"`
+	ExitCode       *int             `json:"exit_code,omitempty"`
+	Result         any              `json:"result,omitempty"`
+	Media          *llm.MediaRef    `json:"media,omitempty"`
+	Content        string           `json:"content,omitempty"`
+	Iter           int              `json:"iter"`
+	CallIndex      int              `json:"call_index"`
+	MessageID      string           `json:"message_id"`
+	Outcome        *RecordedOutcome `json:"outcome,omitempty"`
+}
+
+type OutcomeUnknownPayload struct {
+	Name      string `json:"name"`
+	ToolUseID string `json:"tool_use_id"`
+	Iter      int    `json:"iter"`
+	CallIndex int    `json:"call_index"`
+	MessageID string `json:"message_id"`
+	Error     string `json:"error"`
 }
 
 type ErroredOptions struct {
@@ -100,6 +135,7 @@ type ErroredOptions struct {
 	Result         any
 	Media          *llm.MediaRef
 	Content        string
+	Outcome        *RecordedOutcome
 }
 
 func Requested(call ToolCallPayload) RequestedPayload {
@@ -108,6 +144,9 @@ func Requested(call ToolCallPayload) RequestedPayload {
 		Input:          call.Input,
 		ToolUseID:      call.ToolUseID,
 		TimeoutSeconds: call.TimeoutSeconds,
+		Iter:           call.Iter,
+		CallIndex:      call.CallIndex,
+		MessageID:      call.MessageID,
 	}
 }
 
@@ -116,6 +155,9 @@ func Running(call ToolCallPayload) RunningPayload {
 		Name:           call.Name,
 		ToolUseID:      call.ToolUseID,
 		TimeoutSeconds: call.TimeoutSeconds,
+		Iter:           call.Iter,
+		CallIndex:      call.CallIndex,
+		MessageID:      call.MessageID,
 	}
 }
 
@@ -140,6 +182,9 @@ func Delta(call ToolCallPayload, delta OutputDelta) OutputDeltaPayload {
 		BinaryBytes:   delta.BinaryBytes,
 		BinarySHA256:  delta.BinarySHA256,
 		FirstBytesHex: delta.FirstBytesHex,
+		Iter:          call.Iter,
+		CallIndex:     call.CallIndex,
+		MessageID:     call.MessageID,
 	}
 }
 
@@ -162,6 +207,9 @@ func Completed(call ToolCallPayload, timeoutSeconds int, outputLen int, preview 
 		Len:            outputLen,
 		Preview:        preview,
 		Result:         result,
+		Iter:           call.Iter,
+		CallIndex:      call.CallIndex,
+		MessageID:      call.MessageID,
 	}
 }
 
@@ -180,5 +228,20 @@ func Errored(call ToolCallPayload, opts ErroredOptions) ErroredPayload {
 		Result:         opts.Result,
 		Media:          opts.Media,
 		Content:        opts.Content,
+		Iter:           call.Iter,
+		CallIndex:      call.CallIndex,
+		MessageID:      call.MessageID,
+		Outcome:        opts.Outcome,
+	}
+}
+
+func OutcomeUnknown(call ToolCallPayload, message string) OutcomeUnknownPayload {
+	return OutcomeUnknownPayload{
+		Name:      call.Name,
+		ToolUseID: call.ToolUseID,
+		Iter:      call.Iter,
+		CallIndex: call.CallIndex,
+		MessageID: call.MessageID,
+		Error:     message,
 	}
 }

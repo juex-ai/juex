@@ -12,6 +12,9 @@ func TestPayloadGoldenJSON(t *testing.T) {
 		Name:           "exec_command",
 		Input:          map[string]any{"cmd": "printf ok"},
 		TimeoutSeconds: 5,
+		Iter:           2,
+		CallIndex:      1,
+		MessageID:      "assistant-1",
 	}
 
 	tests := []struct {
@@ -22,7 +25,7 @@ func TestPayloadGoldenJSON(t *testing.T) {
 		{
 			name:    "requested",
 			payload: Requested(call),
-			want:    `{"name":"exec_command","input":{"cmd":"printf ok"},"tool_use_id":"call_1","timeout_seconds":5}`,
+			want:    `{"name":"exec_command","input":{"cmd":"printf ok"},"tool_use_id":"call_1","timeout_seconds":5,"iter":2,"call_index":1,"message_id":"assistant-1"}`,
 		},
 		{
 			name: "output delta",
@@ -33,12 +36,12 @@ func TestPayloadGoldenJSON(t *testing.T) {
 				Text:      "progress\r",
 				Truncated: true,
 			}),
-			want: `{"name":"exec_command","tool_use_id":"call_1","session_id":"42","chunk_id":3,"stream":"combined","text":"progress\r","truncated":true}`,
+			want: `{"name":"exec_command","tool_use_id":"call_1","session_id":"42","chunk_id":3,"stream":"combined","text":"progress\r","truncated":true,"iter":2,"call_index":1,"message_id":"assistant-1"}`,
 		},
 		{
 			name:    "completed",
 			payload: Completed(call, 5, 9, "ok output", nil),
-			want:    `{"name":"exec_command","tool_use_id":"call_1","timeout_seconds":5,"len":9,"preview":"ok output"}`,
+			want:    `{"name":"exec_command","tool_use_id":"call_1","timeout_seconds":5,"len":9,"preview":"ok output","iter":2,"call_index":1,"message_id":"assistant-1"}`,
 		},
 		{
 			name: "completed includes structured result",
@@ -47,7 +50,7 @@ func TestPayloadGoldenJSON(t *testing.T) {
 				"exit_code":  float64(0),
 				"session_id": float64(3),
 			}),
-			want: `{"name":"exec_command","tool_use_id":"call_1","timeout_seconds":5,"len":9,"preview":"ok output","result":{"exit_code":0,"running":false,"session_id":3}}`,
+			want: `{"name":"exec_command","tool_use_id":"call_1","timeout_seconds":5,"len":9,"preview":"ok output","result":{"exit_code":0,"running":false,"session_id":3},"iter":2,"call_index":1,"message_id":"assistant-1"}`,
 		},
 		{
 			name: "errored",
@@ -59,12 +62,12 @@ func TestPayloadGoldenJSON(t *testing.T) {
 				TimedOut:       true,
 				ExitCode:       &exitCode,
 			}),
-			want: `{"name":"exec_command","tool_use_id":"call_1","error":"exit status 7","timeout_seconds":5,"len":18,"preview":"partial output","timed_out":true,"exit_code":7}`,
+			want: `{"name":"exec_command","tool_use_id":"call_1","error":"exit status 7","timeout_seconds":5,"len":18,"preview":"partial output","timed_out":true,"exit_code":7,"iter":2,"call_index":1,"message_id":"assistant-1"}`,
 		},
 		{
 			name:    "errored omits absent optional fields",
 			payload: Errored(call, ErroredOptions{Error: "denied"}),
-			want:    `{"name":"exec_command","tool_use_id":"call_1","error":"denied","timeout_seconds":0}`,
+			want:    `{"name":"exec_command","tool_use_id":"call_1","error":"denied","timeout_seconds":0,"iter":2,"call_index":1,"message_id":"assistant-1"}`,
 		},
 	}
 

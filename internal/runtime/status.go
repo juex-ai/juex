@@ -19,11 +19,12 @@ const statusHistoryLimit = 512
 type ToolCallState string
 
 const (
-	ToolCallRequested ToolCallState = "requested"
-	ToolCallRunning   ToolCallState = "running"
-	ToolCallStreaming ToolCallState = "streaming"
-	ToolCallCompleted ToolCallState = "completed"
-	ToolCallErrored   ToolCallState = "errored"
+	ToolCallRequested      ToolCallState = "requested"
+	ToolCallRunning        ToolCallState = "running"
+	ToolCallStreaming      ToolCallState = "streaming"
+	ToolCallCompleted      ToolCallState = "completed"
+	ToolCallErrored        ToolCallState = "errored"
+	ToolCallOutcomeUnknown ToolCallState = "outcome_unknown"
 )
 
 type TurnLifecycleState string
@@ -61,19 +62,20 @@ func (state SessionRuntimeState) IsWorking() bool {
 type StatusErrorKind string
 
 const (
-	StatusErrorError            StatusErrorKind = "error"
-	StatusErrorTimeout          StatusErrorKind = "timeout"
-	StatusErrorCancelled        StatusErrorKind = "cancelled"
-	StatusErrorInterrupted      StatusErrorKind = "interrupted"
-	StatusErrorTerminated       StatusErrorKind = "terminated"
-	StatusErrorPermission       StatusErrorKind = "permission"
-	StatusErrorAuth             StatusErrorKind = "auth"
-	StatusErrorConnectivity     StatusErrorKind = "connectivity"
-	StatusErrorWrongEndpoint    StatusErrorKind = "wrong_endpoint"
-	StatusErrorRetryable        StatusErrorKind = "retryable"
-	StatusErrorPendingInputFull StatusErrorKind = "pending_input_full"
-	StatusErrorCompaction       StatusErrorKind = "compaction"
-	StatusErrorRuntimeRestart   StatusErrorKind = "runtime_restart"
+	StatusErrorError              StatusErrorKind = "error"
+	StatusErrorTimeout            StatusErrorKind = "timeout"
+	StatusErrorCancelled          StatusErrorKind = "cancelled"
+	StatusErrorInterrupted        StatusErrorKind = "interrupted"
+	StatusErrorTerminated         StatusErrorKind = "terminated"
+	StatusErrorPermission         StatusErrorKind = "permission"
+	StatusErrorAuth               StatusErrorKind = "auth"
+	StatusErrorConnectivity       StatusErrorKind = "connectivity"
+	StatusErrorWrongEndpoint      StatusErrorKind = "wrong_endpoint"
+	StatusErrorRetryable          StatusErrorKind = "retryable"
+	StatusErrorPendingInputFull   StatusErrorKind = "pending_input_full"
+	StatusErrorCompaction         StatusErrorKind = "compaction"
+	StatusErrorRuntimeRestart     StatusErrorKind = "runtime_restart"
+	StatusErrorToolOutcomeUnknown StatusErrorKind = "tool_outcome_unknown"
 )
 
 func (kind StatusErrorKind) IsCancellation() bool {
@@ -299,7 +301,13 @@ func (s *StatusStore) RecoverAfterRestart() {
 	snapshot.Turn.State = TurnLifecycleCancelled
 	snapshot.Turn.Streaming = false
 	snapshot.Turn.Error = statusErr
-	snapshot.Tools = []ToolCallStatus{}
+	unknownTools := snapshot.Tools[:0]
+	for _, tool := range snapshot.Tools {
+		if tool.State == ToolCallOutcomeUnknown {
+			unknownTools = append(unknownTools, tool)
+		}
+	}
+	snapshot.Tools = unknownTools
 	snapshot.Session.State = SessionRuntimeFailed
 	snapshot.Session.PendingCount = 0
 	snapshot.LastError = statusErr
@@ -399,6 +407,12 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 			TimedOut: payload.TimedOut,
 		}
 		upsertToolStatus(&next, event, payload.ToolUseID, payload.Name, ToolCallErrored, statusErr)
+	case toolevents.OutcomeUnknownType:
+		payload := payloadAs[toolevents.OutcomeUnknownPayload](event.Payload)
+		upsertToolStatus(&next, event, payload.ToolUseID, payload.Name, ToolCallOutcomeUnknown, &StatusError{
+			Message: payload.Error,
+			Kind:    StatusErrorToolOutcomeUnknown,
+		})
 	case "pending_input.queued":
 		payload := payloadAs[PendingInputQueuedPayload](event.Payload)
 		setPendingStatus(&next, payload.PendingCount, payload.MaxPendingInputs)
@@ -548,7 +562,7 @@ func upsertToolStatus(snapshot *StatusSnapshot, event events.Event, toolUseID, n
 }
 
 func toolCallStateIsTerminal(state ToolCallState) bool {
-	return state == ToolCallCompleted || state == ToolCallErrored
+	return state == ToolCallCompleted || state == ToolCallErrored || state == ToolCallOutcomeUnknown
 }
 
 func turnAcceptsToolEvent(snapshot *StatusSnapshot, event events.Event) bool {

@@ -299,6 +299,9 @@ export function projectLiveSessionEvent(
     case "tool.errored":
       next = appendToolResult(next, event, true);
       break;
+    case "tool.outcome_unknown":
+      next = appendToolResult(next, event, true);
+      break;
     case "hook.started":
     case "hook.completed":
     case "hook.errored":
@@ -377,9 +380,36 @@ export function projectLiveSessionEvent(
     case "context.compact.skipped":
     case "context.projection.applied":
       break;
+    case "transcript.repaired":
+      next = {
+        ...next,
+        messages: removeRepairedToolMessages(next.messages, event.payload.repairs),
+      };
+      effects.push({ type: "refresh", preserveLiveMessages: true });
+      break;
   }
 
   return { state: next, effects };
+}
+
+function removeRepairedToolMessages(
+  messages: Message[],
+  repairs: Array<{ tool_use_id: string }>,
+): Message[] {
+  const repairedToolUseIDs = new Set(
+    repairs.map((repair) => repair.tool_use_id).filter(Boolean),
+  );
+  if (repairedToolUseIDs.size === 0) return messages;
+  return messages.filter(
+    (message) =>
+      !message.blocks?.some(
+        (block) =>
+          (block.type === "tool_use" || block.type === "tool_result") &&
+          Boolean(
+            block.tool_use_id && repairedToolUseIDs.has(block.tool_use_id),
+          ),
+      ),
+  );
 }
 
 function consumeQueuedInput(
@@ -728,14 +758,25 @@ function applyAssistantOutputDelta(
 
 function appendToolResult(
   state: LiveSessionProjection,
-  event: Extract<BrowserEvent, { type: "tool.completed" | "tool.errored" }>,
+  event: Extract<
+    BrowserEvent,
+    { type: "tool.completed" | "tool.errored" | "tool.outcome_unknown" }
+  >,
   isError: boolean,
 ): LiveSessionProjection {
   if (!event.turn_id) return state;
+  const outcome =
+    "outcome" in event.payload ? event.payload.outcome?.block : undefined;
   const content =
-    event.type === "tool.errored"
-      ? event.payload.content || event.payload.error || event.payload.preview || ""
-      : event.payload.content || event.payload.preview || "";
+    event.type === "tool.outcome_unknown"
+      ? event.payload.error
+      : event.type === "tool.errored"
+        ? outcome?.content ||
+          event.payload.content ||
+          event.payload.error ||
+          event.payload.preview ||
+          ""
+        : outcome?.content || event.payload.content || event.payload.preview || "";
   return {
     ...state,
     messages: applyToolResultToMessages(state.messages, {
@@ -743,9 +784,14 @@ function appendToolResult(
       toolUseID: event.payload.tool_use_id,
       toolName: event.payload.name || "exec_command",
       content,
-      media: event.payload.media,
+      media:
+        outcome?.media ||
+        ("media" in event.payload ? event.payload.media : undefined),
       isError,
-      timeoutSeconds: event.payload.timeout_seconds,
+      timeoutSeconds:
+        "timeout_seconds" in event.payload
+          ? event.payload.timeout_seconds
+          : undefined,
     }),
   };
 }

@@ -116,7 +116,7 @@ type LLMRequestedPayload struct {
 }
 
 type LLMRespondedPayload struct {
-	Iter         int                          `json:"iter,omitempty"`
+	Iter         int                          `json:"iter"`
 	StopReason   llm.StopReason               `json:"stop_reason"`
 	Usage        llm.Usage                    `json:"usage"`
 	TokenUsage   llm.Usage                    `json:"token_usage"`
@@ -127,7 +127,7 @@ type LLMRespondedPayload struct {
 	Model        string                       `json:"model"`
 	ContextUsage *llm.ContextUsage            `json:"context_usage,omitempty"`
 	Notice       *llm.Message                 `json:"notice,omitempty"`
-	MessageID    string                       `json:"message_id,omitempty"`
+	MessageID    string                       `json:"message_id"`
 }
 
 type LLMOutputDeltaPayload struct {

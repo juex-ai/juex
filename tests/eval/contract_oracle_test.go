@@ -29,16 +29,20 @@ func TestContractOracleValidatesAgentSmokeArtifacts(t *testing.T) {
 	)
 	writeContractJSONL(t, events,
 		map[string]any{"type": "tool.completed", "payload": map[string]any{
-			"name":    "exec_command",
-			"content": "INSTALL 10%\r\nPROMPT approve install?",
+			"name": "exec_command",
+			"outcome": map[string]any{"block": map[string]any{
+				"type": "tool_result", "content": "INSTALL 10%\r\nPROMPT approve install?",
+			}},
 			"result": map[string]any{
 				"session_id": 4,
 				"running":    true,
 			},
 		}},
 		map[string]any{"type": "tool.completed", "payload": map[string]any{
-			"name":    "write_stdin",
-			"content": "TTY-DONE contract-token",
+			"name": "write_stdin",
+			"outcome": map[string]any{"block": map[string]any{
+				"type": "tool_result", "content": "TTY-DONE contract-token",
+			}},
 			"result": map[string]any{
 				"running":   false,
 				"exit_code": 0,

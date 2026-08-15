@@ -13,6 +13,9 @@ type OutputEmitter func(OutputDelta)
 type ToolCallEvents struct {
 	Name      string
 	ToolUseID string
+	Iter      int
+	CallIndex int
+	MessageID string
 	Emit      OutputEmitter
 }
 

@@ -122,7 +122,7 @@ def events_have_agent_smoke_terminal_results(path: pathlib.Path, token: str) -> 
             delta_count += 1
         if event.get("type") == "tool.completed":
             result = payload.get("result")
-            content = str(payload.get("content") or "")
+            content = _terminal_content(payload)
             saw_install = saw_install or "INSTALL" in content
             saw_prompt = saw_prompt or "PROMPT approve install" in content
             saw_done = saw_done or f"TTY-DONE {token}" in content
@@ -162,6 +162,20 @@ def events_have_agent_smoke_terminal_results(path: pathlib.Path, token: str) -> 
     if missing:
         return False, "terminal events missing " + ", ".join(missing)
     return True, ""
+
+
+def _terminal_content(payload: dict[str, Any]) -> str:
+    content = payload.get("content")
+    if isinstance(content, str) and content:
+        return content
+    outcome = payload.get("outcome")
+    if not isinstance(outcome, dict):
+        return content if isinstance(content, str) else ""
+    block = outcome.get("block")
+    if not isinstance(block, dict):
+        return content if isinstance(content, str) else ""
+    recorded = block.get("content")
+    return recorded if isinstance(recorded, str) else ""
 
 
 def _number_not_bool(value: Any) -> bool:

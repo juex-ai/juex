@@ -462,6 +462,7 @@ function eventTranscriptAlreadyLoaded(
       );
     case "tool.completed":
     case "tool.errored":
+    case "tool.outcome_unknown":
       return Boolean(
         event.payload.tool_use_id &&
           messages.some((message) =>
@@ -470,6 +471,17 @@ function eventTranscriptAlreadyLoaded(
                 block.type === "tool_result" &&
                 block.tool_use_id === event.payload.tool_use_id,
             ),
+          ),
+      );
+    case "transcript.repaired":
+      return Boolean(
+        event.payload.repairs.length > 0 &&
+          event.payload.repairs.every(
+            (repair) =>
+              repair.repair_message_id &&
+              messages.some(
+                (message) => message.id === repair.repair_message_id,
+              ),
           ),
       );
     default:

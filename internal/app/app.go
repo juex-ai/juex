@@ -366,7 +366,6 @@ func New(opts Options) (*App, error) {
 		_ = sess.Close()
 		return nil, err
 	}
-	chunkedWrites.RestoreActiveFromHistory(sess.History)
 	var eventSink *events.DurableSink
 	var eventUnsubscribe func()
 	var statusUnsubscribe func()
@@ -400,8 +399,6 @@ func New(opts Options) (*App, error) {
 	if statusReplayErr != nil {
 		fmt.Fprintf(stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", statusReplayErr)
 	}
-	status.RecoverAfterRestart()
-
 	pb := &prompt.Builder{
 		GlobalAgentsMDPath: resourcePaths.GlobalAgentsMDPath,
 		AgentsMDDirs:       resourcePaths.AgentsMDDirs,
@@ -509,6 +506,13 @@ func New(opts Options) (*App, error) {
 		completeTurn: a.CompleteAdmittedTurn,
 	})
 	a.statusUnsubscribe = statusUnsubscribe
+	if err := eng.RecoverTranscript("load"); err != nil {
+		_ = a.detachObservability()
+		closeSessionResources()
+		return nil, err
+	}
+	status.RecoverAfterRestart()
+	chunkedWrites.RestoreActiveFromHistory(sess.History)
 	if err := runtime.RegisterGoalTools(reg, eng); err != nil {
 		_ = a.detachObservability()
 		closeSessionResources()

@@ -41,7 +41,7 @@ func TestRepairTranscriptInsertsInterruptedToolResultAtTail(t *testing.T) {
 	if block.Type != llm.BlockToolResult || block.ToolUseID != "call_tail" || block.ToolName != "grep" || !block.IsError {
 		t.Fatalf("repair block = %+v", block)
 	}
-	if !strings.Contains(block.Content, "interrupted tool call") {
+	if !strings.Contains(block.Content, "TOOL_NOT_STARTED") {
 		t.Fatalf("repair content = %q", block.Content)
 	}
 

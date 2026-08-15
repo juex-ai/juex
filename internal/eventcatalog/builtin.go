@@ -1,9 +1,11 @@
 package eventcatalog
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
@@ -42,15 +44,16 @@ func builtinDefinitions() []Definition {
 		required("turn.completed", func() any { return &juexruntime.TurnCompletedPayload{} }, true),
 		required("turn.errored", func() any { return &juexruntime.TurnErroredPayload{} }, true),
 		required("llm.requested", func() any { return &juexruntime.LLMRequestedPayload{} }, true),
-		required("llm.responded", func() any { return &juexruntime.LLMRespondedPayload{} }, true),
+		requiredValidated("llm.responded", 2, func() any { return &juexruntime.LLMRespondedPayload{} }, true, validateLLMRespondedPayload),
 		transient("llm.output_delta", func() any { return &juexruntime.LLMOutputDeltaPayload{} }),
 		required("llm.retry", func() any { return &juexruntime.LLMRetryPayload{} }, true),
 		required("llm.fallback", func() any { return &juexruntime.LLMFallbackPayload{} }, true),
-		required(toolevents.RequestedType, func() any { return &toolevents.RequestedPayload{} }, true),
-		required(toolevents.RunningType, func() any { return &toolevents.RunningPayload{} }, true),
-		required(toolevents.CompletedType, func() any { return &toolevents.CompletedPayload{} }, true),
-		transient(toolevents.OutputDeltaType, func() any { return &toolevents.OutputDeltaPayload{} }),
-		required(toolevents.ErroredType, func() any { return &toolevents.ErroredPayload{} }, true),
+		requiredToolEvent(toolevents.RequestedType, func() any { return &toolevents.RequestedPayload{} }, validateRequestedPayload),
+		requiredToolEvent(toolevents.RunningType, func() any { return &toolevents.RunningPayload{} }, validateRunningPayload),
+		requiredToolEvent(toolevents.CompletedType, func() any { return &toolevents.CompletedPayload{} }, validateCompletedPayload),
+		transientVersioned(toolevents.OutputDeltaType, 2, func() any { return &toolevents.OutputDeltaPayload{} }),
+		requiredToolEvent(toolevents.ErroredType, func() any { return &toolevents.ErroredPayload{} }, validateErroredPayload),
+		requiredValidated(toolevents.OutcomeUnknownType, 1, func() any { return &toolevents.OutcomeUnknownPayload{} }, true, validateOutcomeUnknownPayload),
 		ignorable("hook.requested", func() any { return &juexruntime.HookStartedPayload{} }, false),
 		ignorable("hook.started", func() any { return &juexruntime.HookStartedPayload{} }, true),
 		ignorable("hook.completed", func() any { return &juexruntime.HookCompletedPayload{} }, true),
@@ -86,7 +89,7 @@ func builtinDefinitions() []Definition {
 		ignorable("tool.failure.recorded", func() any { return &juexruntime.ToolFailureRecordedPayload{} }, false),
 		ignorable("tool.failure.resolved", func() any { return &juexruntime.ToolFailureResolvedPayload{} }, false),
 		ignorable("tool.failure.stale", func() any { return &juexruntime.ToolFailureStalePayload{} }, false),
-		ignorable("transcript.repaired", func() any { return &session.TranscriptRepairedPayload{} }, false),
+		ignorable("transcript.repaired", func() any { return &session.TranscriptRepairedPayload{} }, true),
 	}
 }
 
@@ -105,8 +108,119 @@ func ignorable(eventType string, factory func() any, browserVisible bool) Defini
 }
 
 func transient(eventType string, factory func() any) Definition {
+	return transientVersioned(eventType, 1, factory)
+}
+
+func transientVersioned(eventType string, version int, factory func() any) Definition {
 	return Definition{
-		Type: eventType, Version: 1,
+		Type: eventType, Version: version,
 		Transient: true, BrowserVisible: true, NewPayload: factory,
 	}
+}
+
+func requiredToolEvent(eventType string, factory func() any, validate func(any) error) Definition {
+	return requiredValidated(eventType, 2, factory, true, validate)
+}
+
+func requiredValidated(eventType string, version int, factory func() any, browserVisible bool, validate func(any) error) Definition {
+	return Definition{
+		Type: eventType, Version: version, ReplayPolicy: events.ReplayRequired,
+		BrowserVisible: browserVisible, NewPayload: factory, Validate: validate,
+	}
+}
+
+func validateRequestedPayload(payload any) error {
+	value, ok := payload.(toolevents.RequestedPayload)
+	if !ok {
+		return fmt.Errorf("unexpected requested payload %T", payload)
+	}
+	return validateToolIdentity(value.Name, value.ToolUseID, value.MessageID, value.Iter, value.CallIndex)
+}
+
+func validateLLMRespondedPayload(payload any) error {
+	value, ok := payload.(juexruntime.LLMRespondedPayload)
+	if !ok {
+		return fmt.Errorf("unexpected llm responded payload %T", payload)
+	}
+	if value.MessageID == "" || value.Iter < 0 {
+		return fmt.Errorf("llm responded identity requires message_id and a non-negative iter")
+	}
+	seen := make(map[string]struct{}, len(value.ToolCalls))
+	for index, call := range value.ToolCalls {
+		if err := validateToolIdentity(call.Name, call.ToolUseID, call.MessageID, call.Iter, call.CallIndex); err != nil {
+			return err
+		}
+		if call.MessageID != value.MessageID || call.Iter != value.Iter || call.CallIndex != index {
+			return fmt.Errorf("llm responded tool identity must match response iteration, message, and order")
+		}
+		if _, exists := seen[call.ToolUseID]; exists {
+			return fmt.Errorf("llm responded tool_use_id %q is duplicated", call.ToolUseID)
+		}
+		seen[call.ToolUseID] = struct{}{}
+	}
+	return nil
+}
+
+func validateRunningPayload(payload any) error {
+	value, ok := payload.(toolevents.RunningPayload)
+	if !ok {
+		return fmt.Errorf("unexpected running payload %T", payload)
+	}
+	return validateToolIdentity(value.Name, value.ToolUseID, value.MessageID, value.Iter, value.CallIndex)
+}
+
+func validateCompletedPayload(payload any) error {
+	value, ok := payload.(toolevents.CompletedPayload)
+	if !ok {
+		return fmt.Errorf("unexpected completed payload %T", payload)
+	}
+	if err := validateToolIdentity(value.Name, value.ToolUseID, value.MessageID, value.Iter, value.CallIndex); err != nil {
+		return err
+	}
+	return validateRecordedOutcome(value.Name, value.ToolUseID, value.Outcome)
+}
+
+func validateErroredPayload(payload any) error {
+	value, ok := payload.(toolevents.ErroredPayload)
+	if !ok {
+		return fmt.Errorf("unexpected errored payload %T", payload)
+	}
+	if err := validateToolIdentity(value.Name, value.ToolUseID, value.MessageID, value.Iter, value.CallIndex); err != nil {
+		return err
+	}
+	return validateRecordedOutcome(value.Name, value.ToolUseID, value.Outcome)
+}
+
+func validateOutcomeUnknownPayload(payload any) error {
+	value, ok := payload.(toolevents.OutcomeUnknownPayload)
+	if !ok {
+		return fmt.Errorf("unexpected outcome unknown payload %T", payload)
+	}
+	if err := validateToolIdentity(value.Name, value.ToolUseID, value.MessageID, value.Iter, value.CallIndex); err != nil {
+		return err
+	}
+	if value.Error == "" {
+		return fmt.Errorf("outcome unknown error is required")
+	}
+	return nil
+}
+
+func validateToolIdentity(name, toolUseID, messageID string, iter, callIndex int) error {
+	if name == "" || toolUseID == "" || messageID == "" {
+		return fmt.Errorf("tool identity requires name, tool_use_id, and message_id")
+	}
+	if iter < 0 || callIndex < 0 {
+		return fmt.Errorf("tool identity iter and call_index must be non-negative")
+	}
+	return nil
+}
+
+func validateRecordedOutcome(name, toolUseID string, outcome *toolevents.RecordedOutcome) error {
+	if outcome == nil || outcome.MessageID == "" {
+		return fmt.Errorf("recorded outcome and message_id are required")
+	}
+	if outcome.Block.Type != llm.BlockToolResult || outcome.Block.ToolUseID != toolUseID || outcome.Block.ToolName != name {
+		return fmt.Errorf("recorded outcome block must match tool identity")
+	}
+	return nil
 }

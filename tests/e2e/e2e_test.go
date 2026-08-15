@@ -1400,6 +1400,7 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 		TurnID:    "turn-1",
 		Timestamp: timestamp.Add(time.Second),
 		Payload: runtime.LLMRespondedPayload{
+			MessageID:  "resume-assistant-1",
 			TokenUsage: llm.Usage{InputTokens: 21, OutputTokens: 8},
 			ContextUsage: &llm.ContextUsage{
 				Model:       "resume-model",
@@ -1427,7 +1428,8 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 		TurnID:    "turn-1",
 		Timestamp: timestamp.Add(3 * time.Second),
 		Payload: toolevents.RequestedPayload{
-			Name: "exec_command", ToolUseID: "tool-1",
+			Name: "exec_command", ToolUseID: "tool-1", Iter: 0,
+			CallIndex: 0, MessageID: "resume-assistant-1",
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -1438,7 +1440,8 @@ func TestEndToEnd_ResumeReplaysDurableStatusAndRecoversInterruptedTurn(t *testin
 		TurnID:    "turn-1",
 		Timestamp: timestamp.Add(4 * time.Second),
 		Payload: toolevents.RunningPayload{
-			Name: "exec_command", ToolUseID: "tool-1",
+			Name: "exec_command", ToolUseID: "tool-1", Iter: 0,
+			CallIndex: 0, MessageID: "resume-assistant-1",
 		},
 	}); err != nil {
 		t.Fatal(err)

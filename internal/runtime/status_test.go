@@ -434,6 +434,27 @@ func TestStatusReplayKeepsTransientStateWithEqualTimestamp(t *testing.T) {
 	assertToolStatus(t, snapshots[1], "tool-1", ToolCallStreaming)
 }
 
+func TestProjectStatusToolOutcomeUnknownIsTerminalAndVisible(t *testing.T) {
+	base := NewStatusStore(StatusSeed{SessionID: "session-1"}).Snapshot()
+	base = ProjectStatus(base, events.Event{Type: TurnAdmittedType, TurnID: "turn-1"})
+	base = ProjectStatus(base, events.Event{Type: toolevents.RequestedType, TurnID: "turn-1", Payload: toolevents.RequestedPayload{
+		Name: "mcp__remote__send", ToolUseID: "call-1", Iter: 3, MessageID: "assistant-1",
+	}})
+	got := ProjectStatus(base, events.Event{Type: toolevents.OutcomeUnknownType, TurnID: "turn-1", Payload: toolevents.OutcomeUnknownPayload{
+		Name: "mcp__remote__send", ToolUseID: "call-1", Iter: 3, MessageID: "assistant-1",
+		Error: "TOOL_OUTCOME_UNKNOWN",
+	}})
+	if len(got.Tools) != 1 || got.Tools[0].State != ToolCallOutcomeUnknown || got.Tools[0].Error == nil || got.Tools[0].Error.Kind != StatusErrorToolOutcomeUnknown {
+		t.Fatalf("status after unknown outcome = %+v", got)
+	}
+	late := ProjectStatus(got, events.Event{Type: toolevents.CompletedType, TurnID: "turn-1", Payload: toolevents.CompletedPayload{
+		Name: "mcp__remote__send", ToolUseID: "call-1", Iter: 3, MessageID: "assistant-1",
+	}})
+	if late.Tools[0].State != ToolCallOutcomeUnknown {
+		t.Fatalf("late terminal event changed unknown outcome: %+v", late.Tools[0])
+	}
+}
+
 func TestStatusStoreConcurrentPublishDeliversFinalSnapshotLast(t *testing.T) {
 	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: 1024})
 	streams := make([]*StatusStream, 64)

@@ -458,6 +458,131 @@ func TestTurn_DurableToolRequestFailurePreventsToolCall(t *testing.T) {
 	}
 }
 
+func TestTurn_DurableToolStartedFailurePreventsToolCall(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "side_effect",
+		}}},
+		StopReason: llm.StopToolUse,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	hookRunner := &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventPreToolUse: {{Stdout: "pre-hook ran"}},
+	}}
+	eng.Hooks = hookRunner
+	toolCalls := 0
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "side_effect",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			toolCalls++
+			return "done", nil
+		},
+	})
+	want := errors.New("journal sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: toolevents.RunningType, err: want})
+	if _, err := eng.Turn(context.Background(), "run it"); !errors.Is(err, want) {
+		t.Fatalf("Turn() error = %v, want %v", err, want)
+	}
+	if toolCalls != 0 {
+		t.Fatalf("tool calls = %d, want 0", toolCalls)
+	}
+	for _, request := range hookRunner.requests {
+		if request.EventName == hooks.EventPreToolUse {
+			t.Fatalf("pre-tool hook ran before durable started checkpoint: %+v", hookRunner.requests)
+		}
+	}
+}
+
+func TestTurn_ToolExecutionEventsCarryStableIdentityAndRecoverableOutcome(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: "call-identity", ToolName: "side_effect",
+		}}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{Name: "side_effect", Handler: func(context.Context, map[string]any) (string, error) {
+		return "recorded once", nil
+	}})
+	var requested toolevents.RequestedPayload
+	var running toolevents.RunningPayload
+	var completed toolevents.CompletedPayload
+	bus.Subscribe(toolevents.RequestedType, func(event events.Event) { requested, _ = event.Payload.(toolevents.RequestedPayload) })
+	bus.Subscribe(toolevents.RunningType, func(event events.Event) { running, _ = event.Payload.(toolevents.RunningPayload) })
+	bus.Subscribe(toolevents.CompletedType, func(event events.Event) { completed, _ = event.Payload.(toolevents.CompletedPayload) })
+
+	if out, err := eng.Turn(context.Background(), "run once"); err != nil || out != "done" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	assistant := eng.Session.History[1]
+	for name, identity := range map[string]struct {
+		iter      int
+		callIndex int
+		messageID string
+		toolUseID string
+	}{
+		"requested": {requested.Iter, requested.CallIndex, requested.MessageID, requested.ToolUseID},
+		"running":   {running.Iter, running.CallIndex, running.MessageID, running.ToolUseID},
+		"completed": {completed.Iter, completed.CallIndex, completed.MessageID, completed.ToolUseID},
+	} {
+		if identity.iter != 0 || identity.callIndex != 0 || identity.messageID != assistant.ID || identity.toolUseID != "call-identity" {
+			t.Fatalf("%s identity = %+v, assistant=%s", name, identity, assistant.ID)
+		}
+	}
+	if completed.Outcome == nil || completed.Outcome.MessageID != eng.Session.History[2].ID || completed.Outcome.Block.Content != "recorded once" {
+		t.Fatalf("completed outcome = %+v, history=%+v", completed.Outcome, eng.Session.History)
+	}
+}
+
+func TestTurn_DeclaresWholeToolBatchBeforeAnyToolStarts(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "effect_one"},
+			{Type: llm.BlockToolUse, ToolUseID: "call-2", ToolName: "effect_two"},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	for _, name := range []string{"effect_one", "effect_two"} {
+		eng.Tools.MustRegister(tools.Tool{Name: name, Handler: func(context.Context, map[string]any) (string, error) {
+			return "ok", nil
+		}})
+	}
+	type observedToolEvent struct {
+		typeName  string
+		toolUseID string
+	}
+	var observedMu sync.Mutex
+	var observed []observedToolEvent
+	for _, eventType := range []string{toolevents.RequestedType, toolevents.RunningType} {
+		bus.Subscribe(eventType, func(event events.Event) {
+			observedMu.Lock()
+			defer observedMu.Unlock()
+			toolUseID := ""
+			switch payload := event.Payload.(type) {
+			case toolevents.RequestedPayload:
+				toolUseID = payload.ToolUseID
+			case toolevents.RunningPayload:
+				toolUseID = payload.ToolUseID
+			}
+			observed = append(observed, observedToolEvent{typeName: event.Type, toolUseID: toolUseID})
+		})
+	}
+
+	if out, err := eng.Turn(context.Background(), "run both"); err != nil || out != "done" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	observedMu.Lock()
+	defer observedMu.Unlock()
+	if len(observed) != 4 {
+		t.Fatalf("observed events = %+v", observed)
+	}
+	if observed[0] != (observedToolEvent{typeName: toolevents.RequestedType, toolUseID: "call-1"}) ||
+		observed[1] != (observedToolEvent{typeName: toolevents.RequestedType, toolUseID: "call-2"}) {
+		t.Fatalf("tool batch was not fully declared before execution: %+v", observed)
+	}
+}
+
 func TestTurn_DurableToolResultFailurePreventsNextProviderCall(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{
@@ -489,12 +614,8 @@ func TestTurn_DurableToolResultFailurePreventsNextProviderCall(t *testing.T) {
 		t.Fatalf("provider calls = %d, want 1", prov.called)
 	}
 	history := eng.currentSession().History
-	if len(history) == 0 {
-		t.Fatal("session history is empty after the tool executed")
-	}
-	result := history[len(history)-1]
-	if result.Kind != llm.MessageKindToolResult || len(result.Blocks) != 1 || result.Blocks[0].Content != "done" {
-		t.Fatalf("last history message = %+v, want persisted tool result done", result)
+	if len(history) != 2 || history[1].Role != llm.RoleAssistant {
+		t.Fatalf("history = %+v, want unresolved assistant tool call", history)
 	}
 }
 
@@ -523,12 +644,9 @@ func TestTurn_DurableToolErrorFailurePersistsActualResult(t *testing.T) {
 	if prov.called != 1 {
 		t.Fatalf("provider calls = %d, want 1", prov.called)
 	}
-	result := eng.currentSession().History[len(eng.currentSession().History)-1]
-	if result.Kind != llm.MessageKindToolResult || len(result.Blocks) != 1 || !result.Blocks[0].IsError {
-		t.Fatalf("last history message = %+v, want persisted errored tool result", result)
-	}
-	if content := result.Blocks[0].Content; !strings.Contains(content, "partial output") || !strings.Contains(content, "side effect failed") {
-		t.Fatalf("tool result content = %q, want actual output and error", content)
+	history := eng.currentSession().History
+	if len(history) != 2 || history[1].Role != llm.RoleAssistant {
+		t.Fatalf("history = %+v, want unresolved assistant tool call", history)
 	}
 }
 
@@ -4625,7 +4743,11 @@ func TestRunToolCallEmitsRequestedRunningCompleted(t *testing.T) {
 		ToolName:  "echo_status_test",
 		Input:     map[string]any{"text": "hello"},
 	}}
-	if err := eng.recordToolBatchLocked(context.Background(), "turn-1", compactionPolicy{}, calls); err != nil {
+	if err := eng.recordToolBatchLocked(context.Background(), "turn-1", compactionPolicy{}, recordedProviderResponse{
+		toolCalls: calls,
+		iter:      0,
+		messageID: "assistant-test",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
@@ -4892,7 +5014,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 		return nil, nil
 	})
 
-	results := eng.runToolCalls(context.Background(), "turn-goal-order", []llm.Block{
+	results := eng.runToolCalls(context.Background(), "turn-goal-order", testToolExecutions([]llm.Block{
 		{
 			Type:      llm.BlockToolUse,
 			ToolUseID: "goal-create",
@@ -4911,7 +5033,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 				"status_reason": "ordered update applied",
 			},
 		},
-	})
+	}))
 	if len(results) != 2 {
 		t.Fatalf("results = %d, want 2", len(results))
 	}
@@ -4954,10 +5076,10 @@ func TestRunToolCalls_SerializesSideSessionCallsInProviderOrder(t *testing.T) {
 
 	done := make(chan []toolCallResult, 1)
 	go func() {
-		done <- eng.runToolCalls(context.Background(), "turn-side-order", []llm.Block{
+		done <- eng.runToolCalls(context.Background(), "turn-side-order", testToolExecutions([]llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "side-1", ToolName: "side_first", Input: map[string]any{}},
 			{Type: llm.BlockToolUse, ToolUseID: "side-2", ToolName: "side_second", Input: map[string]any{}},
-		})
+		}))
 	}()
 	<-firstStarted
 	select {
@@ -5228,6 +5350,9 @@ func TestTurn_CancellationDuringToolPersistsToolResult(t *testing.T) {
 	if got := erroredPayload.Error; got != "cancelled by user" {
 		t.Fatalf("tool.errored error = %q, want cancelled by user", got)
 	}
+	if erroredPayload.Outcome == nil || erroredPayload.Outcome.MessageID != result.ID || !reflect.DeepEqual(erroredPayload.Outcome.Block, block) {
+		t.Fatalf("cancelled durable outcome = %+v, want message %s block %+v", erroredPayload.Outcome, result.ID, block)
+	}
 }
 
 func TestTurn_ToolTimeoutPersistsErrorWithoutFailureLedgerContinuation(t *testing.T) {
@@ -5305,6 +5430,9 @@ func TestTurn_ToolTimeoutPersistsErrorWithoutFailureLedgerContinuation(t *testin
 	if got := erroredPayload.Preview; got != "partial stdout\npartial stderr\n" {
 		t.Fatalf("errored preview = %v, want captured output preview", got)
 	}
+	if erroredPayload.Outcome == nil || erroredPayload.Outcome.MessageID != result.ID || !reflect.DeepEqual(erroredPayload.Outcome.Block, block) {
+		t.Fatalf("timeout durable outcome = %+v, want message %s block %+v", erroredPayload.Outcome, result.ID, block)
+	}
 }
 
 func TestTurn_DirectToolDeadlineUsesTimeoutContract(t *testing.T) {
@@ -5351,6 +5479,9 @@ func TestTurn_DirectToolDeadlineUsesTimeoutContract(t *testing.T) {
 	}
 	if !strings.Contains(erroredPayload.RawCause, "context deadline exceeded") {
 		t.Fatalf("raw_cause = %q, want original deadline cause", erroredPayload.RawCause)
+	}
+	if erroredPayload.Outcome == nil || !reflect.DeepEqual(erroredPayload.Outcome.Block, block) {
+		t.Fatalf("deadline durable outcome = %+v, want block %+v", erroredPayload.Outcome, block)
 	}
 }
 
@@ -5486,8 +5617,8 @@ func TestTurn_BuiltinShellCompletedEventCarriesAuthoritativeContentWithoutStruct
 	if result.Output != "" {
 		t.Fatalf("shell event result output = %q, want metadata-only structured result", result.Output)
 	}
-	if !strings.Contains(completedPayload.Content, "structured-shell") {
-		t.Fatalf("shell event content = %q, want authoritative output", completedPayload.Content)
+	if completedPayload.Outcome == nil || !strings.Contains(completedPayload.Outcome.Block.Content, "structured-shell") {
+		t.Fatalf("shell event outcome = %+v, want authoritative output", completedPayload.Outcome)
 	}
 	data, err := os.ReadFile(filepath.Join(eng.Session.Dir, "events.jsonl"))
 	if err != nil {
@@ -5513,7 +5644,10 @@ func TestEmitToolFinishedHandlesPointerShellResult(t *testing.T) {
 	block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.ToolName, Content: "finalized bounded output"}
 	observation := tools.NewObservation(tools.ObservationOptions{Content: "earlier output", StructuredResult: original})
 
-	if err := eng.emitToolFinished("turn-1", call, block, observation, tools.CallInfo{}); err != nil {
+	if err := eng.emitToolFinished("turn-1", toolExecutionCall{
+		call:    call,
+		payload: toolCallPayload(call, 0, 0, "assistant-pointer"),
+	}, "result-pointer", block, observation, tools.CallInfo{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -5521,12 +5655,23 @@ func TestEmitToolFinishedHandlesPointerShellResult(t *testing.T) {
 	if !ok {
 		t.Fatalf("completed result = %#v, want *tools.ShellResult", completed.Result)
 	}
-	if completed.Content != block.Content || completed.Preview != "" || result.Output != "" {
+	if completed.Outcome == nil || completed.Outcome.Block.Content != block.Content || completed.Preview != "" || result.Output != "" {
 		t.Fatalf("completed event = %+v result=%+v", completed, result)
 	}
 	if original.Output != "duplicate raw output" {
 		t.Fatalf("source pointer was mutated: %+v", original)
 	}
+}
+
+func testToolExecutions(calls []llm.Block) []toolExecutionCall {
+	executions := make([]toolExecutionCall, len(calls))
+	for index, call := range calls {
+		executions[index] = toolExecutionCall{
+			call:    call,
+			payload: toolCallPayload(call, 0, index, "assistant-test"),
+		}
+	}
+	return executions
 }
 
 func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {

@@ -50,6 +50,7 @@ func TestEventPayloadJSONShapePreservesConditionalFields(t *testing.T) {
 		{
 			name: "llm responded omits nil context usage",
 			payload: LLMRespondedPayload{
+				Iter:       2,
 				StopReason: llm.StopToolUse,
 				Usage:      llm.Usage{InputTokens: 3, OutputTokens: 1},
 				TokenUsage: llm.Usage{InputTokens: 8, OutputTokens: 2},
@@ -59,12 +60,17 @@ func TestEventPayloadJSONShapePreservesConditionalFields(t *testing.T) {
 					ToolName:  "read",
 					Input:     map[string]any{"path": "README.md"},
 				}},
-				Text:      "",
-				Thinking:  "inspect",
-				ToolCalls: []toolevents.ToolCallPayload{{ToolUseID: "tu3", Name: "read", Input: map[string]any{"path": "README.md"}}},
+				Text:     "",
+				Thinking: "inspect",
+				ToolCalls: []toolevents.ToolCallPayload{{
+					ToolUseID: "tu3", Name: "read", Input: map[string]any{"path": "README.md"},
+					Iter: 2, CallIndex: 0, MessageID: "assistant-3",
+				}},
 				Model:     "mock:model",
+				MessageID: "assistant-3",
 			},
 			want: map[string]any{
+				"iter":        float64(2),
 				"stop_reason": "tool_use",
 				"usage": map[string]any{
 					"input_tokens":  float64(3),
@@ -87,8 +93,12 @@ func TestEventPayloadJSONShapePreservesConditionalFields(t *testing.T) {
 					"name":            "read",
 					"input":           map[string]any{"path": "README.md"},
 					"timeout_seconds": float64(0),
+					"iter":            float64(2),
+					"call_index":      float64(0),
+					"message_id":      "assistant-3",
 				}},
-				"model": "mock:model",
+				"model":      "mock:model",
+				"message_id": "assistant-3",
 			},
 		},
 	}

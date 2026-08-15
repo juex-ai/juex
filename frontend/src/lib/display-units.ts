@@ -225,6 +225,7 @@ export function toolState(
     case "completed":
       return "output-available";
     case "errored":
+    case "outcome_unknown":
       return "output-error";
   }
   if (result?.is_error) return "output-error";

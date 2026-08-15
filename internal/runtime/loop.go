@@ -593,6 +593,8 @@ type recordedProviderResponse struct {
 	finalText  string
 	stopReason llm.StopReason
 	toolCalls  []llm.Block
+	iter       int
+	messageID  string
 }
 
 func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, userMsg llm.Message) (preparedTurnContext, error) {
@@ -654,6 +656,22 @@ func (e *Engine) repairTranscriptLocked(turnID, reason string) error {
 		return fmt.Errorf("session repair transcript: %w", err)
 	}
 	if len(repairs) > 0 {
+		for _, repair := range repairs {
+			if repair.RecoveryCode != "TOOL_OUTCOME_UNKNOWN" || repair.OutcomeUnknownRecorded {
+				continue
+			}
+			call := toolevents.ToolCallPayload{
+				Name: repair.ToolName, ToolUseID: repair.ToolUseID,
+				Iter: repair.ProviderIteration, CallIndex: repair.CallIndex,
+				MessageID: repair.AssistantMessageID,
+			}
+			if err := e.emit(events.Event{
+				Type: toolevents.OutcomeUnknownType, TurnID: repair.TurnID,
+				Payload: toolevents.OutcomeUnknown(call, "TOOL_OUTCOME_UNKNOWN: tool execution may have produced external side effects; verify external state before retrying"),
+			}); err != nil {
+				return fmt.Errorf("commit unknown tool outcome: %w", err)
+			}
+		}
 		if err := e.emit(events.Event{Type: "transcript.repaired", TurnID: turnID, Payload: session.TranscriptRepairedPayload{
 			Reason:  reason,
 			Repairs: repairs,
@@ -662,6 +680,18 @@ func (e *Engine) repairTranscriptLocked(turnID, reason string) error {
 		}
 	}
 	return nil
+}
+
+// RecoverTranscript repairs an attached Session while routing recovery facts
+// through the configured Event Bus. The caller must hold the Session lifetime
+// lock, as App does for the full attachment lifetime.
+func (e *Engine) RecoverTranscript(reason string) error {
+	if e == nil {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.repairTranscriptLocked("", reason)
 }
 
 func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared preparedTurnContext) (providerTurnRequest, error) {
@@ -873,7 +903,7 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 		Blocks:       msg.Blocks,
 		Text:         responseText(msg),
 		Thinking:     responseThinking(msg),
-		ToolCalls:    responseToolCalls(msg),
+		ToolCalls:    responseToolCalls(msg, request.iter),
 		Model:        msg.Model,
 		ContextUsage: contextUsage,
 		Notice:       notice,
@@ -884,51 +914,73 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 	}
 
 	toolCalls := msg.ToolCalls()
-	return recordedProviderResponse{finalText: llm.FormatBlocksForTerminal(msg.Blocks), stopReason: resp.StopReason, toolCalls: toolCalls}, nil
+	return recordedProviderResponse{
+		finalText:  llm.FormatBlocksForTerminal(msg.Blocks),
+		stopReason: resp.StopReason,
+		toolCalls:  toolCalls,
+		iter:       request.iter,
+		messageID:  msg.ID,
+	}, nil
 }
 
-func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, policy compactionPolicy, toolCalls []llm.Block) error {
+func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, policy compactionPolicy, recorded recordedProviderResponse) error {
 	if err := e.emit(events.Event{Type: TurnPhaseType, TurnID: turnID, Payload: TurnPhasePayload{Phase: TurnPhaseToolBatch}}); err != nil {
 		return fmt.Errorf("commit tool batch phase: %w", err)
 	}
-	for _, call := range toolCalls {
-		callPayload := toolCallPayload(call)
-		if err := e.emit(events.Event{Type: toolevents.RequestedType, TurnID: turnID, Payload: toolevents.Requested(callPayload)}); err != nil {
+	executions := make([]toolExecutionCall, len(recorded.toolCalls))
+	for index, call := range recorded.toolCalls {
+		executions[index] = toolExecutionCall{
+			call:    call,
+			payload: toolCallPayload(call, recorded.iter, index, recorded.messageID),
+		}
+		if err := e.emit(events.Event{Type: toolevents.RequestedType, TurnID: turnID, Payload: toolevents.Requested(executions[index].payload)}); err != nil {
 			return fmt.Errorf("commit tool request: %w", err)
 		}
-		if err := e.emit(events.Event{Type: toolevents.RunningType, TurnID: turnID, Payload: toolevents.Running(callPayload)}); err != nil {
-			return fmt.Errorf("commit tool running: %w", err)
-		}
 	}
-	toolResults := e.runToolCalls(ctx, turnID, toolCalls)
+	toolResults := e.runToolCalls(ctx, turnID, executions)
 	var fatalErr error
 	for index := range toolResults {
 		result := &toolResults[index]
-		if result.FatalError == nil {
-			continue
+		if result.FatalError != nil {
+			fatalErr = errors.Join(fatalErr, result.FatalError)
 		}
-		fatalErr = errors.Join(fatalErr, result.FatalError)
-		if result.Block.Type == llm.BlockToolResult {
-			continue
-		}
-		call := toolCalls[index]
-		result.Block = skippedToolResultBlock(call)
-		result.Observation = toolObservationForResult(call, result.Block, tools.CallInfo{}, result.FatalError)
 	}
 	toolResults = e.normalizeGuidedToolFailureResults(toolResults)
 	results := toolResultBlocks(toolResults)
-	e.recordToolFailureBatch(turnID, toolCalls, toolResults)
-	toolResultMsg := llm.Message{Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: results}
+	toolResultMsg := llm.Message{
+		ID:     "msg-" + newID(),
+		Role:   llm.RoleUser,
+		Kind:   llm.MessageKindToolResult,
+		Blocks: results,
+	}
 	projectedToolResultMsg, projection, err := e.projectMessageLocked(toolResultMsg, policy)
-	if err == nil {
-		toolResultMsg = projectedToolResultMsg
-	}
-	if appendErr := e.currentSession().Append(toolResultMsg); appendErr != nil {
-		return errors.Join(fatalErr, err, fmt.Errorf("session append tool result: %w", appendErr))
-	}
-	if fatalErr != nil || err != nil {
+	if err != nil {
 		return errors.Join(fatalErr, err)
 	}
+	var outcomeErr error
+	for index := range toolResults {
+		result := &toolResults[index]
+		if result.FatalError != nil || result.Block.Type != llm.BlockToolResult {
+			continue
+		}
+		if emitErr := e.emitToolFinished(
+			turnID,
+			executions[index],
+			projectedToolResultMsg.ID,
+			projectedToolResultMsg.Blocks[index],
+			result.EventObservation,
+			result.Info,
+		); emitErr != nil {
+			outcomeErr = errors.Join(outcomeErr, fmt.Errorf("commit tool result: %w", emitErr))
+		}
+	}
+	if fatalErr != nil || outcomeErr != nil {
+		return errors.Join(fatalErr, outcomeErr)
+	}
+	if appendErr := e.currentSession().Append(projectedToolResultMsg); appendErr != nil {
+		return fmt.Errorf("session append tool result: %w", appendErr)
+	}
+	e.recordToolFailureBatch(turnID, recorded.toolCalls, toolResults)
 	if emitErr := e.emitProjectionApplied(turnID, projection); emitErr != nil {
 		return fmt.Errorf("commit tool result projection: %w", emitErr)
 	}
@@ -944,29 +996,36 @@ func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, last
 }
 
 type toolCallResult struct {
-	Block       llm.Block
-	Observation tools.Observation
-	FatalError  error
+	Block            llm.Block
+	Observation      tools.Observation
+	EventObservation tools.Observation
+	Info             tools.CallInfo
+	FatalError       error
+}
+
+type toolExecutionCall struct {
+	call    llm.Block
+	payload toolevents.ToolCallPayload
 }
 
 // runToolCalls executes one assistant tool-use batch concurrently while
 // preserving provider-facing result order. Stateful tool groups are serialized
 // so dependent reads, writes, and lifecycle changes observe provider order.
-func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []llm.Block) []toolCallResult {
+func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []toolExecutionCall) []toolCallResult {
 	results := make([]toolCallResult, len(calls))
 	type indexedToolCall struct {
 		index int
-		call  llm.Block
+		call  toolExecutionCall
 	}
 	var sessionStateCalls []indexedToolCall
 	var wg sync.WaitGroup
 	for i, tc := range calls {
-		if e.isSerializedToolCall(tc.ToolName) {
+		if e.isSerializedToolCall(tc.call.ToolName) {
 			sessionStateCalls = append(sessionStateCalls, indexedToolCall{index: i, call: tc})
 			continue
 		}
 		wg.Add(1)
-		go func(idx int, call llm.Block) {
+		go func(idx int, call toolExecutionCall) {
 			defer wg.Done()
 			results[idx] = e.runToolCall(ctx, turnID, call)
 		}(i, tc)
@@ -1001,16 +1060,6 @@ func toolResultBlocks(results []toolCallResult) []llm.Block {
 		blocks[i] = result.Block
 	}
 	return blocks
-}
-
-func skippedToolResultBlock(call llm.Block) llm.Block {
-	return llm.Block{
-		Type:      llm.BlockToolResult,
-		ToolUseID: call.ToolUseID,
-		ToolName:  call.ToolName,
-		Content:   "tool execution was skipped because runtime durability failed",
-		IsError:   true,
-	}
 }
 
 func (e *Engine) normalizeGuidedToolFailureResults(results []toolCallResult) []toolCallResult {
@@ -1056,14 +1105,25 @@ func appendGuidedToolFailureHint(content, hint string) string {
 	return trimmed + "\n\n" + hint
 }
 
-func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block) toolCallResult {
-	callPayload := toolCallPayload(call)
+func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolExecutionCall) toolCallResult {
+	call := execution.call
 	preReq := e.newHookRequest(hooks.EventPreToolUse, turnID)
 	preReq.ToolName = call.ToolName
 	preReq.ToolInput = call.Input
-	preResults, err := e.runHooks(ctx, preReq)
+	started := false
+	checkpointStarted := func() error {
+		if started {
+			return nil
+		}
+		if err := e.emit(events.Event{Type: toolevents.RunningType, TurnID: turnID, Payload: toolevents.Running(execution.payload)}); err != nil {
+			return fmt.Errorf("commit tool started: %w", err)
+		}
+		started = true
+		return nil
+	}
+	preResults, err := e.runHooksBeforeRun(ctx, preReq, checkpointStarted)
 	if err != nil {
-		if isHookRequestCommitError(err) {
+		if isHookRequestCommitError(err) || isHookBeforeRunError(err) {
 			return toolCallResult{FatalError: err}
 		}
 		return e.hookToolErrorResult(turnID, call, err)
@@ -1071,12 +1131,18 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 	if denied, reason := hookBlocked(preResults); denied {
 		return e.hookToolErrorResult(turnID, call, fmt.Errorf("hooks: tool %q denied%s", call.ToolName, hookReasonSuffix(reason)))
 	}
+	if err := checkpointStarted(); err != nil {
+		return toolCallResult{FatalError: err}
+	}
 
 	toolCtx := tools.WithToolCallEvents(ctx, tools.ToolCallEvents{
 		Name:      call.ToolName,
 		ToolUseID: call.ToolUseID,
+		Iter:      execution.payload.Iter,
+		CallIndex: execution.payload.CallIndex,
+		MessageID: execution.payload.MessageID,
 		Emit: func(delta tools.OutputDelta) {
-			_ = e.emit(toolevents.OutputDeltaEvent(turnID, callPayload, delta))
+			_ = e.emit(toolevents.OutputDeltaEvent(turnID, execution.payload, delta))
 		},
 	})
 	out, info, err := e.Tools.CallWithInfo(toolCtx, call.ToolName, call.Input)
@@ -1133,12 +1199,10 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		}
 	}
 	observation := toolObservationForResult(call, block, info, toolErr)
-	if fatalErr == nil {
-		if err := e.emitToolFinished(turnID, call, block, observation, info); err != nil {
-			fatalErr = fmt.Errorf("commit tool result: %w", err)
-		}
+	return toolCallResult{
+		Block: block, Observation: observation, EventObservation: observation,
+		Info: info, FatalError: fatalErr,
 	}
-	return toolCallResult{Block: block, Observation: observation, FatalError: fatalErr}
 }
 
 func toolObservationForResult(call llm.Block, block llm.Block, info tools.CallInfo, err error) tools.Observation {
@@ -1166,7 +1230,15 @@ func toolObservationForResult(call llm.Block, block llm.Block, info tools.CallIn
 	return obs
 }
 
-func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block, observation tools.Observation, info tools.CallInfo) error {
+func (e *Engine) emitToolFinished(
+	turnID string,
+	execution toolExecutionCall,
+	outcomeMessageID string,
+	block llm.Block,
+	observation tools.Observation,
+	info tools.CallInfo,
+) error {
+	outcome := &toolevents.RecordedOutcome{MessageID: outcomeMessageID, Block: block}
 	eventResult := observation.StructuredResult
 	terminalContent := ""
 	isShellResult := false
@@ -1203,7 +1275,6 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 			opts.Error = boundedRuntimeDiagnostic(opts.Error, maxShellEventDiagnostic)
 			opts.RawCause = boundedRuntimeDiagnostic(opts.RawCause, maxShellEventDiagnostic)
 			opts.Len = len(terminalContent)
-			opts.Content = terminalContent
 		}
 		if observation.TimedOut {
 			opts.TimedOut = true
@@ -1211,7 +1282,8 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 		opts.ExitCode = cloneIntPtr(observation.ExitCode)
 		opts.Result = eventResult
 		opts.Media = block.Media
-		return e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), opts)})
+		opts.Outcome = outcome
+		return e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(execution.payload, opts)})
 	}
 	outputLen := len(observation.Content)
 	preview := truncate(observation.Content, 200)
@@ -1219,15 +1291,14 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 		outputLen = len(terminalContent)
 		preview = ""
 	}
-	payload := toolevents.Completed(toolCallPayload(call), info.TimeoutSeconds, outputLen, preview, eventResult)
+	payload := toolevents.Completed(execution.payload, info.TimeoutSeconds, outputLen, preview, eventResult)
 	payload.Media = block.Media
-	payload.Content = terminalContent
+	payload.Outcome = outcome
 	return e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: payload})
 }
 
 func (e *Engine) hookToolErrorResult(turnID string, call llm.Block, err error) toolCallResult {
 	err = cancellation.NormalizeError(err)
-	classification := errorclass.Classify(err)
 	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
 	block := llm.Block{
 		Type:      llm.BlockToolResult,
@@ -1237,15 +1308,7 @@ func (e *Engine) hookToolErrorResult(turnID string, call llm.Block, err error) t
 		IsError:   true,
 	}
 	observation := toolObservationForResult(call, block, tools.CallInfo{}, err)
-	if emitErr := e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), toolevents.ErroredOptions{
-		Error:     publicErr,
-		ErrorKind: string(classification.Kind),
-		RawCause:  rawCauseIfDifferent(classification.RawCause, publicErr),
-		TimedOut:  classification.TimedOut,
-	})}); emitErr != nil {
-		return toolCallResult{Block: block, Observation: observation, FatalError: fmt.Errorf("commit hook tool error: %w", emitErr)}
-	}
-	return toolCallResult{Block: block, Observation: observation}
+	return toolCallResult{Block: block, Observation: observation, EventObservation: observation}
 }
 
 func (e *Engine) effectiveMaxPendingInputs() int {
@@ -1610,22 +1673,27 @@ func responseThinking(m llm.Message) string {
 
 // responseToolCalls returns one summary entry per tool_use block in the
 // assistant message: name + input map. Used by verbose UIs.
-func responseToolCalls(m llm.Message) []toolevents.ToolCallPayload {
+func responseToolCalls(m llm.Message, iter int) []toolevents.ToolCallPayload {
 	var out []toolevents.ToolCallPayload
+	callIndex := 0
 	for _, b := range m.Blocks {
 		if b.Type == llm.BlockToolUse {
-			out = append(out, toolCallPayload(b))
+			out = append(out, toolCallPayload(b, iter, callIndex, m.ID))
+			callIndex++
 		}
 	}
 	return out
 }
 
-func toolCallPayload(call llm.Block) toolevents.ToolCallPayload {
+func toolCallPayload(call llm.Block, iter, callIndex int, messageID string) toolevents.ToolCallPayload {
 	return toolevents.ToolCallPayload{
 		ToolUseID:      call.ToolUseID,
 		Name:           call.ToolName,
 		Input:          call.Input,
 		TimeoutSeconds: call.TimeoutSeconds,
+		Iter:           iter,
+		CallIndex:      callIndex,
+		MessageID:      messageID,
 	}
 }
 

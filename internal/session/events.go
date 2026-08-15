@@ -54,10 +54,6 @@ func replayEvents(dir string, catalog events.SchemaCatalog, visit func(events.Ev
 	return err
 }
 
-func replayEventJournal(dir string, visit func(events.Event)) (uint64, error) {
-	return replayEventJournalWithCatalog(dir, nil, visit)
-}
-
 func replayEventJournalWithCatalog(
 	dir string,
 	catalog events.SchemaCatalog,

@@ -14,6 +14,7 @@
   "tool.completed",
   "tool.output_delta",
   "tool.errored",
+  "tool.outcome_unknown",
   "hook.started",
   "hook.completed",
   "hook.errored",
@@ -42,5 +43,6 @@
   "context.compact.errored",
   "context.compact.summary_retry",
   "context.compact.summary_model_fallback",
-  "context.projection.applied"
+  "context.projection.applied",
+  "transcript.repaired"
 ]

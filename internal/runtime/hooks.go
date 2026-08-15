@@ -18,6 +18,10 @@ type hookRequestCommitError struct {
 	err error
 }
 
+type hookBeforeRunError struct {
+	err error
+}
+
 func (e *hookRequestCommitError) Error() string {
 	return "commit hook request: " + e.err.Error()
 }
@@ -26,8 +30,21 @@ func (e *hookRequestCommitError) Unwrap() error {
 	return e.err
 }
 
+func (e *hookBeforeRunError) Error() string {
+	return "checkpoint before hook run: " + e.err.Error()
+}
+
+func (e *hookBeforeRunError) Unwrap() error {
+	return e.err
+}
+
 func isHookRequestCommitError(err error) bool {
 	var target *hookRequestCommitError
+	return errors.As(err, &target)
+}
+
+func isHookBeforeRunError(err error) bool {
+	var target *hookBeforeRunError
 	return errors.As(err, &target)
 }
 
@@ -47,6 +64,10 @@ func (e *Engine) newHookRequest(event hooks.EventName, turnID string) hooks.Requ
 }
 
 func (e *Engine) runHooks(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
+	return e.runHooksBeforeRun(ctx, req, nil)
+}
+
+func (e *Engine) runHooksBeforeRun(ctx context.Context, req hooks.Request, beforeRun func() error) ([]hooks.Result, error) {
 	if e.Hooks == nil {
 		return nil, nil
 	}
@@ -61,6 +82,11 @@ func (e *Engine) runHooks(ctx context.Context, req hooks.Request) ([]hooks.Resul
 		ToolName:  req.ToolName,
 	}}); err != nil {
 		return nil, &hookRequestCommitError{err: err}
+	}
+	if beforeRun != nil {
+		if err := beforeRun(); err != nil {
+			return nil, &hookBeforeRunError{err: err}
+		}
 	}
 	results, err := e.Hooks.Run(ctx, req)
 	if err != nil {
