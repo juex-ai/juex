@@ -55,6 +55,7 @@ type Session struct {
 	metadataDirty bool
 	historyDirty  bool
 	eventSequence uint64
+	eventCatalog  events.SchemaCatalog
 	journalOps    journalFileOps
 	journalErr    error
 	closed        bool
@@ -113,6 +114,7 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 			startedAtMS:  nowMS,
 			lastActiveMS: nowMS,
 			transcript:   newEmptyTranscriptIndex(),
+			eventCatalog: opts.EventCatalog,
 		}, nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -150,6 +152,7 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 		startedAtMS:  nowMS,
 		lastActiveMS: nowMS,
 		transcript:   newEmptyTranscriptIndex(),
+		eventCatalog: opts.EventCatalog,
 	}, nil
 }
 
@@ -719,7 +722,10 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	eventSequence, err := replayEventJournal(dir, nil)
+	var eventJournal []events.Event
+	eventSequence, err := replayEventJournalWithCatalog(dir, opts.EventCatalog, func(event events.Event) {
+		eventJournal = append(eventJournal, event)
+	})
 	if err != nil {
 		convFD.Close()
 		return nil, err
@@ -746,9 +752,10 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		startedAtMS:   meta.StartedAtMS,
 		lastActiveMS:  meta.LastActiveAtMS,
 		eventSequence: eventSequence,
+		eventCatalog:  opts.EventCatalog,
 	}
 	if opts.RepairTranscript {
-		repairs, err := sess.RepairTranscript("load")
+		repairs, err := sess.repairTranscriptWithEvents("load", eventJournal)
 		if err != nil {
 			_ = sess.Close()
 			return nil, err
@@ -766,15 +773,7 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 			sess.History = activeHistory
 		}
 		if len(repairs) > 0 {
-			repairEvent, err := opts.EventCatalog.Prepare(events.Normalize(events.Event{
-				Type:    "transcript.repaired",
-				Payload: TranscriptRepairedPayload{Reason: "load", Repairs: repairs},
-			}))
-			if err != nil {
-				_ = sess.Close()
-				return nil, err
-			}
-			if err := sess.AppendEvent(repairEvent); err != nil {
+			if err := sess.appendTranscriptRepairEvents(opts.EventCatalog, "load", repairs); err != nil {
 				_ = sess.Close()
 				return nil, err
 			}

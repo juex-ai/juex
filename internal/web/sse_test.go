@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/statusapi"
 	"github.com/juex-ai/juex/internal/toolevents"
@@ -80,6 +81,12 @@ func TestWriteSSEFrame_MarshalsTypedPayload(t *testing.T) {
 			TimeoutSeconds: 2,
 			Len:            12,
 			Preview:        "hello",
+			Iter:           0,
+			CallIndex:      0,
+			MessageID:      "assistant-1",
+			Outcome: &toolevents.RecordedOutcome{MessageID: "result-1", Block: llm.Block{
+				Type: llm.BlockToolResult, ToolUseID: "tu1", ToolName: "shell", Content: "hello",
+			}},
 		},
 	})); err != nil {
 		t.Fatal(err)

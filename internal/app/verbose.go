@@ -112,6 +112,9 @@ func (vp *verbosePrinter) handle(e events.Event) {
 		}
 	case toolevents.RequestedType:
 		payload, _ := payloadAs[toolevents.RequestedPayload](e.Payload)
+		vp.markToolDeclared(payload.ToolUseID, payload.Name)
+	case toolevents.RunningType:
+		payload, _ := payloadAs[toolevents.RunningPayload](e.Payload)
 		vp.markToolRunning(payload.ToolUseID, payload.Name)
 	case toolevents.CompletedType:
 		payload, _ := payloadAs[toolevents.CompletedPayload](e.Payload)
@@ -119,6 +122,9 @@ func (vp *verbosePrinter) handle(e events.Event) {
 	case toolevents.ErroredType:
 		payload, _ := payloadAs[toolevents.ErroredPayload](e.Payload)
 		vp.markToolFailed(payload.ToolUseID, payload.Name)
+	case toolevents.OutcomeUnknownType:
+		payload, _ := payloadAs[toolevents.OutcomeUnknownPayload](e.Payload)
+		vp.markToolOutcomeUnknown(payload.ToolUseID, payload.Name)
 	case toolevents.OutputDeltaType:
 		payload, _ := payloadAs[toolevents.OutputDeltaPayload](e.Payload)
 		vp.markToolOutputDelta(payload.ToolUseID, payload.Name)

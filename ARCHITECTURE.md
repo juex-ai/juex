@@ -768,8 +768,9 @@ can read `session_id`, `running`, `exit_code`, `chunk_id`, truncation, and
 output sizing without scraping prose. Shell output is sanitized at the tool
 output seam before text enters conversation history, runtime events, provider
 context, or Web DTOs. Terminal events carry the authoritative bounded text in
-`payload.content`; their structured `ShellResult` is metadata-only so output is
-not repeated inside the same event. Binary or binary-like bytes are omitted
+`payload.outcome.block.content`; their structured `ShellResult` is metadata-only
+so output is not repeated inside the same event. Binary or binary-like bytes
+are omitted
 from visible text and replaced with a deterministic placeholder carrying the
 full logical window's byte count, SHA-256, and first-bytes hex metadata. Normal
 UTF-8 logs, ANSI-colored output, and localized text remain unchanged, and
@@ -836,7 +837,7 @@ required-or-ignorable replay policy.
 
 Standard cataloged families include `turn.started/completed/errored`,
 `llm.requested/output_delta/responded`,
-`tool.requested/output_delta/completed/errored`,
+`tool.requested/running/output_delta/completed/errored/outcome_unknown`,
 `transcript.repaired`, `pending_input.*`, `context.compact.*`, and
 `context.projection.applied`.
 Payload structs and producer constructors may remain next to the domain module
@@ -850,7 +851,10 @@ while Web owns status attachment and SSE framing.
 are not appended to the session journal or logs. CLI and browser
 subscribers may render them provisionally; the following durable
 `llm.responded`, `tool.completed`, or `tool.errored` event is authoritative and
-replaces the matching provisional content. The `internal/toolevents`
+replaces the matching provisional content. Terminal Tool Events include the
+exact Provider-visible Tool Result block and its result-message id under
+`payload.outcome`, while preview, error, and structured result fields remain
+diagnostic projections. The `internal/toolevents`
 constructor fixes `tool.output_delta` as transient, while persistence
 boundaries reject every event carrying the transient property.
 `llm.responded` includes the assistant message's ordered `blocks` plus summary
@@ -956,17 +960,29 @@ In the app runtime path, the event sink is the Bus commit boundary: a durable
 event must reach `events.jsonl` before projections or live deliveries see it.
 Provider, Hook, and Tool side effects are gated by their required request event,
 so a journal failure stops the effect instead of publishing an uncommitted
-fact. `Close` rejects new commits, drains queued live deliveries, synchronizes
+fact. For Tool batches, `llm.responded` plus every `tool.requested` records the
+ordered declared set first. `tool.running` commits immediately before the first
+pre-Tool Hook or handler action that may have a side effect. A terminal
+`tool.completed` or `tool.errored` commits the exact projected Tool Result
+before the result message is appended and before another Provider request.
+`Close` rejects new commits, drains queued live deliveries, synchronizes
 open journals, and returns a stable result across repeated calls. Runtime
 callers resume
 sessions with `session.LoadWithOptions(dir, opts)` so aliases, lazy transcript
 creation, explicit transcript repair policy, and Catalog preparation of repair
 Events are applied consistently; `session.Load` is
 only the no-option convenience wrapper. When repair is enabled, session loading
-or turn startup inserts explicit error `tool_result` messages for persisted
-assistant `tool_use` blocks that no longer have a matching result before normal
-conversation continues, then records `transcript.repaired` evidence in
-`events.jsonl`. The latest `token_usage` and `context_usage` are restored from
+or turn startup projects the durable Tool execution facts for each unresolved
+assistant `tool_use`. A recorded terminal outcome restores its exact Tool
+Result and message id. A declared-only call receives an explicit
+`TOOL_NOT_STARTED` result. A started call with no terminal outcome receives
+`TOOL_OUTCOME_UNKNOWN`, plus a browser-visible `tool.outcome_unknown` fact, and
+is never automatically retried. The ordered repair result batch is appended
+before normal conversation continues, followed by `transcript.repaired`
+evidence in `events.jsonl`. App runtime initialization performs these writes
+through the Catalog-backed Bus only after acquiring the Session lifetime lock.
+The latest `token_usage` and
+`context_usage` are restored from
 `llm.responded` events and exposed through session `Info`, not through
 individual messages. Agent startup, active-session replacement, and historical
 Web status reads stream this journal through

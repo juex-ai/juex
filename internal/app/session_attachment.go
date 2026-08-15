@@ -28,7 +28,7 @@ func AttachAndLockWorkspaceSession(cfg config.Config, req SessionAttachmentReque
 	var sessLock *session.Lock
 	err := session.WithSessionRootGuard(cfg.SessionsDir(), func() error {
 		var err error
-		attachment, err = AttachWorkspaceSession(cfg, req)
+		attachment, err = attachWorkspaceSession(cfg, req)
 		if err != nil {
 			return err
 		}
@@ -36,6 +36,7 @@ func AttachAndLockWorkspaceSession(cfg config.Config, req SessionAttachmentReque
 		if err != nil {
 			_ = attachment.Session.Close()
 			attachment = SessionAttachment{}
+			return err
 		}
 		return err
 	})
@@ -45,6 +46,10 @@ func AttachAndLockWorkspaceSession(cfg config.Config, req SessionAttachmentReque
 // AttachWorkspaceSession opens or creates the session requested by CLI/web
 // inputs and returns the lock mode that matches that attachment decision.
 func AttachWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (SessionAttachment, error) {
+	return attachWorkspaceSession(cfg, req)
+}
+
+func attachWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (SessionAttachment, error) {
 	if req.ResumeDir != "" {
 		return resumeWorkspaceSession(cfg, req)
 	}
@@ -107,11 +112,10 @@ func resumeWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (Se
 	}
 	active := session.NormalizeKind(kind) == session.KindPrimary
 	sess, err := session.LoadWithOptions(req.ResumeDir, session.Options{
-		Alias:            req.Alias,
-		Active:           active,
-		HistoryPath:      cfg.HistoryPath(),
-		RepairTranscript: true,
-		EventCatalog:     eventcatalog.Default(),
+		Alias:        req.Alias,
+		Active:       active,
+		HistoryPath:  cfg.HistoryPath(),
+		EventCatalog: eventcatalog.Default(),
 	})
 	if err != nil {
 		return SessionAttachment{}, err
@@ -138,11 +142,10 @@ func attachActiveWorkspaceSession(cfg config.Config, req SessionAttachmentReques
 		return newPrimaryWorkspaceSession(cfg, req, SessionModeAttachActive)
 	}
 	sess, err := session.LoadWithOptions(session.InfoDir(cfg.SessionsDir(), info), session.Options{
-		Alias:            req.Alias,
-		Active:           true,
-		HistoryPath:      cfg.HistoryPath(),
-		RepairTranscript: true,
-		EventCatalog:     eventcatalog.Default(),
+		Alias:        req.Alias,
+		Active:       true,
+		HistoryPath:  cfg.HistoryPath(),
+		EventCatalog: eventcatalog.Default(),
 	})
 	if err != nil {
 		return SessionAttachment{}, err
@@ -156,11 +159,12 @@ func attachActiveWorkspaceSession(cfg config.Config, req SessionAttachmentReques
 
 func newPrimaryWorkspaceSession(cfg config.Config, req SessionAttachmentRequest, lockMode SessionMode) (SessionAttachment, error) {
 	sess, err := session.NewWithOptions(cfg.SessionsDir(), session.Options{
-		Alias:       req.Alias,
-		Kind:        session.KindPrimary,
-		Active:      true,
-		HistoryPath: cfg.HistoryPath(),
-		Lazy:        req.Lazy,
+		Alias:        req.Alias,
+		Kind:         session.KindPrimary,
+		Active:       true,
+		HistoryPath:  cfg.HistoryPath(),
+		Lazy:         req.Lazy,
+		EventCatalog: eventcatalog.Default(),
 	})
 	if err != nil {
 		return SessionAttachment{}, err
@@ -174,10 +178,11 @@ func newPrimaryWorkspaceSession(cfg config.Config, req SessionAttachmentRequest,
 
 func newSideWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (SessionAttachment, error) {
 	sess, err := session.NewWithOptions(cfg.SessionsDir(), session.Options{
-		Alias:       req.Alias,
-		Kind:        session.KindSide,
-		HistoryPath: cfg.HistoryPath(),
-		Lazy:        req.Lazy,
+		Alias:        req.Alias,
+		Kind:         session.KindSide,
+		HistoryPath:  cfg.HistoryPath(),
+		Lazy:         req.Lazy,
+		EventCatalog: eventcatalog.Default(),
 	})
 	if err != nil {
 		return SessionAttachment{}, err

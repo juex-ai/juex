@@ -101,12 +101,15 @@ func TestTurn_BuiltinShellErroredEventCarriesAuthoritativeContent(t *testing.T) 
 	if _, err := eng.Turn(context.Background(), "run failing shell"); err != nil {
 		t.Fatal(err)
 	}
+	if errored.Outcome == nil {
+		t.Fatal("errored event is missing recorded outcome")
+	}
 	for _, want := range []string{"HEAD-FAILURE-SENTINEL", "TAIL-FAILURE-SENTINEL", "[output truncated:", "Process exited with code 7"} {
-		if !strings.Contains(errored.Content, want) {
+		if !strings.Contains(errored.Outcome.Block.Content, want) {
 			t.Fatalf("errored content missing %q", want)
 		}
 	}
-	if strings.Contains(errored.Content, "remaining output truncated") {
+	if strings.Contains(errored.Outcome.Block.Content, "remaining output truncated") {
 		t.Fatalf("errored content was truncated a second time")
 	}
 	if len(eng.Session.History) < 3 || len(eng.Session.History[2].Blocks) != 1 {
@@ -115,7 +118,7 @@ func TestTurn_BuiltinShellErroredEventCarriesAuthoritativeContent(t *testing.T) 
 	conversation := eng.Session.History[2].Blocks[0].Content
 	rawBytes := len("HEAD-FAILURE-SENTINEL\n") + 1100000 + len("\nTAIL-FAILURE-SENTINEL\n")
 	wantMarker := fmt.Sprintf("[output truncated: %d bytes omitted]\n", rawBytes-(1<<20))
-	if strings.Count(conversation, wantMarker) != 1 || strings.Count(errored.Content, wantMarker) != 1 {
+	if strings.Count(conversation, wantMarker) != 1 || strings.Count(errored.Outcome.Block.Content, wantMarker) != 1 {
 		t.Fatalf("exact raw-output marker missing: want %q", wantMarker)
 	}
 	for _, want := range []string{"HEAD-FAILURE-SENTINEL", "TAIL-FAILURE-SENTINEL", "[output truncated:"} {
@@ -166,7 +169,7 @@ func TestTurn_BuiltinShellCompletedEventUsesFinalizedHookContent(t *testing.T) {
 			t.Fatalf("conversation content missing %q: %q", want, conversation)
 		}
 	}
-	if completed.Content != conversation || completed.Len != len(conversation) {
+	if completed.Outcome == nil || completed.Outcome.Block.Content != conversation || completed.Len != len(conversation) {
 		t.Fatalf("completed event = %+v, want finalized conversation %q", completed, conversation)
 	}
 	if completed.Preview != "" {
@@ -205,7 +208,7 @@ func TestTurn_BuiltinShellErroredEventUsesFinalizedHookErrorContent(t *testing.T
 			t.Fatalf("conversation content missing %q: %q", want, conversation)
 		}
 	}
-	if errored.Content != conversation || errored.Len != len(conversation) {
+	if errored.Outcome == nil || errored.Outcome.Block.Content != conversation || errored.Len != len(conversation) {
 		t.Fatalf("errored event = %+v, want finalized conversation %q", errored, conversation)
 	}
 	if errored.Preview != "" {
@@ -264,7 +267,9 @@ func TestTurn_BuiltinShellFinalContentBoundsMultipleEscapedHooksAndReplays(t *te
 			payload, _ := event.Payload.(map[string]any)
 			if payload["tool_use_id"] == "exec_large_hooks" {
 				terminalIndex = index
-				if payload["content"] != conversation {
+				outcome, _ := payload["outcome"].(map[string]any)
+				block, _ := outcome["block"].(map[string]any)
+				if block["content"] != conversation {
 					t.Fatalf("replayed terminal content does not match finalized conversation")
 				}
 			}
@@ -309,7 +314,7 @@ func TestTurn_BuiltinShellBoundsEscapedHookErrorDiagnosticsAndReplays(t *testing
 	conversation := eng.Session.History[2].Blocks[0].Content
 	rawBytes := len("HEAD-HOOK-ERROR-SENTINEL\n") + 1100000 + len("\nTAIL-HOOK-ERROR-SENTINEL\n")
 	wantMarker := fmt.Sprintf("[output truncated: %d bytes omitted]\n", rawBytes-(1<<20))
-	if errored.Content != conversation || !strings.Contains(conversation, "HEAD-HOOK-ERROR-SENTINEL") ||
+	if errored.Outcome == nil || errored.Outcome.Block.Content != conversation || !strings.Contains(conversation, "HEAD-HOOK-ERROR-SENTINEL") ||
 		!strings.Contains(conversation, "TAIL-HOOK-ERROR-SENTINEL") || strings.Count(conversation, wantMarker) != 1 {
 		t.Fatalf("bounded terminal content does not match conversation: bytes=%d", len(conversation))
 	}
@@ -325,7 +330,9 @@ func TestTurn_BuiltinShellBoundsEscapedHookErrorDiagnosticsAndReplays(t *testing
 			payload, _ := event.Payload.(map[string]any)
 			if payload["tool_use_id"] == "exec_large_hook_error" {
 				terminalIndex = index
-				if payload["content"] != conversation {
+				outcome, _ := payload["outcome"].(map[string]any)
+				block, _ := outcome["block"].(map[string]any)
+				if block["content"] != conversation {
 					t.Fatalf("replayed errored content does not match conversation")
 				}
 			}

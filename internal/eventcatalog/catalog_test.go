@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/llm"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 func TestDefaultCatalogPreparesAndDecodesStableEvent(t *testing.T) {
@@ -52,6 +54,49 @@ func TestDefaultCatalogRejectsMalformedStablePayload(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "turn.started") {
 		t.Fatalf("Prepare() error = %v, want typed payload error", err)
+	}
+}
+
+func TestDefaultCatalogValidatesToolExecutionIdentityAndOutcome(t *testing.T) {
+	call := toolevents.ToolCallPayload{
+		Name: "write", ToolUseID: "call-1", Iter: 2, CallIndex: 0,
+		MessageID: "assistant-1",
+	}
+	responded, err := Default().Prepare(events.Event{Type: "llm.responded", Payload: juexruntime.LLMRespondedPayload{
+		Iter: 2, MessageID: "assistant-1", ToolCalls: []toolevents.ToolCallPayload{call},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if responded.SchemaVersion != 2 {
+		t.Fatalf("llm.responded schema = %d, want 2", responded.SchemaVersion)
+	}
+
+	call.MessageID = "different-assistant"
+	if _, err := Default().Prepare(events.Event{Type: "llm.responded", Payload: juexruntime.LLMRespondedPayload{
+		Iter: 2, MessageID: "assistant-1", ToolCalls: []toolevents.ToolCallPayload{call},
+	}}); err == nil {
+		t.Fatal("llm.responded mismatched tool identity was accepted")
+	}
+
+	call.MessageID = "assistant-1"
+	completed := toolevents.Completed(call, 60, 2, "ok", nil)
+	if _, err := Default().Prepare(events.Event{Type: toolevents.CompletedType, Payload: completed}); err == nil {
+		t.Fatal("tool.completed without durable outcome was accepted")
+	}
+	completed.Outcome = &toolevents.RecordedOutcome{
+		MessageID: "result-1",
+		Block: llm.Block{
+			Type: llm.BlockToolResult, ToolUseID: call.ToolUseID,
+			ToolName: call.Name, Content: "ok",
+		},
+	}
+	prepared, err := Default().Prepare(events.Event{Type: toolevents.CompletedType, Payload: completed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.SchemaVersion != 2 {
+		t.Fatalf("tool.completed schema = %d, want 2", prepared.SchemaVersion)
 	}
 }
 

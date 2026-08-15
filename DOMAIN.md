@@ -108,17 +108,29 @@ domain boundary.
    creates a Side Session, or explicitly resumes a recorded Session.
 2. Turn admission records the input and establishes one active execution
    boundary for that Session.
-3. Each Provider iteration receives canonical context, may return ordered Tool
-   Calls, and persists their ordered results before the next iteration.
-4. Pending input drains only between Provider iterations. Completion closes the
+3. Each Provider iteration receives canonical context and may return ordered
+   Tool Calls. Every call is identified by Turn, Provider iteration, assistant
+   message, call position, and Tool Use ID.
+4. Runtime durably declares the complete ordered Tool Call batch before any
+   call starts. It durably marks each call started before a pre-Tool Hook or
+   handler can cross an external side-effect boundary, and durably records the
+   exact Provider-visible success, failure, timeout, or cancellation outcome
+   before appending the ordered Tool Result batch or requesting the Provider
+   again.
+5. Restart recovery distinguishes a call that was declared but not started
+   from one that started without a durable outcome. The former is never
+   reported as executed; the latter becomes `TOOL_OUTCOME_UNKNOWN` and is not
+   automatically retried. A durable outcome restores its exact Tool Result
+   once in Provider order.
+6. Pending input drains only between Provider iterations. Completion closes the
    Turn only when no accepted input remains to continue it.
-5. The transcript and durable Events remain the source for resume and
+7. The transcript and durable Events remain the source for resume and
    inspection after completion, cancellation, failure, or process restart.
-6. An active Primary Session may create process-managed Side Sessions for
+8. An active Primary Session may create process-managed Side Sessions for
    delegated work. Each Side Session keeps its own transcript, scratchpad,
    pending input, lock, and Turn lifecycle while sharing the Primary Session's
    effective Workspace resources and explicitly bound Goal and Notes.
-7. Subscribed Side Session terminal results are accepted as durable
+9. Subscribed Side Session terminal results are accepted as durable
    `side_session` input by the owning Primary Session. A busy Primary Session
    queues that input at the normal safe boundary rather than dropping it.
    Subscription is sampled when the child Turn reaches a terminal state; a
@@ -219,7 +231,11 @@ domain boundary.
 7. **Only Primary Sessions activate.** A Side Session cannot replace the active
    Primary Session.
 8. **Transcripts remain structurally valid.** Tool results preserve Provider
-   order and match their Tool Calls; repair is explicit and recorded.
+   order and match their Tool Calls. Repair restores an exact durable outcome,
+   reports a declared-only call as not started, or reports a started call with
+   no outcome as `TOOL_OUTCOME_UNKNOWN`; it never invents successful execution
+   or silently retries an uncertain side effect. Repair is explicit and
+   recorded.
 9. **Accepted input is durable.** Failure or cancellation may stop a Turn, but
    it must not silently lose input that admission already accepted.
 10. **Provider details stop at the adapter.** Protocol-specific wire shapes do
@@ -227,8 +243,10 @@ domain boundary.
 11. **Capabilities are explicit.** Optional Provider behavior is enabled by the
    resolved Capability Set, not guessed from a model name at the call site.
 12. **Events gate facts and effects.** A required request Event commits before
-    its Provider, Hook, or Tool side effect; outcome Events commit after the
-    fact they represent and before live consumers treat it as authoritative.
+    its Provider, Hook, or Tool side effect. Tool declaration and start facts
+    use stable Turn and Provider-iteration identity. A terminal Tool Event
+    commits the exact Provider-visible outcome before transcript continuation;
+    started-without-outcome remains explicitly uncertain after restart.
 13. **Observable definition and state are separate.** Project definitions
     follow the Workspace and read-only Extension definitions follow the selected
     Extension; generated runs, Observations, delivery records, and schedule

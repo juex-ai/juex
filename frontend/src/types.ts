@@ -208,7 +208,8 @@ export type RuntimeToolCallState =
   | "running"
   | "streaming"
   | "completed"
-  | "errored";
+  | "errored"
+  | "outcome_unknown";
 
 export type RuntimeTurnLifecycleState =
   | "admitted"
@@ -325,6 +326,7 @@ export const BROWSER_EVENT_TYPES = [
   "tool.completed",
   "tool.output_delta",
   "tool.errored",
+  "tool.outcome_unknown",
   "hook.started",
   "hook.completed",
   "hook.errored",
@@ -354,6 +356,7 @@ export const BROWSER_EVENT_TYPES = [
   "context.compact.summary_retry",
   "context.compact.summary_model_fallback",
   "context.projection.applied",
+  "transcript.repaired",
 ] as const;
 
 export type BrowserEventType = (typeof BROWSER_EVENT_TYPES)[number];
@@ -441,9 +444,13 @@ export interface ToolCallPayload {
   name: string;
   input?: Record<string, unknown> | null;
   timeout_seconds: number;
+  iter: number;
+  call_index: number;
+  message_id: string;
 }
 
 export interface LLMRespondedPayload {
+  iter: number;
   stop_reason: string;
   usage: TokenUsage;
   token_usage: TokenUsage;
@@ -454,7 +461,7 @@ export interface LLMRespondedPayload {
   model: string;
   context_usage?: ContextUsage;
   notice?: Message;
-  message_id?: string;
+  message_id: string;
 }
 
 export interface ToolRequestedPayload {
@@ -462,12 +469,23 @@ export interface ToolRequestedPayload {
   input?: Record<string, unknown> | null;
   tool_use_id: string;
   timeout_seconds: number;
+  iter: number;
+  call_index: number;
+  message_id: string;
 }
 
 export interface ToolRunningPayload {
   name: string;
   tool_use_id: string;
   timeout_seconds: number;
+  iter: number;
+  call_index: number;
+  message_id: string;
+}
+
+export interface ToolRecordedOutcome {
+  message_id: string;
+  block: ToolResultBlock;
 }
 
 export interface ToolCompletedPayload {
@@ -479,6 +497,10 @@ export interface ToolCompletedPayload {
   content?: string;
   result?: Record<string, unknown>;
   media?: MediaRef;
+  iter: number;
+  call_index: number;
+  message_id: string;
+  outcome: ToolRecordedOutcome;
 }
 
 export interface ToolOutputDeltaPayload {
@@ -493,6 +515,9 @@ export interface ToolOutputDeltaPayload {
   binary_bytes?: number;
   binary_sha256?: string;
   first_bytes_hex?: string;
+  iter: number;
+  call_index: number;
+  message_id: string;
 }
 
 export interface ToolErroredPayload {
@@ -509,6 +534,38 @@ export interface ToolErroredPayload {
   exit_code?: number;
   result?: Record<string, unknown>;
   media?: MediaRef;
+  iter: number;
+  call_index: number;
+  message_id: string;
+  outcome: ToolRecordedOutcome;
+}
+
+export interface ToolOutcomeUnknownPayload {
+  name: string;
+  tool_use_id: string;
+  iter: number;
+  call_index: number;
+  message_id: string;
+  error: string;
+}
+
+export interface TranscriptRepair {
+  tool_use_id: string;
+  tool_name?: string;
+  repair_message_id: string;
+  inserted_before_message_id?: string;
+  reason?: string;
+  turn_id?: string;
+  provider_iteration: number;
+  call_index: number;
+  assistant_message_id?: string;
+  execution_phase: string;
+  recovery_code: string;
+}
+
+export interface TranscriptRepairedPayload {
+  reason?: string;
+  repairs: TranscriptRepair[];
 }
 
 export interface HookStartedPayload {
@@ -752,6 +809,7 @@ export type BrowserEvent =
   | (BrowserEventBase<"tool.completed"> & { payload: ToolCompletedPayload })
   | (BrowserEventBase<"tool.output_delta"> & { payload: ToolOutputDeltaPayload })
   | (BrowserEventBase<"tool.errored"> & { payload: ToolErroredPayload })
+  | (BrowserEventBase<"tool.outcome_unknown"> & { payload: ToolOutcomeUnknownPayload })
   | (BrowserEventBase<"hook.started"> & { payload: HookStartedPayload })
   | (BrowserEventBase<"hook.completed"> & { payload: HookCompletedPayload })
   | (BrowserEventBase<"hook.errored"> & { payload: HookErroredPayload })
@@ -780,7 +838,8 @@ export type BrowserEvent =
   | (BrowserEventBase<"context.compact.errored"> & { payload: ContextCompactErroredPayload })
   | (BrowserEventBase<"context.compact.summary_retry"> & { payload: ContextCompactSummaryRetryPayload })
   | (BrowserEventBase<"context.compact.summary_model_fallback"> & { payload: ContextCompactSummaryFallbackPayload })
-  | (BrowserEventBase<"context.projection.applied"> & { payload: ContextProjectionAppliedPayload });
+  | (BrowserEventBase<"context.projection.applied"> & { payload: ContextProjectionAppliedPayload })
+  | (BrowserEventBase<"transcript.repaired"> & { payload: TranscriptRepairedPayload });
 
 export interface FileNode {
   name: string;

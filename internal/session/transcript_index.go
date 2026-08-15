@@ -202,13 +202,13 @@ func (idx *transcriptIndex) addRepairState(msg llm.Message) {
 				idx.repairSafe = false
 				return
 			}
-			pending = append(pending, messageToolUses(msg)...)
+			pending = append(pending, messageToolUses(msg, nil)...)
 			idx.repairPending = pending
 			idx.repairSafe = !idx.repairBroken && len(pending) == 0
 			return
 		}
 	}
-	pending = messageToolUses(msg)
+	pending = messageToolUses(msg, nil)
 	idx.repairPending = pending
 	idx.repairSafe = !idx.repairBroken && len(pending) == 0
 }

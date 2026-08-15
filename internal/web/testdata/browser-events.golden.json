@@ -111,10 +111,11 @@
   {
     "id": "evt-llm-responded",
     "type": "llm.responded",
-    "schema_version": 1,
+    "schema_version": 2,
     "ts": "2026-06-15T00:00:01Z",
     "turn_id": "turn-1",
     "payload": {
+      "iter": 0,
       "stop_reason": "tool_use",
       "usage": {
         "input_tokens": 10,
@@ -176,13 +177,16 @@
   {
     "id": "evt-tool-running",
     "type": "tool.running",
-    "schema_version": 1,
+    "schema_version": 2,
     "ts": "2026-06-15T00:00:02.5Z",
     "turn_id": "turn-1",
     "payload": {
       "name": "exec_command",
       "tool_use_id": "tool-1",
-      "timeout_seconds": 30
+      "timeout_seconds": 30,
+      "iter": 0,
+      "call_index": 0,
+      "message_id": "msg-assistant-1"
     },
     "status": {
       "cursor": "evt-tool-running",
@@ -393,7 +397,7 @@
   {
     "id": "evt-tool-requested",
     "type": "tool.requested",
-    "schema_version": 1,
+    "schema_version": 2,
     "ts": "2026-06-15T00:00:02Z",
     "turn_id": "turn-1",
     "payload": {
@@ -402,7 +406,10 @@
         "cmd": "printf hi"
       },
       "tool_use_id": "tool-1",
-      "timeout_seconds": 30
+      "timeout_seconds": 30,
+      "iter": 0,
+      "call_index": 0,
+      "message_id": "msg-assistant-1"
     },
     "status": {
       "cursor": "evt-tool-requested",
@@ -447,7 +454,7 @@
   {
     "id": "evt-tool-delta",
     "type": "tool.output_delta",
-    "schema_version": 1,
+    "schema_version": 2,
     "ts": "2026-06-15T00:00:03Z",
     "turn_id": "turn-1",
     "payload": {
@@ -457,7 +464,10 @@
       "chunk_id": 1,
       "stream": "stdout",
       "text": "hi\n",
-      "truncated": true
+      "truncated": true,
+      "iter": 0,
+      "call_index": 0,
+      "message_id": "msg-assistant-1"
     },
     "status": {
       "cursor": "evt-tool-requested",
@@ -502,7 +512,7 @@
   {
     "id": "evt-tool-completed",
     "type": "tool.completed",
-    "schema_version": 1,
+    "schema_version": 2,
     "ts": "2026-06-15T00:00:04Z",
     "turn_id": "turn-1",
     "payload": {
@@ -513,6 +523,18 @@
       "preview": "hi\n",
       "result": {
         "exit_code": 0
+      },
+      "iter": 0,
+      "call_index": 0,
+      "message_id": "msg-assistant-1",
+      "outcome": {
+        "message_id": "msg-tool-result-1",
+        "block": {
+          "type": "tool_result",
+          "tool_use_id": "tool-1",
+          "tool_name": "exec_command",
+          "content": "hi\n"
+        }
       }
     },
     "status": {

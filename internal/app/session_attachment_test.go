@@ -1,15 +1,21 @@
 package app
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/eventcatalog"
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 func TestAttachWorkspaceSessionCreatesActivePrimaryWhenEmpty(t *testing.T) {
@@ -49,15 +55,25 @@ func TestAttachWorkspaceSessionAttachesActivePrimary(t *testing.T) {
 	assertHistoryActive(t, cfg, active.ID)
 }
 
-func TestAttachWorkspaceSessionRepairsActivePrimaryTranscript(t *testing.T) {
+func TestAttachAndLockWorkspaceSessionRepairsThroughRuntimeBus(t *testing.T) {
 	cfg := attachmentTestConfig(t)
 	active := seedDanglingToolUseSession(t, cfg)
 
-	attachment, err := AttachWorkspaceSession(cfg, SessionAttachmentRequest{})
+	attachment, lock, err := AttachAndLockWorkspaceSession(cfg, SessionAttachmentRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer attachment.Session.Close()
+	defer func() { _ = lock.Close() }()
+	sink := events.NewDurableSink(attachment.Session)
+	sink.SetCatalog(eventcatalog.Default())
+	defer func() { _ = sink.Close() }()
+	bus := events.NewBus()
+	bus.SetCommitter(sink)
+	engine := &juexruntime.Engine{Bus: bus, Session: attachment.Session}
+	if err := engine.RecoverTranscript("load"); err != nil {
+		t.Fatal(err)
+	}
 
 	if attachment.Session.ID != active.ID {
 		t.Fatalf("session id = %s, want %s", attachment.Session.ID, active.ID)
@@ -71,6 +87,59 @@ func TestAttachWorkspaceSessionRepairsActivePrimaryTranscript(t *testing.T) {
 	}
 	if repair.Blocks[0].ToolUseID != "attach_missing" || !repair.Blocks[0].IsError {
 		t.Fatalf("repair block = %+v", repair.Blocks[0])
+	}
+}
+
+func TestAttachWorkspaceSessionDoesNotRepairBeforeLifetimeLock(t *testing.T) {
+	cfg := attachmentTestConfig(t)
+	active := seedDanglingToolUseSession(t, cfg)
+
+	attachment, err := AttachWorkspaceSession(cfg, SessionAttachmentRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer attachment.Session.Close()
+
+	if attachment.Session.ID != active.ID {
+		t.Fatalf("session id = %s, want %s", attachment.Session.ID, active.ID)
+	}
+	if len(attachment.Session.History) != 2 {
+		t.Fatalf("history len = %d, want unrepaired 2-message history", len(attachment.Session.History))
+	}
+}
+
+func TestLockedRuntimeRecoverySurfacesUnknownOutcomeToCLIAndTranscript(t *testing.T) {
+	cfg := attachmentTestConfig(t)
+	active := seedStartedDanglingToolUseSession(t, cfg)
+
+	attachment, lock, err := AttachAndLockWorkspaceSession(cfg, SessionAttachmentRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer attachment.Session.Close()
+	defer func() { _ = lock.Close() }()
+	sink := events.NewDurableSink(attachment.Session)
+	sink.SetCatalog(eventcatalog.Default())
+	defer func() { _ = sink.Close() }()
+	bus := events.NewBus()
+	bus.SetCommitter(sink)
+	var stderr bytes.Buffer
+	printer := newVerbosePrinter(&stderr)
+	bus.Subscribe("*", printer.handle)
+	engine := &juexruntime.Engine{Bus: bus, Session: attachment.Session}
+	if err := engine.RecoverTranscript("load"); err != nil {
+		t.Fatal(err)
+	}
+
+	if attachment.Session.ID != active.ID {
+		t.Fatalf("session id = %s, want %s", attachment.Session.ID, active.ID)
+	}
+	result := attachment.Session.History[len(attachment.Session.History)-1].Blocks[0]
+	if !result.IsError || !strings.Contains(result.Content, "TOOL_OUTCOME_UNKNOWN") {
+		t.Fatalf("recovered result = %+v", result)
+	}
+	if output := stripANSI(stderr.String()); !strings.Contains(output, "outcome unknown: mcp__remote__send (attach_started)") {
+		t.Fatalf("verbose recovery output missing unknown outcome:\n%s", output)
 	}
 }
 
@@ -328,6 +397,54 @@ func seedDanglingToolUseSession(t *testing.T, cfg config.Config) session.Info {
 		ToolName:  "read",
 	}}}); err != nil {
 		t.Fatal(err)
+	}
+	info := sess.Info()
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SetActive(cfg.HistoryPath(), info); err != nil {
+		t.Fatal(err)
+	}
+	return info
+}
+
+func seedStartedDanglingToolUseSession(t *testing.T, cfg config.Config) session.Info {
+	t.Helper()
+	sess, err := session.NewWithOptions(cfg.SessionsDir(), session.Options{
+		Kind: session.KindPrimary, HistoryPath: cfg.HistoryPath(), EventCatalog: eventcatalog.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Append(llm.TextMessage(llm.RoleUser, "before")); err != nil {
+		t.Fatal(err)
+	}
+	assistant, err := sess.AppendAssigned(llm.Message{
+		ID: "attach-assistant", Role: llm.RoleAssistant,
+		Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "attach_started", ToolName: "mcp__remote__send"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := toolevents.ToolCallPayload{
+		Name: "mcp__remote__send", ToolUseID: "attach_started", Iter: 1,
+		CallIndex: 0, MessageID: assistant.ID,
+	}
+	for _, event := range []events.Event{
+		{Type: "llm.responded", TurnID: "attach-turn", Payload: juexruntime.LLMRespondedPayload{
+			Iter: 1, MessageID: assistant.ID, Blocks: assistant.Blocks,
+			ToolCalls: []toolevents.ToolCallPayload{call},
+		}},
+		{Type: toolevents.RequestedType, TurnID: "attach-turn", Payload: toolevents.Requested(call)},
+		{Type: toolevents.RunningType, TurnID: "attach-turn", Payload: toolevents.Running(call)},
+	} {
+		prepared, err := eventcatalog.Default().Prepare(events.Normalize(event))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sess.AppendEvent(prepared); err != nil {
+			t.Fatal(err)
+		}
 	}
 	info := sess.Info()
 	if err := sess.Close(); err != nil {

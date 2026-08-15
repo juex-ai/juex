@@ -114,6 +114,28 @@ func TestVerbose_TypedPayloads(t *testing.T) {
 	}
 }
 
+func TestVerbose_ToolOutcomeUnknownIsExplicit(t *testing.T) {
+	out := emitAll([]events.Event{
+		{Type: "llm.responded", Payload: runtimeevents.LLMRespondedPayload{
+			ToolCalls: []toolevents.ToolCallPayload{{ToolUseID: "call_remote", Name: "mcp__remote__send"}},
+		}},
+		{Type: toolevents.RequestedType, Payload: toolevents.RequestedPayload{Name: "mcp__remote__send", ToolUseID: "call_remote"}},
+		{Type: toolevents.RunningType, Payload: toolevents.RunningPayload{Name: "mcp__remote__send", ToolUseID: "call_remote"}},
+		{Type: toolevents.OutcomeUnknownType, Payload: toolevents.OutcomeUnknownPayload{
+			Name: "mcp__remote__send", ToolUseID: "call_remote", Error: "TOOL_OUTCOME_UNKNOWN",
+		}},
+	})
+
+	for _, want := range []string{
+		"failed 1 mcp__remote__send",
+		"outcome unknown: mcp__remote__send (call_remote)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in transcript:\n%s", want, out)
+		}
+	}
+}
+
 func TestVerbose_TurnStartedObservationUsesEventLabel(t *testing.T) {
 	out := emitAll([]events.Event{
 		{Type: "turn.started", Payload: runtimeevents.TurnStartedPayload{

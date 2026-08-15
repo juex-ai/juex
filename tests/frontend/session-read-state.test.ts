@@ -407,6 +407,38 @@ test("replay skips transcript content already present in the initial session pag
     },
   }).state;
   state = projectLiveBrowserEvent(state, {
+    id: "evt-tool-outcome-unknown",
+    type: "tool.outcome_unknown",
+    ts: "2026-07-23T11:00:03Z",
+    turn_id: "turn-1",
+    payload: {
+      name: "exec_command",
+      tool_use_id: "tool-1",
+      iter: 0,
+      call_index: 0,
+      message_id: "msg-assistant",
+      error: "TOOL_OUTCOME_UNKNOWN",
+    },
+  }).state;
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-transcript-repaired",
+    type: "transcript.repaired",
+    ts: "2026-07-23T11:00:03Z",
+    payload: {
+      reason: "load",
+      repairs: [{
+        tool_use_id: "tool-1",
+        tool_name: "exec_command",
+        repair_message_id: "msg-tool-result",
+        provider_iteration: 0,
+        call_index: 0,
+        assistant_message_id: "msg-assistant",
+        execution_phase: "started",
+        recovery_code: "TOOL_OUTCOME_UNKNOWN",
+      }],
+    },
+  }).state;
+  state = projectLiveBrowserEvent(state, {
     id: "evt-hook-trace",
     type: "hook.trace",
     ts: "2026-07-23T11:00:04Z",

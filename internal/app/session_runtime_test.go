@@ -187,7 +187,7 @@ func TestReplaceSessionPublishesOnlyRestartRecoveredStatus(t *testing.T) {
 			Type:   toolevents.RunningType,
 			TurnID: "turn-new",
 			Payload: toolevents.RunningPayload{
-				Name: "exec_command", ToolUseID: "tool-new",
+				Name: "exec_command", ToolUseID: "tool-new", Iter: 0, CallIndex: 0, MessageID: "assistant-new",
 			},
 		},
 	} {

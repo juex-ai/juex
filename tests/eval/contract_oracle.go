@@ -189,7 +189,7 @@ func inspectEventArtifact(path string, doneToken string) eventContractSummary {
 		case "tool.completed":
 			name, _ := payload["name"].(string)
 			result, _ := payload["result"].(map[string]any)
-			content := fmt.Sprint(payload["content"])
+			content := terminalEventContent(payload)
 			summary.sawInstallProgress = summary.sawInstallProgress || strings.Contains(content, "INSTALL")
 			summary.sawInteractivePrompt = summary.sawInteractivePrompt || strings.Contains(content, "PROMPT approve install")
 			summary.sawDone = summary.sawDone || outputHasDoneToken(content, doneToken)
@@ -215,6 +215,16 @@ func inspectEventArtifact(path string, doneToken string) eventContractSummary {
 		}
 	}
 	return summary
+}
+
+func terminalEventContent(payload map[string]any) string {
+	if content, ok := payload["content"].(string); ok && content != "" {
+		return content
+	}
+	outcome, _ := payload["outcome"].(map[string]any)
+	block, _ := outcome["block"].(map[string]any)
+	content, _ := block["content"].(string)
+	return content
 }
 
 func outputHasDoneToken(output string, doneToken string) bool {

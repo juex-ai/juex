@@ -962,6 +962,61 @@ test("projectLiveSessionEvent projects hook.trace as weak messages", () => {
   assert.equal(state.messages.length, 1);
 });
 
+test("projectLiveSessionEvent refreshes the repaired durable transcript", () => {
+  const projection = createLiveSessionProjection();
+  projection.messages = [
+    {
+      role: "assistant",
+      turn_id: "turn-1",
+      pending: true,
+      blocks: [{
+        type: "tool_use",
+        tool_use_id: "tool-1",
+        tool_name: "exec_command",
+      }],
+    },
+    {
+      role: "user",
+      turn_id: "turn-1",
+      blocks: [{
+        type: "tool_result",
+        tool_use_id: "tool-1",
+        content: "TOOL_OUTCOME_UNKNOWN",
+        is_error: true,
+      }],
+    },
+    {
+      role: "user",
+      turn_id: "turn-2",
+      blocks: [{ type: "text", text: "keep the next live turn" }],
+    },
+  ];
+  const result = projectLiveSessionEvent(projection, {
+    id: "repair-1",
+    type: "transcript.repaired",
+    ts: "2026-06-15T00:00:00Z",
+    payload: {
+      reason: "load",
+      repairs: [{
+        tool_use_id: "tool-1",
+        tool_name: "exec_command",
+        repair_message_id: "message-result-1",
+        turn_id: "turn-1",
+        provider_iteration: 0,
+        call_index: 0,
+        assistant_message_id: "message-assistant-1",
+        execution_phase: "started",
+        recovery_code: "TOOL_OUTCOME_UNKNOWN",
+      }],
+    },
+  });
+
+  assert.deepEqual(result.effects, [
+    { type: "refresh", preserveLiveMessages: true },
+  ]);
+  assert.deepEqual(result.state.messages, [projection.messages[2]]);
+});
+
 function apply(state: LiveSessionProjection, event: BrowserEvent): LiveSessionProjection {
   return projectLiveSessionEvent(state, event).state;
 }

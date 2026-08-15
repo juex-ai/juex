@@ -10,9 +10,10 @@ import (
 type verboseToolState string
 
 const (
-	verboseToolRunning verboseToolState = "running"
-	verboseToolDone    verboseToolState = "done"
-	verboseToolFailed  verboseToolState = "failed"
+	verboseToolDeclared verboseToolState = "declared"
+	verboseToolRunning  verboseToolState = "running"
+	verboseToolDone     verboseToolState = "done"
+	verboseToolFailed   verboseToolState = "failed"
 )
 
 type verboseTool struct {
@@ -30,7 +31,7 @@ type verboseToolBatch struct {
 func newVerboseToolBatch(calls []toolevents.ToolCallPayload) *verboseToolBatch {
 	batch := &verboseToolBatch{byID: map[string]*verboseTool{}}
 	for _, call := range calls {
-		batch.upsert(call.ToolUseID, call.Name, verboseToolRunning)
+		batch.upsert(call.ToolUseID, call.Name, verboseToolDeclared)
 	}
 	return batch
 }
@@ -72,7 +73,7 @@ func (b *verboseToolBatch) matchNameless(name string) string {
 		if tool == nil || tool.Name != name {
 			continue
 		}
-		if tool.Status == verboseToolRunning {
+		if tool.Status == verboseToolRunning || tool.Status == verboseToolDeclared {
 			return id
 		}
 	}
@@ -90,7 +91,7 @@ func (b *verboseToolBatch) status() verboseToolState {
 			continue
 		}
 		switch tool.Status {
-		case verboseToolRunning:
+		case verboseToolRunning, verboseToolDeclared:
 			return verboseToolRunning
 		case verboseToolFailed:
 			failed = true
@@ -100,6 +101,15 @@ func (b *verboseToolBatch) status() verboseToolState {
 		return verboseToolFailed
 	}
 	return verboseToolDone
+}
+
+func (vp *verbosePrinter) markToolDeclared(toolUseID, name string) {
+	if vp.toolBatch == nil {
+		vp.toolBatch = newVerboseToolBatch(nil)
+		vp.lastToolLineKey = ""
+	}
+	vp.toolBatch.upsert(toolUseID, name, verboseToolDeclared)
+	vp.renderToolBatch()
 }
 
 func (b *verboseToolBatch) summary() string {
@@ -174,6 +184,11 @@ func (vp *verbosePrinter) markToolFailed(toolUseID, name string) {
 	}
 	vp.toolBatch.upsert(toolUseID, name, verboseToolFailed)
 	vp.renderToolBatch()
+}
+
+func (vp *verbosePrinter) markToolOutcomeUnknown(toolUseID, name string) {
+	vp.markToolFailed(toolUseID, name)
+	vp.printlnRed(fmt.Sprintf("  outcome unknown: %s (%s)", name, toolUseID))
 }
 
 func (vp *verbosePrinter) renderToolBatch() {

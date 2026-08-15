@@ -291,12 +291,19 @@ func TestBrowserProjectionDropsLateTransientToolOutput(t *testing.T) {
 		ToolUseID: "tool-1",
 		Name:      "exec_command",
 		Input:     map[string]any{"cmd": "sleep 1; printf late"},
+		Iter:      0,
+		CallIndex: 0,
+		MessageID: "assistant-1",
 	}
+	completed := toolevents.Completed(tool, 30, 7, "started", map[string]any{"running": true})
+	completed.Outcome = &toolevents.RecordedOutcome{MessageID: "result-1", Block: llm.Block{
+		Type: llm.BlockToolResult, ToolUseID: "tool-1", ToolName: "exec_command", Content: "started",
+	}}
 	journalEvents := []events.Event{
 		{ID: "evt-admitted", Type: juexruntime.TurnAdmittedType, TurnID: "turn-1", Payload: juexruntime.TurnAdmittedPayload{}},
 		{ID: "evt-requested", Type: toolevents.RequestedType, TurnID: "turn-1", Payload: toolevents.Requested(tool)},
 		{ID: "evt-delta", Type: toolevents.OutputDeltaType, TurnID: "turn-1", Transient: true, Payload: toolevents.Delta(tool, toolevents.OutputDelta{Text: "started"})},
-		{ID: "evt-completed", Type: toolevents.CompletedType, TurnID: "turn-1", Payload: toolevents.Completed(tool, 30, 7, "started", map[string]any{"running": true})},
+		{ID: "evt-completed", Type: toolevents.CompletedType, TurnID: "turn-1", Payload: completed},
 		{ID: "evt-late-active", Type: toolevents.OutputDeltaType, TurnID: "turn-1", Transient: true, Payload: toolevents.Delta(tool, toolevents.OutputDelta{Text: "late while turn active"})},
 		{ID: "evt-turn-completed", Type: "turn.completed", TurnID: "turn-1", Payload: juexruntime.TurnCompletedPayload{}},
 		{ID: "evt-late-terminal", Type: toolevents.OutputDeltaType, TurnID: "turn-1", Transient: true, Payload: toolevents.Delta(tool, toolevents.OutputDelta{Text: "late after turn completed"})},
@@ -541,6 +548,9 @@ func browserEventFixtureEvents() []events.Event {
 				Name:           "exec_command",
 				ToolUseID:      "tool-1",
 				TimeoutSeconds: 30,
+				Iter:           0,
+				CallIndex:      0,
+				MessageID:      "msg-assistant-1",
 			},
 		},
 		{
@@ -602,6 +612,9 @@ func browserEventFixtureEvents() []events.Event {
 				Input:          map[string]any{"cmd": "printf hi"},
 				ToolUseID:      "tool-1",
 				TimeoutSeconds: 30,
+				Iter:           0,
+				CallIndex:      0,
+				MessageID:      "msg-assistant-1",
 			},
 		},
 		{
@@ -618,6 +631,9 @@ func browserEventFixtureEvents() []events.Event {
 				Stream:    "stdout",
 				Text:      "hi\n",
 				Truncated: true,
+				Iter:      0,
+				CallIndex: 0,
+				MessageID: "msg-assistant-1",
 			},
 		},
 		{
@@ -632,6 +648,12 @@ func browserEventFixtureEvents() []events.Event {
 				Len:            3,
 				Preview:        "hi\n",
 				Result:         map[string]any{"exit_code": 0},
+				Iter:           0,
+				CallIndex:      0,
+				MessageID:      "msg-assistant-1",
+				Outcome: &toolevents.RecordedOutcome{MessageID: "msg-tool-result-1", Block: llm.Block{
+					Type: llm.BlockToolResult, ToolUseID: "tool-1", ToolName: "exec_command", Content: "hi\n",
+				}},
 			},
 		},
 		{

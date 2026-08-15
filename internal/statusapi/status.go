@@ -45,29 +45,31 @@ const (
 type ToolCallState string
 
 const (
-	ToolCallRequested ToolCallState = "requested"
-	ToolCallRunning   ToolCallState = "running"
-	ToolCallStreaming ToolCallState = "streaming"
-	ToolCallCompleted ToolCallState = "completed"
-	ToolCallErrored   ToolCallState = "errored"
+	ToolCallRequested      ToolCallState = "requested"
+	ToolCallRunning        ToolCallState = "running"
+	ToolCallStreaming      ToolCallState = "streaming"
+	ToolCallCompleted      ToolCallState = "completed"
+	ToolCallErrored        ToolCallState = "errored"
+	ToolCallOutcomeUnknown ToolCallState = "outcome_unknown"
 )
 
 type StatusErrorKind string
 
 const (
-	StatusErrorError            StatusErrorKind = "error"
-	StatusErrorTimeout          StatusErrorKind = "timeout"
-	StatusErrorCancelled        StatusErrorKind = "cancelled"
-	StatusErrorInterrupted      StatusErrorKind = "interrupted"
-	StatusErrorTerminated       StatusErrorKind = "terminated"
-	StatusErrorPermission       StatusErrorKind = "permission"
-	StatusErrorAuth             StatusErrorKind = "auth"
-	StatusErrorConnectivity     StatusErrorKind = "connectivity"
-	StatusErrorWrongEndpoint    StatusErrorKind = "wrong_endpoint"
-	StatusErrorRetryable        StatusErrorKind = "retryable"
-	StatusErrorPendingInputFull StatusErrorKind = "pending_input_full"
-	StatusErrorCompaction       StatusErrorKind = "compaction"
-	StatusErrorRuntimeRestart   StatusErrorKind = "runtime_restart"
+	StatusErrorError              StatusErrorKind = "error"
+	StatusErrorTimeout            StatusErrorKind = "timeout"
+	StatusErrorCancelled          StatusErrorKind = "cancelled"
+	StatusErrorInterrupted        StatusErrorKind = "interrupted"
+	StatusErrorTerminated         StatusErrorKind = "terminated"
+	StatusErrorPermission         StatusErrorKind = "permission"
+	StatusErrorAuth               StatusErrorKind = "auth"
+	StatusErrorConnectivity       StatusErrorKind = "connectivity"
+	StatusErrorWrongEndpoint      StatusErrorKind = "wrong_endpoint"
+	StatusErrorRetryable          StatusErrorKind = "retryable"
+	StatusErrorPendingInputFull   StatusErrorKind = "pending_input_full"
+	StatusErrorCompaction         StatusErrorKind = "compaction"
+	StatusErrorRuntimeRestart     StatusErrorKind = "runtime_restart"
+	StatusErrorToolOutcomeUnknown StatusErrorKind = "tool_outcome_unknown"
 )
 
 type Usage struct {
