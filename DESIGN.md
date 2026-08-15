@@ -421,7 +421,7 @@ system prompt uses a semantic table for label, source, path, and approximate
 token count; each row expands to the full text. The provider profile follows,
 including protocol, model, base URL, and capability gates. `Tools` follows
 Provider and precedes MCP. It keeps the fixed `file`, `chunked_write`, `shell`,
-`search`, `skill`, `memory`, `session_state`, and `observable` groups in
+`search`, `skill`, `session_state`, and `observable` groups in
 two-level semantic tables: a group row exposes its count and tool-name preview,
 then each tool row expands to its description, semantic timeout, top-level
 parameter table, and a separately disclosed raw JSON schema. A bounded timeout
