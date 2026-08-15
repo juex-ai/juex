@@ -33,6 +33,12 @@ func ReadEventsWithCatalog(dir string, catalog events.SchemaCatalog) ([]events.E
 // complete record and are ignored.
 func ReadLatestCommittedEventID(dir string) (string, error) {
 	path := filepath.Join(dir, eventsFile)
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
 	guard, err := acquireEventJournalLock(dir)
 	if err != nil {
 		return "", err

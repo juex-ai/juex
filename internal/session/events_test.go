@@ -189,7 +189,7 @@ func TestReadEventsMissingJournal(t *testing.T) {
 }
 
 func TestReadLatestCommittedEventID(t *testing.T) {
-	dir := t.TempDir()
+	dir := newEventSessionDir(t, "latest")
 	want := []events.Event{
 		{ID: "evt-first", Type: "turn.started", TurnID: "turn-1"},
 		{ID: "evt-latest", Type: "turn.completed", TurnID: "turn-1"},
@@ -221,7 +221,7 @@ func TestReadLatestCommittedEventIDMissingOrEmptyJournal(t *testing.T) {
 		}},
 	} {
 		t.Run(setup.name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := newEventSessionDir(t, setup.name)
 			setup.run(t, dir)
 			got, err := ReadLatestCommittedEventID(dir)
 			if err != nil {
@@ -230,12 +230,17 @@ func TestReadLatestCommittedEventIDMissingOrEmptyJournal(t *testing.T) {
 			if got != "" {
 				t.Fatalf("ReadLatestCommittedEventID() = %q, want empty", got)
 			}
+			if setup.name == "missing" {
+				if _, err := os.Stat(sessionLockGuardPath(dir)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("missing journal guard stat error = %v, want not exist", err)
+				}
+			}
 		})
 	}
 }
 
 func TestReadLatestCommittedEventIDIgnoresTornTailWithoutRepairingJournal(t *testing.T) {
-	dir := t.TempDir()
+	dir := newEventSessionDir(t, "torn-tail")
 	path := filepath.Join(dir, eventsFile)
 	committed := eventJournalBytes(t, filepath.Base(dir), []events.Event{{
 		ID: "evt-committed", Type: "turn.started", TurnID: "turn-1",
@@ -262,7 +267,7 @@ func TestReadLatestCommittedEventIDIgnoresTornTailWithoutRepairingJournal(t *tes
 }
 
 func TestReadLatestCommittedEventIDRejectsMalformedCompleteTail(t *testing.T) {
-	dir := t.TempDir()
+	dir := newEventSessionDir(t, "malformed-tail")
 	path := filepath.Join(dir, eventsFile)
 	committed := eventJournalBytes(t, filepath.Base(dir), []events.Event{{
 		ID: "evt-committed", Type: "turn.started", TurnID: "turn-1",
@@ -279,7 +284,7 @@ func TestReadLatestCommittedEventIDRejectsMalformedCompleteTail(t *testing.T) {
 func TestReadLatestCommittedEventIDRejectsCompleteEmptyRecord(t *testing.T) {
 	for _, suffix := range []string{"\n", "\r\n"} {
 		t.Run(fmt.Sprintf("suffix_%q", suffix), func(t *testing.T) {
-			dir := t.TempDir()
+			dir := newEventSessionDir(t, "empty-record")
 			committed := eventJournalBytes(t, filepath.Base(dir), []events.Event{{
 				ID: "evt-committed", Type: "turn.started", TurnID: "turn-1",
 			}})
@@ -294,7 +299,7 @@ func TestReadLatestCommittedEventIDRejectsCompleteEmptyRecord(t *testing.T) {
 }
 
 func TestReadLatestCommittedEventIDWaitsForEventSync(t *testing.T) {
-	sess, err := New(t.TempDir())
+	sess, err := New(filepath.Join(t.TempDir(), "agent", "sessions"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,11 +351,7 @@ func TestReadLatestCommittedEventIDWaitsForEventSync(t *testing.T) {
 }
 
 func TestReadLatestCommittedEventIDDoesNotRecreateDeletedSession(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "20260815T120000-delete-race")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := newEventSessionDir(t, "delete-race")
 	if err := os.WriteFile(filepath.Join(dir, eventsFile), eventJournalBytes(t, filepath.Base(dir), []events.Event{{
 		ID: "evt-before-delete", Type: "turn.started", TurnID: "turn-1",
 	}}), 0o600); err != nil {
@@ -358,9 +359,6 @@ func TestReadLatestCommittedEventIDDoesNotRecreateDeletedSession(t *testing.T) {
 	}
 	deleteLock, err := AcquireSessionDeleteLock(dir, "delete")
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}
 
@@ -378,6 +376,9 @@ func TestReadLatestCommittedEventIDDoesNotRecreateDeletedSession(t *testing.T) {
 		t.Fatalf("cursor read completed before delete lock released: %+v", got)
 	case <-time.After(50 * time.Millisecond):
 	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
 	if err := deleteLock.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -391,6 +392,15 @@ func TestReadLatestCommittedEventIDDoesNotRecreateDeletedSession(t *testing.T) {
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("deleted Session directory stat error = %v, want not exist", err)
 	}
+}
+
+func newEventSessionDir(t *testing.T, id string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "agent", "sessions", id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func TestReadEventsAcceptsWorstCaseEscapedTerminalContent(t *testing.T) {
