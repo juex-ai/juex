@@ -168,7 +168,7 @@ func TestToolExecutionRecoveryPreservesProviderOrderForMixedBatch(t *testing.T) 
 		t.Fatal(err)
 	}
 	appendExecutionEvent(t, sess, events.Event{Type: "llm.responded", TurnID: "turn-batch", Payload: runtime.LLMRespondedPayload{
-		Iter: 4, MessageID: assistant.ID, Blocks: assistant.Blocks, ToolCalls: []toolevents.ToolCallPayload{
+		Iter: 4, MessageID: assistant.ID, EpochID: "epoch-batch", RequestDigest: strings.Repeat("a", 64), Blocks: assistant.Blocks, ToolCalls: []toolevents.ToolCallPayload{
 			{Name: "exec_command", ToolUseID: "shell", Iter: 4, CallIndex: 0, MessageID: assistant.ID},
 			{Name: "write", ToolUseID: "write", Iter: 4, CallIndex: 1, MessageID: assistant.ID},
 			{Name: "mcp__remote__send", ToolUseID: "remote", Iter: 4, CallIndex: 2, MessageID: assistant.ID},
@@ -259,7 +259,7 @@ func TestToolExecutionRecoveryDoesNotReclassifyNormalRecordedOutcomeAsRepair(t *
 
 func declaredResponseEvent(assistant llm.Message) events.Event {
 	return events.Event{Type: "llm.responded", TurnID: "turn-1", Payload: runtime.LLMRespondedPayload{
-		Iter: 2, MessageID: assistant.ID, Blocks: assistant.Blocks,
+		Iter: 2, MessageID: assistant.ID, EpochID: "epoch-1", RequestDigest: strings.Repeat("a", 64), Blocks: assistant.Blocks,
 		ToolCalls: []toolevents.ToolCallPayload{{
 			Name: "mcp__remote__send", ToolUseID: "call-1", Iter: 2, MessageID: assistant.ID,
 		}},
@@ -268,7 +268,7 @@ func declaredResponseEvent(assistant llm.Message) events.Event {
 
 func declaredResponseEventForCall(assistant llm.Message, call toolevents.ToolCallPayload) events.Event {
 	return events.Event{Type: "llm.responded", TurnID: "turn-1", Payload: runtime.LLMRespondedPayload{
-		MessageID: assistant.ID, Blocks: assistant.Blocks, ToolCalls: []toolevents.ToolCallPayload{call},
+		Iter: call.Iter, MessageID: assistant.ID, EpochID: "epoch-1", RequestDigest: strings.Repeat("a", 64), Blocks: assistant.Blocks, ToolCalls: []toolevents.ToolCallPayload{call},
 	}}
 }
 

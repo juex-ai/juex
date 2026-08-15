@@ -7,6 +7,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/observable"
+	"github.com/juex-ai/juex/internal/provenance"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
@@ -43,10 +44,12 @@ func builtinDefinitions() []Definition {
 		required(juexruntime.TurnPhaseType, func() any { return &juexruntime.TurnPhasePayload{} }, true),
 		required("turn.completed", func() any { return &juexruntime.TurnCompletedPayload{} }, true),
 		required("turn.errored", func() any { return &juexruntime.TurnErroredPayload{} }, true),
-		required("llm.requested", func() any { return &juexruntime.LLMRequestedPayload{} }, true),
-		requiredValidated("llm.responded", 2, func() any { return &juexruntime.LLMRespondedPayload{} }, true, validateLLMRespondedPayload),
+		requiredValidated("llm.requested", 2, func() any { return &juexruntime.LLMRequestedPayload{} }, true, validateLLMRequestedPayload),
+		requiredValidated("llm.responded", 3, func() any { return &juexruntime.LLMRespondedPayload{} }, true, validateLLMRespondedPayload),
+		requiredValidated(provenance.RequestEpochType, 1, func() any { return &provenance.RequestEpochPayload{} }, true, validateRequestEpochPayload),
+		requiredValidated(provenance.HookContextQueuedType, 1, func() any { return &provenance.HookContextQueuedPayload{} }, false, validateHookContextQueuedPayload),
 		transient("llm.output_delta", func() any { return &juexruntime.LLMOutputDeltaPayload{} }),
-		required("llm.retry", func() any { return &juexruntime.LLMRetryPayload{} }, true),
+		requiredValidated("llm.retry", 2, func() any { return &juexruntime.LLMRetryPayload{} }, true, validateLLMRetryPayload),
 		required("llm.fallback", func() any { return &juexruntime.LLMFallbackPayload{} }, true),
 		requiredToolEvent(toolevents.RequestedType, func() any { return &toolevents.RequestedPayload{} }, validateRequestedPayload),
 		requiredToolEvent(toolevents.RunningType, func() any { return &toolevents.RunningPayload{} }, validateRunningPayload),
@@ -142,8 +145,8 @@ func validateLLMRespondedPayload(payload any) error {
 	if !ok {
 		return fmt.Errorf("unexpected llm responded payload %T", payload)
 	}
-	if value.MessageID == "" || value.Iter < 0 {
-		return fmt.Errorf("llm responded identity requires message_id and a non-negative iter")
+	if value.MessageID == "" || value.Iter < 0 || value.EpochID == "" || value.RequestDigest == "" {
+		return fmt.Errorf("llm responded identity requires message_id, epoch_id, request_digest, and a non-negative iter")
 	}
 	seen := make(map[string]struct{}, len(value.ToolCalls))
 	for index, call := range value.ToolCalls {
@@ -159,6 +162,44 @@ func validateLLMRespondedPayload(payload any) error {
 		seen[call.ToolUseID] = struct{}{}
 	}
 	return nil
+}
+
+func validateLLMRequestedPayload(payload any) error {
+	value, ok := payload.(juexruntime.LLMRequestedPayload)
+	if !ok {
+		return fmt.Errorf("unexpected llm requested payload %T", payload)
+	}
+	if value.Iter < 0 || value.EpochID == "" || value.RequestDigest == "" {
+		return fmt.Errorf("llm requested identity requires epoch_id, request_digest, and a non-negative iter")
+	}
+	return nil
+}
+
+func validateLLMRetryPayload(payload any) error {
+	value, ok := payload.(juexruntime.LLMRetryPayload)
+	if !ok {
+		return fmt.Errorf("unexpected llm retry payload %T", payload)
+	}
+	if value.Purpose == "turn" && (value.Iter == nil || value.EpochID == "" || value.RequestDigest == "") {
+		return fmt.Errorf("turn llm retry requires iter, epoch_id, and request_digest")
+	}
+	return nil
+}
+
+func validateRequestEpochPayload(payload any) error {
+	value, ok := payload.(provenance.RequestEpochPayload)
+	if !ok {
+		return fmt.Errorf("unexpected request epoch payload %T", payload)
+	}
+	return provenance.ValidateRequestEpoch(value)
+}
+
+func validateHookContextQueuedPayload(payload any) error {
+	value, ok := payload.(provenance.HookContextQueuedPayload)
+	if !ok {
+		return fmt.Errorf("unexpected hook context queued payload %T", payload)
+	}
+	return provenance.ValidateHookContextQueued(value)
 }
 
 func validateRunningPayload(payload any) error {

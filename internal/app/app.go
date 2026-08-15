@@ -35,6 +35,7 @@ import (
 	"github.com/juex-ai/juex/internal/observability"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/prompt"
+	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
@@ -264,6 +265,7 @@ func New(opts Options) (*App, error) {
 			modelCandidates = append(modelCandidates, runtime.ModelCandidate{
 				Ref:             resolved.Ref,
 				Provider:        candidateProvider,
+				Provenance:      provenance.SafeProviderFromProfile(profile),
 				ContextWindow:   resolved.ContextWindow,
 				MaxOutputTokens: resolved.MaxOutputTokens,
 			})

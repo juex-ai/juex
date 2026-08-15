@@ -24,6 +24,7 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
+	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
@@ -330,25 +331,6 @@ func TestRunSessionStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
 	}
 }
 
-func TestPendingHookRuntimeContextConsumesOnlySnapshottedMessages(t *testing.T) {
-	eng, _ := newEngine(t, &mockProvider{}, false)
-	eng.queueHookRuntimeContext([]hooks.Result{{
-		Hook:   hooks.CommandHook{Name: "first"},
-		Stdout: "first context",
-	}})
-	firstBatch := eng.pendingHookRuntimeContextSnapshot()
-	eng.queueHookRuntimeContext([]hooks.Result{{
-		Hook:   hooks.CommandHook{Name: "second"},
-		Stdout: "second context",
-	}})
-
-	eng.consumePendingHookRuntimeContext(len(firstBatch))
-	remaining := eng.pendingHookRuntimeContextSnapshot()
-	if len(remaining) != 1 || !strings.Contains(remaining[0].FirstText(), "second context") {
-		t.Fatalf("remaining hook context = %+v", remaining)
-	}
-}
-
 func TestRunSessionStartHooksUsesStderrFallbackForExitTwo(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
@@ -426,6 +408,138 @@ func TestTurn_DurableProviderRequestFailurePreventsProviderCall(t *testing.T) {
 	}
 	if prov.called != 0 {
 		t.Fatalf("provider calls = %d, want 0", prov.called)
+	}
+}
+
+func TestTurn_DurableRequestEpochFailurePreventsProviderCallAndHookConsumption(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("epoch sync failed")
+	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session, eventType: provenance.RequestEpochType, err: want})
+	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, want) {
+		t.Fatalf("Turn() error = %v, want %v", err, want)
+	}
+	if prov.called != 0 {
+		t.Fatalf("provider calls = %d, want 0", prov.called)
+	}
+	if pending := eng.pendingHookRuntimeContextSnapshot(); len(pending) != 1 || pending[0].ID == "" {
+		t.Fatalf("pending hook context = %+v", pending)
+	}
+	journal, err := session.ReadEvents(eng.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := provenance.Recover(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending := recovered.PendingHookContext(); len(pending) != 1 {
+		t.Fatalf("recovered hook context before epoch checkpoint = %+v", pending)
+	}
+}
+
+func TestTurn_RequestEpochCheckpointConsumesHookContextAndLinksResponse(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	var epoch provenance.RequestEpochPayload
+	var requested LLMRequestedPayload
+	var responded LLMRespondedPayload
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) { epoch = event.Payload.(provenance.RequestEpochPayload) })
+	bus.Subscribe("llm.requested", func(event events.Event) { requested = event.Payload.(LLMRequestedPayload) })
+	bus.Subscribe("llm.responded", func(event events.Event) { responded = event.Payload.(LLMRespondedPayload) })
+
+	if out, err := eng.Turn(context.Background(), "hello"); err != nil || out != "done" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	if epoch.Epoch.EpochID == "" || epoch.Epoch.RequestDigest == "" {
+		t.Fatalf("epoch = %+v", epoch)
+	}
+	if requested.EpochID != epoch.Epoch.EpochID || requested.RequestDigest != epoch.Epoch.RequestDigest {
+		t.Fatalf("requested = %+v, epoch = %+v", requested, epoch.Epoch)
+	}
+	if responded.EpochID != epoch.Epoch.EpochID || responded.RequestDigest != epoch.Epoch.RequestDigest {
+		t.Fatalf("responded = %+v, epoch = %+v", responded, epoch.Epoch)
+	}
+	if pending := eng.pendingHookRuntimeContextSnapshot(); len(pending) != 0 {
+		t.Fatalf("hook context after checkpoint = %+v", pending)
+	}
+}
+
+func TestTurn_FailedProviderDoesNotReplayCheckpointedHookContext(t *testing.T) {
+	eng, _ := newEngine(t, errorProvider{}, false)
+	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Turn(context.Background(), "hello"); err == nil {
+		t.Fatal("Turn() error = nil")
+	}
+	if pending := eng.pendingHookRuntimeContextSnapshot(); len(pending) != 0 {
+		t.Fatalf("hook context after provider attempt = %+v", pending)
+	}
+}
+
+func TestTurn_DispatchCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn}}}
+	eng, bus := newEngine(t, prov, false)
+	if err := eng.queueHookRuntimeContext([]hooks.Result{{Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context"}}); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("dispatch sync failed")
+	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session, eventType: "llm.requested", err: want})
+	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, want) {
+		t.Fatalf("Turn() error = %v, want %v", err, want)
+	}
+	if prov.called != 0 {
+		t.Fatalf("provider calls = %d, want 0", prov.called)
+	}
+	assertRecoveredHookContextCount(t, eng.Session, 0)
+}
+
+func TestTurn_ResponseCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "returned"), StopReason: llm.StopEndTurn}}}
+	eng, bus := newEngine(t, prov, false)
+	if err := eng.queueHookRuntimeContext([]hooks.Result{{Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context"}}); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("response sync failed")
+	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session, eventType: "llm.responded", err: want})
+	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, want) {
+		t.Fatalf("Turn() error = %v, want %v", err, want)
+	}
+	if prov.called != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.called)
+	}
+	assertRecoveredHookContextCount(t, eng.Session, 0)
+}
+
+func assertRecoveredHookContextCount(t *testing.T, sess *session.Session, want int) {
+	t.Helper()
+	journal, err := session.ReadEvents(sess.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := provenance.Recover(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending := recovered.PendingHookContext(); len(pending) != want {
+		t.Fatalf("recovered hook context = %+v, want %d", pending, want)
 	}
 }
 
@@ -706,6 +820,25 @@ func (c selectiveFailCommitter) Commit(event events.Event) (events.Event, error)
 		return events.Event{}, c.err
 	}
 	return events.Normalize(event), nil
+}
+
+type selectiveSessionCommitter struct {
+	session   *session.Session
+	eventType string
+	err       error
+}
+
+func (c selectiveSessionCommitter) Commit(event events.Event) (events.Event, error) {
+	event = events.Normalize(event)
+	if event.Type == c.eventType {
+		return events.Event{}, c.err
+	}
+	if !event.Transient {
+		if err := c.session.AppendEvent(event); err != nil {
+			return events.Event{}, err
+		}
+	}
+	return event, nil
 }
 
 func TestTurn_ReturnsImagePlaceholderForImageOnlyResponse(t *testing.T) {
@@ -3979,8 +4112,8 @@ func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
 	if !strings.Contains(continuedHistory, "continue after failure") {
 		t.Fatalf("continued provider history missing pending input:\n%s", continuedHistory)
 	}
-	if !strings.Contains(continuedHistory, "preserve retry context") {
-		t.Fatalf("continued provider history missing hook context:\n%s", continuedHistory)
+	if strings.Contains(continuedHistory, "preserve retry context") {
+		t.Fatalf("continued provider history repeated checkpointed hook context:\n%s", continuedHistory)
 	}
 	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
 		t.Fatalf("hook context remaining after successful provider request = %+v", remaining)
@@ -5177,6 +5310,9 @@ func TestTurn_EmitsLLMRetryDiagnostics(t *testing.T) {
 	}
 	if event.Purpose != "turn" || event.Iter == nil || *event.Iter != 0 {
 		t.Fatalf("retry runtime context = %+v, want purpose turn iter 0", event)
+	}
+	if event.EpochID == "" || event.RequestDigest == "" {
+		t.Fatalf("retry provenance = %+v", event)
 	}
 }
 

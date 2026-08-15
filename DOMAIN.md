@@ -58,6 +58,7 @@ domain boundary.
 | --- | --- |
 | Provider | A model service adapter that exchanges Juex's canonical messages, Tool definitions, usage, and stop reasons with an external model service. |
 | Provider Profile | The resolved Provider identity, model, Protocol, endpoint and credential inputs, compatibility options, and Capability Set used for a request. |
+| Request Epoch | A durable, secret-safe identity for one effective Provider request envelope. It records safe Provider settings, bounded system/tool snapshots or digests, ordered message IDs and content digests, compaction selection, and one-shot hook context without duplicating the transcript or wire request. |
 | Protocol | A Provider wire contract, such as Anthropic Messages, OpenAI Responses, OpenAI Codex Responses, or OpenAI-compatible Chat. |
 | Capability Set | Explicit gates describing which optional behaviors a Provider Profile supports, including tools, vision, streaming, reasoning controls/replay, and output-token control. |
 | Tool | A named, schema-described operation available to the model. Builtin, skill, memory, Observable, model-state, and MCP tools share one runtime catalog and result contract. |
@@ -247,6 +248,9 @@ domain boundary.
     use stable Turn and Provider-iteration identity. A terminal Tool Event
     commits the exact Provider-visible outcome before transcript continuation;
     started-without-outcome remains explicitly uncertain after restart.
+    `provider.request_epoch` is the durable checkpoint that consumes included
+    one-shot hook context; `llm.requested` then declares dispatch and
+    `llm.responded` links the persisted response to that epoch.
 13. **Observable definition and state are separate.** Project definitions
     follow the Workspace and read-only Extension definitions follow the selected
     Extension; generated runs, Observations, delivery records, and schedule

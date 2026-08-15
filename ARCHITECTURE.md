@@ -202,6 +202,7 @@ implementation decisions live.
 | `internal/environment` | Portable environment-name validation, deterministic dotenv parsing, immutable effective snapshots, low-priority child-runtime defaults, child overlays, value-free metadata, controlled single-workspace activation | Config-file discovery, Extension discovery, subprocess ownership, runtime policy, diagnostic presentation |
 | `internal/providerreadiness` | Provider selection, credential, construction, and connectivity readiness checks | Provider Protocol semantics, runtime fallback, CLI presentation |
 | `internal/llm` | Canonical messages and blocks, Provider interfaces/profiles, Protocol and Capability resolution, wire/SDK adapters, provider transport/API/stream retry, model health | Model-chain fallback, Session lifecycle, Tool execution, CLI/HTTP DTOs |
+| `internal/provenance` | Request Epoch schema, canonical digests, safe Provider descriptors, bounded snapshot deduplication, and hook-context replay reduction | Provider call timing, complete Provider profiles or credentials, transcript/Event storage, UI projection |
 | `internal/runtime` | Turn lifecycle, Provider-iteration and Tool Call ordering, pending-input queue, model-chain fallback and Turn-level retry, active context, compaction, context projection, runtime fact emission | Provider SDK and transport retry, Session discovery, MCP process lifecycle, transport parsing |
 | `internal/session` | Session identity and kind, transcript/Event persistence, metadata and history index, active metadata, usage snapshots, scratchpad path, single-writer locks | Prompt assembly, Provider calls, Tool dispatch, Session attachment orchestration |
 | `internal/cancellation` | Typed user, signal, and runtime-restart cancellation causes plus signal-aware contexts | Transport Stop admission, Turn reaction policy, user-facing status DTOs |
@@ -836,6 +837,7 @@ use, but their envelope must explicitly declare a positive schema version and
 required-or-ignorable replay policy.
 
 Standard cataloged families include `turn.started/completed/errored`,
+`provider.request_epoch`, `provider.hook_context.queued`,
 `llm.requested/output_delta/responded`,
 `tool.requested/running/output_delta/completed/errored/outcome_unknown`,
 `transcript.repaired`, `pending_input.*`, `context.compact.*`, and
@@ -846,6 +848,17 @@ The Bus remains open and never becomes a closed union of plugin and built-in
 Events. BrowserEvent is a separate transport projection DTO: the Catalog
 selects browser-visible stable facts and supplies their normalized payload,
 while Web owns status attachment and SSE framing.
+
+`provider.hook_context.queued` durably records an ordered, bounded batch before
+it enters provider-visible memory. `provider.request_epoch` records the final
+projected message IDs and content digests, compaction marker, safe Provider
+descriptor, and bounded system/tool snapshots or digest references. Committing
+the epoch consumes its included one-shot hook-context IDs; replay reduces
+queued batches minus committed epoch consumption. `llm.requested` declares
+dispatch after that checkpoint, while `llm.responded` and turn-scoped
+`llm.retry` carry the same epoch ID and reconstructed request digest. Provider
+credentials, arbitrary headers/query values, and raw wire requests never enter
+the epoch schema.
 
 `llm.output_delta` and `tool.output_delta` are cataloged live-only signals and
 are not appended to the session journal or logs. CLI and browser

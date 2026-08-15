@@ -6,6 +6,7 @@
   "turn.errored",
   "llm.requested",
   "llm.responded",
+  "provider.request_epoch",
   "llm.output_delta",
   "llm.retry",
   "llm.fallback",

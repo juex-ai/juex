@@ -2,11 +2,13 @@ package runtime
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/prompt"
+	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
 )
@@ -48,10 +50,23 @@ func (e *Engine) ReplaceSessionRuntime(sess *session.Session) error {
 	if e.activeTurnID != "" || len(e.pendingInput) > 0 {
 		return ErrSessionRuntimeBusy
 	}
+	journal, err := session.ReadEvents(sess.Dir)
+	if err != nil {
+		return fmt.Errorf("runtime: read provider provenance: %w", err)
+	}
+	tracker, err := provenance.Recover(journal)
+	if err != nil {
+		return fmt.Errorf("runtime: recover provider provenance: %w", err)
+	}
 
 	current := e.sessionRuntimeStateLocked()
 	next := buildSessionRuntimeState(current, sess)
 	e.publishSessionRuntimeLocked(next)
+	pendingHookContext := tracker.PendingHookContext()
+	e.hookRuntimeContextMu.Lock()
+	e.provenanceTracker = tracker
+	e.pendingHookRuntimeContext = pendingHookContext
+	e.hookRuntimeContextMu.Unlock()
 	return nil
 }
 

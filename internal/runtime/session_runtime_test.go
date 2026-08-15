@@ -1,13 +1,17 @@
 package runtime
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
+	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -81,6 +85,57 @@ func TestReplaceSessionRuntimeRejectsBusyRuntimeAtomically(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("pending records after rejected replacement = %+v, want one", records)
 	}
+}
+
+func TestReplaceSessionRuntimeRecoversUnconsumedHookContext(t *testing.T) {
+	root := t.TempDir()
+	sess := newSessionRuntimeTestSession(t, root)
+	first := provenanceRuntimeContextMessage("hook-1", "consumed")
+	second := provenanceRuntimeContextMessage("hook-2", "pending")
+	for _, event := range []events.Event{
+		{Type: provenance.HookContextQueuedType, SchemaVersion: 1, ReplayPolicy: events.ReplayRequired, Payload: provenance.HookContextQueuedPayload{Messages: []llm.Message{first}}},
+		{Type: provenance.RequestEpochType, SchemaVersion: 1, ReplayPolicy: events.ReplayRequired, Payload: provenance.RequestEpochPayload{Epoch: validRecoveryEpoch(t, first.ID)}},
+		{Type: provenance.HookContextQueuedType, SchemaVersion: 1, ReplayPolicy: events.ReplayRequired, Payload: provenance.HookContextQueuedPayload{Messages: []llm.Message{second}}},
+	} {
+		if err := sess.AppendEvent(events.Normalize(event)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	engine := &Engine{Session: sess, Prompt: &prompt.Builder{ScratchpadDir: sess.ScratchpadDir()}}
+	if err := engine.ReplaceSessionRuntime(sess); err != nil {
+		t.Fatal(err)
+	}
+	pending := engine.pendingHookRuntimeContextSnapshot()
+	if len(pending) != 1 || pending[0].ID != second.ID {
+		t.Fatalf("recovered hook context = %+v", pending)
+	}
+}
+
+func provenanceRuntimeContextMessage(id, text string) llm.Message {
+	message := llm.TextMessage(llm.RoleUser, text)
+	message.ID = id
+	message.Kind = llm.MessageKindRuntimeContext
+	return message
+}
+
+func validRecoveryEpoch(t *testing.T, hookID string) provenance.RequestEpoch {
+	t.Helper()
+	epoch, err := provenance.BuildRequestEpoch(provenance.RequestInput{
+		Provider: provenance.SafeProvider{ID: "test", Model: "model"},
+		History: []llm.Message{
+			provenanceRuntimeContextMessage("user-1", "hello"),
+			provenanceRuntimeContextMessage(hookID, "consumed"),
+		},
+		HookContextMessageIDs: []string{hookID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch.EpochID = "epoch-1"
+	if _, err := json.Marshal(epoch); err != nil {
+		t.Fatal(err)
+	}
+	return epoch
 }
 
 func newSessionRuntimeTestSession(t *testing.T, root string) *session.Session {
