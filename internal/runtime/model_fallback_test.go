@@ -28,6 +28,7 @@ func TestTurnMultiLevelFallbackUsesRealTransitionsAndFinalServingNotice(t *testi
 		StopReason: llm.StopEndTurn,
 	}}}}
 	eng, bus := newEngine(t, primary, false)
+	eng.NotifyModelChanges = true
 	eng.ModelCandidates = []ModelCandidate{
 		{Ref: "a:model", Provider: primary, ContextWindow: 128000},
 		{Ref: "b:model", Provider: middle, ContextWindow: 128000},
@@ -112,6 +113,7 @@ func TestTurnRecoversHigherPriorityModelWithPersistedNotice(t *testing.T) {
 	}}}}
 	backup := &fallbackProvider{name: "backup:model"}
 	eng, _ := newEngine(t, primary, false)
+	eng.NotifyModelChanges = true
 	eng.ModelCandidates = []ModelCandidate{
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
@@ -136,6 +138,52 @@ func TestTurnRecoversHigherPriorityModelWithPersistedNotice(t *testing.T) {
 	}
 }
 
+func TestTurnRecoveryDoesNotNotifyModelChangesByDefault(t *testing.T) {
+	now := time.Unix(15_000, 0)
+	health := llm.NewModelHealth(llm.ModelHealthOptions{Now: func() time.Time { return now }})
+	refs := []string{"primary:model", "backup:model"}
+	failed, ok := health.Acquire(refs, nil)
+	if !ok {
+		t.Fatal("missing initial primary ticket")
+	}
+	health.Complete(failed.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	now = now.Add(30 * time.Second)
+
+	primary := &fallbackProvider{name: "primary:model", results: []fallbackProviderResult{{response: llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "primary restored"),
+		StopReason: llm.StopEndTurn,
+	}}}}
+	backup := &fallbackProvider{name: "backup:model"}
+	eng, _ := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
+	}
+	eng.ModelHealth = health
+	previous := llm.TextMessage(llm.RoleAssistant, "backup response")
+	previous.Model = "backup:model"
+	if err := eng.Session.Append(previous); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Turn(context.Background(), "try again"); err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range primary.histories[0] {
+		if message.Kind == llm.MessageKindModelChange {
+			t.Fatalf("provider-visible recovery notice = %+v", message)
+		}
+	}
+	for _, message := range eng.Session.History {
+		if message.Kind == llm.MessageKindModelChange {
+			t.Fatalf("persisted recovery notice = %+v", message)
+		}
+	}
+	if backup.calls != 0 || eng.Session.History[len(eng.Session.History)-1].Model != "primary:model" {
+		t.Fatalf("backup calls=%d tail=%+v", backup.calls, eng.Session.History[len(eng.Session.History)-1])
+	}
+}
+
 func TestTurnFailedRecoveryProbeDoesNotPersistFalseNotice(t *testing.T) {
 	now := time.Unix(20_000, 0)
 	health := llm.NewModelHealth(llm.ModelHealthOptions{Now: func() time.Time { return now }})
@@ -150,6 +198,7 @@ func TestTurnFailedRecoveryProbeDoesNotPersistFalseNotice(t *testing.T) {
 		StopReason: llm.StopEndTurn,
 	}}}}
 	eng, bus := newEngine(t, primary, false)
+	eng.NotifyModelChanges = true
 	eng.ModelCandidates = []ModelCandidate{
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
@@ -186,6 +235,7 @@ func TestTurnFallbackBatchFailureLeavesNoNoticeUsageOrRespondedEvent(t *testing.
 		Message: invalid, StopReason: llm.StopToolUse, Usage: llm.Usage{InputTokens: 10, OutputTokens: 2},
 	}}}}
 	eng, bus := newEngine(t, primary, false)
+	eng.NotifyModelChanges = true
 	eng.ModelCandidates = []ModelCandidate{
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
@@ -290,6 +340,7 @@ func TestTurnReportsBreakerSkipOnlyOnceWhileContinuingChain(t *testing.T) {
 		StopReason: llm.StopEndTurn,
 	}}}}
 	eng, bus := newEngine(t, a, false)
+	eng.NotifyModelChanges = true
 	eng.ModelCandidates = []ModelCandidate{
 		{Ref: "a:model", Provider: a, ContextWindow: 128000},
 		{Ref: "b:model", Provider: b, ContextWindow: 128000},
@@ -368,6 +419,7 @@ func TestTurnFallbackAfterToolResultDoesNotRerunTool(t *testing.T) {
 		StopReason: llm.StopEndTurn,
 	}}}}
 	eng, _ := newEngine(t, primary, false)
+	eng.NotifyModelChanges = true
 	eng.ModelCandidates = []ModelCandidate{
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
@@ -530,6 +582,7 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 		StopReason: llm.StopEndTurn,
 	}}}}
 	eng, bus := newEngine(t, primary, false)
+	eng.NotifyModelChanges = true
 	eng.ModelCandidates = []ModelCandidate{
 		{Ref: "primary:model", Provider: primary, ContextWindow: 128000, MaxOutputTokens: 4096},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 64000, MaxOutputTokens: 2048},
@@ -604,6 +657,49 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 	}
 	if len(fallbackEvents) != 1 || fallbackEvents[0].From != "primary:model" || fallbackEvents[0].To != "backup:model" || fallbackEvents[0].Reason != "transient" {
 		t.Fatalf("fallback events = %+v", fallbackEvents)
+	}
+}
+
+func TestTurnFallbackDoesNotNotifyModelChangesByDefault(t *testing.T) {
+	primary := &fallbackProvider{name: "primary:model", results: []fallbackProviderResult{{err: errors.New("status 503: unavailable")}}}
+	backup := &fallbackProvider{name: "backup:model", results: []fallbackProviderResult{{response: llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "served by backup"),
+		StopReason: llm.StopEndTurn,
+	}}}}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 64000},
+	}
+	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	previous := llm.TextMessage(llm.RoleAssistant, "primary response")
+	previous.Model = "primary:model"
+	if err := eng.Session.Append(previous); err != nil {
+		t.Fatal(err)
+	}
+	var fallbackEvents []LLMFallbackPayload
+	bus.Subscribe("llm.fallback", func(event events.Event) {
+		fallbackEvents = append(fallbackEvents, event.Payload.(LLMFallbackPayload))
+	})
+
+	if out, err := eng.Turn(context.Background(), "continue"); err != nil || out != "served by backup" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	for _, message := range backup.histories[0] {
+		if message.Kind == llm.MessageKindModelChange {
+			t.Fatalf("provider-visible fallback notice = %+v", message)
+		}
+	}
+	for _, message := range eng.Session.History {
+		if message.Kind == llm.MessageKindModelChange {
+			t.Fatalf("persisted fallback notice = %+v", message)
+		}
+	}
+	if len(fallbackEvents) != 1 || fallbackEvents[0].From != "primary:model" || fallbackEvents[0].To != "backup:model" {
+		t.Fatalf("fallback events = %+v", fallbackEvents)
+	}
+	if eng.Session.History[len(eng.Session.History)-1].Model != "backup:model" {
+		t.Fatalf("serving model attribution = %+v", eng.Session.History[len(eng.Session.History)-1])
 	}
 }
 

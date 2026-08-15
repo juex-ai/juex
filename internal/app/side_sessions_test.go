@@ -1049,6 +1049,25 @@ func TestManagedSideSessionSkipsSharedGoalCompletionGate(t *testing.T) {
 	}
 }
 
+func TestManagedSideSessionInheritsModelChangeNotificationPolicy(t *testing.T) {
+	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, &scriptedSideProvider{})
+	parent.cfg.NotifyModelChanges = true
+
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{
+		"query":     "inherit runtime policy",
+		"subscribe": false,
+	})
+	id := created["session_id"].(string)
+	_ = waitForSideState(t, parent, id, SideSessionStateIdle)
+
+	parent.sideSessions.mu.Lock()
+	managed := parent.sideSessions.sessions[id]
+	parent.sideSessions.mu.Unlock()
+	if managed == nil || managed.app == nil || !managed.app.Engine.NotifyModelChanges {
+		t.Fatalf("managed Side Session did not inherit notify_model_changes: %+v", managed)
+	}
+}
+
 func TestPrimaryGoalContinuationDefersDuringSubscribedResultHandoff(t *testing.T) {
 	primaryProvider := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
 	parent := newSideSessionTestApp(t, primaryProvider, &scriptedSideProvider{})

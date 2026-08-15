@@ -298,6 +298,7 @@ type RuntimeLimits struct {
 	ExternalEventTTL      time.Duration
 	ToolTimeout           time.Duration
 	ShowBuiltinHookTraces bool
+	NotifyModelChanges    bool
 }
 
 func (c Config) RuntimeLimits() RuntimeLimits {
@@ -310,6 +311,7 @@ func (c Config) RuntimeLimits() RuntimeLimits {
 		ExternalEventTTL:      c.ExternalEventTTL,
 		ToolTimeout:           c.ToolTimeout,
 		ShowBuiltinHookTraces: c.ShowBuiltinHookTraces,
+		NotifyModelChanges:    c.NotifyModelChanges,
 	}
 }
 

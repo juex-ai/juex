@@ -1858,6 +1858,9 @@ func TestRuntimeLimits_ResolvedValues(t *testing.T) {
 	if limits.ToolOutput != cfg.ToolOutput {
 		t.Fatalf("tool output = %+v, want %+v", limits.ToolOutput, cfg.ToolOutput)
 	}
+	if limits.NotifyModelChanges {
+		t.Fatalf("model change notifications enabled by default: %+v", limits)
+	}
 }
 
 func TestLoadFromFile_ThinkingEffort(t *testing.T) {
@@ -2241,6 +2244,7 @@ runtime:
   tool_timeout: 2m
   max_output_tokens: 8192
   show_builtin_hook_traces: true
+  notify_model_changes: true
 `
 	writeTextFile(t, configPath, body)
 
@@ -2257,6 +2261,53 @@ runtime:
 	}
 	if !limits.ShowBuiltinHookTraces {
 		t.Fatalf("builtin hook traces should be enabled: %+v", limits)
+	}
+	if !limits.NotifyModelChanges {
+		t.Fatalf("model change notifications should be enabled: %+v", limits)
+	}
+}
+
+func TestLoadFromFile_ModelChangeNotificationsLayeredOverride(t *testing.T) {
+	home := prepareConfigTest(t)
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), `model: openai:gpt-4
+providers:
+  - id: openai
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  notify_model_changes: true
+`)
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), `runtime:
+  notify_model_changes: false
+`)
+
+	cfg, err := LoadForWorkDir(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RuntimeLimits().NotifyModelChanges {
+		t.Fatalf("workspace false did not override Home true: %+v", cfg.RuntimeLimits())
+	}
+}
+
+func TestLoadFromFile_InvalidModelChangeNotification(t *testing.T) {
+	prepareConfigTest(t)
+	configPath := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, configPath, `model: openai:gpt-4
+providers:
+  - id: openai
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  notify_model_changes: sometimes
+`)
+
+	_, err := LoadFromFile(configPath)
+	if err == nil || !strings.Contains(err.Error(), "runtime.notify_model_changes") {
+		t.Fatalf("err = %v, want runtime.notify_model_changes parse error", err)
 	}
 }
 

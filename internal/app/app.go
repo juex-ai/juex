@@ -468,6 +468,7 @@ func New(opts Options) (*App, error) {
 		ExternalEventTTL:      externalEventTTL,
 		GoalState:             goalStateStore(sess),
 		ShowBuiltinHookTraces: runtimeLimits.ShowBuiltinHookTraces,
+		NotifyModelChanges:    runtimeLimits.NotifyModelChanges,
 		ContextWindow:         runtimeLimits.ContextWindow,
 		MaxOutputTokens:       runtimeLimits.MaxOutputTokens,
 		Compaction:            runtimeLimits.Compaction,
