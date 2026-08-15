@@ -12,7 +12,6 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/memory"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/prompt"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
@@ -333,7 +332,17 @@ func (s RuntimeCatalogService) toolsStatus() (RuntimeToolsStatus, error) {
 		Shell: toolsShellProfile(s.cfg.Shell),
 	})
 	definitions = append(definitions, skillToolDefinitions()...)
-	definitions = append(definitions, memory.ToolDefinitions()...)
+	moduleRegistry, err := newRuntimeModuleRegistry(s.cfg)
+	if err != nil {
+		return RuntimeToolsStatus{}, err
+	}
+	moduleTools := tools.NewRegistry()
+	if err := moduleRegistry.RegisterTools(moduleTools); err != nil {
+		return RuntimeToolsStatus{}, err
+	}
+	for _, tool := range moduleTools.List() {
+		definitions = append(definitions, tool.Definition())
+	}
 	definitions = append(definitions, juexruntime.GoalToolDefinitions()...)
 	definitions = append(definitions, juexruntime.NotesToolDefinitions()...)
 	definitions = append(definitions, SideSessionToolDefinitions()...)
@@ -422,20 +431,23 @@ func hooksStatus(cfg hooks.Config) RuntimeHooksStatus {
 }
 
 func (s RuntimeCatalogService) systemPromptStatus(skillLoader *skills.Loader, scratchpadDir string) (RuntimeSystemPromptStatus, error) {
-	var memStore *memory.Store
-	if memoryDir := s.cfg.MemoryDir(); memoryDir != "" {
-		memStore = memory.NewStore(memoryDir)
+	moduleRegistry, err := newRuntimeModuleRegistry(s.cfg)
+	if err != nil {
+		return RuntimeSystemPromptStatus{}, err
 	}
 	builder := &prompt.Builder{
-		GlobalAgentsMDPath: s.cfg.GlobalAgentsMDPath(),
-		AgentsMDDirs:       s.cfg.AgentsMDDirs(),
-		Memory:             memStore,
-		Skills:             skillLoader,
-		ScratchpadDir:      scratchpadDir,
-		WorkDir:            s.cfg.WorkDir,
-		Shell:              prompt.ShellProfileFromConfig(s.cfg.Shell),
+		GlobalAgentsMDPath:  s.cfg.GlobalAgentsMDPath(),
+		AgentsMDDirs:        s.cfg.AgentsMDDirs(),
+		Skills:              skillLoader,
+		ModulePromptContext: moduleRegistry.PromptContext,
+		ScratchpadDir:       scratchpadDir,
+		WorkDir:             s.cfg.WorkDir,
+		Shell:               prompt.ShellProfileFromConfig(s.cfg.Shell),
 	}
-	sections := builder.Sections()
+	sections, err := builder.SectionsWithError()
+	if err != nil {
+		return RuntimeSystemPromptStatus{}, err
+	}
 	items := make([]RuntimeSystemPromptEntry, 0, len(sections))
 	for _, section := range sections {
 		items = append(items, RuntimeSystemPromptEntry{

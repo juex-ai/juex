@@ -25,6 +25,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
@@ -378,6 +379,34 @@ func newEngineWithToolTimeout(t *testing.T, prov llm.Provider, builtinTools bool
 		WorkDir:     t.TempDir(),
 		ArtifactDir: filepath.Join(artifactState, "artifacts"),
 	}, bus
+}
+
+func TestTurnStopsBeforeProviderWhenModulePromptContextFails(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Prompt.ModulePromptContext = func() ([]runtimemodule.PromptSection, error) {
+		return nil, errors.New("memory unavailable")
+	}
+
+	_, err := eng.Turn(context.Background(), "hello")
+	if err == nil || !strings.Contains(err.Error(), "runtime: build prompt context") ||
+		!strings.Contains(err.Error(), "memory unavailable") {
+		t.Fatalf("Turn() error = %v", err)
+	}
+	if prov.called != 0 {
+		t.Fatalf("provider calls = %d, want 0", prov.called)
+	}
+	reloaded, err := session.Load(eng.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reloaded.Close() })
+	if len(reloaded.History) != 1 || reloaded.History[0].Role != llm.RoleUser ||
+		reloaded.History[0].FirstText() != "hello" {
+		t.Fatalf("durable history = %#v, want accepted user input", reloaded.History)
+	}
 }
 
 func TestTurn_PassesMaxOutputTokensToProvider(t *testing.T) {

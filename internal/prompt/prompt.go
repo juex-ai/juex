@@ -4,12 +4,12 @@
 //
 //  1. AGENTS.md hierarchy (user-global -> project root -> cwd subdir)
 //  2. Skills index (descriptions only)
-//  3. Memory section (Layer 2 entries)
+//  3. Runtime Module prompt context (including built-in Memory)
 //  4. Session scratchpad guidance
 //  5. Tool list (auto-supplied to the provider, not duplicated here)
 //  6. Operating context (cwd, time, OS)
 //
-// The builder is rebuilt from scratch every turn so that memory edits and
+// The builder is rebuilt from scratch every turn so that Module context and
 // skill changes propagate immediately.
 package prompt
 
@@ -23,21 +23,22 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/memory"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/skills"
 )
 
 const SectionSeparator = "\n\n---\n\n"
 
 type Builder struct {
-	GlobalAgentsMDPath string   // optional; e.g. ~/.agents/AGENTS.md
-	AgentsMDDirs       []string // loaded after global AGENTS.md, in caller-provided order
-	Memory             *memory.Store
-	Skills             *skills.Loader
-	ScratchpadDir      string
-	WorkDir            string
-	Shell              ShellProfile
-	RuntimeSections    func() []Section
-	Now                func() time.Time
+	GlobalAgentsMDPath  string   // optional; e.g. ~/.agents/AGENTS.md
+	AgentsMDDirs        []string // loaded after global AGENTS.md, in caller-provided order
+	Skills              *skills.Loader
+	ModulePromptContext func() ([]runtimemodule.PromptSection, error)
+	ScratchpadDir       string
+	WorkDir             string
+	Shell               ShellProfile
+	RuntimeSections     func() []Section
+	Now                 func() time.Time
 }
 
 type ShellProfile struct {
@@ -62,21 +63,29 @@ func ShellProfileFromConfig(p config.ShellProfile) ShellProfile {
 	}
 }
 
-type Section struct {
-	Key    string
-	Label  string
-	Source string
-	Path   string
-	Text   string
+type Section = runtimemodule.PromptSection
+
+// Build is the compatibility helper for callers that cannot return an error.
+// Runtime request paths use BuildWithError so Module failures stay visible.
+func (b *Builder) Build() string {
+	text, _ := b.BuildWithError()
+	return text
 }
 
-// Build composes the prompt. Empty or unavailable sources are skipped
-// gracefully — the resulting string is whatever applies.
-func (b *Builder) Build() string {
-	return JoinSections(b.Sections())
+func (b *Builder) BuildWithError() (string, error) {
+	sections, err := b.SectionsWithError()
+	if err != nil {
+		return "", err
+	}
+	return JoinSections(sections), nil
 }
 
 func (b *Builder) Sections() []Section {
+	sections, _ := b.SectionsWithError()
+	return sections
+}
+
+func (b *Builder) SectionsWithError() ([]Section, error) {
 	var sections []Section
 	for _, agents := range memory.LoadAgentsMDFiles(b.GlobalAgentsMDPath, b.AgentsMDDirs) {
 		sections = append(sections, Section{
@@ -94,9 +103,15 @@ func (b *Builder) Sections() []Section {
 		}
 	}
 
-	if b.Memory != nil {
-		if mem, _ := b.Memory.PromptSection(); mem != "" {
-			sections = append(sections, Section{Key: "memory_files", Label: "Memory", Source: "runtime", Text: mem})
+	if b.ModulePromptContext != nil {
+		moduleSections, err := b.ModulePromptContext()
+		if err != nil {
+			return nil, fmt.Errorf("prompt: module context: %w", err)
+		}
+		for _, section := range moduleSections {
+			if section.Text != "" {
+				sections = append(sections, section)
+			}
 		}
 	}
 
@@ -113,7 +128,7 @@ func (b *Builder) Sections() []Section {
 	}
 
 	sections = append(sections, Section{Key: "operating_context", Label: "Operating Context", Source: "runtime", Text: b.operatingContext()})
-	return sections
+	return sections, nil
 }
 
 func (b *Builder) scratchpadSection() (Section, bool) {

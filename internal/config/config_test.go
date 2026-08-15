@@ -1518,6 +1518,48 @@ func TestLoad_EnableUserAgentsResourcesDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestLoad_MemoryModuleDefaultsEnabledAndCanBeDisabled(t *testing.T) {
+	prepareConfigTest(t)
+	work := t.TempDir()
+
+	cfg, err := LoadForWorkDir(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.MemoryModuleEnabled() {
+		t.Fatal("Memory Module should be enabled by default")
+	}
+
+	path := filepath.Join(work, ".juex", "juex.yaml")
+	writeTextFile(t, path, "modules:\n  memory:\n    enabled: false\n")
+	cfg, err = LoadForWorkDir(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MemoryModuleEnabled() {
+		t.Fatal("modules.memory.enabled=false should disable the Memory Module")
+	}
+
+	override := filepath.Join(work, "override.yaml")
+	writeTextFile(t, override, "modules:\n  memory:\n    enabled: true\n")
+	cfg, err = LoadFromFileForWorkDir(override, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.MemoryModuleEnabled() {
+		t.Fatal("explicit config should re-enable the Memory Module")
+	}
+}
+
+func TestMemoryModuleEnabledTreatsUnconfiguredProgrammaticConfigAsDefault(t *testing.T) {
+	if !(Config{}).MemoryModuleEnabled() {
+		t.Fatal("zero Config should preserve the default-enabled Memory Module")
+	}
+	if (Config{Modules: ModulesConfig{Memory: ModuleConfig{Configured: true}}}).MemoryModuleEnabled() {
+		t.Fatal("configured false should disable the Memory Module")
+	}
+}
+
 func TestLoadFromFile_EnableUserAgentsResourcesBoolValues(t *testing.T) {
 	cases := map[string]bool{
 		"true":  true,

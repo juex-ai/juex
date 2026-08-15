@@ -38,6 +38,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/memory"
+	memorymodule "github.com/juex-ai/juex/internal/memory/module"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
@@ -166,7 +167,8 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	}
 
 	// Memory entry (work-local)
-	memStore := memory.NewStore(filepath.Join(root, ".juex", "memory"))
+	memoryDir := filepath.Join(root, ".juex", "memory")
+	memStore := memory.NewStore(memoryDir)
 	if err := memStore.Write(memory.Entry{
 		Name:        "prefer-yaml",
 		Description: "Prefer YAML over JSON in config files",
@@ -225,13 +227,13 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	sess.SubscribeBus(bus)
 
 	pb := &prompt.Builder{
-		GlobalAgentsMDPath: filepath.Join(homeAgents, "AGENTS.md"),
-		AgentsMDDirs:       []string{root, projectAgents},
-		Memory:             memStore,
-		Skills:             skillLoader,
-		WorkDir:            root,
-		Shell:              e2ePromptShellProfile(),
-		Now:                func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
+		GlobalAgentsMDPath:  filepath.Join(homeAgents, "AGENTS.md"),
+		AgentsMDDirs:        []string{root, projectAgents},
+		ModulePromptContext: memorymodule.New(memoryDir).PromptContext,
+		Skills:              skillLoader,
+		WorkDir:             root,
+		Shell:               e2ePromptShellProfile(),
+		Now:                 func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
 	}
 
 	// -- Script the model --
@@ -955,7 +957,8 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	memStore := memory.NewStore(filepath.Join(root, ".juex", "memory"))
+	memoryDir := filepath.Join(root, ".juex", "memory")
+	memStore := memory.NewStore(memoryDir)
 	if err := memStore.Write(memory.Entry{
 		Name:        "prefer-yaml",
 		Description: "Prefer YAML over JSON in config files",
@@ -1009,13 +1012,13 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 	sess.SubscribeBus(bus)
 
 	pb := &prompt.Builder{
-		GlobalAgentsMDPath: filepath.Join(homeAgents, "AGENTS.md"),
-		AgentsMDDirs:       []string{root, projectAgents},
-		Memory:             memStore,
-		Skills:             skillLoader,
-		WorkDir:            root,
-		Shell:              e2ePromptShellProfile(),
-		Now:                func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
+		GlobalAgentsMDPath:  filepath.Join(homeAgents, "AGENTS.md"),
+		AgentsMDDirs:        []string{root, projectAgents},
+		ModulePromptContext: memorymodule.New(memoryDir).PromptContext,
+		Skills:              skillLoader,
+		WorkDir:             root,
+		Shell:               e2ePromptShellProfile(),
+		Now:                 func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
 	}
 
 	prov := &scriptProvider{

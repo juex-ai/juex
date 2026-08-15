@@ -618,11 +618,9 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 	userMsg = appendHookAdditionalContext(userMsg, userHookResults)
 
 	prepared := preparedTurnContext{
-		promptSections: e.PromptSections(),
-		tools:          e.Tools.Specs(),
-		policy:         effectiveCompactionPolicy(e.Compaction, e.ContextWindow),
+		tools:  e.Tools.Specs(),
+		policy: effectiveCompactionPolicy(e.Compaction, e.ContextWindow),
 	}
-	prepared.systemPrompt = prompt.JoinSections(prepared.promptSections)
 	projectedUserMsg, projection, err := e.projectMessageLocked(userMsg, prepared.policy)
 	if err != nil {
 		return preparedTurnContext{}, err
@@ -631,6 +629,17 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 	if err := e.emitProjectionApplied(turnID, projection); err != nil {
 		return preparedTurnContext{}, fmt.Errorf("commit user input projection: %w", err)
 	}
+
+	promptSections, err := e.PromptSectionsWithError()
+	if err != nil {
+		promptErr := fmt.Errorf("runtime: build prompt context: %w", err)
+		if persistErr := e.recordTurnStartLocked(turnID, prepared.userMessage); persistErr != nil {
+			return preparedTurnContext{}, errors.Join(promptErr, fmt.Errorf("persist accepted user input after prompt failure: %w", persistErr))
+		}
+		return preparedTurnContext{}, promptErr
+	}
+	prepared.promptSections = promptSections
+	prepared.systemPrompt = prompt.JoinSections(prepared.promptSections)
 
 	if err := e.maybeCompact(ctx, turnID, prepared.systemPrompt, prepared.tools, prepared.userMessage); err != nil {
 		if !canContinueAfterAutoCompactError(ctx, prepared.userMessage) {

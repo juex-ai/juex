@@ -26,8 +26,10 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/memory"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
@@ -247,6 +249,31 @@ func TestCompactWithInstructionsWithoutEligibleContextLeavesRuntimeIdle(t *testi
 		snapshot.Turn == nil ||
 		snapshot.Turn.State != runtime.TurnLifecycleCompleted ||
 		!strings.HasPrefix(snapshot.Turn.ID, "compact-") {
+		t.Fatalf("runtime status = %+v", snapshot)
+	}
+}
+
+func TestCompactWithInstructionsPromptFailureTerminatesAdmittedTurn(t *testing.T) {
+	a, provider := newStubApp(t)
+	a.Engine.Prompt.ModulePromptContext = func() ([]runtimemodule.PromptSection, error) {
+		return nil, errors.New("memory unavailable")
+	}
+
+	_, err := a.CompactWithInstructions(context.Background(), "manual", false, "")
+	if err == nil || !strings.Contains(err.Error(), "app: build compaction prompt") ||
+		!strings.Contains(err.Error(), "memory unavailable") {
+		t.Fatalf("CompactWithInstructions() error = %v", err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("provider calls = %d, want 0", provider.calls)
+	}
+	snapshot := a.Status.Snapshot()
+	if snapshot.Session.State != runtime.SessionRuntimeFailed ||
+		snapshot.Turn == nil ||
+		snapshot.Turn.State != runtime.TurnLifecycleErrored ||
+		!strings.HasPrefix(snapshot.Turn.ID, "compact-") ||
+		snapshot.Turn.Error == nil ||
+		!strings.Contains(snapshot.Turn.Error.Message, "memory unavailable") {
 		t.Fatalf("runtime status = %+v", snapshot)
 	}
 }
@@ -2382,6 +2409,50 @@ func TestAppPromptSkipsGlobalAgentsWhenUserAgentsResourcesDisabled(t *testing.T)
 	}
 	if !strings.Contains(got, "workspace agent rule") {
 		t.Fatalf("prompt should keep workspace AGENTS.md when user-agent resources are disabled:\n%s", got)
+	}
+}
+
+func TestAppMemoryModuleCanBeDisabledWithoutAffectingRuntime(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		modules config.ModulesConfig
+		enabled bool
+	}{
+		{name: "default enabled", enabled: true},
+		{name: "explicitly disabled", modules: config.ModulesConfig{Memory: config.ModuleConfig{Configured: true}}, enabled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			work := t.TempDir()
+			state := filepath.Join(work, "agent-state")
+			cfg := config.Config{
+				ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, AgentStateDir: state, Modules: tc.modules,
+			}
+			if err := memory.NewStore(cfg.MemoryDir()).Write(memory.Entry{
+				Name: "existing", Description: "existing module memory", Type: "project", Body: "body",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			provider := &stubProvider{replies: []llm.Response{{
+				Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn,
+			}}}
+			a, err := New(Options{Config: cfg, Provider: provider, WorkDir: work, DisableMCP: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = a.Close() })
+
+			_, hasMemoryTool := a.Engine.Tools.Get("memory_write")
+			promptText, err := a.Engine.SystemPromptWithError()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if hasMemoryTool != tc.enabled || strings.Contains(promptText, "existing module memory") != tc.enabled {
+				t.Fatalf("memory tool=%v prompt=%q, want enabled=%v", hasMemoryTool, promptText, tc.enabled)
+			}
+			if _, err := a.Run(context.Background(), "continue"); err != nil {
+				t.Fatalf("non-Memory runtime failed: %v", err)
+			}
+		})
 	}
 }
 

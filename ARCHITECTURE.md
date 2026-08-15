@@ -118,7 +118,9 @@ juex/
 │   │   ├── sdk_remote_notification.go
 │   │   └── sdk_secret.go
 │   ├── skills/     loader.go     # SKILL.md frontmatter loader
-│   ├── memory/     memory.go     # AGENTS.md hierarchy + entry store
+│   ├── memory/                   # AGENTS.md hierarchy + entry store
+│   │   ├── memory.go
+│   │   └── module/               # built-in Memory Runtime Module adapter
 │   ├── frontmatter/parser.go     # shared YAML frontmatter parser
 │   ├── prompt/     prompt.go     # system prompt assembly
 │   ├── session/                  # conversation history, info, locks, history index
@@ -128,6 +130,7 @@ juex/
 │   │   ├── transcript_repair.go
 │   │   └── lock*.go
 │   ├── runtime/                  # turn loop, pending input, context projection, runtime glue
+│   │   ├── module/               # in-process Module interfaces + ordered registry
 │   │   ├── loop.go
 │   │   ├── active_context.go
 │   │   ├── compact.go
@@ -204,6 +207,7 @@ implementation decisions live.
 | `internal/llm` | Canonical messages and blocks, Provider interfaces/profiles, Protocol and Capability resolution, wire/SDK adapters, provider transport/API/stream retry, model health | Model-chain fallback, Session lifecycle, Tool execution, CLI/HTTP DTOs |
 | `internal/provenance` | Request Epoch schema, canonical digests, safe Provider descriptors, bounded snapshot deduplication, and incremental journal replay reduction | Provider call timing, complete Provider profiles or credentials, transcript/Event storage, UI projection |
 | `internal/runtime` | Turn lifecycle, Provider-iteration and Tool Call ordering, pending-input queue, model-chain fallback and Turn-level retry, active context, compaction, context projection, runtime fact emission | Provider SDK and transport retry, Session discovery, MCP process lifecycle, transport parsing |
+| `internal/runtime/module` | Stable in-process Module identity, ordered enablement, prompt-context and Tool-registration interfaces, capability error attribution | Concrete Module policy, external Extension discovery, dynamic Go plugin loading, Turn lifecycle behavior |
 | `internal/session` | Session identity and kind, transcript/Event persistence, metadata and history index, active metadata, usage snapshots, scratchpad path, single-writer locks | Prompt assembly, Provider calls, Tool dispatch, Session attachment orchestration |
 | `internal/cancellation` | Typed user, signal, and runtime-restart cancellation causes plus signal-aware contexts | Transport Stop admission, Turn reaction policy, user-facing status DTOs |
 | `internal/errorclass` | Shared timeout/cancellation/auth/permission/connectivity/wrong-endpoint/retryable/error classification and public error wording | Retry decisions, cancellation sources, transport rendering |
@@ -220,9 +224,9 @@ implementation decisions live.
 | `internal/observable` | Tagged Command Observable/Schedule specs, project and Extension definition-source validation and ownership, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Extension discovery, Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
 | `internal/eventmedia` | Workspace/current-AgentStateDir external-event attachment validation, size gates, blocked-path enforcement, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
 | `internal/mcp` | Adapter over the official Go SDK: Claude-compatible MCP config normalization, command and Streamable HTTP sessions, static HTTP header handling, Tool discovery, staged remote readiness, custom notification preservation, and transport-specific diagnostics | Protocol framing/negotiation, Turn policy, active Session selection, Web ownership |
-| `internal/memory` | `AGENTS.md` hierarchy loading, Agent-owned Memory Entry storage, memory Tool registration | Final prompt-section ordering, Session history, Skill loading |
+| `internal/memory` | `AGENTS.md` hierarchy loading, Agent-owned Memory Entry storage, Memory Tool behavior and the built-in Memory Module adapter | Final prompt-section ordering, Module enablement, Session history, Skill loading |
 | `internal/skills` | `SKILL.md` frontmatter loading, Skill metadata, catalog prompt rendering, compression, and budget selection | Final system-prompt section assembly, task execution policy, Tool dispatch |
-| `internal/prompt` | System-prompt section assembly from guidance, Skills, Memory, runtime metadata, and shell profile | Provider wire formatting, Session persistence, resource discovery policy |
+| `internal/prompt` | System-prompt section assembly from guidance, Skills, Runtime Module context, runtime metadata, and shell profile | Provider wire formatting, Session persistence, resource discovery policy |
 | `internal/artifact` | Workspace-rooted path safety, atomic byte storage, content addressing, bounded reads, integrity verification | Media format policy, Provider encoding, context preview policy, retention |
 | `internal/usermedia` | User image validation, per-turn limits, Session namespace policy, media-reference verification | Artifact filesystem mechanics, HTTP multipart parsing, Provider encoding |
 | `internal/app` | Process composition, Agent-scoped extension runtime context, Session attachment, Turn admission, external input Session selection/delivery, application slash commands | Cobra grammar, HTTP parsing, Provider SDK behavior, Observation state machine |
@@ -270,6 +274,47 @@ implementation decisions live.
 12. **Retry boundaries stay explicit.** LLM adapters own retry of one
     Provider transport/API/stream operation; runtime owns model-chain fallback,
     pending-input continuation, and other Turn-level retry decisions.
+
+### 2.2 Runtime Modules And Lifecycle
+
+A Runtime Module is a named, trusted Go value compiled into the JueX binary.
+`internal/app` creates an ordered `module.Registry` from resolved configuration,
+then asks enabled Modules for the narrow capabilities they implement. The first
+interfaces are `PromptContextProvider`, evaluated whenever a system prompt is
+rebuilt, and `ToolRegistrar`, evaluated during startup. Registration order is
+stable. Disabled Modules are absent, duplicate or invalid names fail
+registration, Tool registration errors fail startup, and prompt-context errors
+abort the request or status snapshot with the Module name attached.
+
+The built-in file-backed Memory implementation is the first ordinary Runtime
+Module. `modules.memory.enabled` defaults to `true`; disabling it removes both
+the `memory_files` prompt section and all `memory_*` Tools without changing the
+Memory file format or the rest of runtime assembly. Generic App and prompt
+paths consume the Registry interfaces rather than a Memory-specific field.
+
+Runtime Modules and external Extensions are different boundaries. A Module is
+trusted in-process implementation code shipped with JueX. An Extension remains
+a selected manifest and resource bundle that contributes Skills, MCP servers,
+Hooks, Observables, environment declarations, and private extension data. JueX
+does not load Extension Go plugins or dynamic libraries. New Module interfaces
+should follow demonstrated cross-capability needs; there is no Memory-specific
+slot.
+
+The current runtime lifecycle is:
+
+| Phase | Current implementation | Runtime Module interface |
+| --- | --- | --- |
+| Startup | Config and resources resolve; enabled Modules register in order; Module Tools register before the runtime starts serving. | `ToolRegistrar` exists. There is no generic startup callback. |
+| Session start | App attaches or creates the Session, builds session-scoped stores, publishes the runtime snapshot, and runs `SessionStart` Hooks. | None. Existing Hooks remain the external lifecycle surface. |
+| Turn start | Runtime admits input, runs `UserPromptSubmit` Hooks, builds and projects current prompt/input context, then persists the input and emits `turn.started`. | `PromptContextProvider` exists and is evaluated here before the first Provider request. There is no Turn observer. |
+| Before Provider request | Runtime projects canonical context, may compact, records request provenance, and calls the selected Provider. Prompt context is reused for later Provider iterations in that Turn. | None beyond the prompt context already collected for the Turn. |
+| After Provider response | Runtime persists the response, emits `llm.responded`, then either completes or executes the declared Tool batch and continues. | None. Events expose facts; they are not Module callbacks. |
+| Turn completed | Runtime drains accepted pending input at safe iteration boundaries and emits `turn.completed` only when the Turn is terminal. `Stop` Hooks can request continuation before completion. | None. |
+| Shutdown | App stops admission, cancels process-owned work, and drains ordered cleanup for Observables, Side Sessions, MCP, shell sessions, Session resources, and logs. | None. A generic shutdown interface is a future option only when a Module owns such a resource. |
+
+Turn observers, Event/status projections, and Module shutdown cleanup remain
+architecture candidates, not implemented contracts. They should be introduced
+only with a concrete second Module consumer and explicit ordering/error rules.
 
 ---
 
