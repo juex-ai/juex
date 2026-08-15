@@ -207,12 +207,68 @@ func TestToolExecutionRecoveryPreservesProviderOrderForMixedBatch(t *testing.T) 
 	}
 }
 
+func TestToolExecutionRecoveryDoesNotReclassifyNormalRecordedOutcomeAsRepair(t *testing.T) {
+	root := t.TempDir()
+	sess, err := session.NewWithOptions(root, session.Options{EventCatalog: eventcatalog.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assistant, err := sess.AppendAssigned(llm.Message{ID: "assistant-normal", Role: llm.RoleAssistant, Blocks: []llm.Block{{
+		Type: llm.BlockToolUse, ToolUseID: "call-normal", ToolName: "read",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := toolevents.ToolCallPayload{Name: "read", ToolUseID: "call-normal", MessageID: assistant.ID}
+	result := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.Name, Content: "normal result"}
+	for _, event := range []events.Event{
+		declaredResponseEventForCall(assistant, call),
+		toolEvent(toolevents.RunningType, toolevents.Running(call)),
+		toolEvent(toolevents.CompletedType, toolevents.CompletedPayload{
+			Name: call.Name, ToolUseID: call.ToolUseID, MessageID: call.MessageID,
+			Outcome: &toolevents.RecordedOutcome{MessageID: "result-normal", Block: result},
+		}),
+	} {
+		appendExecutionEvent(t, sess, event)
+	}
+	if _, err := sess.AppendAssigned(llm.Message{
+		ID: "result-normal", Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{result},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dir := sess.Dir
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, err := session.LoadWithOptions(dir, session.Options{RepairTranscript: true, EventCatalog: eventcatalog.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recovered.Close()
+	journal, err := session.ReadEventsWithCatalog(dir, eventcatalog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range journal {
+		if event.Type == "transcript.repaired" {
+			t.Fatalf("normal recorded outcome was reclassified as transcript repair: %+v", event)
+		}
+	}
+}
+
 func declaredResponseEvent(assistant llm.Message) events.Event {
 	return events.Event{Type: "llm.responded", TurnID: "turn-1", Payload: runtime.LLMRespondedPayload{
 		Iter: 2, MessageID: assistant.ID, Blocks: assistant.Blocks,
 		ToolCalls: []toolevents.ToolCallPayload{{
 			Name: "mcp__remote__send", ToolUseID: "call-1", Iter: 2, MessageID: assistant.ID,
 		}},
+	}}
+}
+
+func declaredResponseEventForCall(assistant llm.Message, call toolevents.ToolCallPayload) events.Event {
+	return events.Event{Type: "llm.responded", TurnID: "turn-1", Payload: runtime.LLMRespondedPayload{
+		MessageID: assistant.ID, Blocks: assistant.Blocks, ToolCalls: []toolevents.ToolCallPayload{call},
 	}}
 }
 

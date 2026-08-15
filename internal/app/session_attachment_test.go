@@ -143,6 +143,127 @@ func TestLockedRuntimeRecoverySurfacesUnknownOutcomeToCLIAndTranscript(t *testin
 	}
 }
 
+func TestLockedRuntimeRecoveryReplaysFactsAfterPostRewriteCommitFailure(t *testing.T) {
+	for _, failedEventType := range []string{toolevents.OutcomeUnknownType, "transcript.repaired"} {
+		t.Run(failedEventType, func(t *testing.T) {
+			cfg := attachmentTestConfig(t)
+			seedStartedDanglingToolUseSession(t, cfg)
+
+			attachment, lock, err := AttachAndLockWorkspaceSession(cfg, SessionAttachmentRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			sink := events.NewDurableSink(attachment.Session)
+			sink.SetCatalog(eventcatalog.Default())
+			bus := events.NewBus()
+			bus.SetCommitter(&failOnceEventCommitter{
+				delegate:  sink,
+				eventType: failedEventType,
+				err:       errors.New("injected recovery commit failure"),
+			})
+			engine := &juexruntime.Engine{Bus: bus, Session: attachment.Session}
+			if err := engine.RecoverTranscript("load"); err == nil {
+				t.Fatal("RecoverTranscript succeeded despite injected event commit failure")
+			}
+			if got := attachment.Session.History[len(attachment.Session.History)-1].Blocks[0].Content; !strings.Contains(got, "TOOL_OUTCOME_UNKNOWN") {
+				t.Fatalf("transcript was not durably rewritten before failure: %q", got)
+			}
+			bus.SetCommitter(nil)
+			if err := sink.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := attachment.Session.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := lock.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			restarted, restartedLock, err := AttachAndLockWorkspaceSession(cfg, SessionAttachmentRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restarted.Session.Close()
+			defer func() { _ = restartedLock.Close() }()
+			restartedSink := events.NewDurableSink(restarted.Session)
+			restartedSink.SetCatalog(eventcatalog.Default())
+			defer func() { _ = restartedSink.Close() }()
+			restartedBus := events.NewBus()
+			restartedBus.SetCommitter(restartedSink)
+			restartedEngine := &juexruntime.Engine{Bus: restartedBus, Session: restarted.Session}
+			if err := restartedEngine.RecoverTranscript("load"); err != nil {
+				t.Fatal(err)
+			}
+
+			journal, err := session.ReadEventsWithCatalog(restarted.Session.Dir, eventcatalog.Default())
+			if err != nil {
+				t.Fatal(err)
+			}
+			unknownCount := 0
+			repairedCount := 0
+			for _, event := range journal {
+				switch event.Type {
+				case toolevents.OutcomeUnknownType:
+					unknownCount++
+				case "transcript.repaired":
+					repairedCount++
+				}
+			}
+			if unknownCount != 1 || repairedCount != 1 {
+				t.Fatalf("recovery events after retry = unknown:%d repaired:%d, want exactly one each", unknownCount, repairedCount)
+			}
+		})
+	}
+}
+
+func TestAppStartupProjectsUnknownOutcomeBeforeRestartFinalization(t *testing.T) {
+	cfg := attachmentTestConfig(t)
+	cfg.ProviderID = "test"
+	seedStartedDanglingToolUseSession(t, cfg)
+
+	a, err := New(Options{
+		Config:             cfg,
+		Provider:           &stubProvider{},
+		WorkDir:            cfg.WorkDir,
+		DisableMCP:         true,
+		disableObservables: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := a.CloseAndWait(); err != nil {
+			t.Errorf("close app: %v", err)
+		}
+	}()
+
+	snapshot := a.Status.Snapshot()
+	if snapshot.Turn == nil || snapshot.Turn.State != juexruntime.TurnLifecycleCancelled {
+		t.Fatalf("recovered turn = %+v, want cancelled", snapshot.Turn)
+	}
+	if len(snapshot.Tools) != 1 || snapshot.Tools[0].State != juexruntime.ToolCallOutcomeUnknown {
+		t.Fatalf("recovered tools = %+v, want one outcome_unknown tool", snapshot.Tools)
+	}
+	if snapshot.Tools[0].Error == nil || snapshot.Tools[0].Error.Kind != juexruntime.StatusErrorToolOutcomeUnknown {
+		t.Fatalf("recovered tool error = %+v", snapshot.Tools[0].Error)
+	}
+}
+
+type failOnceEventCommitter struct {
+	delegate  events.Committer
+	eventType string
+	err       error
+	failed    bool
+}
+
+func (c *failOnceEventCommitter) Commit(event events.Event) (events.Event, error) {
+	if event.Type == c.eventType && !c.failed {
+		c.failed = true
+		return events.Event{}, c.err
+	}
+	return c.delegate.Commit(event)
+}
+
 func TestAttachWorkspaceSessionFallsBackFromStaleActive(t *testing.T) {
 	cfg := attachmentTestConfig(t)
 	stale := session.Info{

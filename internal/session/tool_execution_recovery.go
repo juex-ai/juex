@@ -131,7 +131,7 @@ func decodeRecoveryPayload(payload any, target any) error {
 
 func (s *Session) appendTranscriptRepairEvents(catalog events.SchemaCatalog, reason string, repairs []TranscriptRepair) error {
 	for _, repair := range repairs {
-		if repair.RecoveryCode != "TOOL_OUTCOME_UNKNOWN" {
+		if repair.RecoveryCode != "TOOL_OUTCOME_UNKNOWN" || repair.OutcomeUnknownRecorded {
 			continue
 		}
 		call := toolevents.ToolCallPayload{

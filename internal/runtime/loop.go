@@ -657,7 +657,7 @@ func (e *Engine) repairTranscriptLocked(turnID, reason string) error {
 	}
 	if len(repairs) > 0 {
 		for _, repair := range repairs {
-			if repair.RecoveryCode != "TOOL_OUTCOME_UNKNOWN" {
+			if repair.RecoveryCode != "TOOL_OUTCOME_UNKNOWN" || repair.OutcomeUnknownRecorded {
 				continue
 			}
 			call := toolevents.ToolCallPayload{

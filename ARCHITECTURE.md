@@ -979,8 +979,12 @@ Result and message id. A declared-only call receives an explicit
 `TOOL_OUTCOME_UNKNOWN`, plus a browser-visible `tool.outcome_unknown` fact, and
 is never automatically retried. The ordered repair result batch is appended
 before normal conversation continues, followed by `transcript.repaired`
-evidence in `events.jsonl`. App runtime initialization performs these writes
-through the Catalog-backed Bus only after acquiring the Session lifetime lock.
+evidence in `events.jsonl`. The exact synthetic `TOOL_NOT_STARTED` and
+`TOOL_OUTCOME_UNKNOWN` results are also recoverable completion intent: if a
+restart interrupts repair-event commits, the next repair pass recognizes those
+persisted blocks and appends only the missing evidence. App runtime
+initialization performs these writes through the Catalog-backed Bus only after
+acquiring the Session lifetime lock.
 The latest `token_usage` and
 `context_usage` are restored from
 `llm.responded` events and exposed through session `Info`, not through

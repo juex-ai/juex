@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"reflect"
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 const (
@@ -26,6 +28,7 @@ type TranscriptRepair struct {
 	AssistantMessageID      string `json:"assistant_message_id,omitempty"`
 	ExecutionPhase          string `json:"execution_phase"`
 	RecoveryCode            string `json:"recovery_code"`
+	OutcomeUnknownRecorded  bool   `json:"-"`
 }
 
 type TranscriptRepairedPayload struct {
@@ -65,7 +68,7 @@ func (s *Session) repairTranscriptWithEvents(reason string, journal []events.Eve
 	}
 
 	if s.transcript.repairSafe {
-		return nil, nil
+		return recoverPersistedTranscriptRepairs(s.History, reason, executions, journal), nil
 	}
 	convPath := filepath.Join(s.Dir, conversationFile)
 	fullIndex, err := scanTranscriptIndex(convPath)
@@ -78,15 +81,106 @@ func (s *Session) repairTranscriptWithEvents(reason string, journal []events.Eve
 	}
 	repaired, repairs := repairTranscriptMessagesWithExecutions(fullHistory, reason, executions)
 	if len(repairs) == 0 {
+		repairs = recoverPersistedTranscriptRepairs(fullHistory, reason, executions, journal)
 		fullIndex.repairSafe = true
 		fullIndex.repairPrefixSafe = true
 		s.transcript = fullIndex
-		return nil, nil
+		return repairs, nil
 	}
 	if err := s.rewriteConversationLocked(repaired); err != nil {
 		return nil, err
 	}
 	return repairs, nil
+}
+
+func recoverPersistedTranscriptRepairs(
+	history []llm.Message,
+	reason string,
+	executions toolExecutionRecoveryIndex,
+	journal []events.Event,
+) []TranscriptRepair {
+	finalized := make(map[string]struct{})
+	unknownRecorded := make(map[string]struct{})
+	for _, event := range journal {
+		switch event.Type {
+		case "transcript.repaired":
+			var payload TranscriptRepairedPayload
+			if decodeRecoveryPayload(event.Payload, &payload) != nil {
+				continue
+			}
+			for _, repair := range payload.Repairs {
+				finalized[transcriptRepairKey(repair.RepairMessageID, repair.ToolUseID)] = struct{}{}
+			}
+		case toolevents.OutcomeUnknownType:
+			var payload toolevents.OutcomeUnknownPayload
+			if decodeRecoveryPayload(event.Payload, &payload) != nil {
+				continue
+			}
+			unknownRecorded[toolExecutionRecoveryKey(payload.MessageID, payload.ToolUseID)] = struct{}{}
+		}
+	}
+
+	toolUses := make(map[string]pendingTranscriptToolUse)
+	var repairs []TranscriptRepair
+	for messageIndex, msg := range history {
+		for _, block := range msg.Blocks {
+			if block.Type != llm.BlockToolUse || block.ToolUseID == "" {
+				continue
+			}
+			toolUses[block.ToolUseID] = pendingTranscriptToolUse{
+				id:        block.ToolUseID,
+				name:      block.ToolName,
+				messageID: msg.ID,
+				execution: executions.lookup(msg.ID, block.ToolUseID),
+			}
+		}
+		for _, block := range msg.Blocks {
+			if block.Type != llm.BlockToolResult || block.ToolUseID == "" {
+				continue
+			}
+			toolUse, ok := toolUses[block.ToolUseID]
+			if !ok || !persistedRepairBlockMatches(block, toolUse) {
+				continue
+			}
+			key := transcriptRepairKey(msg.ID, block.ToolUseID)
+			if _, ok := finalized[key]; ok {
+				continue
+			}
+			beforeID := ""
+			if messageIndex+1 < len(history) {
+				beforeID = history[messageIndex+1].ID
+			}
+			_, recoveryCode := recoveryToolResult(toolUse)
+			_, recorded := unknownRecorded[toolExecutionRecoveryKey(toolUse.messageID, toolUse.id)]
+			repairs = append(repairs, TranscriptRepair{
+				ToolUseID:               toolUse.id,
+				ToolName:                toolUse.name,
+				RepairMessageID:         msg.ID,
+				InsertedBeforeMessageID: beforeID,
+				Reason:                  reason,
+				TurnID:                  toolUse.execution.turnID,
+				ProviderIteration:       toolUse.execution.iter,
+				CallIndex:               toolUse.execution.callIndex,
+				AssistantMessageID:      toolUse.messageID,
+				ExecutionPhase:          string(toolUse.execution.phase),
+				RecoveryCode:            recoveryCode,
+				OutcomeUnknownRecorded:  recorded,
+			})
+		}
+	}
+	return repairs
+}
+
+func persistedRepairBlockMatches(block llm.Block, toolUse pendingTranscriptToolUse) bool {
+	if toolUse.execution.phase != toolExecutionDeclared && toolUse.execution.phase != toolExecutionStarted {
+		return false
+	}
+	expected, _ := recoveryToolResult(toolUse)
+	return reflect.DeepEqual(block, expected)
+}
+
+func transcriptRepairKey(messageID, toolUseID string) string {
+	return messageID + "\x00" + toolUseID
 }
 
 func repairTranscriptMessages(history []llm.Message, reason string) ([]llm.Message, []TranscriptRepair) {
