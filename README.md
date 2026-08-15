@@ -149,7 +149,9 @@ request on another declared model after exhausted transient, authentication,
 permission, or model-not-found failures. Juex skips unhealthy models during a
 process-local cooldown and returns to higher-priority models through real
 request probes. Context overflow, cancellation, and failures after streamed
-output never trigger fallback.
+output never trigger fallback. Model transitions do not notify the Agent by
+default; set `runtime.notify_model_changes: true` to add provider-visible and
+durable `model_change` reminders without changing fallback events or selection.
 
 Anthropic, OpenAI, OpenAI-compatible Chat, DeepSeek, and Codex provider
 profiles stream assistant text and reasoning to verbose CLI and Web sessions

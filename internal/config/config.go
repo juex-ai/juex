@@ -47,6 +47,7 @@ type Config struct {
 	ExternalEventTTL          time.Duration
 	ToolTimeout               time.Duration
 	ShowBuiltinHookTraces     bool
+	NotifyModelChanges        bool
 	Hooks                     hooks.Config
 	Shell                     ShellProfile
 	Sandbox                   sandbox.Policy
@@ -249,6 +250,8 @@ type runtimeConfig struct {
 	MaxOutputTokensSet       bool
 	ShowBuiltinHookTraces    bool
 	ShowBuiltinHookTracesSet bool
+	NotifyModelChanges       bool
+	NotifyModelChangesSet    bool
 }
 
 type sandboxConfig struct {
@@ -335,6 +338,13 @@ func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
 			}
 			c.ShowBuiltinHookTraces = enabled
 			c.ShowBuiltinHookTracesSet = true
+		case "notify_model_changes":
+			enabled, err := ParseBoolValue(value.Value)
+			if err != nil {
+				return fmt.Errorf("runtime.%s: %w", key, err)
+			}
+			c.NotifyModelChanges = enabled
+			c.NotifyModelChangesSet = true
 		default:
 			return fmt.Errorf("field runtime.%s not found", key)
 		}
@@ -1436,6 +1446,9 @@ func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
 	}
 	if c.ShowBuiltinHookTracesSet {
 		cfg.ShowBuiltinHookTraces = c.ShowBuiltinHookTraces
+	}
+	if c.NotifyModelChangesSet {
+		cfg.NotifyModelChanges = c.NotifyModelChanges
 	}
 }
 

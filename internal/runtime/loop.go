@@ -105,6 +105,9 @@ type Engine struct {
 	// ShowBuiltinHookTraces includes built-in runtime gates in UI-only hook
 	// trace messages. Command hook traces are always shown.
 	ShowBuiltinHookTraces bool
+	// NotifyModelChanges adds provider-visible notices when the serving model
+	// degrades or recovers. Fallback events and model attribution are unchanged.
+	NotifyModelChanges bool
 	// PendingInputTTL controls generated-id user steer records.
 	PendingInputTTL time.Duration
 	// ExternalEventTTL controls MCP/external event records when the caller
@@ -752,9 +755,12 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		candidate := candidates[selection.Index]
 		attempt++
 		attempted[candidate.Ref] = struct{}{}
-		notice := modelSwitchNotice(previousModel, candidate.Ref, refs, selection, pending, failures, skipped)
-		if notice != nil {
-			notice.ID = providerNoticeMessageID(turnID, base.iter, candidate.Ref, *notice)
+		var notice *llm.Message
+		if e.NotifyModelChanges {
+			notice = modelSwitchNotice(previousModel, candidate.Ref, refs, selection, pending, failures, skipped)
+			if notice != nil {
+				notice.ID = providerNoticeMessageID(turnID, base.iter, candidate.Ref, *notice)
+			}
 		}
 		request, err := e.prepareCandidateRequestLocked(ctx, turnID, prepared, base, candidate, notice, selection.Index > 0)
 		if err != nil {

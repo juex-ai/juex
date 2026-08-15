@@ -258,7 +258,7 @@ func TestAppNewModelCandidatePrecedenceAndHealthInjection(t *testing.T) {
 	injectedSingle := &stubProvider{}
 	health := llm.NewModelHealth(llm.ModelHealthOptions{})
 	a, err := New(Options{
-		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, FallbackModels: []string{"missing:model"}},
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, FallbackModels: []string{"missing:model"}, NotifyModelChanges: true},
 		Provider: injectedSingle,
 		ModelCandidates: []runtime.ModelCandidate{
 			{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
@@ -272,7 +272,7 @@ func TestAppNewModelCandidatePrecedenceAndHealthInjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	if len(a.Engine.ModelCandidates) != 2 || a.Engine.Provider != primary || a.Engine.ModelHealth != health {
+	if len(a.Engine.ModelCandidates) != 2 || a.Engine.Provider != primary || a.Engine.ModelHealth != health || !a.Engine.NotifyModelChanges {
 		t.Fatalf("engine wiring = provider:%T candidates:%+v health:%p", a.Engine.Provider, a.Engine.ModelCandidates, a.Engine.ModelHealth)
 	}
 }

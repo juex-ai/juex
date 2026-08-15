@@ -104,6 +104,9 @@ model: openai:gpt-4.1
 #   tool_timeout: 60s
 #   # Optional normal-turn provider output cap. Omit to use provider default.
 #   max_output_tokens: 8192
+#   # Opt in to provider-visible and durable model fallback/recovery reminders.
+#   # Model selection and runtime fallback events are unchanged. Defaults false.
+#   notify_model_changes: false
 
 # Optional lifecycle command hooks. Hooks in the default-home and instance-home
 # juex.yaml files are trusted by location. Project-local hooks must set

@@ -504,6 +504,8 @@ func TestLiveBinary_ModelFallbackPersistsNoticeAndServingModel(t *testing.T) {
 	configBody := fmt.Sprintf(`model: primary:primary-model
 fallback_models:
   - backup:backup-model
+runtime:
+  notify_model_changes: true
 providers:
   - id: primary
     protocol: openai/chat
@@ -580,6 +582,105 @@ providers:
 	eventsText := strings.Join(readLines(t, filepath.Join(second.SessionDir, "events.jsonl")), "\n")
 	if !strings.Contains(eventsText, `"type":"llm.fallback"`) || backupCalls.Load() != 1 {
 		t.Fatalf("fallback event/requests missing: backup=%d events=%s", backupCalls.Load(), eventsText)
+	}
+}
+
+func TestLiveBinary_ModelFallbackDoesNotNotifyByDefault(t *testing.T) {
+	bin := buildJuex(t)
+	var primaryCalls atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if primaryCalls.Add(1) == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(chatCompletionResponse("primary-ok")))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"invalid key","type":"authentication_error","code":"invalid_api_key"}}`))
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(chatCompletionResponse("backup-ok")))
+	}))
+	defer backup.Close()
+
+	work := t.TempDir()
+	configBody := fmt.Sprintf(`model: primary:primary-model
+fallback_models:
+  - backup:backup-model
+providers:
+  - id: primary
+    protocol: openai/chat
+    base_url: %s
+    api_key: primary-key
+    capabilities:
+      streaming: false
+    models:
+      - id: primary-model
+  - id: backup
+    protocol: openai/chat
+    base_url: %s
+    api_key: backup-key
+    capabilities:
+      streaming: false
+    models:
+      - id: backup-model
+`, primary.URL, backup.URL)
+	if err := writeText(filepath.Join(work, ".juex", "juex.yaml"), configBody); err != nil {
+		t.Fatal(err)
+	}
+	env := isolatedJuexBinaryEnv(t.TempDir())
+
+	firstCmd := exec.Command(bin, "-C", work, "run", "--new", "--json", "first turn")
+	firstCmd.Env = env
+	firstOut, err := firstCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("first run: %v\n%s", err, firstOut)
+	}
+	var first struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(firstOut, &first); err != nil {
+		t.Fatalf("decode first run: %v\n%s", err, firstOut)
+	}
+
+	secondCmd := exec.Command(bin, "-C", work, "run", "--json", "second turn")
+	secondCmd.Env = env
+	secondOut, err := secondCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("second run: %v\n%s", err, secondOut)
+	}
+	var second struct {
+		Text       string `json:"text"`
+		SessionID  string `json:"session_id"`
+		SessionDir string `json:"session_dir"`
+	}
+	if err := json.Unmarshal(secondOut, &second); err != nil {
+		t.Fatalf("decode second run: %v\n%s", err, secondOut)
+	}
+	if second.Text != "backup-ok" || second.SessionID != first.SessionID {
+		t.Fatalf("second run = %+v, first session = %q", second, first.SessionID)
+	}
+
+	lines := readLines(t, filepath.Join(second.SessionDir, "conversation.jsonl"))
+	var tail llm.Message
+	for i, line := range lines {
+		var message llm.Message
+		if err := json.Unmarshal([]byte(line), &message); err != nil {
+			t.Fatalf("decode conversation line %d: %v", i, err)
+		}
+		if message.Kind == llm.MessageKindModelChange {
+			t.Fatalf("default configuration persisted model-change notice: %+v", message)
+		}
+		tail = message
+	}
+	if tail.Role != llm.RoleAssistant || tail.Model != "backup:backup-model" {
+		t.Fatalf("fallback tail = %+v", tail)
+	}
+	eventsText := strings.Join(readLines(t, filepath.Join(second.SessionDir, "events.jsonl")), "\n")
+	if !strings.Contains(eventsText, `"type":"llm.fallback"`) {
+		t.Fatalf("fallback event missing: %s", eventsText)
 	}
 }
 
