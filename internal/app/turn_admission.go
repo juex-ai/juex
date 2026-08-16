@@ -205,11 +205,12 @@ func (a *App) admitNewSlash(ctx context.Context, cmd SlashCommand, ids TurnIDAll
 	}
 
 	turnID := ids.NextTurnID("turn")
-	if err := a.Engine.ReserveTurnID(turnID); err != nil {
+	message, err := a.Engine.AdmitTurnMessage(turnID, NewSessionGreetingMessage())
+	if err != nil {
 		a.finishExclusiveCommand()
 		return errorResult(err, nil)
 	}
-	start := &AdmittedTurn{TurnID: turnID, Message: NewSessionGreetingMessage()}
+	start := &AdmittedTurn{TurnID: turnID, Message: message}
 	a.finishExclusiveCommandAsRunning(turnID)
 
 	admitted := commandResult(result, start)

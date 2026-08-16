@@ -15,7 +15,7 @@ var errTurnAdmissionChanged = errors.New("app: turn changed while accepting inpu
 const maxTurnAdmissionAttempts = 2
 
 type turnAdmissionRuntime interface {
-	ReserveTurnID(string) error
+	AdmitTurnMessage(string, llm.Message) (llm.Message, error)
 	ReserveCompactionTurnID(string) error
 	EnqueuePendingMessage(context.Context, llm.Message) (runtime.PendingInputStatus, error)
 	EnqueuePersistedPendingMessage(context.Context, runtime.PendingInputRecord) (runtime.PendingInputStatus, error)
@@ -91,7 +91,8 @@ func (q turnAdmissionQueue) admitPersistedAttempt(ctx context.Context, record ru
 		return result, status, false
 	}
 	turnID := ids.NextTurnID("turn")
-	if err := q.engine.ReserveTurnID(turnID); err != nil {
+	accepted, err := q.engine.AdmitTurnMessage(turnID, record.Message)
+	if err != nil {
 		if errors.Is(err, runtime.ErrActiveTurnExists) {
 			return q.queuePersisted(ctx, record, turnAdmissionIdle, "")
 		}
@@ -104,7 +105,7 @@ func (q turnAdmissionQueue) admitPersistedAttempt(ctx context.Context, record ru
 	return TurnAdmissionResult{
 		Kind:   TurnAdmissionStarted,
 		TurnID: turnID,
-		Start:  &AdmittedTurn{TurnID: turnID, Message: record.Message},
+		Start:  &AdmittedTurn{TurnID: turnID, Message: accepted},
 	}, runtime.PendingInputStatus{TurnID: turnID}, false
 }
 
@@ -122,7 +123,8 @@ func (q turnAdmissionQueue) admitUserAttempt(
 	}
 
 	turnID := ids.NextTurnID("turn")
-	if err := q.engine.ReserveTurnID(turnID); err != nil {
+	accepted, err := q.engine.AdmitTurnMessage(turnID, msg)
+	if err != nil {
 		if errors.Is(err, runtime.ErrActiveTurnExists) {
 			return q.queuePending(ctx, msg, turnAdmissionIdle, "")
 		}
@@ -136,7 +138,7 @@ func (q turnAdmissionQueue) admitUserAttempt(
 	return TurnAdmissionResult{
 		Kind:   TurnAdmissionStarted,
 		TurnID: turnID,
-		Start:  &AdmittedTurn{TurnID: turnID, Message: msg},
+		Start:  &AdmittedTurn{TurnID: turnID, Message: accepted},
 	}, runtime.PendingInputStatus{TurnID: turnID}, false
 }
 

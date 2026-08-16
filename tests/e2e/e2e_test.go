@@ -2058,7 +2058,7 @@ func TestEndToEnd_DebugObservabilityArtifacts(t *testing.T) {
 			t.Fatalf("%s missing: %v", rel, err)
 		}
 	}
-	if got := rootJSONLFiles(t, sessionDir); !slices.Equal(got, []string{"conversation.jsonl", "events.jsonl"}) {
+	if got := rootJSONLFiles(t, sessionDir); !slices.Equal(got, []string{"conversation.jsonl", "events.jsonl", "pending_input.jsonl"}) {
 		t.Fatalf("session JSONL files = %v, want canonical journals", got)
 	}
 	journal := readJSONLObjects(t, filepath.Join(sessionDir, "events.jsonl"))

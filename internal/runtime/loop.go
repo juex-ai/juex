@@ -171,6 +171,46 @@ func (e *Engine) ReserveTurnID(turnID string) error {
 	return e.reserveTurnID(turnID, TurnAdmittedPayload{})
 }
 
+// AdmitTurnMessage durably accepts one main Turn input before establishing the
+// active execution boundary. Repeating admission for the same Turn returns the
+// already accepted message with its stable Framework-owned identity.
+func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Message, error) {
+	if e == nil {
+		return llm.Message{}, ErrNoActiveTurn
+	}
+	if turnID == "" {
+		return llm.Message{}, errors.New("runtime: empty turn id")
+	}
+	queue := e.currentPendingInputQueue()
+	if queue == nil {
+		return llm.Message{}, errors.New("runtime: pending input queue unavailable")
+	}
+	userMsg = llm.ClassifyUserMessage(userMsg)
+
+	e.pendingMu.Lock()
+	if e.activeTurnID != "" && e.activeTurnID != turnID {
+		e.pendingMu.Unlock()
+		return llm.Message{}, ErrActiveTurnExists
+	}
+	alreadyActive := e.activeTurnID == turnID
+	accepted, err := e.checkpointAcceptedTurnInput(queue, turnID, userMsg, alreadyActive)
+	if err != nil {
+		e.pendingMu.Unlock()
+		return llm.Message{}, err
+	}
+	admitted := e.activeTurnID == ""
+	e.activeTurnID = turnID
+	e.pendingMu.Unlock()
+
+	if admitted {
+		if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{}}); err != nil {
+			e.finishActiveTurn(turnID)
+			return llm.Message{}, fmt.Errorf("commit turn admission: %w", err)
+		}
+	}
+	return accepted, nil
+}
+
 func (e *Engine) ReserveCompactionTurnID(turnID string) error {
 	return e.reserveTurnID(turnID, TurnAdmittedPayload{
 		Operation: TurnAdmissionOperationCompact,
@@ -488,8 +528,11 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	if turnID == "" {
 		turnID = newID()
 	}
+	userMsg, err = e.AdmitTurnMessage(turnID, userMsg)
+	if err != nil {
+		return "", err
+	}
 	ctx, _, finishOperation := e.beginActiveOperation(ctx)
-	turnID = e.beginActiveTurn(turnID)
 	previousFailures := e.toolFailures
 	e.toolFailures = newToolFailureLedger(e.WorkDir)
 	lifecycle := turnLifecycle{
@@ -645,6 +688,48 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 		}
 	}
 	return prepared, nil
+}
+
+func (e *Engine) checkpointAcceptedTurnInput(queue *PendingInputQueue, turnID string, userMsg llm.Message, reuseTurnRecord bool) (llm.Message, error) {
+	records, err := queue.Records()
+	if err != nil {
+		return llm.Message{}, fmt.Errorf("load accepted turn input: %w", err)
+	}
+	if userMsg.ID != "" {
+		for _, record := range records {
+			if record.MessageID != userMsg.ID || !isReplayablePendingState(record.State) {
+				continue
+			}
+			if record.State != PendingInputStateAdmitted || record.TurnID != turnID {
+				if err := queue.MarkAdmitted([]string{record.ID}, turnID); err != nil {
+					return llm.Message{}, fmt.Errorf("admit accepted turn input: %w", err)
+				}
+			}
+			return record.Message, nil
+		}
+	}
+	if reuseTurnRecord {
+		for _, record := range records {
+			if record.TurnID == turnID && record.State == PendingInputStateAdmitted {
+				return record.Message, nil
+			}
+		}
+	}
+
+	opts := e.defaultPendingInputOptions(userMsg, PendingInputOptions{})
+	record, err := queue.Enqueue(userMsg, opts, turnID)
+	if err != nil {
+		return llm.Message{}, fmt.Errorf("persist accepted turn input: %w", err)
+	}
+	if !isReplayablePendingState(record.State) {
+		return llm.Message{}, fmt.Errorf("accepted turn input %q is already %s", record.ID, record.State)
+	}
+	if record.State != PendingInputStateAdmitted || record.TurnID != turnID {
+		if err := queue.MarkAdmitted([]string{record.ID}, turnID); err != nil {
+			return llm.Message{}, fmt.Errorf("admit accepted turn input: %w", err)
+		}
+	}
+	return record.Message, nil
 }
 
 func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error {

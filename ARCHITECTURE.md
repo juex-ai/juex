@@ -1347,6 +1347,13 @@ pending-input, or slash-command policy. Manual compact reservation marks its
 preserve queued input even when a pre-compact hook fails before compaction
 starts.
 
+Before ordinary or `/new` admission returns `started`, the runtime writes the
+main input as an `admitted` pending-input record with a stable message id, then
+establishes the active Turn and emits `turn.admitted`. Turn input policies may
+replace message content but retain that Framework-owned identity; transcript
+append marks the accepted record `processed`, while a crash during policy
+evaluation leaves it replayable.
+
 ```go
 // internal/runtime/loop.go
 type Engine struct {

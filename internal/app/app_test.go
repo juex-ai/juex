@@ -1519,8 +1519,20 @@ func TestApp_DebugObservabilityWritesLogsWithCanonicalJournals(t *testing.T) {
 			t.Fatalf("%s missing: %v", rel, err)
 		}
 	}
-	if got := sessionRootJSONL(t, sessionDir); !reflect.DeepEqual(got, []string{"conversation.jsonl", "events.jsonl"}) {
+	if got := sessionRootJSONL(t, sessionDir); !reflect.DeepEqual(got, []string{"conversation.jsonl", "events.jsonl", "pending_input.jsonl"}) {
 		t.Fatalf("session JSONL files = %v, want canonical journals", got)
+	}
+	pending, err := runtime.NewPendingInputQueue(sessionDir, runtime.PendingInputQueueOptions{}).Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending input records = %+v, want one accepted turn input", pending)
+	}
+	for _, record := range pending {
+		if record.State != runtime.PendingInputStateProcessed || record.Message.FirstText() != "hello" {
+			t.Fatalf("accepted turn input = %+v, want processed hello", record)
+		}
 	}
 	debugData, err := os.ReadFile(filepath.Join(sessionDir, "logs", "debug.log"))
 	if err != nil {

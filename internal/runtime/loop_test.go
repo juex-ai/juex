@@ -5332,6 +5332,98 @@ func TestTurn_PromotedPendingInputReplacementPreservesFrameworkIdentity(t *testi
 	}
 }
 
+func TestTurn_AcceptedInputIsReplayableBeforeTurnInputPolicy(t *testing.T) {
+	const turnID = "turn-policy-checkpoint"
+	root := t.TempDir()
+	sess, err := session.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	eng := newEngineForSession(t, sess, prov)
+	var (
+		policyMessageID string
+		recordsAtPolicy map[string]PendingInputRecord
+		policyReadErr   error
+	)
+	installRuntimeTestModules(t, eng, &runtimeTurnInputPolicyModule{id: "replace-input", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+		policyMessageID = request.Message.ID
+		recordsAtPolicy, policyReadErr = NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{}).Records()
+		return runtimemodule.TurnInputDecision{
+			Action:  runtimemodule.TurnInputReplace,
+			Message: llm.TextMessage(llm.RoleUser, "transformed input"),
+		}, nil
+	}})
+
+	if _, err := eng.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, "original input"), turnID); err != nil {
+		t.Fatal(err)
+	}
+	if policyReadErr != nil {
+		t.Fatal(policyReadErr)
+	}
+	if policyMessageID == "" {
+		t.Fatal("turn input policy received a message without durable identity")
+	}
+	if len(recordsAtPolicy) != 1 {
+		t.Fatalf("pending records during policy = %+v, want one accepted input", recordsAtPolicy)
+	}
+	var accepted PendingInputRecord
+	for _, record := range recordsAtPolicy {
+		accepted = record
+	}
+	if accepted.State != PendingInputStateAdmitted || accepted.TurnID != turnID || accepted.MessageID != policyMessageID || accepted.Message.FirstText() != "original input" {
+		t.Fatalf("accepted input during policy = %+v", accepted)
+	}
+	if got := eng.Session.History[0]; got.ID != accepted.MessageID || got.FirstText() != "transformed input" {
+		t.Fatalf("persisted transformed input = %+v, want message id %q", got, accepted.MessageID)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[accepted.ID].State != PendingInputStateProcessed {
+		t.Fatalf("accepted input state = %q, want processed", records[accepted.ID].State)
+	}
+}
+
+func TestTurn_ReusedTurnIDGetsFreshAcceptedInputIdentity(t *testing.T) {
+	sess, err := session.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "first done"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "second done"), StopReason: llm.StopEndTurn},
+	}}
+	eng := newEngineForSession(t, sess, prov)
+	for _, input := range []string{"first input", "second input"} {
+		if _, err := eng.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, input), "turn-1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("accepted records = %+v, want distinct records for reused turn id", records)
+	}
+	messageIDs := map[string]bool{}
+	for _, record := range records {
+		if record.State != PendingInputStateProcessed {
+			t.Fatalf("accepted record = %+v, want processed", record)
+		}
+		messageIDs[record.MessageID] = true
+	}
+	if len(messageIDs) != 2 {
+		t.Fatalf("accepted message ids = %+v, want two", messageIDs)
+	}
+}
+
 type pendingAdmissionProbe struct {
 	queue  *PendingInputQueue
 	order  *[]string
