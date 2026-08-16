@@ -5685,6 +5685,50 @@ func TestTurn_LaterAcceptedTurnInputStillRunsPolicy(t *testing.T) {
 	}
 }
 
+func TestDrainPendingTurnInputClearsPublishedStatus(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: eng.effectiveMaxPendingInputs()})
+	var lifecycle []string
+	bus.Subscribe("*", func(event events.Event) {
+		store.Publish(event)
+		switch event.Type {
+		case "pending_input.queued", PendingInputDrainingType, "pending_input.drained":
+			lifecycle = append(lifecycle, event.Type)
+		}
+	})
+	if err := eng.ReserveTurnID("active-turn"); err != nil {
+		t.Fatal(err)
+	}
+	record, err := eng.currentPendingInputQueue().AdmitTurnInput(
+		"later-turn",
+		llm.TextMessage(llm.RoleUser, "later accepted turn"),
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePersistedPendingMessage(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := store.Snapshot(); snapshot.Session.PendingCount != 1 {
+		t.Fatalf("pending status before drain = %+v, want one queued input", snapshot.Session)
+	}
+
+	eng.mu.Lock()
+	err = eng.drainPendingInputLocked(context.Background(), "active-turn")
+	eng.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := store.Snapshot()
+	if snapshot.Session.PendingCount != 0 || snapshot.Session.State != SessionRuntimeTurnActive {
+		t.Fatalf("pending status after drain = %+v, want active turn with empty queue", snapshot.Session)
+	}
+	if got, want := lifecycle, []string{"pending_input.queued", PendingInputDrainingType, "pending_input.drained"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending lifecycle = %v, want %v", got, want)
+	}
+}
+
 func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
 	sess, err := session.New(t.TempDir())
 	if err != nil {
