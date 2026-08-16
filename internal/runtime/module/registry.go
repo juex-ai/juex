@@ -170,7 +170,10 @@ type ToolCatalog struct {
 
 func (c ToolCatalog) Entries() []ToolEntry {
 	entries := make([]ToolEntry, len(c.entries))
-	copy(entries, c.entries)
+	for i, entry := range c.entries {
+		entries[i] = entry
+		entries[i].Tool = entry.Tool.Clone()
+	}
 	return entries
 }
 
@@ -179,7 +182,7 @@ func (c ToolCatalog) Install(registry *tools.Registry) error {
 		return fmt.Errorf("runtime modules: nil tool registry")
 	}
 	for _, entry := range c.entries {
-		if err := registry.Register(entry.Tool); err != nil {
+		if err := registry.Register(entry.Tool.Clone()); err != nil {
 			return fmt.Errorf("runtime modules: install tool %q from module %q: %w", entry.Tool.Name, entry.ModuleID, err)
 		}
 	}
@@ -215,7 +218,7 @@ func InstallToolCatalogs(registry *tools.Registry, sets ...*Set) error {
 		}
 	}
 	for _, entry := range entries {
-		if err := registry.Register(entry.Tool); err != nil {
+		if err := registry.Register(entry.Tool.Clone()); err != nil {
 			return fmt.Errorf("runtime modules: install tool %q from module %q: %w", entry.Tool.Name, entry.ModuleID, err)
 		}
 	}
@@ -232,6 +235,7 @@ func buildToolCatalog(ctx context.Context, toolContext ToolContext, providers []
 			return ToolCatalog{}, fmt.Errorf("runtime module %q tools: %w", registered.id, err)
 		}
 		for _, tool := range provided {
+			tool = tool.Clone()
 			name := strings.TrimSpace(tool.Name)
 			if first, exists := owners[name]; exists {
 				return ToolCatalog{}, fmt.Errorf("runtime modules: tool %q contributed by module %q and module %q", name, first, registered.id)
@@ -256,7 +260,7 @@ type Set struct {
 	toolCatalog      ToolCatalog
 
 	scope Scope
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	state lifecycleState
 }
 
@@ -281,6 +285,11 @@ func (s *Set) ToolCatalog() ToolCatalog {
 func (s *Set) Context(ctx context.Context, request ContextRequest) ([]ContextSection, error) {
 	if s == nil {
 		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.state.closed {
+		return nil, fmt.Errorf("runtime modules: %s set is closed", s.scope)
 	}
 	if ctx == nil {
 		ctx = context.Background()

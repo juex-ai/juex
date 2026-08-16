@@ -17,6 +17,20 @@ type testModule struct {
 	toolErr    error
 }
 
+type schemaToolModule struct {
+	schema map[string]any
+}
+
+func (schemaToolModule) ID() ID { return "schema-tool" }
+
+func (m schemaToolModule) Tools(context.Context, ToolContext) ([]tools.Tool, error) {
+	return []tools.Tool{{
+		Name:    "schema_tool",
+		Schema:  m.schema,
+		Handler: func(context.Context, map[string]any) (string, error) { return "ok", nil },
+	}}, nil
+}
+
 func (m testModule) ID() ID { return m.id }
 
 func (m testModule) Context(context.Context, ContextRequest) ([]ContextSection, error) {
@@ -74,6 +88,57 @@ func TestRegistrySealsAllCapabilitiesInRegistrationOrder(t *testing.T) {
 	}
 	if got := set.Modules(); len(got) != 2 {
 		t.Fatalf("sealed modules changed after rejected registration: %#v", got)
+	}
+}
+
+func TestToolCatalogEntriesDeepCopySchemas(t *testing.T) {
+	required := []string{"value"}
+	schema := map[string]any{
+		"type":     "object",
+		"required": required,
+		"properties": map[string]any{
+			"value": map[string]any{"enum": []any{"original"}},
+		},
+	}
+	registry := NewRegistry()
+	if err := registry.Register(schemaToolModule{schema: schema}); err != nil {
+		t.Fatal(err)
+	}
+	set, err := registry.Seal(context.Background(), ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	required[0] = "mutated-input"
+	first := set.ToolCatalog().Entries()
+	first[0].Tool.Schema["type"] = "array"
+	first[0].Tool.Schema["required"].([]string)[0] = "mutated-output"
+	first[0].Tool.Schema["properties"].(map[string]any)["value"].(map[string]any)["enum"].([]any)[0] = "mutated-output"
+
+	second := set.ToolCatalog().Entries()
+	if second[0].Tool.Schema["type"] != "object" {
+		t.Fatalf("catalog type mutated through snapshot: %#v", second[0].Tool.Schema)
+	}
+	if got := second[0].Tool.Schema["required"].([]string); len(got) != 1 || got[0] != "value" {
+		t.Fatalf("catalog required mutated through alias: %#v", got)
+	}
+	gotEnum := second[0].Tool.Schema["properties"].(map[string]any)["value"].(map[string]any)["enum"].([]any)
+	if len(gotEnum) != 1 || gotEnum[0] != "original" {
+		t.Fatalf("catalog enum mutated through snapshot: %#v", gotEnum)
+	}
+
+	catalog := set.ToolCatalog()
+	installed := tools.NewRegistry()
+	if err := catalog.Install(installed); err != nil {
+		t.Fatal(err)
+	}
+	installedTool, ok := installed.Get("schema_tool")
+	if !ok {
+		t.Fatal("installed schema_tool is missing")
+	}
+	installedTool.Schema["required"].([]string)[0] = "mutated-install"
+	if got := catalog.Entries()[0].Tool.Schema["required"].([]string); len(got) != 1 || got[0] != "value" {
+		t.Fatalf("catalog required mutated through installed registry: %#v", got)
 	}
 }
 

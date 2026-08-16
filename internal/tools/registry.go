@@ -107,6 +107,13 @@ type Tool struct {
 	ResultHandler  ResultHandler
 }
 
+// Clone returns a defensive copy of the Tool definition while preserving its
+// immutable handler functions.
+func (t Tool) Clone() Tool {
+	t.Schema = cloneSchemaMap(t.Schema)
+	return t
+}
+
 func (d ToolDefinition) Bind(handler Handler) Tool {
 	return Tool{
 		Name:           d.Name,

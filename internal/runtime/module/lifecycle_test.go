@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type lifecycleModule struct {
@@ -35,6 +36,27 @@ func (m *lifecycleModule) CloseRuntime(context.Context) error {
 
 type sessionLifecycleModule struct{ lifecycleModule }
 
+type leasedContextSessionModule struct {
+	contextEntered chan struct{}
+	releaseContext chan struct{}
+	closeEntered   chan struct{}
+}
+
+func (*leasedContextSessionModule) ID() ID { return "leased-context" }
+
+func (m *leasedContextSessionModule) Context(context.Context, ContextRequest) ([]ContextSection, error) {
+	close(m.contextEntered)
+	<-m.releaseContext
+	return []ContextSection{{Key: "leased", Text: "context"}}, nil
+}
+
+func (*leasedContextSessionModule) StartSession(context.Context, SessionContext) error { return nil }
+
+func (m *leasedContextSessionModule) CloseSession(context.Context) error {
+	close(m.closeEntered)
+	return nil
+}
+
 func (m *sessionLifecycleModule) StartSession(context.Context, SessionContext) error {
 	*m.log = append(*m.log, "start:"+string(m.id))
 	return m.startErr
@@ -48,6 +70,54 @@ func (m *sessionLifecycleModule) QuiesceSession(context.Context) error {
 func (m *sessionLifecycleModule) CloseSession(context.Context) error {
 	*m.log = append(*m.log, "close:"+string(m.id))
 	return m.closeErr
+}
+
+func TestSessionCloseWaitsForContextLease(t *testing.T) {
+	mod := &leasedContextSessionModule{
+		contextEntered: make(chan struct{}),
+		releaseContext: make(chan struct{}),
+		closeEntered:   make(chan struct{}),
+	}
+	set, err := BuildSessionSet(context.Background(), []SessionFactorySpec{{
+		ID:      mod.ID(),
+		Enabled: true,
+		New: func(context.Context, SessionContext) (Module, error) {
+			return mod, nil
+		},
+	}}, SessionContext{}, ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := set.StartSession(context.Background(), SessionContext{}); err != nil {
+		t.Fatal(err)
+	}
+
+	contextDone := make(chan error, 1)
+	go func() {
+		_, err := set.Context(context.Background(), ContextRequest{})
+		contextDone <- err
+	}()
+	<-mod.contextEntered
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- set.CloseSession(context.Background())
+	}()
+
+	select {
+	case <-mod.closeEntered:
+		t.Error("Session Module closed while its Context call was active")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(mod.releaseContext)
+	if err := <-contextDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := set.Context(context.Background(), ContextRequest{}); err == nil || !strings.Contains(err.Error(), "session set is closed") {
+		t.Fatalf("Context() after close error = %v, want closed Session set", err)
+	}
 }
 
 func TestBuildRuntimeSetFiltersDisabledBeforeConstruction(t *testing.T) {
