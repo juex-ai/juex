@@ -343,6 +343,57 @@ func TestToolPoliciesPreserveValidContextOnPolicyError(t *testing.T) {
 	}
 }
 
+func TestToolPoliciesCheckpointTransformedInputBeforeNextPolicy(t *testing.T) {
+	var log []string
+	set := mustPolicySet(t,
+		&policyTestModule{id: "first", log: &log, toolDecision: ToolPolicyDecision{
+			Action: ToolPolicyTransform,
+			Input:  map[string]any{"path": "effective.txt"},
+		}},
+		&policyTestModule{id: "second", log: &log, toolDecision: ToolPolicyDecision{Action: ToolPolicyAllow}},
+	)
+	evaluation, err := ApplyToolPoliciesWithInputCheckpoint(context.Background(), ToolPolicyRequest{
+		Stage: ToolPolicyBeforeExecution,
+		Input: map[string]any{"path": "provider.txt"},
+	}, func(input map[string]any) error {
+		log = append(log, "checkpoint:"+input["path"].(string))
+		return nil
+	}, set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"tool:first:before_execution", "checkpoint:effective.txt", "tool:second:before_execution"}; !reflect.DeepEqual(log, want) {
+		t.Fatalf("policy/checkpoint order = %#v, want %#v", log, want)
+	}
+	if got := evaluation.Input["path"]; got != "effective.txt" {
+		t.Fatalf("effective input = %v", got)
+	}
+}
+
+func TestToolPolicyInputCheckpointFailureStopsLaterPolicy(t *testing.T) {
+	var log []string
+	set := mustPolicySet(t,
+		&policyTestModule{id: "first", log: &log, toolDecision: ToolPolicyDecision{
+			Action: ToolPolicyTransform,
+			Input:  map[string]any{"path": "effective.txt"},
+		}},
+		&policyTestModule{id: "second", log: &log, toolDecision: ToolPolicyDecision{Action: ToolPolicyAllow}},
+	)
+	want := errors.New("checkpoint failed")
+	_, err := ApplyToolPoliciesWithInputCheckpoint(context.Background(), ToolPolicyRequest{
+		Stage: ToolPolicyBeforeExecution,
+		Input: map[string]any{"path": "provider.txt"},
+	}, func(map[string]any) error {
+		return want
+	}, set)
+	if !errors.Is(err, want) || !IsPolicyCheckpointError(err) {
+		t.Fatalf("checkpoint error = %v, want %v", err, want)
+	}
+	if wantLog := []string{"tool:first:before_execution"}; !reflect.DeepEqual(log, wantLog) {
+		t.Fatalf("policies after checkpoint failure = %#v, want %#v", log, wantLog)
+	}
+}
+
 func TestPolicyObserverAttributionDoesNotLeakAcrossModules(t *testing.T) {
 	observer := &recordingPolicyObserver{}
 	set := mustPolicySet(t,

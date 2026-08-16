@@ -772,6 +772,48 @@ func TestTurn_TransformedToolInputIsDurableBeforeHandlerExecution(t *testing.T) 
 	}
 }
 
+func TestTurn_TransformedToolInputIsDurableBeforeLaterPolicyExecution(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: "call-transform", ToolName: "side_effect", Input: map[string]any{"path": "provider.txt"},
+		}}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	var durableEffectiveInput atomic.Bool
+	bus.Subscribe(toolevents.InputResolvedType, func(event events.Event) {
+		payload, ok := event.Payload.(toolevents.InputResolvedPayload)
+		if ok && payload.Input["path"] == "effective.txt" {
+			durableEffectiveInput.Store(true)
+		}
+	})
+	laterPolicySawCheckpoint := false
+	eng.Tools.MustRegister(tools.Tool{Name: "side_effect", Handler: func(context.Context, map[string]any) (string, error) {
+		return "recorded once", nil
+	}})
+	installRuntimeTestModules(t, eng,
+		&runtimeToolPolicyModule{id: "transform-input", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+			if request.Stage == runtimemodule.ToolPolicyBeforeExecution {
+				return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyTransform, Input: map[string]any{"path": "effective.txt"}}, nil
+			}
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+		}},
+		&runtimeToolPolicyModule{id: "later-policy", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+			if request.Stage == runtimemodule.ToolPolicyBeforeExecution {
+				laterPolicySawCheckpoint = durableEffectiveInput.Load()
+			}
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+		}},
+	)
+
+	if out, err := eng.Turn(context.Background(), "run transformed call"); err != nil || out != "done" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	if !laterPolicySawCheckpoint {
+		t.Fatal("effective tool input was not durably checkpointed before the later policy")
+	}
+}
+
 func TestTurn_DurableTransformedToolInputFailurePreventsHandlerExecution(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
@@ -781,16 +823,23 @@ func TestTurn_DurableTransformedToolInputFailurePreventsHandlerExecution(t *test
 	}}}
 	eng, bus := newEngine(t, prov, false)
 	toolCalls := 0
+	laterPolicyCalls := 0
 	eng.Tools.MustRegister(tools.Tool{Name: "side_effect", Handler: func(context.Context, map[string]any) (string, error) {
 		toolCalls++
 		return "must not run", nil
 	}})
-	installRuntimeTestModules(t, eng, &runtimeToolPolicyModule{id: "transform-input", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
-		if request.Stage == runtimemodule.ToolPolicyBeforeExecution {
-			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyTransform, Input: map[string]any{"path": "effective.txt"}}, nil
-		}
-		return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
-	}})
+	installRuntimeTestModules(t, eng,
+		&runtimeToolPolicyModule{id: "transform-input", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+			if request.Stage == runtimemodule.ToolPolicyBeforeExecution {
+				return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyTransform, Input: map[string]any{"path": "effective.txt"}}, nil
+			}
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+		}},
+		&runtimeToolPolicyModule{id: "later-policy", apply: func(runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+			laterPolicyCalls++
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+		}},
+	)
 	want := errors.New("resolved input sync failed")
 	bus.SetCommitter(selectiveFailCommitter{eventType: toolevents.InputResolvedType, err: want})
 
@@ -799,6 +848,9 @@ func TestTurn_DurableTransformedToolInputFailurePreventsHandlerExecution(t *test
 	}
 	if toolCalls != 0 {
 		t.Fatalf("tool calls = %d, want 0", toolCalls)
+	}
+	if laterPolicyCalls != 0 {
+		t.Fatalf("later policy calls = %d, want 0", laterPolicyCalls)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -59,9 +60,12 @@ type PolicyObserver interface {
 	Errored(PolicyExecution, PolicyResult, error)
 }
 
-type policyCheckpointError struct{ err error }
+type policyCheckpointError struct {
+	operation string
+	err       error
+}
 
-func (e *policyCheckpointError) Error() string { return "commit policy request: " + e.err.Error() }
+func (e *policyCheckpointError) Error() string { return e.operation + ": " + e.err.Error() }
 func (e *policyCheckpointError) Unwrap() error { return e.err }
 
 func CheckpointPolicy(observer PolicyObserver, execution PolicyExecution) error {
@@ -69,7 +73,7 @@ func CheckpointPolicy(observer PolicyObserver, execution PolicyExecution) error 
 		return nil
 	}
 	if err := observer.Requested(execution); err != nil {
-		return &policyCheckpointError{err: err}
+		return &policyCheckpointError{operation: "commit policy request", err: err}
 	}
 	return nil
 }
@@ -323,11 +327,31 @@ func replaceTurnInputContent(current, replacement llm.Message) llm.Message {
 }
 
 func ApplyToolPolicies(ctx context.Context, request ToolPolicyRequest, sets ...*Set) (ToolPolicyEvaluation, error) {
+	return applyToolPolicies(ctx, request, nil, sets...)
+}
+
+// ApplyToolPoliciesWithInputCheckpoint durably records each effective input
+// before a later before-execution policy can observe or act on it.
+func ApplyToolPoliciesWithInputCheckpoint(
+	ctx context.Context,
+	request ToolPolicyRequest,
+	checkpoint func(map[string]any) error,
+	sets ...*Set,
+) (ToolPolicyEvaluation, error) {
+	return applyToolPolicies(ctx, request, checkpoint, sets...)
+}
+
+func applyToolPolicies(
+	ctx context.Context,
+	request ToolPolicyRequest,
+	checkpoint func(map[string]any) error,
+	sets ...*Set,
+) (ToolPolicyEvaluation, error) {
 	evaluation := ToolPolicyEvaluation{Input: cloneAnyMap(request.Input), Result: request.Result}
 	for _, set := range sets {
 		request.Input = evaluation.Input
 		request.Result = evaluation.Result
-		current, err := set.applyToolPolicies(ctx, request)
+		current, err := set.applyToolPolicies(ctx, request, checkpoint)
 		evaluation.Input = current.Input
 		evaluation.Result = current.Result
 		evaluation.Context = append(evaluation.Context, current.Context...)
@@ -343,7 +367,11 @@ func ApplyToolPolicies(ctx context.Context, request ToolPolicyRequest, sets ...*
 	return evaluation, nil
 }
 
-func (s *Set) applyToolPolicies(ctx context.Context, request ToolPolicyRequest) (ToolPolicyEvaluation, error) {
+func (s *Set) applyToolPolicies(
+	ctx context.Context,
+	request ToolPolicyRequest,
+	checkpoint func(map[string]any) error,
+) (ToolPolicyEvaluation, error) {
 	evaluation := ToolPolicyEvaluation{Input: cloneAnyMap(request.Input), Result: request.Result}
 	if s == nil {
 		return evaluation, nil
@@ -369,7 +397,13 @@ func (s *Set) applyToolPolicies(ctx context.Context, request ToolPolicyRequest) 
 		switch decision.Action {
 		case "", ToolPolicyAllow:
 		case ToolPolicyTransform:
-			evaluation.Input = cloneAnyMap(decision.Input)
+			effectiveInput := cloneAnyMap(decision.Input)
+			if request.Stage == ToolPolicyBeforeExecution && checkpoint != nil && !reflect.DeepEqual(evaluation.Input, effectiveInput) {
+				if err := checkpoint(cloneAnyMap(effectiveInput)); err != nil {
+					return evaluation, &policyCheckpointError{operation: "commit resolved tool input", err: err}
+				}
+			}
+			evaluation.Input = effectiveInput
 			evaluation.Result = decision.Result
 		case ToolPolicyDeny:
 			evaluation.Denied = true

@@ -161,6 +161,7 @@ func TestToolExecutionRecoveryPreservesPolicyTransformedInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalInput := map[string]any{"path": "provider.txt"}
+	intermediateInput := map[string]any{"path": "intermediate.txt"}
 	effectiveInput := map[string]any{"path": "effective.txt"}
 	assistant, err := sess.AppendAssigned(llm.Message{ID: "assistant-transformed", Role: llm.RoleAssistant, Blocks: []llm.Block{{
 		Type: llm.BlockToolUse, ToolUseID: "call-transformed", ToolName: "write", Input: originalInput,
@@ -175,6 +176,9 @@ func TestToolExecutionRecoveryPreservesPolicyTransformedInput(t *testing.T) {
 	appendExecutionEvent(t, sess, declaredResponseEventForCall(assistant, call))
 	appendExecutionEvent(t, sess, toolEvent(toolevents.RequestedType, toolevents.Requested(call)))
 	appendExecutionEvent(t, sess, toolEvent(toolevents.RunningType, toolevents.Running(call)))
+	intermediateCall := call
+	intermediateCall.Input = intermediateInput
+	appendExecutionEvent(t, sess, toolEvent(toolevents.InputResolvedType, toolevents.InputResolved(intermediateCall)))
 	effectiveCall := call
 	effectiveCall.Input = effectiveInput
 	appendExecutionEvent(t, sess, toolEvent(toolevents.InputResolvedType, toolevents.InputResolved(effectiveCall)))

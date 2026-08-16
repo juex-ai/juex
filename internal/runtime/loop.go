@@ -27,7 +27,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -1189,7 +1188,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 	if err := e.emit(events.Event{Type: toolevents.RunningType, TurnID: turnID, Payload: toolevents.Running(execution.payload)}); err != nil {
 		return toolCallResult{FatalError: fmt.Errorf("commit tool started: %w", err)}
 	}
-	prePolicy, err := runtimemodule.ApplyToolPolicies(ctx, runtimemodule.ToolPolicyRequest{
+	prePolicy, err := runtimemodule.ApplyToolPoliciesWithInputCheckpoint(ctx, runtimemodule.ToolPolicyRequest{
 		Runtime:  e.policyRuntimeContext(),
 		Session:  e.policySessionContext(),
 		TurnID:   turnID,
@@ -1197,6 +1196,10 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 		ToolName: call.ToolName,
 		Input:    call.Input,
 		Observer: e.policyObserver(turnID),
+	}, func(input map[string]any) error {
+		effectiveCall := execution.payload
+		effectiveCall.Input = input
+		return e.emit(events.Event{Type: toolevents.InputResolvedType, TurnID: turnID, Payload: toolevents.InputResolved(effectiveCall)})
 	}, e.policySets()...)
 	call.Input = prePolicy.Input
 	if err != nil {
@@ -1208,14 +1211,6 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 	if prePolicy.Denied {
 		return e.policyToolErrorResult(call, fmt.Errorf("tool policy denied %q%s", call.ToolName, policyReasonSuffix(prePolicy.Reason)), prePolicy.Context)
 	}
-	if !reflect.DeepEqual(execution.payload.Input, call.Input) {
-		effectiveCall := execution.payload
-		effectiveCall.Input = call.Input
-		if err := e.emit(events.Event{Type: toolevents.InputResolvedType, TurnID: turnID, Payload: toolevents.InputResolved(effectiveCall)}); err != nil {
-			return toolCallResult{FatalError: fmt.Errorf("commit resolved tool input: %w", err)}
-		}
-	}
-
 	toolCtx := tools.WithToolCallEvents(ctx, tools.ToolCallEvents{
 		Name:      call.ToolName,
 		ToolUseID: call.ToolUseID,
