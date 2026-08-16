@@ -301,7 +301,7 @@ func (s *Set) applyTurnInputPolicies(ctx context.Context, request TurnInputReque
 		switch decision.Action {
 		case "", TurnInputAllow:
 		case TurnInputReplace:
-			message = cloneMessage(decision.Message)
+			message = replaceTurnInputContent(message, decision.Message)
 		case TurnInputReject:
 			return llm.Message{}, fmt.Errorf("runtime module %q turn input rejected%s", registered.id, reasonSuffix(decision.Reason))
 		default:
@@ -309,6 +309,17 @@ func (s *Set) applyTurnInputPolicies(ctx context.Context, request TurnInputReque
 		}
 	}
 	return message, nil
+}
+
+func replaceTurnInputContent(current, replacement llm.Message) llm.Message {
+	frameworkMetadata := cloneMessage(current)
+	replacement = cloneMessage(replacement)
+	replacement.ID = frameworkMetadata.ID
+	replacement.Role = frameworkMetadata.Role
+	replacement.Kind = frameworkMetadata.Kind
+	replacement.Model = frameworkMetadata.Model
+	replacement.Compaction = frameworkMetadata.Compaction
+	return replacement
 }
 
 func ApplyToolPolicies(ctx context.Context, request ToolPolicyRequest, sets ...*Set) (ToolPolicyEvaluation, error) {

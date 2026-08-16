@@ -8,6 +8,7 @@ import (
 const (
 	RequestedType      = "tool.requested"
 	RunningType        = "tool.running"
+	InputResolvedType  = "tool.input_resolved"
 	OutputDeltaType    = "tool.output_delta"
 	CompletedType      = "tool.completed"
 	ErroredType        = "tool.errored"
@@ -41,6 +42,17 @@ type RunningPayload struct {
 	Iter           int    `json:"iter"`
 	CallIndex      int    `json:"call_index"`
 	MessageID      string `json:"message_id"`
+}
+
+// InputResolvedPayload durably records the effective input after all
+// before-execution policies have completed and before the handler is invoked.
+type InputResolvedPayload struct {
+	Name      string         `json:"name"`
+	Input     map[string]any `json:"input"`
+	ToolUseID string         `json:"tool_use_id"`
+	Iter      int            `json:"iter"`
+	CallIndex int            `json:"call_index"`
+	MessageID string         `json:"message_id"`
 }
 
 type OutputDelta struct {
@@ -115,12 +127,13 @@ type ErroredPayload struct {
 }
 
 type OutcomeUnknownPayload struct {
-	Name      string `json:"name"`
-	ToolUseID string `json:"tool_use_id"`
-	Iter      int    `json:"iter"`
-	CallIndex int    `json:"call_index"`
-	MessageID string `json:"message_id"`
-	Error     string `json:"error"`
+	Name      string         `json:"name"`
+	Input     map[string]any `json:"input,omitempty"`
+	ToolUseID string         `json:"tool_use_id"`
+	Iter      int            `json:"iter"`
+	CallIndex int            `json:"call_index"`
+	MessageID string         `json:"message_id"`
+	Error     string         `json:"error"`
 }
 
 type ErroredOptions struct {
@@ -158,6 +171,17 @@ func Running(call ToolCallPayload) RunningPayload {
 		Iter:           call.Iter,
 		CallIndex:      call.CallIndex,
 		MessageID:      call.MessageID,
+	}
+}
+
+func InputResolved(call ToolCallPayload) InputResolvedPayload {
+	return InputResolvedPayload{
+		Name:      call.Name,
+		Input:     call.Input,
+		ToolUseID: call.ToolUseID,
+		Iter:      call.Iter,
+		CallIndex: call.CallIndex,
+		MessageID: call.MessageID,
 	}
 }
 
@@ -238,6 +262,7 @@ func Errored(call ToolCallPayload, opts ErroredOptions) ErroredPayload {
 func OutcomeUnknown(call ToolCallPayload, message string) OutcomeUnknownPayload {
 	return OutcomeUnknownPayload{
 		Name:      call.Name,
+		Input:     call.Input,
 		ToolUseID: call.ToolUseID,
 		Iter:      call.Iter,
 		CallIndex: call.CallIndex,

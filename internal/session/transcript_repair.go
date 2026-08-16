@@ -17,18 +17,19 @@ const (
 )
 
 type TranscriptRepair struct {
-	ToolUseID               string `json:"tool_use_id"`
-	ToolName                string `json:"tool_name,omitempty"`
-	RepairMessageID         string `json:"repair_message_id"`
-	InsertedBeforeMessageID string `json:"inserted_before_message_id,omitempty"`
-	Reason                  string `json:"reason,omitempty"`
-	TurnID                  string `json:"turn_id,omitempty"`
-	ProviderIteration       int    `json:"provider_iteration"`
-	CallIndex               int    `json:"call_index"`
-	AssistantMessageID      string `json:"assistant_message_id,omitempty"`
-	ExecutionPhase          string `json:"execution_phase"`
-	RecoveryCode            string `json:"recovery_code"`
-	OutcomeUnknownRecorded  bool   `json:"-"`
+	ToolUseID               string         `json:"tool_use_id"`
+	ToolName                string         `json:"tool_name,omitempty"`
+	RepairMessageID         string         `json:"repair_message_id"`
+	InsertedBeforeMessageID string         `json:"inserted_before_message_id,omitempty"`
+	Reason                  string         `json:"reason,omitempty"`
+	TurnID                  string         `json:"turn_id,omitempty"`
+	ProviderIteration       int            `json:"provider_iteration"`
+	CallIndex               int            `json:"call_index"`
+	AssistantMessageID      string         `json:"assistant_message_id,omitempty"`
+	EffectiveInput          map[string]any `json:"effective_input,omitempty"`
+	ExecutionPhase          string         `json:"execution_phase"`
+	RecoveryCode            string         `json:"recovery_code"`
+	OutcomeUnknownRecorded  bool           `json:"-"`
 }
 
 type TranscriptRepairedPayload struct {
@@ -40,6 +41,7 @@ type pendingTranscriptToolUse struct {
 	id        string
 	name      string
 	messageID string
+	input     map[string]any
 	execution toolExecutionRecovery
 }
 
@@ -131,6 +133,7 @@ func recoverPersistedTranscriptRepairs(
 				id:        block.ToolUseID,
 				name:      block.ToolName,
 				messageID: msg.ID,
+				input:     block.Input,
 				execution: executions.lookup(msg.ID, block.ToolUseID),
 			}
 		}
@@ -162,6 +165,7 @@ func recoverPersistedTranscriptRepairs(
 				ProviderIteration:       toolUse.execution.iter,
 				CallIndex:               toolUse.execution.callIndex,
 				AssistantMessageID:      toolUse.messageID,
+				EffectiveInput:          toolUse.execution.input,
 				ExecutionPhase:          string(toolUse.execution.phase),
 				RecoveryCode:            recoveryCode,
 				OutcomeUnknownRecorded:  recorded,
@@ -255,6 +259,7 @@ func messageToolUses(msg llm.Message, executions toolExecutionRecoveryIndex) []p
 				id:        block.ToolUseID,
 				name:      block.ToolName,
 				messageID: msg.ID,
+				input:     block.Input,
 				execution: executions.lookup(msg.ID, block.ToolUseID),
 			})
 		}
@@ -299,6 +304,7 @@ func newTranscriptRepairMessage(pending []pendingTranscriptToolUse, reason, befo
 			ProviderIteration:       item.execution.iter,
 			CallIndex:               item.execution.callIndex,
 			AssistantMessageID:      item.messageID,
+			EffectiveInput:          item.execution.input,
 			ExecutionPhase:          string(item.execution.phase),
 			RecoveryCode:            recoveryCode,
 		})
@@ -318,6 +324,11 @@ func recoveryToolResult(item pendingTranscriptToolUse) (llm.Block, string) {
 	recoveryCode := "TOOL_NOT_STARTED"
 	if item.execution.phase == toolExecutionStarted {
 		content = toolOutcomeUnknownContent
+		if !reflect.DeepEqual(item.input, item.execution.input) {
+			if encoded, err := json.Marshal(item.execution.input); err == nil {
+				content += "\nEffective input at execution: " + string(encoded)
+			}
+		}
 		recoveryCode = "TOOL_OUTCOME_UNKNOWN"
 	}
 	return llm.Block{

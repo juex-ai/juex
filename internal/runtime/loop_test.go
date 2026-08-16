@@ -236,6 +236,20 @@ type runtimeToolPolicyModule struct {
 	apply func(runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error)
 }
 
+type runtimeTurnInputPolicyModule struct {
+	id    runtimemodule.ID
+	apply func(runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error)
+}
+
+func (m *runtimeTurnInputPolicyModule) ID() runtimemodule.ID { return m.id }
+
+func (m *runtimeTurnInputPolicyModule) ApplyTurnInput(_ context.Context, request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+	if m.apply == nil {
+		return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputAllow}, nil
+	}
+	return m.apply(request)
+}
+
 func (m *runtimeToolPolicyModule) ID() runtimemodule.ID { return m.id }
 
 func (m *runtimeToolPolicyModule) ApplyTool(_ context.Context, request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
@@ -717,6 +731,74 @@ func TestTurn_ToolExecutionEventsCarryStableIdentityAndRecoverableOutcome(t *tes
 	}
 	if completed.Outcome == nil || completed.Outcome.MessageID != eng.Session.History[2].ID || completed.Outcome.Block.Content != "recorded once" {
 		t.Fatalf("completed outcome = %+v, history=%+v", completed.Outcome, eng.Session.History)
+	}
+}
+
+func TestTurn_TransformedToolInputIsDurableBeforeHandlerExecution(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: "call-transform", ToolName: "side_effect", Input: map[string]any{"path": "provider.txt"},
+		}}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	var durableEffectiveInput atomic.Bool
+	bus.Subscribe(toolevents.InputResolvedType, func(event events.Event) {
+		payload, ok := event.Payload.(toolevents.InputResolvedPayload)
+		if ok && payload.Input["path"] == "effective.txt" {
+			durableEffectiveInput.Store(true)
+		}
+	})
+	handlerSawCheckpoint := false
+	eng.Tools.MustRegister(tools.Tool{Name: "side_effect", Handler: func(_ context.Context, input map[string]any) (string, error) {
+		handlerSawCheckpoint = durableEffectiveInput.Load()
+		if input["path"] != "effective.txt" {
+			return "", fmt.Errorf("handler input = %#v", input)
+		}
+		return "recorded once", nil
+	}})
+	installRuntimeTestModules(t, eng, &runtimeToolPolicyModule{id: "transform-input", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+		if request.Stage == runtimemodule.ToolPolicyBeforeExecution {
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyTransform, Input: map[string]any{"path": "effective.txt"}}, nil
+		}
+		return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+	}})
+
+	if out, err := eng.Turn(context.Background(), "run transformed call"); err != nil || out != "done" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	if !handlerSawCheckpoint {
+		t.Fatal("effective tool input was not durably checkpointed before handler execution")
+	}
+}
+
+func TestTurn_DurableTransformedToolInputFailurePreventsHandlerExecution(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: "call-transform", ToolName: "side_effect", Input: map[string]any{"path": "provider.txt"},
+		}}},
+		StopReason: llm.StopToolUse,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	toolCalls := 0
+	eng.Tools.MustRegister(tools.Tool{Name: "side_effect", Handler: func(context.Context, map[string]any) (string, error) {
+		toolCalls++
+		return "must not run", nil
+	}})
+	installRuntimeTestModules(t, eng, &runtimeToolPolicyModule{id: "transform-input", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+		if request.Stage == runtimemodule.ToolPolicyBeforeExecution {
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyTransform, Input: map[string]any{"path": "effective.txt"}}, nil
+		}
+		return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+	}})
+	want := errors.New("resolved input sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: toolevents.InputResolvedType, err: want})
+
+	if _, err := eng.Turn(context.Background(), "run transformed call"); !errors.Is(err, want) {
+		t.Fatalf("Turn() error = %v, want %v", err, want)
+	}
+	if toolCalls != 0 {
+		t.Fatalf("tool calls = %d, want 0", toolCalls)
 	}
 }
 
@@ -5090,6 +5172,61 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	}
 	if records["event-1"].State != PendingInputStateProcessed {
 		t.Fatalf("state = %q, want processed", records["event-1"].State)
+	}
+}
+
+func TestTurn_PromotedPendingInputReplacementPreservesFrameworkIdentity(t *testing.T) {
+	root := t.TempDir()
+	sess, err := session.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	eng := newEngineForSession(t, sess, prov)
+	if err := eng.ReserveTurnID("compact-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "original pending input"),
+		PendingInputOptions{ID: "event-replaced", TTL: time.Hour},
+	); err != nil {
+		t.Fatal(err)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := records["event-replaced"]
+	installRuntimeTestModules(t, eng, &runtimeTurnInputPolicyModule{id: "replace-input", apply: func(runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+		return runtimemodule.TurnInputDecision{
+			Action:  runtimemodule.TurnInputReplace,
+			Message: llm.TextMessage(llm.RoleUser, "transformed pending input"),
+		}, nil
+	}})
+
+	msg, _, promoted, err := eng.PromotePendingInputTurn("compact-1", "turn-replaced")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !promoted {
+		t.Fatal("pending input was not promoted")
+	}
+	if _, err := eng.TurnMessageWithID(context.Background(), msg, "turn-replaced"); err != nil {
+		t.Fatal(err)
+	}
+	if got := eng.Session.History[0]; got.ID != record.MessageID || got.Kind != record.Message.Kind || got.FirstText() != "transformed pending input" {
+		t.Fatalf("persisted transformed input = %+v, want id %q kind %q", got, record.MessageID, record.Message.Kind)
+	}
+	records, err = eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[record.ID].State != PendingInputStateProcessed {
+		t.Fatalf("pending state = %q, want processed", records[record.ID].State)
 	}
 }
 

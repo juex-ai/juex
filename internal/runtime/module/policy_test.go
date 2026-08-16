@@ -249,6 +249,47 @@ func TestTurnInputPoliciesTransformSequentiallyAndFailClosed(t *testing.T) {
 	}
 }
 
+func TestTurnInputPolicyReplacementPreservesFrameworkMessageMetadata(t *testing.T) {
+	compaction := &llm.CompactionMetadata{Auto: true, Reason: "pending-input"}
+	original := llm.Message{
+		ID:         "pending-message-1",
+		Role:       llm.RoleUser,
+		Kind:       llm.MessageKindMCPEvent,
+		Model:      "framework:model",
+		Compaction: compaction,
+		Blocks:     []llm.Block{{Type: llm.BlockText, Text: "original"}},
+	}
+	replacement := llm.Message{
+		ID:         "policy-message",
+		Role:       llm.RoleAssistant,
+		Kind:       llm.MessageKindContinuation,
+		Model:      "policy:model",
+		Compaction: &llm.CompactionMetadata{Reason: "policy"},
+		Blocks:     []llm.Block{{Type: llm.BlockText, Text: "replacement"}},
+	}
+	set := mustPolicySet(t, &policyTestModule{
+		id: "transformer",
+		inputDecision: TurnInputDecision{
+			Action:  TurnInputReplace,
+			Message: replacement,
+		},
+	})
+
+	result, err := ApplyTurnInputPolicies(context.Background(), TurnInputRequest{Message: original}, set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FirstText() != "replacement" {
+		t.Fatalf("replacement content = %q", result.FirstText())
+	}
+	if result.ID != original.ID || result.Role != original.Role || result.Kind != original.Kind || result.Model != original.Model {
+		t.Fatalf("framework metadata changed: got %+v, want ID=%q role=%q kind=%q model=%q", result, original.ID, original.Role, original.Kind, original.Model)
+	}
+	if result.Compaction == nil || result.Compaction.Auto != original.Compaction.Auto || result.Compaction.Reason != original.Compaction.Reason {
+		t.Fatalf("compaction metadata = %+v, want %+v", result.Compaction, original.Compaction)
+	}
+}
+
 func TestToolPolicyErrorIsAttributedAndDenyStopsLaterPolicies(t *testing.T) {
 	var log []string
 	set := mustPolicySet(t,

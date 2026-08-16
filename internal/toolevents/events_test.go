@@ -28,6 +28,11 @@ func TestPayloadGoldenJSON(t *testing.T) {
 			want:    `{"name":"exec_command","input":{"cmd":"printf ok"},"tool_use_id":"call_1","timeout_seconds":5,"iter":2,"call_index":1,"message_id":"assistant-1"}`,
 		},
 		{
+			name:    "input resolved",
+			payload: InputResolved(call),
+			want:    `{"name":"exec_command","input":{"cmd":"printf ok"},"tool_use_id":"call_1","iter":2,"call_index":1,"message_id":"assistant-1"}`,
+		},
+		{
 			name: "output delta",
 			payload: Delta(call, OutputDelta{
 				SessionID: "42",

@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -678,7 +679,7 @@ func (e *Engine) repairTranscriptLocked(turnID, reason string) error {
 			call := toolevents.ToolCallPayload{
 				Name: repair.ToolName, ToolUseID: repair.ToolUseID,
 				Iter: repair.ProviderIteration, CallIndex: repair.CallIndex,
-				MessageID: repair.AssistantMessageID,
+				MessageID: repair.AssistantMessageID, Input: repair.EffectiveInput,
 			}
 			if err := e.emit(events.Event{
 				Type: toolevents.OutcomeUnknownType, TurnID: repair.TurnID,
@@ -1206,6 +1207,13 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 	}
 	if prePolicy.Denied {
 		return e.policyToolErrorResult(call, fmt.Errorf("tool policy denied %q%s", call.ToolName, policyReasonSuffix(prePolicy.Reason)), prePolicy.Context)
+	}
+	if !reflect.DeepEqual(execution.payload.Input, call.Input) {
+		effectiveCall := execution.payload
+		effectiveCall.Input = call.Input
+		if err := e.emit(events.Event{Type: toolevents.InputResolvedType, TurnID: turnID, Payload: toolevents.InputResolved(effectiveCall)}); err != nil {
+			return toolCallResult{FatalError: fmt.Errorf("commit resolved tool input: %w", err)}
+		}
 	}
 
 	toolCtx := tools.WithToolCallEvents(ctx, tools.ToolCallEvents{

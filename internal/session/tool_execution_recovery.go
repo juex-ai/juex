@@ -24,6 +24,7 @@ type toolExecutionRecovery struct {
 	messageID string
 	toolUseID string
 	name      string
+	input     map[string]any
 	phase     toolExecutionPhase
 	outcome   *toolevents.RecordedOutcome
 }
@@ -54,7 +55,7 @@ func projectToolExecutionRecovery(journal []events.Event) (toolExecutionRecovery
 			for _, call := range payload.ToolCalls {
 				index[toolExecutionRecoveryKey(call.MessageID, call.ToolUseID)] = toolExecutionRecovery{
 					turnID: event.TurnID, iter: call.Iter, callIndex: call.CallIndex,
-					messageID: call.MessageID, toolUseID: call.ToolUseID, name: call.Name,
+					messageID: call.MessageID, toolUseID: call.ToolUseID, name: call.Name, input: call.Input,
 					phase: toolExecutionDeclared,
 				}
 			}
@@ -63,25 +64,31 @@ func projectToolExecutionRecovery(journal []events.Event) (toolExecutionRecovery
 			if err := decodeRecoveryPayload(event.Payload, &payload); err != nil {
 				return nil, fmt.Errorf("session: decode tool.requested recovery payload: %w", err)
 			}
-			index.record(event.TurnID, payload.Iter, payload.CallIndex, payload.MessageID, payload.ToolUseID, payload.Name, toolExecutionDeclared, nil)
+			index.record(event.TurnID, payload.Iter, payload.CallIndex, payload.MessageID, payload.ToolUseID, payload.Name, payload.Input, true, toolExecutionDeclared, nil)
 		case toolevents.RunningType:
 			var payload toolevents.RunningPayload
 			if err := decodeRecoveryPayload(event.Payload, &payload); err != nil {
 				return nil, fmt.Errorf("session: decode tool.running recovery payload: %w", err)
 			}
-			index.record(event.TurnID, payload.Iter, payload.CallIndex, payload.MessageID, payload.ToolUseID, payload.Name, toolExecutionStarted, nil)
+			index.record(event.TurnID, payload.Iter, payload.CallIndex, payload.MessageID, payload.ToolUseID, payload.Name, nil, false, toolExecutionStarted, nil)
+		case toolevents.InputResolvedType:
+			var payload toolevents.InputResolvedPayload
+			if err := decodeRecoveryPayload(event.Payload, &payload); err != nil {
+				return nil, fmt.Errorf("session: decode tool.input_resolved recovery payload: %w", err)
+			}
+			index.record(event.TurnID, payload.Iter, payload.CallIndex, payload.MessageID, payload.ToolUseID, payload.Name, payload.Input, true, toolExecutionStarted, nil)
 		case toolevents.CompletedType:
 			var payload toolevents.CompletedPayload
 			if err := decodeRecoveryPayload(event.Payload, &payload); err != nil {
 				return nil, fmt.Errorf("session: decode tool.completed recovery payload: %w", err)
 			}
-			index.record(event.TurnID, payload.Iter, payload.CallIndex, payload.MessageID, payload.ToolUseID, payload.Name, toolExecutionOutcomeRecorded, payload.Outcome)
+			index.record(event.TurnID, payload.Iter, payload.CallIndex, payload.MessageID, payload.ToolUseID, payload.Name, nil, false, toolExecutionOutcomeRecorded, payload.Outcome)
 		case toolevents.ErroredType:
 			var payload toolevents.ErroredPayload
 			if err := decodeRecoveryPayload(event.Payload, &payload); err != nil {
 				return nil, fmt.Errorf("session: decode tool.errored recovery payload: %w", err)
 			}
-			index.record(event.TurnID, payload.Iter, payload.CallIndex, payload.MessageID, payload.ToolUseID, payload.Name, toolExecutionOutcomeRecorded, payload.Outcome)
+			index.record(event.TurnID, payload.Iter, payload.CallIndex, payload.MessageID, payload.ToolUseID, payload.Name, nil, false, toolExecutionOutcomeRecorded, payload.Outcome)
 		}
 	}
 	return index, nil
@@ -91,6 +98,8 @@ func (index toolExecutionRecoveryIndex) record(
 	turnID string,
 	iter, callIndex int,
 	messageID, toolUseID, name string,
+	input map[string]any,
+	replaceInput bool,
 	phase toolExecutionPhase,
 	outcome *toolevents.RecordedOutcome,
 ) {
@@ -102,9 +111,12 @@ func (index toolExecutionRecoveryIndex) record(
 	if current.phase == toolExecutionOutcomeRecorded {
 		return
 	}
+	if !replaceInput {
+		input = current.input
+	}
 	index[key] = toolExecutionRecovery{
 		turnID: turnID, iter: iter, callIndex: callIndex,
-		messageID: messageID, toolUseID: toolUseID, name: name,
+		messageID: messageID, toolUseID: toolUseID, name: name, input: input,
 		phase: phase, outcome: cloneRecordedOutcome(outcome),
 	}
 }
@@ -137,7 +149,7 @@ func (s *Session) appendTranscriptRepairEvents(catalog events.SchemaCatalog, rea
 		call := toolevents.ToolCallPayload{
 			Name: repair.ToolName, ToolUseID: repair.ToolUseID,
 			Iter: repair.ProviderIteration, CallIndex: repair.CallIndex,
-			MessageID: repair.AssistantMessageID,
+			MessageID: repair.AssistantMessageID, Input: repair.EffectiveInput,
 		}
 		if err := s.appendPreparedRecoveryEvent(catalog, events.Event{
 			Type: toolevents.OutcomeUnknownType, TurnID: repair.TurnID,
