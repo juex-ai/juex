@@ -111,6 +111,44 @@ func TestPendingInputQueue_PersistsStableMessageID(t *testing.T) {
 	}
 }
 
+func TestPendingInputQueue_ReplayablePreservesJournalOrderWhenCreatedAtTies(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC)
+	store := NewPendingInputQueue(dir, PendingInputQueueOptions{
+		Now: func() time.Time { return now },
+	})
+	first, err := store.Enqueue(
+		llm.TextMessage(llm.RoleUser, "first"),
+		PendingInputOptions{ID: "z-first", TTL: time.Minute},
+		"turn-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Enqueue(
+		llm.TextMessage(llm.RoleUser, "second"),
+		PendingInputOptions{ID: "a-second", TTL: time.Minute},
+		"turn-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkAdmitted([]string{first.ID}, "turn-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := NewPendingInputQueue(dir, PendingInputQueueOptions{
+		Now: func() time.Time { return now },
+	})
+	replayable, err := reloaded.Replayable("turn-2", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 2 || replayable[0].ID != first.ID || replayable[1].ID != second.ID {
+		t.Fatalf("replayable order = %+v, want %q then %q", replayable, first.ID, second.ID)
+	}
+}
+
 func TestPendingInputQueue_TurnInputDoesNotExpireAndUsesOneAdmissionCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC)

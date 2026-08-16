@@ -5533,6 +5533,37 @@ func TestTurn_RecoveryPreservesQueuedAndTurnInputAcceptanceOrder(t *testing.T) {
 	}
 }
 
+func TestTurn_CurrentTurnFollowUpStaysAfterTrigger(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "done"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	var enqueueErr error
+	bus.Subscribe(TurnAdmittedType, func(events.Event) {
+		_, enqueueErr = eng.EnqueuePendingInput(context.Background(), "queued during admission")
+	})
+
+	if _, err := eng.Turn(context.Background(), "current trigger"); err != nil {
+		t.Fatal(err)
+	}
+	if enqueueErr != nil {
+		t.Fatalf("enqueue during turn admission: %v", enqueueErr)
+	}
+	if len(prov.histories) != 1 || len(prov.histories[0]) != 2 {
+		t.Fatalf("provider history = %+v", prov.histories)
+	}
+	if got, want := []string{
+		prov.histories[0][0].FirstText(),
+		prov.histories[0][1].FirstText(),
+	}, []string{"current trigger", "queued during admission"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider input order = %v, want %v", got, want)
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want empty queue", status)
+	}
+}
+
 func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
 	sess, err := session.New(t.TempDir())
 	if err != nil {

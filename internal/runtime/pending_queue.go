@@ -75,6 +75,8 @@ type PendingInputQueue struct {
 	replayable        map[string]struct{}
 	messageIndex      map[string]string
 	admittedTurnIndex map[string]string
+	acceptanceOrder   map[string]uint64
+	nextAcceptance    uint64
 	journalExists     bool
 	journalSize       int64
 	journalInfo       os.FileInfo
@@ -374,6 +376,8 @@ func (q *PendingInputQueue) ensureLoadedLocked() error {
 	if q.loaded {
 		return q.validateJournalLocked()
 	}
+	q.acceptanceOrder = map[string]uint64{}
+	q.nextAcceptance = 0
 	records, err := q.loadLatestLocked()
 	if err != nil {
 		return err
@@ -467,6 +471,7 @@ func (q *PendingInputQueue) indexRecordLocked(record PendingInputRecord) {
 	if q.admittedTurnIndex == nil {
 		q.admittedTurnIndex = map[string]string{}
 	}
+	q.trackAcceptanceLocked(record.ID)
 	if previous, ok := q.records[record.ID]; ok {
 		delete(q.replayable, previous.ID)
 		if q.messageIndex[previous.MessageID] == previous.ID {
@@ -493,11 +498,30 @@ func (q *PendingInputQueue) orderedReplayableLocked() []PendingInputRecord {
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			left := q.acceptanceOrder[out[i].ID]
+			right := q.acceptanceOrder[out[j].ID]
+			if left != right {
+				return left < right
+			}
 			return out[i].ID < out[j].ID
 		}
 		return out[i].CreatedAt.Before(out[j].CreatedAt)
 	})
 	return out
+}
+
+func (q *PendingInputQueue) trackAcceptanceLocked(id string) {
+	if id == "" {
+		return
+	}
+	if q.acceptanceOrder == nil {
+		q.acceptanceOrder = map[string]uint64{}
+	}
+	if q.acceptanceOrder[id] != 0 {
+		return
+	}
+	q.nextAcceptance++
+	q.acceptanceOrder[id] = q.nextAcceptance
 }
 
 func clonePendingInputRecords(records map[string]PendingInputRecord) map[string]PendingInputRecord {
@@ -558,6 +582,7 @@ func (q *PendingInputQueue) loadLatestLocked() (map[string]PendingInputRecord, e
 			}
 			continue
 		}
+		q.trackAcceptanceLocked(record.ID)
 		records[record.ID] = record
 		if err == io.EOF {
 			break

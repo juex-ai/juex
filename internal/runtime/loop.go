@@ -1572,6 +1572,7 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 		}
 		return restoreErr
 	}
+	reachedCurrentInput := false
 	flushQueued := func() error {
 		if len(queued) == 0 {
 			return nil
@@ -1585,6 +1586,13 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 	}
 	for _, record := range records {
 		if skipMessageID != "" && record.MessageID == skipMessageID {
+			if err := flushQueued(); err != nil {
+				return markAlreadyProcessed(err)
+			}
+			reachedCurrentInput = true
+			continue
+		}
+		if reachedCurrentInput {
 			continue
 		}
 		if sessionHasMessageID(sess, record.MessageID) {
