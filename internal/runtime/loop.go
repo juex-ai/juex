@@ -158,6 +158,7 @@ type PendingInputStatus struct {
 type queuedPendingInput struct {
 	RecordID string
 	Message  llm.Message
+	Origin   PendingInputOrigin
 }
 
 // Turn drives one user input to completion. The returned string is the final
@@ -355,7 +356,7 @@ func (e *Engine) EnqueuePersistedPendingMessage(ctx context.Context, record Pend
 		e.pendingMu.Unlock()
 		return status, ErrPendingInputQueueFull
 	}
-	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: record.ID, Message: record.Message})
+	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: record.ID, Message: record.Message, Origin: record.Origin})
 	status.PendingCount = len(e.pendingInput)
 	event := events.Event{Type: "pending_input.queued", TurnID: turnID, Payload: PendingInputQueuedPayload{
 		Input:            record.Message.FirstText(),
@@ -428,7 +429,7 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 			return status, nil
 		}
 	}
-	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: recordID, Message: userMsg})
+	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: recordID, Message: userMsg, Origin: PendingInputOriginQueued})
 	status.PendingCount = len(e.pendingInput)
 	event := events.Event{Type: "pending_input.queued", TurnID: turnID, Payload: PendingInputQueuedPayload{
 		Input:            userMsg.FirstText(),
@@ -1598,7 +1599,7 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 				alreadyProcessed = append(alreadyProcessed, record.ID)
 				continue
 			}
-			afterCurrent = append(afterCurrent, queuedPendingInput{RecordID: record.ID, Message: record.Message})
+			afterCurrent = append(afterCurrent, queuedPendingInput{RecordID: record.ID, Message: record.Message, Origin: record.Origin})
 			continue
 		}
 		if sessionHasMessageID(sess, record.MessageID) {
@@ -1614,7 +1615,7 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 			}
 			continue
 		}
-		queued = append(queued, queuedPendingInput{RecordID: record.ID, Message: record.Message})
+		queued = append(queued, queuedPendingInput{RecordID: record.ID, Message: record.Message, Origin: record.Origin})
 	}
 	if err := flushQueued(); err != nil {
 		return markAlreadyProcessed(err)
@@ -1633,18 +1634,9 @@ func (e *Engine) mergeRecoveredPendingInputAfterCurrent(sess *session.Session, r
 	e.pendingMu.Lock()
 	defer e.pendingMu.Unlock()
 
-	existingByID := make(map[string]queuedPendingInput, len(e.pendingInput))
-	for _, item := range e.pendingInput {
-		if item.RecordID != "" {
-			existingByID[item.RecordID] = item
-		}
-	}
 	merged := make([]queuedPendingInput, 0, len(recovered)+len(e.pendingInput))
 	mergedIDs := make(map[string]struct{}, len(recovered))
 	for _, item := range recovered {
-		if existing, ok := existingByID[item.RecordID]; ok {
-			item = existing
-		}
 		merged = append(merged, item)
 		mergedIDs[item.RecordID] = struct{}{}
 	}
@@ -1715,7 +1707,45 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 	pending := append([]queuedPendingInput(nil), e.pendingInput...)
 	e.pendingInput = nil
 	e.pendingMu.Unlock()
-	return e.commitPendingInputBatchLocked(ctx, turnID, pending)
+	return e.commitPendingInputSequenceLocked(ctx, turnID, pending)
+}
+
+func (e *Engine) commitPendingInputSequenceLocked(ctx context.Context, turnID string, pending []queuedPendingInput) error {
+	queued := make([]queuedPendingInput, 0, len(pending))
+	flushQueued := func() error {
+		if len(queued) == 0 {
+			return nil
+		}
+		batch := queued
+		queued = nil
+		return e.commitPendingInputBatchLocked(ctx, turnID, batch)
+	}
+	for _, item := range pending {
+		if item.Origin != PendingInputOriginTurn {
+			queued = append(queued, item)
+			continue
+		}
+		if err := flushQueued(); err != nil {
+			return err
+		}
+		if sessionHasMessageID(e.currentSession(), item.Message.ID) {
+			if queue := e.currentPendingInputQueue(); queue != nil && item.RecordID != "" {
+				if err := queue.MarkProcessed([]string{item.RecordID}); err != nil {
+					return fmt.Errorf("mark recovered turn input processed: %w", err)
+				}
+			}
+			continue
+		}
+		if err := e.restoreAcceptedTurnInputLocked(ctx, turnID, PendingInputRecord{
+			ID:        item.RecordID,
+			MessageID: item.Message.ID,
+			Message:   item.Message,
+			Origin:    item.Origin,
+		}); err != nil {
+			return err
+		}
+	}
+	return flushQueued()
 }
 
 func (e *Engine) commitPendingInputBatchLocked(ctx context.Context, turnID string, pending []queuedPendingInput) error {

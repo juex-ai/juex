@@ -5626,6 +5626,65 @@ func TestTurn_PersistedInputsAfterCurrentTriggerRestoreInOrder(t *testing.T) {
 	}
 }
 
+func TestTurn_LaterAcceptedTurnInputStillRunsPolicy(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "done"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, _ := newEngine(t, prov, false)
+	now := time.Date(2026, 8, 17, 9, 0, 0, 0, time.UTC)
+	eng.PendingInputQueue = NewPendingInputQueue(eng.currentSession().Dir, PendingInputQueueOptions{
+		Now: func() time.Time { return now },
+	})
+	current, err := eng.PendingInputQueue.Enqueue(
+		llm.TextMessage(llm.RoleUser, "current persisted trigger"),
+		PendingInputOptions{ID: "current-persisted", TTL: time.Hour},
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	later, err := eng.PendingInputQueue.AdmitTurnInput(
+		"later-turn",
+		llm.TextMessage(llm.RoleUser, "later accepted turn"),
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policyInputs []string
+	installRuntimeTestModules(t, eng, &runtimeTurnInputPolicyModule{id: "redact-later", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+		policyInputs = append(policyInputs, request.Message.FirstText())
+		if request.Message.ID == later.MessageID {
+			return runtimemodule.TurnInputDecision{
+				Action:  runtimemodule.TurnInputReplace,
+				Message: llm.TextMessage(llm.RoleUser, "redacted later turn"),
+			}, nil
+		}
+		return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputAllow}, nil
+	}})
+
+	if _, err := eng.TurnMessageWithID(context.Background(), current.Message, "current-turn"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := policyInputs, []string{"current persisted trigger", "later accepted turn"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("policy inputs = %v, want %v", got, want)
+	}
+	if len(prov.histories) != 1 || len(prov.histories[0]) != 2 {
+		t.Fatalf("provider history = %+v", prov.histories)
+	}
+	if got, want := []string{
+		prov.histories[0][0].FirstText(),
+		prov.histories[0][1].FirstText(),
+	}, []string{"current persisted trigger", "redacted later turn"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider input order = %v, want %v", got, want)
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want empty queue", status)
+	}
+}
+
 func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
 	sess, err := session.New(t.TempDir())
 	if err != nil {
