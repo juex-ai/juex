@@ -27,14 +27,7 @@ import (
 const SectionSeparator = "\n\n---\n\n"
 
 type Builder struct {
-	GlobalAgentsMDPath  string   // optional; e.g. ~/.agents/AGENTS.md
-	AgentsMDDirs        []string // loaded after global AGENTS.md, in caller-provided order
 	ModulePromptContext func() ([]runtimemodule.PromptSection, error)
-	ScratchpadDir       string
-	WorkDir             string
-	Shell               ShellProfile
-	RuntimeSections     func() []Section
-	Now                 func() time.Time
 }
 
 type ShellProfile struct {
@@ -82,43 +75,14 @@ func (b *Builder) Sections() []Section {
 }
 
 func (b *Builder) SectionsWithError() ([]Section, error) {
-	var sections []Section
-	for _, agents := range loadAgentsMDFiles(b.GlobalAgentsMDPath, b.AgentsMDDirs) {
-		sections = append(sections, Section{
-			Key:    "agents",
-			Label:  b.agentsSectionLabel(agents.Path),
-			Source: b.agentsSectionSource(agents.Path),
-			Path:   agents.Path,
-			Text:   agents.Text,
-		})
+	if b == nil || b.ModulePromptContext == nil {
+		return nil, nil
 	}
-
-	if b.ModulePromptContext != nil {
-		moduleSections, err := b.ModulePromptContext()
-		if err != nil {
-			return nil, fmt.Errorf("prompt: module context: %w", err)
-		}
-		for _, section := range moduleSections {
-			if section.Text != "" {
-				sections = append(sections, section)
-			}
-		}
+	moduleSections, err := b.ModulePromptContext()
+	if err != nil {
+		return nil, fmt.Errorf("prompt: module context: %w", err)
 	}
-
-	if section, ok := b.scratchpadSection(); ok {
-		sections = append(sections, section)
-	}
-
-	if b.RuntimeSections != nil {
-		for _, section := range b.RuntimeSections() {
-			if section.Text != "" {
-				sections = append(sections, section)
-			}
-		}
-	}
-
-	sections = append(sections, Section{Key: "operating_context", Label: "Operating Context", Source: "runtime", Text: b.operatingContext()})
-	return sections, nil
+	return runtimemodule.SectionsForProjection(moduleSections, runtimemodule.ContextProjectionSystemPrompt), nil
 }
 
 type agentsMDFile struct {
@@ -139,6 +103,11 @@ func appendAgentsMDFile(files []agentsMDFile, path string) []agentsMDFile {
 	if path == "" {
 		return files
 	}
+	for _, existing := range files {
+		if sameCleanPath(existing.Path, path) {
+			return files
+		}
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return files
@@ -153,8 +122,8 @@ func appendAgentsMDFile(files []agentsMDFile, path string) []agentsMDFile {
 	})
 }
 
-func (b *Builder) scratchpadSection() (Section, bool) {
-	dir := strings.TrimSpace(b.ScratchpadDir)
+func scratchpadSection(workDir, scratchpadDir string) (Section, bool) {
+	dir := strings.TrimSpace(scratchpadDir)
 	if dir == "" {
 		return Section{}, false
 	}
@@ -165,7 +134,7 @@ func (b *Builder) scratchpadSection() (Section, bool) {
 		"## Session Scratchpad",
 		fmt.Sprintf("- path: %s", dir),
 	}
-	if rel, ok := scratchpadRelativePath(b.WorkDir, dir); ok {
+	if rel, ok := scratchpadRelativePath(workDir, dir); ok {
 		lines = append(lines, fmt.Sprintf("- workspace-relative path for `write_begin`: %s", rel))
 	}
 	lines = append(lines,
@@ -210,12 +179,12 @@ func JoinSections(sections []Section) string {
 	return strings.Join(parts, SectionSeparator)
 }
 
-func (b *Builder) operatingContext() string {
+func operatingContext(workDir string, shell ShellProfile, nowFn func() time.Time) string {
 	now := time.Now
-	if b.Now != nil {
-		now = b.Now
+	if nowFn != nil {
+		now = nowFn
 	}
-	cwd := b.WorkDir
+	cwd := workDir
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	} else if abs, err := filepath.Abs(cwd); err == nil {
@@ -227,20 +196,20 @@ func (b *Builder) operatingContext() string {
 		fmt.Sprintf("- os: %s/%s", runtime.GOOS, runtime.GOARCH),
 		fmt.Sprintf("- time: %s", now().UTC().Format(time.RFC3339)),
 	}
-	if b.Shell.Binary != "" || b.Shell.Profile != "" || b.Shell.Family != "" {
-		profile := b.Shell.Profile
+	if shell.Binary != "" || shell.Profile != "" || shell.Family != "" {
+		profile := shell.Profile
 		if profile == "" {
-			profile = b.Shell.Family
+			profile = shell.Family
 		}
-		binary := b.Shell.Binary
+		binary := shell.Binary
 		if binary == "" {
 			binary = "shell"
 		}
-		family := b.Shell.Family
+		family := shell.Family
 		if family == "" {
 			family = profile
 		}
-		pathStyle := b.Shell.PathStyle
+		pathStyle := shell.PathStyle
 		if pathStyle == "" {
 			pathStyle = "platform"
 		}
@@ -258,8 +227,8 @@ func (b *Builder) operatingContext() string {
 	return strings.Join(lines, "\n")
 }
 
-func (b *Builder) agentsSectionLabel(path string) string {
-	if sameCleanPath(path, b.GlobalAgentsMDPath) {
+func agentsSectionLabel(path, globalPath string) string {
+	if sameCleanPath(path, globalPath) {
 		return "Global AGENTS.md"
 	}
 	if filepath.Base(filepath.Dir(path)) == ".agents" {
@@ -268,8 +237,8 @@ func (b *Builder) agentsSectionLabel(path string) string {
 	return "Workspace AGENTS.md"
 }
 
-func (b *Builder) agentsSectionSource(path string) string {
-	if sameCleanPath(path, b.GlobalAgentsMDPath) {
+func agentsSectionSource(path, globalPath string) string {
+	if sameCleanPath(path, globalPath) {
 		return "user"
 	}
 	return "project"

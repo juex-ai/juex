@@ -282,8 +282,11 @@ implementation decisions live.
 
 A Module is a trusted in-process Feature value compiled into JueX. It has one
 stable `module.ID`, is registered once, and is indexed under every narrow typed
-capability it implements. The production Runtime set includes Builtin Tools and
-Skills; Skills implements both Tool and Context contribution interfaces.
+capability it implements. The production Runtime set includes Builtin Tools,
+project guidance, Skills, and enabled Side Session, Observable, and MCP
+Modules. The Session set includes session context, Goal, Notes, and any
+caller-provided Session Modules. A Module may implement Tool, Context, or both
+contribution interfaces.
 
 ```go
 type Module interface { ID() ID }
@@ -297,7 +300,10 @@ type ContextProvider interface {
 }
 ```
 
-Providers return values; they never mutate the serving Tool registry. The
+Providers return values; they never mutate the serving Tool registry. After
+both sets are sealed, the Framework validates their complete Tool catalogs and
+builds a fresh serving registry. Only that fully built registry is published,
+so duplicate or invalid contributions cannot expose a partial catalog. The
 Framework assigns provenance, rejects invalid or duplicate Module identities,
 Tool names, and context keys with both owners in the error, and preserves
 explicit registration order. `Seal` freezes registration and capability
@@ -320,9 +326,11 @@ The Framework lifecycle is:
    with the startup error.
 4. Attach and lock a Session. Construct, validate, seal, and start its Session
    set before publication.
-5. Publish the Session, sealed Session set, Tool catalog, prompt builder, and
-   other Session dependencies together through `runtime.Engine`'s existing
-   replacement transaction. A failed replacement leaves the old bundle intact.
+5. Build one complete Tool registry from the sealed Runtime and Session
+   catalogs, then publish the Session, sealed Session set, registry, prompt
+   builder, and other Session dependencies together through `runtime.Engine`'s
+   existing replacement transaction. A failed build or replacement leaves the
+   old bundle intact.
 6. On a committed replacement, quiesce and close the old Session set in reverse
    order. Post-commit cleanup failures are diagnostics and never undo or delete
    the newly published Session.
@@ -333,8 +341,14 @@ The Framework lifecycle is:
 Context requests identify their purpose (`session_start`, `turn_preparation`,
 or `provider_iteration`) and carry cancellation plus read-only Runtime/Session
 identity. Context sections retain stable key, source, path, and Module owner.
-Tool catalogs similarly retain Module ownership even though provider-facing Tool
-specs remain unchanged.
+The Framework also assigns scope and request purpose, validates system-prompt
+versus runtime-message projection, and enforces each section's explicit bounded
+or unbounded budget. Goal and Notes use stable runtime-message IDs; guidance,
+Skills, scratchpad, active shell, and operating context use system-prompt
+projection. Tool catalogs similarly retain Module ownership even though
+provider-facing Tool specs remain unchanged. Runtime status projects Tool
+definitions and owners from sealed Module catalogs instead of maintaining a
+second feature list.
 
 Runtime Modules and external Extensions remain different boundaries. Extensions
 are selected resource bundles contributing Skills, MCP servers, Hooks,
@@ -2737,29 +2751,34 @@ notification targets.
 MCP stdio stdout is treated as the JSON-RPC protocol stream. Non-JSON output on
 stdout fails the connection as a protocol error; server logs must go to stderr.
 The app runtime catalog service assembles read-only facts for `/api/runtime`:
-provider, shell, system prompt sections, hooks, skills, a fixed-order grouped
-builtin tool catalog, and configured MCP servers with their advertised tool
-details. MCP server entries expose canonical `stdio` or `http` transport plus
+provider, shell, system prompt sections, hooks, skills, a fixed-order tool
+presentation populated from sealed Module catalogs, and configured MCP servers
+with their advertised tool details. MCP server entries expose canonical `stdio`
+or `http` transport plus
 command metadata or an operator-facing URL with its query removed. Startup
 errors that echo the endpoint receive the same projection; the original URL
 remains private to the connection layer. Tool entries expose normalized schema
 plus semantic timeout metadata: `bounded` carries the effective seconds and
-`disabled` means the tool owns its lifecycle. The catalog is the process startup
-view: builtin definitions are static, while the manager-owned MCP row set,
-sources, transport metadata, and descriptors remain fixed until restart. No
-active session is required, and status reads do not reload unapplied MCP config
-or rediscover tools.
+`disabled` means the tool owns its lifecycle. Module identity is the capability
+owner; fixed group ordering is presentation metadata, not a second capability
+list. The catalog is the process startup view: the sealed Runtime and preview
+Session Module definitions, manager-owned MCP row set, sources, transport
+metadata, and descriptors remain fixed until restart. No active session is
+required, and status reads do not reload unapplied MCP config or rediscover
+tools.
 The web layer adds the latest per-server startup error and translates the app
 status into the browser DTO.
 
 Production paths load user-global MCP configs, extension MCP configs, and
 project MCP configs, then start a best-effort process manager with
-`mcp.NewManagerLayeredSoft(ctx, configs, opts)`. Each app/session registry gets
-MCP proxy tools through `Manager.RegisterTools(reg)`. Project `mcp.json`
-entries override user-level servers with the same name; extension MCP server
-names must be unique and reject collisions instead of overriding. Tests that
-cover layered config behavior exercise the same manager API instead of a
-separate layered registration helper.
+`mcp.NewManagerLayeredSoft(ctx, configs, opts)`. `mcp.Module` exposes that
+manager's proxy tools through the Runtime `ToolProvider`; the Framework seals
+the contribution with the other Runtime Modules, validates it against the
+Session catalog, and atomically constructs the complete serving registry.
+Project `mcp.json` entries override user-level servers with the same name;
+extension MCP server names must be unique and reject collisions instead of
+overriding. Tests that cover layered config behavior exercise the same manager
+and Module contribution path instead of a separate registration helper.
 
 Remote MCP readiness is staged as selection, credentials, then connectivity.
 Configuration and environment-backed header failures retain that stage
@@ -2951,7 +2970,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `frontmatter` | round-trip, embedded quotes, embedded colons, blank lines, comments, malformed handling |
 | `version` | default + ldflags override |
 | `tools` | registry duplicate, read/write/edit/apply_patch/chunked_write/grep/exec_command/write_stdin/list_shell_sessions, regex grep, command timeout/session yield, default WorkDir |
-| `runtime/module` | unique identity, multi-capability indexing, stable order, sealing, Tool/context owner conflicts, disabled factory construction, Runtime/Session startup rollback, reverse quiesce/close, joined errors |
+| `runtime/module` | unique identity, multi-capability indexing, stable order, sealing, atomic complete Tool registry construction, Tool/context owner conflicts, context projection and budget validation, disabled factory construction, Runtime/Session startup rollback, reverse quiesce/close, joined errors |
 | `modules/builtintools`, `modules/skills` | real builtin Tool contribution and shell cleanup; Skill Tool/context contribution, sandbox checks, filtering, and `ext:<name>` provenance |
 | `mcp` | round-trip, tool errors, env propagation, no-schema default, multi-server, layered project-over-user, ctx cancellation |
 | `skills` | fail-loud embedded builtin catalog, private builtin provenance, prompt exclusion, filter immunity, dir scan, project-over-user, strict-name collisions, name-fallback, malformed filesystem skill skip, sort, reload, missing dir |
@@ -2960,7 +2979,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `runtime` | mock-provider script, parallel tool calls, long tool follow-up turn, ctx cancel, unknown-tool, provider error, multi-turn |
 | `observability` | log-level parsing, stable log creation, transient filtering, retry status, redaction, timeout/signal metadata, close idempotence |
 | `netbootstrap` | resolv.conf parsing (IPv4/IPv6/comments/malformed), JUEX_DNS env var, Termux PREFIX auto-detect, applyResolver wiring, idempotent install |
-| `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, AgentStateDir sessions, observability log wiring, history update, missing-key fail, default-cwd |
+| `app` | stub-LLM run, sealed Module catalog-to-serving-registry ownership, disabled Module absence, runtime-status catalog projection, REPL multi-line, REPL after error, verbose stderr, AgentStateDir sessions, observability log wiring, history update, missing-key fail, default-cwd |
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flags including model, debug, and log-level |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
 | `tests/e2e` | full-stack tempdir scenario, installed Extension enable/disable flow, apply_patch builtin flow, resume round-trip, canonical session journals and debug logs, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |

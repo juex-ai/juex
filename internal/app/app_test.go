@@ -2399,6 +2399,50 @@ func TestAppPromptLoadsGlobalAgentsBeforeWorkspaceAgents(t *testing.T) {
 	}
 }
 
+func TestAppPromptDeduplicatesGlobalAgentsWhenWorkDirIsHome(t *testing.T) {
+	home := t.TempDir()
+	homeAgents := filepath.Join(home, ".agents")
+	if err := os.MkdirAll(homeAgents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(homeAgents, "AGENTS.md"), []byte("home global rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID:                "openai",
+			APIKey:                    "x",
+			Model:                     "m",
+			HomeAgentsDir:             homeAgents,
+			WorkDir:                   home,
+			EnableUserAgentsResources: true,
+		},
+		Provider: &stubProvider{},
+		WorkDir:  home,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := a.CloseAndWait(); err != nil {
+			t.Errorf("close app: %v", err)
+		}
+	})
+
+	promptText := a.Engine.Prompt.Build()
+	if got := strings.Count(promptText, "home global rule"); got != 1 {
+		t.Fatalf("global rule count = %d, want 1:\n%s", got, promptText)
+	}
+	summary := a.ResourceSummary()
+	if want := []string{"user"}; !reflect.DeepEqual(summary.AgentsSources, want) {
+		t.Fatalf("AGENTS sources = %v, want %v", summary.AgentsSources, want)
+	}
+	if got := FormatResourceSummary(summary); !strings.Contains(got, "AGENTS.md: user") {
+		t.Fatalf("resource summary = %q", got)
+	}
+}
+
 func TestAppPromptSkipsGlobalAgentsWhenUserAgentsResourcesDisabled(t *testing.T) {
 	work := t.TempDir()
 	homeAgents := t.TempDir()

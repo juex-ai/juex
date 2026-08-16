@@ -93,7 +93,11 @@ func (e *Engine) prepareCandidateRequestLocked(ctx context.Context, turnID strin
 			return base, err
 		}
 		base.hookContext = e.pendingHookRuntimeContextSnapshot()
-		base.history = e.activeContextLockedWithHookContext(base.hookContext).Messages
+		active, contextErr := e.activeContextLockedWithHookContextError(ctx, base.hookContext)
+		if contextErr != nil {
+			return base, fmt.Errorf("runtime: build provider context: %w", contextErr)
+		}
+		base.history = active.Messages
 		if err := cancellation.ContextError(ctx); err != nil {
 			return base, err
 		}

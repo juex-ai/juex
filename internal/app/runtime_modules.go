@@ -7,6 +7,8 @@ import (
 	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
+	"github.com/juex-ai/juex/internal/prompt"
+	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
@@ -19,9 +21,10 @@ type runtimeModuleComposition struct {
 	builtinTools   *builtintools.Module
 	skills         *skillsmodule.Module
 	runtimeContext runtimemodule.RuntimeContext
+	modules        []runtimemodule.Module
 }
 
-func buildRuntimeModules(
+func prepareRuntimeModules(
 	ctx context.Context,
 	cfg config.Config,
 	resourceGraph RuntimeResourceGraph,
@@ -37,51 +40,63 @@ func buildRuntimeModules(
 		AgentStateDir: runtimePaths.StateDir,
 		ArtifactDir:   runtimePaths.ArtifactDir,
 	}
-	var composition runtimeModuleComposition
-	specs := []runtimemodule.RuntimeFactorySpec{
-		{
-			ID:      builtintools.ModuleID,
-			Enabled: true,
-			New: func(ctx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				composition.builtinTools = builtintools.New(ctx, tools.BuiltinOptions{
-					WorkDir:            runtimePaths.WorkDir,
-					Environment:        runtimeEnvironment,
-					Shell:              toolsShellProfile(cfg.Shell),
-					Sandbox:            cfg.SandboxPolicy(),
-					SandboxRunner:      sandboxRunner,
-					ToolTimeoutSeconds: toolTimeoutSeconds,
-					ChunkedWrites:      chunkedWrites,
-					AgentStateDir:      runtimePaths.StateDir,
-					ArtifactDir:        runtimePaths.ArtifactDir,
-				})
-				return composition.builtinTools, nil
-			},
+	composition := runtimeModuleComposition{runtimeContext: runtimeContext}
+	composition.builtinTools = builtintools.New(ctx, tools.BuiltinOptions{
+		WorkDir:            runtimePaths.WorkDir,
+		Environment:        runtimeEnvironment,
+		Shell:              toolsShellProfile(cfg.Shell),
+		Sandbox:            cfg.SandboxPolicy(),
+		SandboxRunner:      sandboxRunner,
+		ToolTimeoutSeconds: toolTimeoutSeconds,
+		ChunkedWrites:      chunkedWrites,
+		AgentStateDir:      runtimePaths.StateDir,
+		ArtifactDir:        runtimePaths.ArtifactDir,
+	})
+	var err error
+	composition.skills, err = skillsmodule.New(skillsmodule.Options{
+		Dirs:          resourceGraph.SkillDirs(),
+		LoaderOptions: skillLoaderOptions(cfg),
+		WorkDir:       runtimePaths.WorkDir,
+		Sandbox:       cfg.SandboxPolicy(),
+	})
+	if err != nil {
+		_ = composition.builtinTools.CloseRuntime(context.Background())
+		return runtimeModuleComposition{}, err
+	}
+	composition.modules = []runtimemodule.Module{
+		composition.builtinTools,
+		&prompt.GuidanceModule{
+			GlobalAgentsMDPath: cfg.GlobalAgentsMDPath(),
+			AgentsMDDirs:       cfg.AgentsMDDirs(),
 		},
-		{
-			ID:      skillsmodule.ModuleID,
+		composition.skills,
+	}
+	return composition, nil
+}
+
+func (c *runtimeModuleComposition) sealAndStart(ctx context.Context, extra ...runtimemodule.Module) error {
+	modules := append(append([]runtimemodule.Module(nil), c.modules...), extra...)
+	specs := make([]runtimemodule.RuntimeFactorySpec, 0, len(modules))
+	for _, mod := range modules {
+		moduleValue := mod
+		specs = append(specs, runtimemodule.RuntimeFactorySpec{
+			ID:      moduleValue.ID(),
 			Enabled: true,
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				var err error
-				composition.skills, err = skillsmodule.New(skillsmodule.Options{
-					Dirs:          resourceGraph.SkillDirs(),
-					LoaderOptions: skillLoaderOptions(cfg),
-					WorkDir:       runtimePaths.WorkDir,
-					Sandbox:       cfg.SandboxPolicy(),
-				})
-				return composition.skills, err
+				return moduleValue, nil
 			},
-		},
+		})
 	}
-	set, err := runtimemodule.BuildRuntimeSet(ctx, specs, runtimeContext, runtimemodule.ToolContext{Runtime: runtimeContext})
+	set, err := runtimemodule.BuildRuntimeSet(ctx, specs, c.runtimeContext, runtimemodule.ToolContext{Runtime: c.runtimeContext})
 	if err != nil {
-		return runtimeModuleComposition{}, err
+		return err
 	}
-	if err := set.StartRuntime(ctx, runtimeContext); err != nil {
-		return runtimeModuleComposition{}, err
+	if err := set.StartRuntime(ctx, c.runtimeContext); err != nil {
+		return err
 	}
-	composition.set = set
-	composition.runtimeContext = runtimeContext
-	return composition, nil
+	c.set = set
+	c.modules = modules
+	return nil
 }
 
 func buildSessionModules(
@@ -89,7 +104,35 @@ func buildSessionModules(
 	specs []runtimemodule.SessionFactorySpec,
 	runtimeContext runtimemodule.RuntimeContext,
 	sess *session.Session,
+	engine *juexruntime.Engine,
+	workDir string,
+	shell prompt.ShellProfile,
+	shellSessions *tools.ShellSessionManager,
 ) (*runtimemodule.Set, error) {
+	builtinSpecs := []runtimemodule.SessionFactorySpec{
+		{
+			ID:      prompt.SessionContextModuleID,
+			Enabled: true,
+			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+				return &prompt.SessionContextModule{WorkDir: workDir, Shell: shell, ShellSessions: shellSessions}, nil
+			},
+		},
+		{
+			ID:      juexruntime.GoalModuleID,
+			Enabled: true,
+			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+				return juexruntime.NewGoalModule(engine), nil
+			},
+		},
+		{
+			ID:      juexruntime.NotesModuleID,
+			Enabled: true,
+			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+				return juexruntime.NewNotesModule(engine), nil
+			},
+		},
+	}
+	specs = append(builtinSpecs, specs...)
 	sessionContext := sessionModuleContext(sess)
 	set, err := runtimemodule.BuildSessionSet(ctx, specs, sessionContext, runtimemodule.ToolContext{
 		Runtime: runtimeContext,

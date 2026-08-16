@@ -26,11 +26,11 @@ func TestMCPClient_RemoteToolRoundTrip(t *testing.T) {
 		"remote": {URL: server.URL},
 	}}
 	registry := tools.NewRegistry()
-	clients, err := RegisterAll(t.Context(), cfg, registry)
+	manager, err := connectAndInstallManager(t.Context(), cfg, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { closeAll(clients) })
+	t.Cleanup(func() { _ = manager.Close() })
 
 	tool, ok := registry.Get("mcp__remote__echo")
 	if !ok {

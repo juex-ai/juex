@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -54,15 +55,47 @@ type ContextRequest struct {
 	Session *SessionContext
 }
 
+type ContextProjection string
+
+const (
+	ContextProjectionSystemPrompt   ContextProjection = "system_prompt"
+	ContextProjectionRuntimeMessage ContextProjection = "runtime_message"
+)
+
+type ContextBudgetMode string
+
+const (
+	ContextBudgetBounded   ContextBudgetMode = "bounded"
+	ContextBudgetUnbounded ContextBudgetMode = "unbounded"
+)
+
+type ContextBudget struct {
+	Mode     ContextBudgetMode
+	MaxChars int
+}
+
+func BoundedContextBudget(maxChars int) ContextBudget {
+	return ContextBudget{Mode: ContextBudgetBounded, MaxChars: maxChars}
+}
+
+func UnboundedContextBudget() ContextBudget {
+	return ContextBudget{Mode: ContextBudgetUnbounded}
+}
+
 // ContextSection is one named provider-context fragment. ModuleID is assigned
 // by the framework and cannot be forged by a provider.
 type ContextSection struct {
-	ModuleID ID
-	Key      string
-	Label    string
-	Source   string
-	Path     string
-	Text     string
+	ModuleID   ID
+	Scope      Scope
+	Purpose    ContextPurpose
+	Key        string
+	Label      string
+	Source     string
+	Path       string
+	Text       string
+	Projection ContextProjection
+	MessageID  string
+	Budget     ContextBudget
 }
 
 // PromptSection remains an alias while prompt callers migrate to the broader
@@ -177,18 +210,6 @@ func (c ToolCatalog) Entries() []ToolEntry {
 	return entries
 }
 
-func (c ToolCatalog) Install(registry *tools.Registry) error {
-	if registry == nil {
-		return fmt.Errorf("runtime modules: nil tool registry")
-	}
-	for _, entry := range c.entries {
-		if err := registry.Register(entry.Tool.Clone()); err != nil {
-			return fmt.Errorf("runtime modules: install tool %q from module %q: %w", entry.Tool.Name, entry.ModuleID, err)
-		}
-	}
-	return nil
-}
-
 func (c ToolCatalog) Names() []string {
 	names := make([]string, 0, len(c.entries))
 	for _, entry := range c.entries {
@@ -197,12 +218,9 @@ func (c ToolCatalog) Names() []string {
 	return names
 }
 
-// InstallToolCatalogs validates ownership across complete Runtime and Session
-// sets before mutating the destination registry.
-func InstallToolCatalogs(registry *tools.Registry, sets ...*Set) error {
-	if registry == nil {
-		return fmt.Errorf("runtime modules: nil tool registry")
-	}
+// BuildToolRegistry validates every catalog before returning a new serving
+// registry. A failed build never exposes a partially installed registry.
+func BuildToolRegistry(options tools.RegistryOptions, sets ...*Set) (*tools.Registry, error) {
 	owners := make(map[string]ID)
 	var entries []ToolEntry
 	for _, set := range sets {
@@ -211,18 +229,19 @@ func InstallToolCatalogs(registry *tools.Registry, sets ...*Set) error {
 		}
 		for _, entry := range set.ToolCatalog().Entries() {
 			if first, exists := owners[entry.Tool.Name]; exists {
-				return fmt.Errorf("runtime modules: tool %q contributed by module %q and module %q", entry.Tool.Name, first, entry.ModuleID)
+				return nil, fmt.Errorf("runtime modules: tool %q contributed by module %q and module %q", entry.Tool.Name, first, entry.ModuleID)
 			}
 			owners[entry.Tool.Name] = entry.ModuleID
 			entries = append(entries, entry)
 		}
 	}
+	registry := tools.NewRegistryWithOptions(options)
 	for _, entry := range entries {
 		if err := registry.Register(entry.Tool.Clone()); err != nil {
-			return fmt.Errorf("runtime modules: install tool %q from module %q: %w", entry.Tool.Name, entry.ModuleID, err)
+			return nil, fmt.Errorf("runtime modules: build tool %q from module %q: %w", entry.Tool.Name, entry.ModuleID, err)
 		}
 	}
-	return nil
+	return registry, nil
 }
 
 func buildToolCatalog(ctx context.Context, toolContext ToolContext, providers []registeredModule) (ToolCatalog, error) {
@@ -312,16 +331,78 @@ func (s *Set) Context(ctx context.Context, request ContextRequest) ([]ContextSec
 			if section.ModuleID != "" && normalizeID(section.ModuleID) != registered.id {
 				return nil, fmt.Errorf("runtime module %q context key %q claims module %q", registered.id, key, section.ModuleID)
 			}
+			if section.Scope != "" && section.Scope != s.scope {
+				return nil, fmt.Errorf("runtime module %q context key %q claims scope %q for %q set", registered.id, key, section.Scope, s.scope)
+			}
+			if section.Purpose != "" && section.Purpose != request.Purpose {
+				return nil, fmt.Errorf("runtime module %q context key %q claims purpose %q for %q request", registered.id, key, section.Purpose, request.Purpose)
+			}
+			section.Source = strings.TrimSpace(section.Source)
+			if section.Source == "" {
+				return nil, fmt.Errorf("runtime module %q context key %q has empty source", registered.id, key)
+			}
+			if err := validateContextProjection(section); err != nil {
+				return nil, fmt.Errorf("runtime module %q context key %q: %w", registered.id, key, err)
+			}
+			if err := validateContextBudget(section); err != nil {
+				return nil, fmt.Errorf("runtime module %q context key %q: %w", registered.id, key, err)
+			}
 			if first, exists := owners[key]; exists {
 				return nil, fmt.Errorf("runtime modules: context key %q contributed by module %q and module %q", key, first, registered.id)
 			}
 			section.ModuleID = registered.id
+			section.Scope = s.scope
+			section.Purpose = request.Purpose
 			section.Key = key
 			owners[key] = registered.id
 			sections = append(sections, section)
 		}
 	}
 	return sections, nil
+}
+
+func validateContextProjection(section ContextSection) error {
+	switch section.Projection {
+	case ContextProjectionSystemPrompt:
+		return nil
+	case ContextProjectionRuntimeMessage:
+		if strings.TrimSpace(section.MessageID) == "" {
+			return fmt.Errorf("runtime_message projection requires message id")
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid projection %q", section.Projection)
+	}
+}
+
+func validateContextBudget(section ContextSection) error {
+	switch section.Budget.Mode {
+	case ContextBudgetUnbounded:
+		if section.Budget.MaxChars != 0 {
+			return fmt.Errorf("invalid budget: unbounded section has max_chars %d", section.Budget.MaxChars)
+		}
+		return nil
+	case ContextBudgetBounded:
+		if section.Budget.MaxChars <= 0 {
+			return fmt.Errorf("invalid budget: bounded section requires positive max_chars")
+		}
+		if count := utf8.RuneCountInString(section.Text); count > section.Budget.MaxChars {
+			return fmt.Errorf("context length %d exceeds max_chars %d", count, section.Budget.MaxChars)
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid budget mode %q", section.Budget.Mode)
+	}
+}
+
+func SectionsForProjection(sections []ContextSection, projection ContextProjection) []ContextSection {
+	filtered := make([]ContextSection, 0, len(sections))
+	for _, section := range sections {
+		if section.Projection == projection {
+			filtered = append(filtered, section)
+		}
+	}
+	return filtered
 }
 
 // CollectContext validates context ownership across complete Runtime and

@@ -34,7 +34,19 @@ func (m schemaToolModule) Tools(context.Context, ToolContext) ([]tools.Tool, err
 func (m testModule) ID() ID { return m.id }
 
 func (m testModule) Context(context.Context, ContextRequest) ([]ContextSection, error) {
-	return append([]ContextSection(nil), m.sections...), m.contextErr
+	sections := append([]ContextSection(nil), m.sections...)
+	for i := range sections {
+		if sections[i].Source == "" {
+			sections[i].Source = "test"
+		}
+		if sections[i].Projection == "" {
+			sections[i].Projection = ContextProjectionSystemPrompt
+		}
+		if sections[i].Budget.Mode == "" {
+			sections[i].Budget = UnboundedContextBudget()
+		}
+	}
+	return sections, m.contextErr
 }
 
 func (m testModule) Tools(context.Context, ToolContext) ([]tools.Tool, error) {
@@ -128,8 +140,8 @@ func TestToolCatalogEntriesDeepCopySchemas(t *testing.T) {
 	}
 
 	catalog := set.ToolCatalog()
-	installed := tools.NewRegistry()
-	if err := catalog.Install(installed); err != nil {
+	installed, err := BuildToolRegistry(tools.RegistryOptions{}, set)
+	if err != nil {
 		t.Fatal(err)
 	}
 	installedTool, ok := installed.Get("schema_tool")
@@ -224,48 +236,116 @@ func TestContextAttributesProviderErrors(t *testing.T) {
 	}
 }
 
-func TestToolCatalogInstallsValidatedTools(t *testing.T) {
+type rawContextModule struct {
+	id      ID
+	section ContextSection
+}
+
+func (m rawContextModule) ID() ID { return m.id }
+
+func (m rawContextModule) Context(context.Context, ContextRequest) ([]ContextSection, error) {
+	return []ContextSection{m.section}, nil
+}
+
+func TestContextAssignsFrameworkMetadata(t *testing.T) {
+	set, err := BuildRuntimeSet(context.Background(), []RuntimeFactorySpec{{
+		ID:      "guidance",
+		Enabled: true,
+		New: func(context.Context, RuntimeContext) (Module, error) {
+			return rawContextModule{id: "guidance", section: ContextSection{
+				Key:        "agents",
+				Source:     "project",
+				Text:       "instructions",
+				Projection: ContextProjectionSystemPrompt,
+				Budget:     BoundedContextBudget(32),
+			}}, nil
+		},
+	}}, RuntimeContext{}, ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections, err := set.Context(context.Background(), ContextRequest{Purpose: ContextPurposeProviderIteration})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sections) != 1 {
+		t.Fatalf("sections = %#v", sections)
+	}
+	section := sections[0]
+	if section.ModuleID != "guidance" || section.Scope != ScopeRuntime || section.Purpose != ContextPurposeProviderIteration {
+		t.Fatalf("framework metadata = %#v", section)
+	}
+	if section.Budget.Mode != ContextBudgetBounded || section.Budget.MaxChars != 32 {
+		t.Fatalf("budget = %#v", section.Budget)
+	}
+}
+
+func TestContextRejectsInvalidContributionMetadata(t *testing.T) {
+	tests := []struct {
+		name    string
+		section ContextSection
+		want    string
+	}{
+		{name: "source", section: ContextSection{Key: "x", Text: "text", Projection: ContextProjectionSystemPrompt, Budget: UnboundedContextBudget()}, want: "empty source"},
+		{name: "projection", section: ContextSection{Key: "x", Source: "test", Text: "text", Budget: UnboundedContextBudget()}, want: "invalid projection"},
+		{name: "budget", section: ContextSection{Key: "x", Source: "test", Text: "text", Projection: ContextProjectionSystemPrompt}, want: "invalid budget"},
+		{name: "bounded limit", section: ContextSection{Key: "x", Source: "test", Text: "text", Projection: ContextProjectionSystemPrompt, Budget: BoundedContextBudget(2)}, want: "exceeds max_chars 2"},
+		{name: "scope", section: ContextSection{Key: "x", Source: "test", Text: "text", Projection: ContextProjectionSystemPrompt, Budget: UnboundedContextBudget(), Scope: ScopeSession}, want: "claims scope"},
+		{name: "purpose", section: ContextSection{Key: "x", Source: "test", Text: "text", Projection: ContextProjectionSystemPrompt, Budget: UnboundedContextBudget(), Purpose: ContextPurposeSessionStart}, want: "claims purpose"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := NewRegistry()
+			if err := registry.Register(rawContextModule{id: "invalid", section: tt.section}); err != nil {
+				t.Fatal(err)
+			}
+			set, err := registry.Seal(context.Background(), ToolContext{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			set.scope = ScopeRuntime
+			_, err = set.Context(context.Background(), ContextRequest{Purpose: ContextPurposeProviderIteration})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Context() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildToolRegistryIsAtomicAcrossSets(t *testing.T) {
+	runtimeSet := mustToolSet(t, ScopeRuntime, testModule{id: "runtime", toolNames: []string{"first"}})
+	sessionSet := mustToolSet(t, ScopeSession, testModule{id: "session", toolNames: []string{"first"}})
+	registry, err := BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: 17}, runtimeSet, sessionSet)
+	if err == nil || !strings.Contains(err.Error(), `tool "first"`) {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	if registry != nil {
+		t.Fatalf("failed build returned partial registry: %#v", registry.List())
+	}
+
+	sessionSet = mustToolSet(t, ScopeSession, testModule{id: "session", toolNames: []string{"second"}})
+	registry, err = BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: 17}, runtimeSet, sessionSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.List(); len(got) != 2 || got[0].Name != "first" || got[1].Name != "second" {
+		t.Fatalf("registry tools = %#v", got)
+	}
+	if got := registry.TimeoutSecondsFor("first"); got != 17 {
+		t.Fatalf("default timeout = %d, want 17", got)
+	}
+}
+
+func mustToolSet(t *testing.T, scope Scope, mod Module) *Set {
+	t.Helper()
 	registry := NewRegistry()
-	if err := registry.Register(testModule{id: "builtin", toolNames: []string{"read", "write"}}); err != nil {
+	if err := registry.Register(mod); err != nil {
 		t.Fatal(err)
 	}
 	set, err := registry.Seal(context.Background(), ToolContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	toolRegistry := tools.NewRegistry()
-	if err := set.ToolCatalog().Install(toolRegistry); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := toolRegistry.Get("read"); !ok {
-		t.Fatal("read tool was not installed")
-	}
-	if _, ok := toolRegistry.Get("write"); !ok {
-		t.Fatal("write tool was not installed")
-	}
-}
-
-func TestInstallToolCatalogsRejectsCrossScopeDuplicatesWithBothOwners(t *testing.T) {
-	runtimeRegistry := NewRegistry()
-	if err := runtimeRegistry.Register(testModule{id: "runtime", toolNames: []string{"shared"}}); err != nil {
-		t.Fatal(err)
-	}
-	runtimeSet, err := runtimeRegistry.Seal(context.Background(), ToolContext{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessionRegistry := NewRegistry()
-	if err := sessionRegistry.Register(testModule{id: "session", toolNames: []string{"shared"}}); err != nil {
-		t.Fatal(err)
-	}
-	sessionSet, err := sessionRegistry.Seal(context.Background(), ToolContext{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = InstallToolCatalogs(tools.NewRegistry(), runtimeSet, sessionSet)
-	for _, want := range []string{`tool "shared"`, `module "runtime"`, `module "session"`} {
-		if err == nil || !strings.Contains(err.Error(), want) {
-			t.Fatalf("InstallToolCatalogs() error = %v, want %q", err, want)
-		}
-	}
+	set.scope = scope
+	return set
 }

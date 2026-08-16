@@ -211,11 +211,15 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 	defer sess.Close()
 	sess.SubscribeBus(bus)
 
-	pb := &prompt.Builder{
-		AgentsMDDirs: []string{t.TempDir()}, // empty
-		Shell:        prompt.ShellProfileFromConfig(cfg.Shell),
-		Now:          func() time.Time { return time.Now().UTC() },
-	}
+	pb := e2ePromptBuilder(
+		t,
+		"",
+		[]string{t.TempDir()}, // empty
+		"",
+		prompt.ShellProfileFromConfig(cfg.Shell),
+		func() time.Time { return time.Now().UTC() },
+		sess,
+	)
 	eng := &runtime.Engine{
 		Provider: provider, Tools: reg, Bus: bus, Session: sess, Prompt: pb,
 	}

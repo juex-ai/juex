@@ -17,9 +17,7 @@ import (
 func TestNotesToolDefinitionsBindSessionStateGroup(t *testing.T) {
 	reg := tools.NewRegistry()
 	eng := &Engine{Tools: reg}
-	if err := RegisterNotesTools(reg, eng); err != nil {
-		t.Fatal(err)
-	}
+	installModuleTools(t, reg, NewNotesModule(eng))
 	definitions := NotesToolDefinitions()
 	if len(definitions) != 1 {
 		t.Fatalf("definition count = %d, want 1", len(definitions))
@@ -40,9 +38,7 @@ func TestNotesToolDefinitionsBindSessionStateGroup(t *testing.T) {
 func TestNotesToolRewritesSessionNotesAndEmitsEvent(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	eng.Notes = NewNotesStore(eng.Session.Dir)
-	if err := RegisterNotesTools(eng.Tools, eng); err != nil {
-		t.Fatal(err)
-	}
+	installSessionStateModules(t, eng)
 	tool, ok := eng.Tools.Get(NotesToolUpdate)
 	if !ok {
 		t.Fatal("update_notes is not registered")
@@ -157,9 +153,7 @@ func TestNotesToolRecitesRewriteOnNextProviderRequest(t *testing.T) {
 	}}
 	eng, _ := newEngine(t, prov, false)
 	eng.Notes = NewNotesStore(eng.Session.Dir)
-	if err := RegisterNotesTools(eng.Tools, eng); err != nil {
-		t.Fatal(err)
-	}
+	installSessionStateModules(t, eng)
 
 	if out, err := eng.Turn(context.Background(), "work"); err != nil || out != "done" {
 		t.Fatalf("Turn() = %q, %v", out, err)
@@ -183,6 +177,7 @@ func TestActiveContextAppendsGoalThenNotes(t *testing.T) {
 	if _, err := eng.Notes.Update("- [ ] run tests"); err != nil {
 		t.Fatal(err)
 	}
+	installSessionStateModules(t, eng)
 
 	snapshot := eng.ActiveContext(llm.TextMessage(llm.RoleUser, "continue"))
 	if len(snapshot.Messages) < 3 {
@@ -230,9 +225,7 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			eng, bus := newEngine(t, &mockProvider{}, false)
 			eng.Notes = NewNotesStore(eng.Session.Dir)
-			if err := RegisterNotesTools(eng.Tools, eng); err != nil {
-				t.Fatal(err)
-			}
+			installSessionStateModules(t, eng)
 			notesPath := filepath.Join(eng.Session.Dir, NotesFileName)
 			if err := os.WriteFile(notesPath, tt.corrupt, 0o600); err != nil {
 				t.Fatal(err)
@@ -307,6 +300,7 @@ func TestTurnRecitesNotesReadFailurePlaceholderAfterAutoCompaction(t *testing.T)
 	eng.ContextWindow = 100
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Notes = NewNotesStore(eng.Session.Dir)
+	installSessionStateModules(t, eng)
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -346,6 +340,7 @@ func TestTurnRecitesNotesReadFailurePlaceholder(t *testing.T) {
 	}}}
 	eng, bus := newEngine(t, prov, false)
 	eng.Notes = NewNotesStore(eng.Session.Dir)
+	installSessionStateModules(t, eng)
 	notesPath := filepath.Join(eng.Session.Dir, NotesFileName)
 	if err := os.WriteFile(notesPath, []byte{0xff}, 0o600); err != nil {
 		t.Fatal(err)
@@ -382,12 +377,10 @@ func runtimeContextMessage(messages []llm.Message, id string) *llm.Message {
 	return nil
 }
 
-func TestRegisterNotesToolsRejectsMissingStore(t *testing.T) {
+func TestNotesModuleRejectsMissingStore(t *testing.T) {
 	reg := tools.NewRegistry()
 	eng := &Engine{Tools: reg}
-	if err := RegisterNotesTools(reg, eng); err != nil {
-		t.Fatal(err)
-	}
+	installModuleTools(t, reg, NewNotesModule(eng))
 	if _, err := reg.Call(context.Background(), NotesToolUpdate, map[string]any{"content": "hi"}); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("missing store error = %v", err)
 	}

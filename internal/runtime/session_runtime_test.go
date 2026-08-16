@@ -24,7 +24,6 @@ func TestReplaceSessionRuntimePublishesCoherentBundle(t *testing.T) {
 	second := newSessionRuntimeTestSession(t, root)
 	engine := &Engine{
 		Session:           first,
-		Prompt:            &prompt.Builder{WorkDir: root, ScratchpadDir: first.ScratchpadDir()},
 		PendingInputQueue: NewPendingInputQueue(first.Dir, PendingInputQueueOptions{}),
 		Notes:             NewNotesStore(first.Dir),
 		GoalState:         NewGoalStateStore(first.Dir, GoalStateOptions{}),
@@ -35,6 +34,7 @@ func TestReplaceSessionRuntimePublishesCoherentBundle(t *testing.T) {
 			EventsPath:       filepath.Join(first.Dir, "events.jsonl"),
 		},
 	}
+	engine.Prompt = sessionRuntimeTestPrompt(engine, root)
 	firstModules := newSessionRuntimeTestModuleSet(t)
 	secondModules := newSessionRuntimeTestModuleSet(t)
 	firstTools := sessionRuntimeTestTools(t, "first_tool")
@@ -68,7 +68,7 @@ func TestReplaceSessionRuntimeRejectsBusyRuntimeAtomically(t *testing.T) {
 	second := newSessionRuntimeTestSession(t, root)
 	engine := &Engine{
 		Session:           first,
-		Prompt:            &prompt.Builder{ScratchpadDir: first.ScratchpadDir()},
+		Prompt:            &prompt.Builder{},
 		PendingInputQueue: NewPendingInputQueue(first.Dir, PendingInputQueueOptions{}),
 		Notes:             NewNotesStore(first.Dir),
 		GoalState:         NewGoalStateStore(first.Dir, GoalStateOptions{}),
@@ -124,7 +124,7 @@ func TestReplaceSessionRuntimeRecoversUnconsumedHookContext(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	engine := &Engine{Session: sess, Prompt: &prompt.Builder{ScratchpadDir: sess.ScratchpadDir()}}
+	engine := &Engine{Session: sess, Prompt: &prompt.Builder{}}
 	if err := engine.ReplaceSessionRuntime(sess); err != nil {
 		t.Fatal(err)
 	}
@@ -169,6 +169,22 @@ func TestRecoverSessionProvenanceDoesNotMaterializeUnrelatedEvents(t *testing.T)
 	if len(pending) != 1 || pending[0].ID != queued.ID {
 		t.Fatalf("recovered hook context = %+v, want %q", pending, queued.ID)
 	}
+}
+
+func sessionRuntimeTestPrompt(engine *Engine, workDir string) *prompt.Builder {
+	provider := &prompt.SessionContextModule{WorkDir: workDir}
+	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+		snapshot := engine.SessionRuntimeSnapshot()
+		request := runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration}
+		if snapshot.Session != nil {
+			request.Session = &runtimemodule.SessionContext{
+				ID:            snapshot.Session.ID,
+				Dir:           snapshot.Session.Dir,
+				ScratchpadDir: snapshot.ScratchpadDir,
+			}
+		}
+		return provider.Context(context.Background(), request)
+	}}
 }
 
 func provenanceRuntimeContextMessage(id, text string) llm.Message {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -15,6 +16,39 @@ const (
 	GoalToolUpdate = "update_goal"
 	goalGuide      = `Guide available via skill_load("juex-session-state").`
 )
+
+const GoalModuleID runtimemodule.ID = "goal"
+
+type GoalModule struct {
+	engine *Engine
+}
+
+func NewGoalModule(engine *Engine) *GoalModule { return &GoalModule{engine: engine} }
+
+func (*GoalModule) ID() runtimemodule.ID { return GoalModuleID }
+
+func (m *GoalModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+	return GoalTools(m.engine), nil
+}
+
+func (m *GoalModule) Context(_ context.Context, request runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
+	if m == nil || m.engine == nil || request.Purpose != runtimemodule.ContextPurposeProviderIteration {
+		return nil, nil
+	}
+	runtime := m.engine.SessionRuntimeSnapshot()
+	text, ok := goalStateContextFromStore(runtime.GoalState)
+	if !ok {
+		return nil, nil
+	}
+	return []runtimemodule.ContextSection{{
+		Key:        "session_goal",
+		Source:     "runtime",
+		Text:       text,
+		Projection: runtimemodule.ContextProjectionRuntimeMessage,
+		MessageID:  "runtime-goal-contract",
+		Budget:     runtimemodule.UnboundedContextBudget(),
+	}}, nil
+}
 
 func GoalToolDefinitions() []tools.ToolDefinition {
 	return []tools.ToolDefinition{
@@ -58,24 +92,19 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 	}
 }
 
-func RegisterGoalTools(reg *tools.Registry, engine *Engine) error {
-	if reg == nil || engine == nil {
-		return nil
-	}
+func GoalTools(engine *Engine) []tools.Tool {
 	definitions := GoalToolDefinitions()
-	if err := reg.Register(definitions[0].Bind(func(ctx context.Context, in map[string]any) (string, error) {
-		return engine.handleGetGoal()
-	})); err != nil {
-		return err
+	unavailable := func(context.Context, map[string]any) (string, error) {
+		return "", fmt.Errorf("goal state is not configured")
 	}
-	if err := reg.Register(definitions[1].Bind(func(ctx context.Context, in map[string]any) (string, error) {
-		return engine.handleCreateGoal(in)
-	})); err != nil {
-		return err
+	if engine == nil {
+		return []tools.Tool{definitions[0].Bind(unavailable), definitions[1].Bind(unavailable), definitions[2].Bind(unavailable)}
 	}
-	return reg.Register(definitions[2].Bind(func(ctx context.Context, in map[string]any) (string, error) {
-		return engine.handleUpdateGoal(in)
-	}))
+	return []tools.Tool{
+		definitions[0].Bind(func(context.Context, map[string]any) (string, error) { return engine.handleGetGoal() }),
+		definitions[1].Bind(func(_ context.Context, in map[string]any) (string, error) { return engine.handleCreateGoal(in) }),
+		definitions[2].Bind(func(_ context.Context, in map[string]any) (string, error) { return engine.handleUpdateGoal(in) }),
+	}
 }
 
 func (e *Engine) handleGetGoal() (string, error) {

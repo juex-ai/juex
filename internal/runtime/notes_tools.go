@@ -5,12 +5,46 @@ import (
 	"encoding/json"
 	"fmt"
 
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
 const NotesToolUpdate = "update_notes"
 
 const notesGuide = `Guide available via skill_load("juex-session-state").`
+
+const NotesModuleID runtimemodule.ID = "notes"
+
+type NotesModule struct {
+	engine *Engine
+}
+
+func NewNotesModule(engine *Engine) *NotesModule { return &NotesModule{engine: engine} }
+
+func (*NotesModule) ID() runtimemodule.ID { return NotesModuleID }
+
+func (m *NotesModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+	return NotesTools(m.engine), nil
+}
+
+func (m *NotesModule) Context(_ context.Context, request runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
+	if m == nil || m.engine == nil || request.Purpose != runtimemodule.ContextPurposeProviderIteration {
+		return nil, nil
+	}
+	runtime := m.engine.SessionRuntimeSnapshot()
+	text, ok := m.engine.notesContextFromStore(runtime.Notes)
+	if !ok {
+		return nil, nil
+	}
+	return []runtimemodule.ContextSection{{
+		Key:        "session_notes",
+		Source:     "runtime",
+		Text:       text,
+		Projection: runtimemodule.ContextProjectionRuntimeMessage,
+		MessageID:  "runtime-notes",
+		Budget:     runtimemodule.UnboundedContextBudget(),
+	}}, nil
+}
 
 func NotesToolDefinitions() []tools.ToolDefinition {
 	return []tools.ToolDefinition{{
@@ -27,16 +61,16 @@ func NotesToolDefinitions() []tools.ToolDefinition {
 	}}
 }
 
-func RegisterNotesTools(reg *tools.Registry, engine *Engine) error {
-	if reg == nil {
-		return fmt.Errorf("notes tools: nil registry")
-	}
+func NotesTools(engine *Engine) []tools.Tool {
+	definition := NotesToolDefinitions()[0]
 	if engine == nil {
-		return fmt.Errorf("notes tools: nil engine")
+		return []tools.Tool{definition.Bind(func(context.Context, map[string]any) (string, error) {
+			return "", fmt.Errorf("notes store is unavailable")
+		})}
 	}
-	return reg.Register(NotesToolDefinitions()[0].Bind(func(ctx context.Context, input map[string]any) (string, error) {
+	return []tools.Tool{definition.Bind(func(_ context.Context, input map[string]any) (string, error) {
 		return engine.handleUpdateNotes(input)
-	}))
+	})}
 }
 
 func (e *Engine) handleUpdateNotes(input map[string]any) (string, error) {

@@ -1,8 +1,11 @@
 package runtime
 
 import (
+	"context"
+
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime/contextbudget"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
 type ActiveContextSnapshot = contextbudget.ActiveContextSnapshot
@@ -20,26 +23,28 @@ func providerVisibleMessages(msgs []llm.Message) []llm.Message {
 }
 
 func (e *Engine) ActiveContext(incoming ...llm.Message) ActiveContextSnapshot {
+	snapshot, _ := e.ActiveContextWithError(context.Background(), incoming...)
+	return snapshot
+}
+
+func (e *Engine) ActiveContextWithError(ctx context.Context, incoming ...llm.Message) (ActiveContextSnapshot, error) {
 	if e == nil {
-		return ActiveContextSnapshot{}
+		return ActiveContextSnapshot{}, nil
 	}
 	runtime := e.SessionRuntimeSnapshot()
 	if runtime.Session == nil {
-		return ActiveContextSnapshot{}
+		return ActiveContextSnapshot{}, nil
 	}
 	_, history := runtime.Session.Snapshot()
 	snap := assembleActiveContext(history, incoming)
-	var contextMessages []llm.Message
-	if text, ok := goalStateContextFromStore(runtime.GoalState); ok {
-		contextMessages = append(contextMessages, goalStateContextMessage(text))
-	}
-	if text, ok := e.notesContextFromStore(runtime.Notes); ok {
-		contextMessages = append(contextMessages, notesContextMessage(text))
+	contextMessages, err := e.moduleRuntimeContextMessages(ctx, runtime)
+	if err != nil {
+		return ActiveContextSnapshot{}, err
 	}
 	contextMessages = append(contextMessages, e.pendingHookRuntimeContextSnapshot()...)
 	snap = appendRuntimeContextMessages(snap, contextMessages...)
 	snap.EstimatedTokens = e.estimateMessageTokens(snap.Messages)
-	return snap
+	return snap, nil
 }
 
 func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnapshot {
@@ -47,29 +52,58 @@ func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnaps
 }
 
 func (e *Engine) activeContextLockedWithHookContext(hookContext []llm.Message, incoming ...llm.Message) ActiveContextSnapshot {
+	snapshot, _ := e.activeContextLockedWithHookContextError(context.Background(), hookContext, incoming...)
+	return snapshot
+}
+
+func (e *Engine) activeContextLockedWithHookContextError(ctx context.Context, hookContext []llm.Message, incoming ...llm.Message) (ActiveContextSnapshot, error) {
+	if e == nil {
+		return ActiveContextSnapshot{}, nil
+	}
 	runtime := e.SessionRuntimeSnapshot()
-	if e == nil || runtime.Session == nil {
-		return ActiveContextSnapshot{}
+	if runtime.Session == nil {
+		return ActiveContextSnapshot{}, nil
 	}
 	snap := assembleActiveContext(runtime.Session.History, incoming)
-	var contextMessages []llm.Message
-	if text, ok := goalStateContextFromStore(runtime.GoalState); ok {
-		contextMessages = append(contextMessages, goalStateContextMessage(text))
-	}
-	if text, ok := e.notesContextFromStore(runtime.Notes); ok {
-		contextMessages = append(contextMessages, notesContextMessage(text))
+	contextMessages, err := e.moduleRuntimeContextMessages(ctx, runtime)
+	if err != nil {
+		return ActiveContextSnapshot{}, err
 	}
 	contextMessages = append(contextMessages, hookContext...)
 	snap = appendRuntimeContextMessages(snap, contextMessages...)
 	snap.EstimatedTokens = e.estimateMessageTokens(snap.Messages)
-	return snap
+	return snap, nil
 }
 
-func goalStateContextMessage(text string) llm.Message {
-	msg := llm.TextMessage(llm.RoleUser, text)
-	msg.ID = "runtime-goal-contract"
-	msg.Kind = llm.MessageKindRuntimeContext
-	return msg
+func (e *Engine) moduleRuntimeContextMessages(ctx context.Context, runtime SessionRuntimeSnapshot) ([]llm.Message, error) {
+	if runtime.Session == nil {
+		return nil, nil
+	}
+	sessionContext := runtimemodule.SessionContext{
+		ID:            runtime.Session.ID,
+		Dir:           runtime.Session.Dir,
+		ScratchpadDir: runtime.ScratchpadDir,
+	}
+	sections, err := runtimemodule.CollectContext(ctx, runtimemodule.ContextRequest{
+		Purpose: runtimemodule.ContextPurposeProviderIteration,
+		Runtime: runtimemodule.RuntimeContext{
+			WorkDir:     e.WorkDir,
+			ArtifactDir: e.ArtifactDir,
+		},
+		Session: &sessionContext,
+	}, e.RuntimeModules, runtime.Modules)
+	if err != nil {
+		return nil, err
+	}
+	sections = runtimemodule.SectionsForProjection(sections, runtimemodule.ContextProjectionRuntimeMessage)
+	messages := make([]llm.Message, 0, len(sections))
+	for _, section := range sections {
+		message := llm.TextMessage(llm.RoleUser, section.Text)
+		message.ID = section.MessageID
+		message.Kind = llm.MessageKindRuntimeContext
+		messages = append(messages, message)
+	}
+	return messages, nil
 }
 
 func appendRuntimeContextMessages(snap ActiveContextSnapshot, messages ...llm.Message) ActiveContextSnapshot {

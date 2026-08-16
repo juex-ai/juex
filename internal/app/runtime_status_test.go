@@ -15,8 +15,12 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/modules/builtintools"
+	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
+	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/runtime/contextbudget"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -197,6 +201,9 @@ func TestRuntimeCatalogServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 		if info.Description != definition.Description || entry.group != string(definition.Group) || !reflect.DeepEqual(info.Schema, definition.Schema) {
 			t.Errorf("catalog %q = %#v, registered definition = %#v", actual.Name, info, definition)
 		}
+		if info.Module == "" {
+			t.Errorf("catalog %q has no module owner", actual.Name)
+		}
 		effective := tools.EffectiveToolTimeout(definition, durationSeconds(cfg.RuntimeLimits().ToolTimeout))
 		if info.Timeout.Mode != string(effective.Mode) || info.Timeout.Seconds != effective.Seconds {
 			t.Errorf("catalog %q timeout = %#v, want %#v", actual.Name, info.Timeout, effective)
@@ -204,6 +211,87 @@ func TestRuntimeCatalogServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 	}
 	if actualCount != status.Tools.Count {
 		t.Fatalf("registered non-MCP tools = %d, catalog count = %d", actualCount, status.Tools.Count)
+	}
+}
+
+func TestAppServingToolRegistryMatchesSealedModuleCatalogs(t *testing.T) {
+	work := t.TempDir()
+	a, err := New(Options{
+		Config:     config.Config{WorkDir: work},
+		Provider:   &stubProvider{},
+		WorkDir:    work,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+
+	owners := make(map[string]runtimemodule.ID)
+	for _, set := range []*runtimemodule.Set{a.Engine.RuntimeModules, a.Engine.SessionRuntimeSnapshot().Modules} {
+		for _, entry := range set.ToolCatalog().Entries() {
+			if first, exists := owners[entry.Tool.Name]; exists {
+				t.Fatalf("tool %q has duplicate catalog owners %q and %q", entry.Tool.Name, first, entry.ModuleID)
+			}
+			owners[entry.Tool.Name] = entry.ModuleID
+		}
+	}
+
+	serving := a.Engine.Tools.List()
+	if len(serving) != len(owners) {
+		t.Fatalf("serving tools = %d, catalog tools = %d", len(serving), len(owners))
+	}
+	for _, tool := range serving {
+		if _, ok := owners[tool.Name]; !ok {
+			t.Errorf("serving tool %q is absent from sealed Module catalogs", tool.Name)
+		}
+	}
+
+	for tool, wantOwner := range map[string]runtimemodule.ID{
+		"read":                builtintools.ModuleID,
+		"skill_search":        skillsmodule.ModuleID,
+		"get_goal":            juexruntime.GoalModuleID,
+		"update_notes":        juexruntime.NotesModuleID,
+		"side_session_create": sideSessionModuleID,
+		"observable_list":     observable.ModuleID,
+	} {
+		if got := owners[tool]; got != wantOwner {
+			t.Errorf("tool %q owner = %q, want %q", tool, got, wantOwner)
+		}
+	}
+}
+
+func TestAppDisabledModulesLeaveNoToolsOrCatalogEntries(t *testing.T) {
+	work := t.TempDir()
+	a, err := New(Options{
+		Config:                  config.Config{WorkDir: work},
+		Provider:                &stubProvider{},
+		WorkDir:                 work,
+		DisableMCP:              true,
+		disableSideSessionTools: true,
+		disableObservables:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+
+	owners := make(map[string]runtimemodule.ID)
+	for _, set := range []*runtimemodule.Set{a.Engine.RuntimeModules, a.Engine.SessionRuntimeSnapshot().Modules} {
+		for _, entry := range set.ToolCatalog().Entries() {
+			owners[entry.Tool.Name] = entry.ModuleID
+			if entry.ModuleID == sideSessionModuleID || entry.ModuleID == observable.ModuleID {
+				t.Errorf("disabled module %q contributed tool %q", entry.ModuleID, entry.Tool.Name)
+			}
+		}
+	}
+	for _, name := range []string{"side_session_create", "observable_list"} {
+		if _, ok := a.Engine.Tools.Get(name); ok {
+			t.Errorf("disabled module tool %q is still serving", name)
+		}
+		if _, ok := owners[name]; ok {
+			t.Errorf("disabled module tool %q remains in catalog", name)
+		}
 	}
 }
 
@@ -255,9 +343,15 @@ func TestRuntimeMCPToolSchemaMatchesNormalizedRegistryDefinition(t *testing.T) {
 		t.Fatal("normalized MCP tool was not registered")
 	}
 
-	projected := runtimeMCPToolInfos([]mcp.ToolDescriptor{descriptor}, 0)
+	projected, err := runtimeMCPToolInfos("catalog", []mcp.ToolDescriptor{descriptor}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(projected) != 1 {
 		t.Fatalf("projected tools = %#v", projected)
+	}
+	if projected[0].Module != string(mcp.ModuleID) {
+		t.Fatalf("projected Module owner = %q, want %q", projected[0].Module, mcp.ModuleID)
 	}
 	if !reflect.DeepEqual(projected[0].Schema, registered.Schema) {
 		t.Fatalf("catalog schema = %#v, registered schema = %#v", projected[0].Schema, registered.Schema)

@@ -365,10 +365,7 @@ func newEngineWithToolTimeout(t *testing.T, prov llm.Provider, builtinTools bool
 	}
 	t.Cleanup(func() { sess.Close() })
 	sess.SubscribeBus(bus)
-	pb := &prompt.Builder{
-		AgentsMDDirs: []string{t.TempDir()},
-		Now:          func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
-	}
+	pb := newTestPromptBuilder("", func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) })
 	artifactState := t.TempDir()
 	return &Engine{
 		Provider:    prov,
@@ -483,6 +480,7 @@ func TestTurn_RequestEpochCheckpointConsumesHookContextAndLinksResponse(t *testi
 	if _, err := eng.Notes.Update("- [ ] retain the exact runtime note"); err != nil {
 		t.Fatal(err)
 	}
+	installSessionStateModules(t, eng)
 	if err := eng.queueHookRuntimeContext([]hooks.Result{{
 		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
 	}}); err != nil {
@@ -968,10 +966,7 @@ func newEngineForSession(t *testing.T, sess *session.Session, prov llm.Provider)
 	reg := tools.NewRegistry()
 	bus := events.NewBus()
 	sess.SubscribeBus(bus)
-	pb := &prompt.Builder{
-		AgentsMDDirs: []string{t.TempDir()},
-		Now:          func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
-	}
+	pb := newTestPromptBuilder("", func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) })
 	artifactState := t.TempDir()
 	return &Engine{
 		Provider:          prov,
@@ -4026,9 +4021,7 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	}}
 	eng, bus := newEngine(t, prov, false)
 	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	if err := RegisterGoalTools(eng.Tools, eng); err != nil {
-		t.Fatal(err)
-	}
+	installSessionStateModules(t, eng)
 	var continued int32
 	bus.Subscribe("goal.continued", func(e events.Event) { atomic.AddInt32(&continued, 1) })
 
@@ -4109,6 +4102,7 @@ func TestTurn_DeferredGoalStillHonorsStopHookContinuation(t *testing.T) {
 	if _, err := eng.GoalState.Create("finish delegated work", "all checks pass"); err != nil {
 		t.Fatal(err)
 	}
+	installSessionStateModules(t, eng)
 	eng.ShouldDeferGoalContinuation = func() bool { return true }
 	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventStop: {
@@ -4144,9 +4138,7 @@ func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 	if _, err := eng.GoalState.Create("deploy the service", "the chosen deployment is healthy"); err != nil {
 		t.Fatal(err)
 	}
-	if err := RegisterGoalTools(eng.Tools, eng); err != nil {
-		t.Fatal(err)
-	}
+	installSessionStateModules(t, eng)
 	eng.ShouldDeferGoalContinuation = func() bool {
 		t.Fatal("wait-for-user Goal consulted the continuation defer callback")
 		return true
@@ -5302,7 +5294,7 @@ func TestTurn_ParallelToolCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { sess.Close() })
-	pb := &prompt.Builder{AgentsMDDirs: []string{t.TempDir()}, Now: func() time.Time { return time.Now() }}
+	pb := newTestPromptBuilder("", time.Now)
 	eng := &Engine{Provider: prov, Tools: reg, Bus: bus, Session: sess, Prompt: pb}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -5369,9 +5361,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}, false)
 	eng.Notes = NewNotesStore(eng.Session.Dir)
-	if err := RegisterNotesTools(eng.Tools, eng); err != nil {
-		t.Fatal(err)
-	}
+	installSessionStateModules(t, eng)
 	eng.Hooks = hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName == hooks.EventPreToolUse && req.ToolName == NotesToolUpdate && req.ToolInput["content"] == "first" {
 			select {
@@ -5398,9 +5388,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	if err := RegisterGoalTools(eng.Tools, eng); err != nil {
-		t.Fatal(err)
-	}
+	installSessionStateModules(t, eng)
 	eng.Hooks = hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName == hooks.EventPreToolUse && req.ToolName == GoalToolCreate {
 			select {

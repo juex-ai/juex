@@ -1180,6 +1180,7 @@ export interface RuntimeToolTimeout {
 
 export interface RuntimeToolInfo {
   name: string;
+  module?: string;
   description: string;
   schema: Record<string, unknown>;
   timeout: RuntimeToolTimeout;

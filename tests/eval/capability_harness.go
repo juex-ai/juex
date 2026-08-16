@@ -16,6 +16,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -156,12 +157,7 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 		Tools:    reg,
 		Bus:      bus,
 		Session:  sess,
-		Prompt: &prompt.Builder{
-			AgentsMDDirs: []string{workDir},
-			WorkDir:      workDir,
-			Shell:        capabilityPromptShellProfile(),
-			Now:          func() time.Time { return time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC) },
-		},
+		Prompt: capabilityPromptBuilder(workDir, sess),
 		Hooks: hookRunner,
 		HookContext: hooks.Request{
 			CWD:              workDir,
@@ -180,6 +176,27 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 		result.Error = turnErr.Error()
 	}
 	return result
+}
+
+func capabilityPromptBuilder(workDir string, sess *session.Session) *prompt.Builder {
+	guidance := &prompt.GuidanceModule{AgentsMDDirs: []string{workDir}}
+	runtimeContext := &prompt.SessionContextModule{
+		WorkDir: workDir,
+		Shell:   capabilityPromptShellProfile(),
+		Now:     func() time.Time { return time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC) },
+	}
+	request := runtimemodule.ContextRequest{
+		Purpose: runtimemodule.ContextPurposeProviderIteration,
+		Session: &runtimemodule.SessionContext{ID: sess.ID, Dir: sess.Dir, ScratchpadDir: sess.ScratchpadDir()},
+	}
+	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+		sections, err := guidance.Context(context.Background(), request)
+		if err != nil {
+			return nil, err
+		}
+		runtimeSections, err := runtimeContext.Context(context.Background(), request)
+		return append(sections, runtimeSections...), err
+	}}
 }
 
 func collectCapabilityResult(t *testing.T, name, workDir, sessionDir, finalText string, elapsed time.Duration, provider *capabilityProvider, contract ContractExpectations) CapabilityResult {

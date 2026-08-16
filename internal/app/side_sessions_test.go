@@ -242,7 +242,7 @@ func callSideTool(t *testing.T, a *App, name string, input map[string]any) map[s
 
 func waitForSideState(t *testing.T, a *App, id string, want SideSessionState) SideSessionStatus {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(sideSessionTestTimeout)
 	for time.Now().Before(deadline) {
 		status, err := a.sideSessions.Status(id)
 		if err == nil && status.State == want {

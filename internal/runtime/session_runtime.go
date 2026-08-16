@@ -257,8 +257,8 @@ func (e *Engine) sessionRuntimeStateLocked() sessionRuntimeState {
 		return *e.sessionRuntime
 	}
 	scratchpadDir := ""
-	if e.Prompt != nil {
-		scratchpadDir = e.Prompt.ScratchpadDir
+	if e.Session != nil {
+		scratchpadDir = e.Session.ScratchpadDir()
 	}
 	return sessionRuntimeState{
 		SessionRuntimeSnapshot: SessionRuntimeSnapshot{
@@ -280,7 +280,6 @@ func buildSessionRuntimeState(current sessionRuntimeState, sess *session.Session
 	if builder == nil {
 		builder = &prompt.Builder{}
 	}
-	builder.ScratchpadDir = scratchpadDir
 
 	queue := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{})
 	if current.PendingInputQueue != nil && filepath.Dir(current.PendingInputQueue.path) == sess.Dir {
@@ -360,8 +359,6 @@ func clonePromptBuilder(builder *prompt.Builder) *prompt.Builder {
 		return nil
 	}
 	cloned := *builder
-	cloned.AgentsMDDirs = append([]string(nil), builder.AgentsMDDirs...)
-	cloned.Shell.Args = append([]string(nil), builder.Shell.Args...)
 	return &cloned
 }
 
