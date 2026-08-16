@@ -4063,6 +4063,37 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	}
 }
 
+func TestTurn_GoalCompletionGateAcceptsMaximumGoalContract(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "goal_update_max", ToolName: GoalToolUpdate, Input: map[string]any{
+				"status":        string(GoalStatusSuccess),
+				"status_reason": "maximum contract preserved",
+			}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	acceptance := strings.Repeat("a", 32*1024)
+	if _, err := eng.GoalState.Create("ship the maximum contract", acceptance); err != nil {
+		t.Fatal(err)
+	}
+	installSessionStateModules(t, eng)
+
+	out, err := eng.Turn(context.Background(), "finish the goal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "final" || len(prov.histories) != 3 {
+		t.Fatalf("out = %q, provider calls = %d", out, len(prov.histories))
+	}
+	if got := messagesText(prov.histories[1]); !strings.Contains(got, acceptance) {
+		t.Fatalf("maximum acceptance missing from continuation context: length=%d", len(got))
+	}
+}
+
 func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "waiting for delegated work"), StopReason: llm.StopEndTurn},

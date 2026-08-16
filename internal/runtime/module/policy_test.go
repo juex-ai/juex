@@ -146,6 +146,22 @@ func TestFinishContinuationAndPolicyContextAreBounded(t *testing.T) {
 		t.Fatalf("empty continuation error = %v", err)
 	}
 
+	maximum := mustPolicySet(t, &policyTestModule{
+		id:     "maximum-finish",
+		finish: FinishDecision{Action: FinishContinue, Continuation: strings.Repeat("x", maxPolicyContinuationChars)},
+	})
+	if evaluation, err := EvaluateFinishPolicies(context.Background(), FinishRequest{}, maximum); err != nil || len(evaluation.Candidates) != 1 {
+		t.Fatalf("maximum continuation evaluation = %+v, %v", evaluation, err)
+	}
+
+	oversized := mustPolicySet(t, &policyTestModule{
+		id:     "oversized-finish",
+		finish: FinishDecision{Action: FinishContinue, Continuation: strings.Repeat("x", maxPolicyContinuationChars+1)},
+	})
+	if _, err := EvaluateFinishPolicies(context.Background(), FinishRequest{}, oversized); err == nil || !strings.Contains(err.Error(), "continuation length") {
+		t.Fatalf("oversized continuation error = %v", err)
+	}
+
 	invalidLabel := mustPolicySet(t, &policyTestModule{
 		id: "invalid-label",
 		toolDecision: ToolPolicyDecision{
