@@ -25,6 +25,7 @@ const (
 type PendingInputState string
 
 const (
+	PendingInputStateAccepting PendingInputState = "accepting"
 	PendingInputStatePending   PendingInputState = "pending"
 	PendingInputStateAdmitted  PendingInputState = "admitted"
 	PendingInputStateProcessed PendingInputState = "processed"
@@ -141,6 +142,16 @@ func (q *PendingInputQueue) Enqueue(msg llm.Message, opts PendingInputOptions, t
 // AdmitTurnInput records the main input in one append before any Turn policy
 // runs. Main inputs do not inherit the expiry of queued steering messages.
 func (q *PendingInputQueue) AdmitTurnInput(turnID string, msg llm.Message, reuseTurnRecord bool) (PendingInputRecord, error) {
+	return q.storeTurnInput(turnID, msg, reuseTurnRecord, PendingInputStateAdmitted)
+}
+
+// StageTurnInput writes a non-replayable admission intent. The caller promotes
+// it only after the matching durable turn.admitted event commits.
+func (q *PendingInputQueue) StageTurnInput(turnID string, msg llm.Message, reuseTurnRecord bool) (PendingInputRecord, error) {
+	return q.storeTurnInput(turnID, msg, reuseTurnRecord, PendingInputStateAccepting)
+}
+
+func (q *PendingInputQueue) storeTurnInput(turnID string, msg llm.Message, reuseTurnRecord bool, state PendingInputState) (PendingInputRecord, error) {
 	if q == nil {
 		return PendingInputRecord{}, fmt.Errorf("pending input queue: nil store")
 	}
@@ -149,17 +160,17 @@ func (q *PendingInputQueue) AdmitTurnInput(turnID string, msg llm.Message, reuse
 	if err := q.ensureLoadedLocked(); err != nil {
 		return PendingInputRecord{}, err
 	}
+	if reuseTurnRecord {
+		if id := q.admittedTurnIndex[turnID]; id != "" {
+			return q.records[id], nil
+		}
+	}
 	if msg.ID != "" {
 		if id := q.messageIndex[msg.ID]; id != "" {
 			record := q.records[id]
 			if isReplayablePendingState(record.State) {
-				return q.promoteTurnInputLocked(record, turnID)
+				return q.promoteTurnInputLocked(record, turnID, state)
 			}
-		}
-	}
-	if reuseTurnRecord {
-		if id := q.admittedTurnIndex[turnID]; id != "" {
-			return q.records[id], nil
 		}
 	}
 
@@ -176,7 +187,7 @@ func (q *PendingInputQueue) AdmitTurnInput(turnID string, msg llm.Message, reuse
 		Message:   msg,
 		Summary:   truncate(msg.FirstText(), pendingInputSummaryLength),
 		Origin:    PendingInputOriginTurn,
-		State:     PendingInputStateAdmitted,
+		State:     state,
 		CreatedAt: now,
 		Attempts:  1,
 	}
@@ -187,12 +198,12 @@ func (q *PendingInputQueue) AdmitTurnInput(turnID string, msg llm.Message, reuse
 	return record, nil
 }
 
-func (q *PendingInputQueue) promoteTurnInputLocked(record PendingInputRecord, turnID string) (PendingInputRecord, error) {
-	if record.Origin == PendingInputOriginTurn && record.State == PendingInputStateAdmitted && record.TurnID == turnID {
+func (q *PendingInputQueue) promoteTurnInputLocked(record PendingInputRecord, turnID string, state PendingInputState) (PendingInputRecord, error) {
+	if record.Origin == PendingInputOriginTurn && record.State == state && record.TurnID == turnID {
 		return record, nil
 	}
 	record.Origin = PendingInputOriginTurn
-	record.State = PendingInputStateAdmitted
+	record.State = state
 	record.TurnID = turnID
 	record.ExpiresAt = time.Time{}
 	record.Attempts++
@@ -201,6 +212,33 @@ func (q *PendingInputQueue) promoteTurnInputLocked(record PendingInputRecord, tu
 	}
 	q.indexRecordLocked(record)
 	return record, nil
+}
+
+func (q *PendingInputQueue) CommitTurnInput(id, turnID string) error {
+	if q == nil {
+		return fmt.Errorf("pending input queue: nil store")
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureLoadedLocked(); err != nil {
+		return err
+	}
+	record, ok := q.records[id]
+	if !ok {
+		return fmt.Errorf("pending input queue: admission intent %q not found", id)
+	}
+	if record.State == PendingInputStateAdmitted && record.TurnID == turnID {
+		return nil
+	}
+	if record.State != PendingInputStateAccepting || record.TurnID != turnID {
+		return fmt.Errorf("pending input queue: admission intent %q has state %q for turn %q", id, record.State, record.TurnID)
+	}
+	record.State = PendingInputStateAdmitted
+	if err := q.appendLocked(record); err != nil {
+		return err
+	}
+	q.indexRecordLocked(record)
+	return nil
 }
 
 func (q *PendingInputQueue) Replayable(turnID string, limit int) ([]PendingInputRecord, error) {
@@ -310,7 +348,7 @@ func (q *PendingInputQueue) MarkMessageProcessed(messageID string) error {
 
 func (q *PendingInputQueue) MarkDropped(ids []string) error {
 	return q.updateStates(ids, func(record PendingInputRecord, now time.Time) (PendingInputRecord, bool) {
-		if record.State == PendingInputStatePending || record.State == PendingInputStateAdmitted {
+		if record.State == PendingInputStateAccepting || record.State == PendingInputStatePending || record.State == PendingInputStateAdmitted {
 			record.State = PendingInputStateDropped
 			return record, true
 		}

@@ -1352,20 +1352,23 @@ preserve queued input even when a pre-compact hook fails before compaction
 starts.
 
 Before ordinary or `/new` admission returns `started`, the runtime writes the
-main input as an `admitted` record with `origin: turn` and a stable message id,
-then establishes the active Turn and emits `turn.admitted`. These records do
+main input as a non-replayable `accepting` intent with `origin: turn` and a
+stable message id, establishes the active Turn, commits `turn.admitted`, and
+then promotes the intent to `admitted`. A failure before promotion completes
+drops the intent when possible; even if that compensation cannot be written,
+the durable `accepting` state remains excluded from recovery. These records do
 not use the queued-steering TTL. Turn input policies may replace message
 content but retain that Framework-owned identity; transcript append marks the
-accepted record `processed`. After a crash, an unprocessed Turn-origin record
-runs through the ordered Turn input policies and projection again before it is
-appended, so recovery cannot bypass rejection or transformation.
+accepted record `processed`. After a crash, an unprocessed admitted Turn-origin
+record runs through the ordered Turn input policies and projection again before
+it is appended, so recovery cannot bypass rejection or transformation.
 
 The pending-input journal builds an in-memory latest-record and replayable
 index on first access. Later admission and state transitions update that index
 and verify the journal file fingerprint without rescanning the append-only
-history. Ordinary Turn admission writes the initial `admitted` state directly;
-queued records use `pending` until they are drained or promoted to a main Turn
-input.
+history. Ordinary Turn admission advances `accepting` to `admitted` only after
+its admission event commits; queued records use `pending` until they are
+drained or promoted to a main Turn input.
 
 ```go
 // internal/runtime/loop.go
@@ -1476,10 +1479,11 @@ queued as pending input. The queue is bounded (`MaxPendingInputs`), rejects
 overflow loudly, and drains only before the next provider call. Accepted
 records are also appended to session-local `pending_input.jsonl` with stable
 record/message ids, state, timestamps, attempts, and expiry. On restart, the
-runtime reloads unexpired `pending` or `admitted` records, skips records whose
-stable message id is already present in conversation history, and marks
-processed records so the same user input or external event is not executed
-twice. That keeps assistant `tool_use` and user `tool_result` adjacency intact
+runtime reloads unexpired `pending` or `admitted` records while ignoring
+uncommitted `accepting` intents, skips records whose stable message id is
+already present in conversation history, and marks processed records so the
+same user input or external event is not executed twice. That keeps assistant
+`tool_use` and user `tool_result` adjacency intact
 while still allowing steering messages to join the active turn without
 mid-stream interrupts or rollback. If a provider request fails with a general
 transport or timeout error while pending input exists, the runtime drains that

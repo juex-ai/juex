@@ -330,6 +330,7 @@ func replaceTurnInputContent(current, replacement llm.Message) llm.Message {
 	replacement.Role = frameworkMetadata.Role
 	replacement.Kind = frameworkMetadata.Kind
 	replacement.Model = frameworkMetadata.Model
+	replacement.PolicyBlocked = frameworkMetadata.PolicyBlocked
 	replacement.Compaction = frameworkMetadata.Compaction
 	return replacement
 }

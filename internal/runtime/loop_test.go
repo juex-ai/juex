@@ -488,6 +488,160 @@ func TestAdmitTurnMessage_DurableAdmissionEventFailureDropsAcceptedInput(t *test
 	}
 }
 
+func TestAdmitTurnMessage_RepeatedAdmissionKeepsCommittedRecord(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	first, err := eng.AdmitTurnMessage("turn-1", llm.TextMessage(llm.RoleUser, "accepted once"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := eng.AdmitTurnMessage("turn-1", first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("repeated admission message id = %q, want %q", second.ID, first.ID)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("pending records = %+v, want one committed admission", records)
+	}
+	for _, record := range records {
+		if record.State != PendingInputStateAdmitted {
+			t.Fatalf("repeated admission record = %+v, want state %q", record, PendingInputStateAdmitted)
+		}
+	}
+}
+
+func TestAdmitTurnMessage_AdmissionAndCompensationFailureCannotReplayInput(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	queue := eng.currentPendingInputQueue()
+	pendingPath := queue.path
+	backupPath := pendingPath + ".before-failed-compensation"
+	restored := false
+	restoreJournal := func() error {
+		if restored {
+			return nil
+		}
+		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(backupPath, pendingPath); err != nil {
+			return err
+		}
+		restored = true
+		return nil
+	}
+	t.Cleanup(func() { _ = restoreJournal() })
+	want := errors.New("admission sync failed")
+	bus.SetCommitter(selectiveFailCommitter{
+		eventType: TurnAdmittedType,
+		err:       want,
+		beforeFail: func() error {
+			if err := os.Rename(pendingPath, backupPath); err != nil {
+				return err
+			}
+			return os.Mkdir(pendingPath, 0o700)
+		},
+	})
+
+	_, admissionErr := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "abandoned input"))
+	if !errors.Is(admissionErr, want) || !strings.Contains(admissionErr.Error(), "drop rejected turn admission") {
+		t.Fatalf("AdmitTurnMessage() error = %v, want event and compensation failures", admissionErr)
+	}
+	if err := restoreJournal(); err != nil {
+		t.Fatal(err)
+	}
+	reloadedQueue := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
+	records, err := reloadedQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("pending records = %+v, want one abandoned admission intent", records)
+	}
+	for _, record := range records {
+		if record.State != PendingInputState("accepting") {
+			t.Fatalf("failed admission record = %+v, want non-replayable state %q", record, PendingInputState("accepting"))
+		}
+	}
+	replayable, err := reloadedQueue.Replayable("later-turn", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 0 {
+		t.Fatalf("failed admission remained replayable: %+v", replayable)
+	}
+
+	eng.PendingInputQueue = reloadedQueue
+	eng.Session.SubscribeBus(bus)
+	if out, err := eng.Turn(context.Background(), "later input"); err != nil || out != "done" {
+		t.Fatalf("later Turn() = %q, %v", out, err)
+	}
+	for _, message := range prov.histories[0] {
+		if message.FirstText() == "abandoned input" {
+			t.Fatalf("failed admission replayed in later provider history: %+v", prov.histories[0])
+		}
+	}
+}
+
+func TestAdmitTurnMessage_IntentPromotionFailureCannotReplayInput(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	queue := eng.currentPendingInputQueue()
+	pendingPath := queue.path
+	backupPath := pendingPath + ".before-failed-promotion"
+	restored := false
+	restoreJournal := func() error {
+		if restored {
+			return nil
+		}
+		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(backupPath, pendingPath); err != nil {
+			return err
+		}
+		restored = true
+		return nil
+	}
+	t.Cleanup(func() { _ = restoreJournal() })
+	bus.SetCommitter(interceptCommitter{
+		eventType: TurnAdmittedType,
+		beforeCommit: func() error {
+			if err := os.Rename(pendingPath, backupPath); err != nil {
+				return err
+			}
+			return os.Mkdir(pendingPath, 0o700)
+		},
+	})
+	var turnErrors int
+	bus.Subscribe("turn.errored", func(events.Event) { turnErrors++ })
+
+	_, err := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "uncommitted input"))
+	if err == nil || !strings.Contains(err.Error(), "persist committed turn admission") || !strings.Contains(err.Error(), "drop uncommitted turn admission") {
+		t.Fatalf("AdmitTurnMessage() error = %v, want promotion and compensation failures", err)
+	}
+	if turnErrors != 1 {
+		t.Fatalf("turn.errored events = %d, want 1", turnErrors)
+	}
+	if err := restoreJournal(); err != nil {
+		t.Fatal(err)
+	}
+	reloadedQueue := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
+	replayable, err := reloadedQueue.Replayable("later-turn", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 0 {
+		t.Fatalf("uncommitted admission remained replayable: %+v", replayable)
+	}
+}
+
 func TestTurn_DurableProviderRequestFailurePreventsProviderCall(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn,
@@ -1055,12 +1209,32 @@ func TestTurn_DurableHookRequestFailurePreventsHookRun(t *testing.T) {
 }
 
 type selectiveFailCommitter struct {
-	eventType string
-	err       error
+	eventType  string
+	err        error
+	beforeFail func() error
+}
+
+type interceptCommitter struct {
+	eventType    string
+	beforeCommit func() error
+}
+
+func (c interceptCommitter) Commit(event events.Event) (events.Event, error) {
+	if event.Type == c.eventType && c.beforeCommit != nil {
+		if err := c.beforeCommit(); err != nil {
+			return events.Event{}, err
+		}
+	}
+	return events.Normalize(event), nil
 }
 
 func (c selectiveFailCommitter) Commit(event events.Event) (events.Event, error) {
 	if event.Type == c.eventType {
+		if c.beforeFail != nil {
+			if err := c.beforeFail(); err != nil {
+				return events.Event{}, errors.Join(c.err, err)
+			}
+		}
 		return events.Event{}, c.err
 	}
 	return events.Normalize(event), nil
@@ -4836,6 +5010,38 @@ func TestTurn_TerminalProviderFailureConsumesHookContext(t *testing.T) {
 	}
 	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
 		t.Fatalf("hook context remaining after terminal provider failure = %+v", remaining)
+	}
+}
+
+func TestTurn_PreRestoreCancellationTerminallyPersistsAcceptedInput(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, _ := newEngine(t, prov, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := eng.TurnMessageWithID(ctx, llm.TextMessage(llm.RoleUser, "cancel before restore"), "cancelled-turn")
+	if !errors.Is(err, cancellation.ErrUserCancelled) {
+		t.Fatalf("TurnMessageWithID() error = %v, want ErrUserCancelled", err)
+	}
+	if prov.called != 0 {
+		t.Fatalf("provider calls = %d, want 0", prov.called)
+	}
+	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "cancel before restore" {
+		t.Fatalf("durable history = %+v, want accepted cancelled input", eng.Session.History)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("pending records = %+v, want one processed admission", records)
+	}
+	for _, record := range records {
+		if record.State != PendingInputStateProcessed {
+			t.Fatalf("cancelled admission record = %+v, want state %q", record, PendingInputStateProcessed)
+		}
 	}
 }
 

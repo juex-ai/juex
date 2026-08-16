@@ -194,7 +194,7 @@ func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Messa
 		return llm.Message{}, ErrActiveTurnExists
 	}
 	alreadyActive := e.activeTurnID == turnID
-	record, err := queue.AdmitTurnInput(turnID, userMsg, alreadyActive)
+	record, err := queue.StageTurnInput(turnID, userMsg, alreadyActive)
 	if err != nil {
 		e.pendingMu.Unlock()
 		return llm.Message{}, fmt.Errorf("persist accepted turn input: %w", err)
@@ -212,6 +212,15 @@ func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Messa
 				return llm.Message{}, errors.Join(commitErr, fmt.Errorf("drop rejected turn admission: %w", dropErr))
 			}
 			return llm.Message{}, commitErr
+		}
+		if err := queue.CommitTurnInput(record.ID, turnID); err != nil {
+			dropErr := queue.MarkDropped([]string{record.ID})
+			commitErr := fmt.Errorf("persist committed turn admission: %w", err)
+			if dropErr != nil {
+				commitErr = errors.Join(commitErr, fmt.Errorf("drop uncommitted turn admission: %w", dropErr))
+			}
+			e.finishActiveTurn(turnID)
+			return llm.Message{}, e.failTurn(turnID, commitErr)
 		}
 	}
 	return record.Message, nil

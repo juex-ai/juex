@@ -287,12 +287,13 @@ func TestTurnInputPolicyReplacementPreservesFrameworkMessageMetadata(t *testing.
 		Blocks:     []llm.Block{{Type: llm.BlockText, Text: "original"}},
 	}
 	replacement := llm.Message{
-		ID:         "policy-message",
-		Role:       llm.RoleAssistant,
-		Kind:       llm.MessageKindContinuation,
-		Model:      "policy:model",
-		Compaction: &llm.CompactionMetadata{Reason: "policy"},
-		Blocks:     []llm.Block{{Type: llm.BlockText, Text: "replacement"}},
+		ID:            "policy-message",
+		Role:          llm.RoleAssistant,
+		Kind:          llm.MessageKindContinuation,
+		Model:         "policy:model",
+		PolicyBlocked: true,
+		Compaction:    &llm.CompactionMetadata{Reason: "policy"},
+		Blocks:        []llm.Block{{Type: llm.BlockText, Text: "replacement"}},
 	}
 	set := mustPolicySet(t, &policyTestModule{
 		id: "transformer",
@@ -314,6 +315,14 @@ func TestTurnInputPolicyReplacementPreservesFrameworkMessageMetadata(t *testing.
 	}
 	if result.Compaction == nil || result.Compaction.Auto != original.Compaction.Auto || result.Compaction.Reason != original.Compaction.Reason {
 		t.Fatalf("compaction metadata = %+v, want %+v", result.Compaction, original.Compaction)
+	}
+	if result.PolicyBlocked {
+		t.Fatal("replacement set Framework-owned PolicyBlocked metadata")
+	}
+	original.PolicyBlocked = true
+	replacement.PolicyBlocked = false
+	if result := replaceTurnInputContent(original, replacement); !result.PolicyBlocked {
+		t.Fatal("replacement cleared Framework-owned PolicyBlocked metadata")
 	}
 }
 
