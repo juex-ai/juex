@@ -36,7 +36,6 @@ import (
 	"github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
@@ -63,8 +62,9 @@ type Engine struct {
 	ModelHealth       *llm.ModelHealth
 	Tools             *tools.Registry
 	RuntimeModules    *runtimemodule.Set
+	RuntimeContext    runtimemodule.RuntimeContext
 	Bus               *events.Bus
-	// Session, Prompt, HookContext, PendingInputQueue, Notes, and GoalState
+	// Session, Prompt, PendingInputQueue, Notes, and GoalState
 	// are constructor/test compatibility fields. Concurrent production code
 	// must use the synchronized session-runtime methods instead of reading or
 	// replacing these fields directly.
@@ -75,10 +75,6 @@ type Engine struct {
 	WorkDir string
 	// ArtifactDir is the current Agent's managed Artifact root.
 	ArtifactDir string
-	Hooks       HookRunner
-	// HookContext carries process/session metadata included in every hook
-	// command input. Event-specific fields are filled by the runtime.
-	HookContext hooks.Request
 	// MaxPendingInputs caps user or external event messages that can be
 	// queued while a turn is active. When omitted, DefaultMaxPendingInput is
 	// used. A full queue rejects new input instead of silently dropping it.
@@ -91,19 +87,6 @@ type Engine struct {
 	Notes *NotesStore
 	// GoalState persists the current session goal and latest completion check.
 	GoalState *GoalStateStore
-	// SkipGoalCompletionGate keeps shared Goal state visible and writable while
-	// preventing this Engine from extending turns to satisfy another Session's
-	// completion contract. Managed Side Sessions set this.
-	SkipGoalCompletionGate bool
-	// ShouldDeferGoalContinuation lets an owner temporarily allow an
-	// in-progress Goal to finish the current Turn while subscribed external
-	// work is still running. It must be a fast, read-only callback and must not
-	// call back into this Engine.
-	ShouldDeferGoalContinuation func() bool
-	// PendingInputsAdmitted observes durable pending records when they leave the
-	// in-memory queue for provider-visible processing. It must be fast and must
-	// not call back into this Engine.
-	PendingInputsAdmitted func(recordIDs []string)
 	// ShowBuiltinHookTraces includes built-in runtime gates in UI-only hook
 	// trace messages. Command hook traces are always shown.
 	ShowBuiltinHookTraces bool
@@ -156,10 +139,6 @@ type Engine struct {
 
 	notesContextErrorMu  sync.Mutex
 	notesContextErrorKey string
-}
-
-type HookRunner interface {
-	Run(context.Context, hooks.Request) ([]hooks.Result, error)
 }
 
 var (
@@ -442,11 +421,12 @@ func (e *Engine) PendingInputStatus() PendingInputStatus {
 
 // PromotePendingInputTurn turns the first queued input from a reserved
 // non-provider phase into the user message for a real provider turn.
-func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.Message, PendingInputStatus, bool) {
+func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.Message, PendingInputStatus, bool, error) {
 	if e == nil || nextTurnID == "" {
-		return llm.Message{}, PendingInputStatus{}, false
+		return llm.Message{}, PendingInputStatus{}, false, nil
 	}
 	max := e.effectiveMaxPendingInputs()
+	queue := e.currentPendingInputQueue()
 	e.pendingMu.Lock()
 	if e.activeTurnID != currentTurnID || len(e.pendingInput) == 0 {
 		if e.activeTurnID == currentTurnID {
@@ -458,9 +438,20 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 			MaxPendingInputs: max,
 		}
 		e.pendingMu.Unlock()
-		return llm.Message{}, status, false
+		return llm.Message{}, status, false, nil
 	}
 	item := e.pendingInput[0]
+	if item.RecordID != "" && queue != nil {
+		if err := queue.MarkAdmitted([]string{item.RecordID}, nextTurnID); err != nil {
+			e.activeTurnID = ""
+			status := PendingInputStatus{
+				PendingCount:     len(e.pendingInput),
+				MaxPendingInputs: max,
+			}
+			e.pendingMu.Unlock()
+			return llm.Message{}, status, false, fmt.Errorf("mark promoted pending input admitted: %w", err)
+		}
+	}
 	e.pendingInput[0] = queuedPendingInput{}
 	e.pendingInput = e.pendingInput[1:]
 	e.activeTurnID = nextTurnID
@@ -471,16 +462,16 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 	}
 	e.pendingEventAnnouncing = true
 	e.pendingMu.Unlock()
-	if item.RecordID != "" {
-		e.notifyPendingInputsAdmitted([]string{item.RecordID})
-	}
 	_ = e.emit(events.Event{Type: PendingInputPromotedType, TurnID: nextTurnID, Payload: PendingInputPromotedPayload{
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
 	}})
 	_ = e.emit(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{}})
+	if item.RecordID != "" {
+		e.notifyPendingInputsAdmitted(context.Background(), nextTurnID, []string{item.RecordID})
+	}
 	e.flushPendingEvents()
-	return item.Message, status, true
+	return item.Message, status, true, nil
 }
 
 // TurnMessage drives one already-constructed user message to completion.
@@ -608,16 +599,21 @@ type recordedProviderResponse struct {
 }
 
 func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, userMsg llm.Message) (preparedTurnContext, error) {
-	userHookReq := e.newHookRequest(hooks.EventUserPromptSubmit, turnID)
-	userHookReq.UserInput = userMsg.FirstText()
-	userHookResults, err := e.runHooks(ctx, userHookReq)
+	original := userMsg
+	policyMessage, err := runtimemodule.ApplyTurnInputPolicies(ctx, runtimemodule.TurnInputRequest{
+		Runtime:  e.policyRuntimeContext(),
+		Session:  e.policySessionContext(),
+		TurnID:   turnID,
+		Message:  userMsg,
+		Observer: e.policyObserver(turnID),
+	}, e.policySets()...)
 	if err != nil {
+		if persistErr := e.recordTurnStartLocked(turnID, original); persistErr != nil {
+			return preparedTurnContext{}, errors.Join(err, fmt.Errorf("persist accepted user input after policy failure: %w", persistErr))
+		}
 		return preparedTurnContext{}, err
 	}
-	if denied, reason := hookBlocked(userHookResults); denied {
-		return preparedTurnContext{}, hookDeniedError(hooks.EventUserPromptSubmit, reason)
-	}
-	userMsg = appendHookAdditionalContext(userMsg, userHookResults)
+	userMsg = policyMessage
 
 	prepared := preparedTurnContext{
 		tools:  e.Tools.Specs(),
@@ -1188,33 +1184,28 @@ func appendGuidedToolFailureHint(content, hint string) string {
 
 func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolExecutionCall) toolCallResult {
 	call := execution.call
-	preReq := e.newHookRequest(hooks.EventPreToolUse, turnID)
-	preReq.ToolName = call.ToolName
-	preReq.ToolInput = call.Input
-	started := false
-	checkpointStarted := func() error {
-		if started {
-			return nil
-		}
-		if err := e.emit(events.Event{Type: toolevents.RunningType, TurnID: turnID, Payload: toolevents.Running(execution.payload)}); err != nil {
-			return fmt.Errorf("commit tool started: %w", err)
-		}
-		started = true
-		return nil
+	if err := e.emit(events.Event{Type: toolevents.RunningType, TurnID: turnID, Payload: toolevents.Running(execution.payload)}); err != nil {
+		return toolCallResult{FatalError: fmt.Errorf("commit tool started: %w", err)}
 	}
-	preResults, err := e.runHooksBeforeRun(ctx, preReq, checkpointStarted)
+	prePolicy, err := runtimemodule.ApplyToolPolicies(ctx, runtimemodule.ToolPolicyRequest{
+		Runtime:  e.policyRuntimeContext(),
+		Session:  e.policySessionContext(),
+		TurnID:   turnID,
+		Stage:    runtimemodule.ToolPolicyBeforeExecution,
+		ToolName: call.ToolName,
+		Input:    call.Input,
+		Observer: e.policyObserver(turnID),
+	}, e.policySets()...)
 	if err != nil {
-		if isHookRequestCommitError(err) || isHookBeforeRunError(err) {
+		if runtimemodule.IsPolicyCheckpointError(err) {
 			return toolCallResult{FatalError: err}
 		}
-		return e.hookToolErrorResult(turnID, call, err)
+		return e.policyToolErrorResult(call, err)
 	}
-	if denied, reason := hookBlocked(preResults); denied {
-		return e.hookToolErrorResult(turnID, call, fmt.Errorf("hooks: tool %q denied%s", call.ToolName, hookReasonSuffix(reason)))
+	if prePolicy.Denied {
+		return e.policyToolErrorResult(call, fmt.Errorf("tool policy denied %q%s", call.ToolName, policyReasonSuffix(prePolicy.Reason)))
 	}
-	if err := checkpointStarted(); err != nil {
-		return toolCallResult{FatalError: err}
-	}
+	call.Input = prePolicy.Input
 
 	toolCtx := tools.WithToolCallEvents(ctx, tools.ToolCallEvents{
 		Name:      call.ToolName,
@@ -1249,15 +1240,23 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 	if isShellCall {
 		shellBaseContent = block.Content
 	}
-	postReq := e.newHookRequest(hooks.EventPostToolUse, turnID)
-	postReq.ToolName = call.ToolName
-	postReq.ToolInput = call.Input
-	postReq.ToolResult = block.Content
-	postResults, postErr := e.runHooks(ctx, postReq)
+	postPolicy, postErr := runtimemodule.ApplyToolPolicies(ctx, runtimemodule.ToolPolicyRequest{
+		Runtime:  e.policyRuntimeContext(),
+		Session:  e.policySessionContext(),
+		TurnID:   turnID,
+		Stage:    runtimemodule.ToolPolicyAfterExecution,
+		ToolName: call.ToolName,
+		Input:    call.Input,
+		Result: runtimemodule.ToolPolicyResult{
+			Content: block.Content,
+			IsError: block.IsError,
+		},
+		Observer: e.policyObserver(turnID),
+	}, e.policySets()...)
 	postErr = cancellation.NormalizeError(postErr)
 	var fatalErr error
 	if postErr != nil {
-		if isHookRequestCommitError(postErr) {
+		if runtimemodule.IsPolicyCheckpointError(postErr) {
 			fatalErr = postErr
 		} else {
 			if isShellStructuredResult(info.StructuredResult) {
@@ -1268,9 +1267,12 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 			block.IsError = true
 			toolErr = postErr
 		}
+	} else {
+		block.Content = postPolicy.Result.Content
+		block.IsError = postPolicy.Result.IsError
 	}
-	appendToolHookContext(&block, preResults, false)
-	appendToolHookContext(&block, postResults, true)
+	appendToolPolicyContext(&block, prePolicy.Context)
+	appendToolPolicyContext(&block, postPolicy.Context)
 	if isShellCall {
 		block.Content = finalizedShellContent(shellBaseContent, block.Content)
 	}
@@ -1378,7 +1380,7 @@ func (e *Engine) emitToolFinished(
 	return e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: payload})
 }
 
-func (e *Engine) hookToolErrorResult(turnID string, call llm.Block, err error) toolCallResult {
+func (e *Engine) policyToolErrorResult(call llm.Block, err error) toolCallResult {
 	err = cancellation.NormalizeError(err)
 	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
 	block := llm.Block{
@@ -1568,7 +1570,7 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 			return fmt.Errorf("mark pending input admitted: %w", err)
 		}
 	}
-	e.notifyPendingInputsAdmitted(recordIDs)
+	e.notifyPendingInputsAdmitted(ctx, turnID, recordIDs)
 	var processedIDs []string
 	for _, item := range pending {
 		msg := item.Message
@@ -1610,11 +1612,16 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 	return nil
 }
 
-func (e *Engine) notifyPendingInputsAdmitted(recordIDs []string) {
-	if e == nil || e.PendingInputsAdmitted == nil || len(recordIDs) == 0 {
+func (e *Engine) notifyPendingInputsAdmitted(ctx context.Context, turnID string, recordIDs []string) {
+	if e == nil || len(recordIDs) == 0 {
 		return
 	}
-	e.PendingInputsAdmitted(recordIDs)
+	runtimemodule.NotifyPendingInputsAdmitted(ctx, runtimemodule.PendingInputAdmission{
+		Runtime:   e.policyRuntimeContext(),
+		Session:   e.policySessionContext(),
+		TurnID:    turnID,
+		RecordIDs: recordIDs,
+	}, e.policySets()...)
 }
 
 func (e *Engine) deferPendingEventLocked(event events.Event) bool {

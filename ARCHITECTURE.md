@@ -206,7 +206,7 @@ implementation decisions live.
 | `internal/llm` | Canonical messages and blocks, Provider interfaces/profiles, Protocol and Capability resolution, wire/SDK adapters, provider transport/API/stream retry, model health | Model-chain fallback, Session lifecycle, Tool execution, CLI/HTTP DTOs |
 | `internal/provenance` | Request Epoch schema, canonical digests, safe Provider descriptors, bounded snapshot deduplication, and incremental journal replay reduction | Provider call timing, complete Provider profiles or credentials, transcript/Event storage, UI projection |
 | `internal/runtime` | Turn lifecycle, Provider-iteration and Tool Call ordering, pending-input queue, model-chain fallback and Turn-level retry, active context, compaction, context projection, runtime fact emission | Provider SDK and transport retry, Session discovery, MCP process lifecycle, transport parsing |
-| `internal/runtime/module` | Stable Module identity, typed capability indexing, immutable sealed sets, Tool/context ownership validation, Runtime/Session resource ordering and cleanup | Concrete Feature policy, external Extension discovery, dynamic Go plugin loading, Session attachment |
+| `internal/runtime/module` | Stable Module identity, typed capability indexing, immutable sealed sets, Tool/context ownership validation, typed Turn/Tool/Finish policy decisions, Runtime/Session resource ordering and cleanup | Concrete Feature policy, external Extension discovery, dynamic Go plugin loading, Session attachment |
 | `internal/session` | Session identity and kind, transcript/Event persistence, metadata and history index, active metadata, usage snapshots, scratchpad path, single-writer locks | Prompt assembly, Provider calls, Tool dispatch, Session attachment orchestration |
 | `internal/cancellation` | Typed user, signal, and runtime-restart cancellation causes plus signal-aware contexts | Transport Stop admission, Turn reaction policy, user-facing status DTOs |
 | `internal/errorclass` | Shared timeout/cancellation/auth/permission/connectivity/wrong-endpoint/retryable/error classification and public error wording | Retry decisions, cancellation sources, transport rendering |
@@ -285,8 +285,9 @@ stable `module.ID`, is registered once, and is indexed under every narrow typed
 capability it implements. The production Runtime set includes Builtin Tools,
 project guidance, Skills, and enabled Side Session, Observable, and MCP
 Modules. The Session set includes session context, Goal, Notes, and any
-caller-provided Session Modules. A Module may implement Tool, Context, or both
-contribution interfaces.
+caller-provided Session Modules. A Module may implement any combination of
+contribution, policy, observer, or scoped resource interfaces and is still
+registered only once.
 
 ```go
 type Module interface { ID() ID }
@@ -297,6 +298,18 @@ type ToolProvider interface {
 
 type ContextProvider interface {
     Context(context.Context, ContextRequest) ([]ContextSection, error)
+}
+
+type TurnInputPolicy interface {
+    ApplyTurnInput(context.Context, TurnInputRequest) (TurnInputDecision, error)
+}
+
+type ToolPolicy interface {
+    ApplyTool(context.Context, ToolPolicyRequest) (ToolPolicyDecision, error)
+}
+
+type FinishPolicy interface {
+    EvaluateFinish(context.Context, FinishRequest) (FinishDecision, error)
 }
 ```
 
@@ -357,11 +370,18 @@ Extension Go plugins or dynamic libraries. Provenance remains `ext:<name>` and
 mutable Extension data remains under `JUEX_EXT_DATA_DIR`; Module composition
 does not alter those contracts.
 
+Turn input policies run only after durable admission and transcript repair.
+Tool policies run only after the complete batch is declared and each call is
+durably started. Finish policies all evaluate in explicit Module order before
+any selected continuation is committed; the first still-valid continuation
+wins, while Framework pending input remains final completion authority.
+Post-admission observers receive committed facts and cannot alter flow.
+
 The Framework does not expose an untyped lifecycle callback, priority system,
-dependency DAG, or string service locator. Turn policies and remaining Feature
-contributions are added only through demonstrated typed seams while durable
-Turn, Tool, pending-input, cancellation, and compaction ordering stays owned by
-Framework.
+dependency DAG, or string service locator. Policy decisions and remaining
+Feature contributions use only demonstrated typed seams while durable Turn,
+Tool, pending-input, Request Epoch, cancellation, compaction, and completion
+ordering stays owned by Framework.
 
 ---
 
@@ -2316,7 +2336,8 @@ and are not an implicit secret store.
 
 ### Lifecycle Hooks
 
-Lifecycle hooks are trusted command hooks executed by the runtime. They are
+Lifecycle hooks are trusted command hooks adapted by the Hooks Session Module
+to Framework-owned typed policy seams. They are
 configured in `hooks.commands` and receive one JSON object on stdin with the
 event name, session id, turn id, cwd, workspace roots, permission/sandbox
 labels, conversation/event log paths, current `goal_state`, and event-specific
@@ -2347,14 +2368,14 @@ runtime context for exactly the next model request; it is never persisted as a
 transcript message. `PostCompact` therefore cannot affect the summary request
 that already completed.
 `Stop` exit `2` blocks turn completion and uses its text as the continuation
-prompt. Matching user-configured hooks run in configuration order. The built-in
-`goal-completion-gate` is evaluated after those hooks run but before the runtime
-selects a user Stop continuation; if the gate blocks, its prompt takes
-precedence and user Stop exit `2` results do not contribute to that attempt.
-Otherwise, when multiple user Stop hooks return exit `2`, only the first such
-result supplies the continuation prompt. All matching user Stop hooks run again
-at the next finish attempt, so a later blocker can take effect after an earlier
-one clears.
+prompt. Matching user-configured hooks run in configuration order. Goal and
+Hooks are ordered Finish Policies: Goal evaluates first to retain its existing
+continuation precedence, then every matching Stop hook still runs. Framework
+commits only the first still-valid continuation after every Finish Policy has
+evaluated successfully. When Goal allows completion and multiple Stop hooks
+return exit `2`, only the first such result supplies the continuation prompt.
+All matching Stop hooks run again at the next finish attempt, so a later blocker
+can take effect after an earlier one clears.
 
 Tool failures are also tracked in a per-turn unresolved-failure ledger inside
 `internal/runtime`. The ledger classifies each failed tool result as
@@ -2367,8 +2388,8 @@ it does not independently block finish, mutate Notes, or inject
 provider-visible continuation prompts. Stop authority belongs to configured
 Stop hooks and the goal completion gate.
 
-Finish attempts also pass through the built-in `goal-completion-gate` after
-user-configured Stop command hooks. The runtime stores a session-local
+Finish attempts also pass through the Goal Session Module's typed
+`goal-completion-gate` before the Hooks Module policies. The runtime stores a session-local
 `goal_state.json` owned by model-facing goal tools. Its public contract is
 `description`, `acceptance`, `status`, optional `status_reason`,
 `continuation_count`, and `updated_at`; statuses are `in_progress`,

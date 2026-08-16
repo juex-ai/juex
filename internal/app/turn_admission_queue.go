@@ -19,7 +19,7 @@ type turnAdmissionRuntime interface {
 	ReserveCompactionTurnID(string) error
 	EnqueuePendingMessage(context.Context, llm.Message) (runtime.PendingInputStatus, error)
 	EnqueuePersistedPendingMessage(context.Context, runtime.PendingInputRecord) (runtime.PendingInputStatus, error)
-	PromotePendingInputTurn(string, string) (llm.Message, runtime.PendingInputStatus, bool)
+	PromotePendingInputTurn(string, string) (llm.Message, runtime.PendingInputStatus, bool, error)
 }
 
 type turnAdmissionQueue struct {
@@ -175,24 +175,24 @@ func (q turnAdmissionQueue) beginCompact(turnID string) error {
 	return nil
 }
 
-func (q turnAdmissionQueue) finishCompact(compactTurnID string, ids TurnIDAllocator) *AdmittedTurn {
+func (q turnAdmissionQueue) finishCompact(compactTurnID string, ids TurnIDAllocator) (*AdmittedTurn, error) {
 	if q.state == nil || q.engine == nil || ids == nil {
-		return nil
+		return nil, nil
 	}
 	nextTurnID := ids.NextTurnID("turn")
-	msg, _, promoted := q.engine.PromotePendingInputTurn(compactTurnID, nextTurnID)
+	msg, _, promoted, err := q.engine.PromotePendingInputTurn(compactTurnID, nextTurnID)
 	q.state.mu.Lock()
 	defer q.state.mu.Unlock()
 	if promoted {
 		q.state.phase = turnAdmissionRunning
 		q.state.turnID = nextTurnID
-		return &AdmittedTurn{TurnID: nextTurnID, Message: msg}
+		return &AdmittedTurn{TurnID: nextTurnID, Message: msg}, nil
 	}
 	if q.state.phase == turnAdmissionCompacting && q.state.turnID == compactTurnID {
 		q.state.phase = turnAdmissionIdle
 		q.state.turnID = ""
 	}
-	return nil
+	return nil, err
 }
 
 func (q turnAdmissionQueue) beginExclusiveCommand() bool {

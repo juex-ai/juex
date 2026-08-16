@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -139,7 +140,7 @@ func (a *App) BeginCompactAdmission(turnID string) error {
 	return a.beginCompactAdmission(turnID)
 }
 
-func (a *App) FinishCompactAdmission(compactTurnID string, ids TurnIDAllocator) *AdmittedTurn {
+func (a *App) FinishCompactAdmission(compactTurnID string, ids TurnIDAllocator) (*AdmittedTurn, error) {
 	return a.finishCompactAdmission(compactTurnID, ids)
 }
 
@@ -224,8 +225,8 @@ func (a *App) admitCompactSlash(ctx context.Context, cmd SlashCommand, ids TurnI
 		return conflictResult("session busy", err, runtime.PendingInputStatus{})
 	}
 	result, err := a.executeCompactSlashCommand(ctx, cmd, compactTurnID)
-	start := a.finishCompactAdmission(compactTurnID, ids)
-	if err != nil {
+	start, promotionErr := a.finishCompactAdmission(compactTurnID, ids)
+	if err := errors.Join(err, promotionErr); err != nil {
 		return errorResult(err, start)
 	}
 	return commandResult(result, start)
@@ -235,7 +236,7 @@ func (a *App) beginCompactAdmission(turnID string) error {
 	return a.admissionQueue().beginCompact(turnID)
 }
 
-func (a *App) finishCompactAdmission(compactTurnID string, ids TurnIDAllocator) *AdmittedTurn {
+func (a *App) finishCompactAdmission(compactTurnID string, ids TurnIDAllocator) (*AdmittedTurn, error) {
 	return a.admissionQueue().finishCompact(compactTurnID, ids)
 }
 

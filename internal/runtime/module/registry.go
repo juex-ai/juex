@@ -118,12 +118,18 @@ type registeredModule struct {
 // Registry is mutable only during composition. Seal validates contributions
 // and returns an immutable Set used while the runtime is serving.
 type Registry struct {
-	mu       sync.Mutex
-	sealed   bool
-	modules  []registeredModule
-	ids      map[ID]struct{}
-	tools    []registeredModule
-	contexts []registeredModule
+	mu                    sync.Mutex
+	sealed                bool
+	modules               []registeredModule
+	ids                   map[ID]struct{}
+	tools                 []registeredModule
+	contexts              []registeredModule
+	turnInputPolicies     []registeredModule
+	toolPolicies          []registeredModule
+	finishPolicies        []registeredModule
+	sessionStartPolicies  []registeredModule
+	compactionPolicies    []registeredModule
+	pendingInputObservers []registeredModule
 }
 
 func NewRegistry() *Registry {
@@ -159,6 +165,24 @@ func (r *Registry) Register(mod Module) error {
 	if _, ok := mod.(ContextProvider); ok {
 		r.contexts = append(r.contexts, registered)
 	}
+	if _, ok := mod.(TurnInputPolicy); ok {
+		r.turnInputPolicies = append(r.turnInputPolicies, registered)
+	}
+	if _, ok := mod.(ToolPolicy); ok {
+		r.toolPolicies = append(r.toolPolicies, registered)
+	}
+	if _, ok := mod.(FinishPolicy); ok {
+		r.finishPolicies = append(r.finishPolicies, registered)
+	}
+	if _, ok := mod.(SessionStartPolicy); ok {
+		r.sessionStartPolicies = append(r.sessionStartPolicies, registered)
+	}
+	if _, ok := mod.(CompactionPolicy); ok {
+		r.compactionPolicies = append(r.compactionPolicies, registered)
+	}
+	if _, ok := mod.(PendingInputObserver); ok {
+		r.pendingInputObservers = append(r.pendingInputObservers, registered)
+	}
 	return nil
 }
 
@@ -179,6 +203,12 @@ func (r *Registry) Seal(ctx context.Context, toolContext ToolContext) (*Set, err
 	modules := append([]registeredModule(nil), r.modules...)
 	toolProviders := append([]registeredModule(nil), r.tools...)
 	contextProviders := append([]registeredModule(nil), r.contexts...)
+	turnInputPolicies := append([]registeredModule(nil), r.turnInputPolicies...)
+	toolPolicies := append([]registeredModule(nil), r.toolPolicies...)
+	finishPolicies := append([]registeredModule(nil), r.finishPolicies...)
+	sessionStartPolicies := append([]registeredModule(nil), r.sessionStartPolicies...)
+	compactionPolicies := append([]registeredModule(nil), r.compactionPolicies...)
+	pendingInputObservers := append([]registeredModule(nil), r.pendingInputObservers...)
 	r.mu.Unlock()
 
 	catalog, err := buildToolCatalog(ctx, toolContext, toolProviders)
@@ -186,9 +216,15 @@ func (r *Registry) Seal(ctx context.Context, toolContext ToolContext) (*Set, err
 		return nil, err
 	}
 	return &Set{
-		modules:          modules,
-		contextProviders: contextProviders,
-		toolCatalog:      catalog,
+		modules:               modules,
+		contextProviders:      contextProviders,
+		toolCatalog:           catalog,
+		turnInputPolicies:     turnInputPolicies,
+		toolPolicies:          toolPolicies,
+		finishPolicies:        finishPolicies,
+		sessionStartPolicies:  sessionStartPolicies,
+		compactionPolicies:    compactionPolicies,
+		pendingInputObservers: pendingInputObservers,
 	}, nil
 }
 
@@ -274,9 +310,15 @@ func buildToolCatalog(ctx context.Context, toolContext ToolContext, providers []
 // Set is the immutable capability index produced by Seal. Lifecycle state is
 // private and does not permit capability registration after publication.
 type Set struct {
-	modules          []registeredModule
-	contextProviders []registeredModule
-	toolCatalog      ToolCatalog
+	modules               []registeredModule
+	contextProviders      []registeredModule
+	toolCatalog           ToolCatalog
+	turnInputPolicies     []registeredModule
+	toolPolicies          []registeredModule
+	finishPolicies        []registeredModule
+	sessionStartPolicies  []registeredModule
+	compactionPolicies    []registeredModule
+	pendingInputObservers []registeredModule
 
 	scope Scope
 	mu    sync.RWMutex

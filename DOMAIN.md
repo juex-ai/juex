@@ -106,31 +106,38 @@ domain boundary.
 
 1. Work attaches to the active Primary Session, creates a new Primary Session,
    creates a Side Session, or explicitly resumes a recorded Session.
-2. Turn admission records the input and establishes one active execution
-   boundary for that Session.
+2. Turn admission durably accepts the input and establishes one active
+   execution boundary for that Session. Transcript repair runs before ordered
+   typed input policies; rejection or policy failure ends the Turn without
+   erasing the accepted input.
 3. Each Provider iteration receives canonical context and may return ordered
    Tool Calls. Every call is identified by Turn, Provider iteration, assistant
    message, call position, and Tool Use ID.
 4. Runtime durably declares the complete ordered Tool Call batch before any
-   call starts. It durably marks each call started before a pre-Tool Hook or
+   call starts. It durably marks each call started before a Tool Policy or
    handler can cross an external side-effect boundary, and durably records the
    exact Provider-visible success, failure, timeout, or cancellation outcome
    before appending the ordered Tool Result batch or requesting the Provider
-   again.
+   again. Safety-policy failure is fail-closed before the handler side effect.
 5. Restart recovery distinguishes a call that was declared but not started
    from one that started without a durable outcome. The former is never
    reported as executed; the latter becomes `TOOL_OUTCOME_UNKNOWN` and is not
    automatically retried. A durable outcome restores its exact Tool Result
    once in Provider order.
-6. Pending input drains only between Provider iterations. Completion closes the
-   Turn only when no accepted input remains to continue it.
-7. The transcript and durable Events remain the source for resume and
+6. Every finish attempt evaluates all Finish Policies in stable Module order.
+   Any continue decision blocks completion; the first still-valid continuation
+   supplies the next input, and stateful policy changes commit only for that
+   selected decision.
+7. Pending input drains only between Provider iterations and remains the final
+   completion authority. Completion closes the Turn only when no accepted
+   input remains to continue it.
+8. The transcript and durable Events remain the source for resume and
    inspection after completion, cancellation, failure, or process restart.
-8. An active Primary Session may create process-managed Side Sessions for
+9. An active Primary Session may create process-managed Side Sessions for
    delegated work. Each Side Session keeps its own transcript, scratchpad,
    pending input, lock, and Turn lifecycle while sharing the Primary Session's
    effective Workspace resources and explicitly bound Goal and Notes.
-9. Subscribed Side Session terminal results are accepted as durable
+10. Subscribed Side Session terminal results are accepted as durable
    `side_session` input by the owning Primary Session. A busy Primary Session
    queues that input at the normal safe boundary rather than dropping it.
    Subscription is sampled when the child Turn reaches a terminal state; a

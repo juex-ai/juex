@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -140,6 +139,8 @@ type App struct {
 	runtimeModules         *runtimemodule.Set
 	runtimeModuleContext   runtimemodule.RuntimeContext
 	sessionModuleFactories []runtimemodule.SessionFactorySpec
+	hookRunner             hooks.PolicyRunner
+	hookBaseRequest        hooks.Request
 
 	turnAdmission turnAdmission
 
@@ -424,6 +425,12 @@ func New(opts Options) (*App, error) {
 		closeSessionResources()
 		return nil, err
 	}
+	hookBaseRequest := hooks.Request{
+		CWD:            runtimePaths.WorkDir,
+		WorkspaceRoots: []string{runtimePaths.WorkDir},
+		PermissionMode: "unrestricted",
+		SandboxMode:    "none",
+	}
 	pendingInputTTL := runtimeLimits.PendingInputTTL
 	if pendingInputTTL <= 0 {
 		pendingInputTTL = runtime.DefaultPendingInputTTL
@@ -434,26 +441,18 @@ func New(opts Options) (*App, error) {
 	}
 
 	eng = &runtime.Engine{
-		Provider:          provider,
-		SummaryProvider:   summaryProvider,
-		SummaryProvenance: summaryProvenance,
-		ModelCandidates:   modelCandidates,
-		ModelHealth:       modelHealth,
-		Tools:             reg,
-		Bus:               bus,
-		Session:           sess,
-		Prompt:            pb,
-		WorkDir:           runtimePaths.WorkDir,
-		ArtifactDir:       runtimePaths.ArtifactDir,
-		Hooks:             hookRunner,
-		HookContext: hooks.Request{
-			CWD:              runtimePaths.WorkDir,
-			WorkspaceRoots:   []string{runtimePaths.WorkDir},
-			PermissionMode:   "unrestricted",
-			SandboxMode:      "none",
-			ConversationPath: filepath.Join(sess.Dir, "conversation.jsonl"),
-			EventsPath:       filepath.Join(sess.Dir, "events.jsonl"),
-		},
+		Provider:              provider,
+		SummaryProvider:       summaryProvider,
+		SummaryProvenance:     summaryProvenance,
+		ModelCandidates:       modelCandidates,
+		ModelHealth:           modelHealth,
+		Tools:                 reg,
+		RuntimeContext:        runtimeModules.runtimeContext,
+		Bus:                   bus,
+		Session:               sess,
+		Prompt:                pb,
+		WorkDir:               runtimePaths.WorkDir,
+		ArtifactDir:           runtimePaths.ArtifactDir,
 		PendingInputQueue:     runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{}),
 		Notes:                 notesStore(sess),
 		PendingInputTTL:       pendingInputTTL,
@@ -495,6 +494,8 @@ func New(opts Options) (*App, error) {
 		agentRuntime:           agentRuntime,
 		runtimeModuleContext:   runtimeModules.runtimeContext,
 		sessionModuleFactories: append([]runtimemodule.SessionFactorySpec(nil), opts.sessionModuleFactories...),
+		hookRunner:             hookRunner,
+		hookBaseRequest:        hookBaseRequest,
 	}
 	statusUnsubscribe = eventSink.AddProjection(turnAdmissionStatusProjection{
 		status:       status,
@@ -503,8 +504,6 @@ func New(opts Options) (*App, error) {
 	a.statusUnsubscribe = statusUnsubscribe
 	if sess.Kind == session.KindPrimary && sess.Active && !opts.disableSideSessionTools {
 		a.sideSessions = newSideSessionManager(a)
-		eng.ShouldDeferGoalContinuation = a.sideSessions.shouldDeferGoalContinuation
-		eng.PendingInputsAdmitted = a.sideSessions.finishResultHandoffs
 	}
 	if err := a.attachObservability(sess); err != nil {
 		closeSessionResources()
@@ -624,6 +623,12 @@ func New(opts Options) (*App, error) {
 		runtimePaths.WorkDir,
 		prompt.ShellProfileFromConfig(cfg.Shell),
 		runtimeModules.builtinTools.ShellSessions(),
+		sessionModuleOptions{
+			hookRunner:               hookRunner,
+			hookBaseRequest:          hookBaseRequest,
+			goalContinuation:         opts.sharedGoalState == nil,
+			goalContinuationDeferrer: a.sideSessions,
+		},
 	)
 	if err != nil {
 		_ = a.Close()
@@ -651,7 +656,6 @@ func New(opts Options) (*App, error) {
 	}
 	if opts.sharedGoalState != nil || opts.sharedNotes != nil {
 		eng.ShareSessionState(opts.sharedGoalState, opts.sharedNotes)
-		eng.SkipGoalCompletionGate = true
 	}
 	if err := eng.RecoverTranscript("load"); err != nil {
 		_ = a.Close()
@@ -659,7 +663,7 @@ func New(opts Options) (*App, error) {
 	}
 	status.RecoverAfterRestart()
 	chunkedWrites.RestoreActiveFromHistory(sess.History)
-	if err := eng.RunSessionStartHooks(startupCtx); err != nil {
+	if err := eng.RunSessionStartPolicies(startupCtx); err != nil {
 		_ = a.Close()
 		return nil, err
 	}
@@ -762,6 +766,12 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 		a.cfg.WorkDir,
 		prompt.ShellProfileFromConfig(a.cfg.Shell),
 		a.shellSessions,
+		sessionModuleOptions{
+			hookRunner:               a.hookRunner,
+			hookBaseRequest:          a.hookBaseRequest,
+			goalContinuation:         true,
+			goalContinuationDeferrer: a.sideSessions,
+		},
 	)
 	if err != nil {
 		return err

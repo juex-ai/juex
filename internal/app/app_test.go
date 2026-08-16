@@ -1559,7 +1559,7 @@ func TestApp_NewSessionStartHookDenyFailsStartup(t *testing.T) {
 		Provider: &stubProvider{replies: []llm.Response{}},
 		WorkDir:  dir,
 	})
-	if err == nil || !strings.Contains(err.Error(), "SessionStart denied: startup blocked") {
+	if err == nil || !strings.Contains(err.Error(), `runtime module "hooks" session start rejected: startup blocked`) {
 		t.Fatalf("err = %v", err)
 	}
 }

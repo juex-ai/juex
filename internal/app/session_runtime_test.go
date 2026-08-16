@@ -555,8 +555,8 @@ func assertAtomicAppSessionRead(a *App) error {
 		if runtime.GoalState.SessionDir != sess.Dir {
 			return fmt.Errorf("session %q goal state belongs to %q", sess.ID, runtime.GoalState.SessionDir)
 		}
-		if runtime.HookContext.SessionID != sess.ID {
-			return fmt.Errorf("session %q hook session = %q", sess.ID, runtime.HookContext.SessionID)
+		if runtime.Modules == nil {
+			return fmt.Errorf("session %q has no sealed Module set", sess.ID)
 		}
 		return nil
 	})

@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
+	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/prompt"
@@ -22,6 +24,13 @@ type runtimeModuleComposition struct {
 	skills         *skillsmodule.Module
 	runtimeContext runtimemodule.RuntimeContext
 	modules        []runtimemodule.Module
+}
+
+type sessionModuleOptions struct {
+	hookRunner               hooks.PolicyRunner
+	hookBaseRequest          hooks.Request
+	goalContinuation         bool
+	goalContinuationDeferrer juexruntime.GoalContinuationDeferrer
 }
 
 func prepareRuntimeModules(
@@ -108,6 +117,7 @@ func buildSessionModules(
 	workDir string,
 	shell prompt.ShellProfile,
 	shellSessions *tools.ShellSessionManager,
+	opts sessionModuleOptions,
 ) (*runtimemodule.Set, error) {
 	builtinSpecs := []runtimemodule.SessionFactorySpec{
 		{
@@ -121,7 +131,10 @@ func buildSessionModules(
 			ID:      juexruntime.GoalModuleID,
 			Enabled: true,
 			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
-				return juexruntime.NewGoalModule(engine), nil
+				return juexruntime.NewGoalModuleWithOptions(engine, juexruntime.GoalModuleOptions{
+					EnableContinuation:   opts.goalContinuation,
+					ContinuationDeferrer: opts.goalContinuationDeferrer,
+				}), nil
 			},
 		},
 		{
@@ -131,6 +144,35 @@ func buildSessionModules(
 				return juexruntime.NewNotesModule(engine), nil
 			},
 		},
+	}
+	if opts.hookRunner != nil {
+		builtinSpecs = append(builtinSpecs, runtimemodule.SessionFactorySpec{
+			ID:      hooks.ModuleID,
+			Enabled: true,
+			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+				base := opts.hookBaseRequest
+				base.SessionID = sess.ID
+				base.ConversationPath = filepath.Join(sess.Dir, "conversation.jsonl")
+				base.EventsPath = filepath.Join(sess.Dir, "events.jsonl")
+				return hooks.NewModule(opts.hookRunner, hooks.ModuleOptions{
+					BaseRequest: base,
+					GoalState: func() []byte {
+						if engine == nil {
+							return nil
+						}
+						store := engine.SessionRuntimeSnapshot().GoalState
+						if store == nil {
+							return nil
+						}
+						state, err := store.Snapshot()
+						if err != nil {
+							return nil
+						}
+						return state.RawMessage()
+					},
+				}), nil
+			},
+		})
 	}
 	specs = append(builtinSpecs, specs...)
 	sessionContext := sessionModuleContext(sess)

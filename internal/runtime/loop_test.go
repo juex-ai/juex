@@ -303,9 +303,9 @@ func TestRunSessionStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "second"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventSessionStart: {{Stdout: "load project policy"}},
-	}}
+	}})
 
 	if err := eng.RunSessionStartHooks(context.Background()); err != nil {
 		t.Fatal(err)
@@ -334,9 +334,9 @@ func TestRunSessionStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
 
 func TestRunSessionStartHooksUsesStderrFallbackForExitTwo(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventSessionStart: {{ExitCode: 2, Stderr: "workspace is not trusted"}},
-	}}
+	}})
 
 	err := eng.RunSessionStartHooks(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "workspace is not trusted") {
@@ -641,7 +641,7 @@ func TestTurn_DurableToolStartedFailurePreventsToolCall(t *testing.T) {
 	hookRunner := &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreToolUse: {{Stdout: "pre-hook ran"}},
 	}}
-	eng.Hooks = hookRunner
+	installHookRunner(t, eng, hookRunner)
 	toolCalls := 0
 	eng.Tools.MustRegister(tools.Tool{
 		Name: "side_effect",
@@ -857,7 +857,7 @@ func TestTurn_DurableToolProjectionFailurePersistsProjectedResult(t *testing.T) 
 func TestTurn_DurableHookRequestFailurePreventsHookRun(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	runner := &fakeHookRunner{}
-	eng.Hooks = runner
+	installHookRunner(t, eng, runner)
 	want := errors.New("journal sync failed")
 	bus.SetCommitter(selectiveFailCommitter{eventType: "hook.requested", err: want})
 	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, want) {
@@ -1711,7 +1711,7 @@ func TestCancelActiveTurnRejectsCancellationAfterCompactionCommit(t *testing.T) 
 	var releaseOnce sync.Once
 	releaseHook := func() { releaseOnce.Do(func() { close(releasePost) }) }
 	defer releaseHook()
-	eng.Hooks = hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
+	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName != hooks.EventPostCompact {
 			return nil, nil
 		}
@@ -1722,7 +1722,7 @@ func TestCancelActiveTurnRejectsCancellationAfterCompactionCommit(t *testing.T) 
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-	})
+	}))
 	completed := make(chan struct{}, 1)
 	bus.Subscribe("context.compact.completed", func(events.Event) {
 		signal(completed)
@@ -2429,10 +2429,11 @@ func TestCompactRunsPreAndPostHooks(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	runner := &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact:  {{}},
 		hooks.EventPostCompact: {{}},
 	}}
+	installHookRunner(t, eng, runner)
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2447,7 +2448,6 @@ func TestCompactRunsPreAndPostHooks(t *testing.T) {
 	if result.MessageID == "" {
 		t.Fatalf("result = %+v", result)
 	}
-	runner := eng.Hooks.(*fakeHookRunner)
 	got := []hooks.EventName{runner.requests[0].EventName, runner.requests[1].EventName}
 	want := []hooks.EventName{hooks.EventPreCompact, hooks.EventPostCompact}
 	for i := range want {
@@ -2467,9 +2467,9 @@ func TestCompactPreHookStdoutExtendsSummaryInstructions(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact: {{Stdout: "Preserve deployment command exactly."}},
-	}}
+	}})
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2507,9 +2507,9 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	if _, err := eng.Notes.Update("- [x] map the runtime\n- [ ] run the live compaction evaluation"); err != nil {
 		t.Fatal(err)
 	}
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact: {{Stdout: "Preserve hook deployment evidence."}},
-	}}
+	}})
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2581,7 +2581,7 @@ func TestCompactExitTwoEmitsHookErrorWithoutVeto(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng.Hooks = runner
+	installHookRunner(t, eng, runner)
 	var hookError HookErroredPayload
 	bus.Subscribe("hook.errored", func(event events.Event) {
 		payload, _ := event.Payload.(HookErroredPayload)
@@ -2617,9 +2617,9 @@ func TestCompactPostHookStdoutQueuesRuntimeContextForNextProviderRequest(t *test
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPostCompact: {{Stdout: "Recheck the release branch on the next turn."}},
-	}}
+	}})
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -3312,7 +3312,7 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 			defer unsub()
 			eng.Compaction = DefaultCompactionPolicy()
 			eng.Compaction.KeepRecentTokens = 1
-			eng.Hooks = tc.runner
+			installHookRunner(t, eng, tc.runner)
 			if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 				t.Fatal(err)
 			}
@@ -3366,10 +3366,10 @@ func TestCompactPreservesCommittedResultWhenPostHookContextCannotBeQueued(t *tes
 	defer unsub()
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact:  {{}},
 		hooks.EventPostCompact: {{Stdout: strings.Repeat("x", provenance.MaxHookContextBatchBytes)}},
-	}}
+	}})
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -3760,9 +3760,9 @@ func TestTurn_PostToolUseHookDenyPreservesChunkedWriteLifecycleFact(t *testing.T
 			}, nil
 		},
 	})
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPostToolUse: {{ExitCode: 2, Stdout: "redaction required"}},
-	}}
+	}})
 
 	out, err := eng.Turn(context.Background(), "commit chunked write")
 	if err != nil {
@@ -3789,9 +3789,9 @@ func TestTurn_UserPromptSubmitHookInjectsContext(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventUserPromptSubmit: {{Stdout: "ticket: ABC-123"}},
-	}}
+	}})
 
 	out, err := eng.Turn(context.Background(), "summarize")
 	if err != nil {
@@ -3814,16 +3814,19 @@ func TestTurn_UserPromptSubmitHookDenyStopsBeforeProvider(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventUserPromptSubmit: {{ExitCode: 2, Stdout: "missing approval"}},
-	}}
+	}})
 
 	_, err := eng.Turn(context.Background(), "summarize")
-	if err == nil || !strings.Contains(err.Error(), "UserPromptSubmit denied: missing approval") {
+	if err == nil || !strings.Contains(err.Error(), `runtime module "hooks" turn input rejected: missing approval`) {
 		t.Fatalf("err = %v", err)
 	}
 	if len(prov.histories) != 0 {
 		t.Fatalf("provider should not be called, calls = %d", len(prov.histories))
+	}
+	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "summarize" {
+		t.Fatalf("accepted input was not preserved after policy rejection: %+v", eng.Session.History)
 	}
 }
 
@@ -3841,9 +3844,10 @@ func TestTurn_PreToolUseStdoutAddsToolResultContext(t *testing.T) {
 			return "inspection complete", nil
 		},
 	})
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	runner := &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreToolUse: {{Stdout: "compare against approved baseline"}},
 	}}
+	installHookRunner(t, eng, runner)
 
 	if _, err := eng.Turn(context.Background(), "inspect"); err != nil {
 		t.Fatal(err)
@@ -3852,7 +3856,6 @@ func TestTurn_PreToolUseStdoutAddsToolResultContext(t *testing.T) {
 	if result.IsError || !strings.Contains(result.Content, "inspection complete") || !strings.Contains(result.Content, "compare against approved baseline") {
 		t.Fatalf("tool result = %+v", result)
 	}
-	runner := eng.Hooks.(*fakeHookRunner)
 	var postRequest hooks.Request
 	for _, request := range runner.requests {
 		if request.EventName == hooks.EventPostToolUse {
@@ -3879,9 +3882,9 @@ func TestTurn_PreToolUseHookDenyReturnsToolError(t *testing.T) {
 			return "", nil
 		},
 	})
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreToolUse: {{ExitCode: 2, Stdout: "policy denied"}},
-	}}
+	}})
 
 	out, err := eng.Turn(context.Background(), "run danger")
 	if err != nil {
@@ -3913,10 +3916,10 @@ func TestTurn_PostToolUseExitTwoAddsCorrectiveContext(t *testing.T) {
 			return "sensitive output", nil
 		},
 	})
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreToolUse:  {{}},
 		hooks.EventPostToolUse: {{ExitCode: 2, Stdout: "redaction required"}},
-	}}
+	}})
 
 	out, err := eng.Turn(context.Background(), "run audit")
 	if err != nil {
@@ -3940,12 +3943,12 @@ func TestTurn_StopHookBlockContinuesWithPrompt(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventStop: {
 			{ExitCode: 2, Stdout: "continue until done"},
 			{},
 		},
-	}}
+	}})
 
 	out, err := eng.Turn(context.Background(), "start")
 	if err != nil {
@@ -3969,13 +3972,13 @@ func TestTurn_StopHookStdoutQueuesRuntimeContextForNextProviderRequest(t *testin
 		{Message: llm.TextMessage(llm.RoleAssistant, "third"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventStop: {
 			{Stdout: "verify the release branch before the next response"},
 			{},
 			{},
 		},
-	}}
+	}})
 
 	if _, err := eng.Turn(context.Background(), "first turn"); err != nil {
 		t.Fatal(err)
@@ -4069,7 +4072,10 @@ func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
 	if _, err := eng.GoalState.Create("finish delegated work", "all delegated results are incorporated"); err != nil {
 		t.Fatal(err)
 	}
-	eng.ShouldDeferGoalContinuation = func() bool { return true }
+	installSessionStateModulesWithGoalOptions(t, eng, GoalModuleOptions{
+		EnableContinuation:   true,
+		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
+	})
 	var continued int32
 	bus.Subscribe("goal.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })
 
@@ -4102,14 +4108,16 @@ func TestTurn_DeferredGoalStillHonorsStopHookContinuation(t *testing.T) {
 	if _, err := eng.GoalState.Create("finish delegated work", "all checks pass"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModules(t, eng)
-	eng.ShouldDeferGoalContinuation = func() bool { return true }
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installSessionStateModulesWithGoalOptions(t, eng, GoalModuleOptions{
+		EnableContinuation:   true,
+		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
+	})
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventStop: {
 			{ExitCode: 2, Stdout: "run the explicit stop check"},
 			{},
 		},
-	}}
+	}})
 
 	out, err := eng.Turn(context.Background(), "delegate the work")
 	if err != nil {
@@ -4138,11 +4146,10 @@ func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 	if _, err := eng.GoalState.Create("deploy the service", "the chosen deployment is healthy"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModules(t, eng)
-	eng.ShouldDeferGoalContinuation = func() bool {
-		t.Fatal("wait-for-user Goal consulted the continuation defer callback")
-		return true
-	}
+	installSessionStateModulesWithGoalOptions(t, eng, GoalModuleOptions{
+		EnableContinuation:   true,
+		ContinuationDeferrer: panicGoalContinuationDeferrer{t: t},
+	})
 	var continued int32
 	bus.Subscribe("goal.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })
 
@@ -4202,7 +4209,7 @@ func TestTurn_HookGoalStateOutputDoesNotModifyGoal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng.Hooks = runner
+	installHookRunner(t, eng, runner)
 
 	out, err := eng.Turn(context.Background(), "finish")
 	if err != nil {
@@ -4901,6 +4908,17 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	if status.PendingCount != 1 {
 		t.Fatalf("pending count = %d", status.PendingCount)
 	}
+	var admissionOrder []string
+	probe := &pendingAdmissionProbe{queue: eng.PendingInputQueue, order: &admissionOrder}
+	registry := runtimemodule.NewRegistry()
+	if err := registry.Register(probe); err != nil {
+		t.Fatal(err)
+	}
+	set, err := registry.Seal(context.Background(), runtimemodule.ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.RuntimeModules = set
 	var drained int32
 	var promoted PendingInputPromotedPayload
 	eng.Bus.Subscribe("pending_input.drained", func(e events.Event) {
@@ -4908,9 +4926,16 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	})
 	eng.Bus.Subscribe(PendingInputPromotedType, func(e events.Event) {
 		promoted, _ = e.Payload.(PendingInputPromotedPayload)
+		admissionOrder = append(admissionOrder, "pending_input.promoted")
+	})
+	eng.Bus.Subscribe(TurnAdmittedType, func(events.Event) {
+		admissionOrder = append(admissionOrder, "turn.admitted")
 	})
 
-	msg, promotedStatus, ok := eng.PromotePendingInputTurn("compact-1", "turn-1")
+	msg, promotedStatus, ok, err := eng.PromotePendingInputTurn("compact-1", "turn-1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatal("pending input was not promoted")
 	}
@@ -4918,6 +4943,15 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 		promoted.PendingCount != 0 ||
 		promoted.MaxPendingInputs != DefaultMaxPendingInput {
 		t.Fatalf("promoted status/event = %+v / %+v, want empty queue", promotedStatus, promoted)
+	}
+	if probe.err != nil {
+		t.Fatal(probe.err)
+	}
+	if want := []string{"pending_input.promoted", "turn.admitted", "observer"}; !reflect.DeepEqual(admissionOrder, want) {
+		t.Fatalf("promotion admission order = %v, want %v", admissionOrder, want)
+	}
+	if len(probe.states) != 1 || probe.states[0] != PendingInputStateAdmitted {
+		t.Fatalf("observer states = %v, want admitted", probe.states)
 	}
 	if _, err := eng.TurnMessageWithID(context.Background(), msg, "turn-1"); err != nil {
 		t.Fatal(err)
@@ -4931,6 +4965,75 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	}
 	if records["event-1"].State != PendingInputStateProcessed {
 		t.Fatalf("state = %q, want processed", records["event-1"].State)
+	}
+}
+
+type pendingAdmissionProbe struct {
+	queue  *PendingInputQueue
+	order  *[]string
+	states []PendingInputState
+	err    error
+}
+
+func (*pendingAdmissionProbe) ID() runtimemodule.ID { return "pending-admission-probe" }
+
+func (p *pendingAdmissionProbe) PendingInputsAdmitted(_ context.Context, admission runtimemodule.PendingInputAdmission) {
+	if p.order != nil {
+		*p.order = append(*p.order, "observer")
+	}
+	records, err := p.queue.Records()
+	if err != nil {
+		p.err = err
+		return
+	}
+	for _, id := range admission.RecordIDs {
+		p.states = append(p.states, records[id].State)
+	}
+}
+
+func TestPromotePendingInputFailsBeforeObserverWhenDurableAdmissionFails(t *testing.T) {
+	root := t.TempDir()
+	sess, err := session.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sess.Close() })
+	eng := newEngineForSession(t, sess, &mockProvider{})
+	if err := eng.ReserveTurnID("compact-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "after compact"),
+		PendingInputOptions{ID: "event-1", TTL: time.Hour},
+	); err != nil {
+		t.Fatal(err)
+	}
+	var observed []string
+	probe := &pendingAdmissionProbe{queue: eng.PendingInputQueue, order: &observed}
+	registry := runtimemodule.NewRegistry()
+	if err := registry.Register(probe); err != nil {
+		t.Fatal(err)
+	}
+	set, err := registry.Seal(context.Background(), runtimemodule.ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.RuntimeModules = set
+	eng.PendingInputQueue.path = t.TempDir()
+
+	_, status, promoted, err := eng.PromotePendingInputTurn("compact-1", "turn-1")
+	if err == nil || !strings.Contains(err.Error(), "mark promoted pending input admitted") {
+		t.Fatalf("promotion error = %v", err)
+	}
+	if promoted {
+		t.Fatal("pending input was promoted after durable admission failed")
+	}
+	if status.TurnID != "" || status.PendingCount != 1 || len(observed) != 0 {
+		t.Fatalf("status/observer = %+v / %v, want queued and unobserved", status, observed)
+	}
+	if current := eng.PendingInputStatus(); current.TurnID != "" || current.PendingCount != 1 {
+		t.Fatalf("engine status = %+v, want idle with queued input", current)
 	}
 }
 
@@ -4950,7 +5053,9 @@ func TestPromotePendingInputDefersReentrantQueuedEventUntilAfterPromotion(t *tes
 	if _, err := eng.EnqueuePendingInput(context.Background(), "promoted input"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok := eng.PromotePendingInputTurn("compact-1", "turn-1"); !ok {
+	if _, _, ok, err := eng.PromotePendingInputTurn("compact-1", "turn-1"); err != nil {
+		t.Fatal(err)
+	} else if !ok {
 		t.Fatal("pending input was not promoted")
 	}
 	if enqueueErr != nil {
@@ -5362,7 +5467,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 	}}, false)
 	eng.Notes = NewNotesStore(eng.Session.Dir)
 	installSessionStateModules(t, eng)
-	eng.Hooks = hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
+	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName == hooks.EventPreToolUse && req.ToolName == NotesToolUpdate && req.ToolInput["content"] == "first" {
 			select {
 			case <-time.After(100 * time.Millisecond):
@@ -5371,7 +5476,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 			}
 		}
 		return nil, nil
-	})
+	}))
 
 	if out, err := eng.Turn(context.Background(), "rewrite notes twice"); err != nil || out != "done" {
 		t.Fatalf("Turn() = %q, %v", out, err)
@@ -5389,7 +5494,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
 	installSessionStateModules(t, eng)
-	eng.Hooks = hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
+	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName == hooks.EventPreToolUse && req.ToolName == GoalToolCreate {
 			select {
 			case <-time.After(100 * time.Millisecond):
@@ -5398,7 +5503,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 			}
 		}
 		return nil, nil
-	})
+	}))
 
 	results := eng.runToolCalls(context.Background(), "turn-goal-order", testToolExecutions([]llm.Block{
 		{
@@ -6311,6 +6416,7 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 	}}
 	eng, bus := newEngine(t, prov, false)
 	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	installSessionStateModules(t, eng)
 	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
 		Name:    "stop-ok",
 		Events:  []hooks.EventName{hooks.EventStop},
@@ -6319,7 +6425,7 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng.Hooks = runner
+	installHookRunner(t, eng, runner)
 
 	var order []string
 	bus.Subscribe("finish.attempted", func(e events.Event) {
@@ -6343,10 +6449,10 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 	}
 	want := []string{
 		"finish.attempted",
-		"start:stop-ok",
-		"done:stop-ok",
 		"start:goal-completion-gate",
 		"done:goal-completion-gate",
+		"start:stop-ok",
+		"done:stop-ok",
 	}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("finish policy order = %#v, want %#v", order, want)
@@ -6515,7 +6621,7 @@ func TestTurn_StopHookOtherExitDoesNotBlockAndEmitsHookErrored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng.Hooks = runner
+	installHookRunner(t, eng, runner)
 
 	var errored HookErroredPayload
 	bus.Subscribe("hook.errored", func(e events.Event) {

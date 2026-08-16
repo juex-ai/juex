@@ -8,8 +8,8 @@ import (
 
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	runtimepolicy "github.com/juex-ai/juex/internal/runtime/policy"
 )
 
@@ -138,16 +138,21 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		compactErr := newCompactionError(ctx, err)
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
 	}
-	preReq := e.newHookRequest(hooks.EventPreCompact, turnID)
-	preReq.CompactReason = reason
-	preReq.CompactAuto = auto
-	preResults, err := e.runHooks(ctx, preReq)
+	prePolicy, err := runtimemodule.ApplyCompactionPolicies(ctx, runtimemodule.CompactionPolicyRequest{
+		Runtime:  e.policyRuntimeContext(),
+		Session:  e.policySessionContext(),
+		TurnID:   turnID,
+		Stage:    runtimemodule.CompactionPolicyBefore,
+		Reason:   reason,
+		Auto:     auto,
+		Observer: e.policyObserver(turnID),
+	}, e.policySets()...)
 	if err != nil {
 		compactErr := newCompactionError(ctx, err)
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
 	}
 	instructions = mergeCompactInstructions(policy.Instructions, instructions)
-	instructions = appendCompactHookInstructions(instructions, preResults)
+	instructions = mergeCompactInstructions(append([]string{instructions}, prePolicy.Instructions...)...)
 	summaryInput, retainedInputReferences, projection, err := e.projectOversizedCompactionInputsLocked(selection.SummaryInput, selection.OversizedInputIDs, policy)
 	if err != nil {
 		compactErr := newCompactionError(ctx, err)
@@ -275,16 +280,21 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	}}); err != nil {
 		return result, fmt.Errorf("commit compaction completion: %w", err)
 	}
-	postReq := e.newHookRequest(hooks.EventPostCompact, turnID)
-	postReq.CompactReason = reason
-	postReq.CompactAuto = auto
-	postResults, postErr := e.runHooks(ctx, postReq)
-	// Hook failures are observational after commit; keep context produced by
-	// earlier successful hooks when a later hook fails.
-	if err := e.queueHookRuntimeContext(postResults); err != nil {
+	postPolicy, postErr := runtimemodule.ApplyCompactionPolicies(ctx, runtimemodule.CompactionPolicyRequest{
+		Runtime:  e.policyRuntimeContext(),
+		Session:  e.policySessionContext(),
+		TurnID:   turnID,
+		Stage:    runtimemodule.CompactionPolicyAfter,
+		Reason:   reason,
+		Auto:     auto,
+		Observer: e.policyObserver(turnID),
+	}, e.policySets()...)
+	// Policy failures are observational after commit; keep context produced by
+	// earlier successful policies when a later policy fails.
+	if err := e.queuePolicyRuntimeContext(postPolicy.Context); err != nil {
 		return result, err
 	}
-	if isHookRequestCommitError(postErr) {
+	if runtimemodule.IsPolicyCheckpointError(postErr) {
 		return result, postErr
 	}
 	return result, nil

@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
@@ -27,12 +26,6 @@ func TestReplaceSessionRuntimePublishesCoherentBundle(t *testing.T) {
 		PendingInputQueue: NewPendingInputQueue(first.Dir, PendingInputQueueOptions{}),
 		Notes:             NewNotesStore(first.Dir),
 		GoalState:         NewGoalStateStore(first.Dir, GoalStateOptions{}),
-		HookContext: hooks.Request{
-			CWD:              root,
-			WorkspaceRoots:   []string{root},
-			ConversationPath: filepath.Join(first.Dir, "conversation.jsonl"),
-			EventsPath:       filepath.Join(first.Dir, "events.jsonl"),
-		},
 	}
 	engine.Prompt = sessionRuntimeTestPrompt(engine, root)
 	firstModules := newSessionRuntimeTestModuleSet(t)
@@ -268,15 +261,6 @@ func assertSessionRuntimeBundle(t *testing.T, snapshot SessionRuntimeSnapshot, w
 	}
 	if snapshot.GoalState == nil || snapshot.GoalState.SessionDir != want.Dir {
 		t.Fatalf("goal state = %+v, want session dir %q", snapshot.GoalState, want.Dir)
-	}
-	if snapshot.HookContext.SessionID != want.ID {
-		t.Fatalf("hook session id = %q, want %q", snapshot.HookContext.SessionID, want.ID)
-	}
-	if snapshot.HookContext.ConversationPath != filepath.Join(want.Dir, "conversation.jsonl") {
-		t.Fatalf("hook conversation path = %q", snapshot.HookContext.ConversationPath)
-	}
-	if snapshot.HookContext.EventsPath != filepath.Join(want.Dir, "events.jsonl") {
-		t.Fatalf("hook events path = %q", snapshot.HookContext.EventsPath)
 	}
 }
 

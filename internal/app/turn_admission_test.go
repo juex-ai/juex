@@ -45,8 +45,8 @@ func (s *turnAdmissionRuntimeStub) EnqueuePersistedPendingMessage(
 
 func (s *turnAdmissionRuntimeStub) PromotePendingInputTurn(
 	_, _ string,
-) (llm.Message, runtime.PendingInputStatus, bool) {
-	return llm.Message{}, runtime.PendingInputStatus{}, false
+) (llm.Message, runtime.PendingInputStatus, bool, error) {
+	return llm.Message{}, runtime.PendingInputStatus{}, false, nil
 }
 
 func (g *testTurnIDs) NextTurnID(prefix string) string {
@@ -587,7 +587,10 @@ func TestAdmitTurnQueuesDuringCompactAndPromotesPendingInput(t *testing.T) {
 		t.Fatalf("queued = %+v", queued)
 	}
 
-	promoted := a.finishCompactAdmission(compactID, ids)
+	promoted, err := a.finishCompactAdmission(compactID, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if promoted == nil || promoted.TurnID != "turn-1" || promoted.Message.FirstText() != "after compact" {
 		t.Fatalf("promoted = %+v", promoted)
 	}
@@ -619,7 +622,10 @@ func TestAdmitTurnQueuesImageBlocksDuringCompactAndPromotesPendingInput(t *testi
 		t.Fatalf("queued = %+v", queued)
 	}
 
-	promoted := a.finishCompactAdmission(compactID, ids)
+	promoted, err := a.finishCompactAdmission(compactID, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if promoted == nil || promoted.TurnID != "turn-1" {
 		t.Fatalf("promoted = %+v", promoted)
 	}

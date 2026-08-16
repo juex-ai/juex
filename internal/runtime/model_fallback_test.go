@@ -471,9 +471,9 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 		{Ref: "backup:model", Provider: backup, ContextWindow: 120},
 	}
 	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPostCompact: {{Stdout: "Use the refreshed fallback context now."}},
-	}}
+	}})
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("large history ", 300))); err != nil {
 		t.Fatal(err)
 	}

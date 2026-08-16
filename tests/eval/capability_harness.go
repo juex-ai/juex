@@ -142,7 +142,7 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 	bus := events.NewBus()
 	sess.SubscribeBus(bus)
 
-	var hookRunner runtime.HookRunner
+	var hookRunner hooks.PolicyRunner
 	if tc.Hooks != nil {
 		runner, err := hooks.NewRunner(tc.Hooks(workDir))
 		if err != nil {
@@ -153,18 +153,31 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 
 	provider := &capabilityProvider{workDir: workDir, steps: tc.Script}
 	engine := &runtime.Engine{
-		Provider: provider,
-		Tools:    reg,
-		Bus:      bus,
-		Session:  sess,
-		Prompt: capabilityPromptBuilder(workDir, sess),
-		Hooks: hookRunner,
-		HookContext: hooks.Request{
+		Provider:       provider,
+		Tools:          reg,
+		Bus:            bus,
+		Session:        sess,
+		Prompt:         capabilityPromptBuilder(workDir, sess),
+		WorkDir:        workDir,
+		RuntimeContext: runtimemodule.RuntimeContext{WorkDir: workDir},
+	}
+	if hookRunner != nil {
+		hookModule := hooks.NewModule(hookRunner, hooks.ModuleOptions{BaseRequest: hooks.Request{
+			SessionID:        sess.ID,
 			CWD:              workDir,
 			WorkspaceRoots:   []string{workDir},
 			ConversationPath: filepath.Join(sess.Dir, "conversation.jsonl"),
 			EventsPath:       filepath.Join(sess.Dir, "events.jsonl"),
-		},
+		}})
+		engine.RuntimeModules, err = runtimemodule.BuildRuntimeSet(context.Background(), []runtimemodule.RuntimeFactorySpec{{
+			ID: hooks.ModuleID, Enabled: true,
+			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				return hookModule, nil
+			},
+		}}, engine.RuntimeContext, runtimemodule.ToolContext{Runtime: engine.RuntimeContext})
+		if err != nil {
+			t.Fatalf("build hook module: %v", err)
+		}
 	}
 
 	start := time.Now()
