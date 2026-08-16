@@ -102,11 +102,12 @@ func (q *PendingInputQueue) Enqueue(msg llm.Message, opts PendingInputOptions, t
 		return PendingInputRecord{}, err
 	}
 	id := strings.TrimSpace(opts.ID)
-	if id == "" {
-		id = "pending-" + newID()
-	}
-	if existing, ok := q.records[id]; ok {
-		return existing, nil
+	if id != "" {
+		if existing, ok := q.records[id]; ok {
+			return existing, nil
+		}
+	} else {
+		id = nextUniquePendingInputID(q.records, newPendingInputID)
 	}
 	now := q.now().UTC()
 	ttl := opts.TTL
@@ -160,7 +161,7 @@ func (q *PendingInputQueue) AdmitTurnInput(turnID string, msg llm.Message, reuse
 		}
 	}
 
-	id := "pending-" + newID()
+	id := nextUniquePendingInputID(q.records, newPendingInputID)
 	msg.ID = pendingInputMessageID(id)
 	if msg.Blocks == nil {
 		msg.Blocks = []llm.Block{}
@@ -505,6 +506,19 @@ func clonePendingInputRecords(records map[string]PendingInputRecord) map[string]
 		out[id] = record
 	}
 	return out
+}
+
+func nextUniquePendingInputID(records map[string]PendingInputRecord, next func() string) string {
+	for {
+		id := next()
+		if _, exists := records[id]; !exists {
+			return id
+		}
+	}
+}
+
+func newPendingInputID() string {
+	return "pending-" + newID()
 }
 
 func (q *PendingInputQueue) loadLatestLocked() (map[string]PendingInputRecord, error) {

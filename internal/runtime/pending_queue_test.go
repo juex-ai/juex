@@ -166,3 +166,19 @@ func TestPendingInputQueue_PromotedTurnInputClearsQueuedExpiry(t *testing.T) {
 		t.Fatalf("promoted turn input = %+v", replayable)
 	}
 }
+
+func TestNextUniquePendingInputIDRetriesHistoricalCollision(t *testing.T) {
+	records := map[string]PendingInputRecord{
+		"pending-collision": {ID: "pending-collision"},
+	}
+	candidates := []string{"pending-collision", "pending-fresh"}
+	attempt := 0
+	got := nextUniquePendingInputID(records, func() string {
+		id := candidates[attempt]
+		attempt++
+		return id
+	})
+	if got != "pending-fresh" || attempt != 2 {
+		t.Fatalf("generated id = %q after %d attempts, want pending-fresh after 2", got, attempt)
+	}
+}
