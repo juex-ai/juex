@@ -1573,6 +1573,7 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 		return restoreErr
 	}
 	reachedCurrentInput := false
+	var afterCurrent []queuedPendingInput
 	flushQueued := func() error {
 		if len(queued) == 0 {
 			return nil
@@ -1593,6 +1594,11 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 			continue
 		}
 		if reachedCurrentInput {
+			if sessionHasMessageID(sess, record.MessageID) {
+				alreadyProcessed = append(alreadyProcessed, record.ID)
+				continue
+			}
+			afterCurrent = append(afterCurrent, queuedPendingInput{RecordID: record.ID, Message: record.Message})
 			continue
 		}
 		if sessionHasMessageID(sess, record.MessageID) {
@@ -1613,7 +1619,45 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 	if err := flushQueued(); err != nil {
 		return markAlreadyProcessed(err)
 	}
-	return markAlreadyProcessed(nil)
+	if err := markAlreadyProcessed(nil); err != nil {
+		return err
+	}
+	e.mergeRecoveredPendingInputAfterCurrent(sess, afterCurrent)
+	return nil
+}
+
+func (e *Engine) mergeRecoveredPendingInputAfterCurrent(sess *session.Session, recovered []queuedPendingInput) {
+	if len(recovered) == 0 {
+		return
+	}
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+
+	existingByID := make(map[string]queuedPendingInput, len(e.pendingInput))
+	for _, item := range e.pendingInput {
+		if item.RecordID != "" {
+			existingByID[item.RecordID] = item
+		}
+	}
+	merged := make([]queuedPendingInput, 0, len(recovered)+len(e.pendingInput))
+	mergedIDs := make(map[string]struct{}, len(recovered))
+	for _, item := range recovered {
+		if existing, ok := existingByID[item.RecordID]; ok {
+			item = existing
+		}
+		merged = append(merged, item)
+		mergedIDs[item.RecordID] = struct{}{}
+	}
+	for _, item := range e.pendingInput {
+		if _, ok := mergedIDs[item.RecordID]; ok && item.RecordID != "" {
+			continue
+		}
+		if sessionHasMessageID(sess, item.Message.ID) {
+			continue
+		}
+		merged = append(merged, item)
+	}
+	e.pendingInput = merged
 }
 
 func (e *Engine) restoreAcceptedTurnInputLocked(ctx context.Context, turnID string, record PendingInputRecord) error {

@@ -5564,6 +5564,68 @@ func TestTurn_CurrentTurnFollowUpStaysAfterTrigger(t *testing.T) {
 	}
 }
 
+func TestTurn_PersistedInputsAfterCurrentTriggerRestoreInOrder(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "done"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	now := time.Date(2026, 8, 17, 8, 0, 0, 0, time.UTC)
+	eng.PendingInputQueue = NewPendingInputQueue(eng.currentSession().Dir, PendingInputQueueOptions{
+		Now: func() time.Time { return now },
+	})
+	current, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "current persisted trigger"),
+		PendingInputOptions{ID: "current-persisted"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	later, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "later durable input"),
+		PendingInputOptions{ID: "later-durable"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var enqueueErr error
+	bus.Subscribe(TurnAdmittedType, func(events.Event) {
+		_, enqueueErr = eng.EnqueuePendingInput(context.Background(), "queued during admission")
+	})
+
+	if _, err := eng.TurnMessageWithID(context.Background(), current.Message, "turn-1"); err != nil {
+		t.Fatal(err)
+	}
+	if enqueueErr != nil {
+		t.Fatalf("enqueue during turn admission: %v", enqueueErr)
+	}
+	if len(prov.histories) != 1 || len(prov.histories[0]) != 3 {
+		t.Fatalf("provider history = %+v", prov.histories)
+	}
+	if got, want := []string{
+		prov.histories[0][0].FirstText(),
+		prov.histories[0][1].FirstText(),
+		prov.histories[0][2].FirstText(),
+	}, []string{"current persisted trigger", "later durable input", "queued during admission"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider input order = %v, want %v", got, want)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{current.ID, later.ID} {
+		if records[id].State != PendingInputStateProcessed {
+			t.Fatalf("persisted record %q state = %q, want processed", id, records[id].State)
+		}
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want empty queue", status)
+	}
+}
+
 func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
 	sess, err := session.New(t.TempDir())
 	if err != nil {
