@@ -4165,6 +4165,56 @@ func TestTurn_PostExecutionPolicyDenyBecomesToolErrorAndStopsLaterPolicies(t *te
 	}
 }
 
+func TestTurn_PostExecutionTransformOwnsTerminalObservation(t *testing.T) {
+	const rawResult = "sensitive raw result"
+	const filteredResult = "[redacted by policy]"
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "tu-redact", ToolName: "audit", Input: map[string]any{}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "audit",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return rawResult, nil
+		},
+	})
+	installRuntimeTestModules(t, eng, &runtimeToolPolicyModule{id: "redact-result", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+		if request.Stage == runtimemodule.ToolPolicyAfterExecution {
+			return runtimemodule.ToolPolicyDecision{
+				Action: runtimemodule.ToolPolicyTransform,
+				Result: runtimemodule.ToolPolicyResult{Content: filteredResult},
+			}, nil
+		}
+		return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+	}})
+
+	var completed toolevents.CompletedPayload
+	bus.Subscribe(toolevents.CompletedType, func(event events.Event) {
+		completed, _ = event.Payload.(toolevents.CompletedPayload)
+	})
+
+	if out, err := eng.Turn(context.Background(), "run audit"); err != nil || out != "done" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	result := eng.Session.History[2].Blocks[0]
+	if result.Content != filteredResult || result.IsError {
+		t.Fatalf("tool result = %+v, want filtered success", result)
+	}
+	if completed.Preview != filteredResult || completed.Len != len(filteredResult) {
+		t.Fatalf("completed payload = %+v, want filtered terminal observation", completed)
+	}
+	data, err := os.ReadFile(filepath.Join(eng.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), rawResult) || !strings.Contains(string(data), filteredResult) {
+		t.Fatalf("durable events leaked pre-policy result:\n%s", data)
+	}
+}
+
 func TestTurn_StopHookBlockContinuesWithPrompt(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},

@@ -1261,6 +1261,11 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 	if postErr == nil && postPolicy.Denied {
 		postErr = fmt.Errorf("tool policy denied %q after execution%s", call.ToolName, policyReasonSuffix(postPolicy.Reason))
 	}
+	if postPolicy.ResultTransformed {
+		block.Content = postPolicy.Result.Content
+		block.IsError = postPolicy.Result.IsError
+		block.ChunkedWrite = nil
+	}
 	var fatalErr error
 	if postErr != nil {
 		if runtimemodule.IsPolicyCheckpointError(postErr) {
@@ -1274,7 +1279,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 			block.IsError = true
 			toolErr = postErr
 		}
-	} else {
+	} else if !postPolicy.ResultTransformed {
 		block.Content = postPolicy.Result.Content
 		block.IsError = postPolicy.Result.IsError
 	}
@@ -1283,19 +1288,27 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 	if isShellCall {
 		block.Content = finalizedShellContent(shellBaseContent, block.Content)
 	}
-	if !block.IsError {
+	if !block.IsError && !postPolicy.ResultTransformed {
 		if media, ok := tools.MediaRefFromStructuredResult(info.StructuredResult); ok {
 			block.Media = media
 		}
 	}
-	observation := toolObservationForResult(call, block, info, toolErr)
+	observation := toolObservationForResult(call, block, info, toolErr, postPolicy.ResultTransformed)
 	return toolCallResult{
 		Call: call, Block: block, Observation: observation, EventObservation: observation,
 		Info: info, FatalError: fatalErr,
 	}
 }
 
-func toolObservationForResult(call llm.Block, block llm.Block, info tools.CallInfo, err error) tools.Observation {
+func toolObservationForResult(call llm.Block, block llm.Block, info tools.CallInfo, err error, resultTransformed bool) tools.Observation {
+	if resultTransformed {
+		return tools.NewObservation(tools.ObservationOptions{
+			ToolName:  call.ToolName,
+			ToolUseID: call.ToolUseID,
+			Input:     call.Input,
+			Content:   block.Content,
+		})
+	}
 	var obs tools.Observation
 	if info.Observation != nil {
 		obs = info.Observation.Clone()
@@ -1398,7 +1411,7 @@ func (e *Engine) policyToolErrorResult(call llm.Block, err error, contexts []run
 		IsError:   true,
 	}
 	appendToolPolicyContext(&block, contexts)
-	observation := toolObservationForResult(call, block, tools.CallInfo{}, err)
+	observation := toolObservationForResult(call, block, tools.CallInfo{}, err, false)
 	return toolCallResult{Call: call, Block: block, Observation: observation, EventObservation: observation}
 }
 

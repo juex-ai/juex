@@ -405,6 +405,9 @@ func TestAfterExecutionTransformPreservesInputForLaterPolicies(t *testing.T) {
 	if evaluation.Result.Content != "filtered" {
 		t.Fatalf("evaluated result = %#v, want filtered content", evaluation.Result)
 	}
+	if !evaluation.ResultTransformed {
+		t.Fatal("after-execution transform was not recorded in the evaluation")
+	}
 }
 
 func TestToolPolicyInputCheckpointFailureStopsLaterPolicy(t *testing.T) {

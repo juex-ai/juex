@@ -93,9 +93,11 @@ type testSessionModule struct {
 }
 
 type sessionStartPolicyTracker struct {
-	mu         sync.Mutex
-	sessionIDs []string
-	rejectCall int
+	mu                 sync.Mutex
+	sessionIDs         []string
+	rejectCall         int
+	replacementStarted chan struct{}
+	releaseReplacement chan struct{}
 }
 
 type trackedSessionStartPolicy struct {
@@ -104,11 +106,19 @@ type trackedSessionStartPolicy struct {
 
 func (*trackedSessionStartPolicy) ID() runtimemodule.ID { return "tracked-session-start" }
 
-func (m *trackedSessionStartPolicy) ApplySessionStart(_ context.Context, request runtimemodule.SessionStartRequest) (runtimemodule.SessionStartDecision, error) {
+func (m *trackedSessionStartPolicy) ApplySessionStart(ctx context.Context, request runtimemodule.SessionStartRequest) (runtimemodule.SessionStartDecision, error) {
 	m.tracker.mu.Lock()
 	m.tracker.sessionIDs = append(m.tracker.sessionIDs, request.Session.ID)
 	call := len(m.tracker.sessionIDs)
 	m.tracker.mu.Unlock()
+	if call == 2 && m.tracker.replacementStarted != nil {
+		close(m.tracker.replacementStarted)
+		select {
+		case <-ctx.Done():
+			return runtimemodule.SessionStartDecision{}, ctx.Err()
+		case <-m.tracker.releaseReplacement:
+		}
+	}
 	if call == m.tracker.rejectCall {
 		return runtimemodule.SessionStartDecision{Reject: true, Reason: "replacement blocked"}, nil
 	}
@@ -399,6 +409,70 @@ func TestSwitchToNewPrimarySessionStartPolicyRejectsReplacement(t *testing.T) {
 	}
 }
 
+func TestSwitchToNewPrimarySessionCancellationStopsSessionStartPolicy(t *testing.T) {
+	dir := t.TempDir()
+	tracker := &sessionStartPolicyTracker{
+		replacementStarted: make(chan struct{}),
+		releaseReplacement: make(chan struct{}),
+	}
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID:    "openai",
+			APIKey:        "x",
+			Model:         "m",
+			WorkDir:       dir,
+			AgentStateDir: filepath.Join(dir, ".juex"),
+		},
+		Provider:           &stubProvider{},
+		WorkDir:            dir,
+		DisableMCP:         true,
+		disableObservables: true,
+		sessionModuleFactories: []runtimemodule.SessionFactorySpec{{
+			ID:      "tracked-session-start",
+			Enabled: true,
+			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+				return &trackedSessionStartPolicy{tracker: tracker}, nil
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	oldID := a.Session.ID
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- a.SwitchToNewPrimarySessionContext(ctx)
+	}()
+	<-tracker.replacementStarted
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("session replacement error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		close(tracker.releaseReplacement)
+		if err := <-done; err != nil {
+			t.Fatalf("session replacement ignored cancellation, then returned %v", err)
+		}
+		t.Fatal("session replacement ignored cancellation while SessionStart policy was running")
+	}
+	if got := a.Session.ID; got != oldID {
+		t.Fatalf("active session after cancelled replacement = %q, want %q", got, oldID)
+	}
+	history, err := session.LoadHistory(a.cfg.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history.Active == nil || history.Active.ID != oldID || len(history.Sessions) != 1 {
+		t.Fatalf("history after cancelled replacement = %+v, want only active %q", history, oldID)
+	}
+}
+
 func TestSwitchToNewPrimarySessionSerializesModuleReplacement(t *testing.T) {
 	dir := t.TempDir()
 	tracker := newSessionModuleTracker()
@@ -643,7 +717,7 @@ func TestReplaceSessionPublishesOnlyRestartRecoveredStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.replaceSession(sess, lock); err != nil {
+	if err := a.replaceSession(context.Background(), sess, lock); err != nil {
 		_ = lock.Close()
 		t.Fatal(err)
 	}

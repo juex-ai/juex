@@ -252,11 +252,12 @@ type PendingInputObserver interface {
 }
 
 type ToolPolicyEvaluation struct {
-	Input   map[string]any
-	Result  ToolPolicyResult
-	Context []PolicyContext
-	Denied  bool
-	Reason  string
+	Input             map[string]any
+	Result            ToolPolicyResult
+	Context           []PolicyContext
+	Denied            bool
+	Reason            string
+	ResultTransformed bool
 }
 
 type FinishCandidate struct {
@@ -355,6 +356,7 @@ func applyToolPolicies(
 		evaluation.Input = current.Input
 		evaluation.Result = current.Result
 		evaluation.Context = append(evaluation.Context, current.Context...)
+		evaluation.ResultTransformed = evaluation.ResultTransformed || current.ResultTransformed
 		if err != nil {
 			return evaluation, err
 		}
@@ -407,6 +409,7 @@ func (s *Set) applyToolPolicies(
 				evaluation.Input = effectiveInput
 			} else {
 				evaluation.Result = decision.Result
+				evaluation.ResultTransformed = true
 			}
 		case ToolPolicyDeny:
 			evaluation.Denied = true

@@ -738,7 +738,7 @@ func (a *App) SwitchToNewPrimarySessionContext(ctx context.Context) error {
 			return err
 		}
 		sess := attachment.Session
-		if err := a.replaceSession(sess, sessLock); err != nil {
+		if err := a.replaceSession(ctx, sess, sessLock); err != nil {
 			_ = sessLock.Close()
 			_ = sess.Close()
 			cleanupErr := DeleteSession(a.cfg, sess.ID, SessionDeleteOptions{AllowMissingSession: true})
@@ -756,9 +756,12 @@ func (a *App) SwitchToNewPrimarySessionContext(ctx context.Context) error {
 	return replace()
 }
 
-func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) error {
+func (a *App) replaceSession(ctx context.Context, sess *session.Session, sessLock *session.Lock) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	nextModules, err := buildSessionModules(
-		a.ctx,
+		ctx,
 		a.sessionModuleFactories,
 		a.runtimeModuleContext,
 		sess,
@@ -776,7 +779,7 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 	if err != nil {
 		return err
 	}
-	if err := validateSessionModuleContext(a.ctx, a.runtimeModules, nextModules, a.runtimeModuleContext, sess); err != nil {
+	if err := validateSessionModuleContext(ctx, a.runtimeModules, nextModules, a.runtimeModuleContext, sess); err != nil {
 		return errors.Join(err, nextModules.CloseSession(context.Background()))
 	}
 	var nextTools *tools.Registry
@@ -792,8 +795,11 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 			return errors.Join(err, nextModules.CloseSession(context.Background()))
 		}
 	}
-	if err := nextModules.StartSession(a.ctx, sessionModuleContext(sess)); err != nil {
-		return err
+	if err := nextModules.StartSession(ctx, sessionModuleContext(sess)); err != nil {
+		return errors.Join(err, nextModules.CloseSession(context.Background()))
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(err, nextModules.CloseSession(context.Background()))
 	}
 
 	a.sessionMu.Lock()
@@ -806,21 +812,30 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 	if a.eventSink != nil {
 		a.eventSink.SetJournal(sess)
 	}
-	if a.Engine != nil {
-		if err := a.Engine.RunSessionStartPolicies(a.ctx); err != nil {
-			if a.eventSink != nil {
-				a.eventSink.SetJournal(oldRuntime.Session)
-			}
-			rollbackErr := a.Engine.ReplaceSessionRuntimeBundle(oldRuntime.Session, runtime.SessionRuntimeReplacement{
+	rollbackReplacement := func(cause error) error {
+		if a.eventSink != nil {
+			a.eventSink.SetJournal(oldRuntime.Session)
+		}
+		var rollbackErr error
+		if a.Engine != nil {
+			rollbackErr = a.Engine.ReplaceSessionRuntimeBundle(oldRuntime.Session, runtime.SessionRuntimeReplacement{
 				Modules: oldRuntime.Modules,
 				Tools:   oldRuntime.Tools,
 			})
-			a.sessionMu.Unlock()
-			if rollbackErr != nil {
-				return errors.Join(err, fmt.Errorf("app: roll back rejected session replacement: %w", rollbackErr))
-			}
-			return errors.Join(err, nextModules.CloseSession(context.Background()))
 		}
+		a.sessionMu.Unlock()
+		if rollbackErr != nil {
+			return errors.Join(cause, fmt.Errorf("app: roll back rejected session replacement: %w", rollbackErr))
+		}
+		return errors.Join(cause, nextModules.CloseSession(context.Background()))
+	}
+	if a.Engine != nil {
+		if err := a.Engine.RunSessionStartPolicies(ctx); err != nil {
+			return rollbackReplacement(err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return rollbackReplacement(err)
 	}
 	_ = a.detachObservability()
 	oldLock := a.sessionLock
