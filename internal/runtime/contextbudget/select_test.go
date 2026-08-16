@@ -142,6 +142,22 @@ func TestSelectCompactionInputNoticesDoNotDisplaceRealInputs(t *testing.T) {
 	}
 }
 
+func TestSelectCompactionInputOmitsPolicyBlockedMessages(t *testing.T) {
+	allowed := testMsg("direct-1", llm.RoleUser, "allowed input")
+	allowed.Kind = llm.MessageKindDirect
+	blocked := testMsg("blocked-1", llm.RoleUser, "sensitive rejected input")
+	blocked.Kind = llm.MessageKindDirect
+	blocked.PolicyBlocked = true
+	history := []llm.Message{allowed, blocked, testMsg("assistant-1", llm.RoleAssistant, "answer")}
+
+	selection := SelectInput(history, Policy{KeepRecentTokens: EstimateMessageTokens(history)})
+	for _, message := range append(append([]llm.Message(nil), selection.SummaryInput...), selection.RetainedTail...) {
+		if message.ID == blocked.ID {
+			t.Fatalf("policy-blocked input survived compaction selection: %+v", selection)
+		}
+	}
+}
+
 func TestSelectCompactionInputTreatsSideSessionResultAsRealInput(t *testing.T) {
 	direct := testMsg("direct-1", llm.RoleUser, "delegate research")
 	direct.Kind = llm.MessageKindDirect

@@ -29,6 +29,9 @@ func BuildProviderContext(history []Message, profile ProviderProfile, opts Provi
 func projectProviderTranscript(history []Message, profile ProviderProfile, opts providerProjectionOptions) []Message {
 	filtered := make([]Message, 0, len(history))
 	for _, m := range history {
+		if m.PolicyBlocked {
+			continue
+		}
 		projected := m
 		projected.Blocks = make([]Block, 0, len(m.Blocks))
 		for _, b := range m.Blocks {

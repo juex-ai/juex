@@ -58,3 +58,19 @@ func TestActiveContext_SkipsHookEventMessages(t *testing.T) {
 		t.Fatalf("active order = %+v", got.Messages)
 	}
 }
+
+func TestActiveContext_SkipsPolicyBlockedMessages(t *testing.T) {
+	blocked := testMsg("blocked-1", llm.RoleUser, "sensitive rejected input")
+	blocked.Kind = llm.MessageKindDirect
+	blocked.PolicyBlocked = true
+	h := []llm.Message{
+		testMsg("user-1", llm.RoleUser, "allowed input"),
+		blocked,
+		testMsg("assistant-1", llm.RoleAssistant, "ok"),
+	}
+
+	got := AssembleActiveContext(h, nil)
+	if len(got.Messages) != 2 || got.Messages[0].ID != "user-1" || got.Messages[1].ID != "assistant-1" {
+		t.Fatalf("active messages = %+v, want policy-blocked input omitted", got.Messages)
+	}
+}

@@ -657,6 +657,7 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 		Observer: e.policyObserver(turnID),
 	}, e.policySets()...)
 	if err != nil {
+		original.PolicyBlocked = true
 		if persistErr := e.recordTurnStartLocked(turnID, original); persistErr != nil {
 			return preparedTurnContext{}, errors.Join(err, fmt.Errorf("persist accepted user input after policy failure: %w", persistErr))
 		}
@@ -1735,6 +1736,7 @@ func (e *Engine) restoreAcceptedTurnInputLocked(ctx context.Context, turnID stri
 		Observer: e.policyObserver(turnID),
 	}, e.policySets()...)
 	if err != nil {
+		original.PolicyBlocked = true
 		if persistErr := e.appendRecoveredTurnInputLocked(original); persistErr != nil {
 			return errors.Join(err, fmt.Errorf("persist recovered accepted input after policy failure: %w", persistErr))
 		}

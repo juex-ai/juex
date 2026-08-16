@@ -4014,6 +4014,14 @@ func TestTurn_UserPromptSubmitHookDenyStopsBeforeProvider(t *testing.T) {
 	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "summarize" {
 		t.Fatalf("accepted input was not preserved after policy rejection: %+v", eng.Session.History)
 	}
+	if !eng.Session.History[0].PolicyBlocked {
+		t.Fatalf("rejected input = %+v, want policy_blocked", eng.Session.History[0])
+	}
+	for _, message := range eng.ActiveContext().Messages {
+		if message.FirstText() == "summarize" {
+			t.Fatalf("policy-rejected input remained provider-visible: %+v", eng.ActiveContext().Messages)
+		}
+	}
 }
 
 func TestTurn_PreToolUseStdoutAddsToolResultContext(t *testing.T) {
@@ -5912,6 +5920,14 @@ func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
 	}
 	if want := []string{"blocked before crash", "accepted after blocked", "new trigger"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("persisted accepted inputs = %+v, want %v", sess.History, want)
+	}
+	if !sess.History[0].PolicyBlocked {
+		t.Fatalf("recovered rejected input = %+v, want policy_blocked", sess.History[0])
+	}
+	for _, message := range recovered.ActiveContext().Messages {
+		if message.FirstText() == "blocked before crash" {
+			t.Fatalf("recovered policy-rejected input remained provider-visible: %+v", recovered.ActiveContext().Messages)
+		}
 	}
 	records, err := recovered.PendingInputQueue.Records()
 	if err != nil {

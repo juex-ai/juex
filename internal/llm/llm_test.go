@@ -3702,6 +3702,27 @@ func TestBuildProviderContextOwnsProjectionAndValidation(t *testing.T) {
 	}
 }
 
+func TestBuildProviderContextOmitsPolicyBlockedMessages(t *testing.T) {
+	allowed := TextMessage(RoleUser, "allowed input")
+	allowed.Kind = MessageKindDirect
+	blocked := TextMessage(RoleUser, "sensitive rejected input")
+	blocked.Kind = MessageKindDirect
+	blocked.PolicyBlocked = true
+	answer := TextMessage(RoleAssistant, "answer")
+
+	providerContext, err := BuildProviderContext(
+		[]Message{allowed, blocked, answer},
+		ProviderProfile{},
+		ProviderContextOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(providerContext.Messages) != 2 || providerContext.Messages[0].FirstText() != "allowed input" || providerContext.Messages[1].FirstText() != "answer" {
+		t.Fatalf("provider messages = %+v, want policy-blocked input omitted", providerContext.Messages)
+	}
+}
+
 func TestBuildProviderContextValidatesAfterCapabilityFiltering(t *testing.T) {
 	history := []Message{
 		{

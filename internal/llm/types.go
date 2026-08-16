@@ -121,9 +121,11 @@ type Message struct {
 	ID     string  `json:"id,omitempty"`
 	Role   Role    `json:"role"`
 	Blocks []Block `json:"blocks"`
-	// Kind marks app-level message categories that still travel through
-	// providers as ordinary role/block messages. Empty means normal chat.
+	// Kind marks app-level message categories. Empty means normal chat.
 	Kind string `json:"kind,omitempty"`
+	// PolicyBlocked keeps accepted input visible in the durable transcript when
+	// a Turn Input Policy fails closed, while excluding it from provider context.
+	PolicyBlocked bool `json:"policy_blocked,omitempty"`
 	// Model is the provider:model name responsible for producing this
 	// message. Only set on assistant messages (provider-stamped at
 	// generation time so resuming a session under a different config

@@ -112,6 +112,9 @@ func messageHasRetainableReference(msg llm.Message) bool {
 func compactionRelevantMessages(messages []llm.Message) []llm.Message {
 	out := make([]llm.Message, 0, len(messages))
 	for _, msg := range messages {
+		if msg.PolicyBlocked {
+			continue
+		}
 		switch msg.Kind {
 		case llm.MessageKindHookEvent, llm.MessageKindRuntimeContext, llm.MessageKindModelChange, llm.MessageKindSystemNotice, llm.MessageKindCompact:
 			continue
