@@ -16,10 +16,9 @@ import (
 	"github.com/juex-ai/juex/internal/tools"
 )
 
-const (
-	ModuleID                runtimemodule.ID = "skills"
-	defaultSkillSearchLimit                  = 20
-)
+const ModuleID runtimemodule.ID = "skills"
+
+const defaultSkillSearchLimit = 20
 
 type Options struct {
 	Dirs          []skills.Dir
