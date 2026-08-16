@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -333,7 +334,7 @@ func runtimeExtensionsStatus(graph RuntimeResourceGraph, skills RuntimeSkillsSta
 	return RuntimeExtensionsStatus{Count: len(items), Items: items}, nil
 }
 
-func (s RuntimeCatalogService) toolsStatus(skillLoader *skills.Loader) (RuntimeToolsStatus, error) {
+func (s RuntimeCatalogService) toolsStatus(skillLoader *skills.Loader) (status RuntimeToolsStatus, err error) {
 	ctx := context.Background()
 	runtimeContext := runtimemodule.RuntimeContext{WorkDir: s.cfg.WorkDir}
 	builtin := builtintools.New(ctx, tools.BuiltinOptions{
@@ -362,7 +363,9 @@ func (s RuntimeCatalogService) toolsStatus(skillLoader *skills.Loader) (RuntimeT
 	if err := runtimeSet.StartRuntime(ctx, runtimeContext); err != nil {
 		return RuntimeToolsStatus{}, err
 	}
-	defer runtimeSet.CloseRuntime(context.Background())
+	defer func() {
+		err = errors.Join(err, runtimeSet.CloseRuntime(context.Background()))
+	}()
 	sessionContext := runtimemodule.SessionContext{}
 	sessionSet, err := runtimemodule.BuildSessionSet(ctx, []runtimemodule.SessionFactorySpec{
 		{ID: juexruntime.GoalModuleID, Enabled: true, New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {

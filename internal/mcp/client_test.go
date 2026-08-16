@@ -536,7 +536,11 @@ func TestMCPModuleToolsUsesMCPGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close manager: %v", err)
+		}
+	}()
 
 	tool, ok := r.Get("mcp__fake__echo")
 	if !ok {
@@ -575,7 +579,11 @@ func TestMCPModule_OmitsArgumentsForStrictNoArgTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close manager: %v", err)
+		}
+	}()
 
 	out, _, err := r.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{})
 	if err != nil {
@@ -1087,7 +1095,11 @@ func TestMCPClient_ToolWithNoSchemaGetsDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close manager: %v", err)
+		}
+	}()
 	tool, ok := r.Get("mcp__fake__noschema")
 	if !ok {
 		t.Fatalf("expected mcp__fake__noschema, have %+v", r.List())
@@ -1114,7 +1126,11 @@ func TestMCPClient_ToolSchemaNullsAreNormalized(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close manager: %v", err)
+		}
+	}()
 	tool, ok := r.Get("mcp__fake__nullschema")
 	if !ok {
 		t.Fatalf("expected mcp__fake__nullschema, have %+v", r.List())
@@ -1143,7 +1159,11 @@ func TestMCPModule_MultipleServers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close manager: %v", err)
+		}
+	}()
 	if got := len(manager.ToolCounts()); got != 2 {
 		t.Fatalf("got %d connected servers, want 2", got)
 	}

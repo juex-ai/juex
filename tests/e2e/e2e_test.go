@@ -194,7 +194,11 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mcpManager.Close()
+	defer func() {
+		if err := mcpManager.Close(); err != nil {
+			t.Errorf("close MCP manager: %v", err)
+		}
+	}()
 
 	// -- Build runtime --
 	bus := events.NewBus()
@@ -930,7 +934,11 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mcpManager.Close()
+	defer func() {
+		if err := mcpManager.Close(); err != nil {
+			t.Errorf("close MCP manager: %v", err)
+		}
+	}()
 
 	bus := events.NewBus()
 	sess, err := session.New(filepath.Join(root, ".juex", "sessions"))
