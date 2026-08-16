@@ -4957,8 +4957,11 @@ func TestTurn_ReplaysPersistedPendingInputAfterRestart(t *testing.T) {
 	if len(prov.histories) != 1 {
 		t.Fatalf("provider calls = %d", len(prov.histories))
 	}
-	if got := prov.histories[0][len(prov.histories[0])-1].FirstText(); got != "replay me" {
-		t.Fatalf("last provider message = %q", got)
+	if got, want := []string{
+		prov.histories[0][0].FirstText(),
+		prov.histories[0][1].FirstText(),
+	}, []string{"replay me", "after restart"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider input order = %v, want %v", got, want)
 	}
 }
 
@@ -5432,6 +5435,101 @@ func TestTurn_RecoveredAcceptedInputRunsTurnInputPolicy(t *testing.T) {
 	}
 	if got := prov.histories[0][1].FirstText(); got != "new trigger" {
 		t.Fatalf("current provider input = %q", got)
+	}
+}
+
+func TestTurn_RecoveryPreservesQueuedAndTurnInputAcceptanceOrder(t *testing.T) {
+	sess, err := session.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	now := time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC)
+	queue := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return now }})
+	queued, err := queue.Enqueue(
+		llm.TextMessage(llm.RoleUser, "queued before crash"),
+		PendingInputOptions{ID: "queued-before-crash", TTL: time.Hour},
+		"turn-before-crash",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	accepted, err := queue.AdmitTurnInput(
+		"turn-before-crash",
+		llm.TextMessage(llm.RoleUser, "turn input before crash"),
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	recovered := newEngineForSession(t, sess, prov)
+	now = now.Add(time.Second)
+	recovered.PendingInputQueue = NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return now }})
+	var (
+		policyInputs   []string
+		admissionOrder []string
+	)
+	probe := &pendingAdmissionProbe{queue: recovered.PendingInputQueue, order: &admissionOrder}
+	installRuntimeTestModules(t, recovered,
+		&runtimeTurnInputPolicyModule{id: "redact-input", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+			policyInputs = append(policyInputs, request.Message.FirstText())
+			if request.Message.ID == accepted.MessageID {
+				return runtimemodule.TurnInputDecision{
+					Action:  runtimemodule.TurnInputReplace,
+					Message: llm.TextMessage(llm.RoleUser, "redacted turn input"),
+				}, nil
+			}
+			return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputAllow}, nil
+		}},
+		probe,
+	)
+
+	if _, err := recovered.TurnMessageWithID(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "new trigger"),
+		"turn-after-crash",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"turn input before crash", "new trigger"}; !reflect.DeepEqual(policyInputs, want) {
+		t.Fatalf("policy inputs = %v, want %v", policyInputs, want)
+	}
+	if len(prov.histories) != 1 || len(prov.histories[0]) != 3 {
+		t.Fatalf("provider history = %+v", prov.histories)
+	}
+	if got, want := []string{
+		prov.histories[0][0].FirstText(),
+		prov.histories[0][1].FirstText(),
+		prov.histories[0][2].FirstText(),
+	}, []string{"queued before crash", "redacted turn input", "new trigger"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider input order = %v, want %v", got, want)
+	}
+	if probe.err != nil {
+		t.Fatal(probe.err)
+	}
+	if want := []string{"observer"}; !reflect.DeepEqual(admissionOrder, want) {
+		t.Fatalf("queued admission order = %v, want %v", admissionOrder, want)
+	}
+	if want := []PendingInputState{PendingInputStateAdmitted}; !reflect.DeepEqual(probe.states, want) {
+		t.Fatalf("queued admission states = %v, want %v", probe.states, want)
+	}
+	records, err := recovered.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{queued.ID, accepted.ID} {
+		if records[id].State != PendingInputStateProcessed {
+			t.Fatalf("recovered record %q state = %q, want processed", id, records[id].State)
+		}
+	}
+	if status := recovered.PendingInputStatus(); status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want empty queue", status)
 	}
 }
 

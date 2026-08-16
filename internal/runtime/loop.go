@@ -1545,6 +1545,9 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 	if e == nil || turnID == "" {
 		return nil
 	}
+	if err := cancellation.ContextError(ctx); err != nil {
+		return err
+	}
 	queue := e.currentPendingInputQueue()
 	sess := e.currentSession()
 	if queue == nil {
@@ -1556,6 +1559,30 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 	}
 	var alreadyProcessed []string
 	queued := make([]queuedPendingInput, 0, len(records))
+	markAlreadyProcessed := func(restoreErr error) error {
+		if len(alreadyProcessed) == 0 {
+			return restoreErr
+		}
+		if err := queue.MarkProcessed(alreadyProcessed); err != nil {
+			markErr := fmt.Errorf("mark recovered input processed: %w", err)
+			if restoreErr != nil {
+				return errors.Join(restoreErr, markErr)
+			}
+			return markErr
+		}
+		return restoreErr
+	}
+	flushQueued := func() error {
+		if len(queued) == 0 {
+			return nil
+		}
+		if err := cancellation.ContextError(ctx); err != nil {
+			return err
+		}
+		batch := queued
+		queued = nil
+		return e.commitPendingInputBatchLocked(ctx, turnID, batch)
+	}
 	for _, record := range records {
 		if skipMessageID != "" && record.MessageID == skipMessageID {
 			continue
@@ -1565,36 +1592,20 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 			continue
 		}
 		if record.Origin == PendingInputOriginTurn {
+			if err := flushQueued(); err != nil {
+				return markAlreadyProcessed(err)
+			}
 			if err := e.restoreAcceptedTurnInputLocked(ctx, turnID, record); err != nil {
-				if processedErr := queue.MarkProcessed(alreadyProcessed); processedErr != nil {
-					return errors.Join(err, fmt.Errorf("mark recovered input processed: %w", processedErr))
-				}
-				return err
+				return markAlreadyProcessed(err)
 			}
 			continue
 		}
 		queued = append(queued, queuedPendingInput{RecordID: record.ID, Message: record.Message})
 	}
-	if len(alreadyProcessed) > 0 {
-		if err := queue.MarkProcessed(alreadyProcessed); err != nil {
-			return err
-		}
+	if err := flushQueued(); err != nil {
+		return markAlreadyProcessed(err)
 	}
-
-	e.pendingMu.Lock()
-	remaining := e.effectiveMaxPendingInputs() - len(e.pendingInput)
-	for _, item := range queued {
-		if remaining <= 0 {
-			break
-		}
-		if e.hasPendingRecordLocked(item.RecordID) {
-			continue
-		}
-		e.pendingInput = append(e.pendingInput, item)
-		remaining--
-	}
-	e.pendingMu.Unlock()
-	return nil
+	return markAlreadyProcessed(nil)
 }
 
 func (e *Engine) restoreAcceptedTurnInputLocked(ctx context.Context, turnID string, record PendingInputRecord) error {
@@ -1648,22 +1659,27 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 	if err := cancellation.ContextError(ctx); err != nil {
 		return err
 	}
-	queue := e.currentPendingInputQueue()
-	sess := e.currentSession()
 	e.pendingMu.Lock()
 	pending := append([]queuedPendingInput(nil), e.pendingInput...)
 	e.pendingInput = nil
-	max := e.effectiveMaxPendingInputs()
-	if len(pending) > 0 {
-		e.pendingEventAnnouncing = true
-	}
 	e.pendingMu.Unlock()
+	return e.commitPendingInputBatchLocked(ctx, turnID, pending)
+}
+
+func (e *Engine) commitPendingInputBatchLocked(ctx context.Context, turnID string, pending []queuedPendingInput) error {
 	if len(pending) == 0 {
 		return nil
 	}
+	queue := e.currentPendingInputQueue()
+	sess := e.currentSession()
+	e.pendingMu.Lock()
+	remaining := len(e.pendingInput)
+	max := e.effectiveMaxPendingInputs()
+	e.pendingEventAnnouncing = true
+	e.pendingMu.Unlock()
 	_ = e.emit(events.Event{Type: PendingInputDrainingType, TurnID: turnID, Payload: PendingInputDrainingPayload{
 		Count:            len(pending),
-		PendingCount:     0,
+		PendingCount:     remaining,
 		MaxPendingInputs: max,
 	}})
 	e.flushPendingEvents()
@@ -1705,7 +1721,7 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 		}
 	}
 	e.pendingMu.Lock()
-	remaining := len(e.pendingInput)
+	remaining = len(e.pendingInput)
 	e.pendingMu.Unlock()
 	_ = e.emit(events.Event{Type: "pending_input.drained", TurnID: turnID, Payload: PendingInputDrainedPayload{
 		Count:            len(pending),
