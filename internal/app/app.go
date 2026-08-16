@@ -118,6 +118,7 @@ type App struct {
 	closeRunning           bool
 	closeRunDone           chan struct{}
 	closeRunResult         *error
+	sessionReplaceMu       sync.Mutex
 	sessionMu              sync.RWMutex
 	sessionReleased        chan struct{}
 	sessionRelease         sync.Once
@@ -747,6 +748,8 @@ func (a *App) SwitchToNewPrimarySessionContext(ctx context.Context) error {
 	}
 	a.lifecycleMu.RLock()
 	defer a.lifecycleMu.RUnlock()
+	a.sessionReplaceMu.Lock()
+	defer a.sessionReplaceMu.Unlock()
 	var oldInfo session.Info
 	err := a.ReadSession(func(sess *session.Session) error {
 		oldInfo = sess.Info()
