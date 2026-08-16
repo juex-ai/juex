@@ -450,6 +450,44 @@ func TestTurn_PassesMaxOutputTokensToProvider(t *testing.T) {
 	}
 }
 
+func TestAdmitTurnMessage_DurableAdmissionEventFailureDropsAcceptedInput(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	want := errors.New("admission sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: TurnAdmittedType, err: want})
+
+	if _, err := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "abandoned input")); !errors.Is(err, want) {
+		t.Fatalf("AdmitTurnMessage() error = %v, want %v", err, want)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("pending records = %+v, want one dropped admission", records)
+	}
+	for _, record := range records {
+		if record.State != PendingInputStateDropped {
+			t.Fatalf("failed admission record = %+v, want state %q", record, PendingInputStateDropped)
+		}
+	}
+
+	eng.Session.SubscribeBus(bus)
+	if out, err := eng.Turn(context.Background(), "later input"); err != nil || out != "done" {
+		t.Fatalf("later Turn() = %q, %v", out, err)
+	}
+	if prov.called != 1 || len(prov.histories) != 1 {
+		t.Fatalf("provider calls = %d, histories = %d, want one", prov.called, len(prov.histories))
+	}
+	for _, message := range prov.histories[0] {
+		if message.FirstText() == "abandoned input" {
+			t.Fatalf("failed admission replayed in later provider history: %+v", prov.histories[0])
+		}
+	}
+}
+
 func TestTurn_DurableProviderRequestFailurePreventsProviderCall(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn,

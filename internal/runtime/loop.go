@@ -205,8 +205,13 @@ func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Messa
 
 	if admitted {
 		if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{}}); err != nil {
+			dropErr := queue.MarkDropped([]string{record.ID})
 			e.finishActiveTurn(turnID)
-			return llm.Message{}, fmt.Errorf("commit turn admission: %w", err)
+			commitErr := fmt.Errorf("commit turn admission: %w", err)
+			if dropErr != nil {
+				return llm.Message{}, errors.Join(commitErr, fmt.Errorf("drop rejected turn admission: %w", dropErr))
+			}
+			return llm.Message{}, commitErr
 		}
 	}
 	return record.Message, nil
