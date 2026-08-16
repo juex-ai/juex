@@ -1277,7 +1277,7 @@ func shellResultFromAppInfo(t *testing.T, info tools.CallInfo) tools.ShellResult
 	return result
 }
 
-func TestApp_NewRunsSessionStartHooks(t *testing.T) {
+func TestApp_NewAndReplacementRunSessionStartHooks(t *testing.T) {
 	dir := t.TempDir()
 	a, err := New(Options{
 		Config: config.Config{
@@ -1299,13 +1299,29 @@ func TestApp_NewRunsSessionStartHooks(t *testing.T) {
 	}
 	defer a.Close()
 
-	data, err := os.ReadFile(filepath.Join(a.Session.Dir, "events.jsonl"))
+	oldSessionDir := a.Session.Dir
+	data, err := os.ReadFile(filepath.Join(oldSessionDir, "events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(data)
 	if !strings.Contains(body, `"type":"hook.completed"`) || !strings.Contains(body, `"event_name":"SessionStart"`) {
 		t.Fatalf("events missing SessionStart hook:\n%s", body)
+	}
+
+	if err := a.SwitchToNewPrimarySession(); err != nil {
+		t.Fatal(err)
+	}
+	if a.Session.Dir == oldSessionDir {
+		t.Fatal("session replacement retained the old session directory")
+	}
+	data, err = os.ReadFile(filepath.Join(a.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = string(data)
+	if !strings.Contains(body, `"type":"hook.completed"`) || !strings.Contains(body, `"event_name":"SessionStart"`) {
+		t.Fatalf("replacement events missing SessionStart hook:\n%s", body)
 	}
 }
 

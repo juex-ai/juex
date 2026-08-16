@@ -397,14 +397,17 @@ func (s *Set) applyToolPolicies(
 		switch decision.Action {
 		case "", ToolPolicyAllow:
 		case ToolPolicyTransform:
-			effectiveInput := cloneAnyMap(decision.Input)
-			if request.Stage == ToolPolicyBeforeExecution && checkpoint != nil && !reflect.DeepEqual(evaluation.Input, effectiveInput) {
-				if err := checkpoint(cloneAnyMap(effectiveInput)); err != nil {
-					return evaluation, &policyCheckpointError{operation: "commit resolved tool input", err: err}
+			if request.Stage == ToolPolicyBeforeExecution {
+				effectiveInput := cloneAnyMap(decision.Input)
+				if checkpoint != nil && !reflect.DeepEqual(evaluation.Input, effectiveInput) {
+					if err := checkpoint(cloneAnyMap(effectiveInput)); err != nil {
+						return evaluation, &policyCheckpointError{operation: "commit resolved tool input", err: err}
+					}
 				}
+				evaluation.Input = effectiveInput
+			} else {
+				evaluation.Result = decision.Result
 			}
-			evaluation.Input = effectiveInput
-			evaluation.Result = decision.Result
 		case ToolPolicyDeny:
 			evaluation.Denied = true
 			evaluation.Reason = strings.TrimSpace(decision.Reason)

@@ -25,6 +25,7 @@ type policyTestModule struct {
 	commitApplied bool
 	commitErr     error
 	admitted      *[]string
+	observedInput *[]map[string]any
 	mutateInput   bool
 	mutateMessage bool
 	mutateIDs     bool
@@ -48,6 +49,9 @@ func (m *policyTestModule) ApplyTurnInput(_ context.Context, request TurnInputRe
 func (m *policyTestModule) ApplyTool(_ context.Context, request ToolPolicyRequest) (ToolPolicyDecision, error) {
 	if m.log != nil {
 		*m.log = append(*m.log, "tool:"+string(m.id)+":"+string(request.Stage))
+	}
+	if m.observedInput != nil {
+		*m.observedInput = append(*m.observedInput, cloneAnyMap(request.Input))
 	}
 	if m.mutateInput {
 		request.Input["nested"].(map[string]any)["value"] = "mutated"
@@ -367,6 +371,39 @@ func TestToolPoliciesCheckpointTransformedInputBeforeNextPolicy(t *testing.T) {
 	}
 	if got := evaluation.Input["path"]; got != "effective.txt" {
 		t.Fatalf("effective input = %v", got)
+	}
+}
+
+func TestAfterExecutionTransformPreservesInputForLaterPolicies(t *testing.T) {
+	var observed []map[string]any
+	set := mustPolicySet(t,
+		&policyTestModule{id: "transform-result", toolDecision: ToolPolicyDecision{
+			Action: ToolPolicyTransform,
+			Result: ToolPolicyResult{Content: "filtered"},
+		}},
+		&policyTestModule{
+			id:            "audit-input",
+			observedInput: &observed,
+			toolDecision:  ToolPolicyDecision{Action: ToolPolicyAllow},
+		},
+	)
+
+	evaluation, err := ApplyToolPolicies(context.Background(), ToolPolicyRequest{
+		Stage:  ToolPolicyAfterExecution,
+		Input:  map[string]any{"path": "handled.txt"},
+		Result: ToolPolicyResult{Content: "raw"},
+	}, set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observed) != 1 || observed[0]["path"] != "handled.txt" {
+		t.Fatalf("later policy input = %#v, want handled input", observed)
+	}
+	if evaluation.Input["path"] != "handled.txt" {
+		t.Fatalf("evaluated input = %#v, want handled input", evaluation.Input)
+	}
+	if evaluation.Result.Content != "filtered" {
+		t.Fatalf("evaluated result = %#v, want filtered content", evaluation.Result)
 	}
 }
 

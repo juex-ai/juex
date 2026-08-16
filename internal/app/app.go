@@ -780,10 +780,9 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 		return errors.Join(err, nextModules.CloseSession(context.Background()))
 	}
 	var nextTools *tools.Registry
-	var oldModules *runtimemodule.Set
+	var oldRuntime runtime.SessionRuntimeSnapshot
 	if a.Engine != nil {
-		current := a.Engine.SessionRuntimeSnapshot()
-		oldModules = current.Modules
+		oldRuntime = a.Engine.SessionRuntimeSnapshot()
 		nextTools, err = runtimemodule.BuildToolRegistry(
 			tools.RegistryOptions{DefaultTimeoutSeconds: durationSeconds(a.cfg.RuntimeLimits().ToolTimeout)},
 			a.runtimeModules,
@@ -804,6 +803,25 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 			return errors.Join(err, nextModules.CloseSession(context.Background()))
 		}
 	}
+	if a.eventSink != nil {
+		a.eventSink.SetJournal(sess)
+	}
+	if a.Engine != nil {
+		if err := a.Engine.RunSessionStartPolicies(a.ctx); err != nil {
+			if a.eventSink != nil {
+				a.eventSink.SetJournal(oldRuntime.Session)
+			}
+			rollbackErr := a.Engine.ReplaceSessionRuntimeBundle(oldRuntime.Session, runtime.SessionRuntimeReplacement{
+				Modules: oldRuntime.Modules,
+				Tools:   oldRuntime.Tools,
+			})
+			a.sessionMu.Unlock()
+			if rollbackErr != nil {
+				return errors.Join(err, fmt.Errorf("app: roll back rejected session replacement: %w", rollbackErr))
+			}
+			return errors.Join(err, nextModules.CloseSession(context.Background()))
+		}
+	}
 	_ = a.detachObservability()
 	oldLock := a.sessionLock
 	oldSession := a.sessionResource
@@ -813,9 +831,6 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 	a.sessionResource = sess
 	if a.chunkedWrites != nil {
 		a.chunkedWrites.RestoreActiveFromHistory(sess.History)
-	}
-	if a.eventSink != nil {
-		a.eventSink.SetJournal(sess)
 	}
 	if a.Status != nil {
 		err := a.Status.ResetFromReplayWithRestartRecovery(
@@ -836,8 +851,8 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 	a.sessionMu.Unlock()
 
 	var cleanupErr error
-	if oldModules != nil {
-		cleanupErr = errors.Join(cleanupErr, oldModules.CloseSession(context.Background()))
+	if oldRuntime.Modules != nil {
+		cleanupErr = errors.Join(cleanupErr, oldRuntime.Modules.CloseSession(context.Background()))
 	}
 	if oldLock != nil {
 		cleanupErr = errors.Join(cleanupErr, oldLock.Close())
