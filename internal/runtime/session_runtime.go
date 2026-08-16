@@ -10,8 +10,9 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/session"
-	"github.com/juex-ai/juex/internal/skills"
+	"github.com/juex-ai/juex/internal/tools"
 )
 
 var ErrSessionRuntimeBusy = errors.New("runtime: session runtime is busy")
@@ -26,6 +27,13 @@ type SessionRuntimeSnapshot struct {
 	Notes             *NotesStore
 	GoalState         *GoalStateStore
 	HookContext       hooks.Request
+	Modules           *runtimemodule.Set
+	Tools             *tools.Registry
+}
+
+type SessionRuntimeReplacement struct {
+	Modules *runtimemodule.Set
+	Tools   *tools.Registry
 }
 
 type sessionRuntimeState struct {
@@ -37,6 +45,12 @@ type sessionRuntimeState struct {
 // under one synchronization boundary. It serializes with turns and compaction,
 // and refuses to move an active reservation or in-memory pending input.
 func (e *Engine) ReplaceSessionRuntime(sess *session.Session) error {
+	return e.ReplaceSessionRuntimeBundle(sess, SessionRuntimeReplacement{})
+}
+
+// ReplaceSessionRuntimeBundle publishes Session state and its sealed Module
+// set/tool catalog under the existing Engine replacement transaction.
+func (e *Engine) ReplaceSessionRuntimeBundle(sess *session.Session, replacement SessionRuntimeReplacement) error {
 	if e == nil || sess == nil || strings.TrimSpace(sess.Dir) == "" {
 		return errors.New("runtime: replacement session is required")
 	}
@@ -57,7 +71,7 @@ func (e *Engine) ReplaceSessionRuntime(sess *session.Session) error {
 	}
 
 	current := e.sessionRuntimeStateLocked()
-	next := buildSessionRuntimeState(current, sess)
+	next := buildSessionRuntimeState(current, sess, replacement)
 	e.publishSessionRuntimeLocked(next)
 	pendingHookContext := tracker.PendingHookContext()
 	e.hookRuntimeContextMu.Lock()
@@ -128,20 +142,6 @@ func (e *Engine) SystemPromptWithError() (string, error) {
 		return "", err
 	}
 	return prompt.JoinSections(sections), nil
-}
-
-func (e *Engine) PromptSkillStatus() (skills.PromptBudgetReport, int, bool) {
-	if e == nil {
-		return skills.PromptBudgetReport{}, 0, false
-	}
-	e.sessionRuntimeMu.RLock()
-	state := e.sessionRuntimeStateLocked()
-	builder := state.prompt
-	e.sessionRuntimeMu.RUnlock()
-	if builder == nil || builder.Skills == nil {
-		return skills.PromptBudgetReport{}, 0, false
-	}
-	return builder.Skills.PromptReport(), len(builder.Skills.Filtered()), true
 }
 
 // SessionStateStatus reads Goal and Notes from one runtime snapshot.
@@ -268,12 +268,13 @@ func (e *Engine) sessionRuntimeStateLocked() sessionRuntimeState {
 			Notes:             e.Notes,
 			GoalState:         e.GoalState,
 			HookContext:       cloneHookRequest(e.HookContext),
+			Tools:             e.Tools,
 		},
 		prompt: e.Prompt,
 	}
 }
 
-func buildSessionRuntimeState(current sessionRuntimeState, sess *session.Session) sessionRuntimeState {
+func buildSessionRuntimeState(current sessionRuntimeState, sess *session.Session, replacement SessionRuntimeReplacement) sessionRuntimeState {
 	scratchpadDir := sess.ScratchpadDir()
 	builder := clonePromptBuilder(current.prompt)
 	if builder == nil {
@@ -307,6 +308,14 @@ func buildSessionRuntimeState(current sessionRuntimeState, sess *session.Session
 	hookContext.CompactAuto = false
 	hookContext.GoalState = nil
 	hookContext.Observer = nil
+	modules := current.Modules
+	if replacement.Modules != nil {
+		modules = replacement.Modules
+	}
+	toolRegistry := current.Tools
+	if replacement.Tools != nil {
+		toolRegistry = replacement.Tools
+	}
 
 	return sessionRuntimeState{
 		SessionRuntimeSnapshot: SessionRuntimeSnapshot{
@@ -316,6 +325,8 @@ func buildSessionRuntimeState(current sessionRuntimeState, sess *session.Session
 			Notes:             notes,
 			GoalState:         goal,
 			HookContext:       hookContext,
+			Modules:           modules,
+			Tools:             toolRegistry,
 		},
 		prompt: builder,
 	}
@@ -334,6 +345,9 @@ func (e *Engine) publishSessionRuntimeLocked(next sessionRuntimeState) {
 	e.Notes = next.Notes
 	e.GoalState = next.GoalState
 	e.HookContext = cloneHookRequest(next.HookContext)
+	if next.Tools != nil {
+		e.Tools = next.Tools
+	}
 }
 
 func cloneSessionRuntimeSnapshot(snapshot SessionRuntimeSnapshot) SessionRuntimeSnapshot {

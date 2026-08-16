@@ -10,7 +10,6 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/skills"
 )
 
 func TestBuilder_AllSourcesPresent(t *testing.T) {
@@ -35,29 +34,16 @@ func TestBuilder_AllSourcesPresent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// skills dir
-	skillRoot := t.TempDir()
-	skillDir := filepath.Join(skillRoot, "x")
-	if err := os.MkdirAll(skillDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
-		[]byte("---\nname: x\ndescription: do X\n---\nbody"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	loader := skills.NewLoader(skillRoot)
-	if err := loader.Load(); err != nil {
-		t.Fatal(err)
-	}
-
 	b := &Builder{
 		GlobalAgentsMDPath: globalAgents,
 		AgentsMDDirs:       []string{root, subdir},
 		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
-			return []runtimemodule.PromptSection{{Key: "demo", Label: "Demo Module", Source: "runtime", Text: "## Demo Module\nmodule context"}}, nil
+			return []runtimemodule.PromptSection{
+				{Key: "skills", Label: "Available Skills", Source: "runtime", Text: "## Available Skills\n- x: do X"},
+				{Key: "demo", Label: "Demo Module", Source: "runtime", Text: "## Demo Module\nmodule context"},
+			}, nil
 		},
-		Skills: loader,
-		Now:    func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+		Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
 	}
 
 	got := b.Build()

@@ -245,6 +245,31 @@ func (r *Registry) List() []Tool {
 	return out
 }
 
+// CloneExcluding copies the registry while omitting named Tools. It is used to
+// build a complete replacement catalog before an atomic Session publication.
+func (r *Registry) CloneExcluding(names ...string) (*Registry, error) {
+	if r == nil {
+		return nil, fmt.Errorf("tools: nil registry")
+	}
+	excluded := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		excluded[name] = struct{}{}
+	}
+	r.mu.RLock()
+	defaultTimeoutSeconds := r.defaultTimeoutSeconds
+	r.mu.RUnlock()
+	cloned := NewRegistryWithOptions(RegistryOptions{DefaultTimeoutSeconds: defaultTimeoutSeconds})
+	for _, tool := range r.List() {
+		if _, skip := excluded[tool.Name]; skip {
+			continue
+		}
+		if err := cloned.Register(tool); err != nil {
+			return nil, err
+		}
+	}
+	return cloned, nil
+}
+
 // Specs converts the registry to the LLM-facing ToolSpec list.
 func (r *Registry) Specs() []llm.ToolSpec {
 	tools := r.List()

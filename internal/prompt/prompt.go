@@ -3,11 +3,10 @@
 // Layout (in order, matching design doc §4.1):
 //
 //  1. AGENTS.md hierarchy (user-global -> project root -> cwd subdir)
-//  2. Skills index (descriptions only)
-//  3. Runtime Module prompt context
-//  4. Session scratchpad guidance
-//  5. Tool list (auto-supplied to the provider, not duplicated here)
-//  6. Operating context (cwd, time, OS)
+//  2. Runtime Module context, including the Skills index
+//  3. Session scratchpad guidance
+//  4. Tool list (auto-supplied to the provider, not duplicated here)
+//  5. Operating context (cwd, time, OS)
 //
 // The builder is rebuilt from scratch every turn so that Module context and
 // skill changes propagate immediately.
@@ -23,7 +22,6 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
-	"github.com/juex-ai/juex/internal/skills"
 )
 
 const SectionSeparator = "\n\n---\n\n"
@@ -31,7 +29,6 @@ const SectionSeparator = "\n\n---\n\n"
 type Builder struct {
 	GlobalAgentsMDPath  string   // optional; e.g. ~/.agents/AGENTS.md
 	AgentsMDDirs        []string // loaded after global AGENTS.md, in caller-provided order
-	Skills              *skills.Loader
 	ModulePromptContext func() ([]runtimemodule.PromptSection, error)
 	ScratchpadDir       string
 	WorkDir             string
@@ -94,12 +91,6 @@ func (b *Builder) SectionsWithError() ([]Section, error) {
 			Path:   agents.Path,
 			Text:   agents.Text,
 		})
-	}
-
-	if b.Skills != nil {
-		if s := b.Skills.PromptSection(); s != "" {
-			sections = append(sections, Section{Key: "skills", Label: "Available Skills", Source: "runtime", Text: s})
-		}
 	}
 
 	if b.ModulePromptContext != nil {

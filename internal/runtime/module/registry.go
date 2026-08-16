@@ -1,8 +1,10 @@
-// Package module defines the in-process capability modules assembled into a
-// JueX runtime. It is intentionally separate from resource-based Extensions.
+// Package module defines the typed in-process capabilities and lifecycle sets
+// assembled into a JueX runtime. It is separate from resource-based Extensions.
 package module
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -10,117 +12,330 @@ import (
 	"github.com/juex-ai/juex/internal/tools"
 )
 
-// Module is one named in-process runtime capability. A Module implements one
-// or more narrow capability interfaces such as PromptContextProvider or
-// ToolRegistrar.
+var ErrSealed = errors.New("runtime modules: registry is sealed")
+
+type ID string
+
+// Module is one trusted in-process capability unit. A Module is registered
+// once and indexed under every narrow capability interface it implements.
 type Module interface {
-	Name() string
+	ID() ID
 }
 
-// PromptSection is one named system-prompt fragment supplied by a Module.
-type PromptSection struct {
-	Key    string
-	Label  string
-	Source string
-	Path   string
-	Text   string
+type RuntimeContext struct {
+	ID            string
+	WorkDir       string
+	AgentStateDir string
+	ArtifactDir   string
 }
 
-// PromptContextProvider contributes prompt sections in Module registration
-// order. Implementations are called whenever the system prompt is rebuilt.
-type PromptContextProvider interface {
-	PromptContext() ([]PromptSection, error)
+type SessionContext struct {
+	ID            string
+	Dir           string
+	ScratchpadDir string
 }
 
-// ToolRegistrar registers a Module's model-callable tools during startup.
-type ToolRegistrar interface {
-	RegisterTools(*tools.Registry) error
+type ToolContext struct {
+	Runtime RuntimeContext
+	Session *SessionContext
 }
 
-// Registry retains enabled Modules in stable registration order.
+type ContextPurpose string
+
+const (
+	ContextPurposeSessionStart      ContextPurpose = "session_start"
+	ContextPurposeTurnPreparation   ContextPurpose = "turn_preparation"
+	ContextPurposeProviderIteration ContextPurpose = "provider_iteration"
+)
+
+type ContextRequest struct {
+	Purpose ContextPurpose
+	Runtime RuntimeContext
+	Session *SessionContext
+}
+
+// ContextSection is one named provider-context fragment. ModuleID is assigned
+// by the framework and cannot be forged by a provider.
+type ContextSection struct {
+	ModuleID ID
+	Key      string
+	Label    string
+	Source   string
+	Path     string
+	Text     string
+}
+
+// PromptSection remains an alias while prompt callers migrate to the broader
+// Context Provider vocabulary.
+type PromptSection = ContextSection
+
+type ToolProvider interface {
+	Tools(context.Context, ToolContext) ([]tools.Tool, error)
+}
+
+type ContextProvider interface {
+	Context(context.Context, ContextRequest) ([]ContextSection, error)
+}
+
+type registeredModule struct {
+	id     ID
+	module Module
+}
+
+// Registry is mutable only during composition. Seal validates contributions
+// and returns an immutable Set used while the runtime is serving.
 type Registry struct {
-	mu      sync.RWMutex
-	modules []Module
-	names   map[string]struct{}
+	mu       sync.Mutex
+	sealed   bool
+	modules  []registeredModule
+	ids      map[ID]struct{}
+	tools    []registeredModule
+	contexts []registeredModule
 }
 
 func NewRegistry() *Registry {
-	return &Registry{names: make(map[string]struct{})}
+	return &Registry{ids: make(map[ID]struct{})}
 }
 
-// Register adds an enabled Module. Disabled Modules are deliberately absent
-// from the Registry and therefore cannot contribute any capability.
-func (r *Registry) Register(mod Module, enabled bool) error {
-	if !enabled {
-		return nil
-	}
+func (r *Registry) Register(mod Module) error {
 	if mod == nil {
 		return fmt.Errorf("runtime modules: nil module")
 	}
-	name := strings.TrimSpace(mod.Name())
-	if name == "" {
-		return fmt.Errorf("runtime modules: empty name")
+	id := normalizeID(mod.ID())
+	if id == "" {
+		return fmt.Errorf("runtime modules: empty id")
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.names == nil {
-		r.names = make(map[string]struct{})
+	if r.sealed {
+		return ErrSealed
 	}
-	if _, exists := r.names[name]; exists {
-		return fmt.Errorf("runtime modules: %q already registered", name)
+	if r.ids == nil {
+		r.ids = make(map[ID]struct{})
 	}
-	r.names[name] = struct{}{}
-	r.modules = append(r.modules, mod)
+	if _, exists := r.ids[id]; exists {
+		return fmt.Errorf("runtime modules: module %q already registered", id)
+	}
+	registered := registeredModule{id: id, module: mod}
+	r.ids[id] = struct{}{}
+	r.modules = append(r.modules, registered)
+	if _, ok := mod.(ToolProvider); ok {
+		r.tools = append(r.tools, registered)
+	}
+	if _, ok := mod.(ContextProvider); ok {
+		r.contexts = append(r.contexts, registered)
+	}
 	return nil
 }
 
-// Modules returns a stable snapshot in registration order.
-func (r *Registry) Modules() []Module {
+func (r *Registry) Seal(ctx context.Context, toolContext ToolContext) (*Set, error) {
 	if r == nil {
-		return nil
+		return nil, fmt.Errorf("runtime modules: nil registry")
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return append([]Module(nil), r.modules...)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	r.mu.Lock()
+	if r.sealed {
+		r.mu.Unlock()
+		return nil, ErrSealed
+	}
+	r.sealed = true
+	modules := append([]registeredModule(nil), r.modules...)
+	toolProviders := append([]registeredModule(nil), r.tools...)
+	contextProviders := append([]registeredModule(nil), r.contexts...)
+	r.mu.Unlock()
+
+	catalog, err := buildToolCatalog(ctx, toolContext, toolProviders)
+	if err != nil {
+		return nil, err
+	}
+	return &Set{
+		modules:          modules,
+		contextProviders: contextProviders,
+		toolCatalog:      catalog,
+	}, nil
 }
 
-// PromptContext collects non-empty prompt sections in Module registration
-// order. A contribution error identifies its owning Module.
-func (r *Registry) PromptContext() ([]PromptSection, error) {
-	var sections []PromptSection
-	for _, mod := range r.Modules() {
-		provider, ok := mod.(PromptContextProvider)
-		if !ok {
+type ToolEntry struct {
+	ModuleID ID
+	Tool     tools.Tool
+}
+
+type ToolCatalog struct {
+	entries []ToolEntry
+}
+
+func (c ToolCatalog) Entries() []ToolEntry {
+	entries := make([]ToolEntry, len(c.entries))
+	copy(entries, c.entries)
+	return entries
+}
+
+func (c ToolCatalog) Install(registry *tools.Registry) error {
+	if registry == nil {
+		return fmt.Errorf("runtime modules: nil tool registry")
+	}
+	for _, entry := range c.entries {
+		if err := registry.Register(entry.Tool); err != nil {
+			return fmt.Errorf("runtime modules: install tool %q from module %q: %w", entry.Tool.Name, entry.ModuleID, err)
+		}
+	}
+	return nil
+}
+
+func (c ToolCatalog) Names() []string {
+	names := make([]string, 0, len(c.entries))
+	for _, entry := range c.entries {
+		names = append(names, entry.Tool.Name)
+	}
+	return names
+}
+
+// InstallToolCatalogs validates ownership across complete Runtime and Session
+// sets before mutating the destination registry.
+func InstallToolCatalogs(registry *tools.Registry, sets ...*Set) error {
+	if registry == nil {
+		return fmt.Errorf("runtime modules: nil tool registry")
+	}
+	owners := make(map[string]ID)
+	var entries []ToolEntry
+	for _, set := range sets {
+		if set == nil {
 			continue
 		}
-		provided, err := provider.PromptContext()
+		for _, entry := range set.ToolCatalog().Entries() {
+			if first, exists := owners[entry.Tool.Name]; exists {
+				return fmt.Errorf("runtime modules: tool %q contributed by module %q and module %q", entry.Tool.Name, first, entry.ModuleID)
+			}
+			owners[entry.Tool.Name] = entry.ModuleID
+			entries = append(entries, entry)
+		}
+	}
+	for _, entry := range entries {
+		if err := registry.Register(entry.Tool); err != nil {
+			return fmt.Errorf("runtime modules: install tool %q from module %q: %w", entry.Tool.Name, entry.ModuleID, err)
+		}
+	}
+	return nil
+}
+
+func buildToolCatalog(ctx context.Context, toolContext ToolContext, providers []registeredModule) (ToolCatalog, error) {
+	owners := make(map[string]ID)
+	validator := tools.NewRegistry()
+	var entries []ToolEntry
+	for _, registered := range providers {
+		provided, err := registered.module.(ToolProvider).Tools(ctx, toolContext)
 		if err != nil {
-			return nil, fmt.Errorf("runtime module %q prompt context: %w", strings.TrimSpace(mod.Name()), err)
+			return ToolCatalog{}, fmt.Errorf("runtime module %q tools: %w", registered.id, err)
+		}
+		for _, tool := range provided {
+			name := strings.TrimSpace(tool.Name)
+			if first, exists := owners[name]; exists {
+				return ToolCatalog{}, fmt.Errorf("runtime modules: tool %q contributed by module %q and module %q", name, first, registered.id)
+			}
+			tool.Name = name
+			if err := validator.Register(tool); err != nil {
+				return ToolCatalog{}, fmt.Errorf("runtime module %q tool %q: %w", registered.id, name, err)
+			}
+			normalized, _ := validator.Get(tool.Name)
+			owners[name] = registered.id
+			entries = append(entries, ToolEntry{ModuleID: registered.id, Tool: normalized})
+		}
+	}
+	return ToolCatalog{entries: entries}, nil
+}
+
+// Set is the immutable capability index produced by Seal. Lifecycle state is
+// private and does not permit capability registration after publication.
+type Set struct {
+	modules          []registeredModule
+	contextProviders []registeredModule
+	toolCatalog      ToolCatalog
+
+	scope Scope
+	mu    sync.Mutex
+	state lifecycleState
+}
+
+func (s *Set) Modules() []Module {
+	if s == nil {
+		return nil
+	}
+	modules := make([]Module, 0, len(s.modules))
+	for _, registered := range s.modules {
+		modules = append(modules, registered.module)
+	}
+	return modules
+}
+
+func (s *Set) ToolCatalog() ToolCatalog {
+	if s == nil {
+		return ToolCatalog{}
+	}
+	return ToolCatalog{entries: s.toolCatalog.Entries()}
+}
+
+func (s *Set) Context(ctx context.Context, request ContextRequest) ([]ContextSection, error) {
+	if s == nil {
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	owners := make(map[string]ID)
+	var sections []ContextSection
+	for _, registered := range s.contextProviders {
+		provided, err := registered.module.(ContextProvider).Context(ctx, request)
+		if err != nil {
+			return nil, fmt.Errorf("runtime module %q context: %w", registered.id, err)
 		}
 		for _, section := range provided {
-			if section.Text != "" {
-				sections = append(sections, section)
+			if section.Text == "" {
+				continue
 			}
+			key := strings.TrimSpace(section.Key)
+			if key == "" {
+				return nil, fmt.Errorf("runtime module %q context: empty key", registered.id)
+			}
+			if section.ModuleID != "" && normalizeID(section.ModuleID) != registered.id {
+				return nil, fmt.Errorf("runtime module %q context key %q claims module %q", registered.id, key, section.ModuleID)
+			}
+			if first, exists := owners[key]; exists {
+				return nil, fmt.Errorf("runtime modules: context key %q contributed by module %q and module %q", key, first, registered.id)
+			}
+			section.ModuleID = registered.id
+			section.Key = key
+			owners[key] = registered.id
+			sections = append(sections, section)
 		}
 	}
 	return sections, nil
 }
 
-// RegisterTools invokes ToolRegistrar Modules in registration order. Any
-// failure aborts startup and identifies the owning Module.
-func (r *Registry) RegisterTools(reg *tools.Registry) error {
-	if reg == nil {
-		return fmt.Errorf("runtime modules: nil tool registry")
-	}
-	for _, mod := range r.Modules() {
-		registrar, ok := mod.(ToolRegistrar)
-		if !ok {
-			continue
+// CollectContext validates context ownership across complete Runtime and
+// Session sets while preserving their explicit composition order.
+func CollectContext(ctx context.Context, request ContextRequest, sets ...*Set) ([]ContextSection, error) {
+	owners := make(map[string]ID)
+	var sections []ContextSection
+	for _, set := range sets {
+		provided, err := set.Context(ctx, request)
+		if err != nil {
+			return nil, err
 		}
-		if err := registrar.RegisterTools(reg); err != nil {
-			return fmt.Errorf("runtime module %q register tools: %w", strings.TrimSpace(mod.Name()), err)
+		for _, section := range provided {
+			if first, exists := owners[section.Key]; exists {
+				return nil, fmt.Errorf("runtime modules: context key %q contributed by module %q and module %q", section.Key, first, section.ModuleID)
+			}
+			owners[section.Key] = section.ModuleID
+			sections = append(sections, section)
 		}
 	}
-	return nil
+	return sections, nil
+}
+
+func normalizeID(id ID) ID {
+	return ID(strings.TrimSpace(string(id)))
 }

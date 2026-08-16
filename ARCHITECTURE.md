@@ -42,7 +42,6 @@ juex/
 │   │   ├── app.go
 │   │   ├── runtime_status.go
 │   │   ├── session_attachment.go
-│   │   ├── skill_tools.go
 │   │   ├── slash.go
 │   │   ├── turn_admission.go
 │   │   └── turn_admission_queue.go
@@ -107,6 +106,9 @@ juex/
 │   │   ├── output_hygiene.go     # binary/binary-like output sanitization
 │   │   ├── apply_patch.go
 │   │   └── chunked_write.go
+│   ├── modules/                  # concrete trusted Feature Module adapters
+│   │   ├── builtintools/         # builtin Tool contributions + shell resource ownership
+│   │   └── skills/               # Skill Tools + provider context
 │   ├── mcp/                      # official Go SDK adapter for local and remote MCP
 │   │   ├── config.go
 │   │   ├── client.go
@@ -204,7 +206,7 @@ implementation decisions live.
 | `internal/llm` | Canonical messages and blocks, Provider interfaces/profiles, Protocol and Capability resolution, wire/SDK adapters, provider transport/API/stream retry, model health | Model-chain fallback, Session lifecycle, Tool execution, CLI/HTTP DTOs |
 | `internal/provenance` | Request Epoch schema, canonical digests, safe Provider descriptors, bounded snapshot deduplication, and incremental journal replay reduction | Provider call timing, complete Provider profiles or credentials, transcript/Event storage, UI projection |
 | `internal/runtime` | Turn lifecycle, Provider-iteration and Tool Call ordering, pending-input queue, model-chain fallback and Turn-level retry, active context, compaction, context projection, runtime fact emission | Provider SDK and transport retry, Session discovery, MCP process lifecycle, transport parsing |
-| `internal/runtime/module` | Stable in-process Module identity, ordered enablement, prompt-context and Tool-registration interfaces, capability error attribution | Concrete Module policy, external Extension discovery, dynamic Go plugin loading, Turn lifecycle behavior |
+| `internal/runtime/module` | Stable Module identity, typed capability indexing, immutable sealed sets, Tool/context ownership validation, Runtime/Session resource ordering and cleanup | Concrete Feature policy, external Extension discovery, dynamic Go plugin loading, Session attachment |
 | `internal/session` | Session identity and kind, transcript/Event persistence, metadata and history index, active metadata, usage snapshots, scratchpad path, single-writer locks | Prompt assembly, Provider calls, Tool dispatch, Session attachment orchestration |
 | `internal/cancellation` | Typed user, signal, and runtime-restart cancellation causes plus signal-aware contexts | Transport Stop admission, Turn reaction policy, user-facing status DTOs |
 | `internal/errorclass` | Shared timeout/cancellation/auth/permission/connectivity/wrong-endpoint/retryable/error classification and public error wording | Retry decisions, cancellation sources, transport rendering |
@@ -215,6 +217,8 @@ implementation decisions live.
 | `internal/toolevents` | Tool Event names, typed payloads, and producer constructors shared with the Event Catalog | Tool execution, schema version/replay policy, Event dispatch, Event persistence and log projection |
 | `internal/observability` | Redacted human-readable Session logs projected from Events | Authoritative transcript/Event state, runtime decisions, Web presentation |
 | `internal/tools` | Tool registry and dispatch, builtin file/shell/search adapters, Tool result normalization and output hygiene | Canonical chunked-write lifecycle, Provider wire quirks, Session persistence, Observable/MCP source lifecycles |
+| `internal/modules/builtintools` | Runtime-scoped builtin Tool contributions and shell-session resource ownership | Tool dispatch, sandbox policy definition, Session state |
+| `internal/modules/skills` | Runtime-scoped Skill Tool contributions and bounded Skill catalog context | Skill discovery rules, prompt section ordering, Extension discovery |
 | `internal/chunkedwrite` | Canonical chunked-write lifecycle facts and deterministic state derivation | Tool schemas/dispatch, filesystem execution, runtime Event transport |
 | `internal/hooks` | Trusted hook config, matching, bounded command execution, and hook result facts | Lifecycle phase ordering, interpretation of deny/continue results, Tool execution |
 | `internal/sandbox` | Shared model-triggered file policy, canonical writable-root projection, blocked-path enforcement, command backend selection, cached functional probing, execution wrapping, structured availability errors | AgentStateDir selection, Shell Tool lifecycle, config parsing, trusted hooks, MCP server lifecycle, general approval policy |
@@ -222,10 +226,10 @@ implementation decisions live.
 | `internal/eventmedia` | Workspace/current-AgentStateDir external-event attachment validation, size gates, blocked-path enforcement, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
 | `internal/mcp` | Adapter over the official Go SDK: Claude-compatible MCP config normalization, command and Streamable HTTP sessions, static HTTP header handling, Tool discovery, staged remote readiness, custom notification preservation, and transport-specific diagnostics | Protocol framing/negotiation, Turn policy, active Session selection, Web ownership |
 | `internal/skills` | `SKILL.md` frontmatter loading, Skill metadata, catalog prompt rendering, compression, and budget selection | Final system-prompt section assembly, task execution policy, Tool dispatch |
-| `internal/prompt` | AGENTS.md hierarchy loading and system-prompt section assembly from guidance, Skills, Runtime Module context, runtime metadata, and shell profile | Provider wire formatting, Session persistence, resource discovery policy |
+| `internal/prompt` | AGENTS.md hierarchy loading and system-prompt section assembly from guidance, typed Module context, runtime metadata, and shell profile | Skill discovery, Provider wire formatting, Session persistence, resource discovery policy |
 | `internal/artifact` | Workspace-rooted path safety, atomic byte storage, content addressing, bounded reads, integrity verification | Media format policy, Provider encoding, context preview policy, retention |
 | `internal/usermedia` | User image validation, per-turn limits, Session namespace policy, media-reference verification | Artifact filesystem mechanics, HTTP multipart parsing, Provider encoding |
-| `internal/app` | Process composition, Agent-scoped extension runtime context, Session attachment, Turn admission, external input Session selection/delivery, application slash commands | Cobra grammar, HTTP parsing, Provider SDK behavior, Observation state machine |
+| `internal/app` | Configuration/resource resolution, enabled Feature Module construction, explicit cross-feature dependency wiring, Session attachment, Turn admission, external input Session selection/delivery, application slash commands | Module capability ordering and validation, Module cleanup policy, Cobra grammar, HTTP parsing, Provider SDK behavior |
 | `internal/cli` | Cobra command grammar, flags, terminal/JSON presentation, CLI exit categories | Shared runtime policy, Session persistence, Fleet lifecycle |
 | `internal/web` | Single-Agent HTTP/SSE transport, browser DTOs, in-process Session cache, cancellation and read-only persisted views | Shared domain decisions, Provider Protocol, Fleet registry policy |
 | `frontend/` | Transcript assembly, visual presentation, DTO mirroring, interaction behavior | Runtime-status projection, backend policy, storage, Provider/runtime decisions |
@@ -242,9 +246,11 @@ implementation decisions live.
 3. **Homestore owns home mutation mechanics.** Identity, endpoint, Fleet, and
    service modules retain policy while delegating portable locks and atomic
    publication.
-4. **Runtime speaks canonical Juex types.** Runtime may depend on canonical
-   LLM, Tool, Session, prompt, Event, and resolved config values, but not
-   provider SDK, Cobra, HTTP, frontend, or raw YAML types.
+4. **The three layer direction is strict.** Foundation packages expose
+   business-agnostic technical primitives and cannot import Framework or
+   Feature Modules. Framework owns Agent/Session/Turn orchestration and Module
+   contracts and cannot import concrete Feature implementations. Feature
+   Modules may depend on Framework contracts and Foundation values.
 5. **Provider adapters translate at the edge.** Wire structs and compatibility
    details stay in adapter code; shared meanings belong in canonical LLM
    values.
@@ -252,9 +258,10 @@ implementation decisions live.
    selections, paths, and policy inputs. LLM owns canonical Provider Profile
    semantics, and runtime receives resolved values instead of reaching into
    parser structures.
-7. **App composes without absorbing module policy.** Cross-module
-   orchestration belongs in App; reusable identity, Session, runtime, or Fleet
-   decisions remain with their owning module.
+7. **App is the composition root.** App filters disabled factories before
+   construction, supplies explicit typed dependencies, and hands sealed sets
+   to Framework. Capability indexing, ordering, publication, and cleanup policy
+   stay in Framework; concrete Feature behavior stays in Feature packages.
 8. **Session owns persistence and active metadata.** Callers use Session/App
    interfaces instead of copying transcript, activation, or lock rules into
    CLI and Web code.
@@ -271,45 +278,76 @@ implementation decisions live.
     Provider transport/API/stream operation; runtime owns model-chain fallback,
     pending-input continuation, and other Turn-level retry decisions.
 
-### 2.2 Runtime Modules And Lifecycle
+### 2.2 Module Sets And Lifecycle
 
-A Runtime Module is a named, trusted Go value compiled into the JueX binary.
-`internal/app` creates an ordered `module.Registry` from resolved configuration,
-then asks enabled Modules for the narrow capabilities they implement. The first
-interfaces are `PromptContextProvider`, evaluated whenever a system prompt is
-rebuilt, and `ToolRegistrar`, evaluated during startup. Registration order is
-stable. Disabled Modules are absent, duplicate or invalid names fail
-registration, Tool registration errors fail startup, and prompt-context errors
-abort the request or status snapshot with the Module name attached.
+A Module is a trusted in-process Feature value compiled into JueX. It has one
+stable `module.ID`, is registered once, and is indexed under every narrow typed
+capability it implements. The production Runtime set includes Builtin Tools and
+Skills; Skills implements both Tool and Context contribution interfaces.
 
-No Runtime Module is registered by default. The Registry and its generic
-prompt/tool interfaces remain available for trusted capabilities that must run
-inside the JueX process, but optional product capabilities should prefer
-standard Extension resources when those boundaries are sufficient.
+```go
+type Module interface { ID() ID }
 
-Runtime Modules and external Extensions are different boundaries. A Module is
-trusted in-process implementation code shipped with JueX. An Extension remains
-a selected manifest and resource bundle that contributes Skills, MCP servers,
-Hooks, Observables, environment declarations, and private extension data. JueX
-does not load Extension Go plugins or dynamic libraries. New Module interfaces
-should follow demonstrated cross-capability needs; there is no capability-
-specific slot for external Extensions.
+type ToolProvider interface {
+    Tools(context.Context, ToolContext) ([]tools.Tool, error)
+}
 
-The current runtime lifecycle is:
+type ContextProvider interface {
+    Context(context.Context, ContextRequest) ([]ContextSection, error)
+}
+```
 
-| Phase | Current implementation | Runtime Module interface |
-| --- | --- | --- |
-| Startup | Config and resources resolve; enabled Modules register in order; Module Tools register before the runtime starts serving. | `ToolRegistrar` exists. There is no generic startup callback. |
-| Session start | App attaches or creates the Session, builds session-scoped stores, publishes the runtime snapshot, and runs `SessionStart` Hooks. | None. Existing Hooks remain the external lifecycle surface. |
-| Turn start | Runtime admits input, runs `UserPromptSubmit` Hooks, builds and projects current prompt/input context, then persists the input and emits `turn.started`. | `PromptContextProvider` exists and is evaluated here before the first Provider request. There is no Turn observer. |
-| Before Provider request | Runtime projects canonical context, may compact, records request provenance, and calls the selected Provider. Prompt context is reused for later Provider iterations in that Turn. | None beyond the prompt context already collected for the Turn. |
-| After Provider response | Runtime persists the response, emits `llm.responded`, then either completes or executes the declared Tool batch and continues. | None. Events expose facts; they are not Module callbacks. |
-| Turn completed | Runtime drains accepted pending input at safe iteration boundaries and emits `turn.completed` only when the Turn is terminal. `Stop` Hooks can request continuation before completion. | None. |
-| Shutdown | App stops admission, cancels process-owned work, and drains ordered cleanup for Observables, Side Sessions, MCP, shell sessions, Session resources, and logs. | None. A generic shutdown interface is a future option only when a Module owns such a resource. |
+Providers return values; they never mutate the serving Tool registry. The
+Framework assigns provenance, rejects invalid or duplicate Module identities,
+Tool names, and context keys with both owners in the error, and preserves
+explicit registration order. `Seal` freezes registration and capability
+indexes. A sealed set exposes defensive snapshots and cannot be extended.
 
-Turn observers, Event/status projections, and Module shutdown cleanup remain
-architecture candidates, not implemented contracts. They should be introduced
-only with a concrete second Module consumer and explicit ordering/error rules.
+Runtime and Session resources use different typed lifecycle interfaces. Runtime
+factories receive only immutable Runtime identity/path values; Session factories
+receive only immutable Session identity/path values. The composition root
+filters `enabled: false` factory specifications before invoking constructors.
+Constructors receive explicit dependencies and cannot resolve arbitrary global
+services.
+
+The Framework lifecycle is:
+
+1. Resolve configuration and Extension resource references.
+2. Filter disabled factories, construct Runtime Modules in declared order,
+   register each once, validate contributions, and seal the Runtime set.
+3. Start Runtime resources in registration order. A failure closes only
+   successfully started resources in reverse order and joins cleanup failures
+   with the startup error.
+4. Attach and lock a Session. Construct, validate, seal, and start its Session
+   set before publication.
+5. Publish the Session, sealed Session set, Tool catalog, prompt builder, and
+   other Session dependencies together through `runtime.Engine`'s existing
+   replacement transaction. A failed replacement leaves the old bundle intact.
+6. On a committed replacement, quiesce and close the old Session set in reverse
+   order. Post-commit cleanup failures are diagnostics and never undo or delete
+   the newly published Session.
+7. On shutdown, stop admission, quiesce and close Session Modules in reverse
+   order, then close Runtime Modules in reverse order. Every cleanup is
+   attempted and errors are joined with Module identity and lifecycle phase.
+
+Context requests identify their purpose (`session_start`, `turn_preparation`,
+or `provider_iteration`) and carry cancellation plus read-only Runtime/Session
+identity. Context sections retain stable key, source, path, and Module owner.
+Tool catalogs similarly retain Module ownership even though provider-facing Tool
+specs remain unchanged.
+
+Runtime Modules and external Extensions remain different boundaries. Extensions
+are selected resource bundles contributing Skills, MCP servers, Hooks,
+Observables, environment declarations, and private data. JueX does not load
+Extension Go plugins or dynamic libraries. Provenance remains `ext:<name>` and
+mutable Extension data remains under `JUEX_EXT_DATA_DIR`; Module composition
+does not alter those contracts.
+
+The Framework does not expose an untyped lifecycle callback, priority system,
+dependency DAG, or string service locator. Turn policies and remaining Feature
+contributions are added only through demonstrated typed seams while durable
+Turn, Tool, pending-input, cancellation, and compaction ordering stays owned by
+Framework.
 
 ---
 
@@ -2913,9 +2951,11 @@ and `tests/eval/` covers the local evaluation harness.
 | `frontmatter` | round-trip, embedded quotes, embedded colons, blank lines, comments, malformed handling |
 | `version` | default + ldflags override |
 | `tools` | registry duplicate, read/write/edit/apply_patch/chunked_write/grep/exec_command/write_stdin/list_shell_sessions, regex grep, command timeout/session yield, default WorkDir |
+| `runtime/module` | unique identity, multi-capability indexing, stable order, sealing, Tool/context owner conflicts, disabled factory construction, Runtime/Session startup rollback, reverse quiesce/close, joined errors |
+| `modules/builtintools`, `modules/skills` | real builtin Tool contribution and shell cleanup; Skill Tool/context contribution, sandbox checks, filtering, and `ext:<name>` provenance |
 | `mcp` | round-trip, tool errors, env propagation, no-schema default, multi-server, layered project-over-user, ctx cancellation |
 | `skills` | fail-loud embedded builtin catalog, private builtin provenance, prompt exclusion, filter immunity, dir scan, project-over-user, strict-name collisions, name-fallback, malformed filesystem skill skip, sort, reload, missing dir |
-| `prompt` | AGENTS.md hierarchy, all sources, only-global, only-project, Module context, ops context, divider, fresh rebuild |
+| `prompt` | AGENTS.md hierarchy, typed Module context including Skills, ops context, divider, fresh rebuild |
 | `session` | append → jsonl line counts, event subscription, load round-trip, alias metadata, history index, delete |
 | `runtime` | mock-provider script, parallel tool calls, long tool follow-up turn, ctx cancel, unknown-tool, provider error, multi-turn |
 | `observability` | log-level parsing, stable log creation, transient filtering, retry status, redaction, timeout/signal metadata, close idempotence |

@@ -1,5 +1,5 @@
 // Package app wires process-level runtime dependencies: config -> provider ->
-// registry -> tools -> MCP -> skills -> runtime modules -> session -> prompt -> engine.
+// enabled Modules -> sealed catalogs -> Session -> prompt -> engine.
 //
 // It also owns application policies shared by transports, such as workspace
 // session attachment, slash commands, MCP notification routing, and turn
@@ -36,6 +36,7 @@ import (
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
@@ -91,6 +92,7 @@ type Options struct {
 	sharedNotes             *runtime.NotesStore
 	sharedObservables       *observable.Manager
 	sideSessionFactory      sideSessionFactory
+	sessionModuleFactories  []runtimemodule.SessionFactorySpec
 	startupContext          context.Context
 }
 
@@ -103,34 +105,39 @@ const (
 )
 
 type App struct {
-	Engine          *runtime.Engine
-	Status          *runtime.StatusStore
-	Bus             *events.Bus
-	Session         *session.Session
-	cleanup         []func() error
-	closeMu         sync.Mutex
-	lifecycleMu     sync.RWMutex
-	closeCancel     sync.Once
-	cleanupIndex    int
-	closeErr        error
-	closeRunning    bool
-	closeRunDone    chan struct{}
-	closeRunResult  *error
-	sessionMu       sync.RWMutex
-	sessionReleased chan struct{}
-	sessionRelease  sync.Once
-	ctx             context.Context
-	cancel          context.CancelFunc
-	cfg             config.Config
-	stderr          io.Writer
-	skills          []skills.Skill
-	mcp             MCPStatus
-	obsv            *observable.Manager
-	chunkedWrites   *tools.ChunkedWriteManager
-	sideSessions    *sideSessionManager
-	sideFactory     sideSessionFactory
-	mcpManager      *mcp.Manager
-	agentRuntime    AgentRuntimeResolution
+	Engine                 *runtime.Engine
+	Status                 *runtime.StatusStore
+	Bus                    *events.Bus
+	Session                *session.Session
+	cleanup                []func() error
+	closeMu                sync.Mutex
+	lifecycleMu            sync.RWMutex
+	closeCancel            sync.Once
+	cleanupIndex           int
+	closeErr               error
+	closeRunning           bool
+	closeRunDone           chan struct{}
+	closeRunResult         *error
+	sessionMu              sync.RWMutex
+	sessionReleased        chan struct{}
+	sessionRelease         sync.Once
+	ctx                    context.Context
+	cancel                 context.CancelFunc
+	cfg                    config.Config
+	stderr                 io.Writer
+	skills                 []skills.Skill
+	skillPrompt            skills.PromptBudgetReport
+	skillFiltered          int
+	mcp                    MCPStatus
+	obsv                   *observable.Manager
+	chunkedWrites          *tools.ChunkedWriteManager
+	sideSessions           *sideSessionManager
+	sideFactory            sideSessionFactory
+	mcpManager             *mcp.Manager
+	agentRuntime           AgentRuntimeResolution
+	runtimeModules         *runtimemodule.Set
+	runtimeModuleContext   runtimemodule.RuntimeContext
+	sessionModuleFactories []runtimemodule.SessionFactorySpec
 
 	turnAdmission turnAdmission
 
@@ -303,11 +310,14 @@ func New(opts Options) (*App, error) {
 	}
 
 	appCtx, appCancel := context.WithCancel(context.Background())
-	shellSessions := tools.NewShellSessionManager(appCtx)
 	appContextTransferred := false
+	var runtimeModules runtimeModuleComposition
+	var err error
 	defer func() {
 		if !appContextTransferred {
-			_ = shellSessions.Close()
+			if runtimeModules.set != nil {
+				_ = runtimeModules.set.CloseRuntime(context.Background())
+			}
 			appCancel()
 		}
 	}()
@@ -319,29 +329,8 @@ func New(opts Options) (*App, error) {
 	chunkedWrites := tools.NewChunkedWriteManager(runtimePaths.WorkDir, filePolicy)
 	runtimeEnvironment := agentRuntime.Environment()
 	sandboxRunner := sandbox.DefaultRunner{LookPath: cfg.LaunchEnvironmentSnapshot().LookPath}
-	tools.RegisterBuiltins(reg, tools.BuiltinOptions{
-		WorkDir:            runtimePaths.WorkDir,
-		Environment:        runtimeEnvironment,
-		Shell:              toolsShellProfile(cfg.Shell),
-		ShellSessions:      shellSessions,
-		Sandbox:            cfg.SandboxPolicy(),
-		SandboxRunner:      sandboxRunner,
-		ToolTimeoutSeconds: toolTimeoutSeconds,
-		ChunkedWrites:      chunkedWrites,
-		AgentStateDir:      runtimePaths.StateDir,
-		ArtifactDir:        runtimePaths.ArtifactDir,
-	})
-
-	skillLoader := skills.NewLoaderFromDirsWithOptions(resourceGraph.SkillDirs(), skillLoaderOptions(cfg))
-	if err := skillLoader.Load(); err != nil {
-		return nil, err
-	}
-	if err := registerSkillTools(reg, skillLoader, runtimePaths.WorkDir, cfg.SandboxPolicy()); err != nil {
-		return nil, err
-	}
-
-	moduleRegistry := newRuntimeModuleRegistry()
-	if err := moduleRegistry.RegisterTools(reg); err != nil {
+	runtimeModules, err = buildRuntimeModules(appCtx, cfg, resourceGraph, runtimePaths, runtimeEnvironment, sandboxRunner, chunkedWrites, toolTimeoutSeconds)
+	if err != nil {
 		return nil, err
 	}
 
@@ -370,10 +359,37 @@ func New(opts Options) (*App, error) {
 		_ = sess.Close()
 		return nil, err
 	}
+	sessionModules, err := buildSessionModules(startupCtx, opts.sessionModuleFactories, runtimeModules.runtimeContext, sess)
+	if err != nil {
+		_ = sessLock.Close()
+		_ = sess.Close()
+		return nil, err
+	}
+	if err := validateSessionModuleContext(startupCtx, runtimeModules.set, sessionModules, runtimeModules.runtimeContext, sess); err != nil {
+		_ = sessionModules.CloseSession(context.Background())
+		_ = sessLock.Close()
+		_ = sess.Close()
+		return nil, err
+	}
+	if err := runtimemodule.InstallToolCatalogs(reg, runtimeModules.set, sessionModules); err != nil {
+		_ = sessionModules.CloseSession(context.Background())
+		_ = sessLock.Close()
+		_ = sess.Close()
+		return nil, err
+	}
+	if err := sessionModules.StartSession(startupCtx, sessionModuleContext(sess)); err != nil {
+		_ = sessLock.Close()
+		_ = sess.Close()
+		return nil, err
+	}
 	var eventSink *events.DurableSink
 	var eventUnsubscribe func()
 	var statusUnsubscribe func()
 	closeSessionResources := func() {
+		if sessionModules != nil {
+			_ = sessionModules.CloseSession(context.Background())
+			sessionModules = nil
+		}
 		if statusUnsubscribe != nil {
 			statusUnsubscribe()
 			statusUnsubscribe = nil
@@ -403,15 +419,32 @@ func New(opts Options) (*App, error) {
 	if statusReplayErr != nil {
 		fmt.Fprintf(stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", statusReplayErr)
 	}
+	var eng *runtime.Engine
 	pb := &prompt.Builder{
-		GlobalAgentsMDPath:  resourcePaths.GlobalAgentsMDPath,
-		AgentsMDDirs:        resourcePaths.AgentsMDDirs,
-		Skills:              skillLoader,
-		ModulePromptContext: moduleRegistry.PromptContext,
-		ScratchpadDir:       sess.ScratchpadDir(),
-		WorkDir:             runtimePaths.WorkDir,
-		Shell:               prompt.ShellProfileFromConfig(cfg.Shell),
+		GlobalAgentsMDPath: resourcePaths.GlobalAgentsMDPath,
+		AgentsMDDirs:       resourcePaths.AgentsMDDirs,
+		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+			request := runtimemodule.ContextRequest{
+				Purpose: runtimemodule.ContextPurposeProviderIteration,
+				Runtime: runtimeModules.runtimeContext,
+			}
+			var activeSessionModules *runtimemodule.Set
+			if eng != nil {
+				snapshot := eng.SessionRuntimeSnapshot()
+				activeSessionModules = snapshot.Modules
+				sessionContext := sessionModuleContext(snapshot.Session)
+				request.Session = &sessionContext
+			}
+			return runtimemodule.CollectContext(appCtx, request, runtimeModules.set, activeSessionModules)
+		},
+		ScratchpadDir: sess.ScratchpadDir(),
+		WorkDir:       runtimePaths.WorkDir,
+		Shell:         prompt.ShellProfileFromConfig(cfg.Shell),
 		RuntimeSections: func() []prompt.Section {
+			shellSessions := runtimeModules.builtinTools.ShellSessions()
+			if shellSessions == nil {
+				return nil
+			}
 			text := tools.FormatActiveShellSessionsPrompt(shellSessions.List(false))
 			if text == "" {
 				return nil
@@ -440,7 +473,7 @@ func New(opts Options) (*App, error) {
 		externalEventTTL = runtime.DefaultExternalEventTTL
 	}
 
-	eng := &runtime.Engine{
+	eng = &runtime.Engine{
 		Provider:          provider,
 		SummaryProvider:   summaryProvider,
 		SummaryProvenance: summaryProvenance,
@@ -473,35 +506,43 @@ func New(opts Options) (*App, error) {
 		Compaction:            runtimeLimits.Compaction,
 		ToolOutput:            runtimeLimits.ToolOutput,
 	}
-	if err := eng.ReplaceSessionRuntime(sess); err != nil {
+	if err := eng.ReplaceSessionRuntimeBundle(sess, runtime.SessionRuntimeReplacement{
+		Modules: sessionModules,
+		Tools:   reg,
+	}); err != nil {
 		closeSessionResources()
 		return nil, err
 	}
 
 	a := &App{
-		Engine:             eng,
-		Status:             status,
-		Bus:                bus,
-		Session:            sess,
-		ctx:                appCtx,
-		cancel:             appCancel,
-		cfg:                cfg,
-		stderr:             stderr,
-		skills:             skillLoader.All(),
-		chunkedWrites:      chunkedWrites,
-		sessionLock:        sessLock,
-		sessionResource:    sess,
-		eventSink:          eventSink,
-		eventCatalog:       eventCatalog,
-		eventUnsubscribe:   eventUnsubscribe,
-		statusUnsubscribe:  statusUnsubscribe,
-		debug:              opts.Debug,
-		logLevel:           opts.LogLevel,
-		runtimeEnvironment: runtimeEnvironment,
-		sessionReleased:    make(chan struct{}),
-		sideFactory:        opts.sideSessionFactory,
-		mcpManager:         opts.MCPManager,
-		agentRuntime:       agentRuntime,
+		Engine:                 eng,
+		Status:                 status,
+		Bus:                    bus,
+		Session:                sess,
+		ctx:                    appCtx,
+		cancel:                 appCancel,
+		cfg:                    cfg,
+		stderr:                 stderr,
+		skills:                 runtimeModules.skills.All(),
+		skillPrompt:            runtimeModules.skills.PromptReport(),
+		skillFiltered:          len(runtimeModules.skills.Filtered()),
+		chunkedWrites:          chunkedWrites,
+		sessionLock:            sessLock,
+		sessionResource:        sess,
+		eventSink:              eventSink,
+		eventCatalog:           eventCatalog,
+		eventUnsubscribe:       eventUnsubscribe,
+		statusUnsubscribe:      statusUnsubscribe,
+		debug:                  opts.Debug,
+		logLevel:               opts.LogLevel,
+		runtimeEnvironment:     runtimeEnvironment,
+		sessionReleased:        make(chan struct{}),
+		sideFactory:            opts.sideSessionFactory,
+		mcpManager:             opts.MCPManager,
+		agentRuntime:           agentRuntime,
+		runtimeModules:         runtimeModules.set,
+		runtimeModuleContext:   runtimeModules.runtimeContext,
+		sessionModuleFactories: append([]runtimemodule.SessionFactorySpec(nil), opts.sessionModuleFactories...),
 	}
 	if opts.sharedGoalState != nil || opts.sharedNotes != nil {
 		eng.ShareSessionState(opts.sharedGoalState, opts.sharedNotes)
@@ -585,7 +626,7 @@ func New(opts Options) (*App, error) {
 	if ownedObservables && obsv != nil {
 		a.cleanup = append(a.cleanup, obsv.Close)
 	}
-	a.cleanup = append(a.cleanup, shellSessions.Close, func() error {
+	a.cleanup = append(a.cleanup, func() error {
 		if err := a.detachObservability(); err != nil {
 			return err
 		}
@@ -603,7 +644,12 @@ func New(opts Options) (*App, error) {
 			return a.eventSink.Close()
 		}
 		return nil
-	}, a.closeActiveSessionResources)
+	}, a.closeActiveSessionResources, func() error {
+		if a.runtimeModules == nil {
+			return nil
+		}
+		return a.runtimeModules.CloseRuntime(context.Background())
+	})
 	if a.sideSessions != nil {
 		a.cleanup = append(a.cleanup, a.sideSessions.WaitClose)
 	}
@@ -737,12 +783,39 @@ func (a *App) SwitchToNewPrimarySessionContext(ctx context.Context) error {
 }
 
 func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) error {
-	a.sessionMu.Lock()
-	defer a.sessionMu.Unlock()
-
+	nextModules, err := buildSessionModules(a.ctx, a.sessionModuleFactories, a.runtimeModuleContext, sess)
+	if err != nil {
+		return err
+	}
+	if err := validateSessionModuleContext(a.ctx, a.runtimeModules, nextModules, a.runtimeModuleContext, sess); err != nil {
+		return err
+	}
+	var nextTools *tools.Registry
+	var oldModules *runtimemodule.Set
 	if a.Engine != nil {
-		if err := a.Engine.ReplaceSessionRuntime(sess); err != nil {
+		current := a.Engine.SessionRuntimeSnapshot()
+		oldModules = current.Modules
+		var oldModuleToolNames []string
+		if oldModules != nil {
+			oldModuleToolNames = oldModules.ToolCatalog().Names()
+		}
+		nextTools, err = a.Engine.Tools.CloneExcluding(oldModuleToolNames...)
+		if err == nil {
+			err = nextModules.ToolCatalog().Install(nextTools)
+		}
+		if err != nil {
 			return err
+		}
+	}
+	if err := nextModules.StartSession(a.ctx, sessionModuleContext(sess)); err != nil {
+		return err
+	}
+
+	a.sessionMu.Lock()
+	if a.Engine != nil {
+		if err := a.Engine.ReplaceSessionRuntimeBundle(sess, runtime.SessionRuntimeReplacement{Modules: nextModules, Tools: nextTools}); err != nil {
+			a.sessionMu.Unlock()
+			return errors.Join(err, nextModules.CloseSession(context.Background()))
 		}
 	}
 	_ = a.detachObservability()
@@ -774,11 +847,20 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 		// a runtime event so callers still receive a usable session.
 		_ = a.Bus.Emit(events.Event{Type: "turn.errored", Payload: runtime.TurnErroredPayload{Error: err.Error()}})
 	}
+	a.sessionMu.Unlock()
+
+	var cleanupErr error
+	if oldModules != nil {
+		cleanupErr = errors.Join(cleanupErr, oldModules.CloseSession(context.Background()))
+	}
 	if oldLock != nil {
-		_ = oldLock.Close()
+		cleanupErr = errors.Join(cleanupErr, oldLock.Close())
 	}
 	if oldSession != nil {
-		_ = oldSession.Close()
+		cleanupErr = errors.Join(cleanupErr, oldSession.Close())
+	}
+	if cleanupErr != nil {
+		fmt.Fprintf(a.stderr, "juex: warning: committed session replacement cleanup: %v\n", cleanupErr)
 	}
 	return nil
 }
@@ -795,7 +877,12 @@ func (a *App) closeActiveSessionResources() error {
 	a.Session = nil
 	a.sessionMu.Unlock()
 
-	var lockErr, sessionErr error
+	var moduleErr, lockErr, sessionErr error
+	if a.Engine != nil {
+		if modules := a.Engine.SessionRuntimeSnapshot().Modules; modules != nil {
+			moduleErr = modules.CloseSession(context.Background())
+		}
+	}
 	if sessLock != nil {
 		lockErr = sessLock.Close()
 	}
@@ -807,7 +894,7 @@ func (a *App) closeActiveSessionResources() error {
 			close(a.sessionReleased)
 		}
 	})
-	return errors.Join(lockErr, sessionErr)
+	return errors.Join(moduleErr, lockErr, sessionErr)
 }
 
 // WaitSessionReleased waits until final App cleanup has closed the active

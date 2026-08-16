@@ -93,16 +93,27 @@ func DefaultBuiltinToolDefinitions(opts BuiltinDefinitionOptions) []ToolDefiniti
 // for exec_command / grep calls without an explicit workdir / path. Pass "" to
 // fall back to the process cwd (file tools and shell) and "." (grep).
 func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
-	ctx := newBuiltinProviderContext(r, opts)
-	providers := opts.Providers
+	for _, tool := range builtinTools(newBuiltinProviderContext(r, opts), opts.Providers) {
+		r.MustRegister(tool)
+	}
+}
+
+// BuiltinTools returns the default builtin contributions without mutating a
+// registry. Runtime Modules use this form so ownership and duplicates can be
+// validated before a catalog is published.
+func BuiltinTools(opts BuiltinOptions) []Tool {
+	return builtinTools(newBuiltinProviderContext(nil, opts), opts.Providers)
+}
+
+func builtinTools(ctx BuiltinProviderContext, providers []BuiltinProvider) []Tool {
 	if len(providers) == 0 {
 		providers = DefaultBuiltinProviders()
 	}
+	var provided []Tool
 	for _, provider := range providers {
-		for _, tool := range provider.Tools(ctx) {
-			r.MustRegister(tool)
-		}
+		provided = append(provided, provider.Tools(ctx)...)
 	}
+	return provided
 }
 
 func newBuiltinProviderContext(r *Registry, opts BuiltinOptions) BuiltinProviderContext {

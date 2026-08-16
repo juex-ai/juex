@@ -36,9 +36,12 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
 	"github.com/juex-ai/juex/internal/toolevents"
@@ -207,12 +210,12 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	sess.SubscribeBus(bus)
 
 	pb := &prompt.Builder{
-		GlobalAgentsMDPath: filepath.Join(homeAgents, "AGENTS.md"),
-		AgentsMDDirs:       []string{root, projectAgents},
-		Skills:             skillLoader,
-		WorkDir:            root,
-		Shell:              e2ePromptShellProfile(),
-		Now:                func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
+		GlobalAgentsMDPath:  filepath.Join(homeAgents, "AGENTS.md"),
+		AgentsMDDirs:        []string{root, projectAgents},
+		ModulePromptContext: e2eSkillModulePromptContext(t, skillLoader, root),
+		WorkDir:             root,
+		Shell:               e2ePromptShellProfile(),
+		Now:                 func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
 	}
 
 	// -- Script the model --
@@ -947,12 +950,12 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 	sess.SubscribeBus(bus)
 
 	pb := &prompt.Builder{
-		GlobalAgentsMDPath: filepath.Join(homeAgents, "AGENTS.md"),
-		AgentsMDDirs:       []string{root, projectAgents},
-		Skills:             skillLoader,
-		WorkDir:            root,
-		Shell:              e2ePromptShellProfile(),
-		Now:                func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
+		GlobalAgentsMDPath:  filepath.Join(homeAgents, "AGENTS.md"),
+		AgentsMDDirs:        []string{root, projectAgents},
+		ModulePromptContext: e2eSkillModulePromptContext(t, skillLoader, root),
+		WorkDir:             root,
+		Shell:               e2ePromptShellProfile(),
+		Now:                 func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
 	}
 
 	prov := &scriptProvider{
@@ -1076,6 +1079,32 @@ func readLines(t *testing.T, path string) []string {
 }
 
 // ---- Fake MCP server (re-exec) ----
+
+func e2eSkillModulePromptContext(t *testing.T, loader *skills.Loader, workDir string) func() ([]runtimemodule.PromptSection, error) {
+	t.Helper()
+	runtimeContext := runtimemodule.RuntimeContext{WorkDir: workDir}
+	skillModule := skillsmodule.NewWithLoader(loader, workDir, sandbox.LegacyDefaultPolicy())
+	set, err := runtimemodule.BuildRuntimeSet(t.Context(), []runtimemodule.RuntimeFactorySpec{{
+		ID:      skillsmodule.ModuleID,
+		Enabled: true,
+		New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+			return skillModule, nil
+		},
+	}}, runtimeContext, runtimemodule.ToolContext{Runtime: runtimeContext})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := set.StartRuntime(t.Context(), runtimeContext); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = set.CloseRuntime(context.Background()) })
+	return func() ([]runtimemodule.PromptSection, error) {
+		return set.Context(context.Background(), runtimemodule.ContextRequest{
+			Purpose: runtimemodule.ContextPurposeProviderIteration,
+			Runtime: runtimeContext,
+		})
+	}
+}
 
 func TestMain(m *testing.M) {
 	if os.Getenv("JUEX_E2E_MCP") == "1" {
