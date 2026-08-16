@@ -1348,11 +1348,20 @@ preserve queued input even when a pre-compact hook fails before compaction
 starts.
 
 Before ordinary or `/new` admission returns `started`, the runtime writes the
-main input as an `admitted` pending-input record with a stable message id, then
-establishes the active Turn and emits `turn.admitted`. Turn input policies may
-replace message content but retain that Framework-owned identity; transcript
-append marks the accepted record `processed`, while a crash during policy
-evaluation leaves it replayable.
+main input as an `admitted` record with `origin: turn` and a stable message id,
+then establishes the active Turn and emits `turn.admitted`. These records do
+not use the queued-steering TTL. Turn input policies may replace message
+content but retain that Framework-owned identity; transcript append marks the
+accepted record `processed`. After a crash, an unprocessed Turn-origin record
+runs through the ordered Turn input policies and projection again before it is
+appended, so recovery cannot bypass rejection or transformation.
+
+The pending-input journal builds an in-memory latest-record and replayable
+index on first access. Later admission and state transitions update that index
+and verify the journal file fingerprint without rescanning the append-only
+history. Ordinary Turn admission writes the initial `admitted` state directly;
+queued records use `pending` until they are drained or promoted to a main Turn
+input.
 
 ```go
 // internal/runtime/loop.go

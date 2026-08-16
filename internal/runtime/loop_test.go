@@ -5389,6 +5389,94 @@ func TestTurn_AcceptedInputIsReplayableBeforeTurnInputPolicy(t *testing.T) {
 	}
 }
 
+func TestTurn_RecoveredAcceptedInputRunsTurnInputPolicy(t *testing.T) {
+	sess, err := session.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	beforeCrash := newEngineForSession(t, sess, &mockProvider{})
+	accepted, err := beforeCrash.AdmitTurnMessage("turn-before-crash", llm.TextMessage(llm.RoleUser, "secret before crash"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	recovered := newEngineForSession(t, sess, prov)
+	var policyInputs []string
+	installRuntimeTestModules(t, recovered, &runtimeTurnInputPolicyModule{id: "redact-input", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+		policyInputs = append(policyInputs, request.Message.FirstText())
+		if request.Message.ID == accepted.ID {
+			return runtimemodule.TurnInputDecision{
+				Action:  runtimemodule.TurnInputReplace,
+				Message: llm.TextMessage(llm.RoleUser, "redacted before recovery"),
+			}, nil
+		}
+		return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputAllow}, nil
+	}})
+
+	if _, err := recovered.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, "new trigger"), "turn-after-crash"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"secret before crash", "new trigger"}; !reflect.DeepEqual(policyInputs, want) {
+		t.Fatalf("policy inputs = %v, want %v", policyInputs, want)
+	}
+	if len(prov.histories) != 1 || len(prov.histories[0]) != 2 {
+		t.Fatalf("provider history = %+v", prov.histories)
+	}
+	if got := prov.histories[0][0]; got.ID != accepted.ID || got.FirstText() != "redacted before recovery" {
+		t.Fatalf("recovered provider input = %+v", got)
+	}
+	if got := prov.histories[0][1].FirstText(); got != "new trigger" {
+		t.Fatalf("current provider input = %q", got)
+	}
+}
+
+func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
+	sess, err := session.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	beforeCrash := newEngineForSession(t, sess, &mockProvider{})
+	accepted, err := beforeCrash.AdmitTurnMessage("turn-before-crash", llm.TextMessage(llm.RoleUser, "blocked before crash"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &mockProvider{}
+	recovered := newEngineForSession(t, sess, prov)
+	installRuntimeTestModules(t, recovered, &runtimeTurnInputPolicyModule{id: "reject-input", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+		if request.Message.ID == accepted.ID {
+			return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputReject, Reason: "blocked"}, nil
+		}
+		return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputAllow}, nil
+	}})
+
+	if _, err := recovered.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, "new trigger"), "turn-after-crash"); err == nil || !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("recovered turn error = %v, want policy rejection", err)
+	}
+	if prov.called != 0 {
+		t.Fatalf("provider calls = %d, want none after recovered input rejection", prov.called)
+	}
+	if len(sess.History) != 1 || sess.History[0].ID != accepted.ID || sess.History[0].FirstText() != "blocked before crash" {
+		t.Fatalf("persisted rejected input = %+v", sess.History)
+	}
+	records, err := recovered.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if record.MessageID == accepted.ID && record.State != PendingInputStateProcessed {
+			t.Fatalf("rejected recovered record = %+v", record)
+		}
+	}
+}
+
 func TestTurn_ReusedTurnIDGetsFreshAcceptedInputIdentity(t *testing.T) {
 	sess, err := session.New(t.TempDir())
 	if err != nil {

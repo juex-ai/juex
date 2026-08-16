@@ -1,6 +1,9 @@
 package runtime
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,5 +108,61 @@ func TestPendingInputQueue_PersistsStableMessageID(t *testing.T) {
 	}
 	if replayable[0].Message.ID == "" || replayable[0].Message.ID != record.Message.ID {
 		t.Fatalf("message id = %q, want stable %q", replayable[0].Message.ID, record.Message.ID)
+	}
+}
+
+func TestPendingInputQueue_TurnInputDoesNotExpireAndUsesOneAdmissionCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC)
+	store := NewPendingInputQueue(dir, PendingInputQueueOptions{Now: func() time.Time { return now }})
+	record, err := store.AdmitTurnInput("turn-1", llm.TextMessage(llm.RoleUser, "accepted"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Origin != PendingInputOriginTurn || record.State != PendingInputStateAdmitted || !record.ExpiresAt.IsZero() || record.Attempts != 1 {
+		t.Fatalf("turn input record = %+v", record)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, pendingInputFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Count(strings.TrimSpace(string(data)), "\n") + 1; lines != 1 {
+		t.Fatalf("admission journal lines = %d, want one checkpoint", lines)
+	}
+
+	now = now.Add(24 * time.Hour)
+	reloaded := NewPendingInputQueue(dir, PendingInputQueueOptions{Now: func() time.Time { return now }})
+	replayable, err := reloaded.Replayable("turn-2", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 1 || replayable[0].ID != record.ID {
+		t.Fatalf("replayable turn inputs = %+v", replayable)
+	}
+	if err := reloaded.MarkMessageProcessed(record.MessageID); err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.loaded || len(reloaded.records) != 1 || len(reloaded.replayable) != 0 {
+		t.Fatalf("queue index = loaded:%v records:%d replayable:%d", reloaded.loaded, len(reloaded.records), len(reloaded.replayable))
+	}
+}
+
+func TestPendingInputQueue_PromotedTurnInputClearsQueuedExpiry(t *testing.T) {
+	now := time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC)
+	store := NewPendingInputQueue(t.TempDir(), PendingInputQueueOptions{Now: func() time.Time { return now }})
+	record, err := store.Enqueue(llm.TextMessage(llm.RoleUser, "promote me"), PendingInputOptions{TTL: time.Second}, "compact-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PromoteToTurnInput([]string{record.ID}, "turn-1"); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	replayable, err := store.Replayable("turn-2", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 1 || replayable[0].Origin != PendingInputOriginTurn || !replayable[0].ExpiresAt.IsZero() {
+		t.Fatalf("promoted turn input = %+v", replayable)
 	}
 }

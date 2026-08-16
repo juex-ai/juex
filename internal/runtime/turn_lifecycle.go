@@ -49,7 +49,7 @@ func (l *turnLifecycle) runLocked(ctx context.Context) (turnLifecycleResult, err
 	if err := l.engine.repairTranscriptLocked(l.turnID, "turn_start"); err != nil {
 		return turnLifecycleResult{}, err
 	}
-	if err := l.engine.restorePendingInput(l.turnID, l.userMsg.ID); err != nil {
+	if err := l.engine.restorePendingInput(ctx, l.turnID, l.userMsg.ID); err != nil {
 		return turnLifecycleResult{}, err
 	}
 

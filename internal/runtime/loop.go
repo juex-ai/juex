@@ -193,10 +193,10 @@ func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Messa
 		return llm.Message{}, ErrActiveTurnExists
 	}
 	alreadyActive := e.activeTurnID == turnID
-	accepted, err := e.checkpointAcceptedTurnInput(queue, turnID, userMsg, alreadyActive)
+	record, err := queue.AdmitTurnInput(turnID, userMsg, alreadyActive)
 	if err != nil {
 		e.pendingMu.Unlock()
-		return llm.Message{}, err
+		return llm.Message{}, fmt.Errorf("persist accepted turn input: %w", err)
 	}
 	admitted := e.activeTurnID == ""
 	e.activeTurnID = turnID
@@ -208,7 +208,7 @@ func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Messa
 			return llm.Message{}, fmt.Errorf("commit turn admission: %w", err)
 		}
 	}
-	return accepted, nil
+	return record.Message, nil
 }
 
 func (e *Engine) ReserveCompactionTurnID(turnID string) error {
@@ -482,7 +482,7 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 	}
 	item := e.pendingInput[0]
 	if item.RecordID != "" && queue != nil {
-		if err := queue.MarkAdmitted([]string{item.RecordID}, nextTurnID); err != nil {
+		if err := queue.PromoteToTurnInput([]string{item.RecordID}, nextTurnID); err != nil {
 			e.activeTurnID = ""
 			status := PendingInputStatus{
 				PendingCount:     len(e.pendingInput),
@@ -688,48 +688,6 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 		}
 	}
 	return prepared, nil
-}
-
-func (e *Engine) checkpointAcceptedTurnInput(queue *PendingInputQueue, turnID string, userMsg llm.Message, reuseTurnRecord bool) (llm.Message, error) {
-	records, err := queue.Records()
-	if err != nil {
-		return llm.Message{}, fmt.Errorf("load accepted turn input: %w", err)
-	}
-	if userMsg.ID != "" {
-		for _, record := range records {
-			if record.MessageID != userMsg.ID || !isReplayablePendingState(record.State) {
-				continue
-			}
-			if record.State != PendingInputStateAdmitted || record.TurnID != turnID {
-				if err := queue.MarkAdmitted([]string{record.ID}, turnID); err != nil {
-					return llm.Message{}, fmt.Errorf("admit accepted turn input: %w", err)
-				}
-			}
-			return record.Message, nil
-		}
-	}
-	if reuseTurnRecord {
-		for _, record := range records {
-			if record.TurnID == turnID && record.State == PendingInputStateAdmitted {
-				return record.Message, nil
-			}
-		}
-	}
-
-	opts := e.defaultPendingInputOptions(userMsg, PendingInputOptions{})
-	record, err := queue.Enqueue(userMsg, opts, turnID)
-	if err != nil {
-		return llm.Message{}, fmt.Errorf("persist accepted turn input: %w", err)
-	}
-	if !isReplayablePendingState(record.State) {
-		return llm.Message{}, fmt.Errorf("accepted turn input %q is already %s", record.ID, record.State)
-	}
-	if record.State != PendingInputStateAdmitted || record.TurnID != turnID {
-		if err := queue.MarkAdmitted([]string{record.ID}, turnID); err != nil {
-			return llm.Message{}, fmt.Errorf("admit accepted turn input: %w", err)
-		}
-	}
-	return record.Message, nil
 }
 
 func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error {
@@ -1583,33 +1541,22 @@ func (e *Engine) beginActiveTurn(turnID string) string {
 	return turnID
 }
 
-func (e *Engine) restorePendingInput(turnID, skipMessageID string) error {
+func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID string) error {
 	if e == nil || turnID == "" {
 		return nil
 	}
 	queue := e.currentPendingInputQueue()
 	sess := e.currentSession()
-	e.pendingMu.Lock()
 	if queue == nil {
-		e.pendingMu.Unlock()
 		return nil
 	}
-	max := e.effectiveMaxPendingInputs()
-	remaining := max - len(e.pendingInput)
-	if remaining <= 0 {
-		e.pendingMu.Unlock()
-		return nil
-	}
-	records, err := queue.Replayable(turnID, remaining)
+	records, err := queue.Replayable(turnID, 0)
 	if err != nil {
-		e.pendingMu.Unlock()
 		return err
 	}
 	var alreadyProcessed []string
+	queued := make([]queuedPendingInput, 0, len(records))
 	for _, record := range records {
-		if e.hasPendingRecordLocked(record.ID) {
-			continue
-		}
 		if skipMessageID != "" && record.MessageID == skipMessageID {
 			continue
 		}
@@ -1617,11 +1564,71 @@ func (e *Engine) restorePendingInput(turnID, skipMessageID string) error {
 			alreadyProcessed = append(alreadyProcessed, record.ID)
 			continue
 		}
-		e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: record.ID, Message: record.Message})
+		if record.Origin == PendingInputOriginTurn {
+			if err := e.restoreAcceptedTurnInputLocked(ctx, turnID, record); err != nil {
+				if processedErr := queue.MarkProcessed(alreadyProcessed); processedErr != nil {
+					return errors.Join(err, fmt.Errorf("mark recovered input processed: %w", processedErr))
+				}
+				return err
+			}
+			continue
+		}
+		queued = append(queued, queuedPendingInput{RecordID: record.ID, Message: record.Message})
+	}
+	if len(alreadyProcessed) > 0 {
+		if err := queue.MarkProcessed(alreadyProcessed); err != nil {
+			return err
+		}
+	}
+
+	e.pendingMu.Lock()
+	remaining := e.effectiveMaxPendingInputs() - len(e.pendingInput)
+	for _, item := range queued {
+		if remaining <= 0 {
+			break
+		}
+		if e.hasPendingRecordLocked(item.RecordID) {
+			continue
+		}
+		e.pendingInput = append(e.pendingInput, item)
+		remaining--
 	}
 	e.pendingMu.Unlock()
-	if len(alreadyProcessed) > 0 {
-		return queue.MarkProcessed(alreadyProcessed)
+	return nil
+}
+
+func (e *Engine) restoreAcceptedTurnInputLocked(ctx context.Context, turnID string, record PendingInputRecord) error {
+	original := record.Message
+	policyMessage, err := runtimemodule.ApplyTurnInputPolicies(ctx, runtimemodule.TurnInputRequest{
+		Runtime:  e.policyRuntimeContext(),
+		Session:  e.policySessionContext(),
+		TurnID:   turnID,
+		Message:  original,
+		Observer: e.policyObserver(turnID),
+	}, e.policySets()...)
+	if err != nil {
+		if persistErr := e.appendRecoveredTurnInputLocked(original); persistErr != nil {
+			return errors.Join(err, fmt.Errorf("persist recovered accepted input after policy failure: %w", persistErr))
+		}
+		return err
+	}
+	projected, projection, err := e.projectMessageLocked(policyMessage, effectiveCompactionPolicy(e.Compaction, e.ContextWindow))
+	if err != nil {
+		return err
+	}
+	if err := e.emitProjectionApplied(turnID, projection); err != nil {
+		return fmt.Errorf("commit recovered input projection: %w", err)
+	}
+	return e.appendRecoveredTurnInputLocked(projected)
+}
+
+func (e *Engine) appendRecoveredTurnInputLocked(message llm.Message) error {
+	persisted, err := e.currentSession().AppendAssigned(message)
+	if err != nil {
+		return fmt.Errorf("session append recovered user: %w", err)
+	}
+	if err := e.markPendingInputMessageProcessed(persisted); err != nil {
+		return fmt.Errorf("mark recovered user input processed: %w", err)
 	}
 	return nil
 }
@@ -1634,17 +1641,7 @@ func (e *Engine) markPendingInputMessageProcessed(msg llm.Message) error {
 	if queue == nil {
 		return nil
 	}
-	records, err := queue.Records()
-	if err != nil {
-		return err
-	}
-	var ids []string
-	for _, record := range records {
-		if record.MessageID == msg.ID && isReplayablePendingState(record.State) {
-			ids = append(ids, record.ID)
-		}
-	}
-	return queue.MarkProcessed(ids)
+	return queue.MarkMessageProcessed(msg.ID)
 }
 
 func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) error {
