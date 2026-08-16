@@ -1,20 +1,26 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/eventcatalog"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
+	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestSwitchToNewPrimarySessionWaitsForLifecycleReaders(t *testing.T) {
@@ -77,6 +83,306 @@ func TestSwitchToNewPrimarySessionBusyRestoresHistory(t *testing.T) {
 	}
 	if len(history.Sessions) != 1 || history.Sessions[0].ID != oldIdentity.ID {
 		t.Fatalf("history sessions = %+v, want only original session", history.Sessions)
+	}
+}
+
+type testSessionModule struct {
+	id       runtimemodule.ID
+	closeErr error
+}
+
+type trackedSessionModule struct {
+	index   int
+	tracker *sessionModuleTracker
+}
+
+type sessionModuleTracker struct {
+	mu                      sync.Mutex
+	constructed             int
+	closed                  map[int]int
+	firstReplacementStarted chan struct{}
+	releaseFirstReplacement chan struct{}
+}
+
+func newSessionModuleTracker() *sessionModuleTracker {
+	return &sessionModuleTracker{
+		closed:                  make(map[int]int),
+		firstReplacementStarted: make(chan struct{}),
+		releaseFirstReplacement: make(chan struct{}),
+	}
+}
+
+func (t *sessionModuleTracker) newModule() runtimemodule.Module {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.constructed++
+	return &trackedSessionModule{index: t.constructed, tracker: t}
+}
+
+func (t *sessionModuleTracker) snapshot() (int, map[int]int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	closed := make(map[int]int, len(t.closed))
+	for index, count := range t.closed {
+		closed[index] = count
+	}
+	return t.constructed, closed
+}
+
+func (*trackedSessionModule) ID() runtimemodule.ID { return "tracked-session" }
+
+func (m *trackedSessionModule) StartSession(context.Context, runtimemodule.SessionContext) error {
+	if m.index == 2 {
+		close(m.tracker.firstReplacementStarted)
+		<-m.tracker.releaseFirstReplacement
+	}
+	return nil
+}
+
+func (m *trackedSessionModule) CloseSession(context.Context) error {
+	m.tracker.mu.Lock()
+	defer m.tracker.mu.Unlock()
+	m.tracker.closed[m.index]++
+	return nil
+}
+
+type duplicateSessionToolModule struct {
+	starts *int
+}
+
+func (*duplicateSessionToolModule) ID() runtimemodule.ID { return "duplicate-session-tool" }
+
+func (*duplicateSessionToolModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+	return []tools.Tool{{
+		Name:    "read",
+		Handler: func(context.Context, map[string]any) (string, error) { return "duplicate", nil },
+	}}, nil
+}
+
+func (m *duplicateSessionToolModule) StartSession(context.Context, runtimemodule.SessionContext) error {
+	*m.starts = *m.starts + 1
+	return nil
+}
+
+func (*duplicateSessionToolModule) CloseSession(context.Context) error { return nil }
+
+type duplicateSessionContextModule struct {
+	starts *int
+}
+
+func (*duplicateSessionContextModule) ID() runtimemodule.ID { return "duplicate-session-context" }
+
+func (*duplicateSessionContextModule) Context(context.Context, runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
+	return []runtimemodule.ContextSection{{
+		Key:    "skills",
+		Source: "test",
+		Text:   "duplicate",
+	}}, nil
+}
+
+func (m *duplicateSessionContextModule) StartSession(context.Context, runtimemodule.SessionContext) error {
+	*m.starts = *m.starts + 1
+	return nil
+}
+
+func (*duplicateSessionContextModule) CloseSession(context.Context) error { return nil }
+
+func TestAppValidatesCompleteModuleCatalogBeforeSessionStart(t *testing.T) {
+	dir := t.TempDir()
+	starts := 0
+	_, err := New(Options{
+		Config: config.Config{
+			ProviderID:    "openai",
+			APIKey:        "x",
+			Model:         "m",
+			WorkDir:       dir,
+			AgentStateDir: filepath.Join(dir, ".juex"),
+		},
+		Provider:           &stubProvider{},
+		WorkDir:            dir,
+		DisableMCP:         true,
+		disableObservables: true,
+		sessionModuleFactories: []runtimemodule.SessionFactorySpec{{
+			ID:      "duplicate-session-tool",
+			Enabled: true,
+			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+				return &duplicateSessionToolModule{starts: &starts}, nil
+			},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), `tool "read"`) || !strings.Contains(err.Error(), `module "builtin-tools"`) || !strings.Contains(err.Error(), `module "duplicate-session-tool"`) {
+		t.Fatalf("New() error = %v", err)
+	}
+	if starts != 0 {
+		t.Fatalf("Session Module started before catalog validation: %d", starts)
+	}
+}
+
+func TestAppValidatesCompleteModuleContextBeforeSessionStart(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, ".agents", "skills", "context-test")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: context-test\ndescription: context validation fixture\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	starts := 0
+	_, err := New(Options{
+		Config: config.Config{
+			ProviderID:    "openai",
+			APIKey:        "x",
+			Model:         "m",
+			WorkDir:       dir,
+			AgentStateDir: filepath.Join(dir, ".juex"),
+			Skills:        config.DefaultSkillsConfig(),
+		},
+		Provider:           &stubProvider{},
+		WorkDir:            dir,
+		DisableMCP:         true,
+		disableObservables: true,
+		sessionModuleFactories: []runtimemodule.SessionFactorySpec{{
+			ID:      "duplicate-session-context",
+			Enabled: true,
+			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+				return &duplicateSessionContextModule{starts: &starts}, nil
+			},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), `context key "skills"`) || !strings.Contains(err.Error(), `module "skills"`) || !strings.Contains(err.Error(), `module "duplicate-session-context"`) {
+		t.Fatalf("New() error = %v", err)
+	}
+	if starts != 0 {
+		t.Fatalf("Session Module started before context validation: %d", starts)
+	}
+}
+
+func (m *testSessionModule) ID() runtimemodule.ID { return m.id }
+
+func (*testSessionModule) StartSession(context.Context, runtimemodule.SessionContext) error {
+	return nil
+}
+
+func (m *testSessionModule) CloseSession(context.Context) error { return m.closeErr }
+
+func TestSwitchToNewPrimarySessionSerializesModuleReplacement(t *testing.T) {
+	dir := t.TempDir()
+	tracker := newSessionModuleTracker()
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID:    "openai",
+			APIKey:        "x",
+			Model:         "m",
+			WorkDir:       dir,
+			AgentStateDir: filepath.Join(dir, ".juex"),
+		},
+		Provider:           &stubProvider{},
+		WorkDir:            dir,
+		DisableMCP:         true,
+		disableObservables: true,
+		sessionModuleFactories: []runtimemodule.SessionFactorySpec{{
+			ID:      "tracked-session",
+			Enabled: true,
+			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+				return tracker.newModule(), nil
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- a.SwitchToNewPrimarySession()
+	}()
+	<-tracker.firstReplacementStarted
+
+	secondCalled := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		close(secondCalled)
+		secondDone <- a.SwitchToNewPrimarySession()
+	}()
+	<-secondCalled
+	time.Sleep(100 * time.Millisecond)
+	constructedWhileBlocked, _ := tracker.snapshot()
+
+	close(tracker.releaseFirstReplacement)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first replacement: %v", err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second replacement: %v", err)
+	}
+	if constructedWhileBlocked != 2 {
+		t.Errorf("modules constructed while first replacement blocked = %d, want 2", constructedWhileBlocked)
+	}
+	constructed, closed := tracker.snapshot()
+	if constructed != 3 {
+		t.Errorf("constructed modules = %d, want 3", constructed)
+	}
+	if closed[1] != 1 || closed[2] != 1 || closed[3] != 0 {
+		t.Errorf("module close counts before App.Close = %v, want map[1:1 2:1]", closed)
+	}
+
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, closed = tracker.snapshot()
+	if closed[3] != 1 {
+		t.Errorf("active module close count after App.Close = %d, want 1", closed[3])
+	}
+}
+
+func TestSwitchToNewPrimarySessionKeepsCommittedReplacementWhenOldModuleCleanupFails(t *testing.T) {
+	dir := t.TempDir()
+	var stderr bytes.Buffer
+	constructed := 0
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID:    "openai",
+			APIKey:        "x",
+			Model:         "m",
+			WorkDir:       dir,
+			AgentStateDir: filepath.Join(dir, ".juex"),
+		},
+		Provider:           &stubProvider{},
+		WorkDir:            dir,
+		Stderr:             &stderr,
+		DisableMCP:         true,
+		disableObservables: true,
+		sessionModuleFactories: []runtimemodule.SessionFactorySpec{{
+			ID:      "test-session",
+			Enabled: true,
+			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+				constructed++
+				mod := &testSessionModule{id: "test-session"}
+				if constructed == 1 {
+					mod.closeErr = errors.New("old module close failed")
+				}
+				return mod, nil
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	oldIdentity, ok := a.SessionIdentity()
+	if !ok {
+		t.Fatal("missing initial session")
+	}
+
+	if err := a.SwitchToNewPrimarySession(); err != nil {
+		t.Fatalf("committed replacement returned cleanup failure: %v", err)
+	}
+	newIdentity, ok := a.SessionIdentity()
+	if !ok || newIdentity.ID == oldIdentity.ID {
+		t.Fatalf("replacement was not committed: old=%+v new=%+v", oldIdentity, newIdentity)
+	}
+	if !strings.Contains(stderr.String(), "committed session replacement cleanup") || !strings.Contains(stderr.String(), "old module close failed") {
+		t.Fatalf("cleanup diagnostic missing from stderr: %q", stderr.String())
 	}
 }
 

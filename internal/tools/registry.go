@@ -107,6 +107,13 @@ type Tool struct {
 	ResultHandler  ResultHandler
 }
 
+// Clone returns a defensive copy of the Tool definition while preserving its
+// immutable handler functions.
+func (t Tool) Clone() Tool {
+	t.Schema = cloneSchemaMap(t.Schema)
+	return t
+}
+
 func (d ToolDefinition) Bind(handler Handler) Tool {
 	return Tool{
 		Name:           d.Name,
@@ -243,6 +250,31 @@ func (r *Registry) List() []Tool {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// CloneExcluding copies the registry while omitting named Tools. It is used to
+// build a complete replacement catalog before an atomic Session publication.
+func (r *Registry) CloneExcluding(names ...string) (*Registry, error) {
+	if r == nil {
+		return nil, fmt.Errorf("tools: nil registry")
+	}
+	excluded := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		excluded[name] = struct{}{}
+	}
+	r.mu.RLock()
+	defaultTimeoutSeconds := r.defaultTimeoutSeconds
+	r.mu.RUnlock()
+	cloned := NewRegistryWithOptions(RegistryOptions{DefaultTimeoutSeconds: defaultTimeoutSeconds})
+	for _, tool := range r.List() {
+		if _, skip := excluded[tool.Name]; skip {
+			continue
+		}
+		if err := cloned.Register(tool); err != nil {
+			return nil, err
+		}
+	}
+	return cloned, nil
 }
 
 // Specs converts the registry to the LLM-facing ToolSpec list.

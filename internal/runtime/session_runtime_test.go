@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -12,7 +13,9 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestReplaceSessionRuntimePublishesCoherentBundle(t *testing.T) {
@@ -32,17 +35,27 @@ func TestReplaceSessionRuntimePublishesCoherentBundle(t *testing.T) {
 			EventsPath:       filepath.Join(first.Dir, "events.jsonl"),
 		},
 	}
+	firstModules := newSessionRuntimeTestModuleSet(t)
+	secondModules := newSessionRuntimeTestModuleSet(t)
+	firstTools := sessionRuntimeTestTools(t, "first_tool")
+	secondTools := sessionRuntimeTestTools(t, "second_tool")
 
-	if err := engine.ReplaceSessionRuntime(first); err != nil {
+	if err := engine.ReplaceSessionRuntimeBundle(first, SessionRuntimeReplacement{Modules: firstModules, Tools: firstTools}); err != nil {
 		t.Fatal(err)
 	}
 	assertSessionRuntimeBundle(t, engine.SessionRuntimeSnapshot(), first)
+	if snapshot := engine.SessionRuntimeSnapshot(); snapshot.Modules != firstModules || snapshot.Tools != firstTools {
+		t.Fatalf("initial module bundle = modules %p tools %p, want %p %p", snapshot.Modules, snapshot.Tools, firstModules, firstTools)
+	}
 
-	if err := engine.ReplaceSessionRuntime(second); err != nil {
+	if err := engine.ReplaceSessionRuntimeBundle(second, SessionRuntimeReplacement{Modules: secondModules, Tools: secondTools}); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := engine.SessionRuntimeSnapshot()
 	assertSessionRuntimeBundle(t, snapshot, second)
+	if snapshot.Modules != secondModules || snapshot.Tools != secondTools || engine.Tools != secondTools {
+		t.Fatalf("replacement module bundle = modules %p tools %p engine tools %p, want %p %p", snapshot.Modules, snapshot.Tools, engine.Tools, secondModules, secondTools)
+	}
 	if got := engine.SystemPrompt(); !strings.Contains(got, second.ScratchpadDir()) ||
 		strings.Contains(got, first.ScratchpadDir()) {
 		t.Fatalf("system prompt did not switch scratchpad from %q to %q:\n%s", first.ScratchpadDir(), second.ScratchpadDir(), got)
@@ -63,6 +76,13 @@ func TestReplaceSessionRuntimeRejectsBusyRuntimeAtomically(t *testing.T) {
 	if err := engine.ReplaceSessionRuntime(first); err != nil {
 		t.Fatal(err)
 	}
+	firstModules := newSessionRuntimeTestModuleSet(t)
+	secondModules := newSessionRuntimeTestModuleSet(t)
+	firstTools := sessionRuntimeTestTools(t, "first_tool")
+	secondTools := sessionRuntimeTestTools(t, "second_tool")
+	if err := engine.ReplaceSessionRuntimeBundle(first, SessionRuntimeReplacement{Modules: firstModules, Tools: firstTools}); err != nil {
+		t.Fatal(err)
+	}
 	if err := engine.ReserveTurnID("turn-busy"); err != nil {
 		t.Fatal(err)
 	}
@@ -70,11 +90,14 @@ func TestReplaceSessionRuntimeRejectsBusyRuntimeAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := engine.ReplaceSessionRuntime(second)
+	err := engine.ReplaceSessionRuntimeBundle(second, SessionRuntimeReplacement{Modules: secondModules, Tools: secondTools})
 	if !errors.Is(err, ErrSessionRuntimeBusy) {
 		t.Fatalf("ReplaceSessionRuntime() error = %v, want ErrSessionRuntimeBusy", err)
 	}
 	assertSessionRuntimeBundle(t, engine.SessionRuntimeSnapshot(), first)
+	if snapshot := engine.SessionRuntimeSnapshot(); snapshot.Modules != firstModules || snapshot.Tools != firstTools || engine.Tools != firstTools {
+		t.Fatalf("busy replacement changed module bundle: %+v", snapshot)
+	}
 	if status := engine.PendingInputStatus(); status.TurnID != "turn-busy" || status.PendingCount != 1 {
 		t.Fatalf("pending status after rejected replacement = %+v", status)
 	}
@@ -186,6 +209,31 @@ func newSessionRuntimeTestSession(t *testing.T, root string) *session.Session {
 	}
 	t.Cleanup(func() { _ = sess.Close() })
 	return sess
+}
+
+func newSessionRuntimeTestModuleSet(t *testing.T) *runtimemodule.Set {
+	t.Helper()
+	set, err := runtimemodule.BuildSessionSet(t.Context(), nil, runtimemodule.SessionContext{ID: "test"}, runtimemodule.ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := set.StartSession(t.Context(), runtimemodule.SessionContext{ID: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = set.CloseSession(context.Background()) })
+	return set
+}
+
+func sessionRuntimeTestTools(t *testing.T, name string) *tools.Registry {
+	t.Helper()
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:    name,
+		Handler: func(context.Context, map[string]any) (string, error) { return name, nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return registry
 }
 
 func assertSessionRuntimeBundle(t *testing.T, snapshot SessionRuntimeSnapshot, want *session.Session) {

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,9 +13,11 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/prompt"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/skills"
 	"github.com/juex-ai/juex/internal/tools"
@@ -332,15 +335,7 @@ func (s RuntimeCatalogService) toolsStatus() (RuntimeToolsStatus, error) {
 	definitions := tools.DefaultBuiltinToolDefinitions(tools.BuiltinDefinitionOptions{
 		Shell: toolsShellProfile(s.cfg.Shell),
 	})
-	definitions = append(definitions, skillToolDefinitions()...)
-	moduleRegistry := newRuntimeModuleRegistry()
-	moduleTools := tools.NewRegistry()
-	if err := moduleRegistry.RegisterTools(moduleTools); err != nil {
-		return RuntimeToolsStatus{}, err
-	}
-	for _, tool := range moduleTools.List() {
-		definitions = append(definitions, tool.Definition())
-	}
+	definitions = append(definitions, skillsmodule.ToolDefinitions()...)
 	definitions = append(definitions, juexruntime.GoalToolDefinitions()...)
 	definitions = append(definitions, juexruntime.NotesToolDefinitions()...)
 	definitions = append(definitions, SideSessionToolDefinitions()...)
@@ -429,15 +424,24 @@ func hooksStatus(cfg hooks.Config) RuntimeHooksStatus {
 }
 
 func (s RuntimeCatalogService) systemPromptStatus(skillLoader *skills.Loader, scratchpadDir string) (RuntimeSystemPromptStatus, error) {
-	moduleRegistry := newRuntimeModuleRegistry()
+	skillModule := skillsmodule.NewWithLoader(skillLoader, s.cfg.WorkDir, s.cfg.SandboxPolicy())
+	moduleRegistry := runtimemodule.NewRegistry()
+	if err := moduleRegistry.Register(skillModule); err != nil {
+		return RuntimeSystemPromptStatus{}, err
+	}
+	moduleSet, err := moduleRegistry.Seal(context.Background(), runtimemodule.ToolContext{})
+	if err != nil {
+		return RuntimeSystemPromptStatus{}, err
+	}
 	builder := &prompt.Builder{
-		GlobalAgentsMDPath:  s.cfg.GlobalAgentsMDPath(),
-		AgentsMDDirs:        s.cfg.AgentsMDDirs(),
-		Skills:              skillLoader,
-		ModulePromptContext: moduleRegistry.PromptContext,
-		ScratchpadDir:       scratchpadDir,
-		WorkDir:             s.cfg.WorkDir,
-		Shell:               prompt.ShellProfileFromConfig(s.cfg.Shell),
+		GlobalAgentsMDPath: s.cfg.GlobalAgentsMDPath(),
+		AgentsMDDirs:       s.cfg.AgentsMDDirs(),
+		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+			return moduleSet.Context(context.Background(), runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration})
+		},
+		ScratchpadDir: scratchpadDir,
+		WorkDir:       s.cfg.WorkDir,
+		Shell:         prompt.ShellProfileFromConfig(s.cfg.Shell),
 	}
 	sections, err := builder.SectionsWithError()
 	if err != nil {

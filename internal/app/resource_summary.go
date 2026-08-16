@@ -38,12 +38,10 @@ func (a *App) ResourceSummary() ResourceSummary {
 				}
 			}
 		}
-		if report, filtered, ok := a.Engine.PromptSkillStatus(); ok {
-			summary.SkillPromptBudgetChars = report.BudgetChars
-			summary.SkillPromptOmitted = len(report.Omitted)
-			summary.SkillFiltered = filtered
-		}
 	}
+	summary.SkillPromptBudgetChars = a.skillPrompt.BudgetChars
+	summary.SkillPromptOmitted = len(a.skillPrompt.Omitted)
+	summary.SkillFiltered = a.skillFiltered
 	mcpStatus := a.MCPStatus()
 	summary.MCPConfigured = mcpStatus.Configured
 	summary.MCPConnected = mcpStatus.Connected

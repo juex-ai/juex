@@ -26,6 +26,8 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/modules/builtintools"
+	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
@@ -490,7 +492,26 @@ func TestAppRegistersSkillSearchAndLoadTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	definitions := skillToolDefinitions()
+	moduleIDs := make(map[runtimemodule.ID]bool)
+	for _, mod := range a.runtimeModules.Modules() {
+		moduleIDs[mod.ID()] = true
+	}
+	for _, id := range []runtimemodule.ID{builtintools.ModuleID, skillsmodule.ModuleID} {
+		if !moduleIDs[id] {
+			t.Fatalf("production runtime modules missing %q: %#v", id, moduleIDs)
+		}
+	}
+	toolOwners := make(map[string]runtimemodule.ID)
+	for _, entry := range a.runtimeModules.ToolCatalog().Entries() {
+		toolOwners[entry.Tool.Name] = entry.ModuleID
+	}
+	if toolOwners["read"] != builtintools.ModuleID || toolOwners["skill_load"] != skillsmodule.ModuleID {
+		t.Fatalf("module tool provenance = %#v", toolOwners)
+	}
+	if snapshot := a.Engine.SessionRuntimeSnapshot(); snapshot.Modules == nil || snapshot.Tools != a.Engine.Tools {
+		t.Fatalf("session module bundle was not published: %+v", snapshot)
+	}
+	definitions := skillsmodule.ToolDefinitions()
 	if len(definitions) != 2 {
 		t.Fatalf("skill definition count = %d, want 2", len(definitions))
 	}
@@ -609,8 +630,15 @@ func TestSkillLoadDoesNotTrustFilesystemSourceLabel(t *testing.T) {
 	policy := sandbox.LegacyDefaultPolicy()
 	policy.Enabled = true
 	policy.FileSystem.BlockedPaths = []string{skillDir}
-	if err := registerSkillTools(reg, loader, work, policy); err != nil {
+	mod := skillsmodule.NewWithLoader(loader, work, policy)
+	provided, err := mod.Tools(context.Background(), runtimemodule.ToolContext{})
+	if err != nil {
 		t.Fatal(err)
+	}
+	for _, tool := range provided {
+		if err := reg.Register(tool); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if _, err := reg.Call(context.Background(), "skill_load", map[string]any{"name": "forged"}); err == nil || !strings.Contains(err.Error(), "blocked path") {
