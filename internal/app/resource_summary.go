@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/prompt"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/skills"
 )
@@ -29,10 +30,10 @@ func (a *App) ResourceSummary() ResourceSummary {
 	if a.Engine != nil {
 		sections := a.Engine.PromptSections()
 		for _, section := range sections {
-			switch section.Key {
-			case "skills":
+			switch {
+			case section.Key == "skills":
 				summary.SkillPromptTokens = juexruntime.EstimateTextTokens(section.Text)
-			case "agents":
+			case section.ModuleID == prompt.GuidanceModuleID:
 				if section.Source != "" {
 					summary.AgentsSources = appendIfMissing(summary.AgentsSources, section.Source)
 				}

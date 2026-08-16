@@ -103,6 +103,11 @@ func appendAgentsMDFile(files []agentsMDFile, path string) []agentsMDFile {
 	if path == "" {
 		return files
 	}
+	for _, existing := range files {
+		if sameCleanPath(existing.Path, path) {
+			return files
+		}
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return files

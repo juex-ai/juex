@@ -121,6 +121,29 @@ func TestBuilder_OnlyGlobalAgentsMD(t *testing.T) {
 	mustContain(t, got, "Operating Context")
 }
 
+func TestGuidanceModuleDeduplicatesGlobalWorkspaceFile(t *testing.T) {
+	home := t.TempDir()
+	homeAgents := filepath.Join(home, ".agents")
+	if err := os.MkdirAll(homeAgents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	globalAgents := filepath.Join(homeAgents, "AGENTS.md")
+	if err := os.WriteFile(globalAgents, []byte("one global rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sections, err := (&GuidanceModule{
+		GlobalAgentsMDPath: globalAgents,
+		AgentsMDDirs:       []string{home, homeAgents},
+	}).Context(context.Background(), runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sections) != 1 || sections[0].Key != "agents_global" {
+		t.Fatalf("sections = %+v, want one global AGENTS section", sections)
+	}
+}
+
 func TestBuilder_OnlyProjectAgentsMD(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("only-project-rule"), 0o644); err != nil {
