@@ -2751,29 +2751,34 @@ notification targets.
 MCP stdio stdout is treated as the JSON-RPC protocol stream. Non-JSON output on
 stdout fails the connection as a protocol error; server logs must go to stderr.
 The app runtime catalog service assembles read-only facts for `/api/runtime`:
-provider, shell, system prompt sections, hooks, skills, a fixed-order grouped
-builtin tool catalog, and configured MCP servers with their advertised tool
-details. MCP server entries expose canonical `stdio` or `http` transport plus
+provider, shell, system prompt sections, hooks, skills, a fixed-order tool
+presentation populated from sealed Module catalogs, and configured MCP servers
+with their advertised tool details. MCP server entries expose canonical `stdio`
+or `http` transport plus
 command metadata or an operator-facing URL with its query removed. Startup
 errors that echo the endpoint receive the same projection; the original URL
 remains private to the connection layer. Tool entries expose normalized schema
 plus semantic timeout metadata: `bounded` carries the effective seconds and
-`disabled` means the tool owns its lifecycle. The catalog is the process startup
-view: builtin definitions are static, while the manager-owned MCP row set,
-sources, transport metadata, and descriptors remain fixed until restart. No
-active session is required, and status reads do not reload unapplied MCP config
-or rediscover tools.
+`disabled` means the tool owns its lifecycle. Module identity is the capability
+owner; fixed group ordering is presentation metadata, not a second capability
+list. The catalog is the process startup view: the sealed Runtime and preview
+Session Module definitions, manager-owned MCP row set, sources, transport
+metadata, and descriptors remain fixed until restart. No active session is
+required, and status reads do not reload unapplied MCP config or rediscover
+tools.
 The web layer adds the latest per-server startup error and translates the app
 status into the browser DTO.
 
 Production paths load user-global MCP configs, extension MCP configs, and
 project MCP configs, then start a best-effort process manager with
-`mcp.NewManagerLayeredSoft(ctx, configs, opts)`. Each app/session registry gets
-MCP proxy tools through `Manager.RegisterTools(reg)`. Project `mcp.json`
-entries override user-level servers with the same name; extension MCP server
-names must be unique and reject collisions instead of overriding. Tests that
-cover layered config behavior exercise the same manager API instead of a
-separate layered registration helper.
+`mcp.NewManagerLayeredSoft(ctx, configs, opts)`. `mcp.Module` exposes that
+manager's proxy tools through the Runtime `ToolProvider`; the Framework seals
+the contribution with the other Runtime Modules, validates it against the
+Session catalog, and atomically constructs the complete serving registry.
+Project `mcp.json` entries override user-level servers with the same name;
+extension MCP server names must be unique and reject collisions instead of
+overriding. Tests that cover layered config behavior exercise the same manager
+and Module contribution path instead of a separate registration helper.
 
 Remote MCP readiness is staged as selection, credentials, then connectivity.
 Configuration and environment-backed header failures retain that stage
