@@ -818,6 +818,7 @@ func (a *App) replaceSession(ctx context.Context, sess *session.Session, sessLoc
 	observabilityErr = errors.Join(observabilityErr, a.attachObservability(sess))
 	rollbackReplacement := func(cause error) error {
 		var rollbackErr error
+		runtimeRestored := a.Engine == nil
 		if err := a.detachObservability(); err != nil {
 			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore observability: detach replacement: %w", err))
 		}
@@ -825,19 +826,27 @@ func (a *App) replaceSession(ctx context.Context, sess *session.Session, sessLoc
 			a.eventSink.SetJournal(oldRuntime.Session)
 		}
 		if a.Engine != nil {
-			rollbackErr = errors.Join(rollbackErr, a.Engine.ReplaceSessionRuntimeBundle(oldRuntime.Session, runtime.SessionRuntimeReplacement{
+			err := a.Engine.ReplaceSessionRuntimeBundle(oldRuntime.Session, runtime.SessionRuntimeReplacement{
 				Modules: oldRuntime.Modules,
 				Tools:   oldRuntime.Tools,
-			}))
+			})
+			if err != nil {
+				rollbackErr = errors.Join(rollbackErr, err)
+			} else {
+				runtimeRestored = true
+			}
 		}
 		if err := a.attachObservability(oldSession); err != nil {
 			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore observability: attach previous session: %w", err))
 		}
 		a.sessionMu.Unlock()
+		if runtimeRestored {
+			rollbackErr = errors.Join(rollbackErr, nextModules.CloseSession(context.Background()))
+		}
 		if rollbackErr != nil {
 			return errors.Join(cause, fmt.Errorf("app: roll back rejected session replacement: %w", rollbackErr))
 		}
-		return errors.Join(cause, nextModules.CloseSession(context.Background()))
+		return cause
 	}
 	if a.Engine != nil {
 		if err := a.Engine.RunSessionStartPolicies(ctx); err != nil {
@@ -867,8 +876,7 @@ func (a *App) replaceSession(ctx context.Context, sess *session.Session, sessLoc
 	}
 	if observabilityErr != nil {
 		// Recorder failures do not reject an otherwise committed replacement.
-		// Surface them through the canonical runtime event stream instead.
-		_ = a.Bus.Emit(events.Event{Type: "turn.errored", Payload: runtime.TurnErroredPayload{Error: observabilityErr.Error()}})
+		fmt.Fprintf(a.stderr, "juex: warning: session observability after committed replacement: %v\n", observabilityErr)
 	}
 	a.sessionMu.Unlock()
 

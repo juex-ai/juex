@@ -88,8 +88,9 @@ func TestSwitchToNewPrimarySessionBusyRestoresHistory(t *testing.T) {
 }
 
 type testSessionModule struct {
-	id       runtimemodule.ID
-	closeErr error
+	id         runtimemodule.ID
+	closeErr   error
+	closeCount *int
 }
 
 type sessionStartPolicyTracker struct {
@@ -308,7 +309,12 @@ func (*testSessionModule) StartSession(context.Context, runtimemodule.SessionCon
 	return nil
 }
 
-func (m *testSessionModule) CloseSession(context.Context) error { return m.closeErr }
+func (m *testSessionModule) CloseSession(context.Context) error {
+	if m.closeCount != nil {
+		(*m.closeCount)++
+	}
+	return m.closeErr
+}
 
 func TestSwitchToNewPrimarySessionRunsSessionStartPolicies(t *testing.T) {
 	dir := t.TempDir()
@@ -421,6 +427,96 @@ func TestSwitchToNewPrimarySessionStartPolicyRejectsReplacement(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "event=test.observability-restored") {
 		t.Fatalf("previous session observability was not restored:\n%s", data)
+	}
+}
+
+func TestSwitchToNewPrimarySessionObservabilityFailureDoesNotCorruptRuntimeStatus(t *testing.T) {
+	dir := t.TempDir()
+	var stderr bytes.Buffer
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID:    "openai",
+			APIKey:        "x",
+			Model:         "m",
+			WorkDir:       dir,
+			AgentStateDir: filepath.Join(dir, ".juex"),
+		},
+		Provider:           &stubProvider{},
+		WorkDir:            dir,
+		Stderr:             &stderr,
+		DisableMCP:         true,
+		disableObservables: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	a.logLevel = "invalid-for-replacement"
+
+	if err := a.SwitchToNewPrimarySession(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := a.Status.Snapshot()
+	if snapshot.Session.ID != a.Session.ID || snapshot.Session.State != runtime.SessionRuntimeIdle {
+		t.Fatalf("status session = %+v, want idle replacement %q", snapshot.Session, a.Session.ID)
+	}
+	if snapshot.Turn != nil || snapshot.LastError != nil {
+		t.Fatalf("recorder failure corrupted runtime status: %+v", snapshot)
+	}
+	if got := stderr.String(); !strings.Contains(got, "session observability") || !strings.Contains(got, "invalid-for-replacement") {
+		t.Fatalf("observability warning missing from stderr: %q", got)
+	}
+}
+
+func TestSwitchToNewPrimarySessionClosesCandidateModulesWhenObservabilityRollbackFails(t *testing.T) {
+	dir := t.TempDir()
+	tracker := &sessionStartPolicyTracker{rejectCall: 2}
+	closed := 0
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID:    "openai",
+			APIKey:        "x",
+			Model:         "m",
+			WorkDir:       dir,
+			AgentStateDir: filepath.Join(dir, ".juex"),
+		},
+		Provider:           &stubProvider{},
+		WorkDir:            dir,
+		DisableMCP:         true,
+		disableObservables: true,
+		sessionModuleFactories: []runtimemodule.SessionFactorySpec{
+			{
+				ID:      "close-tracked",
+				Enabled: true,
+				New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+					return &testSessionModule{id: "close-tracked", closeCount: &closed}, nil
+				},
+			},
+			{
+				ID:      "tracked-session-start",
+				Enabled: true,
+				New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+					return &trackedSessionStartPolicy{tracker: tracker}, nil
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	oldID := a.Session.ID
+	a.logLevel = "invalid-for-rollback"
+
+	err = a.SwitchToNewPrimarySession()
+	if err == nil || !strings.Contains(err.Error(), "replacement blocked") || !strings.Contains(err.Error(), "invalid-for-rollback") {
+		t.Fatalf("session replacement error = %v, want policy rejection and observability rollback failure", err)
+	}
+	if got := a.Session.ID; got != oldID {
+		t.Fatalf("active session after rejected replacement = %q, want %q", got, oldID)
+	}
+	if closed != 1 {
+		t.Fatalf("closed Session Modules = %d, want rejected candidate closed once", closed)
 	}
 }
 
