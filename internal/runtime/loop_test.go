@@ -231,6 +231,20 @@ func (f hookRunnerFunc) Run(ctx context.Context, req hooks.Request) ([]hooks.Res
 	return f(ctx, req)
 }
 
+type runtimeToolPolicyModule struct {
+	id    runtimemodule.ID
+	apply func(runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error)
+}
+
+func (m *runtimeToolPolicyModule) ID() runtimemodule.ID { return m.id }
+
+func (m *runtimeToolPolicyModule) ApplyTool(_ context.Context, request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+	if m.apply == nil {
+		return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+	}
+	return m.apply(request)
+}
+
 func (r *fakeHookRunner) Run(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 	r.requests = append(r.requests, req)
 	if err := r.errors[req.EventName]; err != nil {
@@ -3937,6 +3951,86 @@ func TestTurn_PostToolUseExitTwoAddsCorrectiveContext(t *testing.T) {
 	}
 }
 
+func TestTurn_PostToolUseRetainsSuccessfulContextBeforeRequiredFailure(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "audit", Input: map[string]any{"path": "x"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "audit",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return "tool output", nil
+		},
+	})
+	installHookRunner(t, eng, hookRunnerFunc(func(_ context.Context, request hooks.Request) ([]hooks.Result, error) {
+		if request.EventName != hooks.EventPostToolUse {
+			return nil, nil
+		}
+		return []hooks.Result{{
+			Hook:      hooks.CommandHook{Name: "context-hook", Events: []hooks.EventName{hooks.EventPostToolUse}},
+			EventName: hooks.EventPostToolUse,
+			ToolName:  request.ToolName,
+			ExitCode:  0,
+			Stdout:    "earlier successful context",
+		}}, errors.New("required post hook failed")
+	}))
+
+	if _, err := eng.Turn(context.Background(), "run audit"); err != nil {
+		t.Fatal(err)
+	}
+	result := eng.Session.History[2].Blocks[0]
+	if !result.IsError || !strings.Contains(result.Content, "tool output") || !strings.Contains(result.Content, "earlier successful context") || !strings.Contains(result.Content, "required post hook failed") {
+		t.Fatalf("tool result = %+v", result)
+	}
+}
+
+func TestTurn_PostExecutionPolicyDenyBecomesToolErrorAndStopsLaterPolicies(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "audit", Input: map[string]any{}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	handlerRan := false
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "audit",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			handlerRan = true
+			return "sensitive result", nil
+		},
+	})
+	var laterAfterCalls int
+	installRuntimeTestModules(t, eng,
+		&runtimeToolPolicyModule{id: "deny-after", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+			if request.Stage == runtimemodule.ToolPolicyAfterExecution {
+				return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyDeny, Reason: "result cannot be released"}, nil
+			}
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+		}},
+		&runtimeToolPolicyModule{id: "later", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+			if request.Stage == runtimemodule.ToolPolicyAfterExecution {
+				laterAfterCalls++
+			}
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+		}},
+	)
+
+	if _, err := eng.Turn(context.Background(), "run audit"); err != nil {
+		t.Fatal(err)
+	}
+	result := eng.Session.History[2].Blocks[0]
+	if !handlerRan || laterAfterCalls != 0 {
+		t.Fatalf("handler ran = %t, later after calls = %d", handlerRan, laterAfterCalls)
+	}
+	if !result.IsError || !strings.Contains(result.Content, "sensitive result") || !strings.Contains(result.Content, "result cannot be released") {
+		t.Fatalf("tool result = %+v", result)
+	}
+}
+
 func TestTurn_StopHookBlockContinuesWithPrompt(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
@@ -6582,6 +6676,49 @@ func TestTurn_FailureLedgerRecordsUnresolvedBlockingToolFailureWithoutContinuati
 	}
 	if atomic.LoadInt32(&failureGateHooks) != 0 {
 		t.Fatalf("unresolved-failure-gate should not emit hook events")
+	}
+}
+
+func TestTurn_FailureLedgerUsesBeforePolicyTransformedInput(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "check_1", ToolName: "check_ready", Input: map[string]any{"path": "provider.txt"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	var handlerPath string
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "check_ready",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(_ context.Context, input map[string]any) (string, error) {
+			handlerPath, _ = input["path"].(string)
+			return "artifact is not ready", errors.New("check failed")
+		},
+	})
+	installRuntimeTestModules(t, eng, &runtimeToolPolicyModule{id: "transform-input", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+		if request.Stage == runtimemodule.ToolPolicyBeforeExecution {
+			return runtimemodule.ToolPolicyDecision{
+				Action: runtimemodule.ToolPolicyTransform,
+				Input:  map[string]any{"path": "effective.txt"},
+			}, nil
+		}
+		return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+	}})
+
+	var recorded ToolFailureRecordedPayload
+	bus.Subscribe("tool.failure.recorded", func(event events.Event) {
+		recorded, _ = event.Payload.(ToolFailureRecordedPayload)
+	})
+	if _, err := eng.Turn(context.Background(), "finish the artifact"); err != nil {
+		t.Fatal(err)
+	}
+	if handlerPath != "effective.txt" {
+		t.Fatalf("handler path = %q", handlerPath)
+	}
+	wantPath := filepath.Join(eng.WorkDir, "effective.txt")
+	if !reflect.DeepEqual(recorded.RelatedPaths, []string{wantPath}) {
+		t.Fatalf("related paths = %#v, want %#v", recorded.RelatedPaths, []string{wantPath})
 	}
 }
 

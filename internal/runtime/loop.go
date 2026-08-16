@@ -1057,7 +1057,7 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, polic
 	if appendErr := e.currentSession().Append(projectedToolResultMsg); appendErr != nil {
 		return fmt.Errorf("session append tool result: %w", appendErr)
 	}
-	e.recordToolFailureBatch(turnID, recorded.toolCalls, toolResults)
+	e.recordToolFailureBatch(turnID, toolResults)
 	if emitErr := e.emitProjectionApplied(turnID, projection); emitErr != nil {
 		return fmt.Errorf("commit tool result projection: %w", emitErr)
 	}
@@ -1073,6 +1073,7 @@ func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, last
 }
 
 type toolCallResult struct {
+	Call             llm.Block
 	Block            llm.Block
 	Observation      tools.Observation
 	EventObservation tools.Observation
@@ -1196,16 +1197,16 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 		Input:    call.Input,
 		Observer: e.policyObserver(turnID),
 	}, e.policySets()...)
+	call.Input = prePolicy.Input
 	if err != nil {
 		if runtimemodule.IsPolicyCheckpointError(err) {
 			return toolCallResult{FatalError: err}
 		}
-		return e.policyToolErrorResult(call, err)
+		return e.policyToolErrorResult(call, err, prePolicy.Context)
 	}
 	if prePolicy.Denied {
-		return e.policyToolErrorResult(call, fmt.Errorf("tool policy denied %q%s", call.ToolName, policyReasonSuffix(prePolicy.Reason)))
+		return e.policyToolErrorResult(call, fmt.Errorf("tool policy denied %q%s", call.ToolName, policyReasonSuffix(prePolicy.Reason)), prePolicy.Context)
 	}
-	call.Input = prePolicy.Input
 
 	toolCtx := tools.WithToolCallEvents(ctx, tools.ToolCallEvents{
 		Name:      call.ToolName,
@@ -1254,6 +1255,9 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 		Observer: e.policyObserver(turnID),
 	}, e.policySets()...)
 	postErr = cancellation.NormalizeError(postErr)
+	if postErr == nil && postPolicy.Denied {
+		postErr = fmt.Errorf("tool policy denied %q after execution%s", call.ToolName, policyReasonSuffix(postPolicy.Reason))
+	}
 	var fatalErr error
 	if postErr != nil {
 		if runtimemodule.IsPolicyCheckpointError(postErr) {
@@ -1283,7 +1287,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 	}
 	observation := toolObservationForResult(call, block, info, toolErr)
 	return toolCallResult{
-		Block: block, Observation: observation, EventObservation: observation,
+		Call: call, Block: block, Observation: observation, EventObservation: observation,
 		Info: info, FatalError: fatalErr,
 	}
 }
@@ -1380,7 +1384,7 @@ func (e *Engine) emitToolFinished(
 	return e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: payload})
 }
 
-func (e *Engine) policyToolErrorResult(call llm.Block, err error) toolCallResult {
+func (e *Engine) policyToolErrorResult(call llm.Block, err error, contexts []runtimemodule.PolicyContext) toolCallResult {
 	err = cancellation.NormalizeError(err)
 	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
 	block := llm.Block{
@@ -1390,8 +1394,9 @@ func (e *Engine) policyToolErrorResult(call llm.Block, err error) toolCallResult
 		Content:   publicErr,
 		IsError:   true,
 	}
+	appendToolPolicyContext(&block, contexts)
 	observation := toolObservationForResult(call, block, tools.CallInfo{}, err)
-	return toolCallResult{Block: block, Observation: observation, EventObservation: observation}
+	return toolCallResult{Call: call, Block: block, Observation: observation, EventObservation: observation}
 }
 
 func (e *Engine) effectiveMaxPendingInputs() int {

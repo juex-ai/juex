@@ -273,6 +273,35 @@ func TestToolPolicyErrorIsAttributedAndDenyStopsLaterPolicies(t *testing.T) {
 	}
 }
 
+func TestToolPoliciesPreserveValidContextOnPolicyError(t *testing.T) {
+	first := mustPolicySet(t, &policyTestModule{
+		id: "first-context",
+		toolDecision: ToolPolicyDecision{
+			Action:  ToolPolicyAllow,
+			Context: []PolicyContext{{Label: "First context:\n", Text: "keep first"}},
+		},
+	})
+	failing := mustPolicySet(t, &policyTestModule{
+		id: "partial-context",
+		toolDecision: ToolPolicyDecision{
+			Action:  ToolPolicyAllow,
+			Context: []PolicyContext{{Label: "Second context:\n", Text: "keep second"}},
+		},
+		toolErr: errors.New("later required check failed"),
+	})
+	evaluation, err := ApplyToolPolicies(context.Background(), ToolPolicyRequest{Stage: ToolPolicyAfterExecution}, first, failing)
+	if err == nil || !strings.Contains(err.Error(), "later required check failed") {
+		t.Fatalf("tool policy error = %v", err)
+	}
+	want := []PolicyContext{
+		{Label: "First context:\n", Text: "keep first"},
+		{Label: "Second context:\n", Text: "keep second"},
+	}
+	if !reflect.DeepEqual(evaluation.Context, want) {
+		t.Fatalf("tool policy context = %#v, want %#v", evaluation.Context, want)
+	}
+}
+
 func TestPolicyObserverAttributionDoesNotLeakAcrossModules(t *testing.T) {
 	observer := &recordingPolicyObserver{}
 	set := mustPolicySet(t,

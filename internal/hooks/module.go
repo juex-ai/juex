@@ -93,18 +93,17 @@ func (m *Module) ApplyTool(ctx context.Context, request runtimemodule.ToolPolicy
 			hookRequest.ToolResult = request.Result.Content
 		}
 	})
-	if err != nil {
-		return runtimemodule.ToolPolicyDecision{}, err
+	decision := runtimemodule.ToolPolicyDecision{
+		Action:  runtimemodule.ToolPolicyAllow,
+		Context: toolContexts(results, request.Stage == runtimemodule.ToolPolicyAfterExecution),
 	}
 	if request.Stage == runtimemodule.ToolPolicyBeforeExecution {
 		if denied, reason := blocked(results); denied {
-			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyDeny, Reason: reason}, nil
+			decision.Action = runtimemodule.ToolPolicyDeny
+			decision.Reason = reason
 		}
 	}
-	return runtimemodule.ToolPolicyDecision{
-		Action:  runtimemodule.ToolPolicyAllow,
-		Context: toolContexts(results, request.Stage == runtimemodule.ToolPolicyAfterExecution),
-	}, nil
+	return decision, err
 }
 
 func (m *Module) EvaluateFinish(ctx context.Context, request runtimemodule.FinishRequest) (runtimemodule.FinishDecision, error) {

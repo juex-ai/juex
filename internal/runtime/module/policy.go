@@ -317,12 +317,12 @@ func ApplyToolPolicies(ctx context.Context, request ToolPolicyRequest, sets ...*
 		request.Input = evaluation.Input
 		request.Result = evaluation.Result
 		current, err := set.applyToolPolicies(ctx, request)
-		if err != nil {
-			return ToolPolicyEvaluation{}, err
-		}
 		evaluation.Input = current.Input
 		evaluation.Result = current.Result
 		evaluation.Context = append(evaluation.Context, current.Context...)
+		if err != nil {
+			return evaluation, err
+		}
 		if current.Denied {
 			evaluation.Denied = true
 			evaluation.Reason = current.Reason
@@ -348,13 +348,13 @@ func (s *Set) applyToolPolicies(ctx context.Context, request ToolPolicyRequest) 
 		request.Result = evaluation.Result
 		request.Observer = ownedPolicyObserver{owner: registered.id, next: observer}
 		decision, err := registered.module.(ToolPolicy).ApplyTool(nonNilContext(ctx), request)
-		if err != nil {
-			return ToolPolicyEvaluation{}, fmt.Errorf("runtime module %q tool policy: %w", registered.id, err)
-		}
-		if err := validatePolicyContext(decision.Context); err != nil {
-			return ToolPolicyEvaluation{}, fmt.Errorf("runtime module %q tool policy: %w", registered.id, err)
+		if validationErr := validatePolicyContext(decision.Context); validationErr != nil {
+			return evaluation, fmt.Errorf("runtime module %q tool policy: %w", registered.id, validationErr)
 		}
 		evaluation.Context = append(evaluation.Context, decision.Context...)
+		if err != nil {
+			return evaluation, fmt.Errorf("runtime module %q tool policy: %w", registered.id, err)
+		}
 		switch decision.Action {
 		case "", ToolPolicyAllow:
 		case ToolPolicyTransform:

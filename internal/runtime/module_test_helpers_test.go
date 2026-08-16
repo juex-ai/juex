@@ -27,18 +27,33 @@ func installHookRunner(t *testing.T, engine *Engine, runner hooks.PolicyRunner) 
 		base.EventsPath = filepath.Join(engine.Session.Dir, "events.jsonl")
 	}
 	mod := hooks.NewModule(runner, hooks.ModuleOptions{BaseRequest: base})
-	set, err := runtimemodule.BuildRuntimeSet(context.Background(), []runtimemodule.RuntimeFactorySpec{{
-		ID:      hooks.ModuleID,
-		Enabled: true,
-		New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-			return mod, nil
-		},
-	}}, runtimemodule.RuntimeContext{WorkDir: engine.WorkDir}, runtimemodule.ToolContext{})
+	installRuntimeTestModules(t, engine, mod)
+}
+
+func installRuntimeTestModules(t *testing.T, engine *Engine, modules ...runtimemodule.Module) {
+	t.Helper()
+	if engine == nil {
+		t.Fatal("runtime modules require an engine")
+	}
+	runtimeContext := runtimemodule.RuntimeContext{WorkDir: engine.WorkDir}
+	specs := make([]runtimemodule.RuntimeFactorySpec, 0, len(modules))
+	for _, module := range modules {
+		module := module
+		specs = append(specs, runtimemodule.RuntimeFactorySpec{
+			ID:      module.ID(),
+			Enabled: true,
+			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				return module, nil
+			},
+		})
+	}
+	set, err := runtimemodule.BuildRuntimeSet(context.Background(), specs, runtimeContext, runtimemodule.ToolContext{Runtime: runtimeContext})
 	if err != nil {
 		t.Fatal(err)
 	}
 	engine.RuntimeModules = set
-	engine.RuntimeContext = runtimemodule.RuntimeContext{WorkDir: engine.WorkDir}
+	engine.RuntimeContext = runtimeContext
+	t.Cleanup(func() { _ = set.CloseRuntime(context.Background()) })
 }
 
 func (e *Engine) RunSessionStartHooks(ctx context.Context) error {

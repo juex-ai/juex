@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -66,16 +65,12 @@ func newToolFailureLedger(workDir string) *toolFailureLedger {
 	}
 }
 
-func (e *Engine) recordToolFailureBatch(turnID string, calls []llm.Block, results []toolCallResult) {
+func (e *Engine) recordToolFailureBatch(turnID string, results []toolCallResult) {
 	if e == nil || e.toolFailures == nil {
 		return
 	}
-	for i, result := range results {
-		var call llm.Block
-		if i < len(calls) {
-			call = calls[i]
-		}
-		obs := toolFailureObservationFromToolResult(call, result)
+	for _, result := range results {
+		obs := toolFailureObservationFromToolResult(result)
 		if result.Block.IsError {
 			payload := e.toolFailures.recordFailure(obs)
 			_ = e.emit(events.Event{Type: "tool.failure.recorded", TurnID: turnID, Payload: payload})
@@ -91,12 +86,12 @@ func (e *Engine) recordToolFailureBatch(turnID string, calls []llm.Block, result
 	}
 }
 
-func toolFailureObservationFromToolResult(call llm.Block, result toolCallResult) toolFailureObservation {
+func toolFailureObservationFromToolResult(result toolCallResult) toolFailureObservation {
 	block := result.Block
 	obs := result.Observation.WithRuntimeContext(
-		firstNonEmptyString(block.ToolName, call.ToolName),
-		firstNonEmptyString(block.ToolUseID, call.ToolUseID),
-		call.Input,
+		firstNonEmptyString(block.ToolName, result.Call.ToolName),
+		firstNonEmptyString(block.ToolUseID, result.Call.ToolUseID),
+		result.Call.Input,
 		block.Content,
 		nil,
 	)
