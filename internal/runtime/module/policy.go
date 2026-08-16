@@ -157,6 +157,13 @@ type ToolPolicy interface {
 	ApplyTool(context.Context, ToolPolicyRequest) (ToolPolicyDecision, error)
 }
 
+// LiveToolOutputPolicy is an optional static promise that a ToolPolicy never
+// transforms or withholds the raw result after execution. Unknown policies are
+// treated conservatively because a live delta cannot be retracted later.
+type LiveToolOutputPolicy interface {
+	AllowsLiveToolOutput() bool
+}
+
 type FinishRequest struct {
 	Runtime    RuntimeContext
 	Session    *SessionContext

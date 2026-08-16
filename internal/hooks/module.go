@@ -38,6 +38,10 @@ func NewModule(runner PolicyRunner, opts ModuleOptions) *Module {
 
 func (*Module) ID() runtimemodule.ID { return ModuleID }
 
+// PostToolUse Hooks can add context or report an error, but they never replace
+// or hide the raw Tool result, so existing live output remains safe to expose.
+func (*Module) AllowsLiveToolOutput() bool { return true }
+
 func (m *Module) ApplySessionStart(ctx context.Context, request runtimemodule.SessionStartRequest) (runtimemodule.SessionStartDecision, error) {
 	results, err := m.run(ctx, EventSessionStart, request.Observer, func(*Request) {})
 	if err != nil {

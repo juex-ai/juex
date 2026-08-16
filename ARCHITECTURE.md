@@ -995,7 +995,11 @@ subscribers may render them provisionally; the following durable
 authoritative and replaces the matching provisional content. Terminal Tool
 Events include the exact Provider-visible Tool Result block and its result-message id under
 `payload.outcome`, while preview, error, and structured result fields remain
-diagnostic projections. The `internal/toolevents`
+diagnostic projections. Because live deltas cannot be retracted, the runtime
+suppresses `tool.output_delta` whenever any active Tool Policy does not
+statically promise that it leaves raw Tool output visible; the Hooks adapter
+makes that promise because PostToolUse only adds context or errors and never
+transforms the result. The `internal/toolevents`
 constructor fixes `tool.output_delta` as transient, while persistence
 boundaries reject every event carrying the transient property.
 `llm.responded` includes the assistant message's ordered `blocks` plus summary

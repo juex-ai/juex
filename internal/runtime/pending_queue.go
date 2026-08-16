@@ -497,15 +497,12 @@ func (q *PendingInputQueue) orderedReplayableLocked() []PendingInputRecord {
 		out = append(out, q.records[id])
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			left := q.acceptanceOrder[out[i].ID]
-			right := q.acceptanceOrder[out[j].ID]
-			if left != right {
-				return left < right
-			}
-			return out[i].ID < out[j].ID
+		left := q.acceptanceOrder[out[i].ID]
+		right := q.acceptanceOrder[out[j].ID]
+		if left != right {
+			return left < right
 		}
-		return out[i].CreatedAt.Before(out[j].CreatedAt)
+		return out[i].ID < out[j].ID
 	})
 	return out
 }

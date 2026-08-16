@@ -34,6 +34,12 @@ type policyTestModule struct {
 	releaseFinish chan struct{}
 }
 
+type liveOutputPolicyTestModule struct {
+	*policyTestModule
+}
+
+func (*liveOutputPolicyTestModule) AllowsLiveToolOutput() bool { return true }
+
 func (m *policyTestModule) ID() ID { return m.id }
 
 func (m *policyTestModule) ApplyTurnInput(_ context.Context, request TurnInputRequest) (TurnInputDecision, error) {
@@ -138,6 +144,23 @@ func TestPolicyRequestsCannotMutateInputsWithoutTypedDecision(t *testing.T) {
 	}
 	if got := input["nested"].(map[string]any)["value"]; got != "original" {
 		t.Fatalf("tool policy mutation leaked into caller: %v", got)
+	}
+}
+
+func TestAllowsLiveToolOutputRequiresStaticPromiseFromEveryPolicy(t *testing.T) {
+	if !AllowsLiveToolOutput(nil) {
+		t.Fatal("empty policy sets should allow live Tool output")
+	}
+	unknown := mustPolicySet(t, &policyTestModule{id: "unknown"})
+	if AllowsLiveToolOutput(unknown) {
+		t.Fatal("unknown Tool Policy should suppress irreversible live output")
+	}
+	safe := mustPolicySet(t, &liveOutputPolicyTestModule{policyTestModule: &policyTestModule{id: "safe"}})
+	if !AllowsLiveToolOutput(safe) {
+		t.Fatal("statically safe Tool Policy should retain live output")
+	}
+	if AllowsLiveToolOutput(safe, unknown) {
+		t.Fatal("every Tool Policy must promise live-output safety")
 	}
 }
 

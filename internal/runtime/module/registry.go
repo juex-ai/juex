@@ -343,6 +343,28 @@ func (s *Set) ToolCatalog() ToolCatalog {
 	return ToolCatalog{entries: s.toolCatalog.Entries()}
 }
 
+func AllowsLiveToolOutput(sets ...*Set) bool {
+	for _, set := range sets {
+		if set == nil {
+			continue
+		}
+		set.mu.RLock()
+		allowed := true
+		for _, registered := range set.toolPolicies {
+			policy, ok := registered.module.(LiveToolOutputPolicy)
+			if !ok || !policy.AllowsLiveToolOutput() {
+				allowed = false
+				break
+			}
+		}
+		set.mu.RUnlock()
+		if !allowed {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Set) Context(ctx context.Context, request ContextRequest) ([]ContextSection, error) {
 	if s == nil {
 		return nil, nil
