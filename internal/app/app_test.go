@@ -1293,6 +1293,7 @@ func TestApp_NewAndReplacementRunSessionStartHooks(t *testing.T) {
 		},
 		Provider: &stubProvider{replies: []llm.Response{}},
 		WorkDir:  dir,
+		Debug:    true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1322,6 +1323,20 @@ func TestApp_NewAndReplacementRunSessionStartHooks(t *testing.T) {
 	body = string(data)
 	if !strings.Contains(body, `"type":"hook.completed"`) || !strings.Contains(body, `"event_name":"SessionStart"`) {
 		t.Fatalf("replacement events missing SessionStart hook:\n%s", body)
+	}
+	oldDebug, err := os.ReadFile(filepath.Join(oldSessionDir, "logs", "debug.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newDebug, err := os.ReadFile(filepath.Join(a.Session.Dir, "logs", "debug.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(oldDebug), "event=hook.completed"); got != 1 {
+		t.Fatalf("old session completed hook logs = %d, want only its initial SessionStart", got)
+	}
+	if got := strings.Count(string(newDebug), "event=hook.completed"); got != 1 {
+		t.Fatalf("replacement session completed hook logs = %d, want its SessionStart", got)
 	}
 }
 

@@ -812,16 +812,26 @@ func (a *App) replaceSession(ctx context.Context, sess *session.Session, sessLoc
 	if a.eventSink != nil {
 		a.eventSink.SetJournal(sess)
 	}
+	oldLock := a.sessionLock
+	oldSession := a.sessionResource
+	observabilityErr := a.detachObservability()
+	observabilityErr = errors.Join(observabilityErr, a.attachObservability(sess))
 	rollbackReplacement := func(cause error) error {
+		var rollbackErr error
+		if err := a.detachObservability(); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore observability: detach replacement: %w", err))
+		}
 		if a.eventSink != nil {
 			a.eventSink.SetJournal(oldRuntime.Session)
 		}
-		var rollbackErr error
 		if a.Engine != nil {
-			rollbackErr = a.Engine.ReplaceSessionRuntimeBundle(oldRuntime.Session, runtime.SessionRuntimeReplacement{
+			rollbackErr = errors.Join(rollbackErr, a.Engine.ReplaceSessionRuntimeBundle(oldRuntime.Session, runtime.SessionRuntimeReplacement{
 				Modules: oldRuntime.Modules,
 				Tools:   oldRuntime.Tools,
-			})
+			}))
+		}
+		if err := a.attachObservability(oldSession); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore observability: attach previous session: %w", err))
 		}
 		a.sessionMu.Unlock()
 		if rollbackErr != nil {
@@ -837,9 +847,6 @@ func (a *App) replaceSession(ctx context.Context, sess *session.Session, sessLoc
 	if err := ctx.Err(); err != nil {
 		return rollbackReplacement(err)
 	}
-	_ = a.detachObservability()
-	oldLock := a.sessionLock
-	oldSession := a.sessionResource
 
 	a.Session = sess
 	a.sessionLock = sessLock
@@ -858,10 +865,10 @@ func (a *App) replaceSession(ctx context.Context, sess *session.Session, sessLoc
 			fmt.Fprintf(a.stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", err)
 		}
 	}
-	if err := a.attachObservability(sess); err != nil {
-		// Session switching happens after startup. Surface recorder failures as
-		// a runtime event so callers still receive a usable session.
-		_ = a.Bus.Emit(events.Event{Type: "turn.errored", Payload: runtime.TurnErroredPayload{Error: err.Error()}})
+	if observabilityErr != nil {
+		// Recorder failures do not reject an otherwise committed replacement.
+		// Surface them through the canonical runtime event stream instead.
+		_ = a.Bus.Emit(events.Event{Type: "turn.errored", Payload: runtime.TurnErroredPayload{Error: observabilityErr.Error()}})
 	}
 	a.sessionMu.Unlock()
 

@@ -388,6 +388,7 @@ func TestSwitchToNewPrimarySessionStartPolicyRejectsReplacement(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = a.Close() })
 	oldID := a.Session.ID
+	oldDir := a.Session.Dir
 
 	err = a.SwitchToNewPrimarySession()
 	if err == nil || !strings.Contains(err.Error(), `runtime module "tracked-session-start" session start rejected: replacement blocked`) {
@@ -406,6 +407,20 @@ func TestSwitchToNewPrimarySessionStartPolicyRejectsReplacement(t *testing.T) {
 	}
 	if history.Active == nil || history.Active.ID != oldID || len(history.Sessions) != 1 {
 		t.Fatalf("history after rejected replacement = %+v, want only active %q", history, oldID)
+	}
+	if err := a.Bus.Emit(events.Event{
+		Type:          "test.observability-restored",
+		SchemaVersion: 1,
+		ReplayPolicy:  events.ReplayIgnorable,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(oldDir, "logs", "juex.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "event=test.observability-restored") {
+		t.Fatalf("previous session observability was not restored:\n%s", data)
 	}
 }
 
