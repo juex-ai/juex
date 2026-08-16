@@ -569,6 +569,7 @@ func New(opts Options) (*App, error) {
 	if a.sideSessions != nil {
 		a.cleanup = append(a.cleanup, a.sideSessions.WaitClose)
 	}
+	var notificationGate *mcpNotificationGate
 	if opts.MCPManager != nil {
 		a.mcp = buildMCPStatus(nil, opts.MCPManager.ToolCounts(), opts.MCPManager.StartupErrors())
 	} else if len(mcpConfigs) > 0 {
@@ -579,9 +580,10 @@ func New(opts Options) (*App, error) {
 		}
 		if sess.Kind == session.KindPrimary {
 			connectOpts.EnableClaudeChannel = true
-			connectOpts.OnNotification = func(n mcp.Notification) {
+			notificationGate = newMCPNotificationGate(func(n mcp.Notification) {
 				_ = a.HandleMCPNotification(a.ctx, n)
-			}
+			})
+			connectOpts.OnNotification = notificationGate.Enqueue
 		}
 		mgr, err := mcp.NewManagerLayeredSoft(context.Background(), mcpConfigs, connectOpts)
 		if err != nil {
@@ -669,6 +671,9 @@ func New(opts Options) (*App, error) {
 		_ = obsv.StartAll(appCtx)
 	}
 	appContextTransferred = true
+	if notificationGate != nil {
+		notificationGate.Activate()
+	}
 	return a, nil
 }
 

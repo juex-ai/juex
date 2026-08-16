@@ -111,6 +111,26 @@ func (p *bareScriptProvider) Complete(ctx context.Context, sys string, hist []ll
 	return p.steps[idx], nil
 }
 
+type startupNotificationProvider struct {
+	calls     int
+	system    string
+	history   []llm.Message
+	toolNames []string
+}
+
+func (*startupNotificationProvider) Name() string { return "startup-notification" }
+
+func (p *startupNotificationProvider) Complete(_ context.Context, system string, history []llm.Message, specs []llm.ToolSpec) (llm.Response, error) {
+	p.calls++
+	p.system = system
+	p.history = append([]llm.Message(nil), history...)
+	p.toolNames = make([]string, 0, len(specs))
+	for _, spec := range specs {
+		p.toolNames = append(p.toolNames, spec.Name)
+	}
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "startup notification handled"), StopReason: llm.StopEndTurn}, nil
+}
+
 func keys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -1179,6 +1199,60 @@ func installE2EMCPModule(ctx context.Context, cfg mcp.Config, registry *tools.Re
 	return manager, nil
 }
 
+func TestAppBuffersStartupMCPNotificationUntilModulePublication(t *testing.T) {
+	workDir := t.TempDir()
+	agentsDir := filepath.Join(workDir, ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mcpConfig := mcp.Config{MCPServers: map[string]mcp.ServerSpec{
+		"local": {
+			Command: os.Args[0],
+			Env: map[string]string{
+				"JUEX_E2E_MCP":                "1",
+				"JUEX_E2E_MCP_NOTIFY_STARTUP": "1",
+			},
+		},
+	}}
+	configJSON, err := json.Marshal(mcpConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "mcp.json"), configJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &startupNotificationProvider{}
+	a, err := app.New(app.Options{
+		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: workDir},
+		Provider: provider,
+		WorkDir:  workDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := a.CloseAndWait(); err != nil {
+			t.Errorf("close app: %v", err)
+		}
+	})
+
+	if provider.calls != 1 {
+		t.Fatalf("provider calls = %d, want startup notification turn", provider.calls)
+	}
+	if !strings.Contains(provider.system, "Operating Context") {
+		t.Fatalf("startup notification prompt missing Module context:\n%s", provider.system)
+	}
+	for _, want := range []string{"read", "get_goal", "update_notes", "mcp__local__echo"} {
+		if !slices.Contains(provider.toolNames, want) {
+			t.Fatalf("startup notification tools missing %q: %v", want, provider.toolNames)
+		}
+	}
+	if len(provider.history) != 1 || provider.history[0].Kind != llm.MessageKindMCPEvent {
+		t.Fatalf("startup notification history = %+v", provider.history)
+	}
+}
+
 func TestMain(m *testing.M) {
 	if os.Getenv("JUEX_E2E_MCP") == "1" {
 		runFakeMCP()
@@ -1226,6 +1300,7 @@ func runFakeMCP() {
 	enc := json.NewEncoder(os.Stdout)
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	startupNotified := false
 	for scanner.Scan() {
 		var req map[string]any
 		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
@@ -1247,6 +1322,17 @@ func runFakeMCP() {
 				},
 			})
 		case "tools/list":
+			if os.Getenv("JUEX_E2E_MCP_NOTIFY_STARTUP") == "1" && !startupNotified {
+				startupNotified = true
+				enc.Encode(map[string]any{
+					"jsonrpc": "2.0",
+					"method":  "notifications/claude/channel",
+					"params": map[string]any{
+						"content": "startup notification",
+						"meta":    map[string]any{"event_type": "message", "topic": "startup"},
+					},
+				})
+			}
 			enc.Encode(map[string]any{
 				"jsonrpc": "2.0", "id": idVal,
 				"result": map[string]any{
