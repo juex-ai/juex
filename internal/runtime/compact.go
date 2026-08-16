@@ -72,7 +72,11 @@ func (e *Engine) maybeCompact(ctx context.Context, turnID, systemPrompt string, 
 		return nil
 	}
 
-	projected := e.activeContextLocked(incoming).Messages
+	active, err := e.activeContextLockedWithHookContextError(ctx, e.pendingHookRuntimeContextSnapshot(), incoming)
+	if err != nil {
+		return fmt.Errorf("runtime: build compaction context: %w", err)
+	}
+	projected := active.Messages
 	estimated := e.estimateContextTokens(systemPrompt, tools, projected)
 	if estimated < policy.TriggerTokens {
 		return nil
@@ -91,7 +95,7 @@ func (e *Engine) maybeCompact(ctx context.Context, turnID, systemPrompt string, 
 		return err
 	}
 
-	_, err := e.compactLocked(ctx, turnID, systemPrompt, tools, "auto", true, "", 0)
+	_, err = e.compactLocked(ctx, turnID, systemPrompt, tools, "auto", true, "", 0)
 	if err != nil {
 		e.autoCompactFailures++
 		return err
@@ -162,7 +166,12 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
 	}
-	tokensBefore := e.estimateContextTokens(systemPrompt, tools, e.activeContextLocked().Messages)
+	active, err := e.activeContextLockedWithHookContextError(ctx, e.pendingHookRuntimeContextSnapshot())
+	if err != nil {
+		compactErr := newCompactionError(ctx, fmt.Errorf("runtime: build compaction context: %w", err))
+		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)
+	}
+	tokensBefore := e.estimateContextTokens(systemPrompt, tools, active.Messages)
 	if err := e.emit(events.Event{Type: "context.compact.started", TurnID: turnID, Payload: ContextCompactStartedPayload{
 		Reason:           reason,
 		Auto:             auto,

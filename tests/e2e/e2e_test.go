@@ -190,15 +190,11 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	// Connect MCP server (re-execs this test binary as a fake JSON-RPC server)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	mcpClients, err := mcp.RegisterAll(ctx, mcpConfig, reg)
+	mcpManager, err := installE2EMCPModule(ctx, mcpConfig, reg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		for _, c := range mcpClients {
-			c.Close()
-		}
-	}()
+	defer mcpManager.Close()
 
 	// -- Build runtime --
 	bus := events.NewBus()
@@ -209,14 +205,16 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	defer sess.Close()
 	sess.SubscribeBus(bus)
 
-	pb := &prompt.Builder{
-		GlobalAgentsMDPath:  filepath.Join(homeAgents, "AGENTS.md"),
-		AgentsMDDirs:        []string{root, projectAgents},
-		ModulePromptContext: e2eSkillModulePromptContext(t, skillLoader, root),
-		WorkDir:             root,
-		Shell:               e2ePromptShellProfile(),
-		Now:                 func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
-	}
+	pb := e2ePromptBuilder(
+		t,
+		filepath.Join(homeAgents, "AGENTS.md"),
+		[]string{root, projectAgents},
+		root,
+		e2ePromptShellProfile(),
+		func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
+		sess,
+		skillsmodule.NewWithLoader(skillLoader, root, sandbox.LegacyDefaultPolicy()),
+	)
 
 	// -- Script the model --
 	// Step 1: parallel calls to read AGENTS.md, write a new file, ping MCP.
@@ -418,10 +416,9 @@ func TestEndToEnd_ToolFailureLedgerRecordsAndStalesWithoutContinuation(t *testin
 		Tools:    reg,
 		Bus:      bus,
 		Session:  sess,
-		Prompt: &prompt.Builder{
-			AgentsMDDirs: []string{root},
-			Now:          func() time.Time { return time.Date(2026, 6, 14, 9, 0, 0, 0, time.UTC) },
-		},
+		Prompt: e2ePromptBuilder(t, "", []string{root}, root, prompt.ShellProfile{}, func() time.Time {
+			return time.Date(2026, 6, 14, 9, 0, 0, 0, time.UTC)
+		}, sess),
 	}
 
 	out, err := eng.Turn(context.Background(), "make the artifact ready")
@@ -523,10 +520,9 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 		Tools:    reg,
 		Bus:      bus,
 		Session:  sess,
-		Prompt: &prompt.Builder{
-			AgentsMDDirs: []string{work},
-			Now:          func() time.Time { return time.Date(2026, 6, 29, 10, 0, 0, 0, time.UTC) },
-		},
+		Prompt: e2ePromptBuilder(t, "", []string{work}, work, prompt.ShellProfile{}, func() time.Time {
+			return time.Date(2026, 6, 29, 10, 0, 0, 0, time.UTC)
+		}, sess),
 	}
 
 	out, err := eng.Turn(context.Background(), "apply the patch")
@@ -597,10 +593,9 @@ func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
 		Tools:    reg,
 		Bus:      bus,
 		Session:  sess,
-		Prompt: &prompt.Builder{
-			AgentsMDDirs: []string{work},
-			Now:          func() time.Time { return time.Date(2026, 6, 29, 11, 0, 0, 0, time.UTC) },
-		},
+		Prompt: e2ePromptBuilder(t, "", []string{work}, work, prompt.ShellProfile{}, func() time.Time {
+			return time.Date(2026, 6, 29, 11, 0, 0, 0, time.UTC)
+		}, sess),
 	}
 
 	out, err := eng.Turn(context.Background(), "write a long report")
@@ -931,15 +926,11 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	mcpClients, err := mcp.RegisterAll(ctx, mcpConfig, reg)
+	mcpManager, err := installE2EMCPModule(ctx, mcpConfig, reg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		for _, c := range mcpClients {
-			c.Close()
-		}
-	}()
+	defer mcpManager.Close()
 
 	bus := events.NewBus()
 	sess, err := session.New(filepath.Join(root, ".juex", "sessions"))
@@ -949,14 +940,16 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 	defer sess.Close()
 	sess.SubscribeBus(bus)
 
-	pb := &prompt.Builder{
-		GlobalAgentsMDPath:  filepath.Join(homeAgents, "AGENTS.md"),
-		AgentsMDDirs:        []string{root, projectAgents},
-		ModulePromptContext: e2eSkillModulePromptContext(t, skillLoader, root),
-		WorkDir:             root,
-		Shell:               e2ePromptShellProfile(),
-		Now:                 func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
-	}
+	pb := e2ePromptBuilder(
+		t,
+		filepath.Join(homeAgents, "AGENTS.md"),
+		[]string{root, projectAgents},
+		root,
+		e2ePromptShellProfile(),
+		func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
+		sess,
+		skillsmodule.NewWithLoader(skillLoader, root, sandbox.LegacyDefaultPolicy()),
+	)
 
 	prov := &scriptProvider{
 		t: t,
@@ -1078,32 +1071,104 @@ func readLines(t *testing.T, path string) []string {
 	return out
 }
 
-// ---- Fake MCP server (re-exec) ----
-
-func e2eSkillModulePromptContext(t *testing.T, loader *skills.Loader, workDir string) func() ([]runtimemodule.PromptSection, error) {
+func e2ePromptBuilder(
+	t *testing.T,
+	globalAgentsMDPath string,
+	agentsMDDirs []string,
+	workDir string,
+	shell prompt.ShellProfile,
+	now func() time.Time,
+	sess *session.Session,
+	runtimeModules ...runtimemodule.Module,
+) *prompt.Builder {
 	t.Helper()
 	runtimeContext := runtimemodule.RuntimeContext{WorkDir: workDir}
-	skillModule := skillsmodule.NewWithLoader(loader, workDir, sandbox.LegacyDefaultPolicy())
-	set, err := runtimemodule.BuildRuntimeSet(t.Context(), []runtimemodule.RuntimeFactorySpec{{
-		ID:      skillsmodule.ModuleID,
-		Enabled: true,
-		New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-			return skillModule, nil
-		},
-	}}, runtimeContext, runtimemodule.ToolContext{Runtime: runtimeContext})
+	runtimeModules = append([]runtimemodule.Module{&prompt.GuidanceModule{
+		GlobalAgentsMDPath: globalAgentsMDPath,
+		AgentsMDDirs:       agentsMDDirs,
+	}}, runtimeModules...)
+	runtimeSpecs := make([]runtimemodule.RuntimeFactorySpec, 0, len(runtimeModules))
+	for _, mod := range runtimeModules {
+		moduleValue := mod
+		runtimeSpecs = append(runtimeSpecs, runtimemodule.RuntimeFactorySpec{
+			ID:      moduleValue.ID(),
+			Enabled: true,
+			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				return moduleValue, nil
+			},
+		})
+	}
+	runtimeSet, err := runtimemodule.BuildRuntimeSet(
+		t.Context(),
+		runtimeSpecs,
+		runtimeContext,
+		runtimemodule.ToolContext{Runtime: runtimeContext},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := set.StartRuntime(t.Context(), runtimeContext); err != nil {
+	if err := runtimeSet.StartRuntime(t.Context(), runtimeContext); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = set.CloseRuntime(context.Background()) })
-	return func() ([]runtimemodule.PromptSection, error) {
-		return set.Context(context.Background(), runtimemodule.ContextRequest{
+	t.Cleanup(func() { _ = runtimeSet.CloseRuntime(context.Background()) })
+
+	sessionContext := runtimemodule.SessionContext{}
+	if sess != nil {
+		sessionContext = runtimemodule.SessionContext{
+			ID:            sess.ID,
+			Dir:           sess.Dir,
+			ScratchpadDir: sess.ScratchpadDir(),
+		}
+	}
+	sessionModule := &prompt.SessionContextModule{WorkDir: workDir, Shell: shell, Now: now}
+	sessionSet, err := runtimemodule.BuildSessionSet(
+		t.Context(),
+		[]runtimemodule.SessionFactorySpec{{
+			ID:      sessionModule.ID(),
+			Enabled: true,
+			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+				return sessionModule, nil
+			},
+		}},
+		sessionContext,
+		runtimemodule.ToolContext{Runtime: runtimeContext, Session: &sessionContext},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sessionSet.StartSession(t.Context(), sessionContext); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sessionSet.CloseSession(context.Background()) })
+
+	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+		return runtimemodule.CollectContext(context.Background(), runtimemodule.ContextRequest{
 			Purpose: runtimemodule.ContextPurposeProviderIteration,
 			Runtime: runtimeContext,
-		})
+			Session: &sessionContext,
+		}, runtimeSet, sessionSet)
+	}}
+}
+
+// ---- Fake MCP server (re-exec) ----
+
+func installE2EMCPModule(ctx context.Context, cfg mcp.Config, registry *tools.Registry) (*mcp.Manager, error) {
+	manager, err := mcp.NewManagerStrict(ctx, cfg, mcp.ConnectOptions{})
+	if err != nil {
+		return nil, err
 	}
+	provided, err := mcp.NewModule(manager).Tools(ctx, runtimemodule.ToolContext{})
+	if err != nil {
+		_ = manager.Close()
+		return nil, err
+	}
+	for _, tool := range provided {
+		if err := registry.Register(tool); err != nil {
+			_ = manager.Close()
+			return nil, err
+		}
+	}
+	return manager, nil
 }
 
 func TestMain(m *testing.M) {

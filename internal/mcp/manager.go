@@ -7,8 +7,64 @@ import (
 	"sort"
 	"sync"
 
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
+
+const ModuleID runtimemodule.ID = "mcp"
+
+type Module struct {
+	manager     *Manager
+	descriptors map[string][]ToolDescriptor
+}
+
+func NewModule(manager *Manager) *Module { return &Module{manager: manager} }
+
+// NewDescriptorModule builds the same Tool catalog without live clients. It is
+// used by read-only status projections that already have discovered descriptors.
+func NewDescriptorModule(descriptors map[string][]ToolDescriptor) *Module {
+	cloned := make(map[string][]ToolDescriptor, len(descriptors))
+	for serverName, tools := range descriptors {
+		cloned[serverName] = append([]ToolDescriptor(nil), tools...)
+	}
+	return &Module{descriptors: cloned}
+}
+
+func (*Module) ID() runtimemodule.ID { return ModuleID }
+
+func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+	if m == nil || m.manager == nil {
+		if m == nil {
+			return nil, nil
+		}
+		return descriptorTools(m.descriptors)
+	}
+	return m.manager.Tools()
+}
+
+func descriptorTools(descriptors map[string][]ToolDescriptor) ([]tools.Tool, error) {
+	serverNames := make([]string, 0, len(descriptors))
+	for serverName := range descriptors {
+		serverNames = append(serverNames, serverName)
+	}
+	sort.Strings(serverNames)
+	var provided []tools.Tool
+	for _, serverName := range serverNames {
+		if err := validateToolNameServer(serverName); err != nil {
+			return nil, &ServerError{Server: serverName, Op: "tool name", Err: err}
+		}
+		for _, descriptor := range descriptors[serverName] {
+			if err := validateToolNameParts(serverName, descriptor.Name); err != nil {
+				return nil, &ServerError{Server: serverName, Op: "tool name", Err: err}
+			}
+			toolName := ToolName(serverName, descriptor.Name)
+			provided = append(provided, toolDefinition(toolName, descriptor).Bind(func(context.Context, map[string]any) (string, error) {
+				return "", fmt.Errorf("mcp: descriptor-only tool %q is not executable", toolName)
+			}))
+		}
+	}
+	return provided, nil
+}
 
 // Manager owns process-scoped MCP client connections and can expose their
 // tools through any number of per-session tool registries.
@@ -45,6 +101,51 @@ func MergeConfigs(configs []Config) Config {
 
 func NewManagerLayeredSoft(ctx context.Context, configs []Config, opts ConnectOptions) (*Manager, error) {
 	return newManager(ctx, MergeConfigs(configs), opts), nil
+}
+
+// NewManagerStrict connects every configured server and discovers all Tools.
+// Any failure closes already connected servers and returns no Manager.
+func NewManagerStrict(ctx context.Context, cfg Config, opts ConnectOptions) (*Manager, error) {
+	mgr := &Manager{
+		clients: map[string]*Client{},
+		tools:   map[string][]ToolDescriptor{},
+		errors:  map[string]error{},
+		specs:   map[string]ServerSpec{},
+		sources: map[string]string{},
+	}
+	serverNames := make([]string, 0, len(cfg.MCPServers))
+	for name := range cfg.MCPServers {
+		serverNames = append(serverNames, name)
+	}
+	sort.Strings(serverNames)
+	for _, name := range serverNames {
+		spec := cfg.MCPServers[name]
+		mgr.sources[name] = cfg.Sources[name]
+		mgr.specs[name] = spec
+		if err := validateToolNameServer(name); err != nil {
+			_ = mgr.Close()
+			return nil, &ServerError{Server: name, Op: "tool name", Err: err}
+		}
+		client, err := ConnectWithOptions(ctx, name, spec, opts)
+		if err != nil {
+			_ = mgr.Close()
+			return nil, &ServerError{Server: name, Op: "connect", Err: err}
+		}
+		mgr.clients[name] = client
+		descriptors, err := client.ListTools(ctx)
+		if err != nil {
+			_ = mgr.Close()
+			return nil, &ServerError{Server: name, Op: "tools/list", Err: err}
+		}
+		for _, descriptor := range descriptors {
+			if err := validateToolNameParts(name, descriptor.Name); err != nil {
+				_ = mgr.Close()
+				return nil, &ServerError{Server: name, Op: "tool name", Err: err}
+			}
+		}
+		mgr.tools[name] = append([]ToolDescriptor(nil), descriptors...)
+	}
+	return mgr, nil
 }
 
 func newManager(ctx context.Context, cfg Config, opts ConnectOptions) *Manager {
@@ -103,32 +204,37 @@ func newManager(ctx context.Context, cfg Config, opts ConnectOptions) *Manager {
 	return mgr
 }
 
-func (m *Manager) RegisterTools(reg *tools.Registry) error {
-	if m == nil || reg == nil {
-		return nil
+func (m *Manager) Tools() ([]tools.Tool, error) {
+	if m == nil {
+		return nil, nil
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if m.closed {
-		return fmt.Errorf("mcp: manager closed")
+		return nil, fmt.Errorf("mcp: manager closed")
 	}
-	for serverName, descs := range m.tools {
+	var provided []tools.Tool
+	serverNames := make([]string, 0, len(m.tools))
+	for serverName := range m.tools {
+		serverNames = append(serverNames, serverName)
+	}
+	sort.Strings(serverNames)
+	for _, serverName := range serverNames {
+		descs := m.tools[serverName]
 		client := m.clients[serverName]
 		for _, d := range descs {
 			if err := validateToolNameParts(serverName, d.Name); err != nil {
-				return &ServerError{Server: serverName, Op: "tool name", Err: err}
+				return nil, &ServerError{Server: serverName, Op: "tool name", Err: err}
 			}
 			toolName := ToolName(serverName, d.Name)
 			cli := client
 			descName := d.Name
-			if err := reg.Register(toolDefinition(toolName, d).Bind(func(ctx context.Context, in map[string]any) (string, error) {
+			provided = append(provided, toolDefinition(toolName, d).Bind(func(ctx context.Context, in map[string]any) (string, error) {
 				return cli.CallTool(ctx, descName, in)
-			})); err != nil {
-				return &ServerError{Server: serverName, Op: "register tool " + toolName, Err: err}
-			}
+			}))
 		}
 	}
-	return nil
+	return provided, nil
 }
 
 func (m *Manager) ToolCounts() map[string]int {

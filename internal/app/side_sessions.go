@@ -17,9 +17,22 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/tools"
 )
+
+const sideSessionModuleID runtimemodule.ID = "side-sessions"
+
+type sideSessionModule struct {
+	manager *sideSessionManager
+}
+
+func (*sideSessionModule) ID() runtimemodule.ID { return sideSessionModuleID }
+
+func (m *sideSessionModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+	return sideSessionTools(m.manager), nil
+}
 
 const (
 	SideSessionToolCreate    = "side_session_create"
@@ -1071,11 +1084,18 @@ func (m *sideSessionManager) nextTurnID() string {
 	return fmt.Sprintf("side-%s-%d", event.ID, m.turnSeq.Add(1))
 }
 
-func RegisterSideSessionTools(reg *tools.Registry, manager *sideSessionManager) error {
-	if reg == nil || manager == nil {
-		return nil
-	}
+func sideSessionTools(manager *sideSessionManager) []tools.Tool {
 	definitions := SideSessionToolDefinitions()
+	unavailable := func(context.Context, map[string]any) (string, error) {
+		return "", errors.New("side session manager is unavailable")
+	}
+	if manager == nil {
+		tools := make([]tools.Tool, 0, len(definitions))
+		for _, definition := range definitions {
+			tools = append(tools, definition.Bind(unavailable))
+		}
+		return tools
+	}
 	handlers := []tools.Handler{
 		func(ctx context.Context, input map[string]any) (string, error) {
 			subscribe := true
@@ -1125,12 +1145,11 @@ func RegisterSideSessionTools(reg *tools.Registry, manager *sideSessionManager) 
 			return marshalSideToolResult(map[string]any{"session_id": id, "stopped": true}, nil)
 		},
 	}
+	provided := make([]tools.Tool, 0, len(definitions))
 	for i, definition := range definitions {
-		if err := reg.Register(definition.Bind(handlers[i])); err != nil {
-			return err
-		}
+		provided = append(provided, definition.Bind(handlers[i]))
 	}
-	return nil
+	return provided
 }
 
 func SideSessionToolDefinitions() []tools.ToolDefinition {

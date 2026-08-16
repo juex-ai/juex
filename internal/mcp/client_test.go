@@ -17,11 +17,44 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/environment"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
+func installManagerModuleTools(t *testing.T, registry *tools.Registry, manager *Manager) {
+	t.Helper()
+	provided, err := NewModule(manager).Tools(context.Background(), runtimemodule.ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range provided {
+		if err := registry.Register(tool); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func connectAndInstallManager(ctx context.Context, cfg Config, registry *tools.Registry) (*Manager, error) {
+	manager, err := NewManagerStrict(ctx, cfg, ConnectOptions{})
+	if err != nil {
+		return nil, err
+	}
+	provided, err := NewModule(manager).Tools(ctx, runtimemodule.ToolContext{})
+	if err != nil {
+		_ = manager.Close()
+		return nil, err
+	}
+	for _, tool := range provided {
+		if err := registry.Register(tool); err != nil {
+			_ = manager.Close()
+			return nil, err
+		}
+	}
+	return manager, nil
+}
+
 // The test binary doubles as a fake MCP server when JUEX_FAKE_MCP=1.
-// Connect()/RegisterAll() launch this same binary as the subprocess.
+// Connect()/NewManagerStrict() launch this same binary as the subprocess.
 func TestMain(m *testing.M) {
 	if os.Getenv("JUEX_FAKE_MCP") == "1" {
 		runFakeServer()
@@ -489,7 +522,7 @@ func TestMCPClient_ClaudeChannelNotification(t *testing.T) {
 	}
 }
 
-func TestMCPRegisterAllToolsUsesMCPGroup(t *testing.T) {
+func TestMCPModuleToolsUsesMCPGroup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -499,15 +532,11 @@ func TestMCPRegisterAllToolsUsesMCPGroup(t *testing.T) {
 		},
 	}
 	r := tools.NewRegistry()
-	clients, err := RegisterAll(ctx, cfg, r)
+	manager, err := connectAndInstallManager(ctx, cfg, r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		for _, c := range clients {
-			c.Close()
-		}
-	}()
+	defer manager.Close()
 
 	tool, ok := r.Get("mcp__fake__echo")
 	if !ok {
@@ -525,7 +554,7 @@ func TestMCPRegisterAllToolsUsesMCPGroup(t *testing.T) {
 	}
 }
 
-func TestMCPRegisterAll_OmitsArgumentsForStrictNoArgTool(t *testing.T) {
+func TestMCPModule_OmitsArgumentsForStrictNoArgTool(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -542,15 +571,11 @@ func TestMCPRegisterAll_OmitsArgumentsForStrictNoArgTool(t *testing.T) {
 		},
 	}
 	r := tools.NewRegistry()
-	clients, err := RegisterAll(ctx, cfg, r)
+	manager, err := connectAndInstallManager(ctx, cfg, r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		for _, c := range clients {
-			c.Close()
-		}
-	}()
+	defer manager.Close()
 
 	out, _, err := r.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{})
 	if err != nil {
@@ -569,7 +594,7 @@ func TestMCPRegisterAll_OmitsArgumentsForStrictNoArgTool(t *testing.T) {
 	}
 }
 
-func TestMCPRegisterAll_ClosesPartialClientsOnRegisterError(t *testing.T) {
+func TestMCPModule_ClosesManagerOnCatalogInstallError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -587,12 +612,12 @@ func TestMCPRegisterAll_ClosesPartialClientsOnRegisterError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	clients, err := RegisterAll(ctx, cfg, r)
+	manager, err := connectAndInstallManager(ctx, cfg, r)
 	if err == nil {
 		t.Fatal("expected duplicate tool registration error")
 	}
-	if len(clients) != 0 {
-		t.Fatalf("expected no partial clients returned after error, got %d", len(clients))
+	if manager != nil {
+		t.Fatalf("expected no partial manager returned after error: %#v", manager)
 	}
 }
 
@@ -1044,7 +1069,7 @@ func TestMCPClient_WorkDirExpansionReachesServer(t *testing.T) {
 }
 
 func TestMCPClient_ToolWithNoSchemaGetsDefault(t *testing.T) {
-	// When the server advertises a tool without inputSchema, RegisterAll
+	// When the server advertises a tool without inputSchema, the MCP Module
 	// supplies a generic {"type":"object"} placeholder.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1058,15 +1083,11 @@ func TestMCPClient_ToolWithNoSchemaGetsDefault(t *testing.T) {
 		},
 	}}
 	r := tools.NewRegistry()
-	clients, err := RegisterAll(ctx, cfg, r)
+	manager, err := connectAndInstallManager(ctx, cfg, r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		for _, c := range clients {
-			c.Close()
-		}
-	}()
+	defer manager.Close()
 	tool, ok := r.Get("mcp__fake__noschema")
 	if !ok {
 		t.Fatalf("expected mcp__fake__noschema, have %+v", r.List())
@@ -1089,15 +1110,11 @@ func TestMCPClient_ToolSchemaNullsAreNormalized(t *testing.T) {
 		},
 	}}
 	r := tools.NewRegistry()
-	clients, err := RegisterAll(ctx, cfg, r)
+	manager, err := connectAndInstallManager(ctx, cfg, r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		for _, c := range clients {
-			c.Close()
-		}
-	}()
+	defer manager.Close()
 	tool, ok := r.Get("mcp__fake__nullschema")
 	if !ok {
 		t.Fatalf("expected mcp__fake__nullschema, have %+v", r.List())
@@ -1114,7 +1131,7 @@ func TestMCPClient_ToolSchemaNullsAreNormalized(t *testing.T) {
 	}
 }
 
-func TestMCPRegisterAll_MultipleServers(t *testing.T) {
+func TestMCPModule_MultipleServers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cfg := Config{MCPServers: map[string]ServerSpec{
@@ -1122,17 +1139,13 @@ func TestMCPRegisterAll_MultipleServers(t *testing.T) {
 		"b": {Command: os.Args[0], Env: map[string]string{"JUEX_FAKE_MCP": "1"}},
 	}}
 	r := tools.NewRegistry()
-	clients, err := RegisterAll(ctx, cfg, r)
+	manager, err := connectAndInstallManager(ctx, cfg, r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		for _, c := range clients {
-			c.Close()
-		}
-	}()
-	if len(clients) != 2 {
-		t.Fatalf("got %d clients, want 2", len(clients))
+	defer manager.Close()
+	if got := len(manager.ToolCounts()); got != 2 {
+		t.Fatalf("got %d connected servers, want 2", got)
 	}
 	for _, name := range []string{"mcp__a__echo", "mcp__b__echo"} {
 		if _, ok := r.Get(name); !ok {
@@ -1168,9 +1181,7 @@ func TestNewManagerLayeredSoftKeepsHealthyServersAndRecordsFailures(t *testing.T
 		t.Fatalf("startup errors = %+v", errs)
 	}
 	reg := tools.NewRegistry()
-	if err := mgr.RegisterTools(reg); err != nil {
-		t.Fatal(err)
-	}
+	installManagerModuleTools(t, reg, mgr)
 	if _, ok := reg.Get("mcp__alpha__echo"); !ok {
 		t.Fatalf("missing alpha tool, have %+v", reg.List())
 	}
@@ -1356,9 +1367,7 @@ func TestManagerRegisterTools_StrictNoArgToolRejectsPlaceholder(t *testing.T) {
 	}()
 
 	reg := tools.NewRegistry()
-	if err := mgr.RegisterTools(reg); err != nil {
-		t.Fatal(err)
-	}
+	installManagerModuleTools(t, reg, mgr)
 	out, _, err := reg.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -1424,9 +1433,7 @@ func TestNewManagerLayeredSoftProjectOverridesUser(t *testing.T) {
 		t.Fatalf("expected shared project server only, got counts %+v", counts)
 	}
 	r := tools.NewRegistry()
-	if err := mgr.RegisterTools(r); err != nil {
-		t.Fatal(err)
-	}
+	installManagerModuleTools(t, r, mgr)
 	tool, ok := r.Get("mcp__shared__envcheck")
 	if !ok {
 		t.Fatalf("expected mcp__shared__envcheck registered, have %v", r.List())
@@ -1461,9 +1468,7 @@ func TestNewManagerLayeredSoftDistinctServersAllRegister(t *testing.T) {
 		t.Fatalf("expected both layered servers registered, got counts %+v", counts)
 	}
 	r := tools.NewRegistry()
-	if err := mgr.RegisterTools(r); err != nil {
-		t.Fatal(err)
-	}
+	installManagerModuleTools(t, r, mgr)
 	for _, name := range []string{"mcp__a__echo", "mcp__b__echo"} {
 		if _, ok := r.Get(name); !ok {
 			t.Fatalf("missing tool %s, have %v", name, r.List())

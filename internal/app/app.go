@@ -132,6 +132,7 @@ type App struct {
 	mcp                    MCPStatus
 	obsv                   *observable.Manager
 	chunkedWrites          *tools.ChunkedWriteManager
+	shellSessions          *tools.ShellSessionManager
 	sideSessions           *sideSessionManager
 	sideFactory            sideSessionFactory
 	mcpManager             *mcp.Manager
@@ -227,7 +228,6 @@ func New(opts Options) (*App, error) {
 		cfg.AgentStateDir = cfg.AgentAddress.StateDir()
 	}
 	runtimePaths := cfg.RuntimePaths()
-	resourcePaths := cfg.ResourcePaths()
 	runtimeLimits := cfg.RuntimeLimits()
 	var agentRuntime AgentRuntimeResolution
 	if opts.AgentRuntime != nil {
@@ -318,6 +318,8 @@ func New(opts Options) (*App, error) {
 		if !appContextTransferred {
 			if runtimeModules.set != nil {
 				_ = runtimeModules.set.CloseRuntime(context.Background())
+			} else if runtimeModules.builtinTools != nil {
+				_ = runtimeModules.builtinTools.CloseRuntime(context.Background())
 			}
 			appCancel()
 		}
@@ -330,7 +332,7 @@ func New(opts Options) (*App, error) {
 	chunkedWrites := tools.NewChunkedWriteManager(runtimePaths.WorkDir, filePolicy)
 	runtimeEnvironment := agentRuntime.Environment()
 	sandboxRunner := sandbox.DefaultRunner{LookPath: cfg.LaunchEnvironmentSnapshot().LookPath}
-	runtimeModules, err = buildRuntimeModules(appCtx, cfg, resourceGraph, runtimePaths, runtimeEnvironment, sandboxRunner, chunkedWrites, toolTimeoutSeconds)
+	runtimeModules, err = prepareRuntimeModules(appCtx, cfg, resourceGraph, runtimePaths, runtimeEnvironment, sandboxRunner, chunkedWrites, toolTimeoutSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -360,29 +362,7 @@ func New(opts Options) (*App, error) {
 		_ = sess.Close()
 		return nil, err
 	}
-	sessionModules, err := buildSessionModules(startupCtx, opts.sessionModuleFactories, runtimeModules.runtimeContext, sess)
-	if err != nil {
-		_ = sessLock.Close()
-		_ = sess.Close()
-		return nil, err
-	}
-	if err := validateSessionModuleContext(startupCtx, runtimeModules.set, sessionModules, runtimeModules.runtimeContext, sess); err != nil {
-		_ = sessionModules.CloseSession(context.Background())
-		_ = sessLock.Close()
-		_ = sess.Close()
-		return nil, err
-	}
-	if err := runtimemodule.InstallToolCatalogs(reg, runtimeModules.set, sessionModules); err != nil {
-		_ = sessionModules.CloseSession(context.Background())
-		_ = sessLock.Close()
-		_ = sess.Close()
-		return nil, err
-	}
-	if err := sessionModules.StartSession(startupCtx, sessionModuleContext(sess)); err != nil {
-		_ = sessLock.Close()
-		_ = sess.Close()
-		return nil, err
-	}
+	var sessionModules *runtimemodule.Set
 	var eventSink *events.DurableSink
 	var eventUnsubscribe func()
 	var statusUnsubscribe func()
@@ -422,8 +402,6 @@ func New(opts Options) (*App, error) {
 	}
 	var eng *runtime.Engine
 	pb := &prompt.Builder{
-		GlobalAgentsMDPath: resourcePaths.GlobalAgentsMDPath,
-		AgentsMDDirs:       resourcePaths.AgentsMDDirs,
 		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
 			request := runtimemodule.ContextRequest{
 				Purpose: runtimemodule.ContextPurposeProviderIteration,
@@ -437,25 +415,6 @@ func New(opts Options) (*App, error) {
 				request.Session = &sessionContext
 			}
 			return runtimemodule.CollectContext(appCtx, request, runtimeModules.set, activeSessionModules)
-		},
-		ScratchpadDir: sess.ScratchpadDir(),
-		WorkDir:       runtimePaths.WorkDir,
-		Shell:         prompt.ShellProfileFromConfig(cfg.Shell),
-		RuntimeSections: func() []prompt.Section {
-			shellSessions := runtimeModules.builtinTools.ShellSessions()
-			if shellSessions == nil {
-				return nil
-			}
-			text := tools.FormatActiveShellSessionsPrompt(shellSessions.List(false))
-			if text == "" {
-				return nil
-			}
-			return []prompt.Section{{
-				Key:    "active_shell_sessions",
-				Label:  "Active Shell Sessions",
-				Source: "runtime",
-				Text:   text,
-			}}
 		},
 	}
 	hookRunner, err := hooks.NewRunnerWithOptions(resourceGraph.HooksConfig(), hooks.RunnerOptions{
@@ -507,14 +466,6 @@ func New(opts Options) (*App, error) {
 		Compaction:            runtimeLimits.Compaction,
 		ToolOutput:            runtimeLimits.ToolOutput,
 	}
-	if err := eng.ReplaceSessionRuntimeBundle(sess, runtime.SessionRuntimeReplacement{
-		Modules: sessionModules,
-		Tools:   reg,
-	}); err != nil {
-		closeSessionResources()
-		return nil, err
-	}
-
 	a := &App{
 		Engine:                 eng,
 		Status:                 status,
@@ -528,6 +479,7 @@ func New(opts Options) (*App, error) {
 		skillPrompt:            runtimeModules.skills.PromptReport(),
 		skillFiltered:          len(runtimeModules.skills.Filtered()),
 		chunkedWrites:          chunkedWrites,
+		shellSessions:          runtimeModules.builtinTools.ShellSessions(),
 		sessionLock:            sessLock,
 		sessionResource:        sess,
 		eventSink:              eventSink,
@@ -541,45 +493,18 @@ func New(opts Options) (*App, error) {
 		sideFactory:            opts.sideSessionFactory,
 		mcpManager:             opts.MCPManager,
 		agentRuntime:           agentRuntime,
-		runtimeModules:         runtimeModules.set,
 		runtimeModuleContext:   runtimeModules.runtimeContext,
 		sessionModuleFactories: append([]runtimemodule.SessionFactorySpec(nil), opts.sessionModuleFactories...),
-	}
-	if opts.sharedGoalState != nil || opts.sharedNotes != nil {
-		eng.ShareSessionState(opts.sharedGoalState, opts.sharedNotes)
-		eng.SkipGoalCompletionGate = true
 	}
 	statusUnsubscribe = eventSink.AddProjection(turnAdmissionStatusProjection{
 		status:       status,
 		completeTurn: a.CompleteAdmittedTurn,
 	})
 	a.statusUnsubscribe = statusUnsubscribe
-	if err := eng.RecoverTranscript("load"); err != nil {
-		_ = a.detachObservability()
-		closeSessionResources()
-		return nil, err
-	}
-	status.RecoverAfterRestart()
-	chunkedWrites.RestoreActiveFromHistory(sess.History)
-	if err := runtime.RegisterGoalTools(reg, eng); err != nil {
-		_ = a.detachObservability()
-		closeSessionResources()
-		return nil, err
-	}
-	if err := runtime.RegisterNotesTools(reg, eng); err != nil {
-		_ = a.detachObservability()
-		closeSessionResources()
-		return nil, err
-	}
 	if sess.Kind == session.KindPrimary && sess.Active && !opts.disableSideSessionTools {
 		a.sideSessions = newSideSessionManager(a)
 		eng.ShouldDeferGoalContinuation = a.sideSessions.shouldDeferGoalContinuation
 		eng.PendingInputsAdmitted = a.sideSessions.finishResultHandoffs
-		if err := RegisterSideSessionTools(reg, a.sideSessions); err != nil {
-			_ = a.detachObservability()
-			closeSessionResources()
-			return nil, err
-		}
 	}
 	if err := a.attachObservability(sess); err != nil {
 		closeSessionResources()
@@ -610,16 +535,6 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 	a.obsv = obsv
-	if obsv != nil {
-		if err := observable.RegisterTools(reg, obsv); err != nil {
-			if ownedObservables {
-				_ = obsv.Close()
-			}
-			_ = a.detachObservability()
-			closeSessionResources()
-			return nil, err
-		}
-	}
 	a.mcp = buildMCPStatus(mergedMCP.MCPServers, nil, nil)
 	if a.sideSessions != nil {
 		a.cleanup = append(a.cleanup, a.sideSessions.StartClose)
@@ -655,11 +570,6 @@ func New(opts Options) (*App, error) {
 		a.cleanup = append(a.cleanup, a.sideSessions.WaitClose)
 	}
 	if opts.MCPManager != nil {
-		if err := opts.MCPManager.RegisterTools(reg); err != nil {
-			_ = a.detachObservability()
-			closeSessionResources()
-			return nil, err
-		}
 		a.mcp = buildMCPStatus(nil, opts.MCPManager.ToolCounts(), opts.MCPManager.StartupErrors())
 	} else if len(mcpConfigs) > 0 {
 		connectOpts := mcp.ConnectOptions{
@@ -683,18 +593,70 @@ func New(opts Options) (*App, error) {
 		if !opts.SuppressMCPWarnings {
 			writeMCPStartupWarnings(stderr, startupErrors, runtimeEnvironment)
 		}
-		if err := mgr.RegisterTools(reg); err != nil {
-			if closeErr := mgr.Close(); closeErr != nil {
-				err = errors.Join(err, closeErr)
-			}
-			_ = a.detachObservability()
-			closeSessionResources()
-			return nil, err
-		}
 		a.mcp = buildMCPStatus(mergedMCP.MCPServers, mgr.ToolCounts(), startupErrors)
 		a.mcpManager = mgr
 		a.cleanup = append(a.cleanup, mgr.Close)
 	}
+	var extraRuntimeModules []runtimemodule.Module
+	if a.sideSessions != nil {
+		extraRuntimeModules = append(extraRuntimeModules, &sideSessionModule{manager: a.sideSessions})
+	}
+	if obsv != nil {
+		extraRuntimeModules = append(extraRuntimeModules, observable.NewModule(obsv))
+	}
+	if a.mcpManager != nil {
+		extraRuntimeModules = append(extraRuntimeModules, mcp.NewModule(a.mcpManager))
+	}
+	if err := runtimeModules.sealAndStart(startupCtx, extraRuntimeModules...); err != nil {
+		_ = a.Close()
+		return nil, err
+	}
+	a.runtimeModules = runtimeModules.set
+	eng.RuntimeModules = runtimeModules.set
+	sessionModules, err = buildSessionModules(
+		startupCtx,
+		opts.sessionModuleFactories,
+		runtimeModules.runtimeContext,
+		sess,
+		eng,
+		runtimePaths.WorkDir,
+		prompt.ShellProfileFromConfig(cfg.Shell),
+		runtimeModules.builtinTools.ShellSessions(),
+	)
+	if err != nil {
+		_ = a.Close()
+		return nil, err
+	}
+	if err := validateSessionModuleContext(startupCtx, runtimeModules.set, sessionModules, runtimeModules.runtimeContext, sess); err != nil {
+		_ = sessionModules.CloseSession(context.Background())
+		_ = a.Close()
+		return nil, err
+	}
+	reg, err = runtimemodule.BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: toolTimeoutSeconds}, runtimeModules.set, sessionModules)
+	if err != nil {
+		_ = sessionModules.CloseSession(context.Background())
+		_ = a.Close()
+		return nil, err
+	}
+	if err := sessionModules.StartSession(startupCtx, sessionModuleContext(sess)); err != nil {
+		_ = a.Close()
+		return nil, err
+	}
+	if err := eng.ReplaceSessionRuntimeBundle(sess, runtime.SessionRuntimeReplacement{Modules: sessionModules, Tools: reg}); err != nil {
+		_ = sessionModules.CloseSession(context.Background())
+		_ = a.Close()
+		return nil, err
+	}
+	if opts.sharedGoalState != nil || opts.sharedNotes != nil {
+		eng.ShareSessionState(opts.sharedGoalState, opts.sharedNotes)
+		eng.SkipGoalCompletionGate = true
+	}
+	if err := eng.RecoverTranscript("load"); err != nil {
+		_ = a.Close()
+		return nil, err
+	}
+	status.RecoverAfterRestart()
+	chunkedWrites.RestoreActiveFromHistory(sess.History)
 	if err := eng.RunSessionStartHooks(startupCtx); err != nil {
 		_ = a.Close()
 		return nil, err
@@ -786,28 +748,34 @@ func (a *App) SwitchToNewPrimarySessionContext(ctx context.Context) error {
 }
 
 func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) error {
-	nextModules, err := buildSessionModules(a.ctx, a.sessionModuleFactories, a.runtimeModuleContext, sess)
+	nextModules, err := buildSessionModules(
+		a.ctx,
+		a.sessionModuleFactories,
+		a.runtimeModuleContext,
+		sess,
+		a.Engine,
+		a.cfg.WorkDir,
+		prompt.ShellProfileFromConfig(a.cfg.Shell),
+		a.shellSessions,
+	)
 	if err != nil {
 		return err
 	}
 	if err := validateSessionModuleContext(a.ctx, a.runtimeModules, nextModules, a.runtimeModuleContext, sess); err != nil {
-		return err
+		return errors.Join(err, nextModules.CloseSession(context.Background()))
 	}
 	var nextTools *tools.Registry
 	var oldModules *runtimemodule.Set
 	if a.Engine != nil {
 		current := a.Engine.SessionRuntimeSnapshot()
 		oldModules = current.Modules
-		var oldModuleToolNames []string
-		if oldModules != nil {
-			oldModuleToolNames = oldModules.ToolCatalog().Names()
-		}
-		nextTools, err = a.Engine.Tools.CloneExcluding(oldModuleToolNames...)
-		if err == nil {
-			err = nextModules.ToolCatalog().Install(nextTools)
-		}
+		nextTools, err = runtimemodule.BuildToolRegistry(
+			tools.RegistryOptions{DefaultTimeoutSeconds: durationSeconds(a.cfg.RuntimeLimits().ToolTimeout)},
+			a.runtimeModules,
+			nextModules,
+		)
 		if err != nil {
-			return err
+			return errors.Join(err, nextModules.CloseSession(context.Background()))
 		}
 	}
 	if err := nextModules.StartSession(a.ctx, sessionModuleContext(sess)); err != nil {

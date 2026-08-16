@@ -13,6 +13,7 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/modules/builtintools"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/prompt"
@@ -119,6 +120,7 @@ type RuntimeToolGroupStatus struct {
 
 type RuntimeToolInfo struct {
 	Name        string
+	Module      string
 	Description string
 	Schema      map[string]any
 	Timeout     RuntimeToolTimeout
@@ -246,7 +248,7 @@ func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatu
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	toolsStatus, err := s.toolsStatus()
+	toolsStatus, err := s.toolsStatus(skillLoader)
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
@@ -331,16 +333,76 @@ func runtimeExtensionsStatus(graph RuntimeResourceGraph, skills RuntimeSkillsSta
 	return RuntimeExtensionsStatus{Count: len(items), Items: items}, nil
 }
 
-func (s RuntimeCatalogService) toolsStatus() (RuntimeToolsStatus, error) {
-	definitions := tools.DefaultBuiltinToolDefinitions(tools.BuiltinDefinitionOptions{
-		Shell: toolsShellProfile(s.cfg.Shell),
+func (s RuntimeCatalogService) toolsStatus(skillLoader *skills.Loader) (RuntimeToolsStatus, error) {
+	ctx := context.Background()
+	runtimeContext := runtimemodule.RuntimeContext{WorkDir: s.cfg.WorkDir}
+	builtin := builtintools.New(ctx, tools.BuiltinOptions{
+		WorkDir:            s.cfg.WorkDir,
+		Shell:              toolsShellProfile(s.cfg.Shell),
+		ToolTimeoutSeconds: durationSeconds(s.cfg.RuntimeLimits().ToolTimeout),
 	})
-	definitions = append(definitions, skillsmodule.ToolDefinitions()...)
-	definitions = append(definitions, juexruntime.GoalToolDefinitions()...)
-	definitions = append(definitions, juexruntime.NotesToolDefinitions()...)
-	definitions = append(definitions, SideSessionToolDefinitions()...)
-	definitions = append(definitions, observable.ToolDefinitions()...)
-	return runtimeToolsStatusFromDefinitions(definitions, durationSeconds(s.cfg.RuntimeLimits().ToolTimeout))
+	runtimeSet, err := runtimemodule.BuildRuntimeSet(ctx, []runtimemodule.RuntimeFactorySpec{
+		{ID: builtintools.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+			return builtin, nil
+		}},
+		{ID: skillsmodule.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+			return skillsmodule.NewWithLoader(skillLoader, s.cfg.WorkDir, s.cfg.SandboxPolicy()), nil
+		}},
+		{ID: sideSessionModuleID, Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+			return &sideSessionModule{}, nil
+		}},
+		{ID: observable.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+			return observable.NewModule(nil), nil
+		}},
+	}, runtimeContext, runtimemodule.ToolContext{Runtime: runtimeContext})
+	if err != nil {
+		_ = builtin.CloseRuntime(context.Background())
+		return RuntimeToolsStatus{}, err
+	}
+	if err := runtimeSet.StartRuntime(ctx, runtimeContext); err != nil {
+		return RuntimeToolsStatus{}, err
+	}
+	defer runtimeSet.CloseRuntime(context.Background())
+	sessionContext := runtimemodule.SessionContext{}
+	sessionSet, err := runtimemodule.BuildSessionSet(ctx, []runtimemodule.SessionFactorySpec{
+		{ID: juexruntime.GoalModuleID, Enabled: true, New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+			return juexruntime.NewGoalModule(nil), nil
+		}},
+		{ID: juexruntime.NotesModuleID, Enabled: true, New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+			return juexruntime.NewNotesModule(nil), nil
+		}},
+	}, sessionContext, runtimemodule.ToolContext{Runtime: runtimeContext, Session: &sessionContext})
+	if err != nil {
+		return RuntimeToolsStatus{}, err
+	}
+	if _, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{}, runtimeSet, sessionSet); err != nil {
+		return RuntimeToolsStatus{}, err
+	}
+	return runtimeToolsStatusFromCatalogs(durationSeconds(s.cfg.RuntimeLimits().ToolTimeout), runtimeSet.ToolCatalog(), sessionSet.ToolCatalog())
+}
+
+func runtimeToolsStatusFromCatalogs(defaultTimeoutSeconds int, catalogs ...runtimemodule.ToolCatalog) (RuntimeToolsStatus, error) {
+	var entries []runtimemodule.ToolEntry
+	for _, catalog := range catalogs {
+		entries = append(entries, catalog.Entries()...)
+	}
+	definitions := make([]tools.ToolDefinition, 0, len(entries))
+	owners := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		definition := entry.Tool.Definition()
+		definitions = append(definitions, definition)
+		owners[definition.Name] = string(entry.ModuleID)
+	}
+	status, err := runtimeToolsStatusFromDefinitions(definitions, defaultTimeoutSeconds)
+	if err != nil {
+		return RuntimeToolsStatus{}, err
+	}
+	for groupIndex := range status.Groups {
+		for toolIndex := range status.Groups[groupIndex].Tools {
+			status.Groups[groupIndex].Tools[toolIndex].Module = owners[status.Groups[groupIndex].Tools[toolIndex].Name]
+		}
+	}
+	return status, nil
 }
 
 func runtimeToolsStatusFromDefinitions(definitions []tools.ToolDefinition, defaultTimeoutSeconds int) (RuntimeToolsStatus, error) {
@@ -425,23 +487,45 @@ func hooksStatus(cfg hooks.Config) RuntimeHooksStatus {
 
 func (s RuntimeCatalogService) systemPromptStatus(skillLoader *skills.Loader, scratchpadDir string) (RuntimeSystemPromptStatus, error) {
 	skillModule := skillsmodule.NewWithLoader(skillLoader, s.cfg.WorkDir, s.cfg.SandboxPolicy())
-	moduleRegistry := runtimemodule.NewRegistry()
-	if err := moduleRegistry.Register(skillModule); err != nil {
+	runtimeContext := runtimemodule.RuntimeContext{WorkDir: s.cfg.WorkDir}
+	runtimeSet, err := runtimemodule.BuildRuntimeSet(context.Background(), []runtimemodule.RuntimeFactorySpec{
+		{
+			ID:      prompt.GuidanceModuleID,
+			Enabled: true,
+			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				return &prompt.GuidanceModule{GlobalAgentsMDPath: s.cfg.GlobalAgentsMDPath(), AgentsMDDirs: s.cfg.AgentsMDDirs()}, nil
+			},
+		},
+		{
+			ID:      skillsmodule.ModuleID,
+			Enabled: true,
+			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				return skillModule, nil
+			},
+		},
+	}, runtimeContext, runtimemodule.ToolContext{Runtime: runtimeContext})
+	if err != nil {
 		return RuntimeSystemPromptStatus{}, err
 	}
-	moduleSet, err := moduleRegistry.Seal(context.Background(), runtimemodule.ToolContext{})
+	sessionContext := runtimemodule.SessionContext{ScratchpadDir: scratchpadDir}
+	sessionSet, err := runtimemodule.BuildSessionSet(context.Background(), []runtimemodule.SessionFactorySpec{{
+		ID:      prompt.SessionContextModuleID,
+		Enabled: true,
+		New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+			return &prompt.SessionContextModule{WorkDir: s.cfg.WorkDir, Shell: prompt.ShellProfileFromConfig(s.cfg.Shell)}, nil
+		},
+	}}, sessionContext, runtimemodule.ToolContext{Runtime: runtimeContext, Session: &sessionContext})
 	if err != nil {
 		return RuntimeSystemPromptStatus{}, err
 	}
 	builder := &prompt.Builder{
-		GlobalAgentsMDPath: s.cfg.GlobalAgentsMDPath(),
-		AgentsMDDirs:       s.cfg.AgentsMDDirs(),
 		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
-			return moduleSet.Context(context.Background(), runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration})
+			return runtimemodule.CollectContext(context.Background(), runtimemodule.ContextRequest{
+				Purpose: runtimemodule.ContextPurposeProviderIteration,
+				Runtime: runtimeContext,
+				Session: &sessionContext,
+			}, runtimeSet, sessionSet)
 		},
-		ScratchpadDir: scratchpadDir,
-		WorkDir:       s.cfg.WorkDir,
-		Shell:         prompt.ShellProfileFromConfig(s.cfg.Shell),
 	}
 	sections, err := builder.SectionsWithError()
 	if err != nil {
@@ -627,13 +711,16 @@ func (s RuntimeCatalogService) mcpStatus(opts RuntimeStatusOptions, refs []mcpCo
 			return RuntimeMCPStatus{}, fmt.Errorf("mcp server %q display error: %w", server.Name, err)
 		}
 		status := "not_started"
-		projectedTools := runtimeMCPToolInfos(nil, defaultTimeoutSeconds)
+		projectedTools := []RuntimeToolInfo{}
 		if errText != "" {
 			status = "error"
 			connected = false
 		} else if connected {
 			status = "connected"
-			projectedTools = runtimeMCPToolInfos(descriptors, defaultTimeoutSeconds)
+			projectedTools, err = runtimeMCPToolInfos(server.Name, descriptors, defaultTimeoutSeconds)
+			if err != nil {
+				return RuntimeMCPStatus{}, err
+			}
 		}
 		info := RuntimeMCPServerStatus{
 			Name:      server.Name,
@@ -678,18 +765,35 @@ func runtimeMCPServersFromConnectionSpecs(specs map[string]mcp.RuntimeConnection
 	return servers
 }
 
-func runtimeMCPToolInfos(descriptors []mcp.ToolDescriptor, defaultTimeoutSeconds int) []RuntimeToolInfo {
+func runtimeMCPToolInfos(serverName string, descriptors []mcp.ToolDescriptor, defaultTimeoutSeconds int) ([]RuntimeToolInfo, error) {
+	module := mcp.NewDescriptorModule(map[string][]mcp.ToolDescriptor{serverName: descriptors})
+	set, err := runtimemodule.BuildRuntimeSet(context.Background(), []runtimemodule.RuntimeFactorySpec{{
+		ID:      mcp.ModuleID,
+		Enabled: true,
+		New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+			return module, nil
+		},
+	}}, runtimemodule.RuntimeContext{}, runtimemodule.ToolContext{})
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string]runtimemodule.ToolEntry, len(descriptors))
+	for _, entry := range set.ToolCatalog().Entries() {
+		byName[entry.Tool.Name] = entry
+	}
 	infos := make([]RuntimeToolInfo, 0, len(descriptors))
 	for _, descriptor := range descriptors {
-		infos = append(infos, runtimeToolInfoFromDefinition(tools.ToolDefinition{
-			Name:        descriptor.Name,
-			Group:       tools.ToolGroupMCP,
-			Description: descriptor.Description,
-			Schema:      descriptor.InputSchema,
-		}, defaultTimeoutSeconds))
+		entry, ok := byName[mcp.ToolName(serverName, descriptor.Name)]
+		if !ok {
+			return nil, fmt.Errorf("mcp server %q tool %q missing from Module catalog", serverName, descriptor.Name)
+		}
+		info := runtimeToolInfoFromDefinition(entry.Tool.Definition(), defaultTimeoutSeconds)
+		info.Name = descriptor.Name
+		info.Module = string(entry.ModuleID)
+		infos = append(infos, info)
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
-	return infos
+	return infos, nil
 }
 
 func (s RuntimeCatalogService) configuredMCPServers(refs []mcpConfigRef, runtimeEnvironment environment.Snapshot) ([]runtimeMCPServerConfig, error) {

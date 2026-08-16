@@ -191,32 +191,6 @@ func TestToolDefinitionBindsHandlersAndSpecsStayProviderFacing(t *testing.T) {
 	}
 }
 
-func TestRegistryCloneExcludingPreservesToolsAndDefaultTimeout(t *testing.T) {
-	registry := NewRegistryWithOptions(RegistryOptions{DefaultTimeoutSeconds: 17})
-	for _, name := range []string{"keep", "drop"} {
-		name := name
-		if err := registry.Register(Tool{
-			Name:    name,
-			Handler: func(context.Context, map[string]any) (string, error) { return name, nil },
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	cloned, err := registry.CloneExcluding("drop")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := cloned.Get("keep"); !ok {
-		t.Fatal("kept tool missing from clone")
-	}
-	if _, ok := cloned.Get("drop"); ok {
-		t.Fatal("excluded tool present in clone")
-	}
-	if got := cloned.TimeoutSecondsFor("keep"); got != 17 {
-		t.Fatalf("cloned timeout = %d, want 17", got)
-	}
-}
-
 func TestEffectiveToolTimeout(t *testing.T) {
 	bounded := EffectiveToolTimeout(ToolDefinition{}, 90)
 	if bounded.Mode != ToolTimeoutModeBounded || bounded.Seconds != 90 {

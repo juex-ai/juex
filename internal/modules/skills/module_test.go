@@ -67,6 +67,26 @@ func TestModuleContributesSkillToolsAndContext(t *testing.T) {
 	}
 }
 
+func TestModuleContributesContextOnlyForProviderIteration(t *testing.T) {
+	loader := skills.NewLoader(t.TempDir(), t.TempDir())
+	if err := loader.Load(); err != nil {
+		t.Fatal(err)
+	}
+	mod := NewWithLoader(loader, t.TempDir(), sandbox.Policy{})
+	for _, purpose := range []runtimemodule.ContextPurpose{
+		runtimemodule.ContextPurposeSessionStart,
+		runtimemodule.ContextPurposeTurnPreparation,
+	} {
+		sections, err := mod.Context(context.Background(), runtimemodule.ContextRequest{Purpose: purpose})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sections) != 0 {
+			t.Fatalf("Context(%q) = %#v, want no sections", purpose, sections)
+		}
+	}
+}
+
 func TestModulePreservesExtensionProvenance(t *testing.T) {
 	root := t.TempDir()
 	skillDir := filepath.Join(root, "memory")

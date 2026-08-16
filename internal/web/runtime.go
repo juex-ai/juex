@@ -87,6 +87,7 @@ type runtimeToolGroupInfo struct {
 
 type runtimeToolInfo struct {
 	Name        string             `json:"name"`
+	Module      string             `json:"module,omitempty"`
 	Description string             `json:"description"`
 	Schema      map[string]any     `json:"schema"`
 	Timeout     runtimeToolTimeout `json:"timeout"`
@@ -369,6 +370,7 @@ func runtimeToolInfosFromApp(tools []app.RuntimeToolInfo) []runtimeToolInfo {
 	for _, tool := range tools {
 		infos = append(infos, runtimeToolInfo{
 			Name:        tool.Name,
+			Module:      tool.Module,
 			Description: tool.Description,
 			Schema:      tool.Schema,
 			Timeout: runtimeToolTimeout{

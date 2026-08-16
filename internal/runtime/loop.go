@@ -40,6 +40,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
@@ -61,6 +62,7 @@ type Engine struct {
 	ModelCandidates   []ModelCandidate
 	ModelHealth       *llm.ModelHealth
 	Tools             *tools.Registry
+	RuntimeModules    *runtimemodule.Set
 	Bus               *events.Bus
 	// Session, Prompt, HookContext, PendingInputQueue, Notes, and GoalState
 	// are constructor/test compatibility fields. Concurrent production code
@@ -711,9 +713,13 @@ func (e *Engine) RecoverTranscript(reason string) error {
 	return e.repairTranscriptLocked("", reason)
 }
 
-func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared preparedTurnContext) (providerTurnRequest, error) {
+func (e *Engine) prepareProviderRequestLocked(ctx context.Context, turnID string, iter int, prepared preparedTurnContext) (providerTurnRequest, error) {
 	hookContext := e.pendingHookRuntimeContextSnapshot()
-	requestHistory := e.activeContextLockedWithHookContext(hookContext).Messages
+	active, err := e.activeContextLockedWithHookContextError(ctx, hookContext)
+	if err != nil {
+		return providerTurnRequest{}, fmt.Errorf("runtime: build provider context: %w", err)
+	}
+	requestHistory := active.Messages
 	return providerTurnRequest{
 		iter:        iter,
 		history:     requestHistory,
@@ -777,7 +783,12 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			return providerTurnResult{request: request}, err
 		}
 		base.hookContext = request.hookContext
-		base.history = e.activeContextLockedWithHookContext(base.hookContext).Messages
+		active, contextErr := e.activeContextLockedWithHookContextError(ctx, base.hookContext)
+		if contextErr != nil {
+			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			return providerTurnResult{request: base}, fmt.Errorf("runtime: build provider context: %w", contextErr)
+		}
+		base.history = active.Messages
 		if pending != nil {
 			e.emitModelFallback(turnID, *pending, candidate.Ref)
 		}
@@ -861,7 +872,11 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			probe:    selection.Ticket.Probe,
 		}
 		base.hookContext = e.pendingHookRuntimeContextSnapshot()
-		base.history = e.activeContextLockedWithHookContext(base.hookContext).Messages
+		active, contextErr = e.activeContextLockedWithHookContextError(ctx, base.hookContext)
+		if contextErr != nil {
+			return providerTurnResult{request: base}, fmt.Errorf("runtime: build provider context: %w", contextErr)
+		}
+		base.history = active.Messages
 	}
 }
 

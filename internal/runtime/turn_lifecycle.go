@@ -94,7 +94,7 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 		return fmt.Errorf("commit provider iteration phase: %w", err)
 	}
 
-	request, err := l.engine.prepareProviderRequestLocked(l.turnID, iter, l.prepared)
+	request, err := l.engine.prepareProviderRequestLocked(ctx, l.turnID, iter, l.prepared)
 	if err != nil {
 		return err
 	}

@@ -47,7 +47,13 @@ func (*leasedContextSessionModule) ID() ID { return "leased-context" }
 func (m *leasedContextSessionModule) Context(context.Context, ContextRequest) ([]ContextSection, error) {
 	close(m.contextEntered)
 	<-m.releaseContext
-	return []ContextSection{{Key: "leased", Text: "context"}}, nil
+	return []ContextSection{{
+		Key:        "leased",
+		Source:     "test",
+		Text:       "context",
+		Projection: ContextProjectionSystemPrompt,
+		Budget:     UnboundedContextBudget(),
+	}}, nil
 }
 
 func (*leasedContextSessionModule) StartSession(context.Context, SessionContext) error { return nil }

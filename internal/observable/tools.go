@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -17,6 +18,34 @@ const (
 	maxObservationToolLimit     = 100
 	observableGuidePointer      = `Guide available via skill_load("juex-observables").`
 )
+
+const ModuleID runtimemodule.ID = "observables"
+
+type Module struct {
+	manager *Manager
+}
+
+func NewModule(manager *Manager) *Module { return &Module{manager: manager} }
+
+func (*Module) ID() runtimemodule.ID { return ModuleID }
+
+func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+	if m == nil || m.manager == nil {
+		return unavailableObservableTools(), nil
+	}
+	return observableTools(m.manager), nil
+}
+
+func unavailableObservableTools() []tools.Tool {
+	definitions := ToolDefinitions()
+	provided := make([]tools.Tool, 0, len(definitions))
+	for _, definition := range definitions {
+		provided = append(provided, definition.Bind(func(context.Context, map[string]any) (string, error) {
+			return "", fmt.Errorf("observable manager is unavailable")
+		}))
+	}
+	return provided
+}
 
 func ToolDefinitions() []tools.ToolDefinition {
 	idSchema := map[string]any{
@@ -76,18 +105,6 @@ func ToolDefinitions() []tools.ToolDefinition {
 			},
 		},
 	}
-}
-
-func RegisterTools(reg *tools.Registry, manager *Manager) error {
-	if reg == nil || manager == nil {
-		return nil
-	}
-	for _, tool := range observableTools(manager) {
-		if err := reg.Register(tool); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func observableTools(manager *Manager) []tools.Tool {

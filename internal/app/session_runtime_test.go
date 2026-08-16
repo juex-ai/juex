@@ -174,9 +174,11 @@ func (*duplicateSessionContextModule) ID() runtimemodule.ID { return "duplicate-
 
 func (*duplicateSessionContextModule) Context(context.Context, runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
 	return []runtimemodule.ContextSection{{
-		Key:    "skills",
-		Source: "test",
-		Text:   "duplicate",
+		Key:        "skills",
+		Source:     "test",
+		Text:       "duplicate",
+		Projection: runtimemodule.ContextProjectionSystemPrompt,
+		Budget:     runtimemodule.UnboundedContextBudget(),
 	}}, nil
 }
 

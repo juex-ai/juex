@@ -6,15 +6,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/llm"
 )
-
-func notesContextMessage(text string) llm.Message {
-	message := llm.TextMessage(llm.RoleUser, text)
-	message.ID = "runtime-notes"
-	message.Kind = llm.MessageKindRuntimeContext
-	return message
-}
 
 func (e *Engine) notesStoreLocked() *NotesStore {
 	return e.currentNotesStore()

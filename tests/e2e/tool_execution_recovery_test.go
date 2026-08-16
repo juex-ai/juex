@@ -102,10 +102,9 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 		Tools:    registry,
 		Bus:      bus,
 		Session:  recovered,
-		Prompt: &prompt.Builder{
-			AgentsMDDirs: []string{root},
-			Now:          func() time.Time { return time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC) },
-		},
+		Prompt: e2ePromptBuilder(t, "", []string{root}, root, prompt.ShellProfile{}, func() time.Time {
+			return time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
+		}, recovered),
 		WorkDir:     root,
 		ArtifactDir: filepath.Join(root, "artifacts"),
 	}

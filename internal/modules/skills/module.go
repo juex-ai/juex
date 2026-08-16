@@ -108,19 +108,28 @@ func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool
 	}, nil
 }
 
-func (m *Module) Context(context.Context, runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
+func (m *Module) Context(_ context.Context, request runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
 	if m == nil || m.loader == nil {
 		return nil, fmt.Errorf("skills module: loader is required")
+	}
+	if request.Purpose != runtimemodule.ContextPurposeProviderIteration {
+		return nil, nil
 	}
 	text := m.loader.PromptSection()
 	if text == "" {
 		return nil, nil
 	}
+	budget := runtimemodule.UnboundedContextBudget()
+	if report := m.loader.PromptReport(); report.BudgetChars > 0 {
+		budget = runtimemodule.BoundedContextBudget(report.BudgetChars)
+	}
 	return []runtimemodule.ContextSection{{
-		Key:    "skills",
-		Label:  "Available Skills",
-		Source: "runtime",
-		Text:   text,
+		Key:        "skills",
+		Label:      "Available Skills",
+		Source:     "runtime",
+		Text:       text,
+		Projection: runtimemodule.ContextProjectionSystemPrompt,
+		Budget:     budget,
 	}}, nil
 }
 
