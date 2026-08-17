@@ -784,8 +784,10 @@ func (a *App) replaceSession(ctx context.Context, sess *session.Session, sessLoc
 	}
 	var nextTools *tools.Registry
 	var oldRuntime runtime.SessionRuntimeSnapshot
+	var oldRuntimeCheckpoint runtime.SessionRuntimeCheckpoint
 	if a.Engine != nil {
-		oldRuntime = a.Engine.SessionRuntimeSnapshot()
+		oldRuntimeCheckpoint = a.Engine.CaptureSessionRuntimeCheckpoint()
+		oldRuntime = oldRuntimeCheckpoint.Snapshot()
 		nextTools, err = runtimemodule.BuildToolRegistry(
 			tools.RegistryOptions{DefaultTimeoutSeconds: durationSeconds(a.cfg.RuntimeLimits().ToolTimeout)},
 			a.runtimeModules,
@@ -826,10 +828,7 @@ func (a *App) replaceSession(ctx context.Context, sess *session.Session, sessLoc
 			a.eventSink.SetJournal(oldRuntime.Session)
 		}
 		if a.Engine != nil {
-			err := a.Engine.ReplaceSessionRuntimeBundle(oldRuntime.Session, runtime.SessionRuntimeReplacement{
-				Modules: oldRuntime.Modules,
-				Tools:   oldRuntime.Tools,
-			})
+			err := a.Engine.RestoreSessionRuntimeCheckpoint(oldRuntimeCheckpoint)
 			if err != nil {
 				rollbackErr = errors.Join(rollbackErr, err)
 			} else {

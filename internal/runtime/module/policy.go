@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/provenance"
 )
 
 const (
@@ -80,6 +81,18 @@ func CheckpointPolicy(observer PolicyObserver, execution PolicyExecution) error 
 
 func IsPolicyCheckpointError(err error) bool {
 	var target *policyCheckpointError
+	return errors.As(err, &target)
+}
+
+type policyContextValidationError struct {
+	err error
+}
+
+func (e *policyContextValidationError) Error() string { return e.err.Error() }
+func (e *policyContextValidationError) Unwrap() error { return e.err }
+
+func IsPolicyContextValidationError(err error) bool {
+	var target *policyContextValidationError
 	return errors.As(err, &target)
 }
 
@@ -363,7 +376,11 @@ func applyToolPolicies(
 		current, err := set.applyToolPolicies(ctx, request, checkpoint)
 		evaluation.Input = current.Input
 		evaluation.Result = current.Result
-		evaluation.Context = append(evaluation.Context, current.Context...)
+		combinedContext := append(append([]PolicyContext(nil), evaluation.Context...), current.Context...)
+		if validationErr := validatePolicyContext(combinedContext); validationErr != nil {
+			return evaluation, fmt.Errorf("runtime modules tool policy context: %w", validationErr)
+		}
+		evaluation.Context = combinedContext
 		evaluation.ResultTransformed = evaluation.ResultTransformed || current.ResultTransformed
 		if err != nil {
 			return evaluation, err
@@ -397,10 +414,11 @@ func (s *Set) applyToolPolicies(
 		request.Result = evaluation.Result
 		request.Observer = ownedPolicyObserver{owner: registered.id, next: observer}
 		decision, err := registered.module.(ToolPolicy).ApplyTool(nonNilContext(ctx), request)
-		if validationErr := validatePolicyContext(decision.Context); validationErr != nil {
+		combinedContext := append(append([]PolicyContext(nil), evaluation.Context...), decision.Context...)
+		if validationErr := validatePolicyContext(combinedContext); validationErr != nil {
 			return evaluation, fmt.Errorf("runtime module %q tool policy: %w", registered.id, validationErr)
 		}
-		evaluation.Context = append(evaluation.Context, decision.Context...)
+		evaluation.Context = combinedContext
 		if err != nil {
 			return evaluation, fmt.Errorf("runtime module %q tool policy: %w", registered.id, err)
 		}
@@ -438,7 +456,11 @@ func EvaluateFinishPolicies(ctx context.Context, request FinishRequest, sets ...
 			return FinishEvaluation{}, err
 		}
 		evaluation.Candidates = append(evaluation.Candidates, current.Candidates...)
-		evaluation.Context = append(evaluation.Context, current.Context...)
+		combinedContext := append(append([]PolicyContext(nil), evaluation.Context...), current.Context...)
+		if err := validateDurablePolicyContext(combinedContext); err != nil {
+			return FinishEvaluation{}, fmt.Errorf("runtime modules finish policy context: %w", err)
+		}
+		evaluation.Context = combinedContext
 	}
 	return evaluation, nil
 }
@@ -460,10 +482,11 @@ func (s *Set) evaluateFinishPolicies(ctx context.Context, request FinishRequest)
 		if err != nil {
 			return FinishEvaluation{}, fmt.Errorf("runtime module %q finish policy: %w", registered.id, err)
 		}
-		if err := validatePolicyContext(decision.Context); err != nil {
+		combinedContext := append(append([]PolicyContext(nil), evaluation.Context...), decision.Context...)
+		if err := validateDurablePolicyContext(combinedContext); err != nil {
 			return FinishEvaluation{}, fmt.Errorf("runtime module %q finish policy: %w", registered.id, err)
 		}
-		evaluation.Context = append(evaluation.Context, decision.Context...)
+		evaluation.Context = combinedContext
 		switch decision.Action {
 		case "", FinishComplete:
 		case FinishContinue:
@@ -531,7 +554,11 @@ func ApplySessionStartPolicies(ctx context.Context, request SessionStartRequest,
 		if err != nil {
 			return nil, err
 		}
-		contexts = append(contexts, current...)
+		combinedContext := append(append([]PolicyContext(nil), contexts...), current...)
+		if err := validateDurablePolicyContext(combinedContext); err != nil {
+			return nil, fmt.Errorf("runtime modules session start policy context: %w", err)
+		}
+		contexts = combinedContext
 	}
 	return contexts, nil
 }
@@ -553,10 +580,11 @@ func (s *Set) applySessionStartPolicies(ctx context.Context, request SessionStar
 		if err != nil {
 			return nil, fmt.Errorf("runtime module %q session start policy: %w", registered.id, err)
 		}
-		if err := validatePolicyContext(decision.Context); err != nil {
+		combinedContext := append(append([]PolicyContext(nil), contexts...), decision.Context...)
+		if err := validateDurablePolicyContext(combinedContext); err != nil {
 			return nil, fmt.Errorf("runtime module %q session start policy: %w", registered.id, err)
 		}
-		contexts = append(contexts, decision.Context...)
+		contexts = combinedContext
 		if decision.Reject {
 			return nil, fmt.Errorf("runtime module %q session start rejected%s", registered.id, reasonSuffix(decision.Reason))
 		}
@@ -569,7 +597,11 @@ func ApplyCompactionPolicies(ctx context.Context, request CompactionPolicyReques
 	for _, set := range sets {
 		current, err := set.applyCompactionPolicies(ctx, request)
 		combined.Instructions = append(combined.Instructions, current.Instructions...)
-		combined.Context = append(combined.Context, current.Context...)
+		combinedContext := append(append([]PolicyContext(nil), combined.Context...), current.Context...)
+		if validationErr := validateDurablePolicyContext(combinedContext); validationErr != nil {
+			return combined, fmt.Errorf("runtime modules compaction policy context: %w", validationErr)
+		}
+		combined.Context = combinedContext
 		if err != nil {
 			return combined, err
 		}
@@ -591,11 +623,12 @@ func (s *Set) applyCompactionPolicies(ctx context.Context, request CompactionPol
 	for _, registered := range s.compactionPolicies {
 		request.Observer = ownedPolicyObserver{owner: registered.id, next: observer}
 		decision, err := registered.module.(CompactionPolicy).ApplyCompaction(nonNilContext(ctx), request)
-		if err := validatePolicyContext(decision.Context); err != nil {
+		combinedContext := append(append([]PolicyContext(nil), combined.Context...), decision.Context...)
+		if err := validateDurablePolicyContext(combinedContext); err != nil {
 			return combined, fmt.Errorf("runtime module %q compaction policy: %w", registered.id, err)
 		}
 		combined.Instructions = append(combined.Instructions, decision.Instructions...)
-		combined.Context = append(combined.Context, decision.Context...)
+		combined.Context = combinedContext
 		if err != nil {
 			return combined, fmt.Errorf("runtime module %q compaction policy: %w", registered.id, err)
 		}
@@ -643,6 +676,30 @@ func validatePolicyContext(contexts []PolicyContext) error {
 		if count := utf8.RuneCountInString(text); count > maxPolicyContextChars {
 			return fmt.Errorf("policy context length %d exceeds %d", count, maxPolicyContextChars)
 		}
+	}
+	return nil
+}
+
+func validateDurablePolicyContext(contexts []PolicyContext) error {
+	if err := validatePolicyContext(contexts); err != nil {
+		return &policyContextValidationError{err: err}
+	}
+	messages := make([]llm.Message, 0, len(contexts))
+	for _, item := range contexts {
+		text := strings.TrimSpace(item.Text)
+		if text == "" {
+			continue
+		}
+		message := llm.TextMessage(llm.RoleUser, item.Label+text)
+		message.ID = fmt.Sprintf("hook-context-%024x", len(messages))
+		message.Kind = llm.MessageKindRuntimeContext
+		messages = append(messages, message)
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	if err := provenance.ValidateHookContextQueued(provenance.HookContextQueuedPayload{Messages: messages}); err != nil {
+		return &policyContextValidationError{err: fmt.Errorf("policy context durable batch: %w", err)}
 	}
 	return nil
 }

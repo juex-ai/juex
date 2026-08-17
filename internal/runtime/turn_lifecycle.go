@@ -50,9 +50,12 @@ func (l *turnLifecycle) runLocked(ctx context.Context) (turnLifecycleResult, err
 		return turnLifecycleResult{}, err
 	}
 	if err := l.engine.restorePendingInput(ctx, l.turnID, l.userMsg.ID); err != nil {
-		if cancellation.ContextError(ctx) != nil && !sessionHasMessageID(l.engine.currentSession(), l.userMsg.ID) {
+		if preserveErr := l.engine.preservePendingInputAfterFailureLocked(l.turnID); preserveErr != nil {
+			err = errors.Join(err, fmt.Errorf("preserve accepted input order after pending-input restore failure: %w", preserveErr))
+		}
+		if !sessionHasMessageID(l.engine.currentSession(), l.userMsg.ID) {
 			if persistErr := l.engine.recordTurnStartLocked(l.turnID, l.userMsg); persistErr != nil {
-				return turnLifecycleResult{}, errors.Join(err, fmt.Errorf("persist accepted user input after pre-restore cancellation: %w", persistErr))
+				return turnLifecycleResult{}, errors.Join(err, fmt.Errorf("persist accepted user input after pending-input restore failure: %w", persistErr))
 			}
 		}
 		return turnLifecycleResult{}, err

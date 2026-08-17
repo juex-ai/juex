@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -124,6 +125,73 @@ func TestReplaceSessionRuntimeRecoversUnconsumedHookContext(t *testing.T) {
 	pending := engine.pendingHookRuntimeContextSnapshot()
 	if len(pending) != 1 || pending[0].ID != second.ID {
 		t.Fatalf("recovered hook context = %+v", pending)
+	}
+}
+
+func TestRestoreSessionRuntimeCheckpointDoesNotReplayJournal(t *testing.T) {
+	root := t.TempDir()
+	first := newSessionRuntimeTestSession(t, root)
+	second := newSessionRuntimeTestSession(t, root)
+	firstPending := provenanceRuntimeContextMessage("hook-first", "first pending")
+	secondPending := provenanceRuntimeContextMessage("hook-second", "second pending")
+	if err := first.AppendEvent(events.Normalize(events.Event{
+		Type:          provenance.HookContextQueuedType,
+		SchemaVersion: 1,
+		ReplayPolicy:  events.ReplayRequired,
+		Payload:       provenance.HookContextQueuedPayload{Messages: []llm.Message{firstPending}},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.AppendEvent(events.Normalize(events.Event{
+		Type:          provenance.HookContextQueuedType,
+		SchemaVersion: 1,
+		ReplayPolicy:  events.ReplayRequired,
+		Payload:       provenance.HookContextQueuedPayload{Messages: []llm.Message{secondPending}},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	engine := &Engine{Session: first, Prompt: &prompt.Builder{}}
+	if err := engine.ReplaceSessionRuntime(first); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := engine.CaptureSessionRuntimeCheckpoint()
+	if err := engine.ReplaceSessionRuntime(second); err != nil {
+		t.Fatal(err)
+	}
+
+	eventPath := filepath.Join(first.Dir, "events.jsonl")
+	backupPath := eventPath + ".checkpoint-test"
+	if err := os.Rename(eventPath, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(eventPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	restored := false
+	restoreJournal := func() error {
+		if restored {
+			return nil
+		}
+		if err := os.Remove(eventPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(backupPath, eventPath); err != nil {
+			return err
+		}
+		restored = true
+		return nil
+	}
+	t.Cleanup(func() { _ = restoreJournal() })
+
+	if err := engine.RestoreSessionRuntimeCheckpoint(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if got := engine.SessionRuntimeSnapshot().Session.ID; got != first.ID {
+		t.Fatalf("restored Session = %q, want %q", got, first.ID)
+	}
+	pending := engine.pendingHookRuntimeContextSnapshot()
+	if len(pending) != 1 || pending[0].ID != firstPending.ID {
+		t.Fatalf("restored pending hook context = %+v, want %q", pending, firstPending.ID)
 	}
 }
 

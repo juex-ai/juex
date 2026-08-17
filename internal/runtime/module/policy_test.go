@@ -210,6 +210,72 @@ func TestFinishContinuationAndPolicyContextAreBounded(t *testing.T) {
 	if _, err := ApplyToolPolicies(context.Background(), ToolPolicyRequest{}, largeLabel); err == nil || !strings.Contains(err.Error(), "label length") {
 		t.Fatalf("large label error = %v", err)
 	}
+
+	durableEnvelopeOverflow := mustPolicySet(t, &policyTestModule{
+		id: "durable-envelope-overflow",
+		finish: FinishDecision{
+			Action:  FinishComplete,
+			Context: []PolicyContext{{Text: strings.Repeat("x", maxPolicyContextChars)}},
+		},
+	})
+	if _, err := EvaluateFinishPolicies(context.Background(), FinishRequest{}, durableEnvelopeOverflow); err == nil || !strings.Contains(err.Error(), "durable batch") {
+		t.Fatalf("durable envelope overflow error = %v", err)
+	}
+
+	escapedEnvelopeOverflow := mustPolicySet(t, &policyTestModule{
+		id: "escaped-envelope-overflow",
+		finish: FinishDecision{
+			Action:  FinishComplete,
+			Context: []PolicyContext{{Text: strings.Repeat("<", 200*1024)}},
+		},
+	})
+	if _, err := EvaluateFinishPolicies(context.Background(), FinishRequest{}, escapedEnvelopeOverflow); err == nil || !strings.Contains(err.Error(), "durable batch") {
+		t.Fatalf("escaped durable envelope overflow error = %v", err)
+	}
+}
+
+func TestFinishPolicyContextAggregateIsBoundedAcrossSets(t *testing.T) {
+	first := mustPolicySet(t, &policyTestModule{
+		id: "first-large-context",
+		finish: FinishDecision{
+			Action:  FinishComplete,
+			Context: []PolicyContext{{Text: strings.Repeat("a", 600*1024)}},
+		},
+	})
+	second := mustPolicySet(t, &policyTestModule{
+		id: "second-large-context",
+		finish: FinishDecision{
+			Action:  FinishComplete,
+			Context: []PolicyContext{{Text: strings.Repeat("b", 600*1024)}},
+		},
+	})
+
+	if _, err := EvaluateFinishPolicies(context.Background(), FinishRequest{}, first); err != nil {
+		t.Fatalf("individual finish policy context = %v, want valid", err)
+	}
+	if _, err := EvaluateFinishPolicies(context.Background(), FinishRequest{}, first, second); err == nil || !strings.Contains(err.Error(), "durable batch") {
+		t.Fatalf("aggregate finish policy context error = %v", err)
+	}
+
+	combined := mustPolicySet(t,
+		&policyTestModule{
+			id: "first-combined-context",
+			finish: FinishDecision{
+				Action:  FinishComplete,
+				Context: []PolicyContext{{Text: strings.Repeat("a", 600*1024)}},
+			},
+		},
+		&policyTestModule{
+			id: "second-combined-context",
+			finish: FinishDecision{
+				Action:  FinishComplete,
+				Context: []PolicyContext{{Text: strings.Repeat("b", 600*1024)}},
+			},
+		},
+	)
+	if _, err := EvaluateFinishPolicies(context.Background(), FinishRequest{}, combined); err == nil || !strings.Contains(err.Error(), "durable batch") {
+		t.Fatalf("same-set aggregate finish policy context error = %v", err)
+	}
 }
 
 func TestTypedPoliciesPreserveModuleOrderAndEvaluateEveryFinishPolicy(t *testing.T) {

@@ -294,7 +294,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	if err := e.queuePolicyRuntimeContext(postPolicy.Context); err != nil {
 		return result, err
 	}
-	if runtimemodule.IsPolicyCheckpointError(postErr) {
+	if runtimemodule.IsPolicyCheckpointError(postErr) || runtimemodule.IsPolicyContextValidationError(postErr) {
 		return result, postErr
 	}
 	return result, nil

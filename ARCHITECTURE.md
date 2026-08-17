@@ -959,7 +959,9 @@ selects browser-visible stable facts and supplies their normalized payload,
 while Web owns status attachment and SSE framing.
 
 `provider.hook_context.queued` durably records an ordered, bounded batch before
-it enters provider-visible memory. `provider.request_epoch` records the final
+it enters provider-visible memory. Policy-produced queued context is bounded
+across all contributing Modules against the final serialized payload, which
+must not exceed 1 MiB. `provider.request_epoch` records the final
 projected message IDs and content digests, compaction marker, safe Provider
 descriptor with hashed endpoint/header/query identities, hashed cache-policy
 identity, and bounded system/tool snapshots or
@@ -1351,17 +1353,21 @@ pending-input, or slash-command policy. Manual compact reservation marks its
 preserve queued input even when a pre-compact hook fails before compaction
 starts.
 
-Before ordinary or `/new` admission returns `started`, the runtime writes the
-main input as a non-replayable `accepting` intent with `origin: turn` and a
-stable message id, establishes the active Turn, commits `turn.admitted`, and
-then promotes the intent to `admitted`. A failure before promotion completes
-drops the intent when possible; even if that compensation cannot be written,
-the durable `accepting` state remains excluded from recovery. These records do
-not use the queued-steering TTL. Turn input policies may replace message
-content but retain that Framework-owned identity; transcript append marks the
-accepted record `processed`. After a crash, an unprocessed admitted Turn-origin
-record runs through the ordered Turn input policies and projection again before
-it is appended, so recovery cannot bypass rejection or transformation.
+Before ordinary or `/new` admission returns `started`, a newly accepted main
+input is written as a non-replayable `accepting` intent with `origin: turn` and
+a stable message id. The runtime establishes the active Turn, commits
+`turn.admitted`, and then promotes the intent to `admitted`. A failure before
+promotion completes drops the new intent when possible; even if that
+compensation cannot be written, its durable `accepting` state remains excluded
+from recovery. An input already accepted as a replayable pending record is not
+overwritten during staging: it stays replayable until `turn.admitted` commits,
+is promoted only afterward, and remains retryable if admission or promotion
+fails. Turn-origin records do not use the queued-steering TTL. Turn input
+policies may replace message content but retain Framework-owned identity;
+transcript append marks the accepted record `processed`. After a crash, an
+unprocessed admitted Turn-origin record runs through the ordered Turn input
+policies and projection again before it is appended, so recovery cannot bypass
+rejection or transformation.
 
 The pending-input journal builds an in-memory latest-record and replayable
 index on first access. Later admission and state transitions update that index

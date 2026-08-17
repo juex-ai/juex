@@ -5130,6 +5130,77 @@ func TestTurn_PreRestoreCancellationTerminallyPersistsAcceptedInput(t *testing.T
 	}
 }
 
+func TestTurn_PendingInputRestoreFailureTerminallyPersistsAcceptedInput(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "later done"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, _ := newEngine(t, prov, false)
+	accepted, err := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "accepted before restore failure"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := eng.currentPendingInputQueue()
+	pendingPath := queue.path
+	backupPath := pendingPath + ".restore-failure"
+	if err := os.Rename(pendingPath, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(pendingPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	restored := false
+	restoreJournal := func() error {
+		if restored {
+			return nil
+		}
+		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(backupPath, pendingPath); err != nil {
+			return err
+		}
+		restored = true
+		return nil
+	}
+	t.Cleanup(func() { _ = restoreJournal() })
+
+	eng.mu.Lock()
+	lifecycle := turnLifecycle{
+		engine:  eng,
+		turnID:  "failed-turn",
+		userMsg: accepted,
+		start:   time.Now(),
+	}
+	_, turnErr := lifecycle.runLocked(context.Background())
+	eng.mu.Unlock()
+	if turnErr == nil || !strings.Contains(turnErr.Error(), "pending input queue") {
+		t.Fatalf("turn lifecycle error = %v, want pending journal failure", turnErr)
+	}
+	if len(eng.Session.History) != 1 || eng.Session.History[0].ID != accepted.ID {
+		t.Fatalf("durable history = %+v, want accepted input %q", eng.Session.History, accepted.ID)
+	}
+
+	if err := restoreJournal(); err != nil {
+		t.Fatal(err)
+	}
+	eng.finishActiveTurn("failed-turn")
+	if out, err := eng.Turn(context.Background(), "later input"); err != nil || out != "later done" {
+		t.Fatalf("later Turn() = %q, %v", out, err)
+	}
+	acceptedCopies := 0
+	for _, message := range eng.Session.History {
+		if message.ID == accepted.ID {
+			acceptedCopies++
+		}
+	}
+	if acceptedCopies != 1 {
+		t.Fatalf("accepted input copies in durable history = %d, want 1", acceptedCopies)
+	}
+	if prov.called != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.called)
+	}
+}
+
 func TestTurn_CancellationPreservesPendingInputWithoutContinuing(t *testing.T) {
 	prov := &mockProvider{
 		script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn}},

@@ -97,6 +97,7 @@ type sessionStartPolicyTracker struct {
 	mu                 sync.Mutex
 	sessionIDs         []string
 	rejectCall         int
+	beforeReject       func() error
 	replacementStarted chan struct{}
 	releaseReplacement chan struct{}
 }
@@ -121,6 +122,11 @@ func (m *trackedSessionStartPolicy) ApplySessionStart(ctx context.Context, reque
 		}
 	}
 	if call == m.tracker.rejectCall {
+		if m.tracker.beforeReject != nil {
+			if err := m.tracker.beforeReject(); err != nil {
+				return runtimemodule.SessionStartDecision{}, err
+			}
+		}
 		return runtimemodule.SessionStartDecision{Reject: true, Reason: "replacement blocked"}, nil
 	}
 	return runtimemodule.SessionStartDecision{Context: []runtimemodule.PolicyContext{{
@@ -517,6 +523,73 @@ func TestSwitchToNewPrimarySessionClosesCandidateModulesWhenObservabilityRollbac
 	}
 	if closed != 1 {
 		t.Fatalf("closed Session Modules = %d, want rejected candidate closed once", closed)
+	}
+}
+
+func TestSwitchToNewPrimarySessionRollbackUsesCapturedRuntime(t *testing.T) {
+	dir := t.TempDir()
+	tracker := &sessionStartPolicyTracker{rejectCall: 2}
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID:    "openai",
+			APIKey:        "x",
+			Model:         "m",
+			WorkDir:       dir,
+			AgentStateDir: filepath.Join(dir, ".juex"),
+		},
+		Provider:           &stubProvider{},
+		WorkDir:            dir,
+		DisableMCP:         true,
+		disableObservables: true,
+		sessionModuleFactories: []runtimemodule.SessionFactorySpec{{
+			ID:      "tracked-session-start",
+			Enabled: true,
+			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+				return &trackedSessionStartPolicy{tracker: tracker}, nil
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	oldID := a.Session.ID
+	oldEventPath := filepath.Join(a.Session.Dir, "events.jsonl")
+	backupPath := oldEventPath + ".rollback-test"
+	restored := false
+	restoreJournal := func() error {
+		if restored {
+			return nil
+		}
+		if err := os.Remove(oldEventPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(backupPath, oldEventPath); err != nil {
+			return err
+		}
+		restored = true
+		return nil
+	}
+	t.Cleanup(func() { _ = restoreJournal() })
+	tracker.beforeReject = func() error {
+		if err := os.Rename(oldEventPath, backupPath); err != nil {
+			return err
+		}
+		return os.Mkdir(oldEventPath, 0o700)
+	}
+
+	err = a.SwitchToNewPrimarySession()
+	if err == nil || !strings.Contains(err.Error(), "replacement blocked") {
+		t.Fatalf("session replacement error = %v, want policy rejection", err)
+	}
+	if err := restoreJournal(); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Engine.SessionRuntimeSnapshot().Session.ID; got != oldID {
+		t.Fatalf("Engine runtime Session after rollback = %q, want %q", got, oldID)
+	}
+	if got := a.Session.ID; got != oldID {
+		t.Fatalf("App Session after rollback = %q, want %q", got, oldID)
 	}
 }
 
