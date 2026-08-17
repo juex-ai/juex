@@ -438,10 +438,11 @@ func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 	result, err := as.app.CompactAdmittedWithInstructions(r.Context(), compactTurnID, req.Reason, false, req.Instructions)
-	if start := as.app.FinishCompactAdmission(compactTurnID, app.TurnIDFunc(s.nextTurnID)); start != nil {
+	start, promotionErr := as.app.FinishCompactAdmission(compactTurnID, app.TurnIDFunc(s.nextTurnID))
+	if start != nil {
 		as.turns.start(start.TurnID, start.Message)
 	}
-	if err != nil {
+	if err = errors.Join(err, promotionErr); err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}

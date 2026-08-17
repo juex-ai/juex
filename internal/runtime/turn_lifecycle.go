@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
 type turnLifecycle struct {
@@ -50,7 +49,15 @@ func (l *turnLifecycle) runLocked(ctx context.Context) (turnLifecycleResult, err
 	if err := l.engine.repairTranscriptLocked(l.turnID, "turn_start"); err != nil {
 		return turnLifecycleResult{}, err
 	}
-	if err := l.engine.restorePendingInput(l.turnID, l.userMsg.ID); err != nil {
+	if err := l.engine.restorePendingInput(ctx, l.turnID, l.userMsg.ID); err != nil {
+		if preserveErr := l.engine.preservePendingInputAfterFailureLocked(l.turnID); preserveErr != nil {
+			err = errors.Join(err, fmt.Errorf("preserve accepted input order after pending-input restore failure: %w", preserveErr))
+		}
+		if !sessionHasMessageID(l.engine.currentSession(), l.userMsg.ID) {
+			if persistErr := l.engine.recordTurnStartLocked(l.turnID, l.userMsg); persistErr != nil {
+				return turnLifecycleResult{}, errors.Join(err, fmt.Errorf("persist accepted user input after pending-input restore failure: %w", persistErr))
+			}
+		}
 		return turnLifecycleResult{}, err
 	}
 
@@ -154,41 +161,42 @@ func (l *turnLifecycle) applyFinishPolicyLocked(ctx context.Context, recorded re
 		OutputLen:  len(finalText),
 	}})
 
-	stopResults, err := l.runStopHooksLocked(ctx)
+	request := runtimemodule.FinishRequest{
+		Runtime:    e.policyRuntimeContext(),
+		Session:    e.policySessionContext(),
+		TurnID:     l.turnID,
+		UserInput:  l.prepared.userMessage.FirstText(),
+		StopReason: string(recorded.stopReason),
+		Output:     finalText,
+		Observer:   e.policyObserver(l.turnID),
+	}
+	evaluation, err := runtimemodule.EvaluateFinishPolicies(ctx, request, e.policySets()...)
 	if err != nil {
 		return turnFinishOutcome{}, err
 	}
-	if err := e.queueHookRuntimeContext(stopResults); err != nil {
+	if err := e.queuePolicyRuntimeContext(evaluation.Context); err != nil {
 		return turnFinishOutcome{}, err
 	}
 
-	if !e.SkipGoalCompletionGate {
-		if prompt, payload, ok, err := e.runGoalCompletionGate(l.turnID); err != nil {
+	for i := range evaluation.Candidates {
+		candidate := evaluation.Candidates[i]
+		applied, err := runtimemodule.CommitFinishCandidate(ctx, request, candidate)
+		if err != nil {
 			return turnFinishOutcome{}, err
-		} else if ok {
-			if err := l.enqueueContinuationLocked(ctx, prompt); err != nil {
+		}
+		if !applied {
+			continue
+		}
+		if candidate.Decision.Continuation != "" {
+			if err := l.enqueueContinuationLocked(ctx, candidate.Decision.Continuation); err != nil {
 				return turnFinishOutcome{}, err
 			}
-			_ = e.emit(events.Event{Type: "goal.continued", TurnID: l.turnID, Payload: payload})
+			runtimemodule.ObserveFinishContinuation(ctx, request, candidate)
 			return l.finishOrContinueLocked(finalText), nil
 		}
-	}
-
-	if prompt, ok := stopContinuation(stopResults); ok {
-		if strings.TrimSpace(prompt) == "" {
-			return turnFinishOutcome{}, fmt.Errorf("hooks: Stop hook exited with code 2 without text")
-		}
-		if err := l.enqueueContinuationLocked(ctx, prompt); err != nil {
-			return turnFinishOutcome{}, err
-		}
+		return turnFinishOutcome{action: turnFinishContinue, output: finalText}, nil
 	}
 	return l.finishOrContinueLocked(finalText), nil
-}
-
-func (l *turnLifecycle) runStopHooksLocked(ctx context.Context) ([]hooks.Result, error) {
-	stopReq := l.engine.newHookRequest(hooks.EventStop, l.turnID)
-	stopReq.UserInput = l.prepared.userMessage.FirstText()
-	return l.engine.runHooks(ctx, stopReq)
 }
 
 func (l *turnLifecycle) enqueueContinuationLocked(ctx context.Context, prompt string) error {

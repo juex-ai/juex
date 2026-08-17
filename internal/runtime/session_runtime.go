@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/hooks"
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
@@ -26,7 +26,6 @@ type SessionRuntimeSnapshot struct {
 	PendingInputQueue *PendingInputQueue
 	Notes             *NotesStore
 	GoalState         *GoalStateStore
-	HookContext       hooks.Request
 	Modules           *runtimemodule.Set
 	Tools             *tools.Registry
 }
@@ -34,6 +33,19 @@ type SessionRuntimeSnapshot struct {
 type SessionRuntimeReplacement struct {
 	Modules *runtimemodule.Set
 	Tools   *tools.Registry
+}
+
+// SessionRuntimeCheckpoint captures an already-published runtime bundle and
+// its in-memory provenance state for rollback by the lifecycle owner.
+type SessionRuntimeCheckpoint struct {
+	owner                     *Engine
+	state                     sessionRuntimeState
+	provenanceTracker         *provenance.Tracker
+	pendingHookRuntimeContext []llm.Message
+}
+
+func (c SessionRuntimeCheckpoint) Snapshot() SessionRuntimeSnapshot {
+	return cloneSessionRuntimeSnapshot(c.state.SessionRuntimeSnapshot)
 }
 
 type sessionRuntimeState struct {
@@ -108,6 +120,53 @@ func (e *Engine) SessionRuntimeSnapshot() SessionRuntimeSnapshot {
 	snapshot := cloneSessionRuntimeSnapshot(state.SessionRuntimeSnapshot)
 	e.sessionRuntimeMu.RUnlock()
 	return snapshot
+}
+
+// CaptureSessionRuntimeCheckpoint returns the current in-memory runtime state
+// without retaining any external locks. A checkpoint belongs to this Engine.
+func (e *Engine) CaptureSessionRuntimeCheckpoint() SessionRuntimeCheckpoint {
+	if e == nil {
+		return SessionRuntimeCheckpoint{}
+	}
+	e.mu.Lock()
+	e.sessionRuntimeMu.RLock()
+	e.pendingMu.Lock()
+	e.hookRuntimeContextMu.Lock()
+	checkpoint := SessionRuntimeCheckpoint{
+		owner:                     e,
+		state:                     e.sessionRuntimeStateLocked(),
+		provenanceTracker:         e.provenanceTracker,
+		pendingHookRuntimeContext: append([]llm.Message(nil), e.pendingHookRuntimeContext...),
+	}
+	e.hookRuntimeContextMu.Unlock()
+	e.pendingMu.Unlock()
+	e.sessionRuntimeMu.RUnlock()
+	e.mu.Unlock()
+	return checkpoint
+}
+
+// RestoreSessionRuntimeCheckpoint republishes a previously captured bundle
+// without replaying its journal. Lifecycle rollback uses the exact state that
+// was known-good before replacement.
+func (e *Engine) RestoreSessionRuntimeCheckpoint(checkpoint SessionRuntimeCheckpoint) error {
+	if e == nil || checkpoint.owner != e || checkpoint.state.Session == nil {
+		return errors.New("runtime: valid session runtime checkpoint is required")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.sessionRuntimeMu.Lock()
+	defer e.sessionRuntimeMu.Unlock()
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	if e.activeTurnID != "" || len(e.pendingInput) > 0 {
+		return ErrSessionRuntimeBusy
+	}
+	e.publishSessionRuntimeLocked(checkpoint.state)
+	e.hookRuntimeContextMu.Lock()
+	e.provenanceTracker = checkpoint.provenanceTracker
+	e.pendingHookRuntimeContext = append([]llm.Message(nil), checkpoint.pendingHookRuntimeContext...)
+	e.hookRuntimeContextMu.Unlock()
+	return nil
 }
 
 // PromptSections builds the prompt from the same immutable prompt builder and
@@ -267,7 +326,6 @@ func (e *Engine) sessionRuntimeStateLocked() sessionRuntimeState {
 			PendingInputQueue: e.PendingInputQueue,
 			Notes:             e.Notes,
 			GoalState:         e.GoalState,
-			HookContext:       cloneHookRequest(e.HookContext),
 			Tools:             e.Tools,
 		},
 		prompt: e.Prompt,
@@ -293,20 +351,6 @@ func buildSessionRuntimeState(current sessionRuntimeState, sess *session.Session
 	if current.GoalState != nil && current.GoalState.SessionDir == sess.Dir {
 		goal = current.GoalState
 	}
-	hookContext := cloneHookRequest(current.HookContext)
-	hookContext.EventName = ""
-	hookContext.SessionID = sess.ID
-	hookContext.TurnID = ""
-	hookContext.ConversationPath = filepath.Join(sess.Dir, "conversation.jsonl")
-	hookContext.EventsPath = filepath.Join(sess.Dir, "events.jsonl")
-	hookContext.ToolName = ""
-	hookContext.ToolInput = nil
-	hookContext.ToolResult = ""
-	hookContext.UserInput = ""
-	hookContext.CompactReason = ""
-	hookContext.CompactAuto = false
-	hookContext.GoalState = nil
-	hookContext.Observer = nil
 	modules := current.Modules
 	if replacement.Modules != nil {
 		modules = replacement.Modules
@@ -323,7 +367,6 @@ func buildSessionRuntimeState(current sessionRuntimeState, sess *session.Session
 			PendingInputQueue: queue,
 			Notes:             notes,
 			GoalState:         goal,
-			HookContext:       hookContext,
 			Modules:           modules,
 			Tools:             toolRegistry,
 		},
@@ -343,14 +386,12 @@ func (e *Engine) publishSessionRuntimeLocked(next sessionRuntimeState) {
 	e.PendingInputQueue = next.PendingInputQueue
 	e.Notes = next.Notes
 	e.GoalState = next.GoalState
-	e.HookContext = cloneHookRequest(next.HookContext)
 	if next.Tools != nil {
 		e.Tools = next.Tools
 	}
 }
 
 func cloneSessionRuntimeSnapshot(snapshot SessionRuntimeSnapshot) SessionRuntimeSnapshot {
-	snapshot.HookContext = cloneHookRequest(snapshot.HookContext)
 	return snapshot
 }
 
@@ -360,24 +401,4 @@ func clonePromptBuilder(builder *prompt.Builder) *prompt.Builder {
 	}
 	cloned := *builder
 	return &cloned
-}
-
-func cloneHookRequest(req hooks.Request) hooks.Request {
-	req.WorkspaceRoots = append([]string(nil), req.WorkspaceRoots...)
-	if req.ToolInput != nil {
-		req.ToolInput = cloneMap(req.ToolInput)
-	}
-	req.GoalState = append([]byte(nil), req.GoalState...)
-	return req
-}
-
-func cloneMap(input map[string]any) map[string]any {
-	if input == nil {
-		return nil
-	}
-	output := make(map[string]any, len(input))
-	for key, value := range input {
-		output[key] = value
-	}
-	return output
 }

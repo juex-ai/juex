@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -140,6 +139,8 @@ type App struct {
 	runtimeModules         *runtimemodule.Set
 	runtimeModuleContext   runtimemodule.RuntimeContext
 	sessionModuleFactories []runtimemodule.SessionFactorySpec
+	hookRunner             hooks.PolicyRunner
+	hookBaseRequest        hooks.Request
 
 	turnAdmission turnAdmission
 
@@ -424,6 +425,12 @@ func New(opts Options) (*App, error) {
 		closeSessionResources()
 		return nil, err
 	}
+	hookBaseRequest := hooks.Request{
+		CWD:            runtimePaths.WorkDir,
+		WorkspaceRoots: []string{runtimePaths.WorkDir},
+		PermissionMode: "unrestricted",
+		SandboxMode:    "none",
+	}
 	pendingInputTTL := runtimeLimits.PendingInputTTL
 	if pendingInputTTL <= 0 {
 		pendingInputTTL = runtime.DefaultPendingInputTTL
@@ -434,26 +441,18 @@ func New(opts Options) (*App, error) {
 	}
 
 	eng = &runtime.Engine{
-		Provider:          provider,
-		SummaryProvider:   summaryProvider,
-		SummaryProvenance: summaryProvenance,
-		ModelCandidates:   modelCandidates,
-		ModelHealth:       modelHealth,
-		Tools:             reg,
-		Bus:               bus,
-		Session:           sess,
-		Prompt:            pb,
-		WorkDir:           runtimePaths.WorkDir,
-		ArtifactDir:       runtimePaths.ArtifactDir,
-		Hooks:             hookRunner,
-		HookContext: hooks.Request{
-			CWD:              runtimePaths.WorkDir,
-			WorkspaceRoots:   []string{runtimePaths.WorkDir},
-			PermissionMode:   "unrestricted",
-			SandboxMode:      "none",
-			ConversationPath: filepath.Join(sess.Dir, "conversation.jsonl"),
-			EventsPath:       filepath.Join(sess.Dir, "events.jsonl"),
-		},
+		Provider:              provider,
+		SummaryProvider:       summaryProvider,
+		SummaryProvenance:     summaryProvenance,
+		ModelCandidates:       modelCandidates,
+		ModelHealth:           modelHealth,
+		Tools:                 reg,
+		RuntimeContext:        runtimeModules.runtimeContext,
+		Bus:                   bus,
+		Session:               sess,
+		Prompt:                pb,
+		WorkDir:               runtimePaths.WorkDir,
+		ArtifactDir:           runtimePaths.ArtifactDir,
 		PendingInputQueue:     runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{}),
 		Notes:                 notesStore(sess),
 		PendingInputTTL:       pendingInputTTL,
@@ -495,6 +494,8 @@ func New(opts Options) (*App, error) {
 		agentRuntime:           agentRuntime,
 		runtimeModuleContext:   runtimeModules.runtimeContext,
 		sessionModuleFactories: append([]runtimemodule.SessionFactorySpec(nil), opts.sessionModuleFactories...),
+		hookRunner:             hookRunner,
+		hookBaseRequest:        hookBaseRequest,
 	}
 	statusUnsubscribe = eventSink.AddProjection(turnAdmissionStatusProjection{
 		status:       status,
@@ -503,8 +504,6 @@ func New(opts Options) (*App, error) {
 	a.statusUnsubscribe = statusUnsubscribe
 	if sess.Kind == session.KindPrimary && sess.Active && !opts.disableSideSessionTools {
 		a.sideSessions = newSideSessionManager(a)
-		eng.ShouldDeferGoalContinuation = a.sideSessions.shouldDeferGoalContinuation
-		eng.PendingInputsAdmitted = a.sideSessions.finishResultHandoffs
 	}
 	if err := a.attachObservability(sess); err != nil {
 		closeSessionResources()
@@ -624,6 +623,12 @@ func New(opts Options) (*App, error) {
 		runtimePaths.WorkDir,
 		prompt.ShellProfileFromConfig(cfg.Shell),
 		runtimeModules.builtinTools.ShellSessions(),
+		sessionModuleOptions{
+			hookRunner:               hookRunner,
+			hookBaseRequest:          hookBaseRequest,
+			goalContinuation:         opts.sharedGoalState == nil,
+			goalContinuationDeferrer: a.sideSessions,
+		},
 	)
 	if err != nil {
 		_ = a.Close()
@@ -651,7 +656,6 @@ func New(opts Options) (*App, error) {
 	}
 	if opts.sharedGoalState != nil || opts.sharedNotes != nil {
 		eng.ShareSessionState(opts.sharedGoalState, opts.sharedNotes)
-		eng.SkipGoalCompletionGate = true
 	}
 	if err := eng.RecoverTranscript("load"); err != nil {
 		_ = a.Close()
@@ -659,7 +663,7 @@ func New(opts Options) (*App, error) {
 	}
 	status.RecoverAfterRestart()
 	chunkedWrites.RestoreActiveFromHistory(sess.History)
-	if err := eng.RunSessionStartHooks(startupCtx); err != nil {
+	if err := eng.RunSessionStartPolicies(startupCtx); err != nil {
 		_ = a.Close()
 		return nil, err
 	}
@@ -734,7 +738,7 @@ func (a *App) SwitchToNewPrimarySessionContext(ctx context.Context) error {
 			return err
 		}
 		sess := attachment.Session
-		if err := a.replaceSession(sess, sessLock); err != nil {
+		if err := a.replaceSession(ctx, sess, sessLock); err != nil {
 			_ = sessLock.Close()
 			_ = sess.Close()
 			cleanupErr := DeleteSession(a.cfg, sess.ID, SessionDeleteOptions{AllowMissingSession: true})
@@ -752,9 +756,12 @@ func (a *App) SwitchToNewPrimarySessionContext(ctx context.Context) error {
 	return replace()
 }
 
-func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) error {
+func (a *App) replaceSession(ctx context.Context, sess *session.Session, sessLock *session.Lock) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	nextModules, err := buildSessionModules(
-		a.ctx,
+		ctx,
 		a.sessionModuleFactories,
 		a.runtimeModuleContext,
 		sess,
@@ -762,18 +769,25 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 		a.cfg.WorkDir,
 		prompt.ShellProfileFromConfig(a.cfg.Shell),
 		a.shellSessions,
+		sessionModuleOptions{
+			hookRunner:               a.hookRunner,
+			hookBaseRequest:          a.hookBaseRequest,
+			goalContinuation:         true,
+			goalContinuationDeferrer: a.sideSessions,
+		},
 	)
 	if err != nil {
 		return err
 	}
-	if err := validateSessionModuleContext(a.ctx, a.runtimeModules, nextModules, a.runtimeModuleContext, sess); err != nil {
+	if err := validateSessionModuleContext(ctx, a.runtimeModules, nextModules, a.runtimeModuleContext, sess); err != nil {
 		return errors.Join(err, nextModules.CloseSession(context.Background()))
 	}
 	var nextTools *tools.Registry
-	var oldModules *runtimemodule.Set
+	var oldRuntime runtime.SessionRuntimeSnapshot
+	var oldRuntimeCheckpoint runtime.SessionRuntimeCheckpoint
 	if a.Engine != nil {
-		current := a.Engine.SessionRuntimeSnapshot()
-		oldModules = current.Modules
+		oldRuntimeCheckpoint = a.Engine.CaptureSessionRuntimeCheckpoint()
+		oldRuntime = oldRuntimeCheckpoint.Snapshot()
 		nextTools, err = runtimemodule.BuildToolRegistry(
 			tools.RegistryOptions{DefaultTimeoutSeconds: durationSeconds(a.cfg.RuntimeLimits().ToolTimeout)},
 			a.runtimeModules,
@@ -783,8 +797,11 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 			return errors.Join(err, nextModules.CloseSession(context.Background()))
 		}
 	}
-	if err := nextModules.StartSession(a.ctx, sessionModuleContext(sess)); err != nil {
-		return err
+	if err := nextModules.StartSession(ctx, sessionModuleContext(sess)); err != nil {
+		return errors.Join(err, nextModules.CloseSession(context.Background()))
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(err, nextModules.CloseSession(context.Background()))
 	}
 
 	a.sessionMu.Lock()
@@ -794,18 +811,56 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 			return errors.Join(err, nextModules.CloseSession(context.Background()))
 		}
 	}
-	_ = a.detachObservability()
+	if a.eventSink != nil {
+		a.eventSink.SetJournal(sess)
+	}
 	oldLock := a.sessionLock
 	oldSession := a.sessionResource
+	observabilityErr := a.detachObservability()
+	observabilityErr = errors.Join(observabilityErr, a.attachObservability(sess))
+	rollbackReplacement := func(cause error) error {
+		var rollbackErr error
+		runtimeRestored := a.Engine == nil
+		if err := a.detachObservability(); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore observability: detach replacement: %w", err))
+		}
+		if a.eventSink != nil {
+			a.eventSink.SetJournal(oldRuntime.Session)
+		}
+		if a.Engine != nil {
+			err := a.Engine.RestoreSessionRuntimeCheckpoint(oldRuntimeCheckpoint)
+			if err != nil {
+				rollbackErr = errors.Join(rollbackErr, err)
+			} else {
+				runtimeRestored = true
+			}
+		}
+		if err := a.attachObservability(oldSession); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore observability: attach previous session: %w", err))
+		}
+		a.sessionMu.Unlock()
+		if runtimeRestored {
+			rollbackErr = errors.Join(rollbackErr, nextModules.CloseSession(context.Background()))
+		}
+		if rollbackErr != nil {
+			return errors.Join(cause, fmt.Errorf("app: roll back rejected session replacement: %w", rollbackErr))
+		}
+		return cause
+	}
+	if a.Engine != nil {
+		if err := a.Engine.RunSessionStartPolicies(ctx); err != nil {
+			return rollbackReplacement(err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return rollbackReplacement(err)
+	}
 
 	a.Session = sess
 	a.sessionLock = sessLock
 	a.sessionResource = sess
 	if a.chunkedWrites != nil {
 		a.chunkedWrites.RestoreActiveFromHistory(sess.History)
-	}
-	if a.eventSink != nil {
-		a.eventSink.SetJournal(sess)
 	}
 	if a.Status != nil {
 		err := a.Status.ResetFromReplayWithRestartRecovery(
@@ -818,16 +873,15 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 			fmt.Fprintf(a.stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", err)
 		}
 	}
-	if err := a.attachObservability(sess); err != nil {
-		// Session switching happens after startup. Surface recorder failures as
-		// a runtime event so callers still receive a usable session.
-		_ = a.Bus.Emit(events.Event{Type: "turn.errored", Payload: runtime.TurnErroredPayload{Error: err.Error()}})
+	if observabilityErr != nil {
+		// Recorder failures do not reject an otherwise committed replacement.
+		fmt.Fprintf(a.stderr, "juex: warning: session observability after committed replacement: %v\n", observabilityErr)
 	}
 	a.sessionMu.Unlock()
 
 	var cleanupErr error
-	if oldModules != nil {
-		cleanupErr = errors.Join(cleanupErr, oldModules.CloseSession(context.Background()))
+	if oldRuntime.Modules != nil {
+		cleanupErr = errors.Join(cleanupErr, oldRuntime.Modules.CloseSession(context.Background()))
 	}
 	if oldLock != nil {
 		cleanupErr = errors.Join(cleanupErr, oldLock.Close())

@@ -34,6 +34,12 @@ func (m *sideSessionModule) Tools(context.Context, runtimemodule.ToolContext) ([
 	return sideSessionTools(m.manager), nil
 }
 
+func (m *sideSessionModule) PendingInputsAdmitted(_ context.Context, admission runtimemodule.PendingInputAdmission) {
+	if m != nil && m.manager != nil {
+		m.manager.finishResultHandoffs(admission.RecordIDs)
+	}
+}
+
 const (
 	SideSessionToolCreate    = "side_session_create"
 	SideSessionToolList      = "side_session_list"
@@ -371,6 +377,10 @@ func (m *sideSessionManager) shouldDeferGoalContinuation() bool {
 		}
 	}
 	return false
+}
+
+func (m *sideSessionManager) ShouldDeferGoalContinuation() bool {
+	return m.shouldDeferGoalContinuation()
 }
 
 func (m *sideSessionManager) Status(id string) (SideSessionStatus, error) {

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/juex-ai/juex/internal/events"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -19,11 +21,34 @@ const (
 
 const GoalModuleID runtimemodule.ID = "goal"
 
-type GoalModule struct {
-	engine *Engine
+const goalCompletionGateName = "goal-completion-gate"
+
+type GoalContinuationDeferrer interface {
+	ShouldDeferGoalContinuation() bool
 }
 
-func NewGoalModule(engine *Engine) *GoalModule { return &GoalModule{engine: engine} }
+type GoalModuleOptions struct {
+	EnableContinuation   bool
+	ContinuationDeferrer GoalContinuationDeferrer
+}
+
+type GoalModule struct {
+	engine               *Engine
+	enableContinuation   bool
+	continuationDeferrer GoalContinuationDeferrer
+}
+
+func NewGoalModule(engine *Engine) *GoalModule {
+	return NewGoalModuleWithOptions(engine, GoalModuleOptions{EnableContinuation: true})
+}
+
+func NewGoalModuleWithOptions(engine *Engine, opts GoalModuleOptions) *GoalModule {
+	return &GoalModule{
+		engine:               engine,
+		enableContinuation:   opts.EnableContinuation,
+		continuationDeferrer: opts.ContinuationDeferrer,
+	}
+}
 
 func (*GoalModule) ID() runtimemodule.ID { return GoalModuleID }
 
@@ -48,6 +73,108 @@ func (m *GoalModule) Context(_ context.Context, request runtimemodule.ContextReq
 		MessageID:  "runtime-goal-contract",
 		Budget:     runtimemodule.UnboundedContextBudget(),
 	}}, nil
+}
+
+func (m *GoalModule) EvaluateFinish(_ context.Context, request runtimemodule.FinishRequest) (runtimemodule.FinishDecision, error) {
+	if m == nil || m.engine == nil || !m.enableContinuation {
+		return runtimemodule.FinishDecision{Action: runtimemodule.FinishComplete}, nil
+	}
+	store := m.engine.goalStateStoreLocked()
+	if store == nil {
+		return runtimemodule.FinishDecision{Action: runtimemodule.FinishComplete}, nil
+	}
+	started := time.Now()
+	execution := runtimemodule.PolicyExecution{
+		Point:  runtimemodule.PolicyPointFinish,
+		Name:   goalCompletionGateName,
+		Source: "builtin",
+	}
+	if request.Observer != nil {
+		request.Observer.Started(execution)
+	}
+	decision, err := store.CompletionGateDecision()
+	if err != nil {
+		if request.Observer != nil {
+			request.Observer.Errored(execution, runtimemodule.PolicyResult{Duration: time.Since(started)}, err)
+		}
+		return runtimemodule.FinishDecision{}, err
+	}
+	if decision.BlockStop && strings.TrimSpace(decision.ContinuePrompt) == "" {
+		err := fmt.Errorf("goal state: completion gate requested block_stop without continue_prompt")
+		if request.Observer != nil {
+			request.Observer.Errored(execution, runtimemodule.PolicyResult{Duration: time.Since(started)}, err)
+		}
+		return runtimemodule.FinishDecision{}, err
+	}
+	if decision.BlockStop && !m.shouldDeferContinuation() {
+		if request.Observer != nil {
+			request.Observer.Completed(execution, runtimemodule.PolicyResult{
+				ExitCode: 2,
+				Stdout:   decision.ContinuePrompt,
+				Duration: time.Since(started),
+			})
+		}
+		return runtimemodule.FinishDecision{
+			Action:       runtimemodule.FinishContinue,
+			Continuation: decision.ContinuePrompt,
+			OwnerData:    decision,
+		}, nil
+	}
+	if request.Observer != nil {
+		request.Observer.Completed(execution, runtimemodule.PolicyResult{Duration: time.Since(started)})
+	}
+	return runtimemodule.FinishDecision{Action: runtimemodule.FinishComplete}, nil
+}
+
+func (m *GoalModule) CommitFinishDecision(_ context.Context, request runtimemodule.FinishRequest, selected runtimemodule.FinishDecision) (bool, error) {
+	if m == nil || m.engine == nil || !m.enableContinuation || m.shouldDeferContinuation() {
+		return false, nil
+	}
+	decision, ok := selected.OwnerData.(GoalGateDecision)
+	if !ok || !decision.BlockStop {
+		return false, nil
+	}
+	store := m.engine.goalStateStoreLocked()
+	if store == nil {
+		return false, nil
+	}
+	recorded, err := store.RecordContinuation(decision)
+	if err != nil {
+		if request.Observer != nil {
+			request.Observer.Errored(runtimemodule.PolicyExecution{
+				Point: runtimemodule.PolicyPointFinish, Name: goalCompletionGateName, Source: "builtin",
+			}, runtimemodule.PolicyResult{}, err)
+		}
+		return false, err
+	}
+	if recorded {
+		m.engine.emitGoalUpdated(request.TurnID)
+	}
+	return recorded, nil
+}
+
+func (m *GoalModule) FinishContinuationCommitted(_ context.Context, request runtimemodule.FinishRequest, selected runtimemodule.FinishDecision) {
+	if m == nil || m.engine == nil {
+		return
+	}
+	decision, ok := selected.OwnerData.(GoalGateDecision)
+	if !ok {
+		return
+	}
+	store := m.engine.goalStateStoreLocked()
+	if store == nil {
+		return
+	}
+	snapshot, _ := store.StatusSnapshot()
+	_ = m.engine.emit(events.Event{
+		Type:    "goal.continued",
+		TurnID:  request.TurnID,
+		Payload: goalContinuedPayload(decision, snapshot),
+	})
+}
+
+func (m *GoalModule) shouldDeferContinuation() bool {
+	return m.continuationDeferrer != nil && m.continuationDeferrer.ShouldDeferGoalContinuation()
 }
 
 func GoalToolDefinitions() []tools.ToolDefinition {

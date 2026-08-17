@@ -55,7 +55,7 @@ func ProviderVisibleMessages(msgs []llm.Message) []llm.Message {
 	}
 	var filtered []llm.Message
 	for i, msg := range msgs {
-		if msg.Kind != llm.MessageKindHookEvent {
+		if msg.Kind != llm.MessageKindHookEvent && !msg.PolicyBlocked {
 			if filtered != nil {
 				filtered = append(filtered, msg)
 			}

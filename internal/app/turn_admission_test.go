@@ -21,8 +21,14 @@ type turnAdmissionRuntimeStub struct {
 	enqueue func(context.Context, llm.Message) (runtime.PendingInputStatus, error)
 }
 
-func (s *turnAdmissionRuntimeStub) ReserveTurnID(turnID string) error {
-	return s.reserve(turnID)
+func (s *turnAdmissionRuntimeStub) AdmitTurnMessage(turnID string, msg llm.Message) (llm.Message, error) {
+	if err := s.reserve(turnID); err != nil {
+		return llm.Message{}, err
+	}
+	if msg.ID == "" {
+		msg.ID = "accepted-" + turnID
+	}
+	return msg, nil
 }
 
 func (s *turnAdmissionRuntimeStub) ReserveCompactionTurnID(turnID string) error {
@@ -45,8 +51,8 @@ func (s *turnAdmissionRuntimeStub) EnqueuePersistedPendingMessage(
 
 func (s *turnAdmissionRuntimeStub) PromotePendingInputTurn(
 	_, _ string,
-) (llm.Message, runtime.PendingInputStatus, bool) {
-	return llm.Message{}, runtime.PendingInputStatus{}, false
+) (llm.Message, runtime.PendingInputStatus, bool, error) {
+	return llm.Message{}, runtime.PendingInputStatus{}, false, nil
 }
 
 func (g *testTurnIDs) NextTurnID(prefix string) string {
@@ -72,8 +78,23 @@ func TestAdmitTurnStartsWhenIdle(t *testing.T) {
 	if result.Start == nil || result.Start.TurnID != "turn-1" || result.Start.Message.FirstText() != "hello" {
 		t.Fatalf("start = %+v", result.Start)
 	}
+	if result.Start.Message.ID == "" {
+		t.Fatal("started turn input has no durable message id")
+	}
 	if status := a.Engine.PendingInputStatus(); status.TurnID != "turn-1" {
 		t.Fatalf("runtime active turn = %+v", status)
+	}
+	records, err := a.Engine.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("pending records after admission = %+v, want one", records)
+	}
+	for _, record := range records {
+		if record.State != runtime.PendingInputStateAdmitted || record.TurnID != "turn-1" || record.MessageID != result.Start.Message.ID {
+			t.Fatalf("accepted turn record = %+v", record)
+		}
 	}
 }
 
@@ -107,13 +128,23 @@ func TestAdmitTurnSystemNoticeUsesOrdinaryAdmissionWithoutSlashParsing(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 {
+	if len(records) != 2 {
 		t.Fatalf("pending records = %+v", records)
 	}
+	var admittedCount, pendingCount int
 	for _, record := range records {
 		if record.Message.Kind != llm.MessageKindSystemNotice {
 			t.Fatalf("pending record = %+v", record)
 		}
+		switch record.State {
+		case runtime.PendingInputStateAdmitted:
+			admittedCount++
+		case runtime.PendingInputStatePending:
+			pendingCount++
+		}
+	}
+	if admittedCount != 1 || pendingCount != 1 {
+		t.Fatalf("pending states = admitted:%d pending:%d", admittedCount, pendingCount)
 	}
 }
 
@@ -544,15 +575,20 @@ func TestAdmitTurnQueuesImageBlocksWhileRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 {
-		t.Fatalf("pending records = %d, want 1", len(records))
-	}
+	pendingCount := 0
 	for _, record := range records {
+		if record.State != runtime.PendingInputStatePending {
+			continue
+		}
+		pendingCount++
 		blocks := record.Message.Blocks
 		if len(blocks) != 2 || blocks[0].Type != llm.BlockText || blocks[0].Text != "second" ||
 			blocks[1].Type != llm.BlockImage || blocks[1].Media == nil || blocks[1].Media.ArtifactPath != media.ArtifactPath {
 			t.Fatalf("queued message blocks = %+v", blocks)
 		}
+	}
+	if len(records) != 2 || pendingCount != 1 {
+		t.Fatalf("pending records = %+v, want one admitted and one pending", records)
 	}
 }
 
@@ -587,7 +623,10 @@ func TestAdmitTurnQueuesDuringCompactAndPromotesPendingInput(t *testing.T) {
 		t.Fatalf("queued = %+v", queued)
 	}
 
-	promoted := a.finishCompactAdmission(compactID, ids)
+	promoted, err := a.finishCompactAdmission(compactID, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if promoted == nil || promoted.TurnID != "turn-1" || promoted.Message.FirstText() != "after compact" {
 		t.Fatalf("promoted = %+v", promoted)
 	}
@@ -619,7 +658,10 @@ func TestAdmitTurnQueuesImageBlocksDuringCompactAndPromotesPendingInput(t *testi
 		t.Fatalf("queued = %+v", queued)
 	}
 
-	promoted := a.finishCompactAdmission(compactID, ids)
+	promoted, err := a.finishCompactAdmission(compactID, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if promoted == nil || promoted.TurnID != "turn-1" {
 		t.Fatalf("promoted = %+v", promoted)
 	}

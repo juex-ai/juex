@@ -1,28 +1,9 @@
 package runtime
 
-import (
-	"encoding/json"
-
-	"github.com/juex-ai/juex/internal/events"
-)
+import "github.com/juex-ai/juex/internal/events"
 
 func (e *Engine) goalStateStoreLocked() *GoalStateStore {
 	return e.currentGoalStateStore()
-}
-
-func goalStateRawFromStore(store *GoalStateStore) (json.RawMessage, bool) {
-	if store == nil {
-		return nil, false
-	}
-	state, err := store.Snapshot()
-	if err != nil {
-		return nil, false
-	}
-	raw := state.RawMessage()
-	if len(raw) == 0 {
-		return nil, false
-	}
-	return raw, true
 }
 
 func (e *Engine) GoalStatusSnapshot() (*GoalStatusSnapshot, error) {

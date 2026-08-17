@@ -36,7 +36,6 @@ import (
 	"github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
@@ -63,8 +62,9 @@ type Engine struct {
 	ModelHealth       *llm.ModelHealth
 	Tools             *tools.Registry
 	RuntimeModules    *runtimemodule.Set
+	RuntimeContext    runtimemodule.RuntimeContext
 	Bus               *events.Bus
-	// Session, Prompt, HookContext, PendingInputQueue, Notes, and GoalState
+	// Session, Prompt, PendingInputQueue, Notes, and GoalState
 	// are constructor/test compatibility fields. Concurrent production code
 	// must use the synchronized session-runtime methods instead of reading or
 	// replacing these fields directly.
@@ -75,10 +75,6 @@ type Engine struct {
 	WorkDir string
 	// ArtifactDir is the current Agent's managed Artifact root.
 	ArtifactDir string
-	Hooks       HookRunner
-	// HookContext carries process/session metadata included in every hook
-	// command input. Event-specific fields are filled by the runtime.
-	HookContext hooks.Request
 	// MaxPendingInputs caps user or external event messages that can be
 	// queued while a turn is active. When omitted, DefaultMaxPendingInput is
 	// used. A full queue rejects new input instead of silently dropping it.
@@ -91,19 +87,6 @@ type Engine struct {
 	Notes *NotesStore
 	// GoalState persists the current session goal and latest completion check.
 	GoalState *GoalStateStore
-	// SkipGoalCompletionGate keeps shared Goal state visible and writable while
-	// preventing this Engine from extending turns to satisfy another Session's
-	// completion contract. Managed Side Sessions set this.
-	SkipGoalCompletionGate bool
-	// ShouldDeferGoalContinuation lets an owner temporarily allow an
-	// in-progress Goal to finish the current Turn while subscribed external
-	// work is still running. It must be a fast, read-only callback and must not
-	// call back into this Engine.
-	ShouldDeferGoalContinuation func() bool
-	// PendingInputsAdmitted observes durable pending records when they leave the
-	// in-memory queue for provider-visible processing. It must be fast and must
-	// not call back into this Engine.
-	PendingInputsAdmitted func(recordIDs []string)
 	// ShowBuiltinHookTraces includes built-in runtime gates in UI-only hook
 	// trace messages. Command hook traces are always shown.
 	ShowBuiltinHookTraces bool
@@ -158,10 +141,6 @@ type Engine struct {
 	notesContextErrorKey string
 }
 
-type HookRunner interface {
-	Run(context.Context, hooks.Request) ([]hooks.Result, error)
-}
-
 var (
 	ErrNoActiveTurn          = errors.New("runtime: no active turn accepting pending input")
 	ErrActiveTurnExists      = errors.New("runtime: active turn already accepting pending input")
@@ -179,6 +158,7 @@ type PendingInputStatus struct {
 type queuedPendingInput struct {
 	RecordID string
 	Message  llm.Message
+	Origin   PendingInputOrigin
 }
 
 // Turn drives one user input to completion. The returned string is the final
@@ -190,6 +170,67 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 
 func (e *Engine) ReserveTurnID(turnID string) error {
 	return e.reserveTurnID(turnID, TurnAdmittedPayload{})
+}
+
+// AdmitTurnMessage durably accepts one main Turn input before establishing the
+// active execution boundary. Repeating admission for the same Turn returns the
+// already accepted message with its stable Framework-owned identity.
+func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Message, error) {
+	if e == nil {
+		return llm.Message{}, ErrNoActiveTurn
+	}
+	if turnID == "" {
+		return llm.Message{}, errors.New("runtime: empty turn id")
+	}
+	queue := e.currentPendingInputQueue()
+	if queue == nil {
+		return llm.Message{}, errors.New("runtime: pending input queue unavailable")
+	}
+	userMsg = llm.ClassifyUserMessage(userMsg)
+
+	e.pendingMu.Lock()
+	if e.activeTurnID != "" && e.activeTurnID != turnID {
+		e.pendingMu.Unlock()
+		return llm.Message{}, ErrActiveTurnExists
+	}
+	alreadyActive := e.activeTurnID == turnID
+	record, err := queue.StageTurnInput(turnID, userMsg, alreadyActive)
+	if err != nil {
+		e.pendingMu.Unlock()
+		return llm.Message{}, fmt.Errorf("persist accepted turn input: %w", err)
+	}
+	admitted := e.activeTurnID == ""
+	createdAdmissionIntent := record.Origin == PendingInputOriginTurn && record.State == PendingInputStateAccepting && record.TurnID == turnID
+	e.activeTurnID = turnID
+	e.pendingMu.Unlock()
+
+	if admitted {
+		if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{}}); err != nil {
+			var dropErr error
+			if createdAdmissionIntent {
+				dropErr = queue.MarkDropped([]string{record.ID})
+			}
+			e.finishActiveTurn(turnID)
+			commitErr := fmt.Errorf("commit turn admission: %w", err)
+			if dropErr != nil {
+				return llm.Message{}, errors.Join(commitErr, fmt.Errorf("drop rejected turn admission: %w", dropErr))
+			}
+			return llm.Message{}, commitErr
+		}
+		if err := queue.CommitTurnInput(record.ID, turnID); err != nil {
+			var dropErr error
+			if createdAdmissionIntent {
+				dropErr = queue.MarkDropped([]string{record.ID})
+			}
+			commitErr := fmt.Errorf("persist committed turn admission: %w", err)
+			if dropErr != nil {
+				commitErr = errors.Join(commitErr, fmt.Errorf("drop uncommitted turn admission: %w", dropErr))
+			}
+			e.finishActiveTurn(turnID)
+			return llm.Message{}, e.failTurn(turnID, commitErr)
+		}
+	}
+	return record.Message, nil
 }
 
 func (e *Engine) ReserveCompactionTurnID(turnID string) error {
@@ -336,7 +377,7 @@ func (e *Engine) EnqueuePersistedPendingMessage(ctx context.Context, record Pend
 		e.pendingMu.Unlock()
 		return status, ErrPendingInputQueueFull
 	}
-	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: record.ID, Message: record.Message})
+	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: record.ID, Message: record.Message, Origin: record.Origin})
 	status.PendingCount = len(e.pendingInput)
 	event := events.Event{Type: "pending_input.queued", TurnID: turnID, Payload: PendingInputQueuedPayload{
 		Input:            record.Message.FirstText(),
@@ -409,7 +450,7 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 			return status, nil
 		}
 	}
-	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: recordID, Message: userMsg})
+	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: recordID, Message: userMsg, Origin: PendingInputOriginQueued})
 	status.PendingCount = len(e.pendingInput)
 	event := events.Event{Type: "pending_input.queued", TurnID: turnID, Payload: PendingInputQueuedPayload{
 		Input:            userMsg.FirstText(),
@@ -442,11 +483,12 @@ func (e *Engine) PendingInputStatus() PendingInputStatus {
 
 // PromotePendingInputTurn turns the first queued input from a reserved
 // non-provider phase into the user message for a real provider turn.
-func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.Message, PendingInputStatus, bool) {
+func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.Message, PendingInputStatus, bool, error) {
 	if e == nil || nextTurnID == "" {
-		return llm.Message{}, PendingInputStatus{}, false
+		return llm.Message{}, PendingInputStatus{}, false, nil
 	}
 	max := e.effectiveMaxPendingInputs()
+	queue := e.currentPendingInputQueue()
 	e.pendingMu.Lock()
 	if e.activeTurnID != currentTurnID || len(e.pendingInput) == 0 {
 		if e.activeTurnID == currentTurnID {
@@ -458,29 +500,46 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 			MaxPendingInputs: max,
 		}
 		e.pendingMu.Unlock()
-		return llm.Message{}, status, false
+		return llm.Message{}, status, false, nil
 	}
 	item := e.pendingInput[0]
+	e.activeTurnID = nextTurnID
+	e.pendingEventAnnouncing = true
+	e.pendingMu.Unlock()
+
+	if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{}}); err != nil {
+		e.finishActiveTurn(nextTurnID)
+		e.flushPendingEvents()
+		status := e.PendingInputStatus()
+		return llm.Message{}, status, false, fmt.Errorf("commit promoted turn admission: %w", err)
+	}
+	if item.RecordID != "" && queue != nil {
+		if err := queue.PromoteToTurnInput([]string{item.RecordID}, nextTurnID); err != nil {
+			e.finishActiveTurn(nextTurnID)
+			promotionErr := e.failTurn(nextTurnID, fmt.Errorf("mark promoted pending input admitted: %w", err))
+			e.flushPendingEvents()
+			return llm.Message{}, e.PendingInputStatus(), false, promotionErr
+		}
+	}
+
+	e.pendingMu.Lock()
 	e.pendingInput[0] = queuedPendingInput{}
 	e.pendingInput = e.pendingInput[1:]
-	e.activeTurnID = nextTurnID
 	status := PendingInputStatus{
 		TurnID:           nextTurnID,
 		PendingCount:     len(e.pendingInput),
 		MaxPendingInputs: max,
 	}
-	e.pendingEventAnnouncing = true
 	e.pendingMu.Unlock()
-	if item.RecordID != "" {
-		e.notifyPendingInputsAdmitted([]string{item.RecordID})
-	}
 	_ = e.emit(events.Event{Type: PendingInputPromotedType, TurnID: nextTurnID, Payload: PendingInputPromotedPayload{
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
 	}})
-	_ = e.emit(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{}})
+	if item.RecordID != "" {
+		e.notifyPendingInputsAdmitted(context.Background(), nextTurnID, []string{item.RecordID})
+	}
 	e.flushPendingEvents()
-	return item.Message, status, true
+	return item.Message, status, true, nil
 }
 
 // TurnMessage drives one already-constructed user message to completion.
@@ -497,8 +556,11 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	if turnID == "" {
 		turnID = newID()
 	}
+	userMsg, err = e.AdmitTurnMessage(turnID, userMsg)
+	if err != nil {
+		return "", err
+	}
 	ctx, _, finishOperation := e.beginActiveOperation(ctx)
-	turnID = e.beginActiveTurn(turnID)
 	previousFailures := e.toolFailures
 	e.toolFailures = newToolFailureLedger(e.WorkDir)
 	lifecycle := turnLifecycle{
@@ -608,16 +670,22 @@ type recordedProviderResponse struct {
 }
 
 func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, userMsg llm.Message) (preparedTurnContext, error) {
-	userHookReq := e.newHookRequest(hooks.EventUserPromptSubmit, turnID)
-	userHookReq.UserInput = userMsg.FirstText()
-	userHookResults, err := e.runHooks(ctx, userHookReq)
+	original := userMsg
+	policyMessage, err := runtimemodule.ApplyTurnInputPolicies(ctx, runtimemodule.TurnInputRequest{
+		Runtime:  e.policyRuntimeContext(),
+		Session:  e.policySessionContext(),
+		TurnID:   turnID,
+		Message:  userMsg,
+		Observer: e.policyObserver(turnID),
+	}, e.policySets()...)
 	if err != nil {
+		original.PolicyBlocked = true
+		if persistErr := e.recordTurnStartLocked(turnID, original); persistErr != nil {
+			return preparedTurnContext{}, errors.Join(err, fmt.Errorf("persist accepted user input after policy failure: %w", persistErr))
+		}
 		return preparedTurnContext{}, err
 	}
-	if denied, reason := hookBlocked(userHookResults); denied {
-		return preparedTurnContext{}, hookDeniedError(hooks.EventUserPromptSubmit, reason)
-	}
-	userMsg = appendHookAdditionalContext(userMsg, userHookResults)
+	userMsg = policyMessage
 
 	prepared := preparedTurnContext{
 		tools:  e.Tools.Specs(),
@@ -625,11 +693,12 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 	}
 	projectedUserMsg, projection, err := e.projectMessageLocked(userMsg, prepared.policy)
 	if err != nil {
-		return preparedTurnContext{}, err
+		return preparedTurnContext{}, e.persistAcceptedInputAfterPreparationFailureLocked(turnID, userMsg, err)
 	}
 	prepared.userMessage = projectedUserMsg
 	if err := e.emitProjectionApplied(turnID, projection); err != nil {
-		return preparedTurnContext{}, fmt.Errorf("commit user input projection: %w", err)
+		projectionErr := fmt.Errorf("commit user input projection: %w", err)
+		return preparedTurnContext{}, e.persistAcceptedInputAfterPreparationFailureLocked(turnID, userMsg, projectionErr)
 	}
 
 	promptSections, err := e.PromptSectionsWithError()
@@ -645,10 +714,17 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 
 	if err := e.maybeCompact(ctx, turnID, prepared.systemPrompt, prepared.tools, prepared.userMessage); err != nil {
 		if !canContinueAfterAutoCompactError(ctx, prepared.userMessage) {
-			return preparedTurnContext{}, err
+			return preparedTurnContext{}, e.persistAcceptedInputAfterPreparationFailureLocked(turnID, prepared.userMessage, err)
 		}
 	}
 	return prepared, nil
+}
+
+func (e *Engine) persistAcceptedInputAfterPreparationFailureLocked(turnID string, message llm.Message, cause error) error {
+	if persistErr := e.recordTurnStartLocked(turnID, message); persistErr != nil {
+		return errors.Join(cause, fmt.Errorf("persist accepted user input after preparation failure: %w", persistErr))
+	}
+	return cause
 }
 
 func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error {
@@ -682,7 +758,7 @@ func (e *Engine) repairTranscriptLocked(turnID, reason string) error {
 			call := toolevents.ToolCallPayload{
 				Name: repair.ToolName, ToolUseID: repair.ToolUseID,
 				Iter: repair.ProviderIteration, CallIndex: repair.CallIndex,
-				MessageID: repair.AssistantMessageID,
+				MessageID: repair.AssistantMessageID, Input: repair.EffectiveInput,
 			}
 			if err := e.emit(events.Event{
 				Type: toolevents.OutcomeUnknownType, TurnID: repair.TurnID,
@@ -1061,7 +1137,7 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, polic
 	if appendErr := e.currentSession().Append(projectedToolResultMsg); appendErr != nil {
 		return fmt.Errorf("session append tool result: %w", appendErr)
 	}
-	e.recordToolFailureBatch(turnID, recorded.toolCalls, toolResults)
+	e.recordToolFailureBatch(turnID, toolResults)
 	if emitErr := e.emitProjectionApplied(turnID, projection); emitErr != nil {
 		return fmt.Errorf("commit tool result projection: %w", emitErr)
 	}
@@ -1077,6 +1153,7 @@ func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, last
 }
 
 type toolCallResult struct {
+	Call             llm.Block
 	Block            llm.Block
 	Observation      tools.Observation
 	EventObservation tools.Observation
@@ -1188,34 +1265,33 @@ func appendGuidedToolFailureHint(content, hint string) string {
 
 func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolExecutionCall) toolCallResult {
 	call := execution.call
-	preReq := e.newHookRequest(hooks.EventPreToolUse, turnID)
-	preReq.ToolName = call.ToolName
-	preReq.ToolInput = call.Input
-	started := false
-	checkpointStarted := func() error {
-		if started {
-			return nil
-		}
-		if err := e.emit(events.Event{Type: toolevents.RunningType, TurnID: turnID, Payload: toolevents.Running(execution.payload)}); err != nil {
-			return fmt.Errorf("commit tool started: %w", err)
-		}
-		started = true
-		return nil
+	if err := e.emit(events.Event{Type: toolevents.RunningType, TurnID: turnID, Payload: toolevents.Running(execution.payload)}); err != nil {
+		return toolCallResult{FatalError: fmt.Errorf("commit tool started: %w", err)}
 	}
-	preResults, err := e.runHooksBeforeRun(ctx, preReq, checkpointStarted)
+	prePolicy, err := runtimemodule.ApplyToolPoliciesWithInputCheckpoint(ctx, runtimemodule.ToolPolicyRequest{
+		Runtime:  e.policyRuntimeContext(),
+		Session:  e.policySessionContext(),
+		TurnID:   turnID,
+		Stage:    runtimemodule.ToolPolicyBeforeExecution,
+		ToolName: call.ToolName,
+		Input:    call.Input,
+		Observer: e.policyObserver(turnID),
+	}, func(input map[string]any) error {
+		effectiveCall := execution.payload
+		effectiveCall.Input = input
+		return e.emit(events.Event{Type: toolevents.InputResolvedType, TurnID: turnID, Payload: toolevents.InputResolved(effectiveCall)})
+	}, e.policySets()...)
+	call.Input = prePolicy.Input
 	if err != nil {
-		if isHookRequestCommitError(err) || isHookBeforeRunError(err) {
+		if runtimemodule.IsPolicyCheckpointError(err) {
 			return toolCallResult{FatalError: err}
 		}
-		return e.hookToolErrorResult(turnID, call, err)
+		return e.policyToolErrorResult(call, err, prePolicy.Context)
 	}
-	if denied, reason := hookBlocked(preResults); denied {
-		return e.hookToolErrorResult(turnID, call, fmt.Errorf("hooks: tool %q denied%s", call.ToolName, hookReasonSuffix(reason)))
+	if prePolicy.Denied {
+		return e.policyToolErrorResult(call, fmt.Errorf("tool policy denied %q%s", call.ToolName, policyReasonSuffix(prePolicy.Reason)), prePolicy.Context)
 	}
-	if err := checkpointStarted(); err != nil {
-		return toolCallResult{FatalError: err}
-	}
-
+	emitOutputDeltas := runtimemodule.AllowsLiveToolOutput(e.policySets()...)
 	toolCtx := tools.WithToolCallEvents(ctx, tools.ToolCallEvents{
 		Name:      call.ToolName,
 		ToolUseID: call.ToolUseID,
@@ -1223,7 +1299,9 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 		CallIndex: execution.payload.CallIndex,
 		MessageID: execution.payload.MessageID,
 		Emit: func(delta tools.OutputDelta) {
-			_ = e.emit(toolevents.OutputDeltaEvent(turnID, execution.payload, delta))
+			if emitOutputDeltas {
+				_ = e.emit(toolevents.OutputDeltaEvent(turnID, execution.payload, delta))
+			}
 		},
 	})
 	out, info, err := e.Tools.CallWithInfo(toolCtx, call.ToolName, call.Input)
@@ -1249,15 +1327,31 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 	if isShellCall {
 		shellBaseContent = block.Content
 	}
-	postReq := e.newHookRequest(hooks.EventPostToolUse, turnID)
-	postReq.ToolName = call.ToolName
-	postReq.ToolInput = call.Input
-	postReq.ToolResult = block.Content
-	postResults, postErr := e.runHooks(ctx, postReq)
+	postPolicy, postErr := runtimemodule.ApplyToolPolicies(ctx, runtimemodule.ToolPolicyRequest{
+		Runtime:  e.policyRuntimeContext(),
+		Session:  e.policySessionContext(),
+		TurnID:   turnID,
+		Stage:    runtimemodule.ToolPolicyAfterExecution,
+		ToolName: call.ToolName,
+		Input:    call.Input,
+		Result: runtimemodule.ToolPolicyResult{
+			Content: block.Content,
+			IsError: block.IsError,
+		},
+		Observer: e.policyObserver(turnID),
+	}, e.policySets()...)
 	postErr = cancellation.NormalizeError(postErr)
+	if postErr == nil && postPolicy.Denied {
+		postErr = fmt.Errorf("tool policy denied %q after execution%s", call.ToolName, policyReasonSuffix(postPolicy.Reason))
+	}
+	if postPolicy.ResultTransformed {
+		block.Content = postPolicy.Result.Content
+		block.IsError = postPolicy.Result.IsError
+		block.ChunkedWrite = nil
+	}
 	var fatalErr error
 	if postErr != nil {
-		if isHookRequestCommitError(postErr) {
+		if runtimemodule.IsPolicyCheckpointError(postErr) {
 			fatalErr = postErr
 		} else {
 			if isShellStructuredResult(info.StructuredResult) {
@@ -1268,25 +1362,36 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, execution toolE
 			block.IsError = true
 			toolErr = postErr
 		}
+	} else if !postPolicy.ResultTransformed {
+		block.Content = postPolicy.Result.Content
+		block.IsError = postPolicy.Result.IsError
 	}
-	appendToolHookContext(&block, preResults, false)
-	appendToolHookContext(&block, postResults, true)
+	appendToolPolicyContext(&block, prePolicy.Context)
+	appendToolPolicyContext(&block, postPolicy.Context)
 	if isShellCall {
 		block.Content = finalizedShellContent(shellBaseContent, block.Content)
 	}
-	if !block.IsError {
+	if !block.IsError && !postPolicy.ResultTransformed {
 		if media, ok := tools.MediaRefFromStructuredResult(info.StructuredResult); ok {
 			block.Media = media
 		}
 	}
-	observation := toolObservationForResult(call, block, info, toolErr)
+	observation := toolObservationForResult(call, block, info, toolErr, postPolicy.ResultTransformed)
 	return toolCallResult{
-		Block: block, Observation: observation, EventObservation: observation,
+		Call: call, Block: block, Observation: observation, EventObservation: observation,
 		Info: info, FatalError: fatalErr,
 	}
 }
 
-func toolObservationForResult(call llm.Block, block llm.Block, info tools.CallInfo, err error) tools.Observation {
+func toolObservationForResult(call llm.Block, block llm.Block, info tools.CallInfo, err error, resultTransformed bool) tools.Observation {
+	if resultTransformed {
+		return tools.NewObservation(tools.ObservationOptions{
+			ToolName:  call.ToolName,
+			ToolUseID: call.ToolUseID,
+			Input:     call.Input,
+			Content:   block.Content,
+		})
+	}
 	var obs tools.Observation
 	if info.Observation != nil {
 		obs = info.Observation.Clone()
@@ -1378,7 +1483,7 @@ func (e *Engine) emitToolFinished(
 	return e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: payload})
 }
 
-func (e *Engine) hookToolErrorResult(turnID string, call llm.Block, err error) toolCallResult {
+func (e *Engine) policyToolErrorResult(call llm.Block, err error, contexts []runtimemodule.PolicyContext) toolCallResult {
 	err = cancellation.NormalizeError(err)
 	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
 	block := llm.Block{
@@ -1388,8 +1493,9 @@ func (e *Engine) hookToolErrorResult(turnID string, call llm.Block, err error) t
 		Content:   publicErr,
 		IsError:   true,
 	}
-	observation := toolObservationForResult(call, block, tools.CallInfo{}, err)
-	return toolCallResult{Block: block, Observation: observation, EventObservation: observation}
+	appendToolPolicyContext(&block, contexts)
+	observation := toolObservationForResult(call, block, tools.CallInfo{}, err, false)
+	return toolCallResult{Call: call, Block: block, Observation: observation, EventObservation: observation}
 }
 
 func (e *Engine) effectiveMaxPendingInputs() int {
@@ -1475,45 +1581,213 @@ func (e *Engine) beginActiveTurn(turnID string) string {
 	return turnID
 }
 
-func (e *Engine) restorePendingInput(turnID, skipMessageID string) error {
+func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID string) error {
 	if e == nil || turnID == "" {
 		return nil
 	}
+	if err := cancellation.ContextError(ctx); err != nil {
+		return err
+	}
 	queue := e.currentPendingInputQueue()
 	sess := e.currentSession()
-	e.pendingMu.Lock()
 	if queue == nil {
-		e.pendingMu.Unlock()
 		return nil
 	}
-	max := e.effectiveMaxPendingInputs()
-	remaining := max - len(e.pendingInput)
-	if remaining <= 0 {
-		e.pendingMu.Unlock()
-		return nil
-	}
-	records, err := queue.Replayable(turnID, remaining)
+	records, err := queue.Replayable(turnID, 0)
 	if err != nil {
-		e.pendingMu.Unlock()
 		return err
 	}
 	var alreadyProcessed []string
-	for _, record := range records {
-		if e.hasPendingRecordLocked(record.ID) {
+	queued := make([]queuedPendingInput, 0, len(records))
+	markAlreadyProcessed := func(restoreErr error) error {
+		if len(alreadyProcessed) == 0 {
+			return restoreErr
+		}
+		if err := queue.MarkProcessed(alreadyProcessed); err != nil {
+			markErr := fmt.Errorf("mark recovered input processed: %w", err)
+			if restoreErr != nil {
+				return errors.Join(restoreErr, markErr)
+			}
+			return markErr
+		}
+		return restoreErr
+	}
+	reachedCurrentInput := false
+	var afterCurrent []queuedPendingInput
+	flushQueued := func(tail []PendingInputRecord) error {
+		if len(queued) == 0 {
+			return nil
+		}
+		if err := cancellation.ContextError(ctx); err != nil {
+			e.prependPendingInput(append(queued, queuedPendingInputsFromRecords(tail)...))
+			queued = nil
+			return err
+		}
+		batch := queued
+		queued = nil
+		if err := e.commitPendingInputBatchLocked(ctx, turnID, batch); err != nil {
+			e.prependPendingInput(append(batch, queuedPendingInputsFromRecords(tail)...))
+			return err
+		}
+		return nil
+	}
+	for i, record := range records {
+		if skipMessageID != "" && record.MessageID == skipMessageID {
+			if err := flushQueued(records[i:]); err != nil {
+				return markAlreadyProcessed(err)
+			}
+			reachedCurrentInput = true
 			continue
 		}
-		if skipMessageID != "" && record.MessageID == skipMessageID {
+		if reachedCurrentInput {
+			if sessionHasMessageID(sess, record.MessageID) {
+				alreadyProcessed = append(alreadyProcessed, record.ID)
+				continue
+			}
+			afterCurrent = append(afterCurrent, queuedPendingInput{RecordID: record.ID, Message: record.Message, Origin: record.Origin})
 			continue
 		}
 		if sessionHasMessageID(sess, record.MessageID) {
 			alreadyProcessed = append(alreadyProcessed, record.ID)
 			continue
 		}
-		e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: record.ID, Message: record.Message})
+		if record.Origin == PendingInputOriginTurn {
+			if err := flushQueued(records[i:]); err != nil {
+				return markAlreadyProcessed(err)
+			}
+			if err := e.restoreAcceptedTurnInputLocked(ctx, turnID, record); err != nil {
+				e.prependPendingInput(queuedPendingInputsFromRecords(records[i:]))
+				return markAlreadyProcessed(err)
+			}
+			continue
+		}
+		queued = append(queued, queuedPendingInput{RecordID: record.ID, Message: record.Message, Origin: record.Origin})
 	}
+	if err := flushQueued(nil); err != nil {
+		return markAlreadyProcessed(err)
+	}
+	if err := markAlreadyProcessed(nil); err != nil {
+		e.prependPendingInput(afterCurrent)
+		return err
+	}
+	e.mergeRecoveredPendingInputAfterCurrent(sess, afterCurrent)
+	return nil
+}
+
+func (e *Engine) mergeRecoveredPendingInputAfterCurrent(sess *session.Session, recovered []queuedPendingInput) {
+	if len(recovered) == 0 {
+		return
+	}
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+
+	merged := make([]queuedPendingInput, 0, len(recovered)+len(e.pendingInput))
+	mergedIDs := make(map[string]struct{}, len(recovered))
+	for _, item := range recovered {
+		merged = append(merged, item)
+		mergedIDs[item.RecordID] = struct{}{}
+	}
+	for _, item := range e.pendingInput {
+		if _, ok := mergedIDs[item.RecordID]; ok && item.RecordID != "" {
+			continue
+		}
+		if sessionHasMessageID(sess, item.Message.ID) {
+			continue
+		}
+		merged = append(merged, item)
+	}
+	e.pendingInput = merged
+}
+
+func queuedPendingInputsFromRecords(records []PendingInputRecord) []queuedPendingInput {
+	pending := make([]queuedPendingInput, 0, len(records))
+	for _, record := range records {
+		pending = append(pending, queuedPendingInput{
+			RecordID: record.ID,
+			Message:  record.Message,
+			Origin:   record.Origin,
+		})
+	}
+	return pending
+}
+
+func (e *Engine) prependPendingInput(pending []queuedPendingInput) {
+	if len(pending) == 0 {
+		return
+	}
+	e.pendingMu.Lock()
+	seenRecords := make(map[string]struct{}, len(pending)+len(e.pendingInput))
+	seenMessages := make(map[string]struct{}, len(pending)+len(e.pendingInput))
+	merged := make([]queuedPendingInput, 0, len(pending)+len(e.pendingInput))
+	appendUnique := func(item queuedPendingInput) {
+		if item.RecordID != "" {
+			if _, exists := seenRecords[item.RecordID]; exists {
+				return
+			}
+		}
+		if item.Message.ID != "" {
+			if _, exists := seenMessages[item.Message.ID]; exists {
+				return
+			}
+		}
+		merged = append(merged, item)
+		if item.RecordID != "" {
+			seenRecords[item.RecordID] = struct{}{}
+		}
+		if item.Message.ID != "" {
+			seenMessages[item.Message.ID] = struct{}{}
+		}
+	}
+	for _, item := range pending {
+		appendUnique(item)
+	}
+	for _, item := range e.pendingInput {
+		appendUnique(item)
+	}
+	e.pendingInput = merged
 	e.pendingMu.Unlock()
-	if len(alreadyProcessed) > 0 {
-		return queue.MarkProcessed(alreadyProcessed)
+}
+
+func (e *Engine) restoreAcceptedTurnInputLocked(ctx context.Context, turnID string, record PendingInputRecord) error {
+	original := record.Message
+	policyMessage, err := runtimemodule.ApplyTurnInputPolicies(ctx, runtimemodule.TurnInputRequest{
+		Runtime:  e.policyRuntimeContext(),
+		Session:  e.policySessionContext(),
+		TurnID:   turnID,
+		Message:  original,
+		Observer: e.policyObserver(turnID),
+	}, e.policySets()...)
+	if err != nil {
+		original.PolicyBlocked = true
+		if persistErr := e.appendRecoveredTurnInputLocked(original); persistErr != nil {
+			return errors.Join(err, fmt.Errorf("persist recovered accepted input after policy failure: %w", persistErr))
+		}
+		return err
+	}
+	projected, projection, err := e.projectMessageLocked(policyMessage, effectiveCompactionPolicy(e.Compaction, e.ContextWindow))
+	if err != nil {
+		if persistErr := e.appendRecoveredTurnInputLocked(policyMessage); persistErr != nil {
+			return errors.Join(err, fmt.Errorf("persist recovered accepted input after projection failure: %w", persistErr))
+		}
+		return err
+	}
+	if err := e.emitProjectionApplied(turnID, projection); err != nil {
+		projectionErr := fmt.Errorf("commit recovered input projection: %w", err)
+		if persistErr := e.appendRecoveredTurnInputLocked(policyMessage); persistErr != nil {
+			return errors.Join(projectionErr, fmt.Errorf("persist recovered accepted input after projection failure: %w", persistErr))
+		}
+		return projectionErr
+	}
+	return e.appendRecoveredTurnInputLocked(projected)
+}
+
+func (e *Engine) appendRecoveredTurnInputLocked(message llm.Message) error {
+	persisted, err := e.currentSession().AppendAssigned(message)
+	if err != nil {
+		return fmt.Errorf("session append recovered user: %w", err)
+	}
+	if err := e.markPendingInputMessageProcessed(persisted); err != nil {
+		return fmt.Errorf("mark recovered user input processed: %w", err)
 	}
 	return nil
 }
@@ -1526,49 +1800,85 @@ func (e *Engine) markPendingInputMessageProcessed(msg llm.Message) error {
 	if queue == nil {
 		return nil
 	}
-	records, err := queue.Records()
-	if err != nil {
-		return err
-	}
-	var ids []string
-	for _, record := range records {
-		if record.MessageID == msg.ID && isReplayablePendingState(record.State) {
-			ids = append(ids, record.ID)
-		}
-	}
-	return queue.MarkProcessed(ids)
+	return queue.MarkMessageProcessed(msg.ID)
 }
 
 func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) error {
 	if err := cancellation.ContextError(ctx); err != nil {
 		return err
 	}
-	queue := e.currentPendingInputQueue()
-	sess := e.currentSession()
 	e.pendingMu.Lock()
 	pending := append([]queuedPendingInput(nil), e.pendingInput...)
 	e.pendingInput = nil
-	max := e.effectiveMaxPendingInputs()
-	if len(pending) > 0 {
-		e.pendingEventAnnouncing = true
-	}
 	e.pendingMu.Unlock()
+	return e.commitPendingInputSequenceLocked(ctx, turnID, pending)
+}
+
+func (e *Engine) commitPendingInputSequenceLocked(ctx context.Context, turnID string, pending []queuedPendingInput) error {
+	queued := make([]queuedPendingInput, 0, len(pending))
+	queuedStart := 0
+	flushQueued := func(tailStart int) error {
+		if len(queued) == 0 {
+			return nil
+		}
+		batch := queued
+		queued = nil
+		if err := e.commitPendingInputBatchLocked(ctx, turnID, batch); err != nil {
+			e.prependPendingInput(pending[queuedStart:])
+			return err
+		}
+		queuedStart = tailStart
+		return nil
+	}
+	for i, item := range pending {
+		if item.Origin != PendingInputOriginTurn {
+			if len(queued) == 0 {
+				queuedStart = i
+			}
+			queued = append(queued, item)
+			continue
+		}
+		if err := flushQueued(i); err != nil {
+			return err
+		}
+		max := e.beginPendingInputDrain(turnID, 1)
+		if sessionHasMessageID(e.currentSession(), item.Message.ID) {
+			if queue := e.currentPendingInputQueue(); queue != nil && item.RecordID != "" {
+				if err := queue.MarkProcessed([]string{item.RecordID}); err != nil {
+					e.prependPendingInput(pending[i:])
+					return fmt.Errorf("mark recovered turn input processed: %w", err)
+				}
+			}
+		} else {
+			if err := e.restoreAcceptedTurnInputLocked(ctx, turnID, PendingInputRecord{
+				ID:        item.RecordID,
+				MessageID: item.Message.ID,
+				Message:   item.Message,
+				Origin:    item.Origin,
+			}); err != nil {
+				e.prependPendingInput(pending[i:])
+				return err
+			}
+		}
+		e.finishPendingInputDrain(turnID, 1, max)
+	}
+	return flushQueued(len(pending))
+}
+
+func (e *Engine) commitPendingInputBatchLocked(ctx context.Context, turnID string, pending []queuedPendingInput) error {
 	if len(pending) == 0 {
 		return nil
 	}
-	_ = e.emit(events.Event{Type: PendingInputDrainingType, TurnID: turnID, Payload: PendingInputDrainingPayload{
-		Count:            len(pending),
-		PendingCount:     0,
-		MaxPendingInputs: max,
-	}})
-	e.flushPendingEvents()
+	queue := e.currentPendingInputQueue()
+	sess := e.currentSession()
+	max := e.beginPendingInputDrain(turnID, len(pending))
 	recordIDs := pendingRecordIDs(pending)
 	if queue != nil {
 		if err := queue.MarkAdmitted(recordIDs, turnID); err != nil {
 			return fmt.Errorf("mark pending input admitted: %w", err)
 		}
 	}
-	e.notifyPendingInputsAdmitted(recordIDs)
+	e.notifyPendingInputsAdmitted(ctx, turnID, recordIDs)
 	var processedIDs []string
 	for _, item := range pending {
 		msg := item.Message
@@ -1599,22 +1909,46 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 			return fmt.Errorf("mark pending input processed: %w", err)
 		}
 	}
+	e.finishPendingInputDrain(turnID, len(pending), max)
+	return nil
+}
+
+func (e *Engine) beginPendingInputDrain(turnID string, count int) int {
+	e.pendingMu.Lock()
+	remaining := len(e.pendingInput)
+	max := e.effectiveMaxPendingInputs()
+	e.pendingEventAnnouncing = true
+	e.pendingMu.Unlock()
+	_ = e.emit(events.Event{Type: PendingInputDrainingType, TurnID: turnID, Payload: PendingInputDrainingPayload{
+		Count:            count,
+		PendingCount:     remaining,
+		MaxPendingInputs: max,
+	}})
+	e.flushPendingEvents()
+	return max
+}
+
+func (e *Engine) finishPendingInputDrain(turnID string, count, max int) {
 	e.pendingMu.Lock()
 	remaining := len(e.pendingInput)
 	e.pendingMu.Unlock()
 	_ = e.emit(events.Event{Type: "pending_input.drained", TurnID: turnID, Payload: PendingInputDrainedPayload{
-		Count:            len(pending),
+		Count:            count,
 		PendingCount:     remaining,
 		MaxPendingInputs: max,
 	}})
-	return nil
 }
 
-func (e *Engine) notifyPendingInputsAdmitted(recordIDs []string) {
-	if e == nil || e.PendingInputsAdmitted == nil || len(recordIDs) == 0 {
+func (e *Engine) notifyPendingInputsAdmitted(ctx context.Context, turnID string, recordIDs []string) {
+	if e == nil || len(recordIDs) == 0 {
 		return
 	}
-	e.PendingInputsAdmitted(recordIDs)
+	runtimemodule.NotifyPendingInputsAdmitted(ctx, runtimemodule.PendingInputAdmission{
+		Runtime:   e.policyRuntimeContext(),
+		Session:   e.policySessionContext(),
+		TurnID:    turnID,
+		RecordIDs: recordIDs,
+	}, e.policySets()...)
 }
 
 func (e *Engine) deferPendingEventLocked(event events.Event) bool {

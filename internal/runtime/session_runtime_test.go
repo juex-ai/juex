@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
@@ -27,12 +27,6 @@ func TestReplaceSessionRuntimePublishesCoherentBundle(t *testing.T) {
 		PendingInputQueue: NewPendingInputQueue(first.Dir, PendingInputQueueOptions{}),
 		Notes:             NewNotesStore(first.Dir),
 		GoalState:         NewGoalStateStore(first.Dir, GoalStateOptions{}),
-		HookContext: hooks.Request{
-			CWD:              root,
-			WorkspaceRoots:   []string{root},
-			ConversationPath: filepath.Join(first.Dir, "conversation.jsonl"),
-			EventsPath:       filepath.Join(first.Dir, "events.jsonl"),
-		},
 	}
 	engine.Prompt = sessionRuntimeTestPrompt(engine, root)
 	firstModules := newSessionRuntimeTestModuleSet(t)
@@ -131,6 +125,62 @@ func TestReplaceSessionRuntimeRecoversUnconsumedHookContext(t *testing.T) {
 	pending := engine.pendingHookRuntimeContextSnapshot()
 	if len(pending) != 1 || pending[0].ID != second.ID {
 		t.Fatalf("recovered hook context = %+v", pending)
+	}
+}
+
+func TestRestoreSessionRuntimeCheckpointDoesNotReplayJournal(t *testing.T) {
+	root := t.TempDir()
+	first := newSessionRuntimeTestSession(t, root)
+	second := newSessionRuntimeTestSession(t, root)
+	firstPending := provenanceRuntimeContextMessage("hook-first", "first pending")
+	secondPending := provenanceRuntimeContextMessage("hook-second", "second pending")
+	if err := first.AppendEvent(events.Normalize(events.Event{
+		Type:          provenance.HookContextQueuedType,
+		SchemaVersion: 1,
+		ReplayPolicy:  events.ReplayRequired,
+		Payload:       provenance.HookContextQueuedPayload{Messages: []llm.Message{firstPending}},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.AppendEvent(events.Normalize(events.Event{
+		Type:          provenance.HookContextQueuedType,
+		SchemaVersion: 1,
+		ReplayPolicy:  events.ReplayRequired,
+		Payload:       provenance.HookContextQueuedPayload{Messages: []llm.Message{secondPending}},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	engine := &Engine{Session: first, Prompt: &prompt.Builder{}}
+	if err := engine.ReplaceSessionRuntime(first); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := engine.CaptureSessionRuntimeCheckpoint()
+	if err := engine.ReplaceSessionRuntime(second); err != nil {
+		t.Fatal(err)
+	}
+
+	eventPath := filepath.Join(first.Dir, "events.jsonl")
+	file, err := os.OpenFile(eventPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("{invalid checkpoint test event\n"); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := engine.RestoreSessionRuntimeCheckpoint(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if got := engine.SessionRuntimeSnapshot().Session.ID; got != first.ID {
+		t.Fatalf("restored Session = %q, want %q", got, first.ID)
+	}
+	pending := engine.pendingHookRuntimeContextSnapshot()
+	if len(pending) != 1 || pending[0].ID != firstPending.ID {
+		t.Fatalf("restored pending hook context = %+v, want %q", pending, firstPending.ID)
 	}
 }
 
@@ -268,15 +318,6 @@ func assertSessionRuntimeBundle(t *testing.T, snapshot SessionRuntimeSnapshot, w
 	}
 	if snapshot.GoalState == nil || snapshot.GoalState.SessionDir != want.Dir {
 		t.Fatalf("goal state = %+v, want session dir %q", snapshot.GoalState, want.Dir)
-	}
-	if snapshot.HookContext.SessionID != want.ID {
-		t.Fatalf("hook session id = %q, want %q", snapshot.HookContext.SessionID, want.ID)
-	}
-	if snapshot.HookContext.ConversationPath != filepath.Join(want.Dir, "conversation.jsonl") {
-		t.Fatalf("hook conversation path = %q", snapshot.HookContext.ConversationPath)
-	}
-	if snapshot.HookContext.EventsPath != filepath.Join(want.Dir, "events.jsonl") {
-		t.Fatalf("hook events path = %q", snapshot.HookContext.EventsPath)
 	}
 }
 

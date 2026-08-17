@@ -231,6 +231,34 @@ func (f hookRunnerFunc) Run(ctx context.Context, req hooks.Request) ([]hooks.Res
 	return f(ctx, req)
 }
 
+type runtimeToolPolicyModule struct {
+	id    runtimemodule.ID
+	apply func(runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error)
+}
+
+type runtimeTurnInputPolicyModule struct {
+	id    runtimemodule.ID
+	apply func(runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error)
+}
+
+func (m *runtimeTurnInputPolicyModule) ID() runtimemodule.ID { return m.id }
+
+func (m *runtimeTurnInputPolicyModule) ApplyTurnInput(_ context.Context, request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+	if m.apply == nil {
+		return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputAllow}, nil
+	}
+	return m.apply(request)
+}
+
+func (m *runtimeToolPolicyModule) ID() runtimemodule.ID { return m.id }
+
+func (m *runtimeToolPolicyModule) ApplyTool(_ context.Context, request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+	if m.apply == nil {
+		return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+	}
+	return m.apply(request)
+}
+
 func (r *fakeHookRunner) Run(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 	r.requests = append(r.requests, req)
 	if err := r.errors[req.EventName]; err != nil {
@@ -303,9 +331,9 @@ func TestRunSessionStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "second"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventSessionStart: {{Stdout: "load project policy"}},
-	}}
+	}})
 
 	if err := eng.RunSessionStartHooks(context.Background()); err != nil {
 		t.Fatal(err)
@@ -334,9 +362,9 @@ func TestRunSessionStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
 
 func TestRunSessionStartHooksUsesStderrFallbackForExitTwo(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventSessionStart: {{ExitCode: 2, Stderr: "workspace is not trusted"}},
-	}}
+	}})
 
 	err := eng.RunSessionStartHooks(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "workspace is not trusted") {
@@ -419,6 +447,283 @@ func TestTurn_PassesMaxOutputTokensToProvider(t *testing.T) {
 	}
 	if prov.opts.MaxOutputTokens != 8192 {
 		t.Fatalf("MaxOutputTokens = %d, want 8192", prov.opts.MaxOutputTokens)
+	}
+}
+
+func TestAdmitTurnMessage_DurableAdmissionEventFailureDropsAcceptedInput(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	want := errors.New("admission sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: TurnAdmittedType, err: want})
+
+	if _, err := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "abandoned input")); !errors.Is(err, want) {
+		t.Fatalf("AdmitTurnMessage() error = %v, want %v", err, want)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("pending records = %+v, want one dropped admission", records)
+	}
+	for _, record := range records {
+		if record.State != PendingInputStateDropped {
+			t.Fatalf("failed admission record = %+v, want state %q", record, PendingInputStateDropped)
+		}
+	}
+
+	eng.Session.SubscribeBus(bus)
+	if out, err := eng.Turn(context.Background(), "later input"); err != nil || out != "done" {
+		t.Fatalf("later Turn() = %q, %v", out, err)
+	}
+	if prov.called != 1 || len(prov.histories) != 1 {
+		t.Fatalf("provider calls = %d, histories = %d, want one", prov.called, len(prov.histories))
+	}
+	for _, message := range prov.histories[0] {
+		if message.FirstText() == "abandoned input" {
+			t.Fatalf("failed admission replayed in later provider history: %+v", prov.histories[0])
+		}
+	}
+}
+
+func TestAdmitTurnMessage_RepeatedAdmissionKeepsCommittedRecord(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	first, err := eng.AdmitTurnMessage("turn-1", llm.TextMessage(llm.RoleUser, "accepted once"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := eng.AdmitTurnMessage("turn-1", first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("repeated admission message id = %q, want %q", second.ID, first.ID)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("pending records = %+v, want one committed admission", records)
+	}
+	for _, record := range records {
+		if record.State != PendingInputStateAdmitted {
+			t.Fatalf("repeated admission record = %+v, want state %q", record, PendingInputStateAdmitted)
+		}
+	}
+}
+
+func TestAdmitTurnMessage_AdmissionAndCompensationFailureCannotReplayInput(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	queue := eng.currentPendingInputQueue()
+	pendingPath := queue.path
+	backupPath := pendingPath + ".before-failed-compensation"
+	restored := false
+	restoreJournal := func() error {
+		if restored {
+			return nil
+		}
+		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(backupPath, pendingPath); err != nil {
+			return err
+		}
+		restored = true
+		return nil
+	}
+	t.Cleanup(func() { _ = restoreJournal() })
+	want := errors.New("admission sync failed")
+	bus.SetCommitter(selectiveFailCommitter{
+		eventType: TurnAdmittedType,
+		err:       want,
+		beforeFail: func() error {
+			if err := os.Rename(pendingPath, backupPath); err != nil {
+				return err
+			}
+			return os.Mkdir(pendingPath, 0o700)
+		},
+	})
+
+	_, admissionErr := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "abandoned input"))
+	if !errors.Is(admissionErr, want) || !strings.Contains(admissionErr.Error(), "drop rejected turn admission") {
+		t.Fatalf("AdmitTurnMessage() error = %v, want event and compensation failures", admissionErr)
+	}
+	if err := restoreJournal(); err != nil {
+		t.Fatal(err)
+	}
+	reloadedQueue := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
+	records, err := reloadedQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("pending records = %+v, want one abandoned admission intent", records)
+	}
+	for _, record := range records {
+		if record.State != PendingInputState("accepting") {
+			t.Fatalf("failed admission record = %+v, want non-replayable state %q", record, PendingInputState("accepting"))
+		}
+	}
+	replayable, err := reloadedQueue.Replayable("later-turn", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 0 {
+		t.Fatalf("failed admission remained replayable: %+v", replayable)
+	}
+
+	eng.PendingInputQueue = reloadedQueue
+	eng.Session.SubscribeBus(bus)
+	if out, err := eng.Turn(context.Background(), "later input"); err != nil || out != "done" {
+		t.Fatalf("later Turn() = %q, %v", out, err)
+	}
+	for _, message := range prov.histories[0] {
+		if message.FirstText() == "abandoned input" {
+			t.Fatalf("failed admission replayed in later provider history: %+v", prov.histories[0])
+		}
+	}
+}
+
+func TestAdmitTurnMessage_FailedAdmissionKeepsPersistedInputReplayable(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	record, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "persisted input"),
+		PendingInputOptions{ID: "persisted", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("admission sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: TurnAdmittedType, err: want})
+
+	_, admissionErr := eng.AdmitTurnMessage("failed-turn", record.Message)
+	if !errors.Is(admissionErr, want) {
+		t.Fatalf("AdmitTurnMessage() error = %v, want %v", admissionErr, want)
+	}
+	reloaded := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
+	replayable, err := reloaded.Replayable("later-turn", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 1 || replayable[0].ID != record.ID || replayable[0].State != PendingInputStatePending {
+		t.Fatalf("replayable persisted input = %+v, want pending record %q", replayable, record.ID)
+	}
+}
+
+func TestAdmitTurnMessage_FailedPromotionKeepsPersistedInputReplayable(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	record, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "persisted input"),
+		PendingInputOptions{ID: "persisted", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := eng.currentPendingInputQueue()
+	pendingPath := queue.path
+	backupPath := pendingPath + ".before-failed-persisted-promotion"
+	restored := false
+	restoreJournal := func() error {
+		if restored {
+			return nil
+		}
+		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(backupPath, pendingPath); err != nil {
+			return err
+		}
+		restored = true
+		return nil
+	}
+	t.Cleanup(func() { _ = restoreJournal() })
+	bus.SetCommitter(interceptCommitter{
+		eventType: TurnAdmittedType,
+		beforeCommit: func() error {
+			if err := os.Rename(pendingPath, backupPath); err != nil {
+				return err
+			}
+			return os.Mkdir(pendingPath, 0o700)
+		},
+	})
+
+	_, admissionErr := eng.AdmitTurnMessage("failed-turn", record.Message)
+	if admissionErr == nil || !strings.Contains(admissionErr.Error(), "persist committed turn admission") {
+		t.Fatalf("AdmitTurnMessage() error = %v, want promotion failure", admissionErr)
+	}
+	if strings.Contains(admissionErr.Error(), "drop uncommitted turn admission") {
+		t.Fatalf("AdmitTurnMessage() dropped previously persisted input: %v", admissionErr)
+	}
+	if err := restoreJournal(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
+	replayable, err := reloaded.Replayable("later-turn", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 1 || replayable[0].ID != record.ID || replayable[0].State != PendingInputStatePending {
+		t.Fatalf("replayable persisted input = %+v, want pending record %q", replayable, record.ID)
+	}
+}
+
+func TestAdmitTurnMessage_IntentPromotionFailureCannotReplayInput(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	queue := eng.currentPendingInputQueue()
+	pendingPath := queue.path
+	backupPath := pendingPath + ".before-failed-promotion"
+	restored := false
+	restoreJournal := func() error {
+		if restored {
+			return nil
+		}
+		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(backupPath, pendingPath); err != nil {
+			return err
+		}
+		restored = true
+		return nil
+	}
+	t.Cleanup(func() { _ = restoreJournal() })
+	bus.SetCommitter(interceptCommitter{
+		eventType: TurnAdmittedType,
+		beforeCommit: func() error {
+			if err := os.Rename(pendingPath, backupPath); err != nil {
+				return err
+			}
+			return os.Mkdir(pendingPath, 0o700)
+		},
+	})
+	var turnErrors int
+	bus.Subscribe("turn.errored", func(events.Event) { turnErrors++ })
+
+	_, err := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "uncommitted input"))
+	if err == nil || !strings.Contains(err.Error(), "persist committed turn admission") || !strings.Contains(err.Error(), "drop uncommitted turn admission") {
+		t.Fatalf("AdmitTurnMessage() error = %v, want promotion and compensation failures", err)
+	}
+	if turnErrors != 1 {
+		t.Fatalf("turn.errored events = %d, want 1", turnErrors)
+	}
+	if err := restoreJournal(); err != nil {
+		t.Fatal(err)
+	}
+	reloadedQueue := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
+	replayable, err := reloadedQueue.Replayable("later-turn", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 0 {
+		t.Fatalf("uncommitted admission remained replayable: %+v", replayable)
 	}
 }
 
@@ -641,7 +946,7 @@ func TestTurn_DurableToolStartedFailurePreventsToolCall(t *testing.T) {
 	hookRunner := &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreToolUse: {{Stdout: "pre-hook ran"}},
 	}}
-	eng.Hooks = hookRunner
+	installHookRunner(t, eng, hookRunner)
 	toolCalls := 0
 	eng.Tools.MustRegister(tools.Tool{
 		Name: "side_effect",
@@ -703,6 +1008,126 @@ func TestTurn_ToolExecutionEventsCarryStableIdentityAndRecoverableOutcome(t *tes
 	}
 	if completed.Outcome == nil || completed.Outcome.MessageID != eng.Session.History[2].ID || completed.Outcome.Block.Content != "recorded once" {
 		t.Fatalf("completed outcome = %+v, history=%+v", completed.Outcome, eng.Session.History)
+	}
+}
+
+func TestTurn_TransformedToolInputIsDurableBeforeHandlerExecution(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: "call-transform", ToolName: "side_effect", Input: map[string]any{"path": "provider.txt"},
+		}}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	var durableEffectiveInput atomic.Bool
+	bus.Subscribe(toolevents.InputResolvedType, func(event events.Event) {
+		payload, ok := event.Payload.(toolevents.InputResolvedPayload)
+		if ok && payload.Input["path"] == "effective.txt" {
+			durableEffectiveInput.Store(true)
+		}
+	})
+	handlerSawCheckpoint := false
+	eng.Tools.MustRegister(tools.Tool{Name: "side_effect", Handler: func(_ context.Context, input map[string]any) (string, error) {
+		handlerSawCheckpoint = durableEffectiveInput.Load()
+		if input["path"] != "effective.txt" {
+			return "", fmt.Errorf("handler input = %#v", input)
+		}
+		return "recorded once", nil
+	}})
+	installRuntimeTestModules(t, eng, &runtimeToolPolicyModule{id: "transform-input", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+		if request.Stage == runtimemodule.ToolPolicyBeforeExecution {
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyTransform, Input: map[string]any{"path": "effective.txt"}}, nil
+		}
+		return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+	}})
+
+	if out, err := eng.Turn(context.Background(), "run transformed call"); err != nil || out != "done" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	if !handlerSawCheckpoint {
+		t.Fatal("effective tool input was not durably checkpointed before handler execution")
+	}
+}
+
+func TestTurn_TransformedToolInputIsDurableBeforeLaterPolicyExecution(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: "call-transform", ToolName: "side_effect", Input: map[string]any{"path": "provider.txt"},
+		}}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	var durableEffectiveInput atomic.Bool
+	bus.Subscribe(toolevents.InputResolvedType, func(event events.Event) {
+		payload, ok := event.Payload.(toolevents.InputResolvedPayload)
+		if ok && payload.Input["path"] == "effective.txt" {
+			durableEffectiveInput.Store(true)
+		}
+	})
+	laterPolicySawCheckpoint := false
+	eng.Tools.MustRegister(tools.Tool{Name: "side_effect", Handler: func(context.Context, map[string]any) (string, error) {
+		return "recorded once", nil
+	}})
+	installRuntimeTestModules(t, eng,
+		&runtimeToolPolicyModule{id: "transform-input", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+			if request.Stage == runtimemodule.ToolPolicyBeforeExecution {
+				return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyTransform, Input: map[string]any{"path": "effective.txt"}}, nil
+			}
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+		}},
+		&runtimeToolPolicyModule{id: "later-policy", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+			if request.Stage == runtimemodule.ToolPolicyBeforeExecution {
+				laterPolicySawCheckpoint = durableEffectiveInput.Load()
+			}
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+		}},
+	)
+
+	if out, err := eng.Turn(context.Background(), "run transformed call"); err != nil || out != "done" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	if !laterPolicySawCheckpoint {
+		t.Fatal("effective tool input was not durably checkpointed before the later policy")
+	}
+}
+
+func TestTurn_DurableTransformedToolInputFailurePreventsHandlerExecution(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: "call-transform", ToolName: "side_effect", Input: map[string]any{"path": "provider.txt"},
+		}}},
+		StopReason: llm.StopToolUse,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	toolCalls := 0
+	laterPolicyCalls := 0
+	eng.Tools.MustRegister(tools.Tool{Name: "side_effect", Handler: func(context.Context, map[string]any) (string, error) {
+		toolCalls++
+		return "must not run", nil
+	}})
+	installRuntimeTestModules(t, eng,
+		&runtimeToolPolicyModule{id: "transform-input", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+			if request.Stage == runtimemodule.ToolPolicyBeforeExecution {
+				return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyTransform, Input: map[string]any{"path": "effective.txt"}}, nil
+			}
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+		}},
+		&runtimeToolPolicyModule{id: "later-policy", apply: func(runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+			laterPolicyCalls++
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+		}},
+	)
+	want := errors.New("resolved input sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: toolevents.InputResolvedType, err: want})
+
+	if _, err := eng.Turn(context.Background(), "run transformed call"); !errors.Is(err, want) {
+		t.Fatalf("Turn() error = %v, want %v", err, want)
+	}
+	if toolCalls != 0 {
+		t.Fatalf("tool calls = %d, want 0", toolCalls)
+	}
+	if laterPolicyCalls != 0 {
+		t.Fatalf("later policy calls = %d, want 0", laterPolicyCalls)
 	}
 }
 
@@ -857,7 +1282,7 @@ func TestTurn_DurableToolProjectionFailurePersistsProjectedResult(t *testing.T) 
 func TestTurn_DurableHookRequestFailurePreventsHookRun(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	runner := &fakeHookRunner{}
-	eng.Hooks = runner
+	installHookRunner(t, eng, runner)
 	want := errors.New("journal sync failed")
 	bus.SetCommitter(selectiveFailCommitter{eventType: "hook.requested", err: want})
 	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, want) {
@@ -869,12 +1294,32 @@ func TestTurn_DurableHookRequestFailurePreventsHookRun(t *testing.T) {
 }
 
 type selectiveFailCommitter struct {
-	eventType string
-	err       error
+	eventType  string
+	err        error
+	beforeFail func() error
+}
+
+type interceptCommitter struct {
+	eventType    string
+	beforeCommit func() error
+}
+
+func (c interceptCommitter) Commit(event events.Event) (events.Event, error) {
+	if event.Type == c.eventType && c.beforeCommit != nil {
+		if err := c.beforeCommit(); err != nil {
+			return events.Event{}, err
+		}
+	}
+	return events.Normalize(event), nil
 }
 
 func (c selectiveFailCommitter) Commit(event events.Event) (events.Event, error) {
 	if event.Type == c.eventType {
+		if c.beforeFail != nil {
+			if err := c.beforeFail(); err != nil {
+				return events.Event{}, errors.Join(c.err, err)
+			}
+		}
 		return events.Event{}, c.err
 	}
 	return events.Normalize(event), nil
@@ -1711,7 +2156,7 @@ func TestCancelActiveTurnRejectsCancellationAfterCompactionCommit(t *testing.T) 
 	var releaseOnce sync.Once
 	releaseHook := func() { releaseOnce.Do(func() { close(releasePost) }) }
 	defer releaseHook()
-	eng.Hooks = hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
+	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName != hooks.EventPostCompact {
 			return nil, nil
 		}
@@ -1722,7 +2167,7 @@ func TestCancelActiveTurnRejectsCancellationAfterCompactionCommit(t *testing.T) 
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
-	})
+	}))
 	completed := make(chan struct{}, 1)
 	bus.Subscribe("context.compact.completed", func(events.Event) {
 		signal(completed)
@@ -2061,7 +2506,7 @@ func waitSignal(t *testing.T, ch <-chan struct{}, name string) {
 	t.Helper()
 	select {
 	case <-ch:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatalf("timed out waiting for %s", name)
 	}
 }
@@ -2429,10 +2874,11 @@ func TestCompactRunsPreAndPostHooks(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	runner := &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact:  {{}},
 		hooks.EventPostCompact: {{}},
 	}}
+	installHookRunner(t, eng, runner)
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2447,7 +2893,6 @@ func TestCompactRunsPreAndPostHooks(t *testing.T) {
 	if result.MessageID == "" {
 		t.Fatalf("result = %+v", result)
 	}
-	runner := eng.Hooks.(*fakeHookRunner)
 	got := []hooks.EventName{runner.requests[0].EventName, runner.requests[1].EventName}
 	want := []hooks.EventName{hooks.EventPreCompact, hooks.EventPostCompact}
 	for i := range want {
@@ -2467,9 +2912,9 @@ func TestCompactPreHookStdoutExtendsSummaryInstructions(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact: {{Stdout: "Preserve deployment command exactly."}},
-	}}
+	}})
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2507,9 +2952,9 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	if _, err := eng.Notes.Update("- [x] map the runtime\n- [ ] run the live compaction evaluation"); err != nil {
 		t.Fatal(err)
 	}
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact: {{Stdout: "Preserve hook deployment evidence."}},
-	}}
+	}})
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2581,7 +3026,7 @@ func TestCompactExitTwoEmitsHookErrorWithoutVeto(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng.Hooks = runner
+	installHookRunner(t, eng, runner)
 	var hookError HookErroredPayload
 	bus.Subscribe("hook.errored", func(event events.Event) {
 		payload, _ := event.Payload.(HookErroredPayload)
@@ -2617,9 +3062,9 @@ func TestCompactPostHookStdoutQueuesRuntimeContextForNextProviderRequest(t *test
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPostCompact: {{Stdout: "Recheck the release branch on the next turn."}},
-	}}
+	}})
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -3312,7 +3757,7 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 			defer unsub()
 			eng.Compaction = DefaultCompactionPolicy()
 			eng.Compaction.KeepRecentTokens = 1
-			eng.Hooks = tc.runner
+			installHookRunner(t, eng, tc.runner)
 			if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 				t.Fatal(err)
 			}
@@ -3366,10 +3811,10 @@ func TestCompactPreservesCommittedResultWhenPostHookContextCannotBeQueued(t *tes
 	defer unsub()
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact:  {{}},
 		hooks.EventPostCompact: {{Stdout: strings.Repeat("x", provenance.MaxHookContextBatchBytes)}},
-	}}
+	}})
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -3760,9 +4205,9 @@ func TestTurn_PostToolUseHookDenyPreservesChunkedWriteLifecycleFact(t *testing.T
 			}, nil
 		},
 	})
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPostToolUse: {{ExitCode: 2, Stdout: "redaction required"}},
-	}}
+	}})
 
 	out, err := eng.Turn(context.Background(), "commit chunked write")
 	if err != nil {
@@ -3789,9 +4234,9 @@ func TestTurn_UserPromptSubmitHookInjectsContext(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventUserPromptSubmit: {{Stdout: "ticket: ABC-123"}},
-	}}
+	}})
 
 	out, err := eng.Turn(context.Background(), "summarize")
 	if err != nil {
@@ -3814,16 +4259,27 @@ func TestTurn_UserPromptSubmitHookDenyStopsBeforeProvider(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventUserPromptSubmit: {{ExitCode: 2, Stdout: "missing approval"}},
-	}}
+	}})
 
 	_, err := eng.Turn(context.Background(), "summarize")
-	if err == nil || !strings.Contains(err.Error(), "UserPromptSubmit denied: missing approval") {
+	if err == nil || !strings.Contains(err.Error(), `runtime module "hooks" turn input rejected: missing approval`) {
 		t.Fatalf("err = %v", err)
 	}
 	if len(prov.histories) != 0 {
 		t.Fatalf("provider should not be called, calls = %d", len(prov.histories))
+	}
+	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "summarize" {
+		t.Fatalf("accepted input was not preserved after policy rejection: %+v", eng.Session.History)
+	}
+	if !eng.Session.History[0].PolicyBlocked {
+		t.Fatalf("rejected input = %+v, want policy_blocked", eng.Session.History[0])
+	}
+	for _, message := range eng.ActiveContext().Messages {
+		if message.FirstText() == "summarize" {
+			t.Fatalf("policy-rejected input remained provider-visible: %+v", eng.ActiveContext().Messages)
+		}
 	}
 }
 
@@ -3841,9 +4297,10 @@ func TestTurn_PreToolUseStdoutAddsToolResultContext(t *testing.T) {
 			return "inspection complete", nil
 		},
 	})
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	runner := &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreToolUse: {{Stdout: "compare against approved baseline"}},
 	}}
+	installHookRunner(t, eng, runner)
 
 	if _, err := eng.Turn(context.Background(), "inspect"); err != nil {
 		t.Fatal(err)
@@ -3852,7 +4309,6 @@ func TestTurn_PreToolUseStdoutAddsToolResultContext(t *testing.T) {
 	if result.IsError || !strings.Contains(result.Content, "inspection complete") || !strings.Contains(result.Content, "compare against approved baseline") {
 		t.Fatalf("tool result = %+v", result)
 	}
-	runner := eng.Hooks.(*fakeHookRunner)
 	var postRequest hooks.Request
 	for _, request := range runner.requests {
 		if request.EventName == hooks.EventPostToolUse {
@@ -3879,9 +4335,9 @@ func TestTurn_PreToolUseHookDenyReturnsToolError(t *testing.T) {
 			return "", nil
 		},
 	})
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreToolUse: {{ExitCode: 2, Stdout: "policy denied"}},
-	}}
+	}})
 
 	out, err := eng.Turn(context.Background(), "run danger")
 	if err != nil {
@@ -3913,10 +4369,10 @@ func TestTurn_PostToolUseExitTwoAddsCorrectiveContext(t *testing.T) {
 			return "sensitive output", nil
 		},
 	})
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreToolUse:  {{}},
 		hooks.EventPostToolUse: {{ExitCode: 2, Stdout: "redaction required"}},
-	}}
+	}})
 
 	out, err := eng.Turn(context.Background(), "run audit")
 	if err != nil {
@@ -3934,18 +4390,200 @@ func TestTurn_PostToolUseExitTwoAddsCorrectiveContext(t *testing.T) {
 	}
 }
 
+func TestTurn_PostToolUseRetainsSuccessfulContextBeforeRequiredFailure(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "audit", Input: map[string]any{"path": "x"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "audit",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return "tool output", nil
+		},
+	})
+	installHookRunner(t, eng, hookRunnerFunc(func(_ context.Context, request hooks.Request) ([]hooks.Result, error) {
+		if request.EventName != hooks.EventPostToolUse {
+			return nil, nil
+		}
+		return []hooks.Result{{
+			Hook:      hooks.CommandHook{Name: "context-hook", Events: []hooks.EventName{hooks.EventPostToolUse}},
+			EventName: hooks.EventPostToolUse,
+			ToolName:  request.ToolName,
+			ExitCode:  0,
+			Stdout:    "earlier successful context",
+		}}, errors.New("required post hook failed")
+	}))
+
+	if _, err := eng.Turn(context.Background(), "run audit"); err != nil {
+		t.Fatal(err)
+	}
+	result := eng.Session.History[2].Blocks[0]
+	if !result.IsError || !strings.Contains(result.Content, "tool output") || !strings.Contains(result.Content, "earlier successful context") || !strings.Contains(result.Content, "required post hook failed") {
+		t.Fatalf("tool result = %+v", result)
+	}
+}
+
+func TestTurn_PostExecutionPolicyDenyBecomesToolErrorAndStopsLaterPolicies(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "audit", Input: map[string]any{}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	handlerRan := false
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "audit",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			handlerRan = true
+			return "sensitive result", nil
+		},
+	})
+	var laterAfterCalls int
+	installRuntimeTestModules(t, eng,
+		&runtimeToolPolicyModule{id: "deny-after", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+			if request.Stage == runtimemodule.ToolPolicyAfterExecution {
+				return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyDeny, Reason: "result cannot be released"}, nil
+			}
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+		}},
+		&runtimeToolPolicyModule{id: "later", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+			if request.Stage == runtimemodule.ToolPolicyAfterExecution {
+				laterAfterCalls++
+			}
+			return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+		}},
+	)
+
+	if _, err := eng.Turn(context.Background(), "run audit"); err != nil {
+		t.Fatal(err)
+	}
+	result := eng.Session.History[2].Blocks[0]
+	if !handlerRan || laterAfterCalls != 0 {
+		t.Fatalf("handler ran = %t, later after calls = %d", handlerRan, laterAfterCalls)
+	}
+	if !result.IsError || !strings.Contains(result.Content, "sensitive result") || !strings.Contains(result.Content, "result cannot be released") {
+		t.Fatalf("tool result = %+v", result)
+	}
+}
+
+func TestTurn_PostExecutionTransformOwnsTerminalObservation(t *testing.T) {
+	const rawResult = "sensitive raw result"
+	const filteredResult = "[redacted by policy]"
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "tu-redact", ToolName: "audit", Input: map[string]any{}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "audit",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return rawResult, nil
+		},
+	})
+	installRuntimeTestModules(t, eng, &runtimeToolPolicyModule{id: "redact-result", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+		if request.Stage == runtimemodule.ToolPolicyAfterExecution {
+			return runtimemodule.ToolPolicyDecision{
+				Action: runtimemodule.ToolPolicyTransform,
+				Result: runtimemodule.ToolPolicyResult{Content: filteredResult},
+			}, nil
+		}
+		return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+	}})
+
+	var completed toolevents.CompletedPayload
+	bus.Subscribe(toolevents.CompletedType, func(event events.Event) {
+		completed, _ = event.Payload.(toolevents.CompletedPayload)
+	})
+
+	if out, err := eng.Turn(context.Background(), "run audit"); err != nil || out != "done" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	result := eng.Session.History[2].Blocks[0]
+	if result.Content != filteredResult || result.IsError {
+		t.Fatalf("tool result = %+v, want filtered success", result)
+	}
+	if completed.Preview != filteredResult || completed.Len != len(filteredResult) {
+		t.Fatalf("completed payload = %+v, want filtered terminal observation", completed)
+	}
+	data, err := os.ReadFile(filepath.Join(eng.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), rawResult) || !strings.Contains(string(data), filteredResult) {
+		t.Fatalf("durable events leaked pre-policy result:\n%s", data)
+	}
+}
+
+func TestTurn_PostExecutionTransformSuppressesRawOutputDelta(t *testing.T) {
+	const rawResult = "sensitive streamed result"
+	const filteredResult = "[redacted by policy]"
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "tu-stream-redact", ToolName: "stream-audit", Input: map[string]any{}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "stream-audit",
+		Handler: func(ctx context.Context, _ map[string]any) (string, error) {
+			tools.ToolCallEventsFromContext(ctx).Emit(tools.OutputDelta{Text: rawResult})
+			return rawResult, nil
+		},
+	})
+	installRuntimeTestModules(t, eng, &runtimeToolPolicyModule{id: "redact-streamed-result", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+		if request.Stage == runtimemodule.ToolPolicyAfterExecution {
+			return runtimemodule.ToolPolicyDecision{
+				Action: runtimemodule.ToolPolicyTransform,
+				Result: runtimemodule.ToolPolicyResult{Content: filteredResult},
+			}, nil
+		}
+		return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+	}})
+
+	var deltas []toolevents.OutputDeltaPayload
+	bus.Subscribe(toolevents.OutputDeltaType, func(event events.Event) {
+		payload, _ := event.Payload.(toolevents.OutputDeltaPayload)
+		deltas = append(deltas, payload)
+	})
+
+	if out, err := eng.Turn(context.Background(), "stream sensitive output"); err != nil || out != "done" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	if len(deltas) != 0 {
+		t.Fatalf("tool output deltas = %+v, want raw streaming suppressed while Tool Policies are active", deltas)
+	}
+	result := eng.Session.History[2].Blocks[0]
+	if result.Content != filteredResult || result.IsError {
+		t.Fatalf("tool result = %+v, want filtered success", result)
+	}
+	data, err := os.ReadFile(filepath.Join(eng.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), rawResult) || !strings.Contains(string(data), filteredResult) {
+		t.Fatalf("events leaked pre-policy streamed result:\n%s", data)
+	}
+}
+
 func TestTurn_StopHookBlockContinuesWithPrompt(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventStop: {
 			{ExitCode: 2, Stdout: "continue until done"},
 			{},
 		},
-	}}
+	}})
 
 	out, err := eng.Turn(context.Background(), "start")
 	if err != nil {
@@ -3969,13 +4607,13 @@ func TestTurn_StopHookStdoutQueuesRuntimeContextForNextProviderRequest(t *testin
 		{Message: llm.TextMessage(llm.RoleAssistant, "third"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventStop: {
 			{Stdout: "verify the release branch before the next response"},
 			{},
 			{},
 		},
-	}}
+	}})
 
 	if _, err := eng.Turn(context.Background(), "first turn"); err != nil {
 		t.Fatal(err)
@@ -4060,6 +4698,37 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	}
 }
 
+func TestTurn_GoalCompletionGateAcceptsMaximumGoalContract(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "goal_update_max", ToolName: GoalToolUpdate, Input: map[string]any{
+				"status":        string(GoalStatusSuccess),
+				"status_reason": "maximum contract preserved",
+			}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	acceptance := strings.Repeat("a", 32*1024)
+	if _, err := eng.GoalState.Create("ship the maximum contract", acceptance); err != nil {
+		t.Fatal(err)
+	}
+	installSessionStateModules(t, eng)
+
+	out, err := eng.Turn(context.Background(), "finish the goal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "final" || len(prov.histories) != 3 {
+		t.Fatalf("out = %q, provider calls = %d", out, len(prov.histories))
+	}
+	if got := messagesText(prov.histories[1]); !strings.Contains(got, acceptance) {
+		t.Fatalf("maximum acceptance missing from continuation context: length=%d", len(got))
+	}
+}
+
 func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "waiting for delegated work"), StopReason: llm.StopEndTurn},
@@ -4069,7 +4738,10 @@ func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
 	if _, err := eng.GoalState.Create("finish delegated work", "all delegated results are incorporated"); err != nil {
 		t.Fatal(err)
 	}
-	eng.ShouldDeferGoalContinuation = func() bool { return true }
+	installSessionStateModulesWithGoalOptions(t, eng, GoalModuleOptions{
+		EnableContinuation:   true,
+		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
+	})
 	var continued int32
 	bus.Subscribe("goal.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })
 
@@ -4102,14 +4774,16 @@ func TestTurn_DeferredGoalStillHonorsStopHookContinuation(t *testing.T) {
 	if _, err := eng.GoalState.Create("finish delegated work", "all checks pass"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModules(t, eng)
-	eng.ShouldDeferGoalContinuation = func() bool { return true }
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installSessionStateModulesWithGoalOptions(t, eng, GoalModuleOptions{
+		EnableContinuation:   true,
+		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
+	})
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventStop: {
 			{ExitCode: 2, Stdout: "run the explicit stop check"},
 			{},
 		},
-	}}
+	}})
 
 	out, err := eng.Turn(context.Background(), "delegate the work")
 	if err != nil {
@@ -4138,11 +4812,10 @@ func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 	if _, err := eng.GoalState.Create("deploy the service", "the chosen deployment is healthy"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModules(t, eng)
-	eng.ShouldDeferGoalContinuation = func() bool {
-		t.Fatal("wait-for-user Goal consulted the continuation defer callback")
-		return true
-	}
+	installSessionStateModulesWithGoalOptions(t, eng, GoalModuleOptions{
+		EnableContinuation:   true,
+		ContinuationDeferrer: panicGoalContinuationDeferrer{t: t},
+	})
 	var continued int32
 	bus.Subscribe("goal.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })
 
@@ -4202,7 +4875,7 @@ func TestTurn_HookGoalStateOutputDoesNotModifyGoal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng.Hooks = runner
+	installHookRunner(t, eng, runner)
 
 	out, err := eng.Turn(context.Background(), "finish")
 	if err != nil {
@@ -4425,6 +5098,109 @@ func TestTurn_TerminalProviderFailureConsumesHookContext(t *testing.T) {
 	}
 }
 
+func TestTurn_PreRestoreCancellationTerminallyPersistsAcceptedInput(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, _ := newEngine(t, prov, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := eng.TurnMessageWithID(ctx, llm.TextMessage(llm.RoleUser, "cancel before restore"), "cancelled-turn")
+	if !errors.Is(err, cancellation.ErrUserCancelled) {
+		t.Fatalf("TurnMessageWithID() error = %v, want ErrUserCancelled", err)
+	}
+	if prov.called != 0 {
+		t.Fatalf("provider calls = %d, want 0", prov.called)
+	}
+	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "cancel before restore" {
+		t.Fatalf("durable history = %+v, want accepted cancelled input", eng.Session.History)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("pending records = %+v, want one processed admission", records)
+	}
+	for _, record := range records {
+		if record.State != PendingInputStateProcessed {
+			t.Fatalf("cancelled admission record = %+v, want state %q", record, PendingInputStateProcessed)
+		}
+	}
+}
+
+func TestTurn_PendingInputRestoreFailureTerminallyPersistsAcceptedInput(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "later done"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, _ := newEngine(t, prov, false)
+	accepted, err := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "accepted before restore failure"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := eng.currentPendingInputQueue()
+	pendingPath := queue.path
+	backupPath := pendingPath + ".restore-failure"
+	if err := os.Rename(pendingPath, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(pendingPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	restored := false
+	restoreJournal := func() error {
+		if restored {
+			return nil
+		}
+		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(backupPath, pendingPath); err != nil {
+			return err
+		}
+		restored = true
+		return nil
+	}
+	t.Cleanup(func() { _ = restoreJournal() })
+
+	eng.mu.Lock()
+	lifecycle := turnLifecycle{
+		engine:  eng,
+		turnID:  "failed-turn",
+		userMsg: accepted,
+		start:   time.Now(),
+	}
+	_, turnErr := lifecycle.runLocked(context.Background())
+	eng.mu.Unlock()
+	if turnErr == nil || !strings.Contains(turnErr.Error(), "pending input queue") {
+		t.Fatalf("turn lifecycle error = %v, want pending journal failure", turnErr)
+	}
+	if len(eng.Session.History) != 1 || eng.Session.History[0].ID != accepted.ID {
+		t.Fatalf("durable history = %+v, want accepted input %q", eng.Session.History, accepted.ID)
+	}
+
+	if err := restoreJournal(); err != nil {
+		t.Fatal(err)
+	}
+	eng.finishActiveTurn("failed-turn")
+	if out, err := eng.Turn(context.Background(), "later input"); err != nil || out != "later done" {
+		t.Fatalf("later Turn() = %q, %v", out, err)
+	}
+	acceptedCopies := 0
+	for _, message := range eng.Session.History {
+		if message.ID == accepted.ID {
+			acceptedCopies++
+		}
+	}
+	if acceptedCopies != 1 {
+		t.Fatalf("accepted input copies in durable history = %d, want 1", acceptedCopies)
+	}
+	if prov.called != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.called)
+	}
+}
+
 func TestTurn_CancellationPreservesPendingInputWithoutContinuing(t *testing.T) {
 	prov := &mockProvider{
 		script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn}},
@@ -4641,8 +5417,11 @@ func TestTurn_ReplaysPersistedPendingInputAfterRestart(t *testing.T) {
 	if len(prov.histories) != 1 {
 		t.Fatalf("provider calls = %d", len(prov.histories))
 	}
-	if got := prov.histories[0][len(prov.histories[0])-1].FirstText(); got != "replay me" {
-		t.Fatalf("last provider message = %q", got)
+	if got, want := []string{
+		prov.histories[0][0].FirstText(),
+		prov.histories[0][1].FirstText(),
+	}, []string{"replay me", "after restart"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider input order = %v, want %v", got, want)
 	}
 }
 
@@ -4901,6 +5680,17 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	if status.PendingCount != 1 {
 		t.Fatalf("pending count = %d", status.PendingCount)
 	}
+	var admissionOrder []string
+	probe := &pendingAdmissionProbe{queue: eng.PendingInputQueue, order: &admissionOrder}
+	registry := runtimemodule.NewRegistry()
+	if err := registry.Register(probe); err != nil {
+		t.Fatal(err)
+	}
+	set, err := registry.Seal(context.Background(), runtimemodule.ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.RuntimeModules = set
 	var drained int32
 	var promoted PendingInputPromotedPayload
 	eng.Bus.Subscribe("pending_input.drained", func(e events.Event) {
@@ -4908,9 +5698,16 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	})
 	eng.Bus.Subscribe(PendingInputPromotedType, func(e events.Event) {
 		promoted, _ = e.Payload.(PendingInputPromotedPayload)
+		admissionOrder = append(admissionOrder, "pending_input.promoted")
+	})
+	eng.Bus.Subscribe(TurnAdmittedType, func(events.Event) {
+		admissionOrder = append(admissionOrder, "turn.admitted")
 	})
 
-	msg, promotedStatus, ok := eng.PromotePendingInputTurn("compact-1", "turn-1")
+	msg, promotedStatus, ok, err := eng.PromotePendingInputTurn("compact-1", "turn-1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatal("pending input was not promoted")
 	}
@@ -4918,6 +5715,15 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 		promoted.PendingCount != 0 ||
 		promoted.MaxPendingInputs != DefaultMaxPendingInput {
 		t.Fatalf("promoted status/event = %+v / %+v, want empty queue", promotedStatus, promoted)
+	}
+	if probe.err != nil {
+		t.Fatal(probe.err)
+	}
+	if want := []string{"turn.admitted", "pending_input.promoted", "observer"}; !reflect.DeepEqual(admissionOrder, want) {
+		t.Fatalf("promotion admission order = %v, want %v", admissionOrder, want)
+	}
+	if len(probe.states) != 1 || probe.states[0] != PendingInputStateAdmitted {
+		t.Fatalf("observer states = %v, want admitted", probe.states)
 	}
 	if _, err := eng.TurnMessageWithID(context.Background(), msg, "turn-1"); err != nil {
 		t.Fatal(err)
@@ -4931,6 +5737,738 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	}
 	if records["event-1"].State != PendingInputStateProcessed {
 		t.Fatalf("state = %q, want processed", records["event-1"].State)
+	}
+}
+
+func TestTurn_PromotedPendingInputReplacementPreservesFrameworkIdentity(t *testing.T) {
+	root := t.TempDir()
+	sess, err := session.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	eng := newEngineForSession(t, sess, prov)
+	if err := eng.ReserveTurnID("compact-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "original pending input"),
+		PendingInputOptions{ID: "event-replaced", TTL: time.Hour},
+	); err != nil {
+		t.Fatal(err)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := records["event-replaced"]
+	installRuntimeTestModules(t, eng, &runtimeTurnInputPolicyModule{id: "replace-input", apply: func(runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+		return runtimemodule.TurnInputDecision{
+			Action:  runtimemodule.TurnInputReplace,
+			Message: llm.TextMessage(llm.RoleUser, "transformed pending input"),
+		}, nil
+	}})
+
+	msg, _, promoted, err := eng.PromotePendingInputTurn("compact-1", "turn-replaced")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !promoted {
+		t.Fatal("pending input was not promoted")
+	}
+	if _, err := eng.TurnMessageWithID(context.Background(), msg, "turn-replaced"); err != nil {
+		t.Fatal(err)
+	}
+	if got := eng.Session.History[0]; got.ID != record.MessageID || got.Kind != record.Message.Kind || got.FirstText() != "transformed pending input" {
+		t.Fatalf("persisted transformed input = %+v, want id %q kind %q", got, record.MessageID, record.Message.Kind)
+	}
+	records, err = eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[record.ID].State != PendingInputStateProcessed {
+		t.Fatalf("pending state = %q, want processed", records[record.ID].State)
+	}
+}
+
+func TestTurn_AcceptedInputIsReplayableBeforeTurnInputPolicy(t *testing.T) {
+	const turnID = "turn-policy-checkpoint"
+	root := t.TempDir()
+	sess, err := session.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	eng := newEngineForSession(t, sess, prov)
+	var (
+		policyMessageID string
+		recordsAtPolicy map[string]PendingInputRecord
+		policyReadErr   error
+	)
+	installRuntimeTestModules(t, eng, &runtimeTurnInputPolicyModule{id: "replace-input", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+		policyMessageID = request.Message.ID
+		recordsAtPolicy, policyReadErr = NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{}).Records()
+		return runtimemodule.TurnInputDecision{
+			Action:  runtimemodule.TurnInputReplace,
+			Message: llm.TextMessage(llm.RoleUser, "transformed input"),
+		}, nil
+	}})
+
+	if _, err := eng.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, "original input"), turnID); err != nil {
+		t.Fatal(err)
+	}
+	if policyReadErr != nil {
+		t.Fatal(policyReadErr)
+	}
+	if policyMessageID == "" {
+		t.Fatal("turn input policy received a message without durable identity")
+	}
+	if len(recordsAtPolicy) != 1 {
+		t.Fatalf("pending records during policy = %+v, want one accepted input", recordsAtPolicy)
+	}
+	var accepted PendingInputRecord
+	for _, record := range recordsAtPolicy {
+		accepted = record
+	}
+	if accepted.State != PendingInputStateAdmitted || accepted.TurnID != turnID || accepted.MessageID != policyMessageID || accepted.Message.FirstText() != "original input" {
+		t.Fatalf("accepted input during policy = %+v", accepted)
+	}
+	if got := eng.Session.History[0]; got.ID != accepted.MessageID || got.FirstText() != "transformed input" {
+		t.Fatalf("persisted transformed input = %+v, want message id %q", got, accepted.MessageID)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[accepted.ID].State != PendingInputStateProcessed {
+		t.Fatalf("accepted input state = %q, want processed", records[accepted.ID].State)
+	}
+}
+
+func TestTurn_ProjectionFailurePersistsAcceptedInputOnce(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.UserInputInlineMaxBytes = 8
+	eng.ArtifactDir = filepath.Join(t.TempDir(), "missing-parent", "artifacts")
+	input := "accepted input that requires projection"
+
+	if _, err := eng.Turn(context.Background(), input); err == nil || !strings.Contains(err.Error(), "artifact store root") {
+		t.Fatalf("Turn() error = %v, want projection failure", err)
+	}
+	if prov.called != 0 {
+		t.Fatalf("provider calls after projection failure = %d, want none", prov.called)
+	}
+	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != input {
+		t.Fatalf("history after projection failure = %+v, want accepted input once", eng.Session.History)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if record.Message.FirstText() == input && record.State != PendingInputStateProcessed {
+			t.Fatalf("accepted input record = %+v, want processed", record)
+		}
+	}
+
+	eng.Compaction.Enabled = false
+	eng.ArtifactDir = filepath.Join(t.TempDir(), "artifacts")
+	if out, err := eng.Turn(context.Background(), "next input"); err != nil || out != "done" {
+		t.Fatalf("second Turn() = %q, %v", out, err)
+	}
+	var occurrences int
+	for _, message := range eng.Session.History {
+		if message.FirstText() == input {
+			occurrences++
+		}
+	}
+	if occurrences != 1 {
+		t.Fatalf("accepted input occurrences = %d, want one in history %+v", occurrences, eng.Session.History)
+	}
+}
+
+func TestTurn_RecoveredAcceptedInputRunsTurnInputPolicy(t *testing.T) {
+	sess, err := session.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	beforeCrash := newEngineForSession(t, sess, &mockProvider{})
+	accepted, err := beforeCrash.AdmitTurnMessage("turn-before-crash", llm.TextMessage(llm.RoleUser, "secret before crash"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	recovered := newEngineForSession(t, sess, prov)
+	var policyInputs []string
+	installRuntimeTestModules(t, recovered, &runtimeTurnInputPolicyModule{id: "redact-input", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+		policyInputs = append(policyInputs, request.Message.FirstText())
+		if request.Message.ID == accepted.ID {
+			return runtimemodule.TurnInputDecision{
+				Action:  runtimemodule.TurnInputReplace,
+				Message: llm.TextMessage(llm.RoleUser, "redacted before recovery"),
+			}, nil
+		}
+		return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputAllow}, nil
+	}})
+
+	if _, err := recovered.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, "new trigger"), "turn-after-crash"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"secret before crash", "new trigger"}; !reflect.DeepEqual(policyInputs, want) {
+		t.Fatalf("policy inputs = %v, want %v", policyInputs, want)
+	}
+	if len(prov.histories) != 1 || len(prov.histories[0]) != 2 {
+		t.Fatalf("provider history = %+v", prov.histories)
+	}
+	if got := prov.histories[0][0]; got.ID != accepted.ID || got.FirstText() != "redacted before recovery" {
+		t.Fatalf("recovered provider input = %+v", got)
+	}
+	if got := prov.histories[0][1].FirstText(); got != "new trigger" {
+		t.Fatalf("current provider input = %q", got)
+	}
+}
+
+func TestTurn_RecoveryPreservesQueuedAndTurnInputAcceptanceOrder(t *testing.T) {
+	sess, err := session.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	now := time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC)
+	queue := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return now }})
+	queued, err := queue.Enqueue(
+		llm.TextMessage(llm.RoleUser, "queued before crash"),
+		PendingInputOptions{ID: "queued-before-crash", TTL: time.Hour},
+		"turn-before-crash",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	accepted, err := queue.AdmitTurnInput(
+		"turn-before-crash",
+		llm.TextMessage(llm.RoleUser, "turn input before crash"),
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
+	}}}
+	recovered := newEngineForSession(t, sess, prov)
+	now = now.Add(time.Second)
+	recovered.PendingInputQueue = NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return now }})
+	var (
+		policyInputs   []string
+		admissionOrder []string
+	)
+	probe := &pendingAdmissionProbe{queue: recovered.PendingInputQueue, order: &admissionOrder}
+	installRuntimeTestModules(t, recovered,
+		&runtimeTurnInputPolicyModule{id: "redact-input", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+			policyInputs = append(policyInputs, request.Message.FirstText())
+			if request.Message.ID == accepted.MessageID {
+				return runtimemodule.TurnInputDecision{
+					Action:  runtimemodule.TurnInputReplace,
+					Message: llm.TextMessage(llm.RoleUser, "redacted turn input"),
+				}, nil
+			}
+			return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputAllow}, nil
+		}},
+		probe,
+	)
+
+	if _, err := recovered.TurnMessageWithID(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "new trigger"),
+		"turn-after-crash",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"turn input before crash", "new trigger"}; !reflect.DeepEqual(policyInputs, want) {
+		t.Fatalf("policy inputs = %v, want %v", policyInputs, want)
+	}
+	if len(prov.histories) != 1 || len(prov.histories[0]) != 3 {
+		t.Fatalf("provider history = %+v", prov.histories)
+	}
+	if got, want := []string{
+		prov.histories[0][0].FirstText(),
+		prov.histories[0][1].FirstText(),
+		prov.histories[0][2].FirstText(),
+	}, []string{"queued before crash", "redacted turn input", "new trigger"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider input order = %v, want %v", got, want)
+	}
+	if probe.err != nil {
+		t.Fatal(probe.err)
+	}
+	if want := []string{"observer"}; !reflect.DeepEqual(admissionOrder, want) {
+		t.Fatalf("queued admission order = %v, want %v", admissionOrder, want)
+	}
+	if want := []PendingInputState{PendingInputStateAdmitted}; !reflect.DeepEqual(probe.states, want) {
+		t.Fatalf("queued admission states = %v, want %v", probe.states, want)
+	}
+	records, err := recovered.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{queued.ID, accepted.ID} {
+		if records[id].State != PendingInputStateProcessed {
+			t.Fatalf("recovered record %q state = %q, want processed", id, records[id].State)
+		}
+	}
+	if status := recovered.PendingInputStatus(); status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want empty queue", status)
+	}
+}
+
+func TestTurn_CurrentTurnFollowUpStaysAfterTrigger(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "done"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	var enqueueErr error
+	bus.Subscribe(TurnAdmittedType, func(events.Event) {
+		_, enqueueErr = eng.EnqueuePendingInput(context.Background(), "queued during admission")
+	})
+
+	if _, err := eng.Turn(context.Background(), "current trigger"); err != nil {
+		t.Fatal(err)
+	}
+	if enqueueErr != nil {
+		t.Fatalf("enqueue during turn admission: %v", enqueueErr)
+	}
+	if len(prov.histories) != 1 || len(prov.histories[0]) != 2 {
+		t.Fatalf("provider history = %+v", prov.histories)
+	}
+	if got, want := []string{
+		prov.histories[0][0].FirstText(),
+		prov.histories[0][1].FirstText(),
+	}, []string{"current trigger", "queued during admission"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider input order = %v, want %v", got, want)
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want empty queue", status)
+	}
+}
+
+func TestTurn_PersistedInputsAfterCurrentTriggerRestoreInOrder(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "done"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	now := time.Date(2026, 8, 17, 8, 0, 0, 0, time.UTC)
+	eng.PendingInputQueue = NewPendingInputQueue(eng.currentSession().Dir, PendingInputQueueOptions{
+		Now: func() time.Time { return now },
+	})
+	current, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "current persisted trigger"),
+		PendingInputOptions{ID: "current-persisted"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	later, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "later durable input"),
+		PendingInputOptions{ID: "later-durable"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var enqueueErr error
+	bus.Subscribe(TurnAdmittedType, func(events.Event) {
+		_, enqueueErr = eng.EnqueuePendingInput(context.Background(), "queued during admission")
+	})
+
+	if _, err := eng.TurnMessageWithID(context.Background(), current.Message, "turn-1"); err != nil {
+		t.Fatal(err)
+	}
+	if enqueueErr != nil {
+		t.Fatalf("enqueue during turn admission: %v", enqueueErr)
+	}
+	if len(prov.histories) != 1 || len(prov.histories[0]) != 3 {
+		t.Fatalf("provider history = %+v", prov.histories)
+	}
+	if got, want := []string{
+		prov.histories[0][0].FirstText(),
+		prov.histories[0][1].FirstText(),
+		prov.histories[0][2].FirstText(),
+	}, []string{"current persisted trigger", "later durable input", "queued during admission"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider input order = %v, want %v", got, want)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{current.ID, later.ID} {
+		if records[id].State != PendingInputStateProcessed {
+			t.Fatalf("persisted record %q state = %q, want processed", id, records[id].State)
+		}
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want empty queue", status)
+	}
+}
+
+func TestTurn_LaterAcceptedTurnInputStillRunsPolicy(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "done"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, _ := newEngine(t, prov, false)
+	now := time.Date(2026, 8, 17, 9, 0, 0, 0, time.UTC)
+	eng.PendingInputQueue = NewPendingInputQueue(eng.currentSession().Dir, PendingInputQueueOptions{
+		Now: func() time.Time { return now },
+	})
+	current, err := eng.PendingInputQueue.Enqueue(
+		llm.TextMessage(llm.RoleUser, "current persisted trigger"),
+		PendingInputOptions{ID: "current-persisted", TTL: time.Hour},
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	later, err := eng.PendingInputQueue.AdmitTurnInput(
+		"later-turn",
+		llm.TextMessage(llm.RoleUser, "later accepted turn"),
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policyInputs []string
+	installRuntimeTestModules(t, eng, &runtimeTurnInputPolicyModule{id: "redact-later", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+		policyInputs = append(policyInputs, request.Message.FirstText())
+		if request.Message.ID == later.MessageID {
+			return runtimemodule.TurnInputDecision{
+				Action:  runtimemodule.TurnInputReplace,
+				Message: llm.TextMessage(llm.RoleUser, "redacted later turn"),
+			}, nil
+		}
+		return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputAllow}, nil
+	}})
+
+	if _, err := eng.TurnMessageWithID(context.Background(), current.Message, "current-turn"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := policyInputs, []string{"current persisted trigger", "later accepted turn"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("policy inputs = %v, want %v", got, want)
+	}
+	if len(prov.histories) != 1 || len(prov.histories[0]) != 2 {
+		t.Fatalf("provider history = %+v", prov.histories)
+	}
+	if got, want := []string{
+		prov.histories[0][0].FirstText(),
+		prov.histories[0][1].FirstText(),
+	}, []string{"current persisted trigger", "redacted later turn"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider input order = %v, want %v", got, want)
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want empty queue", status)
+	}
+}
+
+func TestDrainPendingTurnInputClearsPublishedStatus(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: eng.effectiveMaxPendingInputs()})
+	var lifecycle []string
+	bus.Subscribe("*", func(event events.Event) {
+		store.Publish(event)
+		switch event.Type {
+		case "pending_input.queued", PendingInputDrainingType, "pending_input.drained":
+			lifecycle = append(lifecycle, event.Type)
+		}
+	})
+	if err := eng.ReserveTurnID("active-turn"); err != nil {
+		t.Fatal(err)
+	}
+	record, err := eng.currentPendingInputQueue().AdmitTurnInput(
+		"later-turn",
+		llm.TextMessage(llm.RoleUser, "later accepted turn"),
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePersistedPendingMessage(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := store.Snapshot(); snapshot.Session.PendingCount != 1 {
+		t.Fatalf("pending status before drain = %+v, want one queued input", snapshot.Session)
+	}
+
+	eng.mu.Lock()
+	err = eng.drainPendingInputLocked(context.Background(), "active-turn")
+	eng.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := store.Snapshot()
+	if snapshot.Session.PendingCount != 0 || snapshot.Session.State != SessionRuntimeTurnActive {
+		t.Fatalf("pending status after drain = %+v, want active turn with empty queue", snapshot.Session)
+	}
+	if got, want := lifecycle, []string{"pending_input.queued", PendingInputDrainingType, "pending_input.drained"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending lifecycle = %v, want %v", got, want)
+	}
+}
+
+func TestTurn_RecoveredAcceptedInputPolicyRejectsFailClosed(t *testing.T) {
+	sess, err := session.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	beforeCrash := newEngineForSession(t, sess, &mockProvider{})
+	acceptedRecord, err := beforeCrash.PendingInputQueue.AdmitTurnInput(
+		"turn-before-crash",
+		llm.TextMessage(llm.RoleUser, "blocked before crash"),
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := acceptedRecord.Message
+	laterRecord, err := beforeCrash.PendingInputQueue.AdmitTurnInput(
+		"turn-after-blocked",
+		llm.TextMessage(llm.RoleUser, "accepted after blocked"),
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := laterRecord.Message
+
+	prov := &mockProvider{}
+	recovered := newEngineForSession(t, sess, prov)
+	installRuntimeTestModules(t, recovered, &runtimeTurnInputPolicyModule{id: "reject-input", apply: func(request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+		if request.Message.ID == accepted.ID {
+			return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputReject, Reason: "blocked"}, nil
+		}
+		return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputAllow}, nil
+	}})
+
+	if _, err := recovered.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, "new trigger"), "turn-after-crash"); err == nil || !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("recovered turn error = %v, want policy rejection", err)
+	}
+	if prov.called != 0 {
+		t.Fatalf("provider calls = %d, want none after recovered input rejection", prov.called)
+	}
+	got := make([]string, 0, len(sess.History))
+	for _, message := range sess.History {
+		got = append(got, message.FirstText())
+	}
+	if want := []string{"blocked before crash", "accepted after blocked", "new trigger"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("persisted accepted inputs = %+v, want %v", sess.History, want)
+	}
+	if !sess.History[0].PolicyBlocked {
+		t.Fatalf("recovered rejected input = %+v, want policy_blocked", sess.History[0])
+	}
+	for _, message := range recovered.ActiveContext().Messages {
+		if message.FirstText() == "blocked before crash" {
+			t.Fatalf("recovered policy-rejected input remained provider-visible: %+v", recovered.ActiveContext().Messages)
+		}
+	}
+	records, err := recovered.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if (record.MessageID == accepted.ID || record.MessageID == later.ID || record.Message.FirstText() == "new trigger") && record.State != PendingInputStateProcessed {
+			t.Fatalf("accepted record after terminal policy failure = %+v", record)
+		}
+	}
+}
+
+func TestTurn_ReusedTurnIDGetsFreshAcceptedInputIdentity(t *testing.T) {
+	sess, err := session.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "first done"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "second done"), StopReason: llm.StopEndTurn},
+	}}
+	eng := newEngineForSession(t, sess, prov)
+	for _, input := range []string{"first input", "second input"} {
+		if _, err := eng.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, input), "turn-1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("accepted records = %+v, want distinct records for reused turn id", records)
+	}
+	messageIDs := map[string]bool{}
+	for _, record := range records {
+		if record.State != PendingInputStateProcessed {
+			t.Fatalf("accepted record = %+v, want processed", record)
+		}
+		messageIDs[record.MessageID] = true
+	}
+	if len(messageIDs) != 2 {
+		t.Fatalf("accepted message ids = %+v, want two", messageIDs)
+	}
+}
+
+type pendingAdmissionProbe struct {
+	queue  *PendingInputQueue
+	order  *[]string
+	states []PendingInputState
+	err    error
+}
+
+func (*pendingAdmissionProbe) ID() runtimemodule.ID { return "pending-admission-probe" }
+
+func (p *pendingAdmissionProbe) PendingInputsAdmitted(_ context.Context, admission runtimemodule.PendingInputAdmission) {
+	if p.order != nil {
+		*p.order = append(*p.order, "observer")
+	}
+	records, err := p.queue.Records()
+	if err != nil {
+		p.err = err
+		return
+	}
+	for _, id := range admission.RecordIDs {
+		p.states = append(p.states, records[id].State)
+	}
+}
+
+func TestPromotePendingInputFailsBeforeObserverWhenDurableAdmissionFails(t *testing.T) {
+	root := t.TempDir()
+	sess, err := session.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sess.Close() })
+	eng := newEngineForSession(t, sess, &mockProvider{})
+	if err := eng.ReserveTurnID("compact-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "after compact"),
+		PendingInputOptions{ID: "event-1", TTL: time.Hour},
+	); err != nil {
+		t.Fatal(err)
+	}
+	var observed []string
+	probe := &pendingAdmissionProbe{queue: eng.PendingInputQueue, order: &observed}
+	registry := runtimemodule.NewRegistry()
+	if err := registry.Register(probe); err != nil {
+		t.Fatal(err)
+	}
+	set, err := registry.Seal(context.Background(), runtimemodule.ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.RuntimeModules = set
+	eng.PendingInputQueue.path = t.TempDir()
+
+	_, status, promoted, err := eng.PromotePendingInputTurn("compact-1", "turn-1")
+	if err == nil || !strings.Contains(err.Error(), "mark promoted pending input admitted") {
+		t.Fatalf("promotion error = %v", err)
+	}
+	if promoted {
+		t.Fatal("pending input was promoted after durable admission failed")
+	}
+	if status.TurnID != "" || status.PendingCount != 1 || len(observed) != 0 {
+		t.Fatalf("status/observer = %+v / %v, want queued and unobserved", status, observed)
+	}
+	if current := eng.PendingInputStatus(); current.TurnID != "" || current.PendingCount != 1 {
+		t.Fatalf("engine status = %+v, want idle with queued input", current)
+	}
+}
+
+func TestPromotePendingInputKeepsRecordReplayableWhenTurnAdmissionFails(t *testing.T) {
+	root := t.TempDir()
+	sess, err := session.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	eng := newEngineForSession(t, sess, &mockProvider{})
+	if err := eng.ReserveTurnID("compact-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "after compact"),
+		PendingInputOptions{ID: "event-1", TTL: time.Hour},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	var observed []string
+	probe := &pendingAdmissionProbe{queue: eng.PendingInputQueue, order: &observed}
+	registry := runtimemodule.NewRegistry()
+	if err := registry.Register(probe); err != nil {
+		t.Fatal(err)
+	}
+	set, err := registry.Seal(context.Background(), runtimemodule.ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.RuntimeModules = set
+	eng.Bus.Subscribe(PendingInputPromotedType, func(events.Event) {
+		observed = append(observed, "pending_input.promoted")
+	})
+	want := errors.New("admission sync failed")
+	eng.Bus.SetCommitter(selectiveFailCommitter{eventType: TurnAdmittedType, err: want})
+
+	_, status, promoted, err := eng.PromotePendingInputTurn("compact-1", "turn-1")
+	if !errors.Is(err, want) || !strings.Contains(err.Error(), "commit promoted turn admission") {
+		t.Fatalf("promotion error = %v, want %v", err, want)
+	}
+	if promoted {
+		t.Fatal("pending input was promoted after turn admission failed")
+	}
+	if status.TurnID != "" || status.PendingCount != 1 || len(observed) != 0 {
+		t.Fatalf("status/observer = %+v / %v, want queued and unobserved", status, observed)
+	}
+	if current := eng.PendingInputStatus(); current.TurnID != "" || current.PendingCount != 1 {
+		t.Fatalf("engine status = %+v, want idle with queued input", current)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := records["event-1"]
+	if record.Origin != PendingInputOriginQueued || record.State != PendingInputStatePending || record.TurnID != "compact-1" {
+		t.Fatalf("record = %+v, want queued pending input", record)
+	}
+	replayable, err := eng.PendingInputQueue.Replayable("later-turn", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 1 || replayable[0].ID != "event-1" {
+		t.Fatalf("replayable records = %+v, want event-1", replayable)
 	}
 }
 
@@ -4950,7 +6488,9 @@ func TestPromotePendingInputDefersReentrantQueuedEventUntilAfterPromotion(t *tes
 	if _, err := eng.EnqueuePendingInput(context.Background(), "promoted input"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok := eng.PromotePendingInputTurn("compact-1", "turn-1"); !ok {
+	if _, _, ok, err := eng.PromotePendingInputTurn("compact-1", "turn-1"); err != nil {
+		t.Fatal(err)
+	} else if !ok {
 		t.Fatal("pending input was not promoted")
 	}
 	if enqueueErr != nil {
@@ -5362,7 +6902,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 	}}, false)
 	eng.Notes = NewNotesStore(eng.Session.Dir)
 	installSessionStateModules(t, eng)
-	eng.Hooks = hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
+	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName == hooks.EventPreToolUse && req.ToolName == NotesToolUpdate && req.ToolInput["content"] == "first" {
 			select {
 			case <-time.After(100 * time.Millisecond):
@@ -5371,7 +6911,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 			}
 		}
 		return nil, nil
-	})
+	}))
 
 	if out, err := eng.Turn(context.Background(), "rewrite notes twice"); err != nil || out != "done" {
 		t.Fatalf("Turn() = %q, %v", out, err)
@@ -5389,7 +6929,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
 	installSessionStateModules(t, eng)
-	eng.Hooks = hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
+	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName == hooks.EventPreToolUse && req.ToolName == GoalToolCreate {
 			select {
 			case <-time.After(100 * time.Millisecond):
@@ -5398,7 +6938,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 			}
 		}
 		return nil, nil
-	})
+	}))
 
 	results := eng.runToolCalls(context.Background(), "turn-goal-order", testToolExecutions([]llm.Block{
 		{
@@ -6311,6 +7851,7 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 	}}
 	eng, bus := newEngine(t, prov, false)
 	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	installSessionStateModules(t, eng)
 	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
 		Name:    "stop-ok",
 		Events:  []hooks.EventName{hooks.EventStop},
@@ -6319,7 +7860,7 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng.Hooks = runner
+	installHookRunner(t, eng, runner)
 
 	var order []string
 	bus.Subscribe("finish.attempted", func(e events.Event) {
@@ -6343,10 +7884,10 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 	}
 	want := []string{
 		"finish.attempted",
-		"start:stop-ok",
-		"done:stop-ok",
 		"start:goal-completion-gate",
 		"done:goal-completion-gate",
+		"start:stop-ok",
+		"done:stop-ok",
 	}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("finish policy order = %#v, want %#v", order, want)
@@ -6448,6 +7989,49 @@ func TestTurn_FailureLedgerRecordsUnresolvedBlockingToolFailureWithoutContinuati
 	}
 }
 
+func TestTurn_FailureLedgerUsesBeforePolicyTransformedInput(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "check_1", ToolName: "check_ready", Input: map[string]any{"path": "provider.txt"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	var handlerPath string
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "check_ready",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(_ context.Context, input map[string]any) (string, error) {
+			handlerPath, _ = input["path"].(string)
+			return "artifact is not ready", errors.New("check failed")
+		},
+	})
+	installRuntimeTestModules(t, eng, &runtimeToolPolicyModule{id: "transform-input", apply: func(request runtimemodule.ToolPolicyRequest) (runtimemodule.ToolPolicyDecision, error) {
+		if request.Stage == runtimemodule.ToolPolicyBeforeExecution {
+			return runtimemodule.ToolPolicyDecision{
+				Action: runtimemodule.ToolPolicyTransform,
+				Input:  map[string]any{"path": "effective.txt"},
+			}, nil
+		}
+		return runtimemodule.ToolPolicyDecision{Action: runtimemodule.ToolPolicyAllow}, nil
+	}})
+
+	var recorded ToolFailureRecordedPayload
+	bus.Subscribe("tool.failure.recorded", func(event events.Event) {
+		recorded, _ = event.Payload.(ToolFailureRecordedPayload)
+	})
+	if _, err := eng.Turn(context.Background(), "finish the artifact"); err != nil {
+		t.Fatal(err)
+	}
+	if handlerPath != "effective.txt" {
+		t.Fatalf("handler path = %q", handlerPath)
+	}
+	wantPath := filepath.Join(eng.WorkDir, "effective.txt")
+	if !reflect.DeepEqual(recorded.RelatedPaths, []string{wantPath}) {
+		t.Fatalf("related paths = %#v, want %#v", recorded.RelatedPaths, []string{wantPath})
+	}
+}
+
 type runtimeExitCodeStructuredResult struct {
 	code int
 }
@@ -6515,7 +8099,7 @@ func TestTurn_StopHookOtherExitDoesNotBlockAndEmitsHookErrored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng.Hooks = runner
+	installHookRunner(t, eng, runner)
 
 	var errored HookErroredPayload
 	bus.Subscribe("hook.errored", func(e events.Event) {

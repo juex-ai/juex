@@ -1277,7 +1277,7 @@ func shellResultFromAppInfo(t *testing.T, info tools.CallInfo) tools.ShellResult
 	return result
 }
 
-func TestApp_NewRunsSessionStartHooks(t *testing.T) {
+func TestApp_NewAndReplacementRunSessionStartHooks(t *testing.T) {
 	dir := t.TempDir()
 	a, err := New(Options{
 		Config: config.Config{
@@ -1293,19 +1293,50 @@ func TestApp_NewRunsSessionStartHooks(t *testing.T) {
 		},
 		Provider: &stubProvider{replies: []llm.Response{}},
 		WorkDir:  dir,
+		Debug:    true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.Close()
 
-	data, err := os.ReadFile(filepath.Join(a.Session.Dir, "events.jsonl"))
+	oldSessionDir := a.Session.Dir
+	data, err := os.ReadFile(filepath.Join(oldSessionDir, "events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(data)
 	if !strings.Contains(body, `"type":"hook.completed"`) || !strings.Contains(body, `"event_name":"SessionStart"`) {
 		t.Fatalf("events missing SessionStart hook:\n%s", body)
+	}
+
+	if err := a.SwitchToNewPrimarySession(); err != nil {
+		t.Fatal(err)
+	}
+	if a.Session.Dir == oldSessionDir {
+		t.Fatal("session replacement retained the old session directory")
+	}
+	data, err = os.ReadFile(filepath.Join(a.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = string(data)
+	if !strings.Contains(body, `"type":"hook.completed"`) || !strings.Contains(body, `"event_name":"SessionStart"`) {
+		t.Fatalf("replacement events missing SessionStart hook:\n%s", body)
+	}
+	oldDebug, err := os.ReadFile(filepath.Join(oldSessionDir, "logs", "debug.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newDebug, err := os.ReadFile(filepath.Join(a.Session.Dir, "logs", "debug.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(oldDebug), "event=hook.completed"); got != 1 {
+		t.Fatalf("old session completed hook logs = %d, want only its initial SessionStart", got)
+	}
+	if got := strings.Count(string(newDebug), "event=hook.completed"); got != 1 {
+		t.Fatalf("replacement session completed hook logs = %d, want its SessionStart", got)
 	}
 }
 
@@ -1503,8 +1534,20 @@ func TestApp_DebugObservabilityWritesLogsWithCanonicalJournals(t *testing.T) {
 			t.Fatalf("%s missing: %v", rel, err)
 		}
 	}
-	if got := sessionRootJSONL(t, sessionDir); !reflect.DeepEqual(got, []string{"conversation.jsonl", "events.jsonl"}) {
+	if got := sessionRootJSONL(t, sessionDir); !reflect.DeepEqual(got, []string{"conversation.jsonl", "events.jsonl", "pending_input.jsonl"}) {
 		t.Fatalf("session JSONL files = %v, want canonical journals", got)
+	}
+	pending, err := runtime.NewPendingInputQueue(sessionDir, runtime.PendingInputQueueOptions{}).Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending input records = %+v, want one accepted turn input", pending)
+	}
+	for _, record := range pending {
+		if record.State != runtime.PendingInputStateProcessed || record.Message.FirstText() != "hello" {
+			t.Fatalf("accepted turn input = %+v, want processed hello", record)
+		}
 	}
 	debugData, err := os.ReadFile(filepath.Join(sessionDir, "logs", "debug.log"))
 	if err != nil {
@@ -1559,7 +1602,7 @@ func TestApp_NewSessionStartHookDenyFailsStartup(t *testing.T) {
 		Provider: &stubProvider{replies: []llm.Response{}},
 		WorkDir:  dir,
 	})
-	if err == nil || !strings.Contains(err.Error(), "SessionStart denied: startup blocked") {
+	if err == nil || !strings.Contains(err.Error(), `runtime module "hooks" session start rejected: startup blocked`) {
 		t.Fatalf("err = %v", err)
 	}
 }

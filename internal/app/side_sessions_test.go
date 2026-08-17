@@ -16,8 +16,11 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/tools"
 )
 
 const sideSessionTestTimeout = 5 * time.Second
@@ -60,6 +63,56 @@ type sideHookRunnerFunc func(context.Context, hooks.Request) ([]hooks.Result, er
 
 func (f sideHookRunnerFunc) Run(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 	return f(ctx, req)
+}
+
+func installSideHookRunner(t *testing.T, a *App, runner hooks.PolicyRunner) {
+	t.Helper()
+	nextModules, err := buildSessionModules(
+		context.Background(),
+		a.sessionModuleFactories,
+		a.runtimeModuleContext,
+		a.Session,
+		a.Engine,
+		a.cfg.WorkDir,
+		prompt.ShellProfileFromConfig(a.cfg.Shell),
+		a.shellSessions,
+		sessionModuleOptions{
+			hookRunner:               runner,
+			hookBaseRequest:          a.hookBaseRequest,
+			goalContinuation:         true,
+			goalContinuationDeferrer: a.sideSessions,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextTools, err := runtimemodule.BuildToolRegistry(
+		tools.RegistryOptions{DefaultTimeoutSeconds: durationSeconds(a.cfg.RuntimeLimits().ToolTimeout)},
+		a.runtimeModules,
+		nextModules,
+	)
+	if err != nil {
+		_ = nextModules.CloseSession(context.Background())
+		t.Fatal(err)
+	}
+	if err := nextModules.StartSession(context.Background(), sessionModuleContext(a.Session)); err != nil {
+		_ = nextModules.CloseSession(context.Background())
+		t.Fatal(err)
+	}
+	oldModules := a.Engine.SessionRuntimeSnapshot().Modules
+	if err := a.Engine.ReplaceSessionRuntimeBundle(a.Session, runtime.SessionRuntimeReplacement{
+		Modules: nextModules,
+		Tools:   nextTools,
+	}); err != nil {
+		_ = nextModules.CloseSession(context.Background())
+		t.Fatal(err)
+	}
+	a.hookRunner = runner
+	if oldModules != nil {
+		if err := oldModules.CloseSession(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func (p *stubbornSideProvider) Name() string { return "side-stubborn" }
@@ -829,7 +882,7 @@ func TestSideSessionRetriesTransientStaleNotificationDropFailure(t *testing.T) {
 	}
 }
 
-func TestSideSessionHookDenialDropsNotificationBeforeTranscriptAppend(t *testing.T) {
+func TestSideSessionHookDenialPreservesAdmittedNotificationWithoutProviderCall(t *testing.T) {
 	primary := &scriptedSideProvider{}
 	child := &barrierSideProvider{started: make(chan struct{}, 1), release: make(chan struct{})}
 	parent := newSideSessionTestApp(t, primary, child)
@@ -844,7 +897,7 @@ func TestSideSessionHookDenialDropsNotificationBeforeTranscriptAppend(t *testing
 	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("side turn did not start")
 	}
-	parent.Engine.Hooks = sideHookRunnerFunc(func(_ context.Context, req hooks.Request) ([]hooks.Result, error) {
+	installSideHookRunner(t, parent, sideHookRunnerFunc(func(_ context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName != hooks.EventUserPromptSubmit || !strings.HasPrefix(req.UserInput, "Side Session result:") {
 			return nil, nil
 		}
@@ -854,25 +907,41 @@ func TestSideSessionHookDenialDropsNotificationBeforeTranscriptAppend(t *testing
 			ExitCode:  2,
 			Stdout:    "side result denied",
 		}}, nil
-	})
+	}))
 	close(child.release)
 	status := waitForSideState(t, parent, id, SideSessionStateIdle)
 
+	pendingID := "side-session-result:" + id + ":" + status.LastTurnID
+	deadline := time.Now().Add(3 * time.Second)
+	var record runtime.PendingInputRecord
+	for time.Now().Before(deadline) {
+		records, err := parent.Engine.PendingInputQueue.Records()
+		if err != nil {
+			t.Fatal(err)
+		}
+		record = records[pendingID]
+		if record.State == runtime.PendingInputStateProcessed {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if record.State != runtime.PendingInputStateProcessed {
+		t.Fatalf("record state = %q, want %q", record.State, runtime.PendingInputStateProcessed)
+	}
+	foundTranscript := false
+	for _, message := range parent.Session.History {
+		if message.ID == record.MessageID && strings.Contains(message.FirstText(), "Side Session result:") {
+			foundTranscript = true
+			break
+		}
+	}
+	if !foundTranscript {
+		t.Fatalf("admitted side result %q missing from transcript", record.MessageID)
+	}
 	select {
 	case event := <-failed:
-		if !strings.Contains(fmt.Sprint(event.Payload), "side result denied") {
-			t.Fatalf("notification failure = %+v", event)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("hook-denied Side Session notification failure was not observable")
-	}
-	pendingID := "side-session-result:" + id + ":" + status.LastTurnID
-	records, err := parent.Engine.PendingInputQueue.Records()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := records[pendingID].State; got != runtime.PendingInputStateDropped {
-		t.Fatalf("record state = %q, want %q", got, runtime.PendingInputStateDropped)
+		t.Fatalf("policy rejection is not a delivery failure: %+v", event)
+	default:
 	}
 	primary.mu.Lock()
 	calls := primary.calls

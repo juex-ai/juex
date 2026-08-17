@@ -1129,7 +1129,7 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 			t.Fatalf("debug artifact %s missing: %v", rel, err)
 		}
 	}
-	if got := rootJSONLFiles(t, result.SessionDir); !slices.Equal(got, []string{"conversation.jsonl", "events.jsonl"}) {
+	if got := rootJSONLFiles(t, result.SessionDir); !slices.Equal(got, []string{"conversation.jsonl", "events.jsonl", "pending_input.jsonl"}) {
 		t.Fatalf("session JSONL files = %v, want canonical journals", got)
 	}
 	journal := readJSONLObjects(t, filepath.Join(result.SessionDir, "events.jsonl"))

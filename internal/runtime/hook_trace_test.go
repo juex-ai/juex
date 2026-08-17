@@ -21,7 +21,7 @@ func TestHookTraceMessageIsUIOnly(t *testing.T) {
 	}
 	prov := &mockProvider{script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn}}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Hooks = runner
+	installHookRunner(t, eng, runner)
 	var traceEvent HookTracePayload
 	bus.Subscribe("hook.trace", func(e events.Event) {
 		payload, _ := e.Payload.(HookTracePayload)

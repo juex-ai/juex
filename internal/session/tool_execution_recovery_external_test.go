@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -150,6 +151,69 @@ func TestToolExecutionRecoveryDistinguishesCrashBoundaries(t *testing.T) {
 				t.Fatalf("unknown events = %d, want 0", unknown)
 			}
 		})
+	}
+}
+
+func TestToolExecutionRecoveryPreservesPolicyTransformedInput(t *testing.T) {
+	root := t.TempDir()
+	sess, err := session.NewWithOptions(root, session.Options{EventCatalog: eventcatalog.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalInput := map[string]any{"path": "provider.txt"}
+	intermediateInput := map[string]any{"path": "intermediate.txt"}
+	effectiveInput := map[string]any{"path": "effective.txt"}
+	assistant, err := sess.AppendAssigned(llm.Message{ID: "assistant-transformed", Role: llm.RoleAssistant, Blocks: []llm.Block{{
+		Type: llm.BlockToolUse, ToolUseID: "call-transformed", ToolName: "write", Input: originalInput,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := toolevents.ToolCallPayload{
+		Name: "write", Input: originalInput, ToolUseID: "call-transformed",
+		Iter: 3, CallIndex: 0, MessageID: assistant.ID,
+	}
+	appendExecutionEvent(t, sess, declaredResponseEventForCall(assistant, call))
+	appendExecutionEvent(t, sess, toolEvent(toolevents.RequestedType, toolevents.Requested(call)))
+	appendExecutionEvent(t, sess, toolEvent(toolevents.RunningType, toolevents.Running(call)))
+	intermediateCall := call
+	intermediateCall.Input = intermediateInput
+	appendExecutionEvent(t, sess, toolEvent(toolevents.InputResolvedType, toolevents.InputResolved(intermediateCall)))
+	effectiveCall := call
+	effectiveCall.Input = effectiveInput
+	appendExecutionEvent(t, sess, toolEvent(toolevents.InputResolvedType, toolevents.InputResolved(effectiveCall)))
+	dir := sess.Dir
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, err := session.LoadWithOptions(dir, session.Options{RepairTranscript: true, EventCatalog: eventcatalog.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = recovered.Close() })
+	result := recovered.History[len(recovered.History)-1].Blocks[0]
+	if !result.IsError || !strings.Contains(result.Content, "TOOL_OUTCOME_UNKNOWN") || !strings.Contains(result.Content, `Effective input at execution: {"path":"effective.txt"}`) {
+		t.Fatalf("recovery result = %+v", result)
+	}
+
+	journal, err := session.ReadEventsWithCatalog(dir, eventcatalog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := 0
+	for _, event := range journal {
+		if event.Type != toolevents.OutcomeUnknownType {
+			continue
+		}
+		unknown++
+		payload, ok := event.Payload.(toolevents.OutcomeUnknownPayload)
+		if !ok || !reflect.DeepEqual(payload.Input, effectiveInput) {
+			t.Fatalf("outcome unknown payload = %+v", event.Payload)
+		}
+	}
+	if unknown != 1 {
+		t.Fatalf("outcome unknown events = %d, want 1", unknown)
 	}
 }
 

@@ -54,6 +54,7 @@ func builtinDefinitions() []Definition {
 		required("llm.fallback", func() any { return &juexruntime.LLMFallbackPayload{} }, true),
 		requiredToolEvent(toolevents.RequestedType, func() any { return &toolevents.RequestedPayload{} }, validateRequestedPayload),
 		requiredToolEvent(toolevents.RunningType, func() any { return &toolevents.RunningPayload{} }, validateRunningPayload),
+		requiredValidated(toolevents.InputResolvedType, 1, func() any { return &toolevents.InputResolvedPayload{} }, false, validateInputResolvedPayload),
 		requiredToolEvent(toolevents.CompletedType, func() any { return &toolevents.CompletedPayload{} }, validateCompletedPayload),
 		transientVersioned(toolevents.OutputDeltaType, 2, func() any { return &toolevents.OutputDeltaPayload{} }),
 		requiredToolEvent(toolevents.ErroredType, func() any { return &toolevents.ErroredPayload{} }, validateErroredPayload),
@@ -287,6 +288,14 @@ func validateRunningPayload(payload any) error {
 	value, ok := payload.(toolevents.RunningPayload)
 	if !ok {
 		return fmt.Errorf("unexpected running payload %T", payload)
+	}
+	return validateToolIdentity(value.Name, value.ToolUseID, value.MessageID, value.Iter, value.CallIndex)
+}
+
+func validateInputResolvedPayload(payload any) error {
+	value, ok := payload.(toolevents.InputResolvedPayload)
+	if !ok {
+		return fmt.Errorf("unexpected input resolved payload %T", payload)
 	}
 	return validateToolIdentity(value.Name, value.ToolUseID, value.MessageID, value.Iter, value.CallIndex)
 }

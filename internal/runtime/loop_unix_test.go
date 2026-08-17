@@ -148,9 +148,9 @@ func TestTurn_BuiltinShellCompletedEventUsesFinalizedHookContent(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "hook handled"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, true)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPostToolUse: {{ExitCode: 2, Stdout: "redaction required"}},
-	}}
+	}})
 
 	var completed toolevents.CompletedPayload
 	bus.Subscribe(toolevents.CompletedType, func(event events.Event) {
@@ -187,9 +187,9 @@ func TestTurn_BuiltinShellErroredEventUsesFinalizedHookErrorContent(t *testing.T
 		{Message: llm.TextMessage(llm.RoleAssistant, "hook failure handled"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, true)
-	eng.Hooks = &fakeHookRunner{errors: map[hooks.EventName]error{
+	installHookRunner(t, eng, &fakeHookRunner{errors: map[hooks.EventName]error{
 		hooks.EventPostToolUse: errors.New("post hook failed"),
-	}}
+	}})
 
 	var errored toolevents.ErroredPayload
 	bus.Subscribe(toolevents.ErroredType, func(event events.Event) {
@@ -227,7 +227,7 @@ func TestTurn_BuiltinShellFinalContentBoundsMultipleEscapedHooksAndReplays(t *te
 	}}
 	eng, _ := newEngine(t, prov, true)
 	eng.ToolOutput = ToolOutputPolicy{InlineMaxBytes: 4 << 20}
-	eng.Hooks = hookRunnerFunc(func(_ context.Context, request hooks.Request) ([]hooks.Result, error) {
+	installHookRunner(t, eng, hookRunnerFunc(func(_ context.Context, request hooks.Request) ([]hooks.Result, error) {
 		if request.EventName != hooks.EventPostToolUse {
 			return nil, nil
 		}
@@ -242,7 +242,7 @@ func TestTurn_BuiltinShellFinalContentBoundsMultipleEscapedHooksAndReplays(t *te
 			}
 		}
 		return results, nil
-	})
+	}))
 
 	if _, err := eng.Turn(context.Background(), "run large shell and hooks"); err != nil {
 		t.Fatal(err)
@@ -293,9 +293,9 @@ func TestTurn_BuiltinShellBoundsEscapedHookErrorDiagnosticsAndReplays(t *testing
 	}}
 	eng, bus := newEngine(t, prov, true)
 	eng.ToolOutput = ToolOutputPolicy{InlineMaxBytes: 4 << 20}
-	eng.Hooks = &fakeHookRunner{errors: map[hooks.EventName]error{
+	installHookRunner(t, eng, &fakeHookRunner{errors: map[hooks.EventName]error{
 		hooks.EventPostToolUse: errors.New("post hook failed: " + strings.Repeat("<", 2<<20)),
-	}}
+	}})
 
 	var errored toolevents.ErroredPayload
 	bus.Subscribe(toolevents.ErroredType, func(event events.Event) {
