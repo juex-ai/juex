@@ -241,6 +241,46 @@ func TestPendingInputQueue_PromotedTurnInputClearsQueuedExpiry(t *testing.T) {
 	}
 }
 
+func TestPendingInputQueue_StagePersistedInputKeepsItReplayableUntilCommit(t *testing.T) {
+	dir := t.TempDir()
+	store := NewPendingInputQueue(dir, PendingInputQueueOptions{})
+	pending, err := store.Enqueue(
+		llm.TextMessage(llm.RoleUser, "retry me"),
+		PendingInputOptions{ID: "persisted", TTL: time.Hour},
+		"source-turn",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := store.StageTurnInput("turn-1", pending.Message, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staged.State != PendingInputStatePending || staged.Origin != PendingInputOriginQueued || staged.TurnID != "source-turn" {
+		t.Fatalf("staged persisted input = %+v, want original replayable record", staged)
+	}
+
+	reloaded := NewPendingInputQueue(dir, PendingInputQueueOptions{})
+	replayable, err := reloaded.Replayable("recovery-turn", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 1 || replayable[0].ID != pending.ID {
+		t.Fatalf("replayable staged input = %+v, want %q", replayable, pending.ID)
+	}
+	if err := reloaded.CommitTurnInput(pending.ID, "turn-1"); err != nil {
+		t.Fatal(err)
+	}
+	records, err := reloaded.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed := records[pending.ID]
+	if committed.State != PendingInputStateAdmitted || committed.Origin != PendingInputOriginTurn || committed.TurnID != "turn-1" || !committed.ExpiresAt.IsZero() {
+		t.Fatalf("committed persisted input = %+v", committed)
+	}
+}
+
 func TestNextUniquePendingInputIDRetriesHistoricalCollision(t *testing.T) {
 	records := map[string]PendingInputRecord{
 		"pending-collision": {ID: "pending-collision"},

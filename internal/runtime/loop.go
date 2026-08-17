@@ -200,12 +200,16 @@ func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Messa
 		return llm.Message{}, fmt.Errorf("persist accepted turn input: %w", err)
 	}
 	admitted := e.activeTurnID == ""
+	createdAdmissionIntent := record.Origin == PendingInputOriginTurn && record.State == PendingInputStateAccepting && record.TurnID == turnID
 	e.activeTurnID = turnID
 	e.pendingMu.Unlock()
 
 	if admitted {
 		if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{}}); err != nil {
-			dropErr := queue.MarkDropped([]string{record.ID})
+			var dropErr error
+			if createdAdmissionIntent {
+				dropErr = queue.MarkDropped([]string{record.ID})
+			}
 			e.finishActiveTurn(turnID)
 			commitErr := fmt.Errorf("commit turn admission: %w", err)
 			if dropErr != nil {
@@ -214,7 +218,10 @@ func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Messa
 			return llm.Message{}, commitErr
 		}
 		if err := queue.CommitTurnInput(record.ID, turnID); err != nil {
-			dropErr := queue.MarkDropped([]string{record.ID})
+			var dropErr error
+			if createdAdmissionIntent {
+				dropErr = queue.MarkDropped([]string{record.ID})
+			}
 			commitErr := fmt.Errorf("persist committed turn admission: %w", err)
 			if dropErr != nil {
 				commitErr = errors.Join(commitErr, fmt.Errorf("drop uncommitted turn admission: %w", dropErr))

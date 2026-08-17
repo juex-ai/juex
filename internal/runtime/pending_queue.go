@@ -145,8 +145,8 @@ func (q *PendingInputQueue) AdmitTurnInput(turnID string, msg llm.Message, reuse
 	return q.storeTurnInput(turnID, msg, reuseTurnRecord, PendingInputStateAdmitted)
 }
 
-// StageTurnInput writes a non-replayable admission intent. The caller promotes
-// it only after the matching durable turn.admitted event commits.
+// StageTurnInput writes a non-replayable intent for a new input. An existing
+// durable pending record stays replayable until the caller commits admission.
 func (q *PendingInputQueue) StageTurnInput(turnID string, msg llm.Message, reuseTurnRecord bool) (PendingInputRecord, error) {
 	return q.storeTurnInput(turnID, msg, reuseTurnRecord, PendingInputStateAccepting)
 }
@@ -169,6 +169,11 @@ func (q *PendingInputQueue) storeTurnInput(turnID string, msg llm.Message, reuse
 		if id := q.messageIndex[msg.ID]; id != "" {
 			record := q.records[id]
 			if isReplayablePendingState(record.State) {
+				// A persisted pending input was already accepted by the Framework.
+				// Keep it replayable until the new Turn admission commits.
+				if state == PendingInputStateAccepting {
+					return record, nil
+				}
 				return q.promoteTurnInputLocked(record, turnID, state)
 			}
 		}
@@ -227,13 +232,23 @@ func (q *PendingInputQueue) CommitTurnInput(id, turnID string) error {
 	if !ok {
 		return fmt.Errorf("pending input queue: admission intent %q not found", id)
 	}
-	if record.State == PendingInputStateAdmitted && record.TurnID == turnID {
+	if record.Origin == PendingInputOriginTurn && record.State == PendingInputStateAdmitted && record.TurnID == turnID {
 		return nil
 	}
-	if record.State != PendingInputStateAccepting || record.TurnID != turnID {
+	if record.State == PendingInputStateAccepting && record.TurnID != turnID {
 		return fmt.Errorf("pending input queue: admission intent %q has state %q for turn %q", id, record.State, record.TurnID)
 	}
+	if record.State != PendingInputStateAccepting && !isReplayablePendingState(record.State) {
+		return fmt.Errorf("pending input queue: admission intent %q has state %q for turn %q", id, record.State, record.TurnID)
+	}
+	wasAccepting := record.State == PendingInputStateAccepting
+	record.Origin = PendingInputOriginTurn
 	record.State = PendingInputStateAdmitted
+	record.TurnID = turnID
+	record.ExpiresAt = time.Time{}
+	if !wasAccepting {
+		record.Attempts++
+	}
 	if err := q.appendLocked(record); err != nil {
 		return err
 	}

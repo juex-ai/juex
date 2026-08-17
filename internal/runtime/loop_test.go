@@ -590,6 +590,91 @@ func TestAdmitTurnMessage_AdmissionAndCompensationFailureCannotReplayInput(t *te
 	}
 }
 
+func TestAdmitTurnMessage_FailedAdmissionKeepsPersistedInputReplayable(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	record, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "persisted input"),
+		PendingInputOptions{ID: "persisted", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("admission sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: TurnAdmittedType, err: want})
+
+	_, admissionErr := eng.AdmitTurnMessage("failed-turn", record.Message)
+	if !errors.Is(admissionErr, want) {
+		t.Fatalf("AdmitTurnMessage() error = %v, want %v", admissionErr, want)
+	}
+	reloaded := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
+	replayable, err := reloaded.Replayable("later-turn", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 1 || replayable[0].ID != record.ID || replayable[0].State != PendingInputStatePending {
+		t.Fatalf("replayable persisted input = %+v, want pending record %q", replayable, record.ID)
+	}
+}
+
+func TestAdmitTurnMessage_FailedPromotionKeepsPersistedInputReplayable(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	record, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "persisted input"),
+		PendingInputOptions{ID: "persisted", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := eng.currentPendingInputQueue()
+	pendingPath := queue.path
+	backupPath := pendingPath + ".before-failed-persisted-promotion"
+	restored := false
+	restoreJournal := func() error {
+		if restored {
+			return nil
+		}
+		if err := os.Remove(pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(backupPath, pendingPath); err != nil {
+			return err
+		}
+		restored = true
+		return nil
+	}
+	t.Cleanup(func() { _ = restoreJournal() })
+	bus.SetCommitter(interceptCommitter{
+		eventType: TurnAdmittedType,
+		beforeCommit: func() error {
+			if err := os.Rename(pendingPath, backupPath); err != nil {
+				return err
+			}
+			return os.Mkdir(pendingPath, 0o700)
+		},
+	})
+
+	_, admissionErr := eng.AdmitTurnMessage("failed-turn", record.Message)
+	if admissionErr == nil || !strings.Contains(admissionErr.Error(), "persist committed turn admission") {
+		t.Fatalf("AdmitTurnMessage() error = %v, want promotion failure", admissionErr)
+	}
+	if strings.Contains(admissionErr.Error(), "drop uncommitted turn admission") {
+		t.Fatalf("AdmitTurnMessage() dropped previously persisted input: %v", admissionErr)
+	}
+	if err := restoreJournal(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
+	replayable, err := reloaded.Replayable("later-turn", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 1 || replayable[0].ID != record.ID || replayable[0].State != PendingInputStatePending {
+		t.Fatalf("replayable persisted input = %+v, want pending record %q", replayable, record.ID)
+	}
+}
+
 func TestAdmitTurnMessage_IntentPromotionFailureCannotReplayInput(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	queue := eng.currentPendingInputQueue()
