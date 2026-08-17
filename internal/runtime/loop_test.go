@@ -5719,7 +5719,7 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	if probe.err != nil {
 		t.Fatal(probe.err)
 	}
-	if want := []string{"pending_input.promoted", "turn.admitted", "observer"}; !reflect.DeepEqual(admissionOrder, want) {
+	if want := []string{"turn.admitted", "pending_input.promoted", "observer"}; !reflect.DeepEqual(admissionOrder, want) {
 		t.Fatalf("promotion admission order = %v, want %v", admissionOrder, want)
 	}
 	if len(probe.states) != 1 || probe.states[0] != PendingInputStateAdmitted {
@@ -6403,6 +6403,72 @@ func TestPromotePendingInputFailsBeforeObserverWhenDurableAdmissionFails(t *test
 	}
 	if current := eng.PendingInputStatus(); current.TurnID != "" || current.PendingCount != 1 {
 		t.Fatalf("engine status = %+v, want idle with queued input", current)
+	}
+}
+
+func TestPromotePendingInputKeepsRecordReplayableWhenTurnAdmissionFails(t *testing.T) {
+	root := t.TempDir()
+	sess, err := session.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	eng := newEngineForSession(t, sess, &mockProvider{})
+	if err := eng.ReserveTurnID("compact-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "after compact"),
+		PendingInputOptions{ID: "event-1", TTL: time.Hour},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	var observed []string
+	probe := &pendingAdmissionProbe{queue: eng.PendingInputQueue, order: &observed}
+	registry := runtimemodule.NewRegistry()
+	if err := registry.Register(probe); err != nil {
+		t.Fatal(err)
+	}
+	set, err := registry.Seal(context.Background(), runtimemodule.ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.RuntimeModules = set
+	eng.Bus.Subscribe(PendingInputPromotedType, func(events.Event) {
+		observed = append(observed, "pending_input.promoted")
+	})
+	want := errors.New("admission sync failed")
+	eng.Bus.SetCommitter(selectiveFailCommitter{eventType: TurnAdmittedType, err: want})
+
+	_, status, promoted, err := eng.PromotePendingInputTurn("compact-1", "turn-1")
+	if !errors.Is(err, want) || !strings.Contains(err.Error(), "commit promoted turn admission") {
+		t.Fatalf("promotion error = %v, want %v", err, want)
+	}
+	if promoted {
+		t.Fatal("pending input was promoted after turn admission failed")
+	}
+	if status.TurnID != "" || status.PendingCount != 1 || len(observed) != 0 {
+		t.Fatalf("status/observer = %+v / %v, want queued and unobserved", status, observed)
+	}
+	if current := eng.PendingInputStatus(); current.TurnID != "" || current.PendingCount != 1 {
+		t.Fatalf("engine status = %+v, want idle with queued input", current)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := records["event-1"]
+	if record.Origin != PendingInputOriginQueued || record.State != PendingInputStatePending || record.TurnID != "compact-1" {
+		t.Fatalf("record = %+v, want queued pending input", record)
+	}
+	replayable, err := eng.PendingInputQueue.Replayable("later-turn", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 1 || replayable[0].ID != "event-1" {
+		t.Fatalf("replayable records = %+v, want event-1", replayable)
 	}
 }
 

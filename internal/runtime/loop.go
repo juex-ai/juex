@@ -503,32 +503,38 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 		return llm.Message{}, status, false, nil
 	}
 	item := e.pendingInput[0]
+	e.activeTurnID = nextTurnID
+	e.pendingEventAnnouncing = true
+	e.pendingMu.Unlock()
+
+	if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{}}); err != nil {
+		e.finishActiveTurn(nextTurnID)
+		e.flushPendingEvents()
+		status := e.PendingInputStatus()
+		return llm.Message{}, status, false, fmt.Errorf("commit promoted turn admission: %w", err)
+	}
 	if item.RecordID != "" && queue != nil {
 		if err := queue.PromoteToTurnInput([]string{item.RecordID}, nextTurnID); err != nil {
-			e.activeTurnID = ""
-			status := PendingInputStatus{
-				PendingCount:     len(e.pendingInput),
-				MaxPendingInputs: max,
-			}
-			e.pendingMu.Unlock()
-			return llm.Message{}, status, false, fmt.Errorf("mark promoted pending input admitted: %w", err)
+			e.finishActiveTurn(nextTurnID)
+			promotionErr := e.failTurn(nextTurnID, fmt.Errorf("mark promoted pending input admitted: %w", err))
+			e.flushPendingEvents()
+			return llm.Message{}, e.PendingInputStatus(), false, promotionErr
 		}
 	}
+
+	e.pendingMu.Lock()
 	e.pendingInput[0] = queuedPendingInput{}
 	e.pendingInput = e.pendingInput[1:]
-	e.activeTurnID = nextTurnID
 	status := PendingInputStatus{
 		TurnID:           nextTurnID,
 		PendingCount:     len(e.pendingInput),
 		MaxPendingInputs: max,
 	}
-	e.pendingEventAnnouncing = true
 	e.pendingMu.Unlock()
 	_ = e.emit(events.Event{Type: PendingInputPromotedType, TurnID: nextTurnID, Payload: PendingInputPromotedPayload{
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
 	}})
-	_ = e.emit(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{}})
 	if item.RecordID != "" {
 		e.notifyPendingInputsAdmitted(context.Background(), nextTurnID, []string{item.RecordID})
 	}
