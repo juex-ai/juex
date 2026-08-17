@@ -555,35 +555,21 @@ func TestSwitchToNewPrimarySessionRollbackUsesCapturedRuntime(t *testing.T) {
 	t.Cleanup(func() { _ = a.Close() })
 	oldID := a.Session.ID
 	oldEventPath := filepath.Join(a.Session.Dir, "events.jsonl")
-	backupPath := oldEventPath + ".rollback-test"
-	restored := false
-	restoreJournal := func() error {
-		if restored {
-			return nil
-		}
-		if err := os.Remove(oldEventPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err := os.Rename(backupPath, oldEventPath); err != nil {
-			return err
-		}
-		restored = true
-		return nil
-	}
-	t.Cleanup(func() { _ = restoreJournal() })
 	tracker.beforeReject = func() error {
-		if err := os.Rename(oldEventPath, backupPath); err != nil {
+		file, err := os.OpenFile(oldEventPath, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
 			return err
 		}
-		return os.Mkdir(oldEventPath, 0o700)
+		if _, err := file.WriteString("{invalid rollback test event\n"); err != nil {
+			_ = file.Close()
+			return err
+		}
+		return file.Close()
 	}
 
 	err = a.SwitchToNewPrimarySession()
 	if err == nil || !strings.Contains(err.Error(), "replacement blocked") {
 		t.Fatalf("session replacement error = %v, want policy rejection", err)
-	}
-	if err := restoreJournal(); err != nil {
-		t.Fatal(err)
 	}
 	if got := a.Engine.SessionRuntimeSnapshot().Session.ID; got != oldID {
 		t.Fatalf("Engine runtime Session after rollback = %q, want %q", got, oldID)

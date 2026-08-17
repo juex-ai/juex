@@ -160,28 +160,17 @@ func TestRestoreSessionRuntimeCheckpointDoesNotReplayJournal(t *testing.T) {
 	}
 
 	eventPath := filepath.Join(first.Dir, "events.jsonl")
-	backupPath := eventPath + ".checkpoint-test"
-	if err := os.Rename(eventPath, backupPath); err != nil {
+	file, err := os.OpenFile(eventPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(eventPath, 0o700); err != nil {
+	if _, err := file.WriteString("{invalid checkpoint test event\n"); err != nil {
+		_ = file.Close()
 		t.Fatal(err)
 	}
-	restored := false
-	restoreJournal := func() error {
-		if restored {
-			return nil
-		}
-		if err := os.Remove(eventPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err := os.Rename(backupPath, eventPath); err != nil {
-			return err
-		}
-		restored = true
-		return nil
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = restoreJournal() })
 
 	if err := engine.RestoreSessionRuntimeCheckpoint(checkpoint); err != nil {
 		t.Fatal(err)
