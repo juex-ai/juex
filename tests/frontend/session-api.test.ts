@@ -223,17 +223,24 @@ test("subscribeEvents forwards open and browser event callbacks", () => {
     assert.equal(eventID, "evt-1");
     assert.equal(source?.closed, true);
 
-    // An empty cursor carries no resume position. Sending `?since=` made the
-    // server replay the entire journal, so the parameter is omitted instead.
+    // An empty cursor means the journal was empty when the transcript snapshot
+    // was taken, so the browser still needs everything committed since. It asks
+    // for that explicitly; a blank `?since=` would read as "no resume position".
     const emptyCursorUnsubscribe = subscribeEvents("empty cursor", {
       since: "",
       onEvent: () => {},
     });
     assert.equal(
       source?.url,
-      "/api/sessions/empty%20cursor/events",
+      "/api/sessions/empty%20cursor/events?since=%40journal-start",
     );
     emptyCursorUnsubscribe();
+
+    const noCursorUnsubscribe = subscribeEvents("no cursor", {
+      onEvent: () => {},
+    });
+    assert.equal(source?.url, "/api/sessions/no%20cursor/events");
+    noCursorUnsubscribe();
   } finally {
     globalThis.EventSource = originalEventSource;
   }

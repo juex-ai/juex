@@ -14,6 +14,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -4751,6 +4752,51 @@ func TestGetSessionShow_FallsBackToJournalCursorWhenStatusHasNone(t *testing.T) 
 	}
 	if parsed.EventCursor != "evt-committed" {
 		t.Fatalf("event cursor = %q, want evt-committed", parsed.EventCursor)
+	}
+}
+
+// A transcript snapshot taken while the journal was empty has no event to
+// resume after, but events committed before the stream attaches must still
+// arrive. That catch-up is requested explicitly so it cannot be triggered by a
+// cursor the client merely lost.
+func TestSSEEvents_JournalStartTokenReplaysWholeJournal(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+	if err := active.app.Bus.Emit(events.Event{
+		ID:      "evt-gap",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequest(
+		http.MethodGet,
+		ts.URL+"/api/sessions/"+sessionID+"/events?since="+url.QueryEscape(sseReplayFromJournalStart),
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	frame := readSSEFrame(t, resp.Body)
+	if !strings.Contains(frame, "id: evt-gap") {
+		t.Fatalf("journal-start replay frame = %q, want evt-gap", frame)
 	}
 }
 

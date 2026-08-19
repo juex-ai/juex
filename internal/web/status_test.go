@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -231,7 +232,8 @@ func TestSSEResumeCursorPrefersLastEventIDOnReconnect(t *testing.T) {
 
 // A blank since carries no resume position, so it must read as absent. Treating
 // it as a present-but-empty cursor made the events stream replay the whole
-// journal to any client that had lost its cursor.
+// journal to any client that had lost its cursor. Asking for the journal start
+// explicitly still works, so genuine catch-up is not lost.
 func TestSSEResumeCursorTreatsExplicitEmptySinceAsAbsent(t *testing.T) {
 	for _, target := range []string{"/events?since=", "/events?since=%20", "/events"} {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
@@ -245,6 +247,16 @@ func TestSSEResumeCursorTreatsExplicitEmptySinceAsAbsent(t *testing.T) {
 	cursor, present := sseResumeCursorWithPresence(request)
 	if cursor != "real-cursor" || !present {
 		t.Fatalf("resume cursor = %q, present = %v; want real-cursor and present", cursor, present)
+	}
+
+	request = httptest.NewRequest(
+		http.MethodGet,
+		"/events?since="+url.QueryEscape(sseReplayFromJournalStart),
+		nil,
+	)
+	cursor, present = sseResumeCursorWithPresence(request)
+	if cursor != "" || !present {
+		t.Fatalf("journal-start cursor = %q, present = %v; want empty and present", cursor, present)
 	}
 }
 

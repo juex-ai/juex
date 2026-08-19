@@ -1955,10 +1955,10 @@ newline-terminated record without repairing an incomplete journal tail. This
 prevents the cursor from observing bytes before their append has synced or
 rolled back, and prevents a concurrent delete from being undone by lock-file
 creation. The active-session branch reads that cursor from the in-memory status
-store and falls back to the same journal read when the store carries none, so an
-empty `event_cursor` always means an empty journal rather than a session the
-browser has fully loaded. The server deduplicates queued durable frames already
-covered by the
+store and falls back to the same journal read when the store carries none, still
+before the transcript page is read, so an empty `event_cursor` always means an
+empty journal rather than a session the browser has fully loaded. The server
+deduplicates queued durable frames already covered by the
 replay tail before continuing live delivery. It captures an open journal
 descriptor and byte boundary behind the
 durable commit barrier, ensuring every event in the snapshot has completed
@@ -1985,9 +1985,10 @@ later reconnect claim the browser had seen nothing. If Agent health or other
 application lifecycle state replaces the EventSource, the session read
 controller resumes from the latest durable status cursor carried by an event it
 has applied. Status calibration remains independent and cannot advance this
-transcript resume point. A resume cursor is only ever a durable event ID; an
-empty one carries no resume position and is omitted from the request rather than
-sent blank.
+transcript resume point. A resume cursor is only ever a durable event ID. An
+empty one carries no resume position, so a browser whose snapshot predates any
+committed event asks for `@journal-start` instead of sending a blank cursor,
+keeping "replay everything" distinct from "I lost my cursor".
 
 Agent API routes are available directly as `/api/...` and through the fleet
 proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
@@ -2032,7 +2033,7 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | POST | `/api/sessions/<id>/interrupt` | cancel current turn |
 | GET | `/api/sessions/<id>/status` | authoritative layered runtime-status snapshot with event cursor |
 | GET | `/api/sessions/<id>/status/events` | resumable full runtime-status snapshot SSE stream after a cursor |
-| GET | `/api/sessions/<id>/events` | BrowserEvent SSE (`?since=<cursor>` resumes after that durable event; a blank or absent `since` carries no resume position and replays nothing) |
+| GET | `/api/sessions/<id>/events` | BrowserEvent SSE (`?since=<cursor>` resumes after that durable event; `?since=@journal-start` replays the whole journal; a blank or absent `since` carries no resume position and replays nothing) |
 | GET | `/api/observables` | list workspace Observables with runtime status |
 | POST | `/api/observables` | create and start a tagged Command Observable or Schedule |
 | GET | `/api/observables/<id>` | Observable status plus recent Observations |

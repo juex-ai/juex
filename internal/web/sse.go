@@ -15,12 +15,20 @@ func sseResumeCursor(r *http.Request) string {
 	return cursor
 }
 
+// sseReplayFromJournalStart is the explicit request for a replay from the first
+// event in the journal. A client whose transcript snapshot was taken while the
+// journal was still empty has no durable event to resume after, but still needs
+// everything committed between that snapshot and its subscription. It asks with
+// this token rather than a blank cursor, so that "I lost my cursor" and "replay
+// everything" stay distinguishable on the wire.
+const sseReplayFromJournalStart = "@journal-start"
+
 // sseResumeCursorWithPresence reports the durable event the client has already
-// applied, and whether it supplied one at all. An empty value carries no resume
-// position, so a blank Last-Event-ID or a blank ?since= is treated exactly like
-// an absent one: there is nothing to replay. Callers must not read a blank
-// cursor as "start of journal", or a client that lost its cursor would pull the
-// whole transcript back on every reconnect.
+// applied, and whether it asked to resume at all. A blank Last-Event-ID or a
+// blank ?since= carries no resume position and reads as absent: there is
+// nothing to replay. Only sseReplayFromJournalStart requests the whole journal,
+// so a client that lost its cursor cannot pull the transcript back on every
+// reconnect.
 func sseResumeCursorWithPresence(r *http.Request) (string, bool) {
 	if r == nil {
 		return "", false
@@ -35,6 +43,9 @@ func sseResumeCursorWithPresence(r *http.Request) (string, bool) {
 	cursor := strings.TrimSpace(values[0])
 	if cursor == "" {
 		return "", false
+	}
+	if cursor == sseReplayFromJournalStart {
+		return "", true
 	}
 	return cursor, true
 }

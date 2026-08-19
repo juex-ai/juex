@@ -75,11 +75,15 @@ only reads and transports that authoritative result.
 `GET /api/sessions/<id>` returns an `event_cursor` captured before its
 transcript page is read. The browser uses this cursor for the initial transcript
 subscription, so events committed between the transcript and status requests
-are replayed rather than skipped. The cursor is empty only when the journal is
-empty: the active-session branch falls back to the journal when the in-memory
-status store carries none. A blank or omitted `since` carries no resume position
-and starts with live delivery only, so a client that lost its cursor cannot pull
-the whole journal back on every reconnect.
+are replayed rather than skipped. That holds for both branches of the handler:
+the active-session branch falls back to the journal when the in-memory status
+store carries no cursor, and reads it before the transcript page too. The cursor
+is therefore empty only when the journal is empty. Such a browser has no event
+to resume after but still needs whatever was committed before its stream
+attached, so it subscribes with `?since=@journal-start` to replay the journal
+from the beginning. A blank or omitted `since` carries no resume position and
+starts with live delivery only, which keeps a cursor the client merely lost from
+replaying the whole transcript on every reconnect.
 Transcript-producing events carry the exact persisted message ID. If the
 initial transcript or current live projection already contains that ID, the
 browser applies event metadata but suppresses the duplicate transcript
