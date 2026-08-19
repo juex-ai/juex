@@ -223,13 +223,15 @@ test("subscribeEvents forwards open and browser event callbacks", () => {
     assert.equal(eventID, "evt-1");
     assert.equal(source?.closed, true);
 
+    // An empty cursor carries no resume position. Sending `?since=` made the
+    // server replay the entire journal, so the parameter is omitted instead.
     const emptyCursorUnsubscribe = subscribeEvents("empty cursor", {
       since: "",
       onEvent: () => {},
     });
     assert.equal(
       source?.url,
-      "/api/sessions/empty%20cursor/events?since=",
+      "/api/sessions/empty%20cursor/events",
     );
     emptyCursorUnsubscribe();
   } finally {

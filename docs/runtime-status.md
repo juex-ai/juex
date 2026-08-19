@@ -75,14 +75,19 @@ only reads and transports that authoritative result.
 `GET /api/sessions/<id>` returns an `event_cursor` captured before its
 transcript page is read. The browser uses this cursor for the initial transcript
 subscription, so events committed between the transcript and status requests
-are replayed rather than skipped. An explicit empty `?since=` requests replay
-from the journal beginning; an omitted `since` starts with live delivery only.
+are replayed rather than skipped. The cursor is empty only when the journal is
+empty: the active-session branch falls back to the journal when the in-memory
+status store carries none. A blank or omitted `since` carries no resume position
+and starts with live delivery only, so a client that lost its cursor cannot pull
+the whole journal back on every reconnect.
 Transcript-producing events carry the exact persisted message ID. If the
 initial transcript or current live projection already contains that ID, the
 browser applies event metadata but suppresses the duplicate transcript
 projection. Live user, assistant, hook, and queued-input state retain those
 persisted IDs. Tool replay uses the same rule with its globally unique tool-use
-ID. The replay cursor is captured once per Session route; later transcript
+ID. The replay cursor is captured once per Session route, except that a cursor
+captured while the journal was still empty is replaced by the first refresh
+carrying a real one; later transcript
 refreshes may advance their response cursor without restarting the existing
 EventSource or clearing its latest status.
 If application lifecycle state replaces that EventSource, the Session read

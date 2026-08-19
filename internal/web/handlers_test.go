@@ -4586,7 +4586,11 @@ func TestSSEEvents_ReplayPreservesAuthoritativeRestartRecovery(t *testing.T) {
 	}
 }
 
-func TestSSEEvents_ExplicitEmptyCursorReplaysFromJournalStart(t *testing.T) {
+// An empty since carries no resume position, so it must mean the same thing as
+// an absent one: nothing to replay. Treating it as "start of journal" let a
+// client that had lost its cursor pull the whole transcript back on every
+// reconnect.
+func TestSSEEvents_ExplicitEmptyCursorReplaysNothing(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -4621,15 +4625,151 @@ func TestSSEEvents_ExplicitEmptyCursorReplaysFromJournalStart(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	buf := make([]byte, 4096)
-	n, err := resp.Body.Read(buf)
+	// The subscription is registered before the response headers flush, so an
+	// event emitted now cannot be missed. If the journal were replayed, its
+	// frame would already be queued ahead of this one.
+	if err := active.app.Bus.Emit(events.Event{
+		ID:     "evt-live",
+		Type:   "turn.started",
+		TurnID: "turn-1",
+		Payload: juexruntime.TurnStartedPayload{
+			Input: "continue",
+			Kind:  "user",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	frame := readSSEFrame(t, resp.Body)
+	if strings.Contains(frame, "evt-first") {
+		t.Fatalf("empty cursor replayed the journal; first frame = %q", frame)
+	}
+	if !strings.Contains(frame, "id: evt-live") {
+		t.Fatalf("first frame = %q, want the live event", frame)
+	}
+}
+
+// The empty-cursor fix must not be a blanket "stop replaying": a real cursor
+// still has to close the gap the browser missed while disconnected.
+func TestSSEEvents_OlderCursorStillReplaysSubsequentEvents(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+	if err := active.app.Bus.Emit(events.Event{
+		ID:      "evt-admitted",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := active.app.Bus.Emit(events.Event{
+		ID:     "evt-started",
+		Type:   "turn.started",
+		TurnID: "turn-1",
+		Payload: juexruntime.TurnStartedPayload{
+			Input: "continue",
+			Kind:  "user",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequest(
+		http.MethodGet,
+		ts.URL+"/api/sessions/"+sessionID+"/events?since=evt-admitted",
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	frame := string(buf[:n])
-	if !strings.Contains(frame, "id: evt-first") ||
-		!strings.Contains(frame, `"type":"turn.admitted"`) {
-		t.Fatalf("initial replay frame = %q", frame)
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	frame := readSSEFrame(t, resp.Body)
+	if strings.Contains(frame, "id: evt-admitted") {
+		t.Fatalf("replay resent the cursor event itself: %q", frame)
+	}
+	if !strings.Contains(frame, "id: evt-started") {
+		t.Fatalf("replay frame = %q, want evt-started", frame)
+	}
+}
+
+// The active-session branch of session show reads the cursor from the in-memory
+// status store. When that store carries no cursor but the journal holds events,
+// reporting "" would tell the browser it has seen nothing.
+func TestGetSessionShow_FallsBackToJournalCursorWhenStatusHasNone(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+	if err := active.app.Bus.Emit(events.Event{
+		ID:      "evt-committed",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Reset the projection to a cursorless state the way a degraded status
+	// restore would, without racing readers of the store pointer itself.
+	active.app.Status.Reset(juexruntime.StatusSeed{
+		SessionID:        sessionID,
+		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
+	}, nil)
+	if cursor := active.app.Status.Snapshot().Cursor; cursor != "" {
+		t.Fatalf("status cursor = %q, want empty after reset", cursor)
+	}
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		EventCursor string `json:"event_cursor"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.EventCursor != "evt-committed" {
+		t.Fatalf("event cursor = %q, want evt-committed", parsed.EventCursor)
+	}
+}
+
+// readSSEFrame returns the first complete SSE frame on the stream.
+func readSSEFrame(t *testing.T, body io.Reader) string {
+	t.Helper()
+	buf := make([]byte, 4096)
+	collected := ""
+	for {
+		n, err := body.Read(buf)
+		if n > 0 {
+			collected += string(buf[:n])
+			if strings.Contains(collected, "\n\n") {
+				return collected
+			}
+		}
+		if err != nil {
+			t.Fatalf("read sse frame: %v; collected:\n%s", err, collected)
+		}
 	}
 }
 

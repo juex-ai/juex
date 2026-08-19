@@ -43,7 +43,7 @@ test("resetSessionReadState clears route-local transcript state", () => {
 test("live subscription keeps its bootstrap cursor across transcript refreshes", () => {
   const initial = captureSessionLiveSubscription(
     null,
-    session("s1", []),
+    { ...session("s1", []), event_cursor: "cursor-1" },
   );
   const refreshed = captureSessionLiveSubscription(
     initial,
@@ -54,9 +54,37 @@ test("live subscription keeps its bootstrap cursor across transcript refreshes",
     { ...session("s2", []), event_cursor: "cursor-3" },
   );
 
-  assert.deepEqual(initial, { sessionID: "s1", cursor: "" });
+  assert.deepEqual(initial, { sessionID: "s1", cursor: "cursor-1" });
   assert.equal(refreshed, initial);
   assert.deepEqual(switched, { sessionID: "s2", cursor: "cursor-3" });
+});
+
+// A session with an empty journal reports an empty cursor. Freezing that
+// placeholder made every later reconnect claim the browser had seen nothing,
+// so the server replayed the whole journal.
+test("live subscription adopts a real cursor once the placeholder resolves", () => {
+  const bootstrap = captureSessionLiveSubscription(null, session("s1", []));
+  const resolved = captureSessionLiveSubscription(
+    bootstrap,
+    { ...session("s1", []), event_cursor: "cursor-9" },
+  );
+  const settled = captureSessionLiveSubscription(
+    resolved,
+    { ...session("s1", []), event_cursor: "cursor-20" },
+  );
+
+  assert.deepEqual(bootstrap, { sessionID: "s1", cursor: "" });
+  assert.deepEqual(resolved, { sessionID: "s1", cursor: "cursor-9" });
+  assert.equal(settled, resolved);
+});
+
+// An empty cursor still empty on refresh must keep the same reference, or the
+// subscribe effect would tear down and rebuild the stream on every refresh.
+test("live subscription does not churn while the cursor stays empty", () => {
+  const bootstrap = captureSessionLiveSubscription(null, session("s1", []));
+  const again = captureSessionLiveSubscription(bootstrap, session("s1", []));
+
+  assert.equal(again, bootstrap);
 });
 
 test("session load failure leaves loading and route reset clears stale data", () => {

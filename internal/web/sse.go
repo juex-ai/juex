@@ -15,6 +15,12 @@ func sseResumeCursor(r *http.Request) string {
 	return cursor
 }
 
+// sseResumeCursorWithPresence reports the durable event the client has already
+// applied, and whether it supplied one at all. An empty value carries no resume
+// position, so a blank Last-Event-ID or a blank ?since= is treated exactly like
+// an absent one: there is nothing to replay. Callers must not read a blank
+// cursor as "start of journal", or a client that lost its cursor would pull the
+// whole transcript back on every reconnect.
 func sseResumeCursorWithPresence(r *http.Request) (string, bool) {
 	if r == nil {
 		return "", false
@@ -23,13 +29,14 @@ func sseResumeCursorWithPresence(r *http.Request) (string, bool) {
 		return cursor, true
 	}
 	values, ok := r.URL.Query()["since"]
-	if !ok {
+	if !ok || len(values) == 0 {
 		return "", false
 	}
-	if len(values) == 0 {
-		return "", true
+	cursor := strings.TrimSpace(values[0])
+	if cursor == "" {
+		return "", false
 	}
-	return strings.TrimSpace(values[0]), true
+	return cursor, true
 }
 
 // writeSSEFrame writes one SSE frame to w using the documented shape:

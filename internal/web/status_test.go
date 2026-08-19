@@ -229,11 +229,22 @@ func TestSSEResumeCursorPrefersLastEventIDOnReconnect(t *testing.T) {
 	}
 }
 
-func TestSSEResumeCursorPreservesExplicitEmptySince(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "/events?since=", nil)
+// A blank since carries no resume position, so it must read as absent. Treating
+// it as a present-but-empty cursor made the events stream replay the whole
+// journal to any client that had lost its cursor.
+func TestSSEResumeCursorTreatsExplicitEmptySinceAsAbsent(t *testing.T) {
+	for _, target := range []string{"/events?since=", "/events?since=%20", "/events"} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		cursor, present := sseResumeCursorWithPresence(request)
+		if cursor != "" || present {
+			t.Fatalf("%s: resume cursor = %q, present = %v; want empty and absent", target, cursor, present)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/events?since=real-cursor", nil)
 	cursor, present := sseResumeCursorWithPresence(request)
-	if cursor != "" || !present {
-		t.Fatalf("resume cursor = %q, present = %v; want empty and present", cursor, present)
+	if cursor != "real-cursor" || !present {
+		t.Fatalf("resume cursor = %q, present = %v; want real-cursor and present", cursor, present)
 	}
 }
 

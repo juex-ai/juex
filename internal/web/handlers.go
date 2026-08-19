@@ -237,6 +237,7 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 			info   session.Info
 			page   session.MessagePage
 			cursor string
+			dir    string
 			goal   *runtime.GoalStatusSnapshot
 			notes  *runtime.NotesSnapshot
 		)
@@ -244,6 +245,7 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 			if as.app.Status != nil {
 				cursor = as.app.Status.Snapshot().Cursor
 			}
+			dir = sess.Dir
 			info = sess.Info()
 			var err error
 			page, err = sess.TranscriptMessagePage(window.Before, window.Limit)
@@ -254,6 +256,17 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 			return nil
 		})
 		if err == nil {
+			// The in-memory status store can hold no cursor while the journal
+			// already has committed events. Reporting "" there would tell the
+			// browser it has seen nothing of a session it has fully loaded.
+			if cursor == "" {
+				journalCursor, cursorErr := session.ReadLatestCommittedEventID(dir)
+				if cursorErr != nil {
+					writeErr(w, http.StatusInternalServerError, "general_error", cursorErr.Error())
+					return
+				}
+				cursor = journalCursor
+			}
 			info, err = session.MarkActiveInfo(s.opts.Cfg.HistoryPath(), info)
 			if err != nil {
 				writeErr(w, http.StatusInternalServerError, "general_error", err.Error())

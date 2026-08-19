@@ -180,15 +180,14 @@ export interface SubscribeOptions {
 // subscribeEvents opens an EventSource for the given session and invokes
 // onEvent for each parsed BrowserEvent. Returns a function that closes the
 // connection. EventSource reconnects automatically with the last durable SSE
-// event ID; transient frames deliberately do not advance that cursor.
+// event ID; transient frames deliberately do not advance that cursor. An empty
+// cursor carries no resume position, so the parameter is omitted rather than
+// sent blank — the server replays nothing for either form.
 export function subscribeEvents(
   id: string,
   opts: SubscribeOptions,
 ): () => void {
-  const qs =
-    opts.since !== undefined
-      ? `?since=${encodeURIComponent(opts.since)}`
-      : "";
+  const qs = opts.since ? `?since=${encodeURIComponent(opts.since)}` : "";
   const url = agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/events${qs}`);
   const es = new EventSource(url);
   es.addEventListener("message", (ev) => {
