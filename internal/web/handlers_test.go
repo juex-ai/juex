@@ -4801,6 +4801,87 @@ func TestSSEEvents_JournalStartReplayRequestsWholeJournal(t *testing.T) {
 	}
 }
 
+// A durable commit appends to the journal and then runs browser projection
+// synchronously. Reading the journal directly can observe the appended ID before
+// its browser frame is queued; reporting it would advance the browser past an
+// event it never receives. The fallback therefore runs behind the commit
+// barrier, so session show cannot return a cursor mid-commit.
+func TestGetSessionShow_JournalFallbackWaitsForCommitBarrier(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+	if err := active.app.Bus.Emit(events.Event{
+		ID:      "evt-settled",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	active.app.Status.Reset(juexruntime.StatusSeed{
+		SessionID:        sessionID,
+		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
+	}, nil)
+
+	// Hold the commit barrier, then confirm session show cannot answer while a
+	// commit could still be mid-flight.
+	barrierHeld := make(chan struct{})
+	releaseBarrier := make(chan struct{})
+	barrierDone := make(chan error, 1)
+	go func() {
+		barrierDone <- active.app.ReadCommittedEvents(func() error {
+			close(barrierHeld)
+			<-releaseBarrier
+			return nil
+		})
+	}()
+	<-barrierHeld
+
+	showDone := make(chan string, 1)
+	go func() {
+		resp, err := http.Get(ts.URL + "/api/sessions/" + sessionID)
+		if err != nil {
+			showDone <- "request error: " + err.Error()
+			return
+		}
+		defer resp.Body.Close()
+		var parsed struct {
+			EventCursor string `json:"event_cursor"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+			showDone <- "decode error: " + err.Error()
+			return
+		}
+		showDone <- parsed.EventCursor
+	}()
+
+	select {
+	case cursor := <-showDone:
+		t.Fatalf("session show answered while the commit barrier was held, cursor = %q", cursor)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	close(releaseBarrier)
+	if err := <-barrierDone; err != nil {
+		t.Fatalf("hold commit barrier: %v", err)
+	}
+	select {
+	case cursor := <-showDone:
+		if cursor != "evt-settled" {
+			t.Fatalf("event cursor = %q, want evt-settled", cursor)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("session show did not finish after the barrier released")
+	}
+}
+
 // readSSEFrame returns the first complete SSE frame on the stream.
 func readSSEFrame(t *testing.T, body io.Reader) string {
 	t.Helper()

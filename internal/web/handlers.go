@@ -240,31 +240,42 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 			goal   *runtime.GoalStatusSnapshot
 			notes  *runtime.NotesSnapshot
 		)
-		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
-			if as.app.Status != nil {
-				cursor = as.app.Status.Snapshot().Cursor
-			}
-			// The in-memory status store can hold no cursor while the journal
-			// already has committed events. Reporting "" there would tell the
-			// browser it has seen nothing of a session it has fully loaded.
-			// Read it before the transcript page, like the status cursor above,
-			// so a concurrent commit may replay but can never be skipped.
-			if cursor == "" {
+		// Capture the resume cursor before the transcript page, so a concurrent
+		// commit may replay but can never be skipped. The status cursor is
+		// advanced by projection and so is already safe; the journal fallback is
+		// not, and runs behind the durable commit barrier because a raw journal
+		// read can otherwise observe an appended event whose browser frame has
+		// not been queued yet. Reporting that ID would advance the browser past
+		// an event it never receives — including ones absent from the transcript
+		// page, such as pending_input.queued.
+		err := as.app.ReadCommittedEvents(func() error {
+			return as.app.ReadSessionID(id, func(sess *session.Session) error {
+				if as.app.Status != nil {
+					cursor = as.app.Status.Snapshot().Cursor
+				}
+				if cursor != "" {
+					return nil
+				}
 				journalCursor, cursorErr := session.ReadLatestCommittedEventID(sess.Dir)
 				if cursorErr != nil {
 					return cursorErr
 				}
 				cursor = journalCursor
-			}
-			info = sess.Info()
-			var err error
-			page, err = sess.TranscriptMessagePage(window.Before, window.Limit)
-			if err != nil {
-				return err
-			}
-			goal, notes = as.app.Engine.SessionStateStatus()
-			return nil
+				return nil
+			})
 		})
+		if err == nil {
+			err = as.app.ReadSessionID(id, func(sess *session.Session) error {
+				info = sess.Info()
+				var pageErr error
+				page, pageErr = sess.TranscriptMessagePage(window.Before, window.Limit)
+				if pageErr != nil {
+					return pageErr
+				}
+				goal, notes = as.app.Engine.SessionStateStatus()
+				return nil
+			})
+		}
 		if err == nil {
 			info, err = session.MarkActiveInfo(s.opts.Cfg.HistoryPath(), info)
 			if err != nil {
@@ -283,7 +294,12 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 			})
 			return
 		}
-		if !errors.Is(err, app.ErrSessionChanged) && !errors.Is(err, app.ErrSessionUnavailable) {
+		// A closed durable sink means the runtime is no longer serving this
+		// session; the on-disk branch below still answers correctly, so treat it
+		// like the other liveness errors rather than failing the request.
+		if !errors.Is(err, app.ErrSessionChanged) &&
+			!errors.Is(err, app.ErrSessionUnavailable) &&
+			!errors.Is(err, events.ErrDurableSinkClosed) {
 			if errors.Is(err, session.ErrBeforeMessageNotFound) {
 				writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 				return
