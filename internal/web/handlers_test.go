@@ -4757,9 +4757,9 @@ func TestGetSessionShow_FallsBackToJournalCursorWhenStatusHasNone(t *testing.T) 
 
 // A transcript snapshot taken while the journal was empty has no event to
 // resume after, but events committed before the stream attaches must still
-// arrive. That catch-up is requested explicitly so it cannot be triggered by a
-// cursor the client merely lost.
-func TestSSEEvents_JournalStartTokenReplaysWholeJournal(t *testing.T) {
+// arrive. That catch-up is requested through its own parameter so it cannot be
+// triggered by a cursor the client merely lost, nor collide with an event ID.
+func TestSSEEvents_JournalStartReplayRequestsWholeJournal(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -4781,7 +4781,8 @@ func TestSSEEvents_JournalStartTokenReplaysWholeJournal(t *testing.T) {
 
 	req, err := http.NewRequest(
 		http.MethodGet,
-		ts.URL+"/api/sessions/"+sessionID+"/events?since="+url.QueryEscape(sseReplayFromJournalStart),
+		ts.URL+"/api/sessions/"+sessionID+"/events?"+
+			sseReplayParam+"="+url.QueryEscape(sseReplayJournalStart),
 		nil,
 	)
 	if err != nil {

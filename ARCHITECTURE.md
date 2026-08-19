@@ -1987,8 +1987,10 @@ controller resumes from the latest durable status cursor carried by an event it
 has applied. Status calibration remains independent and cannot advance this
 transcript resume point. A resume cursor is only ever a durable event ID. An
 empty one carries no resume position, so a browser whose snapshot predates any
-committed event asks for `@journal-start` instead of sending a blank cursor,
-keeping "replay everything" distinct from "I lost my cursor".
+committed event asks for `?replay=journal-start` instead of sending a blank
+cursor. That marker lives outside the cursor namespace because event IDs are
+opaque and caller-supplied ones are preserved, so a reserved cursor value could
+be committed by an extension and reopen the full-journal replay.
 
 Agent API routes are available directly as `/api/...` and through the fleet
 proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
@@ -2033,7 +2035,7 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | POST | `/api/sessions/<id>/interrupt` | cancel current turn |
 | GET | `/api/sessions/<id>/status` | authoritative layered runtime-status snapshot with event cursor |
 | GET | `/api/sessions/<id>/status/events` | resumable full runtime-status snapshot SSE stream after a cursor |
-| GET | `/api/sessions/<id>/events` | BrowserEvent SSE (`?since=<cursor>` resumes after that durable event; `?since=@journal-start` replays the whole journal; a blank or absent `since` carries no resume position and replays nothing) |
+| GET | `/api/sessions/<id>/events` | BrowserEvent SSE (`?since=<cursor>` resumes after that durable event; `?replay=journal-start` replays the whole journal; a blank or absent `since` carries no resume position and replays nothing) |
 | GET | `/api/observables` | list workspace Observables with runtime status |
 | POST | `/api/observables` | create and start a tagged Command Observable or Schedule |
 | GET | `/api/observables/<id>` | Observable status plus recent Observations |

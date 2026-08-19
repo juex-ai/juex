@@ -177,24 +177,27 @@ export interface SubscribeOptions {
   onError?: (err: Event) => void;
 }
 
-// replayFromJournalStart asks the server for every event in the journal. A
-// transcript snapshot taken while the journal was still empty has no durable
-// event to resume after, but the browser still needs whatever was committed
-// before its stream attached. Requesting that explicitly keeps it distinct from
-// a blank cursor, which the server reads as "no resume position" so a lost
-// cursor cannot replay the whole transcript.
-const replayFromJournalStart = "@journal-start";
-
 // subscribeEvents opens an EventSource for the given session and invokes
 // onEvent for each parsed BrowserEvent. Returns a function that closes the
 // connection. EventSource reconnects automatically with the last durable SSE
 // event ID; transient frames deliberately do not advance that cursor.
+//
+// An empty cursor means the journal was empty when the transcript snapshot was
+// taken: there is no event to resume after, but whatever was committed before
+// the stream attached is still needed. That is requested through a separate
+// `replay` parameter rather than a reserved `since` value, so the cursor stays
+// an opaque event ID and a cursor the client merely lost can never be read as
+// "replay everything".
 export function subscribeEvents(
   id: string,
   opts: SubscribeOptions,
 ): () => void {
-  const since = opts.since === "" ? replayFromJournalStart : opts.since;
-  const qs = since ? `?since=${encodeURIComponent(since)}` : "";
+  let qs = "";
+  if (opts.since) {
+    qs = `?since=${encodeURIComponent(opts.since)}`;
+  } else if (opts.since === "") {
+    qs = "?replay=journal-start";
+  }
   const url = agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/events${qs}`);
   const es = new EventSource(url);
   es.addEventListener("message", (ev) => {

@@ -80,10 +80,13 @@ the active-session branch falls back to the journal when the in-memory status
 store carries no cursor, and reads it before the transcript page too. The cursor
 is therefore empty only when the journal is empty. Such a browser has no event
 to resume after but still needs whatever was committed before its stream
-attached, so it subscribes with `?since=@journal-start` to replay the journal
-from the beginning. A blank or omitted `since` carries no resume position and
-starts with live delivery only, which keeps a cursor the client merely lost from
-replaying the whole transcript on every reconnect.
+attached, so it subscribes with `?replay=journal-start` to replay the journal
+from the beginning. That marker is a separate parameter rather than a reserved
+cursor value, because event IDs are opaque and any caller-supplied ID is kept,
+so a reserved cursor could be committed by an extension. A blank or omitted
+`since` carries no resume position and starts with live delivery only, which
+keeps a cursor the client merely lost from replaying the whole transcript on
+every reconnect.
 Transcript-producing events carry the exact persisted message ID. If the
 initial transcript or current live projection already contains that ID, the
 browser applies event metadata but suppresses the duplicate transcript

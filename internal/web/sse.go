@@ -15,20 +15,24 @@ func sseResumeCursor(r *http.Request) string {
 	return cursor
 }
 
-// sseReplayFromJournalStart is the explicit request for a replay from the first
-// event in the journal. A client whose transcript snapshot was taken while the
-// journal was still empty has no durable event to resume after, but still needs
-// everything committed between that snapshot and its subscription. It asks with
-// this token rather than a blank cursor, so that "I lost my cursor" and "replay
-// everything" stay distinguishable on the wire.
-const sseReplayFromJournalStart = "@journal-start"
+// sseReplayParam requests a replay position that is not a durable event ID. It
+// is deliberately a separate parameter rather than a reserved ?since= value:
+// event IDs are opaque and events.Normalize preserves any non-empty
+// caller-supplied ID, so a reserved cursor value could be produced by an
+// extension and turn into the full-journal replay this contract prevents.
+const (
+	sseReplayParam        = "replay"
+	sseReplayJournalStart = "journal-start"
+)
 
 // sseResumeCursorWithPresence reports the durable event the client has already
 // applied, and whether it asked to resume at all. A blank Last-Event-ID or a
 // blank ?since= carries no resume position and reads as absent: there is
-// nothing to replay. Only sseReplayFromJournalStart requests the whole journal,
-// so a client that lost its cursor cannot pull the transcript back on every
-// reconnect.
+// nothing to replay. A client whose transcript snapshot was taken while the
+// journal was still empty has no event to resume after but still needs
+// everything committed since, and asks for that with ?replay=journal-start.
+// Keeping the two separate means "I lost my cursor" can never be mistaken for
+// "replay everything".
 func sseResumeCursorWithPresence(r *http.Request) (string, bool) {
 	if r == nil {
 		return "", false
@@ -36,18 +40,15 @@ func sseResumeCursorWithPresence(r *http.Request) (string, bool) {
 	if cursor := strings.TrimSpace(r.Header.Get("Last-Event-ID")); cursor != "" {
 		return cursor, true
 	}
-	values, ok := r.URL.Query()["since"]
-	if !ok || len(values) == 0 {
-		return "", false
+	if values, ok := r.URL.Query()["since"]; ok && len(values) > 0 {
+		if cursor := strings.TrimSpace(values[0]); cursor != "" {
+			return cursor, true
+		}
 	}
-	cursor := strings.TrimSpace(values[0])
-	if cursor == "" {
-		return "", false
-	}
-	if cursor == sseReplayFromJournalStart {
+	if strings.TrimSpace(r.URL.Query().Get(sseReplayParam)) == sseReplayJournalStart {
 		return "", true
 	}
-	return cursor, true
+	return "", false
 }
 
 // writeSSEFrame writes one SSE frame to w using the documented shape:

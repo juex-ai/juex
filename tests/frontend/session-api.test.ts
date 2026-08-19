@@ -225,14 +225,14 @@ test("subscribeEvents forwards open and browser event callbacks", () => {
 
     // An empty cursor means the journal was empty when the transcript snapshot
     // was taken, so the browser still needs everything committed since. It asks
-    // for that explicitly; a blank `?since=` would read as "no resume position".
+    // through a separate `replay` parameter, keeping `since` an opaque event ID.
     const emptyCursorUnsubscribe = subscribeEvents("empty cursor", {
       since: "",
       onEvent: () => {},
     });
     assert.equal(
       source?.url,
-      "/api/sessions/empty%20cursor/events?since=%40journal-start",
+      "/api/sessions/empty%20cursor/events?replay=journal-start",
     );
     emptyCursorUnsubscribe();
 
