@@ -501,12 +501,17 @@ test("controller interprets navigation, refresh, and timer effects", async () =>
   await flushPromises();
 
   assert.equal(sessionsChanged, 1);
+  const navigationState = navigations[0]?.state as {
+    submittedAt?: string;
+  };
+  assert.match(navigationState.submittedAt ?? "", /^\d{4}-\d{2}-\d{2}T/);
   assert.deepEqual(navigations, [
     {
       sessionID: "s2",
       state: {
         commandInput: "/new",
         command: newCommand,
+        submittedAt: navigationState.submittedAt,
       },
     },
   ]);

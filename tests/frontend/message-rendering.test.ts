@@ -57,6 +57,12 @@ test("message sent time stays inside the copy action on the inner edge", () => {
   assert.match(action, /align === "start" \? timeElement : null/);
   assert.match(action, /<time[\s\S]*?dateTime=\{createdAt\}/);
   assert.match(action, /copyText \? \([\s\S]*?className="size-6/);
+  assert.match(action, /tabIndex=\{copyText \? undefined : 0\}/);
+  assert.match(
+    action,
+    /aria-label=\{copyText \? undefined : `Sent \$\{sentTime\}`\}/,
+  );
+  assert.match(action, /focus-visible:ring-2/);
 });
 
 test("ordinary copy rows receive their message creation time", () => {

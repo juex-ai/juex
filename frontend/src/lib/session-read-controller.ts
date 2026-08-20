@@ -351,11 +351,14 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     sessionID: string,
     commandInput: string,
     command: SlashCommandResponse,
+    submittedAt?: string,
   ) {
-    const key = `${sessionID}:${commandInput}:${command.name}:${command.text}`;
+    const key = `${sessionID}:${commandInput}:${command.name}:${command.text}:${submittedAt ?? ""}`;
     if (initialCommandKey === key) return;
     initialCommandKey = key;
-    runSessionReadResult(projectInitialCommand(state, commandInput, command));
+    runSessionReadResult(
+      projectInitialCommand(state, commandInput, command, submittedAt),
+    );
   }
 
   function projectPromptInput() {

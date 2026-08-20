@@ -95,6 +95,7 @@ export function Sessions() {
               onSubmit={async (msg) => {
                 const text = msg.text?.trim();
                 if (!text) return;
+                const submittedAt = new Date().toISOString();
                 setSending(true);
                 setSubmitError(null);
                 try {
@@ -113,7 +114,11 @@ export function Sessions() {
                     {
                       state:
                         turn.command && !turn.turn_id
-                          ? { commandInput: text, command: turn.command }
+                          ? {
+                              commandInput: text,
+                              command: turn.command,
+                              submittedAt,
+                            }
                           : undefined,
                     },
                   );

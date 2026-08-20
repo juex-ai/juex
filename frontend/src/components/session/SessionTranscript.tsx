@@ -846,10 +846,13 @@ function MessageMetaActions({
   ) : null;
   return (
     <MessageActions
+      aria-label={copyText ? undefined : `Sent ${sentTime}`}
       className={cn(
         "opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         align === "end" ? "justify-end pr-1" : "justify-start pl-1",
       )}
+      tabIndex={copyText ? undefined : 0}
     >
       {align === "end" ? timeElement : null}
       {copyText ? (

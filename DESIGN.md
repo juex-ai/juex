@@ -382,9 +382,11 @@ When the message has copyable text, the row uses a copy icon, copies the whole
 message text, and temporarily changes its tooltip to `Copied to clipboard`.
 When the message has a valid creation timestamp, the same row shows its local
 system time as `MMDD - HH:mm:ss`, including for attachment-only messages that
-have no copy action. When both controls exist, the copy button stays on the
-outer edge for easy targeting, with the timestamp toward the message: copy then
-time for assistant messages, time then copy for user messages.
+have no copy action. A time-only metadata row is keyboard-focusable and exposes
+the standard focus ring, so revealing it does not depend on pointer hover. When
+both controls exist, the copy button stays on the outer edge for easy targeting,
+with the timestamp toward the message: copy then time for assistant messages,
+time then copy for user messages.
 Copyable text is limited to content visibly represented in the transcript;
 reasoning and process metadata are never part of the normal message copy path.
 Compact dividers and external events retain their dedicated copy controls.

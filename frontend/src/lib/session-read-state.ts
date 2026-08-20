@@ -26,6 +26,7 @@ import type {
 export type SessionInitialCommandState = {
   commandInput?: string;
   command?: SlashCommandResponse;
+  submittedAt?: string;
 } | null;
 
 export type SessionReadState = {
@@ -224,14 +225,25 @@ export function projectInitialCommand(
   state: SessionReadState,
   commandInput: string,
   command: SlashCommandResponse,
+  submittedAt?: string,
 ): SessionReadResult {
   let next = state.projection;
   const effects: SessionReadEffect[] = [{ type: "clearRouteState" }];
   if (command.name === "/compact" && command.compact?.message_id) {
-    next = projectCompactCommand(next, command.compact.message_id, commandInput);
+    next = projectCompactCommand(
+      next,
+      command.compact.message_id,
+      commandInput,
+      submittedAt,
+    );
     effects.unshift({ type: "refresh", preserveLiveMessages: true });
   } else {
-    next = projectCommandResult(next, commandInput, command.text ?? "");
+    next = projectCommandResult(
+      next,
+      commandInput,
+      command.text ?? "",
+      submittedAt,
+    );
   }
   return { state: { ...state, projection: next }, effects };
 }
@@ -377,7 +389,9 @@ function projectCommandTurnSucceeded(
         {
           type: "navigateToSession",
           sessionID: command.status.session_id,
-          state: turn.turn_id ? null : { commandInput: prompt, command },
+          state: turn.turn_id
+            ? null
+            : { commandInput: prompt, command, submittedAt },
         },
       ],
     };

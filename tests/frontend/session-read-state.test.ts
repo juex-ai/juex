@@ -787,12 +787,21 @@ test("projectStartTurnSucceeded preserves compact command submission time", () =
 });
 
 test("projectInitialCommand projects slash command and clears route state", () => {
-  const result = projectInitialCommand(createSessionReadState(), "/status", {
-    name: "/status",
-    text: "ok",
-  });
+  const result = projectInitialCommand(
+    createSessionReadState(),
+    "/status",
+    {
+      name: "/status",
+      text: "ok",
+    },
+    "2026-08-20T21:30:00Z",
+  );
 
   assert.equal(result.state.projection.messages.length, 2);
+  assert.equal(
+    result.state.projection.messages[0]?.created_at,
+    "2026-08-20T21:30:00Z",
+  );
   assert.deepEqual(result.effects, [{ type: "clearRouteState" }]);
 });
 
@@ -831,6 +840,24 @@ test("projectInitialCommand omits an unavailable compact submission time", () =>
     { type: "refresh", preserveLiveMessages: true },
     { type: "clearRouteState" },
   ]);
+});
+
+test("projectInitialCommand preserves an available compact submission time", () => {
+  const result = projectInitialCommand(
+    createSessionReadState(),
+    "/compact",
+    {
+      name: "/compact",
+      text: "Compacted",
+      compact: { message_id: "compact-1" },
+    },
+    "2026-08-20T21:31:00Z",
+  );
+
+  assert.deepEqual(result.state.projection.compactCommands["compact-1"], {
+    input: "/compact",
+    submittedAt: "2026-08-20T21:31:00Z",
+  });
 });
 
 test("load older state merges pages and records errors", () => {
