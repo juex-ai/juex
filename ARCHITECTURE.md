@@ -339,8 +339,10 @@ The Framework lifecycle is:
    with the startup error.
 4. Attach and lock a Session. A new Primary attachment may provisionally update
    persisted active history here; this selection record is distinct from App
-   runtime publication. Construct, validate, seal, and start the Session set
-   before publishing it to App readers.
+   runtime publication. If its later lock acquisition fails, the candidate and
+   selection may remain for reconciliation. After attachment succeeds,
+   construct, validate, seal, and start the Session set before publishing it to
+   App readers.
 5. Build one complete Tool registry from the sealed Runtime and Session
    catalogs, then publish the Session, sealed Session set, registry, prompt
    builder, and other Session dependencies together through `runtime.Engine`'s
@@ -1258,15 +1260,18 @@ returns the lock mode (`attach_active`, `new_primary`, `new_side`, or
 `history.active_id` primary when it still appears in the canonical disk list,
 then other disk-listed primary sessions before creating a new active primary.
 `new_primary` creates the candidate, records it as the provisional persisted
-active selection, and acquires its single-writer lock under the Session-root
-guard before the caller builds or validates Session Modules. Other processes
-may therefore observe the candidate in history before the current App runtime
-publishes it. A replacement rejection must delete the candidate and restore
-the previously resident App Session as the persisted selection. This is not a
+active selection, and then attempts its single-writer lock under the
+Session-root guard before the caller builds or validates Session Modules. Other
+processes may therefore observe the candidate in history before the current App
+runtime publishes it. If lock acquisition fails, attachment closes the Session
+handle and returns an empty result, but does not delete the candidate or restore
+active history; the caller has no candidate id and returns the lock error. That
+history must be reconciled before another attachment trusts it. After attachment
+succeeds, a later replacement rejection deletes the candidate and reasserts the
+previously resident App Session as the persisted selection. This is not a
 compare-and-swap restore: a selection written by another process after the
 replacement began may be overwritten. A restore failure is joined with the
-original error and requires history reconciliation before another attachment
-trusts it.
+original error and also requires history reconciliation.
 Web startup and MCP
 notification routing use exported app helpers for active-primary records and
 ids instead of duplicating those rules.
