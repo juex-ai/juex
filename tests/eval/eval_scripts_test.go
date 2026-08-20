@@ -333,7 +333,7 @@ func TestProviderConfigSelectionMergesRepeatedProviderDeclarations(t *testing.T)
 		"        {'id': 'first-only'}, {'id': 'shared', 'context_window': 16000, 'context_widow': 999, 'thinking_effort': 'low', 'compat': {'reasoning_replay_felds': ['misspelled']}},",
 		"    ]},",
 		"    {'id': 'provider', 'protocol': 'openai/responses', 'base_url': '   ', 'api_key': '  ', 'capabilities': {'tools': True, 'reasoning_effort': True}, 'compat': {'codex_transport': ' websocket '}, 'models': [",
-		"        {'id': 'shared', 'context_window': 64000, 'thinking_effort': ' high '}, {'id': 'second-only'},",
+		"        {'id': 'shared', 'context_window': 64000, 'thinking_effort': ' high ', 'capabilities': {'tools': True}}, {'id': 'second-only'},",
 		"    ]},",
 		"]}",
 		"candidates = selection.enumerate_candidates(cfg)",
@@ -353,6 +353,12 @@ func TestProviderConfigSelectionMergesRepeatedProviderDeclarations(t *testing.T)
 		"    rendered = output.read_text(encoding='utf-8')",
 		"    for invalid_field in ['protcol: misspelled', 'context_widow: 999', 'codex_transprot: misspelled', 'reasoning_replay_felds:']:",
 		"        assert invalid_field in rendered, rendered",
+		"    disabled = Path(tmp) / 'selected-disabled.yaml'",
+		"    helper.write_selected_config(cfg, 'provider', 'shared', disabled, disable_tools=True)",
+		"    disabled_cfg = helper.load_yaml_file(disabled)",
+		"    disabled_provider = disabled_cfg['providers'][0]",
+		"    assert disabled_provider['capabilities']['tools'] is False, disabled_provider",
+		"    assert disabled_provider['models'][0]['capabilities']['tools'] is False, disabled_provider['models'][0]",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }

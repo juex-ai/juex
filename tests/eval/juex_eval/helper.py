@@ -944,11 +944,12 @@ def write_selected_config(
     provider = copy.deepcopy(provider)
     provider["models"] = [copy.deepcopy(selected_model)]
     if disable_tools:
-        capabilities = provider.get("capabilities")
-        if not isinstance(capabilities, dict):
-            capabilities = {}
-        capabilities["tools"] = False
-        provider["capabilities"] = capabilities
+        for target in (provider, provider["models"][0]):
+            capabilities = target.get("capabilities")
+            if not isinstance(capabilities, dict):
+                capabilities = {}
+            capabilities["tools"] = False
+            target["capabilities"] = capabilities
     out: dict[str, Any] = {
         "model": f"{provider_id}:{model_id}",
         "enable_user_agents_resources": False,
