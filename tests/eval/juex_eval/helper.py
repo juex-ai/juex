@@ -1380,7 +1380,7 @@ def _runtime_string_map_node(node: yaml.nodes.MappingNode) -> dict[str, str]:
             and key_node.value != "<<"
             and isinstance(value_node, yaml.nodes.ScalarNode)
         ):
-            restored[key_node.value] = value_node.value
+            restored[_runtime_string_node_value(key_node)] = _runtime_string_node_value(value_node)
     return restored
 
 
@@ -1394,6 +1394,10 @@ def _runtime_merged_string_maps(node: yaml.nodes.Node) -> dict[str, str]:
                 restored.update(_runtime_string_map_node(item))
         return restored
     return {}
+
+
+def _runtime_string_node_value(node: yaml.nodes.ScalarNode) -> str:
+    return "" if node.tag == "tag:yaml.org,2002:null" else node.value
 
 
 def _mapping_nodes(node: yaml.nodes.MappingNode) -> dict[str, yaml.nodes.Node]:
