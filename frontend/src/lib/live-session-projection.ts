@@ -191,6 +191,7 @@ export function projectQueuedInput(
 export function projectPendingCompact(
   state: LiveSessionProjection,
   commandInput?: string,
+  submittedAt?: string,
 ): LiveSessionProjection {
   let messages = state.messages;
   if (
@@ -203,6 +204,7 @@ export function projectPendingCompact(
         id: LOCAL_COMPACT_COMMAND_ID,
         role: "user",
         kind: "slash_command",
+        created_at: submittedAt,
         blocks: [{ type: "text", text: commandInput }],
       },
     ];

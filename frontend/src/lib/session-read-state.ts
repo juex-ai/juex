@@ -275,10 +275,14 @@ export function clearComposerHint(state: SessionReadState): SessionReadState {
 export function projectPendingSubmit(
   state: SessionReadState,
   prompt: string,
+  submittedAt?: string,
 ): SessionReadState {
   state = state.submitError ? { ...state, submitError: null } : state;
   if (!isCompactCommandInput(prompt)) return state;
-  return { ...state, projection: projectPendingCompact(state.projection, prompt) };
+  return {
+    ...state,
+    projection: projectPendingCompact(state.projection, prompt, submittedAt),
+  };
 }
 
 export function projectStartTurnSucceeded(

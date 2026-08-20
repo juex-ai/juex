@@ -376,6 +376,9 @@ Context compaction renders as a centered transcript divider: horizontal rules
 with a compact `Context compacted` button between them. Clicking the label
 copies the persisted compact summary to the clipboard and temporarily changes
 the tooltip to `Copied to clipboard`. The summary itself is not shown inline.
+For a manual `/compact`, its local command bubble shows the captured submission
+time immediately while compaction is pending and keeps that same time after the
+persisted compact marker replaces the pending state.
 
 User and assistant message bubbles expose a metadata action row on hover/focus.
 When the message has copyable text, the row uses a copy icon, copies the whole

@@ -325,7 +325,9 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     if (!isLatestSessionRoute(route, sessionID)) return false;
     const submittedAt = new Date().toISOString();
     const compactCommand = isCompactCommandInput(prompt);
-    updateReadState((prev) => projectPendingSubmit(prev, prompt));
+    updateReadState((prev) =>
+      projectPendingSubmit(prev, prompt, submittedAt),
+    );
     try {
       const turn = await ports.startTurn(sessionID, prompt, attachments);
       if (!isLatestSessionRoute(route, sessionID)) return false;

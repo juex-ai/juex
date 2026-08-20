@@ -760,8 +760,16 @@ test("projectStartTurnSucceeded emits navigation effect for /new", () => {
 });
 
 test("projectStartTurnSucceeded preserves compact command submission time", () => {
-  let state = projectPendingSubmit(createSessionReadState(), "/compact");
+  let state = projectPendingSubmit(
+    createSessionReadState(),
+    "/compact",
+    "2026-08-20T20:30:00Z",
+  );
   assert.equal(state.projection.messages.at(-1)?.pending, true);
+  assert.equal(
+    state.projection.messages[0]?.created_at,
+    "2026-08-20T20:30:00Z",
+  );
 
   const result = projectStartTurnSucceeded(
     state,
