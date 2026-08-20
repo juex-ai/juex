@@ -4882,6 +4882,69 @@ func TestGetSessionShow_JournalFallbackWaitsForCommitBarrier(t *testing.T) {
 	}
 }
 
+// A session switch holds the session lifecycle lock and then takes the durable
+// commit barrier (App.replaceSession -> DurableSink.SetJournal). Anything that
+// takes the barrier first and the session lock second deadlocks against it, so
+// every reader here must acquire them session-lock-first. Holding the barrier
+// and then asking for a session read must not be able to wedge session show.
+func TestSessionReadsTakeTheSessionLockBeforeTheCommitBarrier(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+	if err := active.app.Bus.Emit(events.Event{
+		ID:      "evt-ordered",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	active.app.Status.Reset(juexruntime.StatusSeed{
+		SessionID:        sessionID,
+		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
+	}, nil)
+
+	// Take the locks in the order a session switch does, and confirm both are
+	// obtainable together. An inverted reader would already be holding the
+	// barrier and waiting on the session lock, wedging this.
+	acquired := make(chan error, 1)
+	go func() {
+		acquired <- active.app.ReadSessionID(sessionID, func(*session.Session) error {
+			return active.app.ReadCommittedEvents(func() error { return nil })
+		})
+	}()
+	select {
+	case err := <-acquired:
+		if err != nil {
+			t.Fatalf("session-lock-then-barrier acquisition: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("session lock and commit barrier could not be held together")
+	}
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		EventCursor string `json:"event_cursor"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.EventCursor != "evt-ordered" {
+		t.Fatalf("event cursor = %q, want evt-ordered", parsed.EventCursor)
+	}
+}
+
 // readSSEFrame returns the first complete SSE frame on the stream.
 func readSSEFrame(t *testing.T, body io.Reader) string {
 	t.Helper()

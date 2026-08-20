@@ -248,14 +248,19 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 		// not been queued yet. Reporting that ID would advance the browser past
 		// an event it never receives — including ones absent from the transcript
 		// page, such as pending_input.queued.
-		err := as.app.ReadCommittedEvents(func() error {
-			return as.app.ReadSessionID(id, func(sess *session.Session) error {
-				if as.app.Status != nil {
-					cursor = as.app.Status.Snapshot().Cursor
-				}
-				if cursor != "" {
-					return nil
-				}
+		//
+		// The barrier is taken inside the session read, never around it: a
+		// session switch holds the session lifecycle lock and then takes the
+		// commit barrier (App.replaceSession -> DurableSink.SetJournal), so
+		// acquiring them in the other order deadlocks.
+		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
+			if as.app.Status != nil {
+				cursor = as.app.Status.Snapshot().Cursor
+			}
+			if cursor != "" {
+				return nil
+			}
+			return as.app.ReadCommittedEvents(func() error {
 				journalCursor, cursorErr := session.ReadLatestCommittedEventID(sess.Dir)
 				if cursorErr != nil {
 					return cursorErr

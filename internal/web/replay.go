@@ -21,10 +21,17 @@ type committedEventReplay struct {
 	authoritative *runtime.StatusSnapshot
 }
 
+// captureCommittedEventReplay pins the journal prefix whose browser projection
+// has already completed.
+//
+// The session read wraps the commit barrier, not the other way round: a session
+// switch holds the session lifecycle lock and then takes the barrier
+// (App.replaceSession -> DurableSink.SetJournal), so taking the barrier first
+// and the session lock second deadlocks against it.
 func captureCommittedEventReplay(runtimeApp *app.App, sessionID string) (*committedEventReplay, error) {
 	var replay *committedEventReplay
-	err := runtimeApp.ReadCommittedEvents(func() error {
-		return runtimeApp.ReadSessionID(sessionID, func(sess *session.Session) error {
+	err := runtimeApp.ReadSessionID(sessionID, func(sess *session.Session) error {
+		return runtimeApp.ReadCommittedEvents(func() error {
 			source, err := os.Open(filepath.Join(sess.Dir, "events.jsonl"))
 			if err != nil {
 				return err
