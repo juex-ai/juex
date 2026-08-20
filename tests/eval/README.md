@@ -204,7 +204,9 @@ model must be covered. Reports record selected refs, candidate refs, the seed,
 resolved config path, a redacted config hash, and an exact reproduction command.
 The hash covers provider/model identity, protocol, effective tool and reasoning
 capabilities, thinking effort, and effective context-window metadata; it never
-copies credentials, headers, query values, or environment mappings.
+copies credentials, headers, query values, or environment mappings. The two
+retained non-secret runtime overrides, `PROVIDER_THINKING_EFFORT` and
+`PROVIDER_CONTEXT_WINDOW`, contribute normalized values to the hash.
 
 ## Compaction Quality
 

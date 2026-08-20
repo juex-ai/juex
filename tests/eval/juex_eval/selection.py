@@ -209,7 +209,7 @@ def select(
         seed=seed,
         eligible_refs=tuple(candidate.ref for candidate in eligible),
         resolved_config_path=str(resolved_config),
-        redacted_config_hash=redacted_config_hash(all_candidates),
+        redacted_config_hash=redacted_config_hash(all_candidates, cfg),
         reproduction_command=reproduction,
         mode=mode,
     )
@@ -240,8 +240,11 @@ def unavailable_evidence(
     )
 
 
-def redacted_config_hash(candidates: Iterable[Candidate]) -> str:
-    projection = [candidate.redacted_projection() for candidate in sorted(candidates, key=lambda item: item.ref)]
+def redacted_config_hash(candidates: Iterable[Candidate], cfg: dict[str, Any] | None = None) -> str:
+    projection = {
+        "candidates": [candidate.redacted_projection() for candidate in sorted(candidates, key=lambda item: item.ref)],
+        "environment_overrides": _environment_override_projection(cfg or {}),
+    }
     encoded = json.dumps(projection, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
@@ -289,6 +292,27 @@ def _reproduction_command(
 def _capabilities(value: dict[str, Any]) -> dict[str, Any]:
     capabilities = value.get("capabilities")
     return capabilities if isinstance(capabilities, dict) else {}
+
+
+def _environment_override_projection(cfg: dict[str, Any]) -> dict[str, Any]:
+    environment = cfg.get("environment")
+    variables = environment.get("variables") if isinstance(environment, dict) else None
+    if not isinstance(variables, dict):
+        return {}
+    projection: dict[str, Any] = {}
+    raw_context_window = variables.get("PROVIDER_CONTEXT_WINDOW")
+    try:
+        context_window = int(str(raw_context_window).strip()) if raw_context_window is not None else 0
+    except ValueError:
+        context_window = 0
+    if context_window > 0:
+        projection["provider_context_window"] = context_window
+    raw_thinking_effort = str(variables.get("PROVIDER_THINKING_EFFORT") or "").strip()
+    if raw_thinking_effort in {"low", "medium", "high", "xhigh", "max"}:
+        projection["provider_thinking_effort"] = raw_thinking_effort
+    elif raw_thinking_effort:
+        projection["provider_thinking_effort"] = "invalid"
+    return projection
 
 
 def _merge_provider(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
