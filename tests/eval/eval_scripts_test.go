@@ -781,25 +781,19 @@ func TestTestJuexHomeWrapperLiveModeResolvesOriginalHomeDefaults(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	providerConfig, err = filepath.EvalSymlinks(providerConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	codexHome, err = filepath.EvalSymlinks(codexHome)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	cmd := exec.Command(
 		"bash",
 		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
 		"--live",
 		"sh",
 		"-c",
-		`test "$JUEX_PROVIDER_CONFIG" = "$1"; test "$JUEX_TEST_PROVIDER_CONFIG_DEFAULT" = 1; test "$CODEX_HOME" = "$2"`,
-		"wrapper-probe",
-		providerConfig,
-		codexHome,
+		strings.Join([]string{
+			`test "$JUEX_TEST_PROVIDER_CONFIG_DEFAULT" = 1`,
+			`test "$JUEX_PROVIDER_CONFIG" != "$HOME/.juex/juex.yaml"`,
+			`test "$CODEX_HOME" != "$HOME/.codex"`,
+			`grep -q 'model: default:model' "$JUEX_PROVIDER_CONFIG"`,
+			`test -r "$CODEX_HOME/auth.json"`,
+		}, "; "),
 	)
 	cmd.Env = commandEnv(map[string]string{
 		"HOME":        productionHome,
