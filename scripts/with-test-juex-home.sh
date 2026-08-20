@@ -72,6 +72,7 @@ absolute_source_path() {
   case "$path" in
     "~") path="$original_home" ;;
     "~/"*) path="$original_home/${path#\~/}" ;;
+    "~\\"*) path="$original_home/${path:2}"; path="${path//\\//}" ;;
   esac
   case "$path" in
     \\\\*)

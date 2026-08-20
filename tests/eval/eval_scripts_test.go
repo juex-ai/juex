@@ -857,7 +857,7 @@ func TestTestJuexHomeWrapperLiveModeResolvesOriginalHomeDefaults(t *testing.T) {
 	}
 }
 
-func TestTestJuexHomeWrapperLiveModeUsesWindowsUserProfileDefaults(t *testing.T) {
+func TestTestJuexHomeWrapperLiveModeUsesWindowsUserProfileSources(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not found; skipping shell wrapper test")
 	}
@@ -906,6 +906,34 @@ func TestTestJuexHomeWrapperLiveModeUsesWindowsUserProfileDefaults(t *testing.T)
 	}, "JUEX_PROVIDER_CONFIG", "CODEX_HOME")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("resolve Windows USERPROFILE live defaults: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(
+		"bash",
+		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
+		"--live",
+		"sh",
+		"-c",
+		strings.Join([]string{
+			`test -z "${JUEX_TEST_PROVIDER_CONFIG_DEFAULT:-}"`,
+			`test "$JUEX_PROVIDER_CONFIG" = "$1"`,
+			`test "$CODEX_HOME" = "$2"`,
+			`grep -q 'model: windows-default:model' "$JUEX_PROVIDER_CONFIG"`,
+			`test -r "$CODEX_HOME/auth.json"`,
+		}, "; "),
+		"wrapper-probe",
+		filepath.ToSlash(providerConfig),
+		filepath.ToSlash(codexHome),
+	)
+	cmd.Env = commandEnv(map[string]string{
+		"OS":                   "Windows_NT",
+		"HOME":                 decoyHome,
+		"USERPROFILE":          productionHome,
+		"JUEX_PROVIDER_CONFIG": `~\.juex\juex.yaml`,
+		"CODEX_HOME":           `~\.codex`,
+	})
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("expand Windows home-relative live sources: %v\n%s", err, out)
 	}
 }
 
