@@ -146,12 +146,16 @@ def merged_providers(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     for provider_index, raw_provider in enumerate(providers):
         if not isinstance(raw_provider, dict):
             raise ValueError(f"provider config providers[{provider_index}] must be a YAML mapping")
+        provider_label = f"providers[{provider_index}]"
+        _require_string_fields(raw_provider, ("id", "protocol", "base_url", "api_key"), provider_label)
         provider_id = str(raw_provider.get("id") or "").strip()
         if not provider_id:
             raise ValueError(f"provider config providers[{provider_index}] requires an id")
         if ":" in provider_id:
             raise ValueError(f"provider config providers[{provider_index}] id must not contain ':'")
-        _require_mapping_fields(raw_provider, ("headers", "query", "capabilities", "compat"), f"providers[{provider_index}]")
+        _require_mapping_fields(raw_provider, ("headers", "query", "capabilities", "compat"), provider_label)
+        _require_capability_types(raw_provider, provider_label)
+        _require_compat_types(raw_provider, provider_label)
         models = raw_provider.get("models")
         if models is not None and not isinstance(models, list):
             raise ValueError(f"provider config providers[{provider_index}].models must be a YAML sequence")
@@ -160,13 +164,18 @@ def merged_providers(cfg: dict[str, Any]) -> list[dict[str, Any]]:
                 raise ValueError(
                     f"provider config providers[{provider_index}].models[{model_index}] must be a YAML mapping"
                 )
+            model_label = f"providers[{provider_index}].models[{model_index}]"
+            _require_string_fields(raw_model, ("id", "thinking_effort"), model_label)
+            _require_integer_fields(raw_model, ("context_window",), model_label)
             if not str(raw_model.get("id") or "").strip():
                 raise ValueError(f"provider config providers[{provider_index}].models[{model_index}] requires an id")
             _require_mapping_fields(
                 raw_model,
                 ("headers", "query", "capabilities", "compat"),
-                f"providers[{provider_index}].models[{model_index}]",
+                model_label,
             )
+            _require_capability_types(raw_model, model_label)
+            _require_compat_types(raw_model, model_label)
         provider = copy.deepcopy(raw_provider)
         provider["id"] = provider_id
         merged[provider_id] = _merge_provider(merged.get(provider_id, {}), provider)
@@ -450,6 +459,42 @@ def _require_mapping_fields(value: dict[str, Any], fields: Iterable[str], label:
     for name in fields:
         if name in value and value[name] is not None and not isinstance(value[name], dict):
             raise ValueError(f"provider config {label}.{name} must be a YAML mapping")
+
+
+def _require_string_fields(value: dict[str, Any], fields: Iterable[str], label: str) -> None:
+    for name in fields:
+        if name in value and value[name] is not None and not isinstance(value[name], str):
+            raise ValueError(f"provider config {label}.{name} must be a YAML string")
+
+
+def _require_integer_fields(value: dict[str, Any], fields: Iterable[str], label: str) -> None:
+    for name in fields:
+        if name in value and value[name] is not None and (
+            not isinstance(value[name], int) or isinstance(value[name], bool)
+        ):
+            raise ValueError(f"provider config {label}.{name} must be a YAML integer")
+
+
+def _require_capability_types(value: dict[str, Any], label: str) -> None:
+    capabilities = value.get("capabilities")
+    if not isinstance(capabilities, dict):
+        return
+    known = {"tools", "vision", "streaming", "reasoning_effort", "reasoning_replay", "max_output_tokens"}
+    for name in known:
+        if name in capabilities and capabilities[name] is not None and not isinstance(capabilities[name], bool):
+            raise ValueError(f"provider config {label}.capabilities.{name} must be a YAML boolean")
+
+
+def _require_compat_types(value: dict[str, Any], label: str) -> None:
+    compat = value.get("compat")
+    if not isinstance(compat, dict):
+        return
+    _require_string_fields(compat, ("codex_transport",), f"{label}.compat")
+    fields = compat.get("reasoning_replay_fields")
+    if fields is not None and (
+        not isinstance(fields, list) or any(not isinstance(field, str) for field in fields)
+    ):
+        raise ValueError(f"provider config {label}.compat.reasoning_replay_fields must be a YAML string sequence")
 
 
 def _effective_capability(provider: dict[str, Any], model: dict[str, Any], name: str) -> Any:
