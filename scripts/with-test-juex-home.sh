@@ -15,6 +15,15 @@ fi
 original_home="${HOME:-}"
 original_workdir="$(pwd -W 2>/dev/null || pwd -P)"
 
+temp_parent="${TMPDIR:-/tmp}"
+test_root="$(mktemp -d "$temp_parent/juex-test-home.XXXXXX")"
+test_root="$(cd -- "$test_root" && (pwd -W 2>/dev/null || pwd -P))"
+
+cleanup() {
+  rm -rf -- "$test_root"
+}
+trap cleanup EXIT
+
 # Mise shims resolve trust and installed runtimes through HOME. Put the already
 # selected runtime directories ahead of shims before HOME becomes temporary.
 tool_path_prefix=""
@@ -43,11 +52,12 @@ fi
 # Resolve default tool caches before HOME moves so isolation does not turn every
 # test run into a cold build or dependency download.
 if command -v go >/dev/null 2>&1; then
+  bootstrap_go_telemetry="$test_root/.bootstrap-go-telemetry"
   if [[ -z "${GOCACHE:-}" ]]; then
-    export GOCACHE="$(go env GOCACHE)"
+    export GOCACHE="$(TEST_TELEMETRY_DIR="$bootstrap_go_telemetry" go env GOCACHE)"
   fi
   if [[ -z "${GOMODCACHE:-}" ]]; then
-    export GOMODCACHE="$(go env GOMODCACHE)"
+    export GOMODCACHE="$(TEST_TELEMETRY_DIR="$bootstrap_go_telemetry" go env GOMODCACHE)"
   fi
 fi
 if [[ -z "${UV_CACHE_DIR:-}" ]] && command -v uv >/dev/null 2>&1; then
@@ -61,6 +71,11 @@ absolute_source_path() {
     "~/"*) path="$original_home/${path#\~/}" ;;
   esac
   case "$path" in
+    \\\\*)
+      path="${path//\\//}"
+      printf '%s\n' "$path"
+      return
+      ;;
     [[:alpha:]]:[\\/]*) path="${path//\\//}" ;;
     /*) ;;
     *) path="$original_workdir/$path" ;;
@@ -92,19 +107,14 @@ if [[ "$mode" == "live" ]]; then
   fi
 fi
 
-temp_parent="${TMPDIR:-/tmp}"
-test_root="$(mktemp -d "$temp_parent/juex-test-home.XXXXXX")"
-test_root="$(cd -- "$test_root" && (pwd -W 2>/dev/null || pwd -P))"
-
-cleanup() {
-  rm -rf -- "$test_root"
-}
-trap cleanup EXIT
-
 export HOME="$test_root"
 export USERPROFILE="$test_root"
 export JUEX_HOME="$HOME/.juex"
 export XDG_CONFIG_HOME="$HOME/.config"
+export XDG_CACHE_HOME="$HOME/.cache"
+export APPDATA="$HOME/AppData/Roaming"
+export LOCALAPPDATA="$HOME/AppData/Local"
+export TEST_TELEMETRY_DIR="$HOME/.config/go/telemetry"
 export GIT_CONFIG_GLOBAL="$HOME/.gitconfig"
 if [[ "$mode" == "live" ]]; then
   if [[ -n "$live_provider_config" ]]; then

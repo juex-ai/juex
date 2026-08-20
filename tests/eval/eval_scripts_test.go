@@ -541,13 +541,21 @@ func TestTestJuexHomeWrapperIsolatesDeterministicEnvironment(t *testing.T) {
 	fleetMarker := filepath.Join(productionJuexHome, "fleet", "marker")
 	agentMarker := filepath.Join(productionJuexHome, "agents", "agent-a", "marker")
 	xdgMarker := filepath.Join(productionHome, "xdg-config", "marker")
+	xdgCacheMarker := filepath.Join(productionHome, "xdg-cache", "marker")
+	appDataMarker := filepath.Join(productionHome, "appdata", "marker")
+	localAppDataMarker := filepath.Join(productionHome, "local-appdata", "marker")
+	telemetryMarker := filepath.Join(productionHome, "go-telemetry", "marker")
 	globalGitConfig := filepath.Join(productionHome, "global.gitconfig")
 	for path, body := range map[string]string{
-		providerConfig:  "model: private:model\n",
-		fleetMarker:     "fleet-unchanged\n",
-		agentMarker:     "agent-unchanged\n",
-		xdgMarker:       "xdg-unchanged\n",
-		globalGitConfig: "git-unchanged\n",
+		providerConfig:     "model: private:model\n",
+		fleetMarker:        "fleet-unchanged\n",
+		agentMarker:        "agent-unchanged\n",
+		xdgMarker:          "xdg-unchanged\n",
+		xdgCacheMarker:     "cache-unchanged\n",
+		appDataMarker:      "appdata-unchanged\n",
+		localAppDataMarker: "local-appdata-unchanged\n",
+		telemetryMarker:    "telemetry-unchanged\n",
+		globalGitConfig:    "git-unchanged\n",
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
@@ -564,6 +572,10 @@ func TestTestJuexHomeWrapperIsolatesDeterministicEnvironment(t *testing.T) {
 	goCache := filepath.Join(cacheRoot, "go-build")
 	goModCache := filepath.Join(cacheRoot, "go-mod")
 	uvCache := filepath.Join(cacheRoot, "uv")
+	tempParent := filepath.Join(t.TempDir(), "tmp parent")
+	if err := os.MkdirAll(tempParent, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(
 		"bash",
 		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
@@ -574,6 +586,10 @@ func TestTestJuexHomeWrapperIsolatesDeterministicEnvironment(t *testing.T) {
 			`test "$JUEX_HOME" = "$HOME/.juex"`,
 			`test "$CODEX_HOME" = "$HOME/.codex"`,
 			`test "$XDG_CONFIG_HOME" = "$HOME/.config"`,
+			`test "$XDG_CACHE_HOME" = "$HOME/.cache"`,
+			`test "$APPDATA" = "$HOME/AppData/Roaming"`,
+			`test "$LOCALAPPDATA" = "$HOME/AppData/Local"`,
+			`test "$TEST_TELEMETRY_DIR" = "$HOME/.config/go/telemetry"`,
 			`test "$GIT_CONFIG_GLOBAL" = "$HOME/.gitconfig"`,
 			`test -z "${JUEX_PROVIDER_CONFIG:-}"`,
 			`test -z "${JUEX_TEST_PROVIDER_CONFIG_DEFAULT:-}"`,
@@ -581,8 +597,8 @@ func TestTestJuexHomeWrapperIsolatesDeterministicEnvironment(t *testing.T) {
 			`test "$GOMODCACHE" = "$2"`,
 			`test "$UV_CACHE_DIR" = "$3"`,
 			`printf '%s\n' "$HOME" "$JUEX_HOME"`,
-			`mkdir -p "$JUEX_HOME/agents/test-agent" "$JUEX_HOME/fleet" "$XDG_CONFIG_HOME"`,
-			`touch "$JUEX_HOME/agents/test-agent/probe" "$JUEX_HOME/fleet/probe" "$XDG_CONFIG_HOME/probe"`,
+			`mkdir -p "$JUEX_HOME/agents/test-agent" "$JUEX_HOME/fleet" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$APPDATA" "$LOCALAPPDATA" "$TEST_TELEMETRY_DIR"`,
+			`touch "$JUEX_HOME/agents/test-agent/probe" "$JUEX_HOME/fleet/probe" "$XDG_CONFIG_HOME/probe" "$XDG_CACHE_HOME/probe" "$APPDATA/probe" "$LOCALAPPDATA/probe" "$TEST_TELEMETRY_DIR/probe"`,
 			`printf 'isolated\n' >"$GIT_CONFIG_GLOBAL"`,
 		}, "; "),
 		"wrapper-probe",
@@ -597,7 +613,12 @@ func TestTestJuexHomeWrapperIsolatesDeterministicEnvironment(t *testing.T) {
 		"JUEX_PROVIDER_CONFIG": providerConfig,
 		"CODEX_HOME":           productionCodexHome,
 		"XDG_CONFIG_HOME":      filepath.Dir(xdgMarker),
+		"XDG_CACHE_HOME":       filepath.Dir(xdgCacheMarker),
+		"APPDATA":              filepath.Dir(appDataMarker),
+		"LOCALAPPDATA":         filepath.Dir(localAppDataMarker),
+		"TEST_TELEMETRY_DIR":   filepath.Dir(telemetryMarker),
 		"GIT_CONFIG_GLOBAL":    globalGitConfig,
+		"TMPDIR":               tempParent,
 		"GOCACHE":              goCache,
 		"GOMODCACHE":           goModCache,
 		"UV_CACHE_DIR":         uvCache,
@@ -606,7 +627,7 @@ func TestTestJuexHomeWrapperIsolatesDeterministicEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run isolated test home wrapper: %v\n%s", err, out)
 	}
-	lines := strings.Fields(string(out))
+	lines := strings.Split(strings.TrimSuffix(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n"), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("wrapper output = %q, want HOME and JUEX_HOME", out)
 	}
@@ -618,10 +639,14 @@ func TestTestJuexHomeWrapperIsolatesDeterministicEnvironment(t *testing.T) {
 		t.Fatalf("temporary HOME still exists after command: %v", err)
 	}
 	for path, want := range map[string]string{
-		fleetMarker:     "fleet-unchanged\n",
-		agentMarker:     "agent-unchanged\n",
-		xdgMarker:       "xdg-unchanged\n",
-		globalGitConfig: "git-unchanged\n",
+		fleetMarker:        "fleet-unchanged\n",
+		agentMarker:        "agent-unchanged\n",
+		xdgMarker:          "xdg-unchanged\n",
+		xdgCacheMarker:     "cache-unchanged\n",
+		appDataMarker:      "appdata-unchanged\n",
+		localAppDataMarker: "local-appdata-unchanged\n",
+		telemetryMarker:    "telemetry-unchanged\n",
+		globalGitConfig:    "git-unchanged\n",
 	} {
 		got, err := os.ReadFile(path)
 		if err != nil {
@@ -732,7 +757,7 @@ func TestTestJuexHomeWrapperLiveModePreservesExplicitSources(t *testing.T) {
 	}
 }
 
-func TestTestJuexHomeWrapperLiveModeAcceptsWindowsDrivePaths(t *testing.T) {
+func TestTestJuexHomeWrapperLiveModeAcceptsWindowsAbsolutePaths(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not found; skipping shell wrapper test")
 	}
@@ -741,20 +766,48 @@ func TestTestJuexHomeWrapperLiveModeAcceptsWindowsDrivePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(
-		"bash",
-		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
-		"--live",
-		"sh",
-		"-c",
-		`test "$JUEX_PROVIDER_CONFIG" = 'C:/provider/juex.yaml'; test "$CODEX_HOME" = 'D:/Users/me/.codex'`,
-	)
-	cmd.Env = commandEnv(map[string]string{
-		"JUEX_PROVIDER_CONFIG": `C:/provider/juex.yaml`,
-		"CODEX_HOME":           `D:\Users\me\.codex`,
-	})
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("resolve Windows drive-rooted live paths: %v\n%s", err, out)
+	for _, tt := range []struct {
+		name         string
+		provider     string
+		codex        string
+		wantProvider string
+		wantCodex    string
+	}{
+		{
+			name:         "drive-rooted",
+			provider:     `C:/provider/juex.yaml`,
+			codex:        `D:\Users\me\.codex`,
+			wantProvider: `C:/provider/juex.yaml`,
+			wantCodex:    `D:/Users/me/.codex`,
+		},
+		{
+			name:         "UNC",
+			provider:     `\\server\share\juex.yaml`,
+			codex:        `\\server\share\codex`,
+			wantProvider: `//server/share/juex.yaml`,
+			wantCodex:    `//server/share/codex`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command(
+				"bash",
+				filepath.Join(root, "scripts", "with-test-juex-home.sh"),
+				"--live",
+				"sh",
+				"-c",
+				`test "$JUEX_PROVIDER_CONFIG" = "$1"; test "$CODEX_HOME" = "$2"`,
+				"wrapper-probe",
+				tt.wantProvider,
+				tt.wantCodex,
+			)
+			cmd.Env = commandEnv(map[string]string{
+				"JUEX_PROVIDER_CONFIG": tt.provider,
+				"CODEX_HOME":           tt.codex,
+			})
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("resolve Windows absolute live paths: %v\n%s", err, out)
+			}
+		})
 	}
 }
 
@@ -909,8 +962,10 @@ func TestTestJuexHomeWrapperResolvesMiseToolsBeforeHomeIsolation(t *testing.T) {
 			`echo "mise trust state unavailable after HOME switch" >&2` + "\n" +
 			"exit 90\n",
 		filepath.Join(managedDir, "go"): "#!/bin/sh\n" +
+			`if test "$1" = env; then case "$TEST_TELEMETRY_DIR" in *juex-test-home.*/.bootstrap-go-telemetry) ;; *) echo "unsafe preflight telemetry: $TEST_TELEMETRY_DIR" >&2; exit 91;; esac; fi` + "\n" +
 			`if test "$1" = env && test "$2" = GOCACHE; then printf '%s\n' "$FAKE_CACHE/go-build"; exit; fi` + "\n" +
 			`if test "$1" = env && test "$2" = GOMODCACHE; then printf '%s\n' "$FAKE_CACHE/go-mod"; exit; fi` + "\n" +
+			`test "$TEST_TELEMETRY_DIR" = "$HOME/.config/go/telemetry" || { echo "unsafe child telemetry: $TEST_TELEMETRY_DIR" >&2; exit 92; }` + "\n" +
 			`printf 'managed:%s\n' "$*"` + "\n",
 	}
 	for path, body := range files {
@@ -930,6 +985,7 @@ func TestTestJuexHomeWrapperResolvesMiseToolsBeforeHomeIsolation(t *testing.T) {
 		"FAKE_MISE_WINDOWS_BIN": `C:\mise\managed`,
 		"FAKE_MISE_MANAGED_BIN": managedShellDir,
 		"FAKE_CACHE":            filepath.Join(fakeRoot, "cache"),
+		"TEST_TELEMETRY_DIR":    filepath.Join(fakeRoot, "real-go-telemetry"),
 	}, "GOCACHE", "GOMODCACHE", "UV_CACHE_DIR")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
