@@ -20,10 +20,16 @@ type SessionAttachment struct {
 	LockMode string
 }
 
+type sessionLockAcquirer func(dir, mode string) (*session.Lock, error)
+
 // AttachAndLockWorkspaceSession keeps discovery, load/creation, and lifetime
 // lock acquisition in one root-guarded operation so deletion cannot remove the
 // selected directory between those steps.
 func AttachAndLockWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (SessionAttachment, *session.Lock, error) {
+	return attachAndLockWorkspaceSession(cfg, req, session.AcquireSessionLock)
+}
+
+func attachAndLockWorkspaceSession(cfg config.Config, req SessionAttachmentRequest, acquire sessionLockAcquirer) (SessionAttachment, *session.Lock, error) {
 	var attachment SessionAttachment
 	var sessLock *session.Lock
 	err := session.WithSessionRootGuard(cfg.SessionsDir(), func() error {
@@ -32,7 +38,7 @@ func AttachAndLockWorkspaceSession(cfg config.Config, req SessionAttachmentReque
 		if err != nil {
 			return err
 		}
-		sessLock, err = session.AcquireSessionLock(attachment.Session.Dir, attachment.LockMode)
+		sessLock, err = acquire(attachment.Session.Dir, attachment.LockMode)
 		if err != nil {
 			_ = attachment.Session.Close()
 			attachment = SessionAttachment{}
