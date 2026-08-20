@@ -1402,14 +1402,58 @@ input. The exported session-scoped `Engine` fields remain a constructor and
 test compatibility surface; production readers use snapshot methods such as
 `ActiveContext`, `PromptSections`, and `SessionStateStatus`.
 
-`internal/app` owns the wider lifecycle boundary. Session replacement holds an
-App write lock while it installs the Engine bundle, redirects the durable event
-sink, runtime status, observability recorder, chunked-write state, and session
-lock, then closes the old resources. `ReadSession` and higher-level App
-status/context/pending-input/turn methods hold the matching read lock, so an
-old session and lock cannot close underneath an in-flight reader. Lock order is
-App session lifecycle, Engine turn mutex, Engine session-runtime lock,
-pending-input mutex, then session/store mutexes.
+`internal/app` owns the wider lifecycle boundary. It builds, validates, and
+starts the candidate Module set and complete Tool registry before publication.
+Under the App write lock it installs the Engine bundle, redirects the durable
+event sink and observability recorder, runs Session-start policy, and then
+publishes the App Session, runtime status, chunked-write state, and Session
+lock. A pre-commit failure rolls back the captured Engine checkpoint and old
+event/observability targets before closing candidate resources no longer
+referenced by the Engine. Rollback failure is joined with the original error
+instead of closing a still-published Module set. `ReadSession` and
+higher-level App status/context/pending-input/turn methods hold the matching
+read lock, so an old Session and lock cannot close underneath an in-flight
+reader. Only after App publication releases that lock are the old Module set,
+lock, and Session closed; cleanup failure is reported without rolling back the
+new authority. Lock order is App Session lifecycle, Engine Turn mutex, Engine
+Session-runtime lock, Pending-input mutex, then Session/store mutexes.
+
+#### Durable Turn lifecycle ownership
+
+The stable semantics are defined in [`DOMAIN.md`](DOMAIN.md). The following
+map identifies the current code owner for each commit boundary; implementation
+failure cases and exact test names live in
+[`internal/runtime/README.md`](internal/runtime/README.md).
+
+| Concern | Control owner | Durable authority | Live or derived readers |
+| --- | --- | --- | --- |
+| Turn admission | `internal/app` classifies transport input; `internal/runtime` reserves the Turn and applies typed input policy | `internal/runtime.PendingInputQueue`, `turn.admitted`, then the Session transcript | App admission results, runtime status, Web, and pending-input observers |
+| Pending input | `internal/runtime` owns queue admission, safe-boundary drain, processing, and completion checks | Session-local `pending_input.jsonl` plus the transcript's stable message ids | The in-memory queue, `pending_input.*` Events, status, Web, and Module observers |
+| Tool execution | `internal/runtime` orders the batch and policies; `internal/tools` owns handler execution; `internal/toolevents` owns payload constructors | `llm.responded`, the complete ordered `tool.requested` set, per-call `tool.running` and input-resolution facts, then one terminal outcome containing the exact Provider-visible Tool Result | Status, Web, logs, and failure-ledger diagnostics consume cataloged Events; raw handler diagnostics do not replace the terminal outcome |
+| Session replacement | `internal/app` owns the candidate transaction and lifetime locks; `internal/runtime` atomically publishes one `SessionRuntimeSnapshot`; `internal/session` owns the single-writer lock and journals | The candidate Session journals plus the published Engine checkpoint and App Session reference | Status replay, observability, chunked-write state, and App readers switch under the same App lifecycle boundary |
+| Finish and completion | `internal/runtime.turnLifecycle` orders the attempt; `internal/runtime/module` evaluates typed policies and commits only a selected candidate | The assistant response, selected policy-owned state, durable continuation Pending input, and finally `turn.completed` or `turn.errored` | Policy completion observers, continuation observers, status, Web, and logs cannot choose or alter the action |
+
+For a new main input, `PendingInputQueue.StageTurnInput` writes a non-replayable
+`accepting` intent before `Engine.AdmitTurnMessage` establishes the active Turn.
+The Catalog-backed Bus must commit `turn.admitted` before the queue promotes the
+record to `admitted`. Existing Pending input is never demoted to `accepting`;
+it remains replayable until the same admission checkpoint succeeds. Turn input
+policy and context projection then run before Session transcript append, and no
+Provider request is built until that append succeeds. Restart recovery therefore
+comes from `pending_input.jsonl`, `conversation.jsonl`, and cataloged Events,
+not from transport state.
+
+For a finish attempt, `turnLifecycle.applyFinishPolicyLocked` runs only after
+`llm.responded` is durable. `runtime/module.EvaluateFinishPolicies` evaluates
+all ordered policies before Framework commits the first still-valid candidate.
+Framework then admits the candidate continuation through the Pending-input
+queue and only afterward calls `FinishPolicyContinuationObserver`. Whether a
+candidate exists or becomes stale, `finishActiveTurnIfNoPending` is the final
+completion gate. `turn.completed` commits only after that gate closes the
+active Turn. `PolicyObserver.Requested` is the required durability checkpoint
+and may fail closed before policy execution; `Started`, `Completed`, `Errored`,
+pending-input observation, and continuation observation are one-way reports
+with no flow-decision return.
 
 `TurnMessageWithID` is the stable runtime entrypoint. The internal
 `turn_lifecycle.go` runner owns the phase ordering for context preparation,
