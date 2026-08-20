@@ -1080,8 +1080,12 @@ func TestEnsureRipgrepRedirectsGoTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("provision ripgrep with isolated Go telemetry: %v\n%s", err, out)
 	}
-	if strings.TrimSpace(string(out)) != filepath.ToSlash(filepath.Join(fakeRoot, ".tmp", "dev-ripgrep", "juex-path")) {
+	gotPath := strings.ReplaceAll(strings.TrimSpace(string(out)), `\`, "/")
+	if !strings.HasSuffix(gotPath, "/.tmp/dev-ripgrep/juex-path") {
 		t.Fatalf("ensure-ripgrep output = %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(fakeRoot, ".tmp", "dev-ripgrep", "juex-path", "rg")); err != nil {
+		t.Fatalf("ensure-ripgrep did not create cached executable: %v", err)
 	}
 	logged, err := os.ReadFile(goLog)
 	if err != nil {
