@@ -670,17 +670,35 @@ test("projectLiveBrowserEvent refreshes session notes", () => {
 
 test("projectStartTurnSucceeded records queued and optimistic turns", () => {
   let state = createSessionReadState();
-  let result = projectStartTurnSucceeded(state, "second prompt", {
-    queued: true,
-    pending_count: 1,
-  });
+  let result = projectStartTurnSucceeded(
+    state,
+    "second prompt",
+    {
+      queued: true,
+      pending_count: 1,
+    },
+    [],
+    "2026-06-15T00:00:00Z",
+  );
   state = result.state;
   assert.equal(state.projection.queuedInput.items.length, 1);
+  assert.equal(
+    state.projection.queuedInput.items[0]?.createdAt,
+    "2026-06-15T00:00:00Z",
+  );
 
-  result = projectStartTurnSucceeded(state, "new prompt", {
-    turn_id: "turn-2",
-  });
+  result = projectStartTurnSucceeded(
+    state,
+    "new prompt",
+    { turn_id: "turn-2" },
+    [],
+    "2026-06-15T00:00:01Z",
+  );
   assert.equal(result.state.projection.messages.at(-2)?.turn_id, "turn-2");
+  assert.equal(
+    result.state.projection.messages.at(-2)?.created_at,
+    "2026-06-15T00:00:01Z",
+  );
   assert.deepEqual(result.effects, []);
 });
 

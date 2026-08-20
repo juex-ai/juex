@@ -274,6 +274,7 @@ export function projectStartTurnSucceeded(
   prompt: string,
   turn: StartTurnResponse,
   attachments: MediaRef[] = [],
+  submittedAt?: string,
 ): SessionReadResult {
   state = state.submitError ? { ...state, submitError: null } : state;
   if (turn.command) {
@@ -289,6 +290,8 @@ export function projectStartTurnSucceeded(
           undefined,
           turn.pending_count ?? 0,
           attachments,
+          undefined,
+          submittedAt,
         ),
       },
       effects: [],
@@ -310,6 +313,7 @@ export function projectStartTurnSucceeded(
         prompt,
         undefined,
         attachments,
+        submittedAt,
       ),
     },
     effects: [],

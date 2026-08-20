@@ -133,6 +133,7 @@ export function projectOptimisticTurn(
   input: string | undefined,
   kind?: string,
   attachments: MediaRef[] = [],
+  createdAt?: string,
 ): LiveSessionProjection {
   return {
     ...state,
@@ -143,6 +144,8 @@ export function projectOptimisticTurn(
       kind,
       "optimistic",
       attachments,
+      undefined,
+      createdAt,
     ),
   };
 }
@@ -154,6 +157,7 @@ export function projectQueuedInput(
   pendingCount: number,
   attachments: MediaRef[] = [],
   messageID?: string,
+  createdAt?: string,
 ): LiveSessionProjection {
   return {
     ...state,
@@ -164,6 +168,7 @@ export function projectQueuedInput(
       pendingCount,
       attachments,
       messageID,
+      createdAt,
     ),
   };
 }
@@ -244,6 +249,7 @@ export function projectLiveSessionEvent(
           "event",
           consumed.item?.attachments,
           event.payload.message_id ?? consumed.item?.messageID,
+          consumed.item?.createdAt ?? event.ts,
         ),
       };
       break;
@@ -324,6 +330,7 @@ export function projectLiveSessionEvent(
         event.payload.pending_count,
         [],
         event.payload.message_id,
+        event.ts,
       );
       break;
     case "pending_input.draining":
@@ -344,6 +351,7 @@ export function projectLiveSessionEvent(
               "event",
               item.attachments,
               item.messageID,
+              item.createdAt,
             )
           : next.messages,
       };
@@ -515,6 +523,7 @@ function appendDrainedInputs(
     role: "user",
     turn_id: turnID,
     kind: item.kind || "pending_input",
+    created_at: item.createdAt,
     blocks: inputBlocks(item.input, item.attachments),
   }));
   if (!turnID) return [...messages, ...additions];
@@ -540,14 +549,21 @@ function appendLiveTurnToMessages(
   source: "event" | "optimistic",
   attachments: MediaRef[] = [],
   messageID?: string,
+  createdAt?: string,
 ): Message[] {
   const blocks = inputBlocks(input, attachments);
   if (!turnID || blocks.length === 0) return messages;
   if (messages.some((message) => message.turn_id === turnID)) {
-    if (source !== "event" || !messageID) return messages;
+    if (source !== "event") return messages;
     return messages.map((message) =>
-      message.turn_id === turnID && message.role === "user" && !message.id
-        ? { ...message, id: messageID }
+      message.turn_id === turnID && message.role === "user"
+        ? {
+            ...message,
+            id: message.id ?? messageID,
+            created_at: message.id
+              ? (message.created_at ?? createdAt)
+              : (createdAt ?? message.created_at),
+          }
         : message,
     );
   }
@@ -562,6 +578,10 @@ function appendLiveTurnToMessages(
             ...message,
             turn_id: turnID,
             id: message.role === "user" ? messageID : message.id,
+            created_at:
+              message.role === "user"
+                ? (createdAt ?? message.created_at)
+                : message.created_at,
           }
         : message,
     );
@@ -573,6 +593,7 @@ function appendLiveTurnToMessages(
       role: "user",
       turn_id: turnID,
       kind,
+      created_at: createdAt,
       blocks,
     },
     {

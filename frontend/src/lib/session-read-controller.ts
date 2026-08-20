@@ -323,13 +323,20 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     attachments: MediaRef[] = [],
   ): Promise<boolean> {
     if (!isLatestSessionRoute(route, sessionID)) return false;
+    const submittedAt = new Date().toISOString();
     const compactCommand = isCompactCommandInput(prompt);
     updateReadState((prev) => projectPendingSubmit(prev, prompt));
     try {
       const turn = await ports.startTurn(sessionID, prompt, attachments);
       if (!isLatestSessionRoute(route, sessionID)) return false;
       runSessionReadResult(
-        projectStartTurnSucceeded(state, prompt, turn, attachments),
+        projectStartTurnSucceeded(
+          state,
+          prompt,
+          turn,
+          attachments,
+          submittedAt,
+        ),
       );
       return true;
     } catch (error) {
