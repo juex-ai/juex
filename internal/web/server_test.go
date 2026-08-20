@@ -454,7 +454,13 @@ func TestRunPublishesExplicitTCPAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET TCP API %s: %v", path, err)
 		}
-		_ = response.Body.Close()
+		if _, err := io.Copy(io.Discard, response.Body); err != nil {
+			_ = response.Body.Close()
+			t.Fatalf("read TCP API %s: %v", path, err)
+		}
+		if err := response.Body.Close(); err != nil {
+			t.Fatalf("close TCP API %s: %v", path, err)
+		}
 		if response.StatusCode != want {
 			t.Fatalf("GET TCP API %s status = %d, want %d", path, response.StatusCode, want)
 		}
