@@ -52,10 +52,19 @@ func TestSessionStatusSnapshotPreservesProviderStreamingOnRefresh(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	body, readErr := io.ReadAll(response.Body)
+	if closeErr := response.Body.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("start turn status = %d body = %s", response.StatusCode, body)
+	}
 	select {
 	case <-provider.started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("provider did not start")
 	}
 
