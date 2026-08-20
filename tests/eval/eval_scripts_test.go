@@ -134,6 +134,7 @@ func TestProviderConfigSelectionIsStableAndRedacted(t *testing.T) {
 
 	program := strings.Join([]string{
 		"import json",
+		"import shlex",
 		"from pathlib import Path",
 		"from tests.eval.juex_eval import selection",
 		"providers = [",
@@ -159,7 +160,8 @@ func TestProviderConfigSelectionIsStableAndRedacted(t *testing.T) {
 		"rendered = json.dumps(evidence_a.as_dict())",
 		"for secret in ['never-report-zeta', 'never-report-alpha', 'secret-header', 'never-report-token']:",
 		"    assert secret not in rendered, rendered",
-		"assert f'--config {Path(\"/tmp/config.yaml\").resolve()}' in evidence_a.reproduction_command",
+		"tokens = shlex.split(evidence_a.reproduction_command)",
+		"assert tokens[tokens.index('--config') + 1] == str(Path('/tmp/config.yaml').resolve())",
 		"assert '--selection-seed fixed-seed' in evidence_a.reproduction_command",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
