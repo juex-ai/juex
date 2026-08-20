@@ -33,8 +33,9 @@ var liveConfigSelectorEnvKeys = []string{
 }
 
 const (
-	liveProviderConfigEnv = "JUEX_PROVIDER_CONFIG"
-	liveProviderModelEnv  = "JUEX_PROVIDER_SMOKE_ONLY"
+	liveProviderConfigEnv        = "JUEX_PROVIDER_CONFIG"
+	liveProviderConfigDefaultEnv = "JUEX_TEST_PROVIDER_CONFIG_DEFAULT"
+	liveProviderModelEnv         = "JUEX_PROVIDER_SMOKE_ONLY"
 )
 
 type liveConfig struct {
@@ -77,7 +78,7 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 	path := resolveLiveProviderConfigPath(root, home, configuredPath)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			if configuredPath != "" {
+			if liveProviderConfigMissingIsFatal(configuredPath) {
 				t.Fatalf("%s points to missing live provider config %s", liveProviderConfigEnv, path)
 			}
 			t.Skipf(
@@ -108,6 +109,10 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 		t.Fatalf("load live provider config: %v", err)
 	}
 	return []liveConfig{selected}
+}
+
+func liveProviderConfigMissingIsFatal(configuredPath string) bool {
+	return configuredPath != "" && os.Getenv(liveProviderConfigDefaultEnv) != "1"
 }
 
 func resolveLiveProviderConfigPath(root, home, configured string) string {

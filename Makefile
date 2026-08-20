@@ -32,8 +32,8 @@ LDFLAGS := -X github.com/juex-ai/juex/internal/version.Version=$(VERSION) \
 
 help:
 	@echo "Targets:"
-	@echo "  test          go test ./... (isolated JUEX_HOME, auto-provisions ripgrep)"
-	@echo "  race          go test ./... -race (isolated JUEX_HOME, auto-provisions ripgrep)"
+	@echo "  test          go test ./... (isolated HOME/JUEX_HOME, auto-provisions ripgrep)"
+	@echo "  race          go test ./... -race (isolated HOME/JUEX_HOME, auto-provisions ripgrep)"
 	@echo "  ripgrep       ensure a resolvable ripgrep and print its path"
 	@echo "  lint          golangci-lint run"
 	@echo "  build         produce $(DIST_BIN) with embedded version metadata"
@@ -41,7 +41,7 @@ help:
 	@echo "  cross         build all 7 platform archives in dist/ (no goreleaser)"
 	@echo "  snapshot      goreleaser cross-platform snapshot (dist/)"
 	@echo "  release-dry   goreleaser release without publishing"
-	@echo "  integration   isolated live tests using JUEX_PROVIDER_CONFIG or ~/.juex/juex.yaml"
+	@echo "  integration   isolated runtime with explicit live provider/Codex sources"
 	@echo "  provider-smoke live rotating provider:model smoke from tests/eval/live-models.yaml"
 	@echo "  development-eval standard post-development validation record"
 	@echo "  web-check     install, type-check, test, lint, and build the frontend"
@@ -76,7 +76,7 @@ release-dry:
 	goreleaser release --skip=publish --clean
 
 integration:
-	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" ./scripts/with-test-juex-home.sh go test -tags=integration ./tests/e2e/... -count=1 -v
+	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" ./scripts/with-test-juex-home.sh --live go test -tags=integration ./tests/e2e/... -count=1 -v
 
 provider-smoke: build
 	bash tests/eval/provider_model_smoke.sh --juex $(DIST_BIN)

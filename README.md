@@ -790,6 +790,13 @@ make build
 make race
 ```
 
+`make test` and `make race` run with temporary `HOME` and `JUEX_HOME`
+directories, so personal default-home provider config, Fleet, Agent, and Codex
+state cannot affect deterministic results. `make integration` uses the same
+writable-state isolation but resolves `JUEX_PROVIDER_CONFIG` and `CODEX_HOME`
+from the original environment first and passes those paths to the live tests as
+read-only inputs.
+
 The frontend lives in `frontend/`; `make build` runs the frontend build,
 copies it into `internal/web/dist`, and embeds it into `dist/juex`.
 

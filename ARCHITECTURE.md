@@ -2924,15 +2924,15 @@ automatic activation; the model loads a selected guide explicitly.
 
 | Target | Effect |
 |---|---|
-| `make test` | provision ripgrep on `PATH`, then run `go test ./... -count=1` |
-| `make race` | provision ripgrep on `PATH`, then run `go test ./... -race -count=1` |
+| `make test` | provision ripgrep on `PATH`, isolate writable user/Juex/Codex state under a temporary `HOME`, then run `go test ./... -count=1` |
+| `make race` | provision ripgrep on `PATH`, isolate writable user/Juex/Codex state under a temporary `HOME`, then run `go test ./... -race -count=1` |
 | `make ripgrep` | resolve system ripgrep or cache the verified pinned binary for local tests |
 | `make lint` | `golangci-lint run` |
 | `make build` | `dist/juex` with `git describe`-derived version, commit, build time embedded via `-ldflags -X internal/version.*` |
 | `make cross` | build the frontend, then produce all 7 managed archives without GoReleaser |
 | `make snapshot` | build the frontend through the GoReleaser before hook, then produce 7 snapshot archives in `dist/` |
 | `make release-dry` | build the frontend through the GoReleaser before hook, then run a non-publishing release |
-| `make integration` | provision ripgrep on `PATH`, then run verbose credential-backed `go test -tags=integration ./tests/e2e/...` using `JUEX_PROVIDER_CONFIG` or `~/.juex/juex.yaml` |
+| `make integration` | resolve live provider/Codex source paths from the original environment, isolate writable runtime state under a temporary `HOME`, then run verbose credential-backed `go test -tags=integration ./tests/e2e/...` |
 | `make provider-smoke` | build-dependent rotating live capability and Schedule-routing smoke for model refs in `tests/eval/live-models.yaml` using `~/.juex/juex.yaml` credentials |
 | `make development-eval` | deterministic tests, build, rotating live provider:model smoke, and a redacted validation record |
 | `make clean` | `rm -rf dist` |
@@ -3052,9 +3052,11 @@ Run the deterministic suite with `make test`.
 Provider-quality smoke tests remain explicit because they use credentials.
 There are two live layers:
 
-- `go test -tags=integration ./tests/e2e/... -run Live -count=1 -v`
-  uses the top-level model from `JUEX_PROVIDER_CONFIG` or
-  `~/.juex/juex.yaml`; `JUEX_PROVIDER_SMOKE_ONLY=provider:model` selects one
+- `make integration` resolves `JUEX_PROVIDER_CONFIG` (or the original
+  `~/.juex/juex.yaml`) and `CODEX_HOME` before switching `HOME`. The live tests
+  receive those absolute source paths while all Juex runtime writes remain in
+  the temporary `HOME`/`JUEX_HOME`; ordinary `make test` and `make race` receive
+  neither real source. `JUEX_PROVIDER_SMOKE_ONLY=provider:model` selects one
   configured override. The harness calls the eval layer's
   `write-model-config` command, so integration and provider smoke share the
   same provider/model extraction and isolated minimal-config writer. It clears

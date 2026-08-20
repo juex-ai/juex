@@ -1,9 +1,85 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+mode="deterministic"
+if [[ "${1:-}" == "--live" ]]; then
+  mode="live"
+  shift
+fi
+
 if (($# == 0)); then
-  echo "usage: $0 command [args...]" >&2
+  echo "usage: $0 [--live] command [args...]" >&2
   exit 64
+fi
+
+original_home="${HOME:-}"
+original_workdir="$(pwd -W 2>/dev/null || pwd -P)"
+
+# Mise shims resolve trust and installed runtimes through HOME. Put the already
+# selected runtime directories ahead of shims before HOME becomes temporary.
+tool_path_prefix=""
+if command -v mise >/dev/null 2>&1; then
+  if mise_bin_paths="$(mise bin-paths 2>/dev/null)"; then
+    while IFS= read -r tool_dir; do
+      if [[ -n "$tool_dir" ]]; then
+        tool_path_prefix="${tool_path_prefix:+$tool_path_prefix:}$tool_dir"
+      fi
+    done <<<"$mise_bin_paths"
+  fi
+fi
+if [[ -n "$tool_path_prefix" ]]; then
+  export PATH="$tool_path_prefix${PATH:+:$PATH}"
+fi
+
+# Resolve default tool caches before HOME moves so isolation does not turn every
+# test run into a cold build or dependency download.
+if command -v go >/dev/null 2>&1; then
+  if [[ -z "${GOCACHE:-}" ]]; then
+    export GOCACHE="$(go env GOCACHE)"
+  fi
+  if [[ -z "${GOMODCACHE:-}" ]]; then
+    export GOMODCACHE="$(go env GOMODCACHE)"
+  fi
+fi
+if [[ -z "${UV_CACHE_DIR:-}" ]] && command -v uv >/dev/null 2>&1; then
+  export UV_CACHE_DIR="$(uv cache dir)"
+fi
+
+absolute_source_path() {
+  local path="$1"
+  case "$path" in
+    "~") path="$original_home" ;;
+    "~/"*) path="$original_home/${path#\~/}" ;;
+  esac
+  case "$path" in
+    /*) ;;
+    *) path="$original_workdir/$path" ;;
+  esac
+
+  local parent name
+  parent="$(dirname -- "$path")"
+  name="$(basename -- "$path")"
+  if [[ -d "$parent" ]]; then
+    parent="$(cd -- "$parent" && (pwd -W 2>/dev/null || pwd -P))"
+  fi
+  printf '%s/%s\n' "${parent%/}" "$name"
+}
+
+live_provider_config=""
+live_codex_home=""
+live_provider_config_is_default="false"
+if [[ "$mode" == "live" ]]; then
+  if [[ -n "${JUEX_PROVIDER_CONFIG:-}" ]]; then
+    live_provider_config="$(absolute_source_path "$JUEX_PROVIDER_CONFIG")"
+  elif [[ -n "$original_home" ]]; then
+    live_provider_config="$(absolute_source_path "$original_home/.juex/juex.yaml")"
+    live_provider_config_is_default="true"
+  fi
+  if [[ -n "${CODEX_HOME:-}" ]]; then
+    live_codex_home="$(absolute_source_path "$CODEX_HOME")"
+  elif [[ -n "$original_home" ]]; then
+    live_codex_home="$(absolute_source_path "$original_home/.codex")"
+  fi
 fi
 
 temp_parent="${TMPDIR:-/tmp}"
@@ -15,7 +91,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
-export JUEX_HOME="$test_root/.juex"
+export HOME="$test_root"
+export USERPROFILE="$test_root"
+export JUEX_HOME="$HOME/.juex"
+if [[ "$mode" == "live" ]]; then
+  if [[ -n "$live_provider_config" ]]; then
+    export JUEX_PROVIDER_CONFIG="$live_provider_config"
+  else
+    unset JUEX_PROVIDER_CONFIG
+  fi
+  if [[ "$live_provider_config_is_default" == "true" ]]; then
+    export JUEX_TEST_PROVIDER_CONFIG_DEFAULT="1"
+  else
+    unset JUEX_TEST_PROVIDER_CONFIG_DEFAULT
+  fi
+  if [[ -n "$live_codex_home" ]]; then
+    export CODEX_HOME="$live_codex_home"
+  else
+    unset CODEX_HOME
+  fi
+else
+  unset JUEX_PROVIDER_CONFIG
+  unset JUEX_TEST_PROVIDER_CONFIG_DEFAULT
+  export CODEX_HOME="$HOME/.codex"
+fi
 mkdir -p -- "$JUEX_HOME"
 
 "$@"

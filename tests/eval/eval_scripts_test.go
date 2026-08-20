@@ -520,12 +520,12 @@ func TestEvalDevelopmentGoTestsUseIsolatedJuexHome(t *testing.T) {
 	for _, label := range []string{"go-test-e2e", "go-test-all"} {
 		command := findEvalCommand(t, steps, label)
 		if len(command) == 0 || command[0] != filepath.Join(root, "scripts", "with-test-juex-home.sh") {
-			t.Fatalf("%s command = %q, want isolated JUEX_HOME wrapper", label, command)
+			t.Fatalf("%s command = %q, want isolated HOME/JUEX_HOME wrapper", label, command)
 		}
 	}
 }
 
-func TestTestJuexHomeWrapperOverridesAndCleans(t *testing.T) {
+func TestTestJuexHomeWrapperIsolatesDeterministicEnvironment(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not found; skipping shell wrapper test")
 	}
@@ -534,28 +534,368 @@ func TestTestJuexHomeWrapperOverridesAndCleans(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	productionHome := filepath.Join(t.TempDir(), "production-juex-home")
+	productionHome := filepath.Join(t.TempDir(), "production-home")
+	productionJuexHome := filepath.Join(productionHome, ".juex")
+	productionCodexHome := filepath.Join(productionHome, ".codex")
+	providerConfig := filepath.Join(productionJuexHome, "juex.yaml")
+	fleetMarker := filepath.Join(productionJuexHome, "fleet", "marker")
+	agentMarker := filepath.Join(productionJuexHome, "agents", "agent-a", "marker")
+	for path, body := range map[string]string{
+		providerConfig: "model: private:model\n",
+		fleetMarker:    "fleet-unchanged\n",
+		agentMarker:    "agent-unchanged\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(productionCodexHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cacheRoot := t.TempDir()
+	goCache := filepath.Join(cacheRoot, "go-build")
+	goModCache := filepath.Join(cacheRoot, "go-mod")
+	uvCache := filepath.Join(cacheRoot, "uv")
 	cmd := exec.Command(
 		"bash",
 		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
 		"sh",
 		"-c",
-		`printf '%s\n' "$JUEX_HOME"; mkdir -p "$JUEX_HOME"; touch "$JUEX_HOME/probe"`,
+		strings.Join([]string{
+			`test "$HOME" = "$USERPROFILE"`,
+			`test "$JUEX_HOME" = "$HOME/.juex"`,
+			`test "$CODEX_HOME" = "$HOME/.codex"`,
+			`test -z "${JUEX_PROVIDER_CONFIG:-}"`,
+			`test -z "${JUEX_TEST_PROVIDER_CONFIG_DEFAULT:-}"`,
+			`test "$GOCACHE" = "$1"`,
+			`test "$GOMODCACHE" = "$2"`,
+			`test "$UV_CACHE_DIR" = "$3"`,
+			`printf '%s\n' "$HOME" "$JUEX_HOME"`,
+			`mkdir -p "$JUEX_HOME/agents/test-agent" "$JUEX_HOME/fleet"`,
+			`touch "$JUEX_HOME/agents/test-agent/probe" "$JUEX_HOME/fleet/probe"`,
+		}, "; "),
+		"wrapper-probe",
+		goCache,
+		goModCache,
+		uvCache,
 	)
-	cmd.Env = append(os.Environ(), "JUEX_HOME="+productionHome)
+	cmd.Env = commandEnv(map[string]string{
+		"HOME":                 productionHome,
+		"USERPROFILE":          productionHome,
+		"JUEX_HOME":            productionJuexHome,
+		"JUEX_PROVIDER_CONFIG": providerConfig,
+		"CODEX_HOME":           productionCodexHome,
+		"GOCACHE":              goCache,
+		"GOMODCACHE":           goModCache,
+		"UV_CACHE_DIR":         uvCache,
+	})
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("run isolated test home wrapper: %v\n%s", err, out)
 	}
-	testHome := strings.TrimSpace(string(out))
-	if testHome == "" || testHome == productionHome {
-		t.Fatalf("isolated JUEX_HOME = %q, inherited production home = %q", testHome, productionHome)
+	lines := strings.Fields(string(out))
+	if len(lines) != 2 {
+		t.Fatalf("wrapper output = %q, want HOME and JUEX_HOME", out)
+	}
+	testHome, testJuexHome := lines[0], lines[1]
+	if testHome == productionHome || testJuexHome == productionJuexHome {
+		t.Fatalf("isolated homes = %q, %q; inherited production homes", testHome, testJuexHome)
 	}
 	if _, err := os.Stat(testHome); !os.IsNotExist(err) {
-		t.Fatalf("temporary JUEX_HOME still exists after command: %v", err)
+		t.Fatalf("temporary HOME still exists after command: %v", err)
 	}
-	if _, err := os.Stat(productionHome); !os.IsNotExist(err) {
-		t.Fatalf("wrapper wrote inherited production JUEX_HOME: %v", err)
+	for path, want := range map[string]string{
+		fleetMarker: "fleet-unchanged\n",
+		agentMarker: "agent-unchanged\n",
+	} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Fatalf("production marker %s = %q, want %q", path, got, want)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(productionJuexHome, "probe"),
+		filepath.Join(productionJuexHome, "agents", "test-agent"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("wrapper wrote production state %s: %v", path, err)
+		}
+	}
+}
+
+func TestTestJuexHomeWrapperLiveModePreservesExplicitSources(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found; skipping shell wrapper test")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	productionHome := filepath.Join(t.TempDir(), "production-home")
+	productionJuexHome := filepath.Join(productionHome, ".juex")
+	providerConfig := filepath.Join(t.TempDir(), "provider", "juex.yaml")
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	cacheRoot := t.TempDir()
+	goCache := filepath.Join(cacheRoot, "go-build")
+	goModCache := filepath.Join(cacheRoot, "go-mod")
+	uvCache := filepath.Join(cacheRoot, "uv")
+	for path, body := range map[string]string{
+		providerConfig:                              "model: fake:model\n",
+		filepath.Join(codexHome, "auth.json"):       "{}\n",
+		filepath.Join(productionJuexHome, "marker"): "runtime-unchanged\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := exec.Command(
+		"bash",
+		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
+		"--live",
+		"sh",
+		"-c",
+		strings.Join([]string{
+			`test "$HOME" = "$USERPROFILE"`,
+			`test "$JUEX_HOME" = "$HOME/.juex"`,
+			`test "$JUEX_PROVIDER_CONFIG" = "$1"`,
+			`test -z "${JUEX_TEST_PROVIDER_CONFIG_DEFAULT:-}"`,
+			`test "$CODEX_HOME" = "$2"`,
+			`grep -q 'model: fake:model' "$JUEX_PROVIDER_CONFIG"`,
+			`test -r "$CODEX_HOME/auth.json"`,
+			`test "$GOCACHE" = "$3"`,
+			`test "$GOMODCACHE" = "$4"`,
+			`test "$UV_CACHE_DIR" = "$5"`,
+			`printf '%s\n' "$HOME"`,
+			`touch "$JUEX_HOME/live-runtime-probe"`,
+		}, "; "),
+		"wrapper-probe",
+		providerConfig,
+		codexHome,
+		goCache,
+		goModCache,
+		uvCache,
+	)
+	cmd.Env = commandEnv(map[string]string{
+		"HOME":                 productionHome,
+		"USERPROFILE":          productionHome,
+		"JUEX_HOME":            productionJuexHome,
+		"JUEX_PROVIDER_CONFIG": providerConfig,
+		"CODEX_HOME":           codexHome,
+		"GOCACHE":              goCache,
+		"GOMODCACHE":           goModCache,
+		"UV_CACHE_DIR":         uvCache,
+	})
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run live test home wrapper: %v\n%s", err, out)
+	}
+	testHome := strings.TrimSpace(string(out))
+	if testHome == "" || testHome == productionHome {
+		t.Fatalf("isolated HOME = %q, inherited production HOME", testHome)
+	}
+	if _, err := os.Stat(testHome); !os.IsNotExist(err) {
+		t.Fatalf("temporary HOME still exists after command: %v", err)
+	}
+	marker := filepath.Join(productionJuexHome, "marker")
+	got, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "runtime-unchanged\n" {
+		t.Fatalf("production runtime marker = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(productionJuexHome, "live-runtime-probe")); !os.IsNotExist(err) {
+		t.Fatalf("live wrapper wrote production JUEX_HOME: %v", err)
+	}
+}
+
+func TestTestJuexHomeWrapperLiveModeResolvesOriginalHomeDefaults(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found; skipping shell wrapper test")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	productionHome := filepath.Join(t.TempDir(), "production-home")
+	providerConfig := filepath.Join(productionHome, ".juex", "juex.yaml")
+	codexHome := filepath.Join(productionHome, ".codex")
+	for path, body := range map[string]string{
+		providerConfig:                        "model: default:model\n",
+		filepath.Join(codexHome, "auth.json"): "{}\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	providerConfig, err = filepath.EvalSymlinks(providerConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexHome, err = filepath.EvalSymlinks(codexHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(
+		"bash",
+		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
+		"--live",
+		"sh",
+		"-c",
+		`test "$JUEX_PROVIDER_CONFIG" = "$1"; test "$JUEX_TEST_PROVIDER_CONFIG_DEFAULT" = 1; test "$CODEX_HOME" = "$2"`,
+		"wrapper-probe",
+		providerConfig,
+		codexHome,
+	)
+	cmd.Env = commandEnv(map[string]string{
+		"HOME":        productionHome,
+		"USERPROFILE": productionHome,
+	}, "JUEX_PROVIDER_CONFIG", "CODEX_HOME")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("resolve original live defaults: %v\n%s", err, out)
+	}
+}
+
+func TestTestJuexHomeWrapperCleansAfterChildFailure(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found; skipping shell wrapper test")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(
+		"bash",
+		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
+		"sh",
+		"-c",
+		`printf '%s\n' "$HOME"; exit 7`,
+	)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("wrapper child succeeded, want exit status 7")
+	}
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 7 {
+		t.Fatalf("wrapper error = %v, want exit status 7\n%s", err, out)
+	}
+	testHome := strings.TrimSpace(string(out))
+	if testHome == "" {
+		t.Fatal("wrapper did not print temporary HOME")
+	}
+	if _, err := os.Stat(testHome); !os.IsNotExist(err) {
+		t.Fatalf("temporary HOME still exists after child failure: %v", err)
+	}
+}
+
+func TestMakeTargetsUseExpectedTestHomeMode(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	makePath, err := exec.LookPath("make")
+	if err != nil {
+		t.Skip("make is required")
+	}
+
+	for _, tt := range []struct {
+		target   string
+		wantLive bool
+	}{
+		{target: "test"},
+		{target: "race"},
+		{target: "integration", wantLive: true},
+	} {
+		t.Run(tt.target, func(t *testing.T) {
+			cmd := exec.Command(makePath, "-n", tt.target)
+			cmd.Dir = root
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("make -n %s failed: %v\n%s", tt.target, err, out)
+			}
+			text := string(out)
+			if !strings.Contains(text, "./scripts/with-test-juex-home.sh") {
+				t.Fatalf("make -n %s does not use test home wrapper:\n%s", tt.target, out)
+			}
+			hasLive := strings.Contains(text, "./scripts/with-test-juex-home.sh --live")
+			if hasLive != tt.wantLive {
+				t.Fatalf("make -n %s live mode = %v, want %v:\n%s", tt.target, hasLive, tt.wantLive, out)
+			}
+		})
+	}
+}
+
+func TestTestJuexHomeWrapperResolvesMiseToolsBeforeHomeIsolation(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found; skipping shell wrapper test")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fakeRoot := t.TempDir()
+	binDir := filepath.Join(fakeRoot, "bin")
+	shimDir := filepath.Join(fakeRoot, "shims")
+	managedDir := filepath.Join(fakeRoot, "managed")
+	for _, dir := range []string{binDir, shimDir, managedDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(binDir, "mise"): "#!/bin/sh\n" +
+			`test "$1" = "bin-paths" || exit 64` + "\n" +
+			`printf '%s\n' "$FAKE_MISE_MANAGED_BIN"` + "\n",
+		filepath.Join(shimDir, "go"): "#!/bin/sh\n" +
+			`echo "mise trust state unavailable after HOME switch" >&2` + "\n" +
+			"exit 90\n",
+		filepath.Join(managedDir, "go"): "#!/bin/sh\n" +
+			`if test "$1" = env && test "$2" = GOCACHE; then printf '%s\n' "$FAKE_CACHE/go-build"; exit; fi` + "\n" +
+			`if test "$1" = env && test "$2" = GOMODCACHE; then printf '%s\n' "$FAKE_CACHE/go-mod"; exit; fi` + "\n" +
+			`printf 'managed:%s\n' "$*"` + "\n",
+	}
+	for path, body := range files {
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := exec.Command(
+		"bash",
+		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
+		"go",
+		"probe",
+	)
+	cmd.Env = commandEnv(map[string]string{
+		"PATH":                  strings.Join([]string{binDir, shimDir, "/usr/bin", "/bin"}, string(os.PathListSeparator)),
+		"FAKE_MISE_MANAGED_BIN": managedDir,
+		"FAKE_CACHE":            filepath.Join(fakeRoot, "cache"),
+	}, "GOCACHE", "GOMODCACHE", "UV_CACHE_DIR")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run wrapper through fake mise environment: %v\n%s", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != "managed:probe" {
+		t.Fatalf("wrapper tool result = %q, want managed:probe", got)
 	}
 }
 
@@ -599,6 +939,27 @@ func TestTestJuexHomeWrapperUsesAbsoluteHomeWithRelativeTmpdir(t *testing.T) {
 	if _, err := os.Stat(testHome); !os.IsNotExist(err) {
 		t.Fatalf("temporary JUEX_HOME still exists after command: %v", err)
 	}
+}
+
+func commandEnv(overrides map[string]string, unset ...string) []string {
+	excluded := make(map[string]struct{}, len(overrides)+len(unset))
+	for key := range overrides {
+		excluded[key] = struct{}{}
+	}
+	for _, key := range unset {
+		excluded[key] = struct{}{}
+	}
+	env := make([]string, 0, len(os.Environ())+len(overrides))
+	for _, item := range os.Environ() {
+		key, _, _ := strings.Cut(item, "=")
+		if _, skip := excluded[key]; !skip {
+			env = append(env, item)
+		}
+	}
+	for key, value := range overrides {
+		env = append(env, key+"="+value)
+	}
+	return env
 }
 
 func TestEvalHelpersTolerateProgrammaticNone(t *testing.T) {
