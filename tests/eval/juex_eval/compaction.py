@@ -106,6 +106,7 @@ def run(args: argparse.Namespace) -> int:
         if not config.is_file():
             raise FileNotFoundError(f"Missing provider config: {config}")
         cfg = helper.load_yaml_file(config)
+        helper.validate_source_config(args.juex, config)
         candidates, evidence = selection.select(
             cfg,
             kind="compaction",
@@ -114,6 +115,7 @@ def run(args: argparse.Namespace) -> int:
             only=explicit_models,
             all_models=args.all_models,
             required_context_window=args.context_window,
+            provider_api_base_override=os.environ["PROVIDER_API_BASE"] if "PROVIDER_API_BASE" in os.environ else None,
             command_prefix=command_prefix,
         )
     except selection.ProviderUnavailable as exc:

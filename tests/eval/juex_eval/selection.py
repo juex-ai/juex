@@ -85,10 +85,17 @@ def resolved_path(value: str | pathlib.Path) -> pathlib.Path:
     return pathlib.Path(value).expanduser().resolve()
 
 
-def enumerate_candidates(cfg: dict[str, Any]) -> list[Candidate]:
+def enumerate_candidates(
+    cfg: dict[str, Any],
+    *,
+    provider_api_base_override: str | None = None,
+) -> list[Candidate]:
     by_ref: dict[str, Candidate] = {}
-    environment = _environment_variables(cfg)
-    api_base_override = str(environment.get("PROVIDER_API_BASE") or "").strip()
+    if provider_api_base_override is None:
+        environment = _environment_variables(cfg)
+        api_base_override = str(environment.get("PROVIDER_API_BASE") or "").strip()
+    else:
+        api_base_override = provider_api_base_override.strip()
     for provider in merged_providers(cfg):
         provider_id = str(provider.get("id") or "").strip()
         if not provider_id:
@@ -187,8 +194,9 @@ def eligible_candidates(
     kind: str,
     *,
     required_context_window: int = 0,
+    provider_api_base_override: str | None = None,
 ) -> list[Candidate]:
-    candidates = enumerate_candidates(cfg)
+    candidates = enumerate_candidates(cfg, provider_api_base_override=provider_api_base_override)
     if kind == "provider-smoke":
         return [candidate for candidate in candidates if candidate.tools_capability != "false"]
     if kind == "compaction":
@@ -205,14 +213,20 @@ def select(
     only: Iterable[str] = (),
     all_models: bool = False,
     required_context_window: int = 0,
+    provider_api_base_override: str | None = None,
     command_prefix: Iterable[str],
 ) -> tuple[list[Candidate], SelectionEvidence]:
     seed = seed.strip()
     if not seed:
         raise ValueError("selection seed cannot be empty")
     resolved_config = resolved_path(config_path)
-    all_candidates = enumerate_candidates(cfg)
-    eligible = eligible_candidates(cfg, kind, required_context_window=required_context_window)
+    all_candidates = enumerate_candidates(cfg, provider_api_base_override=provider_api_base_override)
+    eligible = eligible_candidates(
+        cfg,
+        kind,
+        required_context_window=required_context_window,
+        provider_api_base_override=provider_api_base_override,
+    )
     eligible_by_ref = {candidate.ref: candidate for candidate in eligible}
     requested = _normalized_refs(only)
     mode = "only" if requested else "all_models" if all_models else "seeded"

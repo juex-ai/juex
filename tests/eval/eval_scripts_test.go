@@ -165,6 +165,12 @@ func TestProviderConfigSelectionIsStableAndRedacted(t *testing.T) {
 		"cfg_env_base['environment']['variables']['PROVIDER_API_BASE'] = 'https://env-gateway.example/v1?token=never-report-env-query'",
 		"env_endpoint_evidence = choose(cfg_env_base, 'fixed-seed')[1]",
 		"assert env_endpoint_evidence.redacted_config_hash != env_hash",
+		"cfg_smoke_endpoint = json.loads(json.dumps(cfg_env_base))",
+		"cfg_smoke_endpoint['providers'][0]['base_url'] = 'https://smoke-gateway-a.example/v1'",
+		"smoke_endpoint_a = selection.select(cfg_smoke_endpoint, kind='provider-smoke', config_path=Path('/tmp/config.yaml'), seed='fixed-seed', provider_api_base_override='', command_prefix=['juex-eval', 'provider-smoke'])[1]",
+		"cfg_smoke_endpoint['providers'][0]['base_url'] = 'https://smoke-gateway-b.example/v1'",
+		"smoke_endpoint_b = selection.select(cfg_smoke_endpoint, kind='provider-smoke', config_path=Path('/tmp/config.yaml'), seed='fixed-seed', provider_api_base_override='', command_prefix=['juex-eval', 'provider-smoke'])[1]",
+		"assert smoke_endpoint_a.redacted_config_hash != smoke_endpoint_b.redacted_config_hash",
 		"cfg_endpoint = json.loads(json.dumps(cfg_a))",
 		"cfg_endpoint['providers'][0]['base_url'] = 'https://user:never-report-password@gateway.example/v1?token=never-report-query'",
 		"endpoint_evidence = choose(cfg_endpoint, 'fixed-seed')[1]",
@@ -336,7 +342,12 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"            error='selected provider failed' if fail_selected else '', schedule_routing_status='not_run' if fail_selected else 'passed',",
 		"        )",
 		"    original_case = helper.run_provider_smoke_case",
+		"    original_validate = helper.validate_source_config",
 		"    helper.run_provider_smoke_case = fake_case",
+		"    def fake_validate(_juex, source):",
+		"        if 'protcol:' in Path(source).read_text(encoding='utf-8'):",
+		"            raise ValueError('provider config is not loadable by Juex')",
+		"    helper.validate_source_config = fake_validate",
 		"    def run(name, *scope, seed='stable', source=config):",
 		"        captured.clear()",
 		"        report = work / f'report-{name}'",
@@ -370,6 +381,10 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        status, refs, summary, _ = run('invalid-container', source=invalid_container)",
 		"        assert status == 1 and refs == [] and summary['failure_category'] == 'provider_unavailable', summary",
 		"        assert \"'providers' must be a YAML sequence\" in summary['error'], summary",
+		"        invalid_full_schema = work / 'invalid-full-schema.yaml'",
+		"        invalid_full_schema.write_text('providers:\\n  - id: provider-on\\n    models: [{id: alpha}]\\n  - id: unselected\\n    protcol: openai/chat\\n    models: [{id: unused}]\\n', encoding='utf-8')",
+		"        status, refs, summary, _ = run('invalid-full-schema', '--only', 'provider-on:alpha', source=invalid_full_schema)",
+		"        assert status == 1 and refs == [] and summary['error'] == 'provider config is not loadable by Juex', summary",
 		"        invalid_context = work / 'invalid-context.yaml'",
 		"        invalid_context.write_text('providers:\\n  - id: provider-on\\n    models: [{id: alpha, context_window: [32000]}]\\n', encoding='utf-8')",
 		"        status, refs, summary, _ = run('invalid-context', source=invalid_context)",
@@ -392,6 +407,7 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        assert 'Selection source: `provider_config`' in markdown, markdown",
 		"    finally:",
 		"        helper.run_provider_smoke_case = original_case",
+		"        helper.validate_source_config = original_validate",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
@@ -429,7 +445,9 @@ func TestCompactionDynamicSelectionWritesSummaryAndFiltersWindow(t *testing.T) {
 		"    assert true_bin",
 		"    captured = []",
 		"    original_run_model = compaction.run_model",
+		"    original_validate = compaction.helper.validate_source_config",
 		"    compaction.run_model = lambda args, cfg, model, out_root, temp_dirs: captured.append(model) or 0",
+		"    compaction.helper.validate_source_config = lambda _juex, _config: None",
 		"    def run(name, only=None, all_models=False, source=config):",
 		"        captured.clear()",
 		"        out = work / name",
@@ -462,6 +480,49 @@ func TestCompactionDynamicSelectionWritesSummaryAndFiltersWindow(t *testing.T) {
 		"        assert 'Selection source: `provider_config`' in markdown, markdown",
 		"    finally:",
 		"        compaction.run_model = original_run_model",
+		"        compaction.helper.validate_source_config = original_validate",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestJuexSourceConfigValidationUsesCompleteConfigDoctor(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"import tempfile",
+		"from pathlib import Path",
+		"from types import SimpleNamespace",
+		"from tests.eval.juex_eval import helper",
+		"captured = []",
+		"original_run = helper.subprocess.run",
+		"def fake_run(command, **kwargs):",
+		"    captured.append((command, kwargs))",
+		"    return SimpleNamespace(stdout=json.dumps({'checks': [{'name': 'config', 'status': 'ok'}]}), stderr='', returncode=6)",
+		"helper.subprocess.run = fake_run",
+		"try:",
+		"    with tempfile.TemporaryDirectory() as tmp:",
+		"        config = Path(tmp) / 'juex.yaml'",
+		"        config.write_text('providers: []\\n', encoding='utf-8')",
+		"        helper.validate_source_config('/path/to/juex', config)",
+		"        command, kwargs = captured[-1]",
+		"        assert command[-4:] == ['doctor', '--offline', '--format', 'json'], command",
+		"        assert '--config' not in command and kwargs['env']['JUEX_HOME'] == str(config.resolve().parent)",
+		"        helper.subprocess.run = lambda *args, **kwargs: SimpleNamespace(stdout=json.dumps({'checks': [{'name': 'config', 'status': 'fail'}]}), stderr='never-report-secret', returncode=7)",
+		"        try:",
+		"            helper.validate_source_config('/path/to/juex', config)",
+		"        except ValueError as exc:",
+		"            assert str(exc) == 'provider config is not loadable by Juex'",
+		"        else:",
+		"            raise AssertionError('failed Juex config check was accepted')",
+		"finally:",
+		"    helper.subprocess.run = original_run",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }

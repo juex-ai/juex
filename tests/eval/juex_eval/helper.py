@@ -188,6 +188,7 @@ def provider_smoke(argv: list[str]) -> int:
             if not config_path.is_file():
                 raise FileNotFoundError(f"provider config not found: {config_path}")
             cfg = load_yaml_file(config_path)
+            validate_source_config(parsed.juex, config_path)
             rows, evidence = selection.select(
                 cfg,
                 kind="provider-smoke",
@@ -195,6 +196,7 @@ def provider_smoke(argv: list[str]) -> int:
                 seed=parsed.selection_seed,
                 only=[parsed.only] if parsed.only else [],
                 all_models=parsed.all_models,
+                provider_api_base_override="",
                 command_prefix=command_prefix,
             )
         except selection.ProviderUnavailable as exc:
@@ -974,6 +976,38 @@ def selected_provider_model(cfg: dict[str, Any], provider_id: str, model_id: str
                 return provider, model
         raise ValueError(f"model not found: {provider_id}:{model_id}")
     raise ValueError(f"provider not found: {provider_id}")
+
+
+def validate_source_config(juex_bin: str, config_path: pathlib.Path) -> None:
+    """Ask Juex to parse the complete source config without exposing diagnostics."""
+    config_path = selection.resolved_path(config_path)
+    with tempfile.TemporaryDirectory(prefix="juex-eval-config-check.") as work:
+        command = [juex_bin, "-C", work]
+        env = os.environ.copy()
+        if config_path.name == "juex.yaml":
+            env["JUEX_HOME"] = str(config_path.parent)
+        else:
+            command.extend(["--config", str(config_path)])
+        command.extend(["doctor", "--offline", "--format", "json"])
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=env,
+            )
+            result = json.loads(completed.stdout)
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+            raise ValueError("provider config validation through Juex failed") from exc
+    checks = result.get("checks") if isinstance(result, dict) else None
+    config_check = next(
+        (check for check in checks or [] if isinstance(check, dict) and check.get("name") == "config"),
+        None,
+    )
+    if not config_check or config_check.get("status") != "ok":
+        raise ValueError("provider config is not loadable by Juex")
 
 
 def write_model_config_command(argv: list[str]) -> int:
