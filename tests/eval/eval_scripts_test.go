@@ -123,69 +123,7 @@ fleet:
 	}
 }
 
-func TestLiveModelRotationScript(t *testing.T) {
-	if _, err := exec.LookPath("uv"); err != nil {
-		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
-	}
-	root, err := findRepoRoot()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	work := t.TempDir()
-	modelList := filepath.Join(work, "live-models.yaml")
-	state := filepath.Join(work, "rotation.json")
-	if err := os.WriteFile(modelList, []byte(strings.Join([]string{
-		"provider_smoke_models:",
-		"  - provider:a",
-		"  - provider:b",
-		"  - provider:c",
-		"compaction_eval_models:",
-		"  - compaction:a",
-		"  - compaction:b",
-		"",
-	}, "\n")), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if got := runRotation(t, root, modelList, state, "select", "--section", "provider_smoke_models"); got != "provider:a" {
-		t.Fatalf("initial provider selection = %q, want provider:a", got)
-	}
-	if _, err := os.Stat(state); !os.IsNotExist(err) {
-		t.Fatalf("select should not create state file, stat err=%v", err)
-	}
-
-	runRotation(t, root, modelList, state, "mark-success", "--section", "provider_smoke_models", "--model", "provider:a")
-	if got := runRotation(t, root, modelList, state, "select", "--section", "provider_smoke_models"); got != "provider:b" {
-		t.Fatalf("rotated provider selection = %q, want provider:b", got)
-	}
-
-	runRotation(t, root, modelList, state, "mark-success", "--section", "compaction_eval_models", "--model", "compaction:a")
-	if got := runRotation(t, root, modelList, state, "select", "--section", "compaction_eval_models"); got != "compaction:b" {
-		t.Fatalf("rotated compaction selection = %q, want compaction:b", got)
-	}
-
-	raw, err := os.ReadFile(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var parsed struct {
-		Sections map[string]struct {
-			LastSuccessful string `json:"last_successful"`
-		} `json:"sections"`
-	}
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		t.Fatal(err)
-	}
-	if got := parsed.Sections["provider_smoke_models"].LastSuccessful; got != "provider:a" {
-		t.Fatalf("provider last_successful = %q, want provider:a", got)
-	}
-	if got := parsed.Sections["compaction_eval_models"].LastSuccessful; got != "compaction:a" {
-		t.Fatalf("compaction last_successful = %q, want compaction:a", got)
-	}
-}
-
-func TestLiveModelScenarioExpectations(t *testing.T) {
+func TestProviderConfigSelectionIsStableAndRedacted(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
 	}
@@ -195,79 +133,34 @@ func TestLiveModelScenarioExpectations(t *testing.T) {
 	}
 
 	program := strings.Join([]string{
-		"import tempfile",
+		"import json",
 		"from pathlib import Path",
-		"from tests.eval.juex_eval import helper, rotation",
-		"with tempfile.TemporaryDirectory() as tmp:",
-		"    work = Path(tmp)",
-		"    model_list = work / 'live-models.yaml'",
-		"    model_list.write_text('''provider_smoke_models:",
-		"  - provider:expected",
-		"  - ref: provider:optional",
-		"    scenario_expectations:",
-		"      schedule-routing: optional",
-		"compaction_eval_models:",
-		"  - compaction:model",
-		"''', encoding='utf-8')",
-		"    specs = rotation.load_model_specs(model_list, 'provider_smoke_models')",
-		"    assert [spec.ref for spec in specs] == ['provider:expected', 'provider:optional'], specs",
-		"    assert specs[0].expectation('schedule-routing') == 'expected'",
-		"    assert specs[1].expectation('schedule-routing') == 'optional'",
-		"    assert rotation.load_model_refs(model_list, 'provider_smoke_models') == ['provider:expected', 'provider:optional']",
-		"    empty_expectations = work / 'empty-expectations.yaml'",
-		"    empty_expectations.write_text('provider_smoke_models:\\n  - ref: provider:empty\\n    scenario_expectations:\\n', encoding='utf-8')",
-		"    empty_spec = rotation.load_model_specs(empty_expectations, 'provider_smoke_models')[0]",
-		"    assert empty_spec.expectation('schedule-routing') == 'expected'",
-		"    assert helper.load_provider_model_specs(work / 'missing.yaml', required=False) == []",
-		"    try:",
-		"        helper.load_provider_model_specs(work / 'missing.yaml', required=True)",
-		"    except FileNotFoundError:",
-		"        pass",
-		"    else:",
-		"        raise AssertionError('required model list must fail when missing')",
-		"    invalid_documents = [",
-		"        'provider_smoke_models: [{ref: provider:model, unknown: true}]\\n',",
-		"        'provider_smoke_models: [{ref: provider:model, scenario_expectations: {unknown: optional}}]\\n',",
-		"        'provider_smoke_models: [{ref: provider:model, scenario_expectations: {schedule-routing: ignored}}]\\n',",
-		"        'provider_smoke_models: [{ref: provider:model, scenario_expectations: false}]\\n',",
-		"        'provider_smoke_models: [{ref: provider:model, scenario_expectations: {schedule-routing: [optional]}}]\\n',",
-		"        'provider_smoke_models: [{scenario_expectations: {schedule-routing: optional}}]\\n',",
-		"        'provider_smoke_models: [provider:model, provider:model]\\n',",
-		"        'compaction_eval_models: [{ref: compaction:model, scenario_expectations: {schedule-routing: optional}}]\\n',",
-		"    ]",
-		"    for index, document in enumerate(invalid_documents):",
-		"        invalid = work / f'invalid-{index}.yaml'",
-		"        invalid.write_text(document, encoding='utf-8')",
-		"        section = 'compaction_eval_models' if document.startswith('compaction') else 'provider_smoke_models'",
-		"        try:",
-		"            rotation.load_model_specs(invalid, section)",
-		"        except ValueError:",
-		"            pass",
-		"        else:",
-		"            raise AssertionError(f'invalid model list accepted: {document}')",
-		"    malformed = work / 'malformed.yaml'",
-		"    malformed.write_text('provider_smoke_models: [\\n', encoding='utf-8')",
-		"    try:",
-		"        helper.load_provider_model_specs(malformed, required=False)",
-		"    except Exception:",
-		"        pass",
-		"    else:",
-		"        raise AssertionError('existing malformed model list must fail')",
-		"for expectation in ('expected', 'optional'):",
-		"    verdict = helper.scenario_verdict(expectation, helper.SCENARIO_PASSED)",
-		"    assert verdict.passed and verdict.status == 'passed', verdict",
-		"assert not helper.scenario_verdict('expected', helper.SCENARIO_CAPABILITY_FAILED).passed",
-		"assert helper.scenario_verdict('expected', helper.SCENARIO_CAPABILITY_FAILED).status == 'failed_expected'",
-		"assert helper.scenario_verdict('optional', helper.SCENARIO_CAPABILITY_FAILED).passed",
-		"assert helper.scenario_verdict('optional', helper.SCENARIO_CAPABILITY_FAILED).status == 'failed_optional'",
-		"for expectation in ('expected', 'optional'):",
-		"    verdict = helper.scenario_verdict(expectation, helper.SCENARIO_HARD_FAILED)",
-		"    assert not verdict.passed and verdict.status == 'hard_failed', verdict",
+		"from tests.eval.juex_eval import selection",
+		"providers = [",
+		"    {'id': 'zeta', 'api_key': 'never-report-zeta', 'capabilities': {'tools': True}, 'models': [{'id': 'large', 'context_window': 64000}]},",
+		"    {'id': 'alpha', 'api_key': 'never-report-alpha', 'headers': {'Authorization': 'secret-header'}, 'models': [{'id': 'one'}, {'id': 'two'}]},",
+		"]",
+		"cfg_a = {'environment': {'variables': {'TOKEN': 'never-report-token'}}, 'providers': providers}",
+		"cfg_b = {'providers': list(reversed(providers))}",
+		"def choose(cfg, seed):",
+		"    return selection.select(cfg, kind='provider-smoke', config_path=Path('/tmp/config.yaml'), seed=seed, command_prefix=['juex-eval', 'provider-smoke'])",
+		"selected_a, evidence_a = choose(cfg_a, 'fixed-seed')",
+		"selected_b, evidence_b = choose(cfg_b, 'fixed-seed')",
+		"assert [item.ref for item in selection.enumerate_candidates(cfg_a)] == ['alpha:one', 'alpha:two', 'zeta:large']",
+		"assert selected_a[0].ref == selected_b[0].ref",
+		"assert evidence_a.redacted_config_hash == evidence_b.redacted_config_hash",
+		"assert evidence_a.eligible_refs == ('alpha:one', 'alpha:two', 'zeta:large')",
+		"assert len({choose(cfg_a, f'seed-{index}')[0][0].ref for index in range(20)}) > 1",
+		"rendered = json.dumps(evidence_a.as_dict())",
+		"for secret in ['never-report-zeta', 'never-report-alpha', 'secret-header', 'never-report-token']:",
+		"    assert secret not in rendered, rendered",
+		"assert f'--config {Path(\"/tmp/config.yaml\").resolve()}' in evidence_a.reproduction_command",
+		"assert '--selection-seed fixed-seed' in evidence_a.reproduction_command",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
 
-func TestOptionalScenarioVerdictControlsRotationAdvance(t *testing.T) {
+func TestProviderConfigSelectionEligibilityAndExactScope(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
 	}
@@ -277,45 +170,39 @@ func TestOptionalScenarioVerdictControlsRotationAdvance(t *testing.T) {
 	}
 
 	program := strings.Join([]string{
-		"import tempfile",
-		"from argparse import Namespace",
 		"from pathlib import Path",
-		"from tests.eval.juex_eval import cli, helper, rotation",
-		"with tempfile.TemporaryDirectory() as tmp:",
-		"    work = Path(tmp)",
-		"    model_list = work / 'live-models.yaml'",
-		"    state_path = work / 'rotation.json'",
-		"    model_list.write_text('provider_smoke_models:\\n  - ref: provider:optional\\n    scenario_expectations:\\n      schedule-routing: optional\\n  - provider:next\\n', encoding='utf-8')",
-		"    args = Namespace(model_list=str(model_list), rotation_state=str(state_path), only='', all_models=False, all_config_models=False)",
-		"    original_args = cli.provider_helper_args",
-		"    original_smoke = helper.provider_smoke",
-		"    cli.provider_helper_args = lambda args: []",
+		"from tests.eval.juex_eval import selection",
+		"cfg = {'providers': [",
+		"    {'id': 'provider-off', 'capabilities': {'tools': False}, 'models': [{'id': 'blocked'}, {'id': 'override', 'capabilities': {'tools': True}}]},",
+		"    {'id': 'provider-on', 'capabilities': {'tools': True}, 'models': [",
+		"        {'id': 'small', 'context_window': 16000},",
+		"        {'id': 'large', 'context_window': 64000},",
+		"        {'id': 'default-window'},",
+		"        {'id': 'model-off', 'capabilities': {'tools': False}},",
+		"    ]},",
+		"]}",
+		"provider_refs = [item.ref for item in selection.eligible_candidates(cfg, 'provider-smoke')]",
+		"assert provider_refs == ['provider-off:override', 'provider-on:default-window', 'provider-on:large', 'provider-on:small'], provider_refs",
+		"compaction_refs = [item.ref for item in selection.eligible_candidates(cfg, 'compaction', required_context_window=32000)]",
+		"assert compaction_refs == ['provider-off:blocked', 'provider-off:override', 'provider-on:default-window', 'provider-on:large', 'provider-on:model-off'], compaction_refs",
+		"selected, evidence = selection.select(cfg, kind='provider-smoke', config_path=Path('/tmp/config.yaml'), seed='unit', only=['provider-off:override'], command_prefix=['juex-eval', 'provider-smoke'])",
+		"assert [item.ref for item in selected] == ['provider-off:override']",
+		"assert '--only provider-off:override' in evidence.reproduction_command",
+		"for ref in ['provider-off:blocked', 'provider-on:model-off', 'missing:model']:",
 		"    try:",
-		"        helper.provider_smoke = lambda args: 0 if helper.scenario_verdict('optional', helper.SCENARIO_CAPABILITY_FAILED).passed else 1",
-		"        assert cli.run_provider_smoke(args) == 0",
-		"        state = rotation.load_state(state_path)",
-		"        assert rotation.section_record(state, 'provider_smoke_models')['last_successful'] == 'provider:optional'",
-		"        helper.provider_smoke = lambda args: 0 if helper.scenario_verdict('optional', helper.SCENARIO_HARD_FAILED).passed else 1",
-		"        assert cli.run_provider_smoke(args) == 1",
-		"        state = rotation.load_state(state_path)",
-		"        assert rotation.section_record(state, 'provider_smoke_models')['last_successful'] == 'provider:optional'",
-		"        mechanical = helper.SmokeResult(",
-		"            run_id='unit', ref='provider:next', provider_id='provider', model_id='next',",
-		"            protocol='openai', reasoning_effort_capability='default', tools_capability='default', thinking_effort='unset',",
-		"        )",
-		"        assert mechanical.status == 'fail' and mechanical.schedule_routing_status == 'not_run'",
-		"        helper.provider_smoke = lambda args: 1",
-		"        assert cli.run_provider_smoke(args) == 1",
-		"        state = rotation.load_state(state_path)",
-		"        assert rotation.section_record(state, 'provider_smoke_models')['last_successful'] == 'provider:optional'",
-		"    finally:",
-		"        cli.provider_helper_args = original_args",
-		"        helper.provider_smoke = original_smoke",
+		"        selection.select(cfg, kind='provider-smoke', config_path=Path('/tmp/config.yaml'), seed='unit', only=[ref], command_prefix=['juex-eval', 'provider-smoke'])",
+		"    except selection.ProviderUnavailable as exc:",
+		"        assert exc.failure_category == 'provider_unavailable'",
+		"        assert exc.evidence.selected_refs == ()",
+		"    else:",
+		"        raise AssertionError(f'ineligible ref accepted: {ref}')",
+		"all_selected, _ = selection.select(cfg, kind='provider-smoke', config_path=Path('/tmp/config.yaml'), seed='unit', all_models=True, command_prefix=['juex-eval', 'provider-smoke'])",
+		"assert [item.ref for item in all_selected] == provider_refs",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
 
-func TestProviderSmokeScopesApplyScenarioExpectations(t *testing.T) {
+func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
 	}
@@ -325,60 +212,139 @@ func TestProviderSmokeScopesApplyScenarioExpectations(t *testing.T) {
 	}
 
 	program := strings.Join([]string{
+		"import json",
 		"import shutil",
 		"import tempfile",
 		"from pathlib import Path",
 		"from tests.eval.juex_eval import helper",
 		"with tempfile.TemporaryDirectory() as tmp:",
 		"    work = Path(tmp)",
-		"    config = work / 'juex.yaml'",
-		"    config.write_text('''providers:",
-		"  - id: provider",
-		"    protocol: openai",
-		"    models:",
-		"      - id: optional",
-		"      - id: unlisted",
-		"''', encoding='utf-8')",
-		"    model_list = work / 'live-models.yaml'",
-		"    model_list.write_text('''provider_smoke_models:",
-		"  - ref: provider:optional",
-		"    scenario_expectations:",
-		"      schedule-routing: optional",
+		"    config = work / 'provider config.yaml'",
+		"    config.write_text('''environment:",
+		"  variables:",
+		"    PRIVATE_TOKEN: never-report-env-token",
+		"providers:",
+		"  - id: provider-off",
+		"    api_key: never-report-disabled-key",
+		"    capabilities: {tools: false}",
+		"    models: [{id: blocked}]",
+		"  - id: provider-on",
+		"    api_key: never-report-live-key",
+		"    headers: {Authorization: never-report-header}",
+		"    models: [{id: alpha}, {id: beta}]",
 		"''', encoding='utf-8')",
 		"    true_bin = shutil.which('true')",
 		"    assert true_bin",
 		"    captured = []",
+		"    fail_selected = False",
 		"    def fake_case(ctx):",
-		"        captured.append((ctx.row.ref, ctx.schedule_routing_expectation))",
+		"        captured.append(ctx.row.ref)",
 		"        return helper.SmokeResult(",
 		"            run_id=ctx.run_id, ref=ctx.row.ref, provider_id=ctx.row.provider_id, model_id=ctx.row.model_id,",
-		"            protocol=ctx.row.protocol, reasoning_effort_capability='default', tools_capability='default',",
-		"            thinking_effort='unset', status='pass', schedule_routing_status='passed',",
+		"            protocol=ctx.row.protocol, reasoning_effort_capability=ctx.row.reasoning_effort_capability,",
+		"            tools_capability=ctx.row.tools_capability, thinking_effort=ctx.row.thinking_effort,",
+		"            status='fail' if fail_selected else 'pass', error_stage='turn1' if fail_selected else '',",
+		"            error='selected provider failed' if fail_selected else '', schedule_routing_status='not_run' if fail_selected else 'passed',",
 		"        )",
 		"    original_case = helper.run_provider_smoke_case",
 		"    helper.run_provider_smoke_case = fake_case",
-		"    def run_scope(name, *scope, model_path=model_list):",
+		"    def run(name, *scope, seed='stable', source=config):",
 		"        captured.clear()",
+		"        report = work / f'report-{name}'",
 		"        status = helper.provider_smoke([",
-		"            '--juex', true_bin, '--config', str(config), '--model-list', str(model_path),",
-		"            '--report-dir', str(work / f'report-{name}'), '--work-root', str(work / f'work-{name}'),",
-		"            '--run-id', name, *scope,",
+		"            '--juex', true_bin, '--config', str(source), '--selection-seed', seed,",
+		"            '--report-dir', str(report), '--work-root', str(work / f'work-{name}'), '--run-id', name, *scope,",
 		"        ])",
-		"        assert status == 0",
-		"        return list(captured)",
+		"        summary = json.loads((report / 'summary.json').read_text(encoding='utf-8'))",
+		"        markdown = (report / 'summary.md').read_text(encoding='utf-8')",
+		"        return status, list(captured), summary, markdown",
 		"    try:",
-		"        assert run_scope('only-provider', '--only', 'provider') == [",
-		"            ('provider:optional', 'optional'), ('provider:unlisted', 'expected')",
-		"        ]",
-		"        assert run_scope('all-models', '--all-models') == [('provider:optional', 'optional')]",
-		"        assert run_scope('all-config', '--all-config-models') == [",
-		"            ('provider:optional', 'optional'), ('provider:unlisted', 'expected')",
-		"        ]",
-		"        assert run_scope(",
-		"            'missing-list', '--only', 'provider:unlisted', model_path=work / 'missing.yaml'",
-		"        ) == [('provider:unlisted', 'expected')]",
+		"        status, refs, summary, markdown = run('default')",
+		"        assert status == 0 and len(refs) == 1 and refs[0] in {'provider-on:alpha', 'provider-on:beta'}, (status, refs)",
+		"        assert summary['selection_source'] == 'provider_config' and summary['selection_seed'] == 'stable', summary",
+		"        assert summary['eligible_candidate_refs'] == ['provider-on:alpha', 'provider-on:beta'], summary",
+		"        assert summary['resolved_config_path'] == str(config.resolve()), summary",
+		"        assert '--selection-seed stable' in summary['reproduction_command'], summary",
+		"        status, refs, summary, _ = run('all', '--all-models')",
+		"        assert status == 0 and refs == ['provider-on:alpha', 'provider-on:beta'], refs",
+		"        status, refs, summary, _ = run('blocked', '--only', 'provider-off:blocked')",
+		"        assert status == 1 and refs == [] and summary['failure_category'] == 'provider_unavailable', summary",
+		"        assert summary['selected_provider_models'] == [] and summary['eligible_candidate_count'] == 2, summary",
+		"        status, refs, summary, _ = run('missing-config', source=work / 'missing.yaml')",
+		"        assert status == 1 and refs == [] and summary['failure_category'] == 'provider_unavailable', summary",
+		"        empty_config = work / 'empty.yaml'",
+		"        empty_config.write_text('providers: []\\n', encoding='utf-8')",
+		"        status, refs, summary, _ = run('zero-candidates', source=empty_config)",
+		"        assert status == 1 and refs == [] and summary['eligible_candidate_count'] == 0, summary",
+		"        fail_selected = True",
+		"        status, refs, summary, _ = run('selected-failure', '--only', 'provider-on:beta')",
+		"        assert status == 1 and refs == ['provider-on:beta'], refs",
+		"        assert summary['selected_provider_model'] == 'provider-on:beta' and summary['failed'] == 1, summary",
+		"        report_text = ''.join(path.read_text(encoding='utf-8', errors='replace') for path in work.glob('report-*/*') if path.is_file())",
+		"        for secret in ['never-report-env-token', 'never-report-disabled-key', 'never-report-live-key', 'never-report-header']:",
+		"            assert secret not in report_text, secret",
+		"        assert 'Selection source: `provider_config`' in markdown, markdown",
 		"    finally:",
 		"        helper.run_provider_smoke_case = original_case",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestCompactionDynamicSelectionWritesSummaryAndFiltersWindow(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"import shutil",
+		"import tempfile",
+		"from argparse import Namespace",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import compaction",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    work = Path(tmp)",
+		"    config = work / 'juex.yaml'",
+		"    config.write_text('''providers:",
+		"  - id: provider",
+		"    api_key: never-report-compaction-key",
+		"    models:",
+		"      - {id: small, context_window: 16000}",
+		"      - {id: large, context_window: 64000}",
+		"      - {id: default-window}",
+		"''', encoding='utf-8')",
+		"    true_bin = shutil.which('true')",
+		"    assert true_bin",
+		"    captured = []",
+		"    original_run_model = compaction.run_model",
+		"    compaction.run_model = lambda args, cfg, model, out_root, temp_dirs: captured.append(model) or 0",
+		"    def run(name, only=None, all_models=False):",
+		"        captured.clear()",
+		"        out = work / name",
+		"        args = Namespace(only=only or [], all_models=all_models, selection_seed='seed-42', juex=true_bin,",
+		"            config=str(config), out_root=str(out), run_id=name, context_window=32000, turn_timeout=10, keep_workdir=False)",
+		"        status = compaction.run(args)",
+		"        summary = json.loads((out / 'summary.json').read_text(encoding='utf-8'))",
+		"        markdown = (out / 'summary.md').read_text(encoding='utf-8')",
+		"        return status, list(captured), summary, markdown",
+		"    try:",
+		"        status, refs, summary, markdown = run('all', all_models=True)",
+		"        assert status == 0 and refs == ['provider:default-window', 'provider:large'], refs",
+		"        assert summary['eligible_candidate_refs'] == refs and summary['selection_source'] == 'provider_config', summary",
+		"        assert summary['redacted_config_hash'].startswith('sha256:'), summary",
+		"        assert '--all-models' in summary['reproduction_command'] and '--config' in summary['reproduction_command'], summary",
+		"        status, refs, summary, _ = run('small', only=['provider:small'])",
+		"        assert status == 1 and refs == [] and summary['failure_category'] == 'provider_unavailable', summary",
+		"        assert summary['selected_provider_models'] == [], summary",
+		"        combined = (work / 'all' / 'summary.json').read_text() + (work / 'all' / 'summary.md').read_text()",
+		"        assert 'never-report-compaction-key' not in combined, combined",
+		"        assert 'Selection source: `provider_config`' in markdown, markdown",
+		"    finally:",
+		"        compaction.run_model = original_run_model",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
@@ -393,15 +359,15 @@ func TestEvalPythonModuleAndShellWrappersExposeHelp(t *testing.T) {
 	}
 
 	moduleHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "--help")
-	for _, want := range []string{"development", "provider-smoke", "compaction", "rotation"} {
+	for _, want := range []string{"development", "provider-smoke", "compaction"} {
 		assertHelpContains(t, moduleHelp, want)
 	}
 
 	providerHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "provider-smoke", "--help")
-	assertHelpContains(t, providerHelp, "--only", "--report-dir")
+	assertHelpContains(t, providerHelp, "--only", "--all-models", "--config", "--selection-seed", "--report-dir")
 
 	compactionHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "compaction", "--help")
-	assertHelpContains(t, compactionHelp, "--only", "--report-dir")
+	assertHelpContains(t, compactionHelp, "--only", "--all-models", "--config", "--selection-seed", "--report-dir")
 
 	developmentHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "development", "--help")
 	assertHelpContains(t, developmentHelp, "--only", "--compaction-only", "--report-dir")
@@ -447,10 +413,11 @@ func TestEvalDevelopmentStepBuilderUsesConsistentFlags(t *testing.T) {
 		"    no_provider_smoke=False,",
 		"    compaction_eval=True,",
 		"    run_id='unit',",
+		"    config='/tmp/provider config.yaml',",
+		"    selection_seed='repeatable',",
 		"    provider_timeout=7,",
 		"    provider_only='ark:model',",
 		"    provider_all_models=False,",
-		"    provider_all_config_models=False,",
 		"    compaction_all_models=False,",
 		"    compaction_only=['openai:model', 'ark:other'],",
 		")",
@@ -469,12 +436,16 @@ func TestEvalDevelopmentStepBuilderUsesConsistentFlags(t *testing.T) {
 
 	providerCmd := findEvalCommand(t, steps, "provider-model-smoke")
 	assertCommandFlagValue(t, providerCmd, "--only", "ark:model")
+	assertCommandFlagValue(t, providerCmd, "--config", "/tmp/provider config.yaml")
+	assertCommandFlagValue(t, providerCmd, "--selection-seed", "repeatable")
 	assertCommandHasFlag(t, providerCmd, "--report-dir")
 	assertCommandLacks(t, providerCmd, "--provider-only")
 
 	compactionCmd := findEvalCommand(t, steps, "compaction-eval")
 	assertCommandFlagValue(t, compactionCmd, "--only", "openai:model")
 	assertCommandFlagValue(t, compactionCmd, "--only", "ark:other")
+	assertCommandFlagValue(t, compactionCmd, "--config", "/tmp/provider config.yaml")
+	assertCommandFlagValue(t, compactionCmd, "--selection-seed", "repeatable")
 	assertCommandHasFlag(t, compactionCmd, "--report-dir")
 	assertCommandLacks(t, compactionCmd, "--out-root")
 }
@@ -498,10 +469,11 @@ func TestEvalDevelopmentGoTestsUseIsolatedJuexHome(t *testing.T) {
 		"    no_provider_smoke=True,",
 		"    compaction_eval=False,",
 		"    run_id='unit',",
+		"    config='/tmp/provider.yaml',",
+		"    selection_seed='repeatable',",
 		"    provider_timeout=7,",
 		"    provider_only='',",
 		"    provider_all_models=False,",
-		"    provider_all_config_models=False,",
 		"    compaction_all_models=False,",
 		"    compaction_only=[],",
 		")",
@@ -1268,12 +1240,10 @@ func TestEvalHelpersTolerateProgrammaticNone(t *testing.T) {
 		"assert command == []",
 		"args = Namespace(",
 		"    only=None,",
-		"    models=None,",
 		"    all_models=False,",
+		"    context_window=32000,",
 		"    juex='/no/such/juex',",
 		"    config='/no/such/config',",
-		"    model_list='/no/such/models.yaml',",
-		"    rotation_state='/no/such/rotation.json',",
 		"    out_root='',",
 		"    keep_workdir=False,",
 		")",
@@ -2045,7 +2015,7 @@ func TestScheduleRoutingSeededEquivalentContract(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
-func TestScheduleRoutingEvalReportingIsAdditive(t *testing.T) {
+func TestScheduleRoutingEvalReportingIncludesSelectionEvidence(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
 	}
@@ -2064,18 +2034,22 @@ func TestScheduleRoutingEvalReportingIsAdditive(t *testing.T) {
 		"    result = helper.SmokeResult(",
 		"        run_id='unit', ref='provider:model', provider_id='provider', model_id='model',",
 		"        protocol='openai', reasoning_effort_capability='default', tools_capability='default', thinking_effort='unset',",
-		"        status='pass', schedule_routing_expectation='optional', schedule_routing_status='failed_optional',",
+		"        status='fail', schedule_routing_status='failed',",
 		"        schedule_routing_variant='seeded-equivalent', schedule_routing_existing_id='schedule-routing-existing',",
 		"        error_stage='schedule-routing', error='model did not call schedule_create', artifacts='cases/provider_model',",
 		"    )",
 		"    assert result.as_dict()['schedule_routing_existing_id'] == 'schedule-routing-existing'",
 		"    summary = {",
-		"        'run_id': 'unit', 'juex': './dist/juex', 'config': 'config.yaml', 'model_list': 'unit', 'work_root': 'cleaned',",
-		"        'total': 1, 'passed': 1, 'failed': 0, 'tool_use_recorded': 1, 'exec_command_tool_use_recorded': 1,",
+		"        'run_id': 'unit', 'juex': './dist/juex', 'config': '/resolved/config.yaml', 'work_root': 'cleaned',",
+		"        'selection_source': 'provider_config', 'selected_provider_model': 'provider:model',",
+		"        'selected_provider_models': ['provider:model'], 'selection_seed': 'seed-1',",
+		"        'eligible_candidate_count': 1, 'eligible_candidate_refs': ['provider:model'],",
+		"        'resolved_config_path': '/resolved/config.yaml', 'redacted_config_hash': 'sha256:abc',",
+		"        'reproduction_command': 'juex-eval provider-smoke --config /resolved/config.yaml --selection-seed seed-1',",
+		"        'selection_mode': 'seeded', 'failure_category': None, 'error': None,",
+		"        'total': 1, 'passed': 0, 'failed': 1, 'tool_use_recorded': 1, 'exec_command_tool_use_recorded': 1,",
 		"        'tty_recorded': 1, 'stdin_recorded': 1, 'filesystem_verified': 1, 'terminal_event_verified': 1,",
-		"        'thinking_observed': 0, 'schedule_routing_verified': 0, 'schedule_routing_expected_failures': 0,",
-		"        'schedule_routing_optional_failures': 1, 'schedule_routing_hard_failures': 0,",
-		"        'optional_failures': [{'ref': 'provider:model', 'scenario': 'schedule-routing', 'error': 'model did not call schedule_create', 'artifacts': 'cases/provider_model'}],",
+		"        'thinking_observed': 0, 'schedule_routing_verified': 0, 'schedule_routing_failures': 1,",
 		"        'schedule_routing_variant': 'seeded-equivalent',",
 		"        'results_jsonl_path': 'results.jsonl',",
 		"    }",
@@ -2083,21 +2057,23 @@ func TestScheduleRoutingEvalReportingIsAdditive(t *testing.T) {
 		"    summary_md = work / 'summary.md'",
 		"    helper.write_smoke_summary(summary_json, summary_md, summary, [result])",
 		"    parsed = json.loads(summary_json.read_text(encoding='utf-8'))",
-		"    assert parsed['total'] == 1 and parsed['schedule_routing_optional_failures'] == 1, parsed",
-		"    assert parsed['optional_failures'][0]['ref'] == 'provider:model', parsed",
+		"    assert parsed['total'] == 1 and parsed['schedule_routing_failures'] == 1, parsed",
+		"    assert parsed['selected_provider_model'] == 'provider:model', parsed",
 		"    markdown = summary_md.read_text(encoding='utf-8')",
-		"    assert 'Schedule routing optional failures: 1' in markdown, markdown",
-		"    assert 'failed (optional, recorded)' in markdown, markdown",
-		"    assert '## Optional Scenario Failures' in markdown and 'model did not call schedule_create' in markdown, markdown",
+		"    assert 'Schedule routing failures: 1' in markdown, markdown",
+		"    assert 'failed (optional' not in markdown, markdown",
+		"    assert 'Selection seed: `seed-1`' in markdown, markdown",
 		"    assert 'Schedule routing variant: `seeded-equivalent`' in markdown, markdown",
-		"    assert '| not_observed | optional | failed (optional, recorded) | seeded-equivalent | schedule-routing |' in markdown, markdown",
+		"    assert '| not_observed | failed | seeded-equivalent | schedule-routing |' in markdown, markdown",
 		"    commands = work / 'commands.jsonl'",
-		"    commands.write_text(json.dumps({'label': 'provider-model-smoke', 'exit_status': 0, 'log': 'provider.log'}) + '\\n', encoding='utf-8')",
+		"    commands.write_text(json.dumps({'label': 'provider-model-smoke', 'exit_status': 1, 'log': 'provider.log'}) + '\\n', encoding='utf-8')",
 		"    record_json = work / 'record.json'",
 		"    record_md = work / 'record.md'",
-		"    helper.write_development_record(work, 'unit', commands, summary_json, '', 0, record_json, record_md)",
+		"    helper.write_development_record(work, 'unit', commands, summary_json, '', 1, record_json, record_md)",
 		"    record = record_md.read_text(encoding='utf-8')",
-		"    assert 'Schedule routing optional failures: 1' in record, record",
+		"    assert 'Schedule routing failures: 1' in record, record",
+		"    assert 'Selection source: provider_config' in record, record",
+		"    assert 'Reproduction command: juex-eval provider-smoke' in record, record",
 		"    assert 'Schedule routing variant: seeded-equivalent' in record, record",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
@@ -2194,31 +2170,6 @@ func TestScheduleRoutingEvalRetriesUseFreshAttempts(t *testing.T) {
 		"    assert contract == {'outcome': 'passed', 'passed': True, 'issues': []}, contract",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
-}
-
-func runRotation(t *testing.T, root, modelList, state string, args ...string) string {
-	t.Helper()
-	baseArgs := []string{
-		"run",
-		"--quiet",
-		"--project",
-		root,
-		"python",
-		"-m",
-		"tests.eval.juex_eval",
-		"rotation",
-		"--model-list",
-		modelList,
-		"--state",
-		state,
-	}
-	cmd := exec.Command("uv", append(baseArgs, args...)...)
-	cmd.Dir = root
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("rotation command failed: %v\n%s", err, out)
-	}
-	return strings.TrimSpace(string(out))
 }
 
 func runUV(t *testing.T, root string, args ...string) string {

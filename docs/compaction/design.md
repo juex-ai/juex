@@ -405,8 +405,8 @@ Every compaction change should be evaluated on:
 - Recovery behavior when compaction request is itself oversized.
 
 The quick automated test should run with a context window between one tenth and
-one quarter of a normal 256k window. The default live evaluation model refs are
-maintained in `tests/eval/live-models.yaml`.
+one quarter of a normal 256k window. Live evaluation derives eligible model
+refs from the resolved provider config and records the selection seed.
 
 ## Rollout Plan
 

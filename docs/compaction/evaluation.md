@@ -11,13 +11,11 @@ providers.
 
 ## Models
 
-The default model matrix is maintained in `tests/eval/live-models.yaml`:
-
-| Label | Juex model ref | Notes |
-| --- | --- | --- |
-| OpenAI Codex | `openai-codex:gpt-5.5` | Uses the Codex Responses adapter. |
-| Ark Doubao | `ark:doubao-seed-2.0-pro` | OpenAI-compatible chat through Ark. |
-| Clip Local Responses | `clip-local-responses:gpt-5.3-codex-spark` | Local proxy provider through the Responses protocol. |
+The command derives model refs from the resolved provider config. It excludes
+models whose declared `context_window` is below the requested evaluation
+window; omitted declarations use Juex's default 256k window. A recorded seed
+selects one stable-sorted eligible ref by default, `--only provider:model`
+selects an exact eligible ref, and `--all-models` runs the full eligible set.
 
 ## Window Size
 
@@ -95,13 +93,13 @@ Build the current binary:
 make build
 ```
 
-Run one rotated model from `tests/eval/live-models.yaml`:
+Run one seeded model from the resolved provider config:
 
 ```bash
 tests/eval/compaction_eval.sh
 ```
 
-Run every configured compaction-eval model:
+Run every eligible configured model:
 
 ```bash
 tests/eval/compaction_eval.sh --all-models
@@ -113,15 +111,17 @@ Run one provider:
 tests/eval/compaction_eval.sh --only openai-codex:gpt-5.5
 ```
 
-The script reads model refs from `tests/eval/live-models.yaml`, records the last
-successful default run in `.juex/live-model-rotation.json`, and reads provider
-details from `~/.juex/juex.yaml` by default. Override the source with
-`JUEX_PROVIDER_CONFIG=/path/to/juex.yaml` when testing another provider config,
-or pass explicit model refs on the command line for a focused run. For each
+The script resolves `--config`, `JUEX_PROVIDER_CONFIG`, or the original user's
+`~/.juex/juex.yaml`. Pass `--selection-seed value` to reproduce default
+selection or `--only provider:model` for a focused run. For each
 selected model it writes a temporary work-local config containing only that
 provider:model, disables tool calling, enables compaction, and deletes the
 temporary config after the run unless `KEEP_WORKDIR=1` is set.
 Set `JUEX_EVAL_TURN_TIMEOUT` to override the per-turn timeout (default 600s).
+
+The root `summary.json` and `summary.md` record the selected refs, seed,
+eligible candidates, resolved config path, redacted config hash, and exact
+reproduction command without copying credentials.
 
 The script writes redacted run artifacts under:
 

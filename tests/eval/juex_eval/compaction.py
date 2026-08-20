@@ -10,10 +10,11 @@ import sys
 import tempfile
 import time
 
-from . import helper, rotation
+import yaml
+
+from . import helper, selection
 
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 DEFAULT_COMPACTION = {
     "enabled": True,
     "reserve_tokens": 8000,
@@ -40,24 +41,16 @@ AUTHORITATIVE_NOTES = (
 def add_args(parser: argparse.ArgumentParser) -> None:
     parser.description = "Run the live compaction quality smoke."
     parser.add_argument(
-        "models",
-        nargs="*",
-        help="Explicit provider:model refs. Prefer --only for new usage. Defaults to one rotated ref.",
-    )
-    parser.add_argument(
         "--only",
         action="append",
         default=[],
         help="Run one explicit provider:model ref. May be repeated.",
     )
-    parser.add_argument("--all-models", action="store_true", help="Run every ref in compaction_eval_models.")
+    parser.add_argument("--all-models", action="store_true", help="Run every eligible provider:model in the provider config.")
     parser.add_argument(
-        "--model-list",
-        default=os.environ.get("JUEX_LIVE_MODEL_LIST") or str(REPO_ROOT / "tests" / "eval" / "live-models.yaml"),
-    )
-    parser.add_argument(
-        "--rotation-state",
-        default=os.environ.get("JUEX_LIVE_MODEL_ROTATION_STATE") or str(REPO_ROOT / ".juex" / "live-model-rotation.json"),
+        "--selection-seed",
+        default=os.environ.get("JUEX_EVAL_SELECTION_SEED") or selection.generated_seed(),
+        help="Reproducible seed for provider-config candidate selection.",
     )
     parser.add_argument("--juex", default=os.environ.get("JUEX_BIN") or "./dist/juex")
     parser.add_argument(
@@ -82,51 +75,131 @@ def add_args(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
-    explicit_models = [*(args.only or []), *(args.models or [])]
+    explicit_models = [*(args.only or [])]
     if args.all_models and explicit_models:
-        raise ValueError("--all-models cannot be combined with --only or positional provider:model refs")
+        raise ValueError("--all-models cannot be combined with --only")
+    if args.context_window <= 0:
+        raise ValueError("--context-window must be a positive integer")
     juex = pathlib.Path(args.juex)
     if not os.access(juex, os.X_OK):
         raise ValueError(f"Missing executable {args.juex}. Run: make build")
-    config = pathlib.Path(args.config).expanduser()
-    if not config.is_file():
-        raise ValueError(f"Missing provider config: {config}")
-
-    model_list = pathlib.Path(args.model_list).expanduser()
-    rotation_state = pathlib.Path(args.rotation_state).expanduser()
-    rotated_model = ""
-    if explicit_models:
-        models = explicit_models
-    elif args.all_models:
-        models = rotation.load_model_refs(model_list, "compaction_eval_models")
-    else:
-        refs = rotation.load_model_refs(model_list, "compaction_eval_models")
-        state = rotation.load_state(rotation_state)
-        rotated_model = rotation.select_next(refs, state, "compaction_eval_models")
-        models = [rotated_model]
-        print(f"rotated compaction eval model: {rotated_model}")
-
+    config = selection.resolved_path(args.config)
     out_root = pathlib.Path(args.out_root or helper.default_report_dir("compaction-eval", args.run_id))
     out_root.mkdir(parents=True, exist_ok=True)
-    cfg = helper.load_yaml_file(config)
+    summary_json = out_root / "summary.json"
+    summary_md = out_root / "summary.md"
+    command_prefix = [
+        sys.executable,
+        "-m",
+        "tests.eval.juex_eval",
+        "compaction",
+        "--juex",
+        args.juex,
+        "--run-id",
+        args.run_id,
+        "--context-window",
+        str(args.context_window),
+        "--turn-timeout",
+        str(args.turn_timeout),
+    ]
+    try:
+        if not config.is_file():
+            raise FileNotFoundError(f"Missing provider config: {config}")
+        cfg = helper.load_yaml_file(config)
+        candidates, evidence = selection.select(
+            cfg,
+            kind="compaction",
+            config_path=config,
+            seed=args.selection_seed,
+            only=explicit_models,
+            all_models=args.all_models,
+            required_context_window=args.context_window,
+            command_prefix=command_prefix,
+        )
+    except selection.ProviderUnavailable as exc:
+        write_compaction_summary(summary_json, summary_md, args, exc.evidence, [], exc.failure_category, str(exc))
+        print(f"{selection.PROVIDER_UNAVAILABLE}: {exc}", file=sys.stderr)
+        helper.print_selection_evidence(exc.evidence)
+        return 1
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        evidence = selection.unavailable_evidence(
+            config_path=config,
+            seed=args.selection_seed,
+            command_prefix=command_prefix,
+            only=explicit_models,
+            all_models=args.all_models,
+        )
+        write_compaction_summary(summary_json, summary_md, args, evidence, [], selection.PROVIDER_UNAVAILABLE, str(exc))
+        print(f"{selection.PROVIDER_UNAVAILABLE}: {exc}", file=sys.stderr)
+        helper.print_selection_evidence(evidence)
+        return 1
+
+    helper.print_selection_evidence(evidence)
     temp_dirs: list[pathlib.Path] = []
     failed = 0
+    results: list[dict[str, str]] = []
     try:
-        for model in models:
-            failed += run_model(args, cfg, model, out_root, temp_dirs)
+        for candidate in candidates:
+            status = run_model(args, cfg, candidate.ref, out_root, temp_dirs)
+            failed += status
+            results.append({"provider_model": candidate.ref, "status": "fail" if status else "pass"})
     finally:
         if not args.keep_workdir:
             for temp_dir in temp_dirs:
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
+    write_compaction_summary(summary_json, summary_md, args, evidence, results, "", "")
     print(f"Reports written to {out_root}")
-    if failed:
-        return 1
-    if rotated_model:
-        state = rotation.load_state(rotation_state)
-        rotation.mark_success(state, "compaction_eval_models", rotated_model)
-        rotation.write_state(rotation_state, state)
-    return 0
+    return 1 if failed else 0
+
+
+def write_compaction_summary(
+    summary_json: pathlib.Path,
+    summary_md: pathlib.Path,
+    args: argparse.Namespace,
+    evidence: selection.SelectionEvidence,
+    results: list[dict[str, str]],
+    failure_category: str,
+    error: str,
+) -> None:
+    summary: dict[str, object] = {
+        "run_id": args.run_id,
+        "failure_category": failure_category or None,
+        "error": error or None,
+        "context_window": args.context_window,
+        "turn_timeout_seconds": args.turn_timeout,
+        "total": len(results),
+        "passed": sum(1 for result in results if result["status"] == "pass"),
+        "failed": sum(1 for result in results if result["status"] != "pass"),
+        "results": results,
+    }
+    summary.update(evidence.as_dict())
+    summary_json.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    lines = [
+        "# Compaction Eval Summary",
+        "",
+        f"- Run ID: `{args.run_id}`",
+        f"- Selection source: `{selection.SELECTION_SOURCE}`",
+        f"- Selected provider/model: `{summary['selected_provider_model'] or ''}`",
+        f"- Selected provider/models: `{', '.join(evidence.selected_refs)}`",
+        f"- Selection seed: `{evidence.seed}`",
+        f"- Eligible candidate count: {len(evidence.eligible_refs)}",
+        f"- Eligible candidate refs: `{', '.join(evidence.eligible_refs)}`",
+        f"- Resolved config path: `{evidence.resolved_config_path}`",
+        f"- Redacted config hash: `{evidence.redacted_config_hash}`",
+        f"- Reproduction command: `{evidence.reproduction_command}`",
+        f"- Context window: {args.context_window}",
+        f"- Failure category: `{failure_category}`",
+        f"- Error: {error}",
+        f"- Total: {len(results)}",
+        f"- Passed: {summary['passed']}",
+        f"- Failed: {summary['failed']}",
+    ]
+    if results:
+        lines.extend(["", "| Provider/model | Status |", "| --- | --- |"])
+        for result in results:
+            lines.append(f"| `{result['provider_model']}` | {result['status']} |")
+    summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def parse_model_ref(model: str) -> tuple[str, str, str]:
