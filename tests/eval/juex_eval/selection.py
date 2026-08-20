@@ -26,6 +26,7 @@ class Candidate:
     tools_capability: str
     thinking_effort: str
     ref: str
+    endpoint_identity: str = "default"
     context_window: int = DEFAULT_CONTEXT_WINDOW
     context_window_declared: bool = False
 
@@ -33,6 +34,7 @@ class Candidate:
         return {
             "context_window": self.context_window,
             "context_window_declared": self.context_window_declared,
+            "endpoint_identity": self.endpoint_identity,
             "provider_model": self.ref,
             "protocol": self.protocol,
             "reasoning_effort_capability": self.reasoning_effort_capability,
@@ -83,12 +85,15 @@ def resolved_path(value: str | pathlib.Path) -> pathlib.Path:
 
 def enumerate_candidates(cfg: dict[str, Any]) -> list[Candidate]:
     by_ref: dict[str, Candidate] = {}
+    environment = _environment_variables(cfg)
+    api_base_override = str(environment.get("PROVIDER_API_BASE") or "").strip()
     for provider in merged_providers(cfg):
         provider_id = str(provider.get("id") or "").strip()
         if not provider_id:
             continue
         protocol = str(provider.get("protocol") or "").strip() or "preset"
         provider_capabilities = _capabilities(provider)
+        endpoint_identity = _opaque_endpoint_identity(api_base_override or str(provider.get("base_url") or ""))
         models = provider.get("models") or []
         for model in models:
             model_id = _model_id(model)
@@ -115,6 +120,7 @@ def enumerate_candidates(cfg: dict[str, Any]) -> list[Candidate]:
             by_ref[ref] = Candidate(
                 provider_id=provider_id,
                 model_id=model_id,
+                endpoint_identity=endpoint_identity,
                 protocol=protocol,
                 reasoning_effort_capability=_jsonish(reasoning_effort) if reasoning_effort is not None else "default",
                 tools_capability=_jsonish(tools) if tools is not None else "default",
@@ -295,10 +301,7 @@ def _capabilities(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def _environment_override_projection(cfg: dict[str, Any]) -> dict[str, Any]:
-    environment = cfg.get("environment")
-    variables = environment.get("variables") if isinstance(environment, dict) else None
-    if not isinstance(variables, dict):
-        return {}
+    variables = _environment_variables(cfg)
     projection: dict[str, Any] = {}
     raw_context_window = variables.get("PROVIDER_CONTEXT_WINDOW")
     try:
@@ -313,6 +316,19 @@ def _environment_override_projection(cfg: dict[str, Any]) -> dict[str, Any]:
     elif raw_thinking_effort:
         projection["provider_thinking_effort"] = "invalid"
     return projection
+
+
+def _environment_variables(cfg: dict[str, Any]) -> dict[str, Any]:
+    environment = cfg.get("environment")
+    variables = environment.get("variables") if isinstance(environment, dict) else None
+    return variables if isinstance(variables, dict) else {}
+
+
+def _opaque_endpoint_identity(value: str) -> str:
+    value = value.strip()
+    if not value:
+        return "default"
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _merge_provider(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

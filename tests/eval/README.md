@@ -206,7 +206,9 @@ The hash covers provider/model identity, protocol, effective tool and reasoning
 capabilities, thinking effort, and effective context-window metadata; it never
 copies credentials, headers, query values, or environment mappings. The two
 retained non-secret runtime overrides, `PROVIDER_THINKING_EFFORT` and
-`PROVIDER_CONTEXT_WINDOW`, contribute normalized values to the hash.
+`PROVIDER_CONTEXT_WINDOW`, contribute normalized values to the hash. The
+effective provider endpoint contributes only an opaque SHA-256 identity, never
+the original URI, user information, path, or query.
 
 ## Compaction Quality
 
