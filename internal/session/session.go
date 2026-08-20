@@ -1200,6 +1200,13 @@ func MessageCreatedAt(id string) (time.Time, bool) {
 	return idCreatedAt(strings.TrimPrefix(id, prefix))
 }
 
+// StableMessageID returns a canonical message ID for a record that already has
+// a durable creation time and identity before it is appended to a transcript.
+func StableMessageID(createdAt time.Time, identity string) string {
+	sum := sha256.Sum256([]byte(identity))
+	return "msg-" + createdAt.UTC().Format(idTimeLayout) + "-" + hex.EncodeToString(sum[:4])
+}
+
 func newMessageID() string {
 	return "msg-" + newID()
 }

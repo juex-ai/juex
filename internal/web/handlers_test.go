@@ -1879,15 +1879,20 @@ func messageIDsFromLLM(messages []llm.Message) []string {
 }
 
 func TestMessagesForSessionResponseProjectsCanonicalCreatedAt(t *testing.T) {
+	pendingCreatedAt := time.Date(2026, 8, 20, 19, 26, 7, 0, time.UTC)
 	messages := messagesForSessionResponse([]llm.Message{
 		{ID: "msg-20260718T065604-8f0582f4", Role: llm.RoleAssistant},
+		{ID: session.StableMessageID(pendingCreatedAt, "pending-input-1"), Role: llm.RoleUser},
 		{ID: "custom-message", Role: llm.RoleAssistant},
 	})
 	if got, want := messages[0].CreatedAt, "2026-07-18T06:56:04Z"; got != want {
 		t.Fatalf("created_at = %q, want %q", got, want)
 	}
-	if messages[1].CreatedAt != "" {
-		t.Fatalf("custom-ID created_at = %q, want empty", messages[1].CreatedAt)
+	if got, want := messages[1].CreatedAt, "2026-08-20T19:26:07Z"; got != want {
+		t.Fatalf("pending created_at = %q, want %q", got, want)
+	}
+	if messages[2].CreatedAt != "" {
+		t.Fatalf("custom-ID created_at = %q, want empty", messages[2].CreatedAt)
 	}
 	data, err := json.Marshal(messages)
 	if err != nil {

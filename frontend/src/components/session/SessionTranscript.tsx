@@ -58,6 +58,7 @@ import {
 import { formatModelFallbackNotice } from "@/lib/model-fallback";
 import {
   externalEventCopyClassName,
+  formatMessageSentAt,
   processDisclosureBodyClassName,
   processDisclosureChevronClassName,
   processDisclosureClassName,
@@ -168,7 +169,12 @@ function CompactGroup({
   const text = textUnit?.kind === "text" ? textUnit.block.text : "";
   return (
     <>
-      {compactCommand ? <SlashCommandMessage text={compactCommand} /> : null}
+      {compactCommand ? (
+        <SlashCommandMessage
+          text={compactCommand}
+          createdAt={group.createdAt}
+        />
+      ) : null}
       <CompactMessage text={text} />
     </>
   );
@@ -236,7 +242,13 @@ function AssistantWorkGroupView({
           </div>
         </details>
         {content ? <AssistantWorkContent group={content} /> : null}
-        {canCopy ? <MessageCopyAction text={copyText} align="start" /> : null}
+        {canCopy ? (
+          <MessageCopyAction
+            text={copyText}
+            createdAt={content?.createdAt}
+            align="start"
+          />
+        ) : null}
       </div>
     </Message>
   );
@@ -347,6 +359,7 @@ function DefaultMessageGroup({
         {canCopyMessage ? (
           <MessageCopyAction
             text={copyText}
+            createdAt={group.createdAt}
             align={group.role === "user" ? "end" : "start"}
           />
         ) : null}
@@ -616,14 +629,20 @@ function formatToolInput(input: Record<string, unknown> | undefined): string {
   }
 }
 
-function SlashCommandMessage({ text }: { text: string }) {
+function SlashCommandMessage({
+  text,
+  createdAt,
+}: {
+  text: string;
+  createdAt?: string;
+}) {
   return (
     <Message from="user">
       <div className="flex w-full flex-col gap-2">
         <MessageContent>
           <MessageResponse>{text}</MessageResponse>
         </MessageContent>
-        <MessageCopyAction text={text} align="end" />
+        <MessageCopyAction text={text} createdAt={createdAt} align="end" />
       </div>
     </Message>
   );
@@ -807,11 +826,22 @@ function CompactMessage({
 
 function MessageCopyAction({
   text,
+  createdAt,
   align,
 }: {
   text: string;
+  createdAt?: string;
   align: "start" | "end";
 }) {
+  const sentTime = formatMessageSentAt(createdAt);
+  const timeElement = sentTime ? (
+    <time
+      dateTime={createdAt}
+      className="select-none font-mono text-[10px] tabular-nums text-muted-foreground/70"
+    >
+      {sentTime}
+    </time>
+  ) : null;
   return (
     <MessageActions
       className={cn(
@@ -819,6 +849,7 @@ function MessageCopyAction({
         align === "end" ? "justify-end pr-1" : "justify-start pl-1",
       )}
     >
+      {align === "end" ? timeElement : null}
       <CopyTextButton
         text={text}
         className="size-6 text-muted-foreground hover:text-foreground"
@@ -828,6 +859,7 @@ function MessageCopyAction({
         size="icon-xs"
         tooltipMode="none"
       />
+      {align === "start" ? timeElement : null}
     </MessageActions>
   );
 }

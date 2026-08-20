@@ -56,6 +56,14 @@ const THINKING_DISCLOSURE_SUMMARY_CLASS_NAME =
 const THINKING_DISCLOSURE_BODY_CLASS_NAME =
   "ml-5 max-h-[15rem] max-w-[min(100%,42rem)] overflow-auto rounded-md border border-border/70 bg-muted/25 px-3 py-2.5 text-[13px] leading-6 text-foreground/80";
 
+export function formatMessageSentAt(value: string | undefined) {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return undefined;
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}${pad(date.getDate())} - ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 export function messageResponseClassName(className?: string) {
   return className
     ? `${MESSAGE_RESPONSE_CLASS_NAME} ${className}`

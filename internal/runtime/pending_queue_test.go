@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/session"
 )
 
 func TestPendingInputQueue_AppendFailureLeavesNoLiveRecordAndRequiresValidPrefixRepair(t *testing.T) {
@@ -172,6 +173,13 @@ func TestPendingInputQueue_PersistsStableMessageID(t *testing.T) {
 	if replayable[0].Message.ID == "" || replayable[0].Message.ID != record.Message.ID {
 		t.Fatalf("message id = %q, want stable %q", replayable[0].Message.ID, record.Message.ID)
 	}
+	createdAt, ok := session.MessageCreatedAt(replayable[0].Message.ID)
+	if !ok {
+		t.Fatalf("MessageCreatedAt(%q) = false", replayable[0].Message.ID)
+	}
+	if want := now.Truncate(time.Second); !createdAt.Equal(want) {
+		t.Fatalf("message created at = %s, want %s", createdAt, want)
+	}
 }
 
 func TestPendingInputQueue_ReplayablePreservesJournalOrderWhenCreatedAtTies(t *testing.T) {
@@ -258,6 +266,10 @@ func TestPendingInputQueue_TurnInputDoesNotExpireAndUsesOneAdmissionCheckpoint(t
 	}
 	if record.Origin != PendingInputOriginTurn || record.State != PendingInputStateAdmitted || !record.ExpiresAt.IsZero() || record.Attempts != 1 {
 		t.Fatalf("turn input record = %+v", record)
+	}
+	createdAt, ok := session.MessageCreatedAt(record.Message.ID)
+	if !ok || !createdAt.Equal(now) {
+		t.Fatalf("turn input message created at = %s, %v, want %s, true", createdAt, ok, now)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, pendingInputFile))
 	if err != nil {
