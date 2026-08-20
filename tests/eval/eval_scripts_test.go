@@ -149,6 +149,11 @@ func TestProviderConfigSelectionIsStableAndRedacted(t *testing.T) {
 		"assert [item.ref for item in selection.enumerate_candidates(cfg_a)] == ['alpha:one', 'alpha:two', 'zeta:large']",
 		"assert selected_a[0].ref == selected_b[0].ref",
 		"assert evidence_a.redacted_config_hash == evidence_b.redacted_config_hash",
+		"cfg_changed = json.loads(json.dumps(cfg_a))",
+		"cfg_changed['providers'][0]['protocol'] = 'openai/responses'",
+		"cfg_changed['providers'][0]['capabilities']['reasoning_effort'] = True",
+		"cfg_changed['providers'][0]['models'][0]['thinking_effort'] = 'high'",
+		"assert choose(cfg_changed, 'fixed-seed')[1].redacted_config_hash != evidence_a.redacted_config_hash",
 		"assert evidence_a.eligible_refs == ('alpha:one', 'alpha:two', 'zeta:large')",
 		"assert len({choose(cfg_a, f'seed-{index}')[0][0].ref for index in range(20)}) > 1",
 		"rendered = json.dumps(evidence_a.as_dict())",
@@ -156,6 +161,38 @@ func TestProviderConfigSelectionIsStableAndRedacted(t *testing.T) {
 		"    assert secret not in rendered, rendered",
 		"assert f'--config {Path(\"/tmp/config.yaml\").resolve()}' in evidence_a.reproduction_command",
 		"assert '--selection-seed fixed-seed' in evidence_a.reproduction_command",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestProviderConfigSelectionMergesRepeatedProviderDeclarations(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from tests.eval.juex_eval import helper, selection",
+		"cfg = {'providers': [",
+		"    {'id': 'provider', 'protocol': 'openai/chat', 'api_key': 'first-secret', 'capabilities': {'tools': False}, 'models': [",
+		"        {'id': 'first-only'}, {'id': 'shared', 'context_window': 16000, 'thinking_effort': 'low'},",
+		"    ]},",
+		"    {'id': 'provider', 'protocol': 'openai/responses', 'api_key': 'second-secret', 'capabilities': {'tools': True, 'reasoning_effort': True}, 'models': [",
+		"        {'id': 'shared', 'context_window': 64000, 'thinking_effort': 'high'}, {'id': 'second-only'},",
+		"    ]},",
+		"]}",
+		"candidates = selection.enumerate_candidates(cfg)",
+		"assert [item.ref for item in candidates] == ['provider:first-only', 'provider:second-only', 'provider:shared']",
+		"shared = next(item for item in candidates if item.ref == 'provider:shared')",
+		"assert shared.protocol == 'openai/responses' and shared.tools_capability == 'true'",
+		"assert shared.reasoning_effort_capability == 'true' and shared.context_window == 64000",
+		"assert shared.thinking_effort == '\"high\"'",
+		"provider, model = helper.selected_provider_model(cfg, 'provider', 'shared')",
+		"assert provider['protocol'] == 'openai/responses' and provider['api_key'] == 'second-secret'",
+		"assert model['context_window'] == 64000 and model['thinking_effort'] == 'high'",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
@@ -212,6 +249,8 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 	}
 
 	program := strings.Join([]string{
+		"import contextlib",
+		"import io",
 		"import json",
 		"import shutil",
 		"import tempfile",
@@ -276,12 +315,19 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        empty_config.write_text('providers: []\\n', encoding='utf-8')",
 		"        status, refs, summary, _ = run('zero-candidates', source=empty_config)",
 		"        assert status == 1 and refs == [] and summary['eligible_candidate_count'] == 0, summary",
+		"        malformed = work / 'malformed.yaml'",
+		"        malformed.write_text('providers:\\n  - id: bad\\n    api_key: never-report-malformed-key: [\\n', encoding='utf-8')",
+		"        terminal = io.StringIO()",
+		"        with contextlib.redirect_stdout(terminal), contextlib.redirect_stderr(terminal):",
+		"            status, refs, summary, _ = run('malformed', source=malformed)",
+		"        assert status == 1 and refs == [] and summary['error'] == 'provider config YAML is invalid', summary",
+		"        assert 'never-report-malformed-key' not in terminal.getvalue(), terminal.getvalue()",
 		"        fail_selected = True",
 		"        status, refs, summary, _ = run('selected-failure', '--only', 'provider-on:beta')",
 		"        assert status == 1 and refs == ['provider-on:beta'], refs",
 		"        assert summary['selected_provider_model'] == 'provider-on:beta' and summary['failed'] == 1, summary",
 		"        report_text = ''.join(path.read_text(encoding='utf-8', errors='replace') for path in work.glob('report-*/*') if path.is_file())",
-		"        for secret in ['never-report-env-token', 'never-report-disabled-key', 'never-report-live-key', 'never-report-header']:",
+		"        for secret in ['never-report-env-token', 'never-report-disabled-key', 'never-report-live-key', 'never-report-header', 'never-report-malformed-key']:",
 		"            assert secret not in report_text, secret",
 		"        assert 'Selection source: `provider_config`' in markdown, markdown",
 		"    finally:",
@@ -300,6 +346,8 @@ func TestCompactionDynamicSelectionWritesSummaryAndFiltersWindow(t *testing.T) {
 	}
 
 	program := strings.Join([]string{
+		"import contextlib",
+		"import io",
 		"import json",
 		"import shutil",
 		"import tempfile",
@@ -322,11 +370,11 @@ func TestCompactionDynamicSelectionWritesSummaryAndFiltersWindow(t *testing.T) {
 		"    captured = []",
 		"    original_run_model = compaction.run_model",
 		"    compaction.run_model = lambda args, cfg, model, out_root, temp_dirs: captured.append(model) or 0",
-		"    def run(name, only=None, all_models=False):",
+		"    def run(name, only=None, all_models=False, source=config):",
 		"        captured.clear()",
 		"        out = work / name",
 		"        args = Namespace(only=only or [], all_models=all_models, selection_seed='seed-42', juex=true_bin,",
-		"            config=str(config), out_root=str(out), run_id=name, context_window=32000, turn_timeout=10, keep_workdir=False)",
+		"            config=str(source), out_root=str(out), run_id=name, context_window=32000, turn_timeout=10, keep_workdir=False)",
 		"        status = compaction.run(args)",
 		"        summary = json.loads((out / 'summary.json').read_text(encoding='utf-8'))",
 		"        markdown = (out / 'summary.md').read_text(encoding='utf-8')",
@@ -340,8 +388,17 @@ func TestCompactionDynamicSelectionWritesSummaryAndFiltersWindow(t *testing.T) {
 		"        status, refs, summary, _ = run('small', only=['provider:small'])",
 		"        assert status == 1 and refs == [] and summary['failure_category'] == 'provider_unavailable', summary",
 		"        assert summary['selected_provider_models'] == [], summary",
+		"        malformed = work / 'malformed.yaml'",
+		"        malformed.write_text('providers:\\n  - id: bad\\n    headers: {Authorization: never-report-malformed-header: [}\\n', encoding='utf-8')",
+		"        terminal = io.StringIO()",
+		"        with contextlib.redirect_stdout(terminal), contextlib.redirect_stderr(terminal):",
+		"            status, refs, summary, _ = run('malformed', source=malformed)",
+		"        assert status == 1 and refs == [] and summary['error'] == 'provider config YAML is invalid', summary",
+		"        assert 'never-report-malformed-header' not in terminal.getvalue(), terminal.getvalue()",
 		"        combined = (work / 'all' / 'summary.json').read_text() + (work / 'all' / 'summary.md').read_text()",
-		"        assert 'never-report-compaction-key' not in combined, combined",
+		"        combined += (work / 'malformed' / 'summary.json').read_text() + (work / 'malformed' / 'summary.md').read_text()",
+		"        for secret in ['never-report-compaction-key', 'never-report-malformed-header']:",
+		"            assert secret not in combined, combined",
 		"        assert 'Selection source: `provider_config`' in markdown, markdown",
 		"    finally:",
 		"        compaction.run_model = original_run_model",

@@ -202,6 +202,9 @@ regression.
 Use `--all-models` only for broader changes where every eligible configured
 model must be covered. Reports record selected refs, candidate refs, the seed,
 resolved config path, a redacted config hash, and an exact reproduction command.
+The hash covers provider/model identity, protocol, effective tool and reasoning
+capabilities, thinking effort, and effective context-window metadata; it never
+copies credentials, headers, query values, or environment mappings.
 
 ## Compaction Quality
 

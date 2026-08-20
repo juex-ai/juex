@@ -208,6 +208,7 @@ def provider_smoke(argv: list[str]) -> int:
             print_selection_evidence(exc.evidence)
             return 1
         except (OSError, ValueError, yaml.YAMLError) as exc:
+            error = safe_config_error(exc)
             evidence = selection.unavailable_evidence(
                 config_path=config_path,
                 seed=parsed.selection_seed,
@@ -218,10 +219,10 @@ def provider_smoke(argv: list[str]) -> int:
             write_smoke_summary(
                 summary_json,
                 summary_md,
-                provider_summary(parsed, report_dir, work_root, evidence, [], selection.PROVIDER_UNAVAILABLE, str(exc)),
+                provider_summary(parsed, report_dir, work_root, evidence, [], selection.PROVIDER_UNAVAILABLE, error),
                 [],
             )
-            print(f"{selection.PROVIDER_UNAVAILABLE}: {exc}", file=sys.stderr)
+            print(f"{selection.PROVIDER_UNAVAILABLE}: {error}", file=sys.stderr)
             print_selection_evidence(evidence)
             return 1
 
@@ -965,11 +966,8 @@ def write_selected_config(
 
 
 def selected_provider_model(cfg: dict[str, Any], provider_id: str, model_id: str) -> tuple[dict[str, Any], Any]:
-    providers = cfg.get("providers") or []
-    if isinstance(providers, dict):
-        providers = list(providers.values())
-    for provider in providers:
-        if not isinstance(provider, dict) or str(provider.get("id") or "").strip() != provider_id:
+    for provider in selection.merged_providers(cfg):
+        if str(provider.get("id") or "").strip() != provider_id:
             continue
         for model in provider.get("models") or []:
             if model_id_from(model) == model_id:
@@ -1222,6 +1220,12 @@ def load_yaml_file(path: pathlib.Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{path} must contain a YAML mapping")
     return value
+
+
+def safe_config_error(exc: Exception) -> str:
+    if isinstance(exc, yaml.YAMLError):
+        return "provider config YAML is invalid"
+    return str(exc)
 
 
 def dump_yaml(value: Any) -> str:

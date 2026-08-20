@@ -122,6 +122,7 @@ def run(args: argparse.Namespace) -> int:
         helper.print_selection_evidence(exc.evidence)
         return 1
     except (OSError, ValueError, yaml.YAMLError) as exc:
+        error = helper.safe_config_error(exc)
         evidence = selection.unavailable_evidence(
             config_path=config,
             seed=args.selection_seed,
@@ -129,8 +130,8 @@ def run(args: argparse.Namespace) -> int:
             only=explicit_models,
             all_models=args.all_models,
         )
-        write_compaction_summary(summary_json, summary_md, args, evidence, [], selection.PROVIDER_UNAVAILABLE, str(exc))
-        print(f"{selection.PROVIDER_UNAVAILABLE}: {exc}", file=sys.stderr)
+        write_compaction_summary(summary_json, summary_md, args, evidence, [], selection.PROVIDER_UNAVAILABLE, error)
+        print(f"{selection.PROVIDER_UNAVAILABLE}: {error}", file=sys.stderr)
         helper.print_selection_evidence(evidence)
         return 1
 

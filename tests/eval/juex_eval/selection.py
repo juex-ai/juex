@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import pathlib
@@ -33,6 +34,9 @@ class Candidate:
             "context_window": self.context_window,
             "context_window_declared": self.context_window_declared,
             "provider_model": self.ref,
+            "protocol": self.protocol,
+            "reasoning_effort_capability": self.reasoning_effort_capability,
+            "thinking_effort": self.thinking_effort,
             "tools_capability": self.tools_capability,
         }
 
@@ -78,13 +82,8 @@ def resolved_path(value: str | pathlib.Path) -> pathlib.Path:
 
 
 def enumerate_candidates(cfg: dict[str, Any]) -> list[Candidate]:
-    providers = cfg.get("providers") or []
-    if isinstance(providers, dict):
-        providers = list(providers.values())
     by_ref: dict[str, Candidate] = {}
-    for provider in providers:
-        if not isinstance(provider, dict):
-            continue
+    for provider in merged_providers(cfg):
         provider_id = str(provider.get("id") or "").strip()
         if not provider_id:
             continue
@@ -113,21 +112,36 @@ def enumerate_candidates(cfg: dict[str, Any]) -> list[Candidate]:
                     context_window = raw_context_window
                     context_window_declared = True
             ref = f"{provider_id}:{model_id}"
-            by_ref.setdefault(
-                ref,
-                Candidate(
-                    provider_id=provider_id,
-                    model_id=model_id,
-                    protocol=protocol,
-                    reasoning_effort_capability=_jsonish(reasoning_effort) if reasoning_effort is not None else "default",
-                    tools_capability=_jsonish(tools) if tools is not None else "default",
-                    thinking_effort=thinking_effort,
-                    ref=ref,
-                    context_window=context_window,
-                    context_window_declared=context_window_declared,
-                ),
+            by_ref[ref] = Candidate(
+                provider_id=provider_id,
+                model_id=model_id,
+                protocol=protocol,
+                reasoning_effort_capability=_jsonish(reasoning_effort) if reasoning_effort is not None else "default",
+                tools_capability=_jsonish(tools) if tools is not None else "default",
+                thinking_effort=thinking_effort,
+                ref=ref,
+                context_window=context_window,
+                context_window_declared=context_window_declared,
             )
     return [by_ref[ref] for ref in sorted(by_ref)]
+
+
+def merged_providers(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the runtime-equivalent merged provider view, without resolving secrets."""
+    providers = cfg.get("providers") or []
+    if isinstance(providers, dict):
+        providers = list(providers.values())
+    merged: dict[str, dict[str, Any]] = {}
+    for raw_provider in providers:
+        if not isinstance(raw_provider, dict):
+            continue
+        provider_id = str(raw_provider.get("id") or "").strip()
+        if not provider_id:
+            continue
+        provider = copy.deepcopy(raw_provider)
+        provider["id"] = provider_id
+        merged[provider_id] = _merge_provider(merged.get(provider_id, {}), provider)
+    return list(merged.values())
 
 
 def eligible_candidates(
@@ -275,6 +289,74 @@ def _reproduction_command(
 def _capabilities(value: dict[str, Any]) -> dict[str, Any]:
     capabilities = value.get("capabilities")
     return capabilities if isinstance(capabilities, dict) else {}
+
+
+def _merge_provider(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(base)
+    merged["id"] = override["id"]
+    for name in ("protocol", "base_url", "api_key"):
+        if _nonempty(override.get(name)):
+            merged[name] = copy.deepcopy(override[name])
+    for name in ("headers", "query", "capabilities"):
+        merged[name] = _merge_mapping(merged.get(name), override.get(name))
+    merged["compat"] = _merge_compat(merged.get("compat"), override.get("compat"))
+    merged["models"] = _merge_models(merged.get("models"), override.get("models"))
+    return merged
+
+
+def _merge_models(base: Any, overrides: Any) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for raw_model in [*(base if isinstance(base, list) else []), *(overrides if isinstance(overrides, list) else [])]:
+        model = _model_mapping(raw_model)
+        model_id = _model_id(model)
+        if not model_id:
+            continue
+        model["id"] = model_id
+        merged[model_id] = _merge_model(merged.get(model_id, {}), model)
+    return list(merged.values())
+
+
+def _merge_model(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(base)
+    merged["id"] = override["id"]
+    if _nonempty(override.get("thinking_effort")):
+        merged["thinking_effort"] = copy.deepcopy(override["thinking_effort"])
+    context_window = override.get("context_window")
+    if isinstance(context_window, int) and not isinstance(context_window, bool) and context_window > 0:
+        merged["context_window"] = context_window
+    for name in ("headers", "query", "capabilities"):
+        merged[name] = _merge_mapping(merged.get(name), override.get(name))
+    merged["compat"] = _merge_compat(merged.get("compat"), override.get("compat"))
+    return merged
+
+
+def _merge_mapping(base: Any, override: Any) -> dict[str, Any]:
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    if isinstance(override, dict):
+        merged.update(copy.deepcopy(override))
+    return merged
+
+
+def _merge_compat(base: Any, override: Any) -> dict[str, Any]:
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    if not isinstance(override, dict):
+        return merged
+    fields = override.get("reasoning_replay_fields")
+    if isinstance(fields, list) and fields:
+        merged["reasoning_replay_fields"] = copy.deepcopy(fields)
+    if _nonempty(override.get("codex_transport")):
+        merged["codex_transport"] = copy.deepcopy(override["codex_transport"])
+    return merged
+
+
+def _model_mapping(model: Any) -> dict[str, Any]:
+    if isinstance(model, dict):
+        return copy.deepcopy(model)
+    return {"id": str(model or "").strip()}
+
+
+def _nonempty(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _effective_capability(provider: dict[str, Any], model: dict[str, Any], name: str) -> Any:
