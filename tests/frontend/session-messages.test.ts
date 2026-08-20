@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeOlderSessionPage } from "../../frontend/src/lib/session-messages.ts";
+import {
+  mergeOlderSessionPage,
+  messageCreatedAtFromID,
+} from "../../frontend/src/lib/session-messages.ts";
 import type { SessionShowResponse } from "../../frontend/src/types.ts";
 
 function sessionPage(
@@ -20,6 +23,22 @@ function sessionPage(
     ...overrides,
   };
 }
+
+test("messageCreatedAtFromID decodes only canonical timestamped message IDs", () => {
+  assert.equal(
+    messageCreatedAtFromID("msg-20260820T214228-abcdef12"),
+    "2026-08-20T21:42:28Z",
+  );
+  for (const id of [
+    undefined,
+    "msg-user",
+    "msg-20261320T214228-abcdef12",
+    "msg-20260820T214228-ABCDEF12",
+    "turn-20260820T214228-abcdef12",
+  ]) {
+    assert.equal(messageCreatedAtFromID(id), undefined);
+  }
+});
 
 test("mergeOlderSessionPage prepends messages without overwriting live metadata", () => {
   const current = sessionPage({

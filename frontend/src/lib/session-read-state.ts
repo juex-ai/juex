@@ -26,6 +26,7 @@ import type {
 export type SessionInitialCommandState = {
   commandInput?: string;
   command?: SlashCommandResponse;
+  submittedAt?: string;
 } | null;
 
 export type SessionReadState = {
@@ -224,14 +225,25 @@ export function projectInitialCommand(
   state: SessionReadState,
   commandInput: string,
   command: SlashCommandResponse,
+  submittedAt?: string,
 ): SessionReadResult {
   let next = state.projection;
   const effects: SessionReadEffect[] = [{ type: "clearRouteState" }];
   if (command.name === "/compact" && command.compact?.message_id) {
-    next = projectCompactCommand(next, command.compact.message_id, commandInput);
+    next = projectCompactCommand(
+      next,
+      command.compact.message_id,
+      commandInput,
+      submittedAt,
+    );
     effects.unshift({ type: "refresh", preserveLiveMessages: true });
   } else {
-    next = projectCommandResult(next, commandInput, command.text ?? "");
+    next = projectCommandResult(
+      next,
+      commandInput,
+      command.text ?? "",
+      submittedAt,
+    );
   }
   return { state: { ...state, projection: next }, effects };
 }
@@ -263,10 +275,14 @@ export function clearComposerHint(state: SessionReadState): SessionReadState {
 export function projectPendingSubmit(
   state: SessionReadState,
   prompt: string,
+  submittedAt?: string,
 ): SessionReadState {
   state = state.submitError ? { ...state, submitError: null } : state;
   if (!isCompactCommandInput(prompt)) return state;
-  return { ...state, projection: projectPendingCompact(state.projection, prompt) };
+  return {
+    ...state,
+    projection: projectPendingCompact(state.projection, prompt, submittedAt),
+  };
 }
 
 export function projectStartTurnSucceeded(
@@ -274,10 +290,11 @@ export function projectStartTurnSucceeded(
   prompt: string,
   turn: StartTurnResponse,
   attachments: MediaRef[] = [],
+  submittedAt?: string,
 ): SessionReadResult {
   state = state.submitError ? { ...state, submitError: null } : state;
   if (turn.command) {
-    return projectCommandTurnSucceeded(state, prompt, turn);
+    return projectCommandTurnSucceeded(state, prompt, turn, submittedAt);
   }
   if (turn.queued) {
     return withStartTurnWarnings({
@@ -289,6 +306,8 @@ export function projectStartTurnSucceeded(
           undefined,
           turn.pending_count ?? 0,
           attachments,
+          undefined,
+          submittedAt,
         ),
       },
       effects: [],
@@ -310,6 +329,7 @@ export function projectStartTurnSucceeded(
         prompt,
         undefined,
         attachments,
+        submittedAt,
       ),
     },
     effects: [],
@@ -359,6 +379,7 @@ function projectCommandTurnSucceeded(
   state: SessionReadState,
   prompt: string,
   turn: StartTurnResponse,
+  submittedAt?: string,
 ): SessionReadResult {
   const command = turn.command;
   if (!command) {
@@ -372,7 +393,9 @@ function projectCommandTurnSucceeded(
         {
           type: "navigateToSession",
           sessionID: command.status.session_id,
-          state: turn.turn_id ? null : { commandInput: prompt, command },
+          state: turn.turn_id
+            ? null
+            : { commandInput: prompt, command, submittedAt },
         },
       ],
     };
@@ -389,9 +412,15 @@ function projectCommandTurnSucceeded(
         projection,
         command.compact.message_id,
         prompt,
+        submittedAt,
       );
     } else {
-      projection = projectCommandResult(projection, prompt, command.text ?? "");
+      projection = projectCommandResult(
+        projection,
+        prompt,
+        command.text ?? "",
+        submittedAt,
+      );
     }
     return { state: { ...state, projection }, effects };
   }
@@ -402,6 +431,7 @@ function projectCommandTurnSucceeded(
         state.projection,
         prompt,
         command.text ?? "",
+        submittedAt,
       ),
     },
     effects: [],

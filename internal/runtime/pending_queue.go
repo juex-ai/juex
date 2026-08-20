@@ -2,8 +2,6 @@ package runtime
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/session"
 )
 
 const (
@@ -123,7 +122,7 @@ func (q *PendingInputQueue) Enqueue(msg llm.Message, opts PendingInputOptions, t
 	if ttl <= 0 {
 		ttl = DefaultPendingInputTTL
 	}
-	msg.ID = pendingInputMessageID(id)
+	msg.ID = pendingInputMessageID(id, now)
 	if msg.Blocks == nil {
 		msg.Blocks = []llm.Block{}
 	}
@@ -186,11 +185,11 @@ func (q *PendingInputQueue) storeTurnInput(turnID string, msg llm.Message, reuse
 	}
 
 	id := nextUniquePendingInputID(q.records, newPendingInputID)
-	msg.ID = pendingInputMessageID(id)
+	now := q.now().UTC()
+	msg.ID = pendingInputMessageID(id, now)
 	if msg.Blocks == nil {
 		msg.Blocks = []llm.Block{}
 	}
-	now := q.now().UTC()
 	record := PendingInputRecord{
 		ID:        id,
 		TurnID:    turnID,
@@ -696,7 +695,6 @@ func (q *PendingInputQueue) appendManyLocked(records []PendingInputRecord) error
 	return nil
 }
 
-func pendingInputMessageID(id string) string {
-	sum := sha256.Sum256([]byte(id))
-	return "msg-pending-" + hex.EncodeToString(sum[:8])
+func pendingInputMessageID(id string, createdAt time.Time) string {
+	return session.StableMessageID(createdAt, id)
 }

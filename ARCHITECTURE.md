@@ -1928,9 +1928,16 @@ prepend older pages without duplicating the added tool context. Truly orphaned
 results remain output-only transcript facts rather than being attached to an
 unrelated call.
 Each message response may also include an RFC3339 `created_at` read-model field
-derived by `internal/session` from canonical message IDs. This timestamp is not
-added to `llm.Message` or persisted JSONL; IDs without the canonical timestamp
-format omit it.
+derived by `internal/session` from canonical message IDs. Session-generated
+messages and Framework Pending Input records both use this timestamp-bearing
+shape; Pending Input derives the deterministic suffix from its durable record
+identity. The timestamp is not added to `llm.Message` or persisted transcript
+JSONL, and older or caller-supplied IDs without the canonical format omit it.
+The Web live projection decodes the same canonical ID timestamp before falling
+back to an event timestamp for both user admission and assistant response
+events. A durable Pending Input can therefore be retried or admitted later,
+and a persisted assistant append can finish later, without the live sent time
+changing to that later lifecycle event time before the next transcript refresh.
 Only the active primary session accepts `POST /turns`; inactive primary
 sessions must be activated first, and side sessions are read-only in the Web UI.
 The CLI continues a recorded side session through `juex sessions continue`

@@ -213,6 +213,38 @@ test("projectLiveSessionEvent accumulates LLM deltas and reconciles the final re
   ]);
 });
 
+test("llm.responded derives assistant time from its canonical message ID", () => {
+  let state = apply(createLiveSessionProjection(), {
+    id: "e-started",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "turn-assistant-time",
+    payload: { input: "answer" },
+  });
+  const responded: BrowserEvent = {
+    id: "e-responded",
+    type: "llm.responded",
+    ts: "2026-06-15T00:00:05Z",
+    turn_id: "turn-assistant-time",
+    payload: {
+      stop_reason: "end_turn",
+      usage: { input_tokens: 1, output_tokens: 1 },
+      blocks: [{ type: "text", text: "done" }],
+      text: "done",
+      thinking: "",
+      tool_calls: [],
+      model: "gpt-test",
+      message_id: "msg-20260615T000002-abcdef12",
+    },
+  };
+
+  state = apply(state, responded);
+  assert.equal(state.messages[1]?.created_at, "2026-06-15T00:00:02Z");
+
+  const replayed = apply(createLiveSessionProjection(), responded);
+  assert.equal(replayed.messages[0]?.created_at, "2026-06-15T00:00:02Z");
+});
+
 test("projectLiveSessionEvent clears abandoned deltas when the model falls back", () => {
   let state = createLiveSessionProjection();
   state = apply(state, {
@@ -397,17 +429,26 @@ test("projectLiveSessionEvent keeps streamed output paired when requested was mi
 
 test("projectOptimisticTurn is replaced by the canonical turn.started event", () => {
   let state = createLiveSessionProjection();
-  state = projectOptimisticTurn(state, "local-turn", "hello");
+  state = projectOptimisticTurn(
+    state,
+    "local-turn",
+    "hello",
+    undefined,
+    [],
+    "2026-06-15T00:00:00Z",
+  );
+  assert.equal(state.messages[0].created_at, "2026-06-15T00:00:00Z");
 
   state = apply(state, {
     id: "e1",
     type: "turn.started",
-    ts: "2026-06-15T00:00:00Z",
+    ts: "2026-06-15T00:00:01Z",
     turn_id: "canonical-turn",
     payload: { input: "hello", message_id: "msg-user" },
   });
   assert.equal(state.messages.length, 2);
   assert.equal(state.messages[0].id, "msg-user");
+  assert.equal(state.messages[0].created_at, "2026-06-15T00:00:01Z");
   assert.deepEqual(
     state.messages.map((message) => message.turn_id),
     ["canonical-turn", "canonical-turn"],
@@ -416,11 +457,70 @@ test("projectOptimisticTurn is replaced by the canonical turn.started event", ()
   state = apply(state, {
     id: "e1-replayed",
     type: "turn.started",
-    ts: "2026-06-15T00:00:00Z",
+    ts: "2026-06-15T00:00:01Z",
     turn_id: "canonical-turn",
     payload: { input: "hello", message_id: "msg-user" },
   });
   assert.equal(state.messages.length, 2);
+});
+
+test("queued input keeps its durable creation time through retry and promotion", () => {
+  let state = projectQueuedInput(
+    createLiveSessionProjection(),
+    "queued follow-up",
+    undefined,
+    1,
+    [],
+    undefined,
+    "2026-06-15T00:00:02Z",
+  );
+  assert.equal(
+    state.queuedInput.items[0]?.createdAt,
+    "2026-06-15T00:00:02Z",
+  );
+
+  state = apply(state, {
+    id: "e-queued",
+    type: "pending_input.queued",
+    ts: "2026-06-15T00:00:03Z",
+    turn_id: "turn-active",
+    payload: {
+      input: "queued follow-up",
+      kind: "",
+      message_id: "msg-20260615T000002-abcdef12",
+      pending_count: 1,
+      max_pending_inputs: 4,
+    },
+  });
+  assert.equal(
+    state.queuedInput.items[0]?.createdAt,
+    "2026-06-15T00:00:02Z",
+  );
+
+  state = apply(state, {
+    id: "e-promoted",
+    type: "pending_input.promoted",
+    ts: "2026-06-15T00:00:04Z",
+    turn_id: "turn-promoted",
+    payload: { pending_count: 0, max_pending_inputs: 4 },
+  });
+  assert.equal(state.messages[0]?.id, "msg-20260615T000002-abcdef12");
+  assert.equal(state.messages[0]?.created_at, "2026-06-15T00:00:02Z");
+});
+
+test("turn.started derives durable creation time after a missed queue event", () => {
+  const state = apply(createLiveSessionProjection(), {
+    id: "e-started",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:05Z",
+    turn_id: "turn-replayed",
+    payload: {
+      input: "replayed follow-up",
+      message_id: "msg-20260615T000002-abcdef12",
+    },
+  });
+
+  assert.equal(state.messages[0]?.created_at, "2026-06-15T00:00:02Z");
 });
 
 test("projectOptimisticTurn renders attachment-only image blocks", () => {

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   externalEventCopyClassName,
+  formatMessageSentAt,
   messageContentBaseClassName,
   messageContentUserClassName,
   messageResponseClassName,
@@ -26,6 +27,80 @@ const transcriptSource = readFileSync(
 
 test("messageResponseClassName preserves explicit paragraph newlines", () => {
   assert.match(messageResponseClassName(), /\[&_p\]:whitespace-pre-wrap/);
+});
+
+test("formatMessageSentAt uses the browser local timezone", () => {
+  const localTime = new Date(2026, 7, 20, 12, 8, 20);
+
+  assert.equal(
+    formatMessageSentAt(localTime.toISOString()),
+    "0820 - 12:08:20",
+  );
+});
+
+test("formatMessageSentAt omits missing and invalid timestamps", () => {
+  assert.equal(formatMessageSentAt(undefined), undefined);
+  assert.equal(formatMessageSentAt("not-a-timestamp"), undefined);
+});
+
+test("message sent time stays inside the copy action on the inner edge", () => {
+  const start = transcriptSource.indexOf("function MessageMetaActions(");
+  const end = transcriptSource.indexOf("function CopyTextButton(", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const action = transcriptSource.slice(start, end);
+
+  assert.match(action, /copyText\?: string/);
+  assert.match(action, /createdAt\?: string/);
+  assert.match(action, /const sentTime = formatMessageSentAt\(createdAt\)/);
+  assert.match(action, /align === "end" \? timeElement : null/);
+  assert.match(action, /align === "start" \? timeElement : null/);
+  assert.match(action, /<time[\s\S]*?dateTime=\{createdAt\}/);
+  assert.match(action, /copyText \? \([\s\S]*?className="size-6/);
+  assert.match(action, /tabIndex=\{copyText \? undefined : 0\}/);
+  assert.match(
+    action,
+    /aria-label=\{copyText \? undefined : `Sent \$\{sentTime\}`\}/,
+  );
+  assert.match(action, /focus-visible:ring-2/);
+});
+
+test("ordinary copy rows receive their message creation time", () => {
+  const assistantStart = transcriptSource.indexOf(
+    "function AssistantWorkGroupView(",
+  );
+  const assistantEnd = transcriptSource.indexOf(
+    "function AssistantWorkContent(",
+    assistantStart,
+  );
+  const defaultStart = transcriptSource.indexOf("function DefaultMessageGroup(");
+  const defaultEnd = transcriptSource.indexOf(
+    "function MessageImageGallery(",
+    defaultStart,
+  );
+  const compactStart = transcriptSource.indexOf("function CompactGroup(");
+  const compactEnd = transcriptSource.indexOf(
+    "function PendingCompactGroup(",
+    compactStart,
+  );
+  const assistant = transcriptSource.slice(assistantStart, assistantEnd);
+  const normal = transcriptSource.slice(defaultStart, defaultEnd);
+  const compact = transcriptSource.slice(compactStart, compactEnd);
+
+  assert.match(
+    assistant,
+    /<MessageMetaActions[\s\S]*?copyText=\{canCopy \? copyText : undefined\}[\s\S]*?createdAt=\{content\?\.createdAt\}/,
+  );
+  assert.match(
+    normal,
+    /<MessageMetaActions[\s\S]*?copyText=\{canCopyMessage \? copyText : undefined\}[\s\S]*?createdAt=\{group\.createdAt\}/,
+  );
+  assert.match(
+    compact,
+    /<SlashCommandMessage[\s\S]*?text=\{compactCommand\.input\}[\s\S]*?createdAt=\{compactCommand\.submittedAt\}/,
+  );
+  assert.doesNotMatch(compact, /createdAt=\{group\.createdAt\}/);
+  assert.doesNotMatch(normal, /\{canCopyMessage \? \([\s\S]*?<MessageMetaActions/);
 });
 
 test("user message chrome uses a weak card treatment", () => {
@@ -195,7 +270,10 @@ test("assistant work disclosure owns process rows and leaves content outside", (
   assert.match(disclosure, /<ToolBatchProcessRow/);
   assert.match(disclosure, /<ToolProcessRow/);
   assert.match(disclosure, /<AssistantWorkContent group=\{content\}/);
-  assert.match(disclosure, /<MessageCopyAction text=\{copyText\}/);
+  assert.match(
+    disclosure,
+    /<MessageMetaActions[\s\S]*?copyText=\{canCopy \? copyText : undefined\}/,
+  );
 });
 
 test("process status dots are smaller while thinking has no dot contract", () => {

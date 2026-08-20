@@ -409,6 +409,38 @@ test("submitPrompt ignores late startTurn failures after route changes", async (
   assert.equal(latestState.projection.messages.length, 0);
 });
 
+test("submitPrompt timestamps a pending compact before the request settles", async () => {
+  let latestState = createSessionReadState();
+  let resolveStart: (value: StartTurnResponse) => void = () => {};
+  const controller = createSessionReadController({
+    ...ports(),
+    onStateChange: (state) => {
+      latestState = state;
+    },
+    startTurn: async () =>
+      new Promise<StartTurnResponse>((resolve) => {
+        resolveStart = resolve;
+      }),
+  });
+
+  controller.setRoute("s1");
+  const submit = controller.submitPrompt("s1", "/compact");
+
+  assert.match(
+    latestState.projection.messages[0]?.created_at ?? "",
+    /^\d{4}-\d{2}-\d{2}T/,
+  );
+
+  resolveStart({
+    command: {
+      name: "/compact",
+      text: "Compacted",
+      compact: { message_id: "compact-1" },
+    },
+  });
+  assert.equal(await submit, true);
+});
+
 test("submitPrompt forwards attachments and projects optimistic image blocks", async () => {
   let latestState = createSessionReadState();
   let submittedAttachments: MediaRef[] | undefined;
@@ -501,12 +533,17 @@ test("controller interprets navigation, refresh, and timer effects", async () =>
   await flushPromises();
 
   assert.equal(sessionsChanged, 1);
+  const navigationState = navigations[0]?.state as {
+    submittedAt?: string;
+  };
+  assert.match(navigationState.submittedAt ?? "", /^\d{4}-\d{2}-\d{2}T/);
   assert.deepEqual(navigations, [
     {
       sessionID: "s2",
       state: {
         commandInput: "/new",
         command: newCommand,
+        submittedAt: navigationState.submittedAt,
       },
     },
   ]);

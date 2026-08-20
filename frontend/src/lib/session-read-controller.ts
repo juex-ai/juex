@@ -323,13 +323,22 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     attachments: MediaRef[] = [],
   ): Promise<boolean> {
     if (!isLatestSessionRoute(route, sessionID)) return false;
+    const submittedAt = new Date().toISOString();
     const compactCommand = isCompactCommandInput(prompt);
-    updateReadState((prev) => projectPendingSubmit(prev, prompt));
+    updateReadState((prev) =>
+      projectPendingSubmit(prev, prompt, submittedAt),
+    );
     try {
       const turn = await ports.startTurn(sessionID, prompt, attachments);
       if (!isLatestSessionRoute(route, sessionID)) return false;
       runSessionReadResult(
-        projectStartTurnSucceeded(state, prompt, turn, attachments),
+        projectStartTurnSucceeded(
+          state,
+          prompt,
+          turn,
+          attachments,
+          submittedAt,
+        ),
       );
       return true;
     } catch (error) {
@@ -344,11 +353,14 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     sessionID: string,
     commandInput: string,
     command: SlashCommandResponse,
+    submittedAt?: string,
   ) {
-    const key = `${sessionID}:${commandInput}:${command.name}:${command.text}`;
+    const key = `${sessionID}:${commandInput}:${command.name}:${command.text}:${submittedAt ?? ""}`;
     if (initialCommandKey === key) return;
     initialCommandKey = key;
-    runSessionReadResult(projectInitialCommand(state, commandInput, command));
+    runSessionReadResult(
+      projectInitialCommand(state, commandInput, command, submittedAt),
+    );
   }
 
   function projectPromptInput() {

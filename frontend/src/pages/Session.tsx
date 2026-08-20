@@ -180,7 +180,12 @@ export function Session() {
     if (!data) return;
     const state = location.state as InitialCommandState;
     if (!state?.command || !state.commandInput) return;
-    controller.projectInitialCommandOnce(id, state.commandInput, state.command);
+    controller.projectInitialCommandOnce(
+      id,
+      state.commandInput,
+      state.command,
+      state.submittedAt,
+    );
   }, [controller, data, id, location.state]);
 
   useShellTitle(
@@ -259,7 +264,7 @@ export function Session() {
             />
           ) : null}
           <SessionTranscript
-            compactCommandInputs={projection.compactCommandInputs}
+            compactCommands={projection.compactCommands}
             items={transcriptItems}
             modelLabels={modelLabels}
           />

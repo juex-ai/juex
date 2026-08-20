@@ -3,6 +3,7 @@ import type { MediaRef } from "../types.ts";
 export type QueuedInput = {
   id: string;
   messageID?: string;
+  createdAt?: string;
   input: string;
   kind?: string;
   attachments?: MediaRef[];
@@ -24,6 +25,7 @@ export function enqueueQueuedInput(
   pendingCount: number,
   attachments: MediaRef[] = [],
   messageID?: string,
+  createdAt?: string,
 ): QueuedInputState {
   const hasInput = Boolean(input) || attachments.length > 0;
   if (!hasInput) return state;
@@ -39,6 +41,8 @@ export function enqueueQueuedInput(
     };
     const persistedID = messageID ?? existing?.messageID;
     if (persistedID) item.messageID = persistedID;
+    const acceptedAt = messageID ? createdAt : (existing?.createdAt ?? createdAt);
+    if (acceptedAt) item.createdAt = acceptedAt;
     return item;
   };
 
@@ -52,6 +56,7 @@ export function enqueueQueuedInput(
         existing?.input === nextItem.input &&
         existing.kind === nextItem.kind &&
         existing.messageID === nextItem.messageID &&
+        existing.createdAt === nextItem.createdAt &&
         sameAttachments(existing.attachments, nextItem.attachments ?? [])
       ) {
         return state;

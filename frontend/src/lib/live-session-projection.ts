@@ -19,6 +19,7 @@ import {
   type QueuedInput,
   type QueuedInputState,
 } from "./queued-inputs.ts";
+import { messageCreatedAtFromID } from "./session-messages.ts";
 import type {
   BrowserEvent,
   Block,
@@ -32,7 +33,12 @@ export type LiveSessionProjection = {
   // Empty slots reserve announced drain positions missing from local queue state.
   drainingQueuedInputs: Array<QueuedInput | undefined>;
   compactAdmissionTurnID: string | null;
-  compactCommandInputs: Record<string, string>;
+  compactCommands: Record<string, ProjectedCompactCommand>;
+};
+
+export type ProjectedCompactCommand = {
+  input: string;
+  submittedAt?: string;
 };
 
 export type LiveSessionProjectionEffect = {
@@ -51,7 +57,7 @@ export function createLiveSessionProjection(): LiveSessionProjection {
     queuedInput: createQueuedInputState(),
     drainingQueuedInputs: [],
     compactAdmissionTurnID: null,
-    compactCommandInputs: {},
+    compactCommands: {},
   };
 }
 
@@ -96,11 +102,18 @@ export function projectCompactCommand(
   state: LiveSessionProjection,
   messageID: string | undefined,
   input: string,
+  submittedAt?: string,
 ): LiveSessionProjection {
   if (!messageID) return state;
   return {
     ...state,
-    compactCommandInputs: { ...state.compactCommandInputs, [messageID]: input },
+    compactCommands: {
+      ...state.compactCommands,
+      [messageID]: {
+        input,
+        ...(submittedAt === undefined ? {} : { submittedAt }),
+      },
+    },
   };
 }
 
@@ -108,6 +121,7 @@ export function projectCommandResult(
   state: LiveSessionProjection,
   input: string,
   output: string,
+  createdAt?: string,
 ): LiveSessionProjection {
   return {
     ...state,
@@ -117,6 +131,7 @@ export function projectCommandResult(
         role: "user",
         kind: "slash_command",
         blocks: [{ type: "text", text: input }],
+        created_at: createdAt,
       },
       {
         role: "assistant",
@@ -133,6 +148,7 @@ export function projectOptimisticTurn(
   input: string | undefined,
   kind?: string,
   attachments: MediaRef[] = [],
+  createdAt?: string,
 ): LiveSessionProjection {
   return {
     ...state,
@@ -143,6 +159,8 @@ export function projectOptimisticTurn(
       kind,
       "optimistic",
       attachments,
+      undefined,
+      createdAt,
     ),
   };
 }
@@ -154,6 +172,7 @@ export function projectQueuedInput(
   pendingCount: number,
   attachments: MediaRef[] = [],
   messageID?: string,
+  createdAt?: string,
 ): LiveSessionProjection {
   return {
     ...state,
@@ -164,6 +183,7 @@ export function projectQueuedInput(
       pendingCount,
       attachments,
       messageID,
+      createdAt,
     ),
   };
 }
@@ -171,6 +191,7 @@ export function projectQueuedInput(
 export function projectPendingCompact(
   state: LiveSessionProjection,
   commandInput?: string,
+  submittedAt?: string,
 ): LiveSessionProjection {
   let messages = state.messages;
   if (
@@ -183,6 +204,7 @@ export function projectPendingCompact(
         id: LOCAL_COMPACT_COMMAND_ID,
         role: "user",
         kind: "slash_command",
+        created_at: submittedAt,
         blocks: [{ type: "text", text: commandInput }],
       },
     ];
@@ -233,6 +255,12 @@ export function projectLiveSessionEvent(
       const consumed = alreadyProjected
         ? { state: next }
         : consumeQueuedInput(next, event.payload.input, event.payload.kind);
+      const messageID =
+        event.payload.message_id ?? consumed.item?.messageID;
+      const createdAt =
+        messageCreatedAtFromID(messageID) ??
+        consumed.item?.createdAt ??
+        event.ts;
       next = consumed.state;
       next = {
         ...next,
@@ -243,7 +271,8 @@ export function projectLiveSessionEvent(
           event.payload.kind,
           "event",
           consumed.item?.attachments,
-          event.payload.message_id ?? consumed.item?.messageID,
+          messageID,
+          createdAt,
         ),
       };
       break;
@@ -324,6 +353,7 @@ export function projectLiveSessionEvent(
         event.payload.pending_count,
         [],
         event.payload.message_id,
+        messageCreatedAtFromID(event.payload.message_id) ?? event.ts,
       );
       break;
     case "pending_input.draining":
@@ -344,6 +374,7 @@ export function projectLiveSessionEvent(
               "event",
               item.attachments,
               item.messageID,
+              item.createdAt,
             )
           : next.messages,
       };
@@ -515,6 +546,7 @@ function appendDrainedInputs(
     role: "user",
     turn_id: turnID,
     kind: item.kind || "pending_input",
+    created_at: item.createdAt,
     blocks: inputBlocks(item.input, item.attachments),
   }));
   if (!turnID) return [...messages, ...additions];
@@ -540,14 +572,21 @@ function appendLiveTurnToMessages(
   source: "event" | "optimistic",
   attachments: MediaRef[] = [],
   messageID?: string,
+  createdAt?: string,
 ): Message[] {
   const blocks = inputBlocks(input, attachments);
   if (!turnID || blocks.length === 0) return messages;
   if (messages.some((message) => message.turn_id === turnID)) {
-    if (source !== "event" || !messageID) return messages;
+    if (source !== "event") return messages;
     return messages.map((message) =>
-      message.turn_id === turnID && message.role === "user" && !message.id
-        ? { ...message, id: messageID }
+      message.turn_id === turnID && message.role === "user"
+        ? {
+            ...message,
+            id: message.id ?? messageID,
+            created_at: message.id
+              ? (message.created_at ?? createdAt)
+              : (createdAt ?? message.created_at),
+          }
         : message,
     );
   }
@@ -562,6 +601,10 @@ function appendLiveTurnToMessages(
             ...message,
             turn_id: turnID,
             id: message.role === "user" ? messageID : message.id,
+            created_at:
+              message.role === "user"
+                ? (createdAt ?? message.created_at)
+                : message.created_at,
           }
         : message,
     );
@@ -573,6 +616,7 @@ function appendLiveTurnToMessages(
       role: "user",
       turn_id: turnID,
       kind,
+      created_at: createdAt,
       blocks,
     },
     {
@@ -634,6 +678,8 @@ function applyAssistantResponse(
   if (!event.turn_id) return state;
   const blocks = assistantBlocksFromEventPayload(event.payload);
   const model = event.payload.model;
+  const createdAt =
+    messageCreatedAtFromID(event.payload.message_id) ?? event.ts;
   const pendingIndex = state.messages.findIndex(
     (message) =>
       message.turn_id === event.turn_id &&
@@ -648,7 +694,7 @@ function applyAssistantResponse(
       pending: false,
       blocks,
       model,
-      created_at: event.ts,
+      created_at: createdAt,
     };
     if (event.payload.notice) {
       messages.splice(pendingIndex, 0, {
@@ -673,7 +719,7 @@ function applyAssistantResponse(
         pending: false,
         blocks,
         model,
-        created_at: event.ts,
+        created_at: createdAt,
       },
     ],
   };

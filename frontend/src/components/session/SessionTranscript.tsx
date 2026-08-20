@@ -58,6 +58,7 @@ import {
 import { formatModelFallbackNotice } from "@/lib/model-fallback";
 import {
   externalEventCopyClassName,
+  formatMessageSentAt,
   processDisclosureBodyClassName,
   processDisclosureChevronClassName,
   processDisclosureClassName,
@@ -71,6 +72,7 @@ import {
   messageGroupRendererKey,
   type MessageGroupRendererKey,
 } from "@/lib/session-transcript-renderers";
+import type { ProjectedCompactCommand } from "@/lib/live-session-projection";
 import { formatSystemNotice } from "@/lib/system-notice";
 import {
   aggregateToolProcessStatus,
@@ -88,7 +90,7 @@ import { cn } from "@/lib/utils";
 import type { MediaRef } from "@/types";
 
 type MessageGroupRendererProps = {
-  compactCommand?: string;
+  compactCommand?: ProjectedCompactCommand;
   group: MessageGroup;
   modelLabel?: string;
 };
@@ -109,11 +111,11 @@ const messageGroupRendererRegistry: Record<
 };
 
 export function SessionTranscript({
-  compactCommandInputs,
+  compactCommands,
   items,
   modelLabels,
 }: {
-  compactCommandInputs: Record<string, string>;
+  compactCommands: Record<string, ProjectedCompactCommand>;
   items: readonly TranscriptItem[];
   modelLabels: readonly (string | undefined)[];
 }) {
@@ -134,7 +136,7 @@ export function SessionTranscript({
         group={item.group}
         modelLabel={modelLabel}
         compactCommand={
-          item.group.id ? compactCommandInputs[item.group.id] : undefined
+          item.group.id ? compactCommands[item.group.id] : undefined
         }
       />
     );
@@ -168,7 +170,12 @@ function CompactGroup({
   const text = textUnit?.kind === "text" ? textUnit.block.text : "";
   return (
     <>
-      {compactCommand ? <SlashCommandMessage text={compactCommand} /> : null}
+      {compactCommand ? (
+        <SlashCommandMessage
+          text={compactCommand.input}
+          createdAt={compactCommand.submittedAt}
+        />
+      ) : null}
       <CompactMessage text={text} />
     </>
   );
@@ -236,7 +243,11 @@ function AssistantWorkGroupView({
           </div>
         </details>
         {content ? <AssistantWorkContent group={content} /> : null}
-        {canCopy ? <MessageCopyAction text={copyText} align="start" /> : null}
+        <MessageMetaActions
+          copyText={canCopy ? copyText : undefined}
+          createdAt={content?.createdAt}
+          align="start"
+        />
       </div>
     </Message>
   );
@@ -344,12 +355,11 @@ function DefaultMessageGroup({
             ...
           </div>
         ) : null}
-        {canCopyMessage ? (
-          <MessageCopyAction
-            text={copyText}
-            align={group.role === "user" ? "end" : "start"}
-          />
-        ) : null}
+        <MessageMetaActions
+          copyText={canCopyMessage ? copyText : undefined}
+          createdAt={group.createdAt}
+          align={group.role === "user" ? "end" : "start"}
+        />
       </div>
     </Message>
   );
@@ -616,14 +626,24 @@ function formatToolInput(input: Record<string, unknown> | undefined): string {
   }
 }
 
-function SlashCommandMessage({ text }: { text: string }) {
+function SlashCommandMessage({
+  text,
+  createdAt,
+}: {
+  text: string;
+  createdAt?: string;
+}) {
   return (
     <Message from="user">
       <div className="flex w-full flex-col gap-2">
         <MessageContent>
           <MessageResponse>{text}</MessageResponse>
         </MessageContent>
-        <MessageCopyAction text={text} align="end" />
+        <MessageMetaActions
+          copyText={text}
+          createdAt={createdAt}
+          align="end"
+        />
       </div>
     </Message>
   );
@@ -805,29 +825,48 @@ function CompactMessage({
   );
 }
 
-function MessageCopyAction({
-  text,
+function MessageMetaActions({
+  copyText,
+  createdAt,
   align,
 }: {
-  text: string;
+  copyText?: string;
+  createdAt?: string;
   align: "start" | "end";
 }) {
+  const sentTime = formatMessageSentAt(createdAt);
+  if (!copyText && !sentTime) return null;
+  const timeElement = sentTime ? (
+    <time
+      dateTime={createdAt}
+      className="select-none font-mono text-[10px] tabular-nums text-muted-foreground/70"
+    >
+      {sentTime}
+    </time>
+  ) : null;
   return (
     <MessageActions
+      aria-label={copyText ? undefined : `Sent ${sentTime}`}
       className={cn(
         "opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         align === "end" ? "justify-end pr-1" : "justify-start pl-1",
       )}
+      tabIndex={copyText ? undefined : 0}
     >
-      <CopyTextButton
-        text={text}
-        className="size-6 text-muted-foreground hover:text-foreground"
-        copiedTooltip="Copied to clipboard"
-        idleTooltip="Copy message"
-        label="Copy message"
-        size="icon-xs"
-        tooltipMode="none"
-      />
+      {align === "end" ? timeElement : null}
+      {copyText ? (
+        <CopyTextButton
+          text={copyText}
+          className="size-6 text-muted-foreground hover:text-foreground"
+          copiedTooltip="Copied to clipboard"
+          idleTooltip="Copy message"
+          label="Copy message"
+          size="icon-xs"
+          tooltipMode="none"
+        />
+      ) : null}
+      {align === "start" ? timeElement : null}
     </MessageActions>
   );
 }

@@ -1032,6 +1032,28 @@ func TestMessageCreatedAtParsesOnlyCanonicalMessageIDs(t *testing.T) {
 	}
 }
 
+func TestStableMessageIDEncodesCreationTimeAndIdentity(t *testing.T) {
+	createdAt := time.Date(2026, 8, 20, 19, 26, 7, 987000000, time.UTC)
+	first := StableMessageID(createdAt, "pending-input-1")
+	if got := StableMessageID(createdAt, "pending-input-1"); got != first {
+		t.Fatalf("StableMessageID(same seed) = %q, want %q", got, first)
+	}
+	if got := StableMessageID(createdAt, "pending-input-2"); got == first {
+		t.Fatalf("StableMessageID(different seed) = %q, want a different ID", got)
+	}
+	if !strings.HasPrefix(first, "msg-20260820T192607-") {
+		t.Fatalf("StableMessageID() = %q, want canonical timestamp prefix", first)
+	}
+	got, ok := MessageCreatedAt(first)
+	if !ok {
+		t.Fatalf("MessageCreatedAt(%q) = false", first)
+	}
+	want := createdAt.Truncate(time.Second)
+	if !got.Equal(want) {
+		t.Fatalf("MessageCreatedAt(%q) = %s, want %s", first, got, want)
+	}
+}
+
 func TestSession_AppendDoesNotMutateHistoryWhenPersistFails(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)
