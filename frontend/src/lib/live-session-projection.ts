@@ -32,7 +32,12 @@ export type LiveSessionProjection = {
   // Empty slots reserve announced drain positions missing from local queue state.
   drainingQueuedInputs: Array<QueuedInput | undefined>;
   compactAdmissionTurnID: string | null;
-  compactCommandInputs: Record<string, string>;
+  compactCommands: Record<string, ProjectedCompactCommand>;
+};
+
+export type ProjectedCompactCommand = {
+  input: string;
+  submittedAt?: string;
 };
 
 export type LiveSessionProjectionEffect = {
@@ -51,7 +56,7 @@ export function createLiveSessionProjection(): LiveSessionProjection {
     queuedInput: createQueuedInputState(),
     drainingQueuedInputs: [],
     compactAdmissionTurnID: null,
-    compactCommandInputs: {},
+    compactCommands: {},
   };
 }
 
@@ -96,11 +101,18 @@ export function projectCompactCommand(
   state: LiveSessionProjection,
   messageID: string | undefined,
   input: string,
+  submittedAt?: string,
 ): LiveSessionProjection {
   if (!messageID) return state;
   return {
     ...state,
-    compactCommandInputs: { ...state.compactCommandInputs, [messageID]: input },
+    compactCommands: {
+      ...state.compactCommands,
+      [messageID]: {
+        input,
+        ...(submittedAt === undefined ? {} : { submittedAt }),
+      },
+    },
   };
 }
 

@@ -259,7 +259,7 @@ export function Session() {
             />
           ) : null}
           <SessionTranscript
-            compactCommandInputs={projection.compactCommandInputs}
+            compactCommands={projection.compactCommands}
             items={transcriptItems}
             modelLabels={modelLabels}
           />

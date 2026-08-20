@@ -90,8 +90,9 @@ test("ordinary copy rows receive their message creation time", () => {
   );
   assert.match(
     compact,
-    /<SlashCommandMessage[\s\S]*?createdAt=\{group\.createdAt\}/,
+    /<SlashCommandMessage[\s\S]*?text=\{compactCommand\.input\}[\s\S]*?createdAt=\{compactCommand\.submittedAt\}/,
   );
+  assert.doesNotMatch(compact, /createdAt=\{group\.createdAt\}/);
 });
 
 test("user message chrome uses a weak card treatment", () => {

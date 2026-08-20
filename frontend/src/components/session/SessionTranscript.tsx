@@ -72,6 +72,7 @@ import {
   messageGroupRendererKey,
   type MessageGroupRendererKey,
 } from "@/lib/session-transcript-renderers";
+import type { ProjectedCompactCommand } from "@/lib/live-session-projection";
 import { formatSystemNotice } from "@/lib/system-notice";
 import {
   aggregateToolProcessStatus,
@@ -89,7 +90,7 @@ import { cn } from "@/lib/utils";
 import type { MediaRef } from "@/types";
 
 type MessageGroupRendererProps = {
-  compactCommand?: string;
+  compactCommand?: ProjectedCompactCommand;
   group: MessageGroup;
   modelLabel?: string;
 };
@@ -110,11 +111,11 @@ const messageGroupRendererRegistry: Record<
 };
 
 export function SessionTranscript({
-  compactCommandInputs,
+  compactCommands,
   items,
   modelLabels,
 }: {
-  compactCommandInputs: Record<string, string>;
+  compactCommands: Record<string, ProjectedCompactCommand>;
   items: readonly TranscriptItem[];
   modelLabels: readonly (string | undefined)[];
 }) {
@@ -135,7 +136,7 @@ export function SessionTranscript({
         group={item.group}
         modelLabel={modelLabel}
         compactCommand={
-          item.group.id ? compactCommandInputs[item.group.id] : undefined
+          item.group.id ? compactCommands[item.group.id] : undefined
         }
       />
     );
@@ -171,8 +172,8 @@ function CompactGroup({
     <>
       {compactCommand ? (
         <SlashCommandMessage
-          text={compactCommand}
-          createdAt={group.createdAt}
+          text={compactCommand.input}
+          createdAt={compactCommand.submittedAt}
         />
       ) : null}
       <CompactMessage text={text} />

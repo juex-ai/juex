@@ -278,7 +278,7 @@ export function projectStartTurnSucceeded(
 ): SessionReadResult {
   state = state.submitError ? { ...state, submitError: null } : state;
   if (turn.command) {
-    return projectCommandTurnSucceeded(state, prompt, turn);
+    return projectCommandTurnSucceeded(state, prompt, turn, submittedAt);
   }
   if (turn.queued) {
     return withStartTurnWarnings({
@@ -363,6 +363,7 @@ function projectCommandTurnSucceeded(
   state: SessionReadState,
   prompt: string,
   turn: StartTurnResponse,
+  submittedAt?: string,
 ): SessionReadResult {
   const command = turn.command;
   if (!command) {
@@ -393,6 +394,7 @@ function projectCommandTurnSucceeded(
         projection,
         command.compact.message_id,
         prompt,
+        submittedAt,
       );
     } else {
       projection = projectCommandResult(projection, prompt, command.text ?? "");

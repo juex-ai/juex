@@ -759,22 +759,28 @@ test("projectStartTurnSucceeded emits navigation effect for /new", () => {
   ]);
 });
 
-test("projectStartTurnSucceeded settles compact command with refresh effect", () => {
+test("projectStartTurnSucceeded preserves compact command submission time", () => {
   let state = projectPendingSubmit(createSessionReadState(), "/compact");
   assert.equal(state.projection.messages.at(-1)?.pending, true);
 
-  const result = projectStartTurnSucceeded(state, "/compact", {
-    command: {
-      name: "/compact",
-      text: "Compacted",
-      compact: { message_id: "compact-1" },
-    },
-  });
-
-  assert.equal(
-    result.state.projection.compactCommandInputs["compact-1"],
+  const result = projectStartTurnSucceeded(
+    state,
     "/compact",
+    {
+      command: {
+        name: "/compact",
+        text: "Compacted",
+        compact: { message_id: "compact-1" },
+      },
+    },
+    [],
+    "2026-08-20T20:30:00Z",
   );
+
+  assert.deepEqual(result.state.projection.compactCommands["compact-1"], {
+    input: "/compact",
+    submittedAt: "2026-08-20T20:30:00Z",
+  });
   assert.deepEqual(result.effects, [
     { type: "refresh", preserveLiveMessages: true },
   ]);
@@ -790,17 +796,16 @@ test("projectInitialCommand projects slash command and clears route state", () =
   assert.deepEqual(result.effects, [{ type: "clearRouteState" }]);
 });
 
-test("projectInitialCommand preserves compact command input across refresh", () => {
+test("projectInitialCommand omits an unavailable compact submission time", () => {
   const result = projectInitialCommand(createSessionReadState(), "/compact", {
     name: "/compact",
     text: "Compacted",
     compact: { message_id: "compact-1" },
   });
 
-  assert.equal(
-    result.state.projection.compactCommandInputs["compact-1"],
-    "/compact",
-  );
+  assert.deepEqual(result.state.projection.compactCommands["compact-1"], {
+    input: "/compact",
+  });
   assert.deepEqual(result.effects, [
     { type: "refresh", preserveLiveMessages: true },
     { type: "clearRouteState" },
