@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import datetime
 import hashlib
 import json
 import pathlib
@@ -382,8 +383,8 @@ def _opaque_runtime_profile_identity(provider: dict[str, Any], model: Any) -> st
     projection = {
         "capabilities": _merge_mapping(_capabilities(provider), _capabilities(model)),
         "compat": _merge_compat(provider.get("compat"), model.get("compat")),
-        "headers": _merge_mapping(provider.get("headers"), model.get("headers")),
-        "query": _merge_mapping(provider.get("query"), model.get("query")),
+        "headers": _runtime_string_mapping(_merge_mapping(provider.get("headers"), model.get("headers"))),
+        "query": _runtime_string_mapping(_merge_mapping(provider.get("query"), model.get("query"))),
     }
     encoded = json.dumps(projection, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
@@ -446,6 +447,20 @@ def _merge_mapping(base: Any, override: Any) -> dict[str, Any]:
     if isinstance(override, dict):
         merged.update(copy.deepcopy(override))
     return merged
+
+
+def _runtime_string_mapping(value: dict[Any, Any]) -> dict[str, str]:
+    return {_runtime_scalar_string(key): _runtime_scalar_string(item) for key, item in value.items()}
+
+
+def _runtime_scalar_string(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return value.isoformat()
+    return str(value)
 
 
 def _merge_compat(base: Any, override: Any) -> dict[str, Any]:

@@ -984,7 +984,11 @@ def validate_source_config(juex_bin: str, config_path: pathlib.Path) -> None:
     with tempfile.TemporaryDirectory(prefix="juex-eval-config-check.") as work:
         command = [juex_bin, "-C", work]
         env = os.environ.copy()
-        if config_path.name == "juex.yaml":
+        configured_home = os.environ.get("JUEX_HOME", "").strip()
+        default_home = selection.resolved_path(pathlib.Path.home() / ".juex")
+        effective_home = selection.resolved_path(configured_home) if configured_home else default_home
+        home_config_paths = {home / "juex.yaml" for home in (default_home, effective_home)}
+        if config_path in home_config_paths:
             env["JUEX_HOME"] = str(config_path.parent)
         else:
             command.extend(["--config", str(config_path)])
