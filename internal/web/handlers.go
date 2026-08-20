@@ -241,26 +241,26 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 			notes  *runtime.NotesSnapshot
 		)
 		// Capture the resume cursor before the transcript page, so a concurrent
-		// commit may replay but can never be skipped. The status cursor is
-		// advanced by projection and so is already safe; the journal fallback is
-		// not, and runs behind the durable commit barrier because a raw journal
-		// read can otherwise observe an appended event whose browser frame has
-		// not been queued yet. Reporting that ID would advance the browser past
-		// an event it never receives — including ones absent from the transcript
-		// page, such as pending_input.queued.
+		// commit may replay but can never be skipped. Both cursor sources run
+		// behind the durable commit barrier: the status projection advances its
+		// cursor before the later browser projection queues the matching frame,
+		// while a raw journal read can observe the appended event before either
+		// projection finishes. Reporting either ID mid-commit would advance the
+		// browser past an event it never receives — including ones absent from
+		// the transcript page, such as pending_input.queued.
 		//
 		// The barrier is taken inside the session read, never around it: a
 		// session switch holds the session lifecycle lock and then takes the
 		// commit barrier (App.replaceSession -> DurableSink.SetJournal), so
 		// acquiring them in the other order deadlocks.
 		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
-			if as.app.Status != nil {
-				cursor = as.app.Status.Snapshot().Cursor
-			}
-			if cursor != "" {
-				return nil
-			}
 			return as.app.ReadCommittedEvents(func() error {
+				if as.app.Status != nil {
+					cursor = as.app.Status.Snapshot().Cursor
+				}
+				if cursor != "" {
+					return nil
+				}
 				journalCursor, cursorErr := session.ReadLatestCommittedEventID(sess.Dir)
 				if cursorErr != nil {
 					return cursorErr

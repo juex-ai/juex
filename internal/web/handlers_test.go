@@ -4829,9 +4829,46 @@ func TestGetSessionShow_JournalFallbackWaitsForCommitBarrier(t *testing.T) {
 		SessionID:        sessionID,
 		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
 	}, nil)
+	assertSessionShowWaitsForCommitBarrier(t, active, ts.URL, sessionID, "evt-settled")
+}
 
-	// Hold the commit barrier, then confirm session show cannot answer while a
-	// commit could still be mid-flight.
+// The in-memory status cursor is advanced by the first synchronous projection
+// of a durable commit. Session show must still wait for the commit barrier so
+// it cannot report that cursor before the later browser projection publishes
+// the matching frame.
+func TestGetSessionShow_StatusCursorWaitsForCommitBarrier(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+	if err := active.app.Bus.Emit(events.Event{
+		ID:     "evt-pending",
+		Type:   "pending_input.queued",
+		TurnID: "turn-1",
+		Payload: juexruntime.PendingInputQueuedPayload{
+			Input:            "queued while busy",
+			Kind:             "user",
+			MessageID:        "msg-pending",
+			PendingCount:     1,
+			MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if cursor := active.app.Status.Snapshot().Cursor; cursor != "evt-pending" {
+		t.Fatalf("status cursor = %q, want evt-pending", cursor)
+	}
+	assertSessionShowWaitsForCommitBarrier(t, active, ts.URL, sessionID, "evt-pending")
+}
+
+func assertSessionShowWaitsForCommitBarrier(t *testing.T, active *activeSession, baseURL, sessionID, wantCursor string) {
+	t.Helper()
 	barrierHeld := make(chan struct{})
 	releaseBarrier := make(chan struct{})
 	barrierDone := make(chan error, 1)
@@ -4844,11 +4881,15 @@ func TestGetSessionShow_JournalFallbackWaitsForCommitBarrier(t *testing.T) {
 	}()
 	<-barrierHeld
 
-	showDone := make(chan string, 1)
+	type showResult struct {
+		cursor string
+		err    error
+	}
+	showDone := make(chan showResult, 1)
 	go func() {
-		resp, err := http.Get(ts.URL + "/api/sessions/" + sessionID)
+		resp, err := http.Get(baseURL + "/api/sessions/" + sessionID)
 		if err != nil {
-			showDone <- "request error: " + err.Error()
+			showDone <- showResult{err: err}
 			return
 		}
 		defer resp.Body.Close()
@@ -4856,26 +4897,35 @@ func TestGetSessionShow_JournalFallbackWaitsForCommitBarrier(t *testing.T) {
 			EventCursor string `json:"event_cursor"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-			showDone <- "decode error: " + err.Error()
+			showDone <- showResult{err: err}
 			return
 		}
-		showDone <- parsed.EventCursor
+		showDone <- showResult{cursor: parsed.EventCursor}
 	}()
 
+	var (
+		earlyResult   showResult
+		answeredEarly bool
+	)
 	select {
-	case cursor := <-showDone:
-		t.Fatalf("session show answered while the commit barrier was held, cursor = %q", cursor)
+	case earlyResult = <-showDone:
+		answeredEarly = true
 	case <-time.After(250 * time.Millisecond):
 	}
-
 	close(releaseBarrier)
 	if err := <-barrierDone; err != nil {
 		t.Fatalf("hold commit barrier: %v", err)
 	}
+	if answeredEarly {
+		t.Fatalf("session show answered while the commit barrier was held: cursor=%q err=%v", earlyResult.cursor, earlyResult.err)
+	}
 	select {
-	case cursor := <-showDone:
-		if cursor != "evt-settled" {
-			t.Fatalf("event cursor = %q, want evt-settled", cursor)
+	case result := <-showDone:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.cursor != wantCursor {
+			t.Fatalf("event cursor = %q, want %q", result.cursor, wantCursor)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("session show did not finish after the barrier released")

@@ -76,15 +76,18 @@ only reads and transports that authoritative result.
 transcript page is read. The browser uses this cursor for the initial transcript
 subscription, so events committed between the transcript and status requests
 are replayed rather than skipped. That holds for both branches of the handler:
-the active-session branch falls back to the journal when the in-memory status
-store carries no cursor, and reads it before the transcript page too. The cursor
-is therefore empty only when the journal is empty. Such a browser has no event
-to resume after but still needs whatever was committed before its stream
-attached, so it subscribes with `?replay=journal-start` to replay the journal
-from the beginning. That marker is a separate parameter rather than a reserved
-cursor value, because event IDs are opaque and any caller-supplied ID is kept,
-so a reserved cursor could be committed by an extension. A blank or omitted
-`since` carries no resume position and starts with live delivery only, which
+the active-session branch reads its in-memory status cursor behind the durable
+commit barrier and falls back to the journal there when the status store carries
+no cursor. The barrier ensures every earlier synchronous projection, including
+browser-event publication, has finished before either cursor source is reported.
+The cursor is therefore empty only when the journal is empty. Such a browser
+has no event to resume after but still needs whatever was committed before its
+stream attached, so it subscribes with `?replay=journal-start` to replay the
+journal from the beginning. That marker is a separate parameter rather than a
+reserved cursor value, because event IDs are opaque and any caller-supplied ID
+is kept, so a reserved cursor could be committed by an extension. A blank or
+omitted `since` carries no resume position and starts with live delivery only,
+which
 keeps a cursor the client merely lost from replaying the whole transcript on
 every reconnect.
 Transcript-producing events carry the exact persisted message ID. If the
