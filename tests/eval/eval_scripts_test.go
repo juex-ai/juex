@@ -203,8 +203,8 @@ func TestProviderConfigSelectionMergesRepeatedProviderDeclarations(t *testing.T)
 		"from pathlib import Path",
 		"from tests.eval.juex_eval import helper, selection",
 		"cfg = {'providers': [",
-		"    {'id': 'provider', 'protocol': 'openai/chat', 'protcol': 'misspelled', 'api_key': 'first-secret', 'capabilities': {'tools': False}, 'models': [",
-		"        {'id': 'first-only'}, {'id': 'shared', 'context_window': 16000, 'context_widow': 999, 'thinking_effort': 'low'},",
+		"    {'id': 'provider', 'protocol': 'openai/chat', 'protcol': 'misspelled', 'api_key': 'first-secret', 'capabilities': {'tools': False}, 'compat': {'codex_transprot': 'misspelled'}, 'models': [",
+		"        {'id': 'first-only'}, {'id': 'shared', 'context_window': 16000, 'context_widow': 999, 'thinking_effort': 'low', 'compat': {'reasoning_replay_felds': ['misspelled']}},",
 		"    ]},",
 		"    {'id': 'provider', 'protocol': 'openai/responses', 'api_key': 'second-secret', 'capabilities': {'tools': True, 'reasoning_effort': True}, 'models': [",
 		"        {'id': 'shared', 'context_window': 64000, 'thinking_effort': 'high'}, {'id': 'second-only'},",
@@ -224,7 +224,8 @@ func TestProviderConfigSelectionMergesRepeatedProviderDeclarations(t *testing.T)
 		"    output = Path(tmp) / 'selected.yaml'",
 		"    helper.write_selected_config(cfg, 'provider', 'shared', output)",
 		"    rendered = output.read_text(encoding='utf-8')",
-		"    assert 'protcol: misspelled' in rendered and 'context_widow: 999' in rendered, rendered",
+		"    for invalid_field in ['protcol: misspelled', 'context_widow: 999', 'codex_transprot: misspelled', 'reasoning_replay_felds:']:",
+		"        assert invalid_field in rendered, rendered",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }

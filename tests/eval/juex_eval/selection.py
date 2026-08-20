@@ -424,6 +424,10 @@ def _merge_compat(base: Any, override: Any) -> dict[str, Any]:
     merged = copy.deepcopy(base) if isinstance(base, dict) else {}
     if not isinstance(override, dict):
         return merged
+    known = {"reasoning_replay_fields", "codex_transport"}
+    for name, value in override.items():
+        if name not in known:
+            merged[name] = copy.deepcopy(value)
     fields = override.get("reasoning_replay_fields")
     if isinstance(fields, list) and fields:
         merged["reasoning_replay_fields"] = copy.deepcopy(fields)
