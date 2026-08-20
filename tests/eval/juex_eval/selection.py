@@ -27,6 +27,7 @@ class Candidate:
     thinking_effort: str
     ref: str
     endpoint_identity: str = "default"
+    runtime_profile_identity: str = "default"
     context_window: int = DEFAULT_CONTEXT_WINDOW
     context_window_declared: bool = False
 
@@ -38,6 +39,7 @@ class Candidate:
             "provider_model": self.ref,
             "protocol": self.protocol,
             "reasoning_effort_capability": self.reasoning_effort_capability,
+            "runtime_profile_identity": self.runtime_profile_identity,
             "thinking_effort": self.thinking_effort,
             "tools_capability": self.tools_capability,
         }
@@ -121,6 +123,7 @@ def enumerate_candidates(cfg: dict[str, Any]) -> list[Candidate]:
                 provider_id=provider_id,
                 model_id=model_id,
                 endpoint_identity=endpoint_identity,
+                runtime_profile_identity=_opaque_runtime_profile_identity(provider, model),
                 protocol=protocol,
                 reasoning_effort_capability=_jsonish(reasoning_effort) if reasoning_effort is not None else "default",
                 tools_capability=_jsonish(tools) if tools is not None else "default",
@@ -331,8 +334,24 @@ def _opaque_endpoint_identity(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _opaque_runtime_profile_identity(provider: dict[str, Any], model: Any) -> str:
+    model = model if isinstance(model, dict) else {}
+    projection = {
+        "capabilities": _merge_mapping(_capabilities(provider), _capabilities(model)),
+        "compat": _merge_compat(provider.get("compat"), model.get("compat")),
+        "headers": _merge_mapping(provider.get("headers"), model.get("headers")),
+        "query": _merge_mapping(provider.get("query"), model.get("query")),
+    }
+    encoded = json.dumps(projection, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 def _merge_provider(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = copy.deepcopy(base)
+    known = {"id", "protocol", "base_url", "api_key", "headers", "query", "capabilities", "compat", "models"}
+    for name, value in override.items():
+        if name not in known:
+            merged[name] = copy.deepcopy(value)
     merged["id"] = override["id"]
     for name in ("protocol", "base_url", "api_key"):
         if _nonempty(override.get(name)):
@@ -358,6 +377,10 @@ def _merge_models(base: Any, overrides: Any) -> list[dict[str, Any]]:
 
 def _merge_model(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = copy.deepcopy(base)
+    known = {"id", "thinking_effort", "context_window", "headers", "query", "capabilities", "compat"}
+    for name, value in override.items():
+        if name not in known:
+            merged[name] = copy.deepcopy(value)
     merged["id"] = override["id"]
     if _nonempty(override.get("thinking_effort")):
         merged["thinking_effort"] = copy.deepcopy(override["thinking_effort"])

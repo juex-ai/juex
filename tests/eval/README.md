@@ -208,7 +208,10 @@ copies credentials, headers, query values, or environment mappings. The two
 retained non-secret runtime overrides, `PROVIDER_THINKING_EFFORT` and
 `PROVIDER_CONTEXT_WINDOW`, contribute normalized values to the hash. The
 effective provider endpoint contributes only an opaque SHA-256 identity, never
-the original URI, user information, path, or query.
+the original URI, user information, path, or query. A second opaque profile
+identity covers effective capabilities, compat, headers, and query settings.
+Unknown provider/model fields remain in the isolated config so Juex's strict
+loader rejects the same invalid source shape instead of silently normalizing it.
 
 ## Compaction Quality
 

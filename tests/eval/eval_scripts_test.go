@@ -172,10 +172,15 @@ func TestProviderConfigSelectionIsStableAndRedacted(t *testing.T) {
 		"assert endpoint_hash != evidence_a.redacted_config_hash",
 		"cfg_endpoint['providers'][0]['base_url'] = 'https://other-gateway.example/v1'",
 		"assert choose(cfg_endpoint, 'fixed-seed')[1].redacted_config_hash != endpoint_hash",
+		"cfg_profile = json.loads(json.dumps(cfg_a))",
+		"cfg_profile['providers'][0].update({'capabilities': {'tools': True, 'reasoning_replay': True}, 'compat': {'codex_transport': 'websocket'}})",
+		"cfg_profile['providers'][0]['models'][0].update({'headers': {'X-Route': 'never-report-route'}, 'query': {'tenant': 'never-report-tenant'}, 'compat': {'reasoning_replay_fields': ['reasoning']}})",
+		"profile_evidence = choose(cfg_profile, 'fixed-seed')[1]",
+		"assert profile_evidence.redacted_config_hash != evidence_a.redacted_config_hash",
 		"assert evidence_a.eligible_refs == ('alpha:one', 'alpha:two', 'zeta:large')",
 		"assert len({choose(cfg_a, f'seed-{index}')[0][0].ref for index in range(20)}) > 1",
-		"rendered = json.dumps([evidence_a.as_dict(), endpoint_evidence.as_dict(), env_endpoint_evidence.as_dict()])",
-		"for secret in ['never-report-zeta', 'never-report-alpha', 'secret-header', 'never-report-token', 'never-report-password', 'never-report-query', 'never-report-env-query']:",
+		"rendered = json.dumps([evidence_a.as_dict(), endpoint_evidence.as_dict(), env_endpoint_evidence.as_dict(), profile_evidence.as_dict()])",
+		"for secret in ['never-report-zeta', 'never-report-alpha', 'secret-header', 'never-report-token', 'never-report-password', 'never-report-query', 'never-report-env-query', 'never-report-route', 'never-report-tenant']:",
 		"    assert secret not in rendered, rendered",
 		"tokens = shlex.split(evidence_a.reproduction_command)",
 		"assert tokens[tokens.index('--config') + 1] == str(Path('/tmp/config.yaml').resolve())",
@@ -194,10 +199,12 @@ func TestProviderConfigSelectionMergesRepeatedProviderDeclarations(t *testing.T)
 	}
 
 	program := strings.Join([]string{
+		"import tempfile",
+		"from pathlib import Path",
 		"from tests.eval.juex_eval import helper, selection",
 		"cfg = {'providers': [",
-		"    {'id': 'provider', 'protocol': 'openai/chat', 'api_key': 'first-secret', 'capabilities': {'tools': False}, 'models': [",
-		"        {'id': 'first-only'}, {'id': 'shared', 'context_window': 16000, 'thinking_effort': 'low'},",
+		"    {'id': 'provider', 'protocol': 'openai/chat', 'protcol': 'misspelled', 'api_key': 'first-secret', 'capabilities': {'tools': False}, 'models': [",
+		"        {'id': 'first-only'}, {'id': 'shared', 'context_window': 16000, 'context_widow': 999, 'thinking_effort': 'low'},",
 		"    ]},",
 		"    {'id': 'provider', 'protocol': 'openai/responses', 'api_key': 'second-secret', 'capabilities': {'tools': True, 'reasoning_effort': True}, 'models': [",
 		"        {'id': 'shared', 'context_window': 64000, 'thinking_effort': 'high'}, {'id': 'second-only'},",
@@ -212,6 +219,12 @@ func TestProviderConfigSelectionMergesRepeatedProviderDeclarations(t *testing.T)
 		"provider, model = helper.selected_provider_model(cfg, 'provider', 'shared')",
 		"assert provider['protocol'] == 'openai/responses' and provider['api_key'] == 'second-secret'",
 		"assert model['context_window'] == 64000 and model['thinking_effort'] == 'high'",
+		"assert provider['protcol'] == 'misspelled' and model['context_widow'] == 999",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    output = Path(tmp) / 'selected.yaml'",
+		"    helper.write_selected_config(cfg, 'provider', 'shared', output)",
+		"    rendered = output.read_text(encoding='utf-8')",
+		"    assert 'protcol: misspelled' in rendered and 'context_widow: 999' in rendered, rendered",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
