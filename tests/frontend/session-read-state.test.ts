@@ -796,6 +796,27 @@ test("projectInitialCommand projects slash command and clears route state", () =
   assert.deepEqual(result.effects, [{ type: "clearRouteState" }]);
 });
 
+test("projectStartTurnSucceeded preserves non-compact command submission time", () => {
+  const result = projectStartTurnSucceeded(
+    createSessionReadState(),
+    "/status",
+    {
+      command: {
+        name: "/status",
+        text: "ok",
+      },
+    },
+    [],
+    "2026-08-20T21:05:00Z",
+  );
+
+  assert.equal(
+    result.state.projection.messages[0]?.created_at,
+    "2026-08-20T21:05:00Z",
+  );
+  assert.equal(result.state.projection.messages[1]?.created_at, undefined);
+});
+
 test("projectInitialCommand omits an unavailable compact submission time", () => {
   const result = projectInitialCommand(createSessionReadState(), "/compact", {
     name: "/compact",

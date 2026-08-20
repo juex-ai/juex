@@ -243,13 +243,11 @@ function AssistantWorkGroupView({
           </div>
         </details>
         {content ? <AssistantWorkContent group={content} /> : null}
-        {canCopy ? (
-          <MessageCopyAction
-            text={copyText}
-            createdAt={content?.createdAt}
-            align="start"
-          />
-        ) : null}
+        <MessageMetaActions
+          copyText={canCopy ? copyText : undefined}
+          createdAt={content?.createdAt}
+          align="start"
+        />
       </div>
     </Message>
   );
@@ -357,13 +355,11 @@ function DefaultMessageGroup({
             ...
           </div>
         ) : null}
-        {canCopyMessage ? (
-          <MessageCopyAction
-            text={copyText}
-            createdAt={group.createdAt}
-            align={group.role === "user" ? "end" : "start"}
-          />
-        ) : null}
+        <MessageMetaActions
+          copyText={canCopyMessage ? copyText : undefined}
+          createdAt={group.createdAt}
+          align={group.role === "user" ? "end" : "start"}
+        />
       </div>
     </Message>
   );
@@ -643,7 +639,11 @@ function SlashCommandMessage({
         <MessageContent>
           <MessageResponse>{text}</MessageResponse>
         </MessageContent>
-        <MessageCopyAction text={text} createdAt={createdAt} align="end" />
+        <MessageMetaActions
+          copyText={text}
+          createdAt={createdAt}
+          align="end"
+        />
       </div>
     </Message>
   );
@@ -825,16 +825,17 @@ function CompactMessage({
   );
 }
 
-function MessageCopyAction({
-  text,
+function MessageMetaActions({
+  copyText,
   createdAt,
   align,
 }: {
-  text: string;
+  copyText?: string;
   createdAt?: string;
   align: "start" | "end";
 }) {
   const sentTime = formatMessageSentAt(createdAt);
+  if (!copyText && !sentTime) return null;
   const timeElement = sentTime ? (
     <time
       dateTime={createdAt}
@@ -851,15 +852,17 @@ function MessageCopyAction({
       )}
     >
       {align === "end" ? timeElement : null}
-      <CopyTextButton
-        text={text}
-        className="size-6 text-muted-foreground hover:text-foreground"
-        copiedTooltip="Copied to clipboard"
-        idleTooltip="Copy message"
-        label="Copy message"
-        size="icon-xs"
-        tooltipMode="none"
-      />
+      {copyText ? (
+        <CopyTextButton
+          text={copyText}
+          className="size-6 text-muted-foreground hover:text-foreground"
+          copiedTooltip="Copied to clipboard"
+          idleTooltip="Copy message"
+          label="Copy message"
+          size="icon-xs"
+          tooltipMode="none"
+        />
+      ) : null}
       {align === "start" ? timeElement : null}
     </MessageActions>
   );

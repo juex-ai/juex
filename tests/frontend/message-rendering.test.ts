@@ -44,18 +44,19 @@ test("formatMessageSentAt omits missing and invalid timestamps", () => {
 });
 
 test("message sent time stays inside the copy action on the inner edge", () => {
-  const start = transcriptSource.indexOf("function MessageCopyAction(");
+  const start = transcriptSource.indexOf("function MessageMetaActions(");
   const end = transcriptSource.indexOf("function CopyTextButton(", start);
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
   const action = transcriptSource.slice(start, end);
 
+  assert.match(action, /copyText\?: string/);
   assert.match(action, /createdAt\?: string/);
   assert.match(action, /const sentTime = formatMessageSentAt\(createdAt\)/);
   assert.match(action, /align === "end" \? timeElement : null/);
   assert.match(action, /align === "start" \? timeElement : null/);
   assert.match(action, /<time[\s\S]*?dateTime=\{createdAt\}/);
-  assert.match(action, /className="size-6/);
+  assert.match(action, /copyText \? \([\s\S]*?className="size-6/);
 });
 
 test("ordinary copy rows receive their message creation time", () => {
@@ -82,17 +83,18 @@ test("ordinary copy rows receive their message creation time", () => {
 
   assert.match(
     assistant,
-    /<MessageCopyAction[\s\S]*?text=\{copyText\}[\s\S]*?createdAt=\{content\?\.createdAt\}/,
+    /<MessageMetaActions[\s\S]*?copyText=\{canCopy \? copyText : undefined\}[\s\S]*?createdAt=\{content\?\.createdAt\}/,
   );
   assert.match(
     normal,
-    /<MessageCopyAction[\s\S]*?text=\{copyText\}[\s\S]*?createdAt=\{group\.createdAt\}/,
+    /<MessageMetaActions[\s\S]*?copyText=\{canCopyMessage \? copyText : undefined\}[\s\S]*?createdAt=\{group\.createdAt\}/,
   );
   assert.match(
     compact,
     /<SlashCommandMessage[\s\S]*?text=\{compactCommand\.input\}[\s\S]*?createdAt=\{compactCommand\.submittedAt\}/,
   );
   assert.doesNotMatch(compact, /createdAt=\{group\.createdAt\}/);
+  assert.doesNotMatch(normal, /\{canCopyMessage \? \([\s\S]*?<MessageMetaActions/);
 });
 
 test("user message chrome uses a weak card treatment", () => {
@@ -264,7 +266,7 @@ test("assistant work disclosure owns process rows and leaves content outside", (
   assert.match(disclosure, /<AssistantWorkContent group=\{content\}/);
   assert.match(
     disclosure,
-    /<MessageCopyAction[\s\S]*?text=\{copyText\}/,
+    /<MessageMetaActions[\s\S]*?copyText=\{canCopy \? copyText : undefined\}/,
   );
 });
 

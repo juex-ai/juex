@@ -120,6 +120,7 @@ export function projectCommandResult(
   state: LiveSessionProjection,
   input: string,
   output: string,
+  createdAt?: string,
 ): LiveSessionProjection {
   return {
     ...state,
@@ -129,6 +130,7 @@ export function projectCommandResult(
         role: "user",
         kind: "slash_command",
         blocks: [{ type: "text", text: input }],
+        created_at: createdAt,
       },
       {
         role: "assistant",

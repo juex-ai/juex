@@ -397,7 +397,12 @@ function projectCommandTurnSucceeded(
         submittedAt,
       );
     } else {
-      projection = projectCommandResult(projection, prompt, command.text ?? "");
+      projection = projectCommandResult(
+        projection,
+        prompt,
+        command.text ?? "",
+        submittedAt,
+      );
     }
     return { state: { ...state, projection }, effects };
   }
@@ -408,6 +413,7 @@ function projectCommandTurnSucceeded(
         state.projection,
         prompt,
         command.text ?? "",
+        submittedAt,
       ),
     },
     effects: [],
