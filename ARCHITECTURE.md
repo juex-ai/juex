@@ -3052,9 +3052,10 @@ Run the deterministic suite with `make test`.
 Provider-quality smoke tests remain explicit because they use credentials.
 There are two live layers:
 
-- `make integration` resolves `JUEX_PROVIDER_CONFIG` (or the original
-  `~/.juex/juex.yaml`) and `CODEX_HOME` before switching `HOME`. The live tests
-  receive those absolute source paths while Juex, user config/cache, Windows
+- `make integration` resolves `JUEX_PROVIDER_CONFIG` (or the original native
+  user home's `.juex/juex.yaml`) and `CODEX_HOME` before switching `HOME`; on
+  Windows, the source user home is `USERPROFILE`. The live tests receive those
+  absolute source paths while Juex, user config/cache, Windows
   application-data, global Git, and Go telemetry writes remain under the
   temporary `HOME`; ordinary `make test` and `make race`
   receive neither real source. `JUEX_PROVIDER_SMOKE_ONLY=provider:model` selects one

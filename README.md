@@ -795,8 +795,9 @@ config/cache, Windows application-data, global Git config, Go telemetry, and
 Codex directories, so personal default-home provider config, Fleet, Agent, and
 tool state cannot affect deterministic results.
 `make integration` uses the same writable-state isolation but resolves
-`JUEX_PROVIDER_CONFIG` and `CODEX_HOME` from the original environment first and
-passes those paths to the live tests as read-only inputs.
+`JUEX_PROVIDER_CONFIG` and `CODEX_HOME` from the original native user home
+(`HOME` on Unix, `USERPROFILE` on Windows) first and passes those paths to the
+live tests as read-only inputs.
 
 The frontend lives in `frontend/`; `make build` runs the frontend build,
 copies it into `internal/web/dist`, and embeds it into `dist/juex`.

@@ -13,6 +13,9 @@ if (($# == 0)); then
 fi
 
 original_home="${HOME:-}"
+if [[ "${OS:-}" == "Windows_NT" && -n "${USERPROFILE:-}" ]]; then
+  original_home="$USERPROFILE"
+fi
 original_workdir="$(pwd -W 2>/dev/null || pwd -P)"
 
 temp_parent="${TMPDIR:-/tmp}"
