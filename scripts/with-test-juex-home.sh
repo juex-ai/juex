@@ -22,6 +22,15 @@ if command -v mise >/dev/null 2>&1; then
   if mise_bin_paths="$(mise bin-paths 2>/dev/null)"; then
     while IFS= read -r tool_dir; do
       if [[ -n "$tool_dir" ]]; then
+        case "$tool_dir" in
+          [[:alpha:]]:[\\/]*)
+            if command -v cygpath >/dev/null 2>&1; then
+              tool_dir="$(cygpath -u "$tool_dir")"
+            else
+              tool_dir="${tool_dir//\\//}"
+            fi
+            ;;
+        esac
         tool_path_prefix="${tool_path_prefix:+$tool_path_prefix:}$tool_dir"
       fi
     done <<<"$mise_bin_paths"

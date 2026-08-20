@@ -692,8 +692,8 @@ func TestTestJuexHomeWrapperLiveModePreservesExplicitSources(t *testing.T) {
 			`touch "$JUEX_HOME/live-runtime-probe"`,
 		}, "; "),
 		"wrapper-probe",
-		providerConfig,
-		codexHome,
+		filepath.ToSlash(providerConfig),
+		filepath.ToSlash(codexHome),
 		goCache,
 		goModCache,
 		uvCache,
@@ -893,6 +893,11 @@ func TestTestJuexHomeWrapperResolvesMiseToolsBeforeHomeIsolation(t *testing.T) {
 	binDir := filepath.Join(fakeRoot, "bin")
 	shimDir := filepath.Join(fakeRoot, "shims")
 	managedDir := filepath.Join(fakeRoot, "managed")
+	managedShellDir := filepath.ToSlash(managedDir)
+	if volume := filepath.VolumeName(managedDir); volume != "" {
+		managedShellDir = "/" + strings.ToLower(strings.TrimSuffix(volume, ":")) +
+			strings.TrimPrefix(managedShellDir, filepath.ToSlash(volume))
+	}
 	for _, dir := range []string{binDir, shimDir, managedDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
@@ -901,6 +906,10 @@ func TestTestJuexHomeWrapperResolvesMiseToolsBeforeHomeIsolation(t *testing.T) {
 	files := map[string]string{
 		filepath.Join(binDir, "mise"): "#!/bin/sh\n" +
 			`test "$1" = "bin-paths" || exit 64` + "\n" +
+			`printf '%s\n' "$FAKE_MISE_WINDOWS_BIN"` + "\n",
+		filepath.Join(binDir, "cygpath"): "#!/bin/sh\n" +
+			`test "$1" = "-u" || exit 65` + "\n" +
+			`test "$2" = "$FAKE_MISE_WINDOWS_BIN" || exit 66` + "\n" +
 			`printf '%s\n' "$FAKE_MISE_MANAGED_BIN"` + "\n",
 		filepath.Join(shimDir, "go"): "#!/bin/sh\n" +
 			`echo "mise trust state unavailable after HOME switch" >&2` + "\n" +
@@ -924,7 +933,8 @@ func TestTestJuexHomeWrapperResolvesMiseToolsBeforeHomeIsolation(t *testing.T) {
 	)
 	cmd.Env = commandEnv(map[string]string{
 		"PATH":                  strings.Join([]string{binDir, shimDir, "/usr/bin", "/bin"}, string(os.PathListSeparator)),
-		"FAKE_MISE_MANAGED_BIN": managedDir,
+		"FAKE_MISE_WINDOWS_BIN": `C:\mise\managed`,
+		"FAKE_MISE_MANAGED_BIN": managedShellDir,
 		"FAKE_CACHE":            filepath.Join(fakeRoot, "cache"),
 	}, "GOCACHE", "GOMODCACHE", "UV_CACHE_DIR")
 	out, err := cmd.CombinedOutput()
