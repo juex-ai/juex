@@ -49,6 +49,10 @@ type PendingInputQueueOptions struct {
 	Now func() time.Time
 }
 
+type pendingInputFileOps struct {
+	write func(*os.File, []byte) (int, error)
+}
+
 type PendingInputRecord struct {
 	ID          string             `json:"id"`
 	TurnID      string             `json:"turn_id,omitempty"`
@@ -81,6 +85,7 @@ type PendingInputQueue struct {
 	journalExists     bool
 	journalSize       int64
 	journalInfo       os.FileInfo
+	fileOps           pendingInputFileOps
 }
 
 func NewPendingInputQueue(sessionDir string, opts PendingInputQueueOptions) *PendingInputQueue {
@@ -89,8 +94,9 @@ func NewPendingInputQueue(sessionDir string, opts PendingInputQueueOptions) *Pen
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &PendingInputQueue{
-		path: filepath.Join(sessionDir, pendingInputFile),
-		now:  now,
+		path:    filepath.Join(sessionDir, pendingInputFile),
+		now:     now,
+		fileOps: pendingInputFileOps{write: func(file *os.File, body []byte) (int, error) { return file.Write(body) }},
 	}
 }
 
@@ -671,7 +677,7 @@ func (q *PendingInputQueue) appendManyLocked(records []PendingInputRecord) error
 			return err
 		}
 		body = append(body, '\n')
-		n, err := file.Write(body)
+		n, err := q.fileOps.write(file, body)
 		written += int64(n)
 		if err != nil {
 			return err

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,68 @@ import (
 
 	"github.com/juex-ai/juex/internal/llm"
 )
+
+func TestPendingInputQueue_AppendFailureLeavesNoLiveRecordAndRequiresValidPrefixRepair(t *testing.T) {
+	dir := t.TempDir()
+	store := NewPendingInputQueue(dir, PendingInputQueueOptions{})
+	first, err := store.Enqueue(
+		llm.TextMessage(llm.RoleUser, "committed prefix"),
+		PendingInputOptions{ID: "prefix", TTL: time.Hour},
+		"turn-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix, err := os.ReadFile(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := errors.New("injected partial append failure")
+	store.fileOps.write = func(file *os.File, body []byte) (int, error) {
+		partial := len(body) / 2
+		n, writeErr := file.Write(body[:partial])
+		return n, errors.Join(want, writeErr)
+	}
+	if _, err := store.Enqueue(
+		llm.TextMessage(llm.RoleUser, "must not become live"),
+		PendingInputOptions{ID: "failed", TTL: time.Hour},
+		"turn-1",
+	); !errors.Is(err, want) {
+		t.Fatalf("Enqueue() error = %v, want %v", err, want)
+	}
+	if _, ok := store.records["failed"]; ok {
+		t.Fatalf("failed append entered live index: %+v", store.records["failed"])
+	}
+	if _, err := NewPendingInputQueue(dir, PendingInputQueueOptions{}).Records(); err == nil || !strings.Contains(err.Error(), "parse") {
+		t.Fatalf("reload error = %v, want invalid-tail parse failure", err)
+	}
+
+	if err := os.Truncate(store.path, int64(len(prefix))); err != nil {
+		t.Fatal(err)
+	}
+	repaired := NewPendingInputQueue(dir, PendingInputQueueOptions{})
+	records, err := repaired.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[first.ID].Message.FirstText() != "committed prefix" {
+		t.Fatalf("records after prefix repair = %+v, want only committed prefix", records)
+	}
+	retried, err := repaired.Enqueue(
+		llm.TextMessage(llm.RoleUser, "retry exactly once"),
+		PendingInputOptions{ID: "failed", TTL: time.Hour},
+		"turn-2",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayable, err := repaired.Replayable("turn-2", 0); err != nil {
+		t.Fatal(err)
+	} else if len(replayable) != 2 || replayable[0].ID != first.ID || replayable[1].ID != retried.ID {
+		t.Fatalf("replayable after retry = %+v, want prefix then one retry", replayable)
+	}
+}
 
 func TestPendingInputQueue_DeduplicatesByID(t *testing.T) {
 	now := time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC)

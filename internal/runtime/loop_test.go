@@ -241,6 +241,31 @@ type runtimeTurnInputPolicyModule struct {
 	apply func(runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error)
 }
 
+type continuationFailureFinishModule struct {
+	committed bool
+	observed  int
+}
+
+func (*continuationFailureFinishModule) ID() runtimemodule.ID {
+	return "continuation-failure-finish"
+}
+
+func (*continuationFailureFinishModule) EvaluateFinish(_ context.Context, _ runtimemodule.FinishRequest) (runtimemodule.FinishDecision, error) {
+	return runtimemodule.FinishDecision{
+		Action:       runtimemodule.FinishContinue,
+		Continuation: "continue after the durable owner checkpoint",
+	}, nil
+}
+
+func (m *continuationFailureFinishModule) CommitFinishDecision(_ context.Context, _ runtimemodule.FinishRequest, _ runtimemodule.FinishDecision) (bool, error) {
+	m.committed = true
+	return true, nil
+}
+
+func (m *continuationFailureFinishModule) FinishContinuationCommitted(_ context.Context, _ runtimemodule.FinishRequest, _ runtimemodule.FinishDecision) {
+	m.observed++
+}
+
 func (m *runtimeTurnInputPolicyModule) ID() runtimemodule.ID { return m.id }
 
 func (m *runtimeTurnInputPolicyModule) ApplyTurnInput(_ context.Context, request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
@@ -724,6 +749,47 @@ func TestAdmitTurnMessage_IntentPromotionFailureCannotReplayInput(t *testing.T) 
 	}
 	if len(replayable) != 0 {
 		t.Fatalf("uncommitted admission remained replayable: %+v", replayable)
+	}
+}
+
+func TestAdmitTurnMessage_IntentAppendFailureLeavesNoActiveTurn(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	queue := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
+	eng.PendingInputQueue = queue
+	want := errors.New("injected intent append failure")
+	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
+		partial := len(body) / 2
+		n, writeErr := file.Write(body[:partial])
+		return n, errors.Join(want, writeErr)
+	}
+	var admitted int
+	bus.Subscribe(TurnAdmittedType, func(events.Event) { admitted++ })
+
+	if _, err := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "not accepted")); !errors.Is(err, want) {
+		t.Fatalf("AdmitTurnMessage() error = %v, want %v", err, want)
+	}
+	if eng.activeTurnID != "" {
+		t.Fatalf("active turn id = %q, want none", eng.activeTurnID)
+	}
+	if admitted != 0 || prov.called != 0 {
+		t.Fatalf("admitted events/provider calls = %d/%d, want 0/0", admitted, prov.called)
+	}
+	if len(queue.records) != 0 {
+		t.Fatalf("failed intent entered live queue: %+v", queue.records)
+	}
+	if _, err := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{}).Records(); err == nil {
+		t.Fatal("reload accepted an invalid partial intent tail")
+	}
+
+	if err := os.Truncate(queue.path, 0); err != nil {
+		t.Fatal(err)
+	}
+	eng.PendingInputQueue = NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
+	if out, err := eng.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, "retry after repair"), "recovery-turn"); err != nil || out != "recovered" {
+		t.Fatalf("recovery TurnMessageWithID() = %q, %v", out, err)
 	}
 }
 
@@ -7816,6 +7882,120 @@ func TestToolFailureClassificationMappings(t *testing.T) {
 				t.Fatalf("classifyToolFailure() = %+v, want %s blocking=%t", got, tc.want, tc.blocking)
 			}
 		})
+	}
+}
+
+func TestTurn_ContinuationQueueFailurePreservesCommittedPolicyStateWithoutObservation(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "checkpointed answer"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, _ := newEngine(t, prov, false)
+	policy := &continuationFailureFinishModule{}
+	installRuntimeTestModules(t, eng, policy)
+	queue := NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{})
+	eng.PendingInputQueue = queue
+	want := errors.New("injected continuation queue failure")
+	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
+		if strings.Contains(string(body), `"kind":"continuation"`) {
+			return 0, want
+		}
+		return file.Write(body)
+	}
+
+	if _, err := eng.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, "finish once"), "continuation-failure-turn"); !errors.Is(err, want) {
+		t.Fatalf("TurnMessageWithID() error = %v, want %v", err, want)
+	}
+	if !policy.committed || policy.observed != 0 {
+		t.Fatalf("finish policy committed/observed = %t/%d, want true/0", policy.committed, policy.observed)
+	}
+	if prov.called != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.called)
+	}
+	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
+		t.Fatalf("pending input status = %+v, want closed and empty", status)
+	}
+	records, err := queue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if record.Message.Kind == llm.MessageKindContinuation {
+			t.Fatalf("failed continuation became durable: %+v", record)
+		}
+	}
+	if len(eng.Session.History) != 2 || eng.Session.History[0].FirstText() != "finish once" || eng.Session.History[1].FirstText() != "checkpointed answer" {
+		t.Fatalf("transcript = %+v, want committed user and assistant messages", eng.Session.History)
+	}
+	journal, err := session.ReadEvents(eng.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var completed, errored int
+	for _, event := range journal {
+		if event.TurnID != "continuation-failure-turn" {
+			continue
+		}
+		switch event.Type {
+		case "turn.completed":
+			completed++
+		case "turn.errored":
+			errored++
+		}
+	}
+	if completed != 0 || errored != 1 {
+		t.Fatalf("terminal events completed/errored = %d/%d, want 0/1", completed, errored)
+	}
+}
+
+func TestTurn_CompletionCommitFailureReturnsErrorAndPreservesTranscript(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer before completion failure"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "recovered answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	want := errors.New("injected completion commit failure")
+	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session, eventType: "turn.completed", err: want})
+
+	if _, err := eng.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, "first input"), "failed-completion"); !errors.Is(err, want) {
+		t.Fatalf("TurnMessageWithID() error = %v, want %v", err, want)
+	}
+	if len(eng.Session.History) != 2 || eng.Session.History[0].FirstText() != "first input" || eng.Session.History[1].FirstText() != "answer before completion failure" {
+		t.Fatalf("transcript after completion failure = %+v", eng.Session.History)
+	}
+	journal, err := session.ReadEvents(eng.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range journal {
+		if event.TurnID == "failed-completion" && event.Type == "turn.completed" {
+			t.Fatalf("failed completion event became durable: %+v", event)
+		}
+	}
+
+	eng.Session.SubscribeBus(bus)
+	if out, err := eng.TurnMessageWithID(context.Background(), llm.TextMessage(llm.RoleUser, "later input"), "recovery-turn"); err != nil || out != "recovered answer" {
+		t.Fatalf("recovery TurnMessageWithID() = %q, %v", out, err)
+	}
+	if prov.called != 2 || !strings.Contains(messagesText(prov.histories[1]), "answer before completion failure") {
+		t.Fatalf("recovery provider history = %+v, want prior durable assistant response", prov.histories)
+	}
+	journal, err = session.ReadEvents(eng.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failedCompleted, failedErrored, recoveryCompleted int
+	for _, event := range journal {
+		switch {
+		case event.TurnID == "failed-completion" && event.Type == "turn.completed":
+			failedCompleted++
+		case event.TurnID == "failed-completion" && event.Type == "turn.errored":
+			failedErrored++
+		case event.TurnID == "recovery-turn" && event.Type == "turn.completed":
+			recoveryCompleted++
+		}
+	}
+	if failedCompleted != 0 || failedErrored != 1 || recoveryCompleted != 1 {
+		t.Fatalf("terminal events failed-completed/failed-errored/recovery-completed = %d/%d/%d, want 0/1/1", failedCompleted, failedErrored, recoveryCompleted)
 	}
 }
 

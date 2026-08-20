@@ -109,6 +109,53 @@ func TestAttachWorkspaceSessionDoesNotRepairBeforeLifetimeLock(t *testing.T) {
 	}
 }
 
+func TestAttachAndLockWorkspaceSession_NewPrimaryLockFailurePreservesProvisionalSelectionForReconciliation(t *testing.T) {
+	cfg := attachmentTestConfig(t)
+	resident := seedAttachmentSession(t, cfg, session.KindPrimary, "resident", "active")
+	var candidateDir string
+	var held *session.Lock
+
+	attachment, returnedLock, err := attachAndLockWorkspaceSession(
+		cfg,
+		SessionAttachmentRequest{Mode: SessionModeNewPrimary},
+		func(dir, mode string) (*session.Lock, error) {
+			candidateDir = dir
+			var lockErr error
+			held, lockErr = session.AcquireSessionLock(dir, "competing-owner")
+			if lockErr != nil {
+				return nil, lockErr
+			}
+			return session.AcquireSessionLock(dir, mode)
+		},
+	)
+	if held != nil {
+		defer func() { _ = held.Close() }()
+	}
+	var lockErr *session.LockError
+	if !errors.As(err, &lockErr) {
+		t.Fatalf("AttachAndLockWorkspaceSession() error = %v, want lock conflict", err)
+	}
+	if attachment.Session != nil || returnedLock != nil {
+		t.Fatalf("failed attachment = %+v, lock = %+v, want neither published", attachment, returnedLock)
+	}
+	if candidateDir == "" {
+		t.Fatal("candidate lock acquisition was not attempted")
+	}
+	candidateID := filepath.Base(candidateDir)
+	if candidateID == resident.ID {
+		t.Fatalf("candidate id = resident id %q", resident.ID)
+	}
+	assertHistoryActive(t, cfg, candidateID)
+	assertHistoryContains(t, cfg, candidateID)
+	assertHistoryContains(t, cfg, resident.ID)
+	if _, statErr := os.Stat(candidateDir); statErr != nil {
+		t.Fatalf("candidate directory was removed: %v", statErr)
+	}
+	if _, statErr := os.Stat(session.InfoDir(cfg.SessionsDir(), resident)); statErr != nil {
+		t.Fatalf("resident directory was removed: %v", statErr)
+	}
+}
+
 func TestLockedRuntimeRecoverySurfacesUnknownOutcomeToCLIAndTranscript(t *testing.T) {
 	cfg := attachmentTestConfig(t)
 	active := seedStartedDanglingToolUseSession(t, cfg)
