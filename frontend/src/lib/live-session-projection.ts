@@ -678,6 +678,8 @@ function applyAssistantResponse(
   if (!event.turn_id) return state;
   const blocks = assistantBlocksFromEventPayload(event.payload);
   const model = event.payload.model;
+  const createdAt =
+    messageCreatedAtFromID(event.payload.message_id) ?? event.ts;
   const pendingIndex = state.messages.findIndex(
     (message) =>
       message.turn_id === event.turn_id &&
@@ -692,7 +694,7 @@ function applyAssistantResponse(
       pending: false,
       blocks,
       model,
-      created_at: event.ts,
+      created_at: createdAt,
     };
     if (event.payload.notice) {
       messages.splice(pendingIndex, 0, {
@@ -717,7 +719,7 @@ function applyAssistantResponse(
         pending: false,
         blocks,
         model,
-        created_at: event.ts,
+        created_at: createdAt,
       },
     ],
   };

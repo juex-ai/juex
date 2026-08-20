@@ -213,6 +213,38 @@ test("projectLiveSessionEvent accumulates LLM deltas and reconciles the final re
   ]);
 });
 
+test("llm.responded derives assistant time from its canonical message ID", () => {
+  let state = apply(createLiveSessionProjection(), {
+    id: "e-started",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "turn-assistant-time",
+    payload: { input: "answer" },
+  });
+  const responded: BrowserEvent = {
+    id: "e-responded",
+    type: "llm.responded",
+    ts: "2026-06-15T00:00:05Z",
+    turn_id: "turn-assistant-time",
+    payload: {
+      stop_reason: "end_turn",
+      usage: { input_tokens: 1, output_tokens: 1 },
+      blocks: [{ type: "text", text: "done" }],
+      text: "done",
+      thinking: "",
+      tool_calls: [],
+      model: "gpt-test",
+      message_id: "msg-20260615T000002-abcdef12",
+    },
+  };
+
+  state = apply(state, responded);
+  assert.equal(state.messages[1]?.created_at, "2026-06-15T00:00:02Z");
+
+  const replayed = apply(createLiveSessionProjection(), responded);
+  assert.equal(replayed.messages[0]?.created_at, "2026-06-15T00:00:02Z");
+});
+
 test("projectLiveSessionEvent clears abandoned deltas when the model falls back", () => {
   let state = createLiveSessionProjection();
   state = apply(state, {
