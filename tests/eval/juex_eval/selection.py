@@ -17,6 +17,9 @@ from typing import Any, Iterable
 DEFAULT_CONTEXT_WINDOW = 256000
 SELECTION_SOURCE = "provider_config"
 PROVIDER_UNAVAILABLE = "provider_unavailable"
+CAPABILITY_FIELDS = frozenset(
+    {"tools", "vision", "streaming", "reasoning_effort", "reasoning_replay", "max_output_tokens"}
+)
 
 
 @dataclass(frozen=True)
@@ -381,7 +384,7 @@ def _opaque_endpoint_identity(value: str) -> str:
 def _opaque_runtime_profile_identity(provider: dict[str, Any], model: Any) -> str:
     model = model if isinstance(model, dict) else {}
     projection = {
-        "capabilities": _merge_mapping(_capabilities(provider), _capabilities(model)),
+        "capabilities": _merge_capabilities(_capabilities(provider), _capabilities(model)),
         "compat": _merge_compat(provider.get("compat"), model.get("compat")),
         "headers": _runtime_string_mapping(_merge_mapping(provider.get("headers"), model.get("headers"))),
         "query": _runtime_string_mapping(_merge_mapping(provider.get("query"), model.get("query"))),
@@ -404,8 +407,9 @@ def _merge_provider(base: dict[str, Any], override: dict[str, Any]) -> dict[str,
         value = override.get(name)
         if isinstance(value, str) and value != "":
             merged[name] = value
-    for name in ("headers", "query", "capabilities"):
+    for name in ("headers", "query"):
         merged[name] = _merge_mapping(merged.get(name), override.get(name))
+    merged["capabilities"] = _merge_capabilities(merged.get("capabilities"), override.get("capabilities"))
     merged["compat"] = _merge_compat(merged.get("compat"), override.get("compat"))
     merged["models"] = _merge_models(merged.get("models"), override.get("models"))
     return merged
@@ -436,8 +440,9 @@ def _merge_model(base: dict[str, Any], override: dict[str, Any]) -> dict[str, An
     context_window = override.get("context_window")
     if isinstance(context_window, int) and not isinstance(context_window, bool) and context_window > 0:
         merged["context_window"] = context_window
-    for name in ("headers", "query", "capabilities"):
+    for name in ("headers", "query"):
         merged[name] = _merge_mapping(merged.get(name), override.get(name))
+    merged["capabilities"] = _merge_capabilities(merged.get("capabilities"), override.get("capabilities"))
     merged["compat"] = _merge_compat(merged.get("compat"), override.get("compat"))
     return merged
 
@@ -446,6 +451,17 @@ def _merge_mapping(base: Any, override: Any) -> dict[str, Any]:
     merged = copy.deepcopy(base) if isinstance(base, dict) else {}
     if isinstance(override, dict):
         merged.update(copy.deepcopy(override))
+    return merged
+
+
+def _merge_capabilities(base: Any, override: Any) -> dict[str, Any]:
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    if not isinstance(override, dict):
+        return merged
+    for name, value in override.items():
+        if name in CAPABILITY_FIELDS and value is None:
+            continue
+        merged[name] = copy.deepcopy(value)
     return merged
 
 
@@ -513,8 +529,7 @@ def _require_capability_types(value: dict[str, Any], label: str) -> None:
     capabilities = value.get("capabilities")
     if not isinstance(capabilities, dict):
         return
-    known = {"tools", "vision", "streaming", "reasoning_effort", "reasoning_replay", "max_output_tokens"}
-    for name in known:
+    for name in CAPABILITY_FIELDS:
         if name in capabilities and capabilities[name] is not None and not isinstance(capabilities[name], bool):
             raise ValueError(f"provider config {label}.capabilities.{name} must be a YAML boolean")
 
@@ -532,7 +547,7 @@ def _require_compat_types(value: dict[str, Any], label: str) -> None:
 
 
 def _effective_capability(provider: dict[str, Any], model: dict[str, Any], name: str) -> Any:
-    if name in model:
+    if name in model and model[name] is not None:
         return model[name]
     return provider.get(name)
 
