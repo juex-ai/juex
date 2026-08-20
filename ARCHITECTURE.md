@@ -337,8 +337,10 @@ The Framework lifecycle is:
 3. Start Runtime resources in registration order. A failure closes only
    successfully started resources in reverse order and joins cleanup failures
    with the startup error.
-4. Attach and lock a Session. Construct, validate, seal, and start its Session
-   set before publication.
+4. Attach and lock a Session. A new Primary attachment may provisionally update
+   persisted active history here; this selection record is distinct from App
+   runtime publication. Construct, validate, seal, and start the Session set
+   before publishing it to App readers.
 5. Build one complete Tool registry from the sealed Runtime and Session
    catalogs, then publish the Session, sealed Session set, registry, prompt
    builder, and other Session dependencies together through `runtime.Engine`'s
@@ -1255,6 +1257,13 @@ returns the lock mode (`attach_active`, `new_primary`, `new_side`, or
 `resume`) that the app lifetime must acquire. The policy prefers a valid
 `history.active_id` primary when it still appears in the canonical disk list,
 then other disk-listed primary sessions before creating a new active primary.
+`new_primary` creates the candidate, records it as the provisional persisted
+active selection, and acquires its single-writer lock under the Session-root
+guard before the caller builds or validates Session Modules. Other processes
+may therefore observe the candidate in history before the current App runtime
+publishes it. A replacement rejection must delete the candidate and restore
+the captured previous selection; a restore failure is joined with the original
+error and requires history reconciliation before another attachment trusts it.
 Web startup and MCP
 notification routing use exported app helpers for active-primary records and
 ids instead of duplicating those rules.
@@ -1403,14 +1412,20 @@ test compatibility surface; production readers use snapshot methods such as
 `ActiveContext`, `PromptSections`, and `SessionStateStatus`.
 
 `internal/app` owns the wider lifecycle boundary. It builds, validates, and
-starts the candidate Module set and complete Tool registry before publication.
+starts the candidate Module set and complete Tool registry after attachment has
+provisionally selected the candidate in persisted history but before App runtime
+publication. Existing App readers remain on the old Session during this phase;
+another process that reads history may observe the candidate selection.
 Under the App write lock it installs the Engine bundle, redirects the durable
 event sink and observability recorder, runs Session-start policy, and then
 publishes the App Session, runtime status, chunked-write state, and Session
 lock. A pre-commit failure rolls back the captured Engine checkpoint and old
 event/observability targets before closing candidate resources no longer
-referenced by the Engine. Rollback failure is joined with the original error
-instead of closing a still-published Module set. `ReadSession` and
+referenced by the Engine. The attachment caller then deletes the candidate and
+restores the captured active-history selection. Either rollback or history
+restore failure is joined with the original error; a failed history restore
+leaves persisted selection uncertain, and a failed Engine rollback prevents
+closing a still-published Module set. `ReadSession` and
 higher-level App status/context/pending-input/turn methods hold the matching
 read lock, so an old Session and lock cannot close underneath an in-flight
 reader. Only after App publication releases that lock are the old Module set,
@@ -1430,7 +1445,7 @@ failure cases and exact test names live in
 | Turn admission | `internal/app` classifies transport input; `internal/runtime` reserves the Turn and applies typed input policy | `internal/runtime.PendingInputQueue`, `turn.admitted`, then the Session transcript | App admission results, runtime status, Web, and pending-input observers |
 | Pending input | `internal/runtime` owns queue admission, safe-boundary drain, processing, and completion checks | Session-local `pending_input.jsonl` plus the transcript's stable message ids | The in-memory queue, `pending_input.*` Events, status, Web, and Module observers |
 | Tool execution | `internal/runtime` orders the batch and policies; `internal/tools` owns handler execution; `internal/toolevents` owns payload constructors | `llm.responded`, the complete ordered `tool.requested` set, per-call `tool.running` and input-resolution facts, then one terminal outcome containing the exact Provider-visible Tool Result | Status, Web, logs, and failure-ledger diagnostics consume cataloged Events; raw handler diagnostics do not replace the terminal outcome |
-| Session replacement | `internal/app` owns the candidate transaction and lifetime locks; `internal/runtime` atomically publishes one `SessionRuntimeSnapshot`; `internal/session` owns the single-writer lock and journals | The candidate Session journals plus the published Engine checkpoint and App Session reference | Status replay, observability, chunked-write state, and App readers switch under the same App lifecycle boundary |
+| Session replacement | `internal/app` owns the candidate transaction and lifetime locks; `internal/runtime` atomically publishes one `SessionRuntimeSnapshot`; `internal/session` owns active-history selection, the single-writer lock, and journals | The provisional candidate active-history selection, candidate Session journals, then the published Engine checkpoint and App Session reference | Another process may observe provisional active history; status replay, observability, chunked-write state, and current App readers switch only under the App lifecycle boundary |
 | Finish and completion | `internal/runtime.turnLifecycle` orders the attempt; `internal/runtime/module` evaluates typed policies and commits only a selected candidate | The assistant response, selected policy-owned state, durable continuation Pending input, and finally `turn.completed` or `turn.errored` | Policy completion observers, continuation observers, status, Web, and logs cannot choose or alter the action |
 
 For a new main input, `PendingInputQueue.StageTurnInput` writes a non-replayable

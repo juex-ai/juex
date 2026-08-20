@@ -42,7 +42,7 @@ domain boundary.
 | Session | A resumable, ordered conversation with identity, kind, transcript, Events, usage, model-owned working state, and a single-writer lock. |
 | Primary Session | A Session eligible to be selected as the Resident Agent's active continuation target. |
 | Side Session | A durable exploratory Session that is listed and resumable but never becomes the active Session. A Primary Session may manage Side Sessions as delegated workers for its App lifetime. |
-| Active Session | The selected Primary Session used by default for CLI, Web, and external-event continuation. |
+| Active Session | The Primary Session selected in persisted history for default CLI, Web, and external-event continuation. A replacement may expose its candidate as a provisional persisted selection before the current App runtime commits it; existing App readers remain on the old Session, and rejection must restore the previous selection. |
 | Turn | One user-originated or system-originated input processed through one or more Provider iterations and Tool Call batches until completion, cancellation, or error. |
 | Pending input | Accepted user steering or external input queued while a Turn or compaction phase is active. It is durable, bounded, expiring, and admitted only at a safe Provider-iteration boundary. |
 | Session state | Model-owned Goal and Notes for one Session, distinct from Agent state and from the runtime's observed execution status. A Primary Session remains the owner when one of its managed Side Sessions is explicitly bound to the same state. |
@@ -182,21 +182,29 @@ domain boundary.
 
 ### Active Session Replacement
 
-1. Replacement acquires and validates a candidate Session before changing the
-   active Session.
+1. Replacement creates and locks a candidate Session. Creating a new Primary
+   may durably advance the persisted active selection to that candidate before
+   candidate validation, so another process reading history may observe the
+   provisional selection while the current App still serves the old Session.
 2. The candidate's Session-scoped Modules, Tool catalog, context, and startup
    behavior are built, validated, and started as one candidate set. Any failure
-   before publication closes that set and leaves the old Session authoritative.
-3. Publication is one serialized replacement boundary. It refuses an active
+   before App publication closes that set and leaves the old App runtime
+   authoritative.
+3. Rejection before App publication deletes the candidate and restores the
+   exact previous persisted active selection. Restore failure is joined with
+   the original rejection and leaves persisted selection uncertain; callers
+   must reconcile it before trusting history as the continuation target.
+4. App publication is one serialized replacement boundary. It refuses an active
    Turn reservation or in-memory Pending input and exposes either the complete
    old Session runtime or the complete candidate runtime, never a mixed view.
-4. Candidate Session-start policy runs before the replacement is committed to
+5. Candidate Session-start policy runs before the replacement is committed to
    App readers. Failure or cancellation starts rollback: the exact previously
    published runtime checkpoint and old projections must be restored before
    resources still referenced by the candidate runtime may close. A rollback
    failure is surfaced with the original rejection; it is never hidden by
    pretending the old Session was restored.
-5. After App publication succeeds, the new Session is authoritative. Existing
+6. After App publication succeeds, the provisional persisted selection becomes
+   the committed Active Session and the new Session is authoritative. Existing
    readers of the old Session finish before its Modules, single-writer lock,
    and Session are closed. Failure while closing those superseded resources is
    diagnostic and does not roll back the committed replacement.
