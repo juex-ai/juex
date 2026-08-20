@@ -137,16 +137,36 @@ def enumerate_candidates(cfg: dict[str, Any]) -> list[Candidate]:
 
 def merged_providers(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     """Return the runtime-equivalent merged provider view, without resolving secrets."""
-    providers = cfg.get("providers") or []
-    if isinstance(providers, dict):
-        providers = list(providers.values())
+    providers = cfg.get("providers")
+    if providers is None:
+        return []
+    if not isinstance(providers, list):
+        raise ValueError("provider config 'providers' must be a YAML sequence")
     merged: dict[str, dict[str, Any]] = {}
-    for raw_provider in providers:
+    for provider_index, raw_provider in enumerate(providers):
         if not isinstance(raw_provider, dict):
-            continue
+            raise ValueError(f"provider config providers[{provider_index}] must be a YAML mapping")
         provider_id = str(raw_provider.get("id") or "").strip()
         if not provider_id:
-            continue
+            raise ValueError(f"provider config providers[{provider_index}] requires an id")
+        if ":" in provider_id:
+            raise ValueError(f"provider config providers[{provider_index}] id must not contain ':'")
+        _require_mapping_fields(raw_provider, ("headers", "query", "capabilities", "compat"), f"providers[{provider_index}]")
+        models = raw_provider.get("models")
+        if models is not None and not isinstance(models, list):
+            raise ValueError(f"provider config providers[{provider_index}].models must be a YAML sequence")
+        for model_index, raw_model in enumerate(models or []):
+            if not isinstance(raw_model, dict):
+                raise ValueError(
+                    f"provider config providers[{provider_index}].models[{model_index}] must be a YAML mapping"
+                )
+            if not str(raw_model.get("id") or "").strip():
+                raise ValueError(f"provider config providers[{provider_index}].models[{model_index}] requires an id")
+            _require_mapping_fields(
+                raw_model,
+                ("headers", "query", "capabilities", "compat"),
+                f"providers[{provider_index}].models[{model_index}]",
+            )
         provider = copy.deepcopy(raw_provider)
         provider["id"] = provider_id
         merged[provider_id] = _merge_provider(merged.get(provider_id, {}), provider)
@@ -420,6 +440,12 @@ def _model_mapping(model: Any) -> dict[str, Any]:
 
 def _nonempty(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _require_mapping_fields(value: dict[str, Any], fields: Iterable[str], label: str) -> None:
+    for name in fields:
+        if name in value and value[name] is not None and not isinstance(value[name], dict):
+            raise ValueError(f"provider config {label}.{name} must be a YAML mapping")
 
 
 def _effective_capability(provider: dict[str, Any], model: dict[str, Any], name: str) -> Any:

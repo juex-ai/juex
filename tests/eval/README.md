@@ -212,6 +212,8 @@ the original URI, user information, path, or query. A second opaque profile
 identity covers effective capabilities, compat, headers, and query settings.
 Unknown provider/model fields remain in the isolated config so Juex's strict
 loader rejects the same invalid source shape instead of silently normalizing it.
+Malformed provider/model container types and missing IDs fail selection as
+`provider_unavailable` before any live request.
 
 ## Compaction Quality
 
