@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import pathlib
+import re
 import secrets
 import shlex
 from dataclasses import dataclass
@@ -93,9 +94,9 @@ def enumerate_candidates(
     by_ref: dict[str, Candidate] = {}
     if provider_api_base_override is None:
         environment = _environment_variables(cfg)
-        api_base_override = str(environment.get("PROVIDER_API_BASE") or "").strip()
+        api_base_override = str(environment.get("PROVIDER_API_BASE") or "")
     else:
-        api_base_override = provider_api_base_override.strip()
+        api_base_override = provider_api_base_override
     for provider in merged_providers(cfg):
         provider_id = str(provider.get("id") or "").strip()
         if not provider_id:
@@ -350,9 +351,9 @@ def _environment_override_projection(cfg: dict[str, Any]) -> dict[str, Any]:
     variables = _environment_variables(cfg)
     projection: dict[str, Any] = {}
     raw_context_window = variables.get("PROVIDER_CONTEXT_WINDOW")
-    try:
-        context_window = int(str(raw_context_window).strip()) if raw_context_window is not None else 0
-    except ValueError:
+    context_text = str(raw_context_window) if raw_context_window is not None else ""
+    context_window = int(context_text) if re.fullmatch(r"[+-]?[0-9]+", context_text) else 0
+    if context_window > 2**63 - 1:
         context_window = 0
     if context_window > 0:
         projection["provider_context_window"] = context_window
@@ -371,7 +372,6 @@ def _environment_variables(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def _opaque_endpoint_identity(value: str) -> str:
-    value = value.strip()
     if not value:
         return "default"
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
@@ -396,9 +396,13 @@ def _merge_provider(base: dict[str, Any], override: dict[str, Any]) -> dict[str,
         if name not in known:
             merged[name] = copy.deepcopy(value)
     merged["id"] = override["id"]
-    for name in ("protocol", "base_url", "api_key"):
-        if _nonempty(override.get(name)):
-            merged[name] = copy.deepcopy(override[name])
+    protocol = override.get("protocol")
+    if _nonempty(protocol):
+        merged["protocol"] = protocol.strip()
+    for name in ("base_url", "api_key"):
+        value = override.get(name)
+        if isinstance(value, str) and value != "":
+            merged[name] = value
     for name in ("headers", "query", "capabilities"):
         merged[name] = _merge_mapping(merged.get(name), override.get(name))
     merged["compat"] = _merge_compat(merged.get("compat"), override.get("compat"))
@@ -425,8 +429,9 @@ def _merge_model(base: dict[str, Any], override: dict[str, Any]) -> dict[str, An
         if name not in known:
             merged[name] = copy.deepcopy(value)
     merged["id"] = override["id"]
-    if _nonempty(override.get("thinking_effort")):
-        merged["thinking_effort"] = copy.deepcopy(override["thinking_effort"])
+    thinking_effort = override.get("thinking_effort")
+    if _nonempty(thinking_effort):
+        merged["thinking_effort"] = thinking_effort.strip()
     context_window = override.get("context_window")
     if isinstance(context_window, int) and not isinstance(context_window, bool) and context_window > 0:
         merged["context_window"] = context_window
@@ -455,7 +460,7 @@ def _merge_compat(base: Any, override: Any) -> dict[str, Any]:
     if isinstance(fields, list) and fields:
         merged["reasoning_replay_fields"] = copy.deepcopy(fields)
     if _nonempty(override.get("codex_transport")):
-        merged["codex_transport"] = copy.deepcopy(override["codex_transport"])
+        merged["codex_transport"] = override["codex_transport"].strip()
     return merged
 
 
