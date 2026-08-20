@@ -105,8 +105,8 @@ def run(args: argparse.Namespace) -> int:
     try:
         if not config.is_file():
             raise FileNotFoundError(f"Missing provider config: {config}")
-        cfg = helper.load_yaml_file(config)
         helper.validate_source_config(args.juex, config)
+        cfg = helper.load_source_config(config)
         candidates, evidence = selection.select(
             cfg,
             kind="compaction",
@@ -115,7 +115,6 @@ def run(args: argparse.Namespace) -> int:
             only=explicit_models,
             all_models=args.all_models,
             required_context_window=args.context_window,
-            provider_api_base_override=os.environ["PROVIDER_API_BASE"] if "PROVIDER_API_BASE" in os.environ else None,
             command_prefix=command_prefix,
         )
     except selection.ProviderUnavailable as exc:
@@ -370,6 +369,8 @@ def run_eval_turn(args: argparse.Namespace, work: pathlib.Path, prompt_file: pat
     env["GIT_CONFIG_GLOBAL"] = str(case_home / "gitconfig")
     env["GIT_CONFIG_NOSYSTEM"] = "1"
     env["CODEX_HOME"] = codex_home
+    for name in helper.ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
+        env.pop(name, None)
     env["PROVIDER_CONTEXT_WINDOW"] = str(args.context_window)
     command = [
         args.juex,

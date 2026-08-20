@@ -46,6 +46,15 @@ SELECTED_PROVIDER_ENVIRONMENT_KEYS = (
     "PROVIDER_THINKING_EFFORT",
     "PROVIDER_CONTEXT_WINDOW",
 )
+ISOLATED_PROVIDER_ENVIRONMENT_KEYS = (
+    "PROVIDER_API_ID",
+    "PROVIDER_API_PROTOCOL",
+    "PROVIDER_API_BASE",
+    "PROVIDER_API_KEY",
+    "PROVIDER_API_MODEL",
+    "PROVIDER_THINKING_EFFORT",
+    "PROVIDER_CONTEXT_WINDOW",
+)
 
 
 def main() -> int:
@@ -187,8 +196,8 @@ def provider_smoke(argv: list[str]) -> int:
         try:
             if not config_path.is_file():
                 raise FileNotFoundError(f"provider config not found: {config_path}")
-            cfg = load_yaml_file(config_path)
             validate_source_config(parsed.juex, config_path)
+            cfg = load_source_config(config_path)
             rows, evidence = selection.select(
                 cfg,
                 kind="provider-smoke",
@@ -196,7 +205,6 @@ def provider_smoke(argv: list[str]) -> int:
                 seed=parsed.selection_seed,
                 only=[parsed.only] if parsed.only else [],
                 all_models=parsed.all_models,
-                provider_api_base_override="",
                 command_prefix=command_prefix,
             )
         except selection.ProviderUnavailable as exc:
@@ -680,6 +688,8 @@ def run_turn(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pat
     (case_home / ".agents").mkdir(parents=True, exist_ok=True)
     (case_home / ".juex").mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
+    for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
+        env.pop(name, None)
     env.update(
         {
             "HOME": str(case_home),
@@ -688,13 +698,6 @@ def run_turn(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pat
             "GIT_CONFIG_GLOBAL": str(case_home / "gitconfig"),
             "GIT_CONFIG_NOSYSTEM": "1",
             "CODEX_HOME": ctx.codex_home,
-            "PROVIDER_API_ID": "",
-            "PROVIDER_API_PROTOCOL": "",
-            "PROVIDER_API_BASE": "",
-            "PROVIDER_API_KEY": "",
-            "PROVIDER_API_MODEL": "",
-            "PROVIDER_THINKING_EFFORT": "",
-            "PROVIDER_CONTEXT_WINDOW": "",
         }
     )
     command = [
@@ -984,9 +987,7 @@ def validate_source_config(juex_bin: str, config_path: pathlib.Path) -> None:
     with tempfile.TemporaryDirectory(prefix="juex-eval-config-check.") as work:
         command = [juex_bin, "-C", work]
         env = os.environ.copy()
-        configured_home = os.environ.get("JUEX_HOME", "").strip()
-        default_home = selection.resolved_path(pathlib.Path.home() / ".juex")
-        effective_home = selection.resolved_path(configured_home) if configured_home else default_home
+        default_home, effective_home = provider_home_dirs()
         home_config_paths = {home / "juex.yaml" for home in (default_home, effective_home)}
         if config_path in home_config_paths:
             env["JUEX_HOME"] = str(config_path.parent)
@@ -1038,7 +1039,7 @@ def write_model_config_command(argv: list[str]) -> int:
             "tool_result_max_chars": 1200,
             "user_input_inline_max_bytes": 524288,
         }
-    cfg = load_yaml_file(pathlib.Path(parsed.source).expanduser())
+    cfg = load_source_config(pathlib.Path(parsed.source).expanduser())
     if parsed.ref:
         provider_id, model_id = split_provider_model_ref(parsed.ref)
     elif parsed.provider:
@@ -1254,10 +1255,133 @@ def append_jsonl(path: pathlib.Path, value: dict[str, Any]) -> None:
 
 
 def load_yaml_file(path: pathlib.Path) -> dict[str, Any]:
-    value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    text = path.read_text(encoding="utf-8")
+    value = yaml.safe_load(text) or {}
     if not isinstance(value, dict):
         raise ValueError(f"{path} must contain a YAML mapping")
+    node = yaml.compose(text)
+    if isinstance(node, yaml.nodes.MappingNode):
+        _restore_runtime_string_maps(value, node)
     return value
+
+
+def load_source_config(path: pathlib.Path) -> dict[str, Any]:
+    """Load the same Home layers plus explicit overlay used by Juex validation."""
+    config_path = selection.resolved_path(path)
+    default_home, effective_home = provider_home_dirs()
+    default_config = default_home / "juex.yaml"
+    effective_config = effective_home / "juex.yaml"
+    if config_path == default_config:
+        sources = [default_config]
+    elif config_path == effective_config:
+        sources = [default_config, effective_config]
+    else:
+        sources = [default_config, effective_config, config_path]
+    merged: dict[str, Any] = {}
+    seen: set[pathlib.Path] = set()
+    for source in sources:
+        source = selection.resolved_path(source)
+        if source in seen:
+            continue
+        seen.add(source)
+        if source != config_path and not source.is_file():
+            continue
+        merged = _merge_source_config(merged, load_yaml_file(source))
+    return merged
+
+
+def provider_home_dirs() -> tuple[pathlib.Path, pathlib.Path]:
+    default_home = selection.resolved_path(pathlib.Path.home() / ".juex")
+    configured_home = os.environ.get("JUEX_HOME", "").strip()
+    effective_home = selection.resolved_path(configured_home) if configured_home else default_home
+    return default_home, effective_home
+
+
+def _merge_source_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(base)
+    for name, value in override.items():
+        if name == "providers":
+            if value is None:
+                continue
+            if isinstance(value, list):
+                existing = merged.get(name)
+                merged[name] = [*(existing if isinstance(existing, list) else []), *copy.deepcopy(value)]
+            else:
+                merged[name] = copy.deepcopy(value)
+        elif name == "environment":
+            if value is None:
+                continue
+            if not isinstance(value, dict):
+                merged[name] = copy.deepcopy(value)
+                continue
+            environment = copy.deepcopy(merged.get(name)) if isinstance(merged.get(name), dict) else {}
+            for environment_name, environment_value in value.items():
+                if environment_name == "variables":
+                    if environment_value is None:
+                        continue
+                    if not isinstance(environment_value, dict):
+                        environment[environment_name] = copy.deepcopy(environment_value)
+                        continue
+                    variables = environment.get(environment_name)
+                    variables = copy.deepcopy(variables) if isinstance(variables, dict) else {}
+                    variables.update(copy.deepcopy(environment_value))
+                    environment[environment_name] = variables
+                else:
+                    environment[environment_name] = copy.deepcopy(environment_value)
+            merged[name] = environment
+        else:
+            merged[name] = copy.deepcopy(value)
+    return merged
+
+
+def _restore_runtime_string_maps(value: dict[str, Any], root: yaml.nodes.MappingNode) -> None:
+    root_nodes = _mapping_nodes(root)
+    environment = value.get("environment")
+    environment_node = root_nodes.get("environment")
+    if isinstance(environment, dict) and isinstance(environment_node, yaml.nodes.MappingNode):
+        _restore_string_map_field(environment, environment_node, "variables")
+    providers = value.get("providers")
+    providers_node = root_nodes.get("providers")
+    if not isinstance(providers, list) or not isinstance(providers_node, yaml.nodes.SequenceNode):
+        return
+    for provider, provider_node in zip(providers, providers_node.value, strict=False):
+        if not isinstance(provider, dict) or not isinstance(provider_node, yaml.nodes.MappingNode):
+            continue
+        for name in ("headers", "query"):
+            _restore_string_map_field(provider, provider_node, name)
+        models = provider.get("models")
+        models_node = _mapping_nodes(provider_node).get("models")
+        if not isinstance(models, list) or not isinstance(models_node, yaml.nodes.SequenceNode):
+            continue
+        for model, model_node in zip(models, models_node.value, strict=False):
+            if not isinstance(model, dict) or not isinstance(model_node, yaml.nodes.MappingNode):
+                continue
+            for name in ("headers", "query"):
+                _restore_string_map_field(model, model_node, name)
+
+
+def _restore_string_map_field(container: dict[str, Any], node: yaml.nodes.MappingNode, name: str) -> None:
+    current = container.get(name)
+    field_node = _mapping_nodes(node).get(name)
+    if not isinstance(current, dict) or not isinstance(field_node, yaml.nodes.MappingNode):
+        return
+    loaded_items = list(current.items())
+    restored: dict[Any, Any] = {}
+    for index, (key_node, value_node) in enumerate(field_node.value):
+        if isinstance(key_node, yaml.nodes.ScalarNode) and isinstance(value_node, yaml.nodes.ScalarNode):
+            restored[key_node.value] = value_node.value
+        elif index < len(loaded_items):
+            loaded_key, loaded_value = loaded_items[index]
+            restored[loaded_key] = loaded_value
+    container[name] = restored
+
+
+def _mapping_nodes(node: yaml.nodes.MappingNode) -> dict[str, yaml.nodes.Node]:
+    return {
+        key.value: value
+        for key, value in node.value
+        if isinstance(key, yaml.nodes.ScalarNode)
+    }
 
 
 def safe_config_error(exc: Exception) -> str:

@@ -206,6 +206,75 @@ func TestProviderConfigSelectionIsStableAndRedacted(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
+func TestProviderConfigLoaderLayersHomeAndPreservesStringMapLexemes(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import os",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper, selection",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    root = Path(tmp)",
+		"    home = root / 'home'",
+		"    instance = root / 'instance'",
+		"    default_config = home / '.juex' / 'juex.yaml'",
+		"    instance_config = instance / 'juex.yaml'",
+		"    overlay = root / 'overlay.yaml'",
+		"    default_config.parent.mkdir(parents=True)",
+		"    instance.mkdir(parents=True)",
+		"    default_config.write_text('''environment:",
+		"  variables: {PROVIDER_THINKING_EFFORT: low}",
+		"providers:",
+		"  - id: layered",
+		"    protocol: openai/chat",
+		"    headers: {X-Mode: yes}",
+		"    models: [{id: inherited}]",
+		"''', encoding='utf-8')",
+		"    instance_config.write_text('''providers:",
+		"  - id: layered",
+		"    api_key: never-report-layered-key",
+		"    models:",
+		"      - id: shared",
+		"        query: {as_of: 2026-08-20}",
+		"''', encoding='utf-8')",
+		"    overlay.write_text('''providers:",
+		"  - id: layered",
+		"    headers: {X-Overlay: no}",
+		"    models: [{id: shared, context_window: 64000}]",
+		"''', encoding='utf-8')",
+		"    original = {name: os.environ.get(name) for name in ['HOME', 'USERPROFILE', 'JUEX_HOME']}",
+		"    os.environ.update({'HOME': str(home), 'USERPROFILE': str(home), 'JUEX_HOME': str(instance)})",
+		"    try:",
+		"        cfg = helper.load_source_config(overlay)",
+		"        provider = selection.merged_providers(cfg)[0]",
+		"        assert [model['id'] for model in provider['models']] == ['inherited', 'shared'], provider",
+		"        assert provider['protocol'] == 'openai/chat' and provider['api_key'] == 'never-report-layered-key'",
+		"        assert provider['headers'] == {'X-Mode': 'yes', 'X-Overlay': 'no'}, provider['headers']",
+		"        shared = provider['models'][1]",
+		"        assert shared['query']['as_of'] == '2026-08-20' and shared['context_window'] == 64000, shared",
+		"        out = root / 'selected.yaml'",
+		"        helper.write_selected_config(cfg, 'layered', 'shared', out)",
+		"        selected = helper.load_yaml_file(out)",
+		"        selected_provider = selected['providers'][0]",
+		"        assert selected_provider['headers'] == {'X-Mode': 'yes', 'X-Overlay': 'no'}",
+		"        assert selected_provider['models'][0]['query']['as_of'] == '2026-08-20'",
+		"    finally:",
+		"        for name, value in original.items():",
+		"            if value is None:",
+		"                os.environ.pop(name, None)",
+		"            else:",
+		"                os.environ[name] = value",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func TestProviderConfigSelectionMergesRepeatedProviderDeclarations(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
@@ -320,12 +389,17 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"import contextlib",
 		"import io",
 		"import json",
+		"import os",
 		"import shutil",
 		"import tempfile",
 		"from pathlib import Path",
 		"from tests.eval.juex_eval import helper",
 		"with tempfile.TemporaryDirectory() as tmp:",
 		"    work = Path(tmp)",
+		"    original_home = {name: os.environ.get(name) for name in ['HOME', 'USERPROFILE', 'JUEX_HOME']}",
+		"    original_provider_env = {name: os.environ.get(name) for name in ['PROVIDER_API_BASE', 'PROVIDER_API_MODEL', 'PROVIDER_THINKING_EFFORT']}",
+		"    os.environ.update({'HOME': str(work / 'home'), 'USERPROFILE': str(work / 'home'), 'JUEX_HOME': str(work / 'instance')})",
+		"    os.environ.update({'PROVIDER_API_BASE': 'https://inherited-a.invalid', 'PROVIDER_API_MODEL': 'inherited-model', 'PROVIDER_THINKING_EFFORT': 'low'})",
 		"    config = work / 'provider config.yaml'",
 		"    config.write_text('''environment:",
 		"  variables:",
@@ -420,6 +494,16 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"    finally:",
 		"        helper.run_provider_smoke_case = original_case",
 		"        helper.validate_source_config = original_validate",
+		"        for name, value in original_home.items():",
+		"            if value is None:",
+		"                os.environ.pop(name, None)",
+		"            else:",
+		"                os.environ[name] = value",
+		"        for name, value in original_provider_env.items():",
+		"            if value is None:",
+		"                os.environ.pop(name, None)",
+		"            else:",
+		"                os.environ[name] = value",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
@@ -437,6 +521,7 @@ func TestCompactionDynamicSelectionWritesSummaryAndFiltersWindow(t *testing.T) {
 		"import contextlib",
 		"import io",
 		"import json",
+		"import os",
 		"import shutil",
 		"import tempfile",
 		"from argparse import Namespace",
@@ -444,6 +529,10 @@ func TestCompactionDynamicSelectionWritesSummaryAndFiltersWindow(t *testing.T) {
 		"from tests.eval.juex_eval import compaction",
 		"with tempfile.TemporaryDirectory() as tmp:",
 		"    work = Path(tmp)",
+		"    original_home = {name: os.environ.get(name) for name in ['HOME', 'USERPROFILE', 'JUEX_HOME']}",
+		"    original_provider_env = {name: os.environ.get(name) for name in ['PROVIDER_API_BASE', 'PROVIDER_API_MODEL', 'PROVIDER_THINKING_EFFORT']}",
+		"    os.environ.update({'HOME': str(work / 'home'), 'USERPROFILE': str(work / 'home'), 'JUEX_HOME': str(work / 'instance')})",
+		"    os.environ.update({'PROVIDER_API_BASE': 'https://inherited-a.invalid', 'PROVIDER_API_MODEL': 'inherited-model', 'PROVIDER_THINKING_EFFORT': 'low'})",
 		"    config = work / 'juex.yaml'",
 		"    config.write_text('''providers:",
 		"  - id: provider",
@@ -475,6 +564,11 @@ func TestCompactionDynamicSelectionWritesSummaryAndFiltersWindow(t *testing.T) {
 		"        assert summary['eligible_candidate_refs'] == refs and summary['selection_source'] == 'provider_config', summary",
 		"        assert summary['redacted_config_hash'].startswith('sha256:'), summary",
 		"        assert '--all-models' in summary['reproduction_command'] and '--config' in summary['reproduction_command'], summary",
+		"        isolated_hash = summary['redacted_config_hash']",
+		"        os.environ.update({'PROVIDER_API_BASE': 'https://inherited-b.invalid', 'PROVIDER_API_MODEL': 'other-model', 'PROVIDER_THINKING_EFFORT': 'high'})",
+		"        status, refs, summary, _ = run('all-other-inherited', all_models=True)",
+		"        assert status == 0 and refs == ['provider:default-window', 'provider:large'], refs",
+		"        assert summary['redacted_config_hash'] == isolated_hash, summary",
 		"        status, refs, summary, _ = run('small', only=['provider:small'])",
 		"        assert status == 1 and refs == [] and summary['failure_category'] == 'provider_unavailable', summary",
 		"        assert summary['selected_provider_models'] == [], summary",
@@ -493,6 +587,65 @@ func TestCompactionDynamicSelectionWritesSummaryAndFiltersWindow(t *testing.T) {
 		"    finally:",
 		"        compaction.run_model = original_run_model",
 		"        compaction.helper.validate_source_config = original_validate",
+		"        for name, value in original_home.items():",
+		"            if value is None:",
+		"                os.environ.pop(name, None)",
+		"            else:",
+		"                os.environ[name] = value",
+		"        for name, value in original_provider_env.items():",
+		"            if value is None:",
+		"                os.environ.pop(name, None)",
+		"            else:",
+		"                os.environ[name] = value",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestCompactionTurnIsolatesInheritedProviderRuntimeOverrides(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import os",
+		"import tempfile",
+		"from argparse import Namespace",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import compaction, helper",
+		"captured = {}",
+		"original_run = helper.run_subprocess_with_timeout",
+		"original_env = {name: os.environ.get(name) for name in helper.ISOLATED_PROVIDER_ENVIRONMENT_KEYS}",
+		"for name in helper.ISOLATED_PROVIDER_ENVIRONMENT_KEYS:",
+		"    os.environ[name] = f'inherited-{name.lower()}'",
+		"def fake_run(command, timeout, **kwargs):",
+		"    captured.update(kwargs['env'])",
+		"    kwargs['stdout'].write(b'ok\\n')",
+		"    return 0",
+		"helper.run_subprocess_with_timeout = fake_run",
+		"try:",
+		"    with tempfile.TemporaryDirectory() as tmp:",
+		"        work = Path(tmp)",
+		"        prompt = work / 'prompt.txt'",
+		"        output = work / 'output.txt'",
+		"        prompt.write_text('test', encoding='utf-8')",
+		"        args = Namespace(juex='/path/to/juex', context_window=32000, turn_timeout=10)",
+		"        assert compaction.run_eval_turn(args, work, prompt, output) == 0",
+		"        for name in helper.ISOLATED_PROVIDER_ENVIRONMENT_KEYS:",
+		"            if name == 'PROVIDER_CONTEXT_WINDOW':",
+		"                assert captured[name] == '32000', (name, captured[name])",
+		"            else:",
+		"                assert name not in captured, (name, captured.get(name))",
+		"finally:",
+		"    helper.run_subprocess_with_timeout = original_run",
+		"    for name, value in original_env.items():",
+		"        if value is None:",
+		"            os.environ.pop(name, None)",
+		"        else:",
+		"            os.environ[name] = value",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
