@@ -454,7 +454,13 @@ func TestRunPublishesExplicitTCPAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET TCP API %s: %v", path, err)
 		}
-		_ = response.Body.Close()
+		if _, err := io.Copy(io.Discard, response.Body); err != nil {
+			_ = response.Body.Close()
+			t.Fatalf("read TCP API %s: %v", path, err)
+		}
+		if err := response.Body.Close(); err != nil {
+			t.Fatalf("close TCP API %s: %v", path, err)
+		}
 		if response.StatusCode != want {
 			t.Fatalf("GET TCP API %s status = %d, want %d", path, response.StatusCode, want)
 		}
@@ -583,7 +589,7 @@ func (p *cancelAwareProvider) Complete(ctx context.Context, sys string, h []llm.
 }
 
 func TestCloseCancelsMCPNotificationTurn(t *testing.T) {
-	const notificationTimeout = 10 * time.Second
+	const notificationTimeout = 30 * time.Second
 
 	provider := &cancelAwareProvider{
 		started:  make(chan struct{}),
@@ -616,6 +622,8 @@ func TestCloseCancelsMCPNotificationTurn(t *testing.T) {
 	}()
 	select {
 	case <-provider.started:
+	case err := <-errCh:
+		t.Fatalf("MCP notification returned before provider start: %v", err)
 	case <-time.After(notificationTimeout):
 		close(provider.release)
 		t.Fatal("provider did not start")

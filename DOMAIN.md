@@ -42,7 +42,7 @@ domain boundary.
 | Session | A resumable, ordered conversation with identity, kind, transcript, Events, usage, model-owned working state, and a single-writer lock. |
 | Primary Session | A Session eligible to be selected as the Resident Agent's active continuation target. |
 | Side Session | A durable exploratory Session that is listed and resumable but never becomes the active Session. A Primary Session may manage Side Sessions as delegated workers for its App lifetime. |
-| Active Session | The selected Primary Session used by default for CLI, Web, and external-event continuation. |
+| Active Session | The Primary Session selected in persisted history for default CLI, Web, and external-event continuation. A replacement may expose its candidate as a provisional persisted selection before the current App runtime commits it; existing App readers remain on the old Session. A post-attachment rejection reasserts that resident App Session as the persisted selection, but an attachment-lock failure may leave the provisional candidate selected. |
 | Turn | One user-originated or system-originated input processed through one or more Provider iterations and Tool Call batches until completion, cancellation, or error. |
 | Pending input | Accepted user steering or external input queued while a Turn or compaction phase is active. It is durable, bounded, expiring, and admitted only at a safe Provider-iteration boundary. |
 | Session state | Model-owned Goal and Notes for one Session, distinct from Agent state and from the runtime's observed execution status. A Primary Session remains the owner when one of its managed Side Sessions is explicitly bound to the same state. |
@@ -106,31 +106,41 @@ domain boundary.
 
 1. Work attaches to the active Primary Session, creates a new Primary Session,
    creates a Side Session, or explicitly resumes a recorded Session.
-2. Turn admission durably accepts the input and establishes one active
-   execution boundary for that Session. Transcript repair runs before ordered
-   typed input policies; rejection or policy failure ends the Turn without
-   erasing the accepted input.
+2. Turn admission durably accepts the input before it can enter a Provider
+   request. A new main input first creates a non-replayable acceptance intent,
+   then commits the Turn admission fact, then becomes replayable admitted
+   input. An already durable Pending input remains replayable until that same
+   admission fact commits. Transcript repair and ordered typed input policies
+   run before the accepted message is appended to the transcript; rejection or
+   policy failure ends the Turn without erasing the accepted input.
 3. Each Provider iteration receives canonical context and may return ordered
    Tool Calls. Every call is identified by Turn, Provider iteration, assistant
    message, call position, and Tool Use ID.
 4. Runtime durably declares the complete ordered Tool Call batch before any
    call starts. It durably marks each call started before a Tool Policy or
-   handler can cross an external side-effect boundary, and durably records the
-   exact Provider-visible success, failure, timeout, or cancellation outcome
-   before appending the ordered Tool Result batch or requesting the Provider
-   again. Safety-policy failure is fail-closed before the handler side effect.
+   handler can cross an external side-effect boundary. The Tool implementation
+   owns its raw output and structured diagnostics; ordered Tool Policies and
+   context projection produce the effective Tool Result. Runtime durably
+   records that exact Provider-visible success, failure, timeout, or
+   cancellation outcome before appending the ordered Tool Result batch or
+   requesting the Provider again. Raw diagnostics never override a transformed
+   or projected outcome. Safety-policy failure is fail-closed before the
+   handler side effect.
 5. Restart recovery distinguishes a call that was declared but not started
    from one that started without a durable outcome. The former is never
    reported as executed; the latter becomes `TOOL_OUTCOME_UNKNOWN` and is not
    automatically retried. A durable outcome restores its exact Tool Result
    once in Provider order.
-6. Every finish attempt evaluates all Finish Policies in stable Module order.
-   Any continue decision blocks completion; the first still-valid continuation
-   supplies the next input, and stateful policy changes commit only for that
-   selected decision.
+6. A finish attempt begins only after the assistant response is durable. It
+   evaluates every Finish Policy in stable Module order, commits state only for
+   the first still-valid continuation candidate, durably admits that
+   continuation as Pending input, and only then notifies observation-only
+   callbacks. A stale candidate falls through without changing control flow.
 7. Pending input drains only between Provider iterations and remains the final
-   completion authority. Completion closes the Turn only when no accepted
-   input remains to continue it.
+   completion authority after Finish Policies run. Completion first closes the
+   active execution boundary only when no accepted input remains, then commits
+   the terminal Turn fact. Observation callbacks may report these decisions but
+   cannot approve, reject, reorder, or replace them.
 8. The transcript and durable Events remain the source for resume and
    inspection after completion, cancellation, failure, or process restart.
 9. An active Primary Session may create process-managed Side Sessions for
@@ -151,16 +161,65 @@ domain boundary.
 
 1. Accepted input receives stable record and message ids, an expiry, and a
    durable `pending` record.
-2. Admission marks the record before its message is appended to active context.
-3. Successful processing is recorded so restart cannot execute the same input
-   twice.
-4. Expired input becomes inert. Queue overflow is rejected loudly.
-5. Turn failure does not silently discard accepted input: retryable Provider
+2. The Framework-owned durable queue is authoritative. Its in-memory queue,
+   Event status, browser state, and observer notifications are projections of
+   accepted records and cannot consume or discard them.
+3. Admission marks the record before its message is appended to active context.
+   A failure before a new Turn's admission fact leaves only a non-replayable
+   intent; a previously accepted Pending record stays replayable.
+4. Successful transcript processing is recorded so cancellation, a later Turn
+   boundary, or restart cannot execute the same input twice. An admitted but
+   unprocessed record is recovered from the durable queue, not from a live
+   transport or observer.
+5. Expired input becomes inert. Queue overflow is rejected loudly without
+   changing an already accepted record.
+6. Turn failure does not silently discard accepted input: retryable Provider
    failures may continue with it, while terminal failures preserve it in
    conversation history before ending the Turn.
-6. Pending is a delivery state, not an input kind. A queued message keeps its
+7. Pending is a delivery state, not an input kind. A queued message keeps its
    semantic source classification, including direct input, MCP notification,
    Observation, or runtime continuation.
+
+### Active Session Replacement
+
+1. Replacement creates a candidate Session and attempts to lock it. Creating a
+   new Primary may durably advance the persisted active selection to that
+   candidate before lock acquisition and candidate validation, so another
+   process reading history may observe the provisional selection while the
+   current App still serves the old Session.
+2. If candidate lock acquisition fails after that selection write, attachment
+   closes its Session handle and returns no candidate. The candidate record and
+   persisted selection may remain; the replacement caller cannot delete it or
+   reassert the resident App Session. The old App runtime remains authoritative,
+   but history requires reconciliation before it is trusted for continuation.
+3. After attachment succeeds, the candidate's Session-scoped Modules, Tool
+   catalog, context, and startup
+   behavior are built, validated, and started as one candidate set. Failure
+   before Engine publication closes that set. After provisional Engine
+   publication, it closes only after the old Engine checkpoint is restored;
+   failed runtime rollback leaves candidate Modules open because the Engine may
+   still reference them.
+4. After attachment succeeds, rejection before App publication deletes the
+   candidate and reasserts the previously resident App Session as the persisted
+   active selection. This is not a compare-and-swap restore of the history
+   record and may overwrite a selection made by another process after
+   replacement began. Restore failure is joined with the original rejection
+   and leaves persisted selection uncertain; callers must reconcile it before
+   trusting history as the continuation target.
+5. App publication is one serialized replacement boundary. It refuses an active
+   Turn reservation or in-memory Pending input and exposes either the complete
+   old Session runtime or the complete candidate runtime, never a mixed view.
+6. Candidate Session-start policy runs before the replacement is committed to
+   App readers. Failure or cancellation starts rollback: the exact previously
+   published runtime checkpoint and old projections must be restored before
+   resources still referenced by the candidate runtime may close. A rollback
+   failure is surfaced with the original rejection; it is never hidden by
+   pretending the old Session was restored.
+7. After App publication succeeds, the provisional persisted selection becomes
+   the committed Active Session and the new Session is authoritative. Existing
+   readers of the old Session finish before its Modules, single-writer lock,
+   and Session are closed. Failure while closing those superseded resources is
+   diagnostic and does not roll back the committed replacement.
 
 ### Goal Lifecycle
 
@@ -272,3 +331,9 @@ domain boundary.
     integrity metadata, and Session-owned references are scoped to their target
     Session. Session scratchpad files remain mutable working material and are
     not Artifacts.
+15. **Projection cannot become authority.** Runtime status, browser delivery,
+    logs, pending-input observers, policy completion observers, and continuation
+    observers report committed lifecycle facts. They cannot admit input,
+    select a Finish Policy, mutate the effective Tool Result, or complete a
+    Turn. A required observer request checkpoint is part of the durable commit
+    boundary itself; later best-effort observation cannot reverse it.
