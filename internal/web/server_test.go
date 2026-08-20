@@ -423,7 +423,11 @@ func TestRestartShutdownAcknowledgesAndPersistsRuntimeRestartCause(t *testing.T)
 }
 
 func TestRunPublishesExplicitTCPAPI(t *testing.T) {
-	srv := newTestServer(t)
+	// This test covers listener publication and routing, not session startup.
+	// Keeping the server provider-free avoids coupling shutdown to asynchronous
+	// active-session creation after OnReady has already fired.
+	srv := NewServer(Options{Cfg: config.Config{WorkDir: t.TempDir()}})
+	t.Cleanup(srv.Close)
 	srv.opts.Addr = "127.0.0.1:0"
 	setTestAgentAddress(t, &srv.opts.Cfg)
 	ready := make(chan ReadyInfo, 1)
