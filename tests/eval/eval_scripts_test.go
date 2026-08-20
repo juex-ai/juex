@@ -1009,6 +1009,94 @@ func TestMakeTargetsUseExpectedTestHomeMode(t *testing.T) {
 	}
 }
 
+func TestEnsureRipgrepRedirectsGoTelemetry(t *testing.T) {
+	bashPath, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not found; skipping shell provisioning test")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fakeRoot := t.TempDir()
+	scriptDir := filepath.Join(fakeRoot, "scripts")
+	binDir := filepath.Join(fakeRoot, "bin")
+	if err := os.MkdirAll(scriptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ensureBody, err := os.ReadFile(filepath.Join(root, "scripts", "ensure-ripgrep.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		filepath.Join(scriptDir, "ensure-ripgrep.sh"): string(ensureBody),
+		filepath.Join(scriptDir, "prepare-ripgrep.sh"): strings.Join([]string{
+			"#!/bin/sh",
+			`while test "$#" -gt 0; do`,
+			`  if test "$1" = --output; then shift; output="$1"; fi`,
+			`  shift`,
+			`done`,
+			`mkdir -p "$output/juex-path"`,
+			`: >"$output/juex-path/rg"`,
+			`chmod +x "$output/juex-path/rg"`,
+		}, "\n") + "\n",
+		filepath.Join(binDir, "go"): strings.Join([]string{
+			"#!/bin/sh",
+			`case "$TEST_TELEMETRY_DIR" in *juex-ripgrep-telemetry.*) ;; *) echo "unsafe telemetry: $TEST_TELEMETRY_DIR" >&2; exit 91;; esac`,
+			`printf '%s\n' "$TEST_TELEMETRY_DIR" >>"$FAKE_GO_LOG"`,
+			`case "$2" in GOOS) printf 'linux\n' ;; GOARCH) printf 'amd64\n' ;; *) exit 92 ;; esac`,
+		}, "\n") + "\n",
+	}
+	for _, name := range []string{"dirname", "mktemp", "rm", "mkdir", "chmod"} {
+		toolPath, err := exec.LookPath(name)
+		if err != nil {
+			t.Skipf("%s not found; skipping shell provisioning test", name)
+		}
+		files[filepath.Join(binDir, name)] = "#!/bin/sh\nexec \"" + filepath.ToSlash(toolPath) + "\" \"$@\"\n"
+	}
+	for path, body := range files {
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	telemetryParent := filepath.Join(fakeRoot, "tmp")
+	if err := os.MkdirAll(telemetryParent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	goLog := filepath.Join(fakeRoot, "go.log")
+	cmd := exec.Command(bashPath, filepath.Join(scriptDir, "ensure-ripgrep.sh"))
+	cmd.Env = commandEnv(map[string]string{
+		"PATH":               binDir,
+		"TMPDIR":             telemetryParent,
+		"TEST_TELEMETRY_DIR": filepath.Join(fakeRoot, "real-go-telemetry"),
+		"FAKE_GO_LOG":        goLog,
+	})
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("provision ripgrep with isolated Go telemetry: %v\n%s", err, out)
+	}
+	if strings.TrimSpace(string(out)) != filepath.ToSlash(filepath.Join(fakeRoot, ".tmp", "dev-ripgrep", "juex-path")) {
+		t.Fatalf("ensure-ripgrep output = %q", out)
+	}
+	logged, err := os.ReadFile(goLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, telemetryDir := range strings.Fields(string(logged)) {
+		if telemetryDir == filepath.Join(fakeRoot, "real-go-telemetry") {
+			t.Fatalf("go env inherited real telemetry directory: %s", telemetryDir)
+		}
+		if _, err := os.Stat(telemetryDir); !os.IsNotExist(err) {
+			t.Fatalf("temporary Go telemetry directory still exists: %s: %v", telemetryDir, err)
+		}
+	}
+}
+
 func TestTestJuexHomeWrapperResolvesMiseToolsBeforeHomeIsolation(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not found; skipping shell wrapper test")

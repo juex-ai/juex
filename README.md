@@ -793,7 +793,8 @@ make race
 `make test` and `make race` run with temporary `HOME`, `JUEX_HOME`, XDG
 config/cache, Windows application-data, global Git config, Go telemetry, and
 Codex directories, so personal default-home provider config, Fleet, Agent, and
-tool state cannot affect deterministic results.
+tool state cannot affect deterministic results. Fresh-checkout ripgrep
+provisioning also redirects its bootstrap Go telemetry to a disposable path.
 `make integration` uses the same writable-state isolation but resolves
 `JUEX_PROVIDER_CONFIG` and `CODEX_HOME` from the original native user home
 (`HOME` on Unix, `USERPROFILE` on Windows) first and passes those paths to the

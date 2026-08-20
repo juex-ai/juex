@@ -17,6 +17,9 @@
 # release-package layout beside the running binary, then the system PATH. The
 # package source never matches under `go test` (the test binary lives in the Go
 # build cache, not a release package), so local runs rely on PATH.
+#
+# Make expands this script before the test-home wrapper starts. Keep any `go
+# env` telemetry writes disposable here instead of relying on the later wrapper.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -29,18 +32,30 @@ if system_rg="$(type -P rg 2>/dev/null)" && [ -n "$system_rg" ]; then
 fi
 
 cache_dir="$repo_root/.tmp/dev-ripgrep"
-os="$(go env GOOS)"
+go_telemetry_dir="$cache_dir/juex-ripgrep-telemetry.$$"
+cleanup() {
+  if command -v rm >/dev/null 2>&1; then
+    rm -rf -- "$go_telemetry_dir"
+  fi
+}
+trap cleanup EXIT
+
+go_env() {
+  TEST_TELEMETRY_DIR="$go_telemetry_dir" go env "$@"
+}
+
+os="$(go_env GOOS)"
 binary_name="rg"
 if [ "$os" = "windows" ]; then
   binary_name="rg.exe"
 fi
 rg_bin="$cache_dir/juex-path/$binary_name"
 if [ ! -x "$rg_bin" ]; then
-  arch="$(go env GOARCH)"
+  arch="$(go_env GOARCH)"
   # GOARCH=arm names the 32-bit ARM family; prepare-ripgrep.sh keys the pinned
   # asset by GOARM level (e.g. linux_armv7), so fold GOARM in before the call.
   if [ "$arch" = "arm" ]; then
-    arch="armv$(go env GOARM)"
+    arch="armv$(go_env GOARM)"
   fi
   # prepare-ripgrep.sh downloads and sha256-verifies the pinned release asset.
   # Its progress goes to stderr so stdout stays a clean path for callers.
