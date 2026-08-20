@@ -2,8 +2,7 @@
 
 This directory contains local evaluation tooling that exercises real providers
 or longer multi-turn behavior. Keep deterministic cross-platform e2e tests in
-`tests/e2e`; put live-provider matrices, rotation state integration, and
-quality-evaluation helpers here.
+`tests/e2e`; put provider-config selection and quality-evaluation helpers here.
 
 The stable command entrypoints live next to the evaluation code:
 
@@ -13,7 +12,7 @@ The stable command entrypoints live next to the evaluation code:
 - `tests/eval/development_eval.sh`
 
 `tests/eval/eval_scripts_test.go` is a Go contract suite for this directory. It
-checks the Python module help surface, shell wrapper help, live-model rotation,
+checks the Python module help surface, shell wrapper help, provider-config selection,
 development-step flags, default report locations, and the Schedule routing
 artifact contract:
 
@@ -81,28 +80,14 @@ sandbox or permission behavior, hooks, stop gates, or context projection. Keep
 cases deterministic and credential-free; live model behavior belongs in the
 provider smoke and compaction eval commands below.
 
-`live-models.yaml` controls the bounded live-model scope:
-
-- `provider_smoke_models` rotates routine provider/tool/exec/thinking smoke tests.
-- `compaction_eval_models` rotates routine compaction quality checks.
-
-Provider smoke entries may be plain refs or mappings with per-model capability
-expectations:
-
-```yaml
-provider_smoke_models:
-  - ark:doubao-seed-2.0-pro
-  - ref: ollama-local:qwen3.6
-    scenario_expectations:
-      schedule-routing: optional
-```
-
-Missing expectations default to `expected`. An `expected` capability failure
-fails the run and pins rotation. An `optional` capability failure is still run
-and retained in the JSON, Markdown, console, and case artifacts, but the model
-result passes and rotation advances. Configuration, provider/process, core
-session artifact, and runtime persistence failures always fail and pin
-rotation, regardless of expectation.
+Live model scope comes from the resolved provider config. Candidates are
+deduplicated and sorted by `provider:model`; routine commands use a recorded
+seed to select one candidate.
+Provider smoke excludes profiles whose effective provider/model capability is
+explicitly `tools: false`. Compaction excludes models whose declared context
+window is smaller than the requested eval window; an omitted declaration uses
+Juex's 256k default. Every selected provider smoke model uses the same strict
+capability and Schedule-routing contract.
 
 Common selection and output flags are intentionally consistent across commands:
 
@@ -112,6 +97,8 @@ Common selection and output flags are intentionally consistent across commands:
 - `development_eval.sh --only provider:model` passes the provider smoke scope.
 - `development_eval.sh --compaction-eval --compaction-only provider:model`
   passes the compaction scope.
+- `--selection-seed value` reproduces default selection from the same config.
+- `--all-models` runs every eligible ref from the resolved config.
 - `--report-dir` overrides the output directory for each command.
 
 By default, local run artifacts are written under
@@ -124,17 +111,16 @@ Report kinds are:
 
 ## Provider Smoke
 
-Run the rotating local provider:model smoke after building the binary:
+Run a dynamically selected local provider:model smoke after building the binary:
 
 ```bash
 make build
 bash tests/eval/provider_model_smoke.sh --juex ./dist/juex
 ```
 
-This reads credentials from `~/.juex/juex.yaml`, picks the next
-`provider_smoke_models` ref from `live-models.yaml`, and records the last
-successful ref in `.juex/live-model-rotation.json`. It copies one provider:model
-at a time into isolated temporary workdirs, then runs a real compiled `juex`
+This resolves `--config`, `JUEX_PROVIDER_CONFIG`, or the original user's
+`~/.juex/juex.yaml`, selects one eligible ref using the recorded seed, and
+copies that provider:model into an isolated temporary workdir. It then runs a real compiled `juex`
 binary through two live agent workflows. The capability workflow requires the
 model to use `read`, `write`, `edit`, `grep`, `exec_command`, and
 `write_stdin` against case-local files and a deterministic interactive
@@ -204,20 +190,30 @@ retained under `cases/<provider_model>/schedule-routing/attempt-N/`. Seeded
 attempts also retain `seed-observables.json` so the initial fixture cannot be
 confused with final state. Retryable turn failures and Schedule contract
 failures consume the same bounded `--retries` budget in fresh attempts.
-Persistent failures still fail the single provider:model result rather than
-adding another result or rotation target.
+Persistent failures still fail the selected provider:model result; the command
+never silently switches to a different target.
 The contract report classifies failures as model capability failures or hard
-runtime failures. Summary output distinguishes `failed (expected pass)`,
-`failed (optional, recorded)`, and hard failures.
+runtime failures, and every failure fails the strict live gate.
 
 A failed provider:model is not a skip; keep the report and explain whether the
 problem is configuration, provider capability, prompt-following, or a JueX
 regression.
 
-Use `--all-models` only for broader changes where every listed model must be
-covered. `provider_model_smoke.sh --all-config-models` is reserved for full
-provider config audits. Local rotation success is stored in
-`.juex/live-model-rotation.json` and is intentionally not committed.
+Use `--all-models` only for broader changes where every eligible configured
+model must be covered. Reports record selected refs, candidate refs, the seed,
+resolved config path, a redacted config hash, and an exact reproduction command.
+The hash covers provider/model identity, protocol, effective tool and reasoning
+capabilities, thinking effort, and effective context-window metadata; it never
+copies credentials, headers, query values, or environment mappings. The two
+retained non-secret runtime overrides, `PROVIDER_THINKING_EFFORT` and
+`PROVIDER_CONTEXT_WINDOW`, contribute normalized values to the hash. The
+effective provider endpoint contributes only an opaque SHA-256 identity, never
+the original URI, user information, path, or query. A second opaque profile
+identity covers effective capabilities, compat, headers, and query settings.
+Unknown provider/model fields remain in the isolated config so Juex's strict
+loader rejects the same invalid source shape instead of silently normalizing it.
+Malformed provider/model container types and missing IDs fail selection as
+`provider_unavailable` before any live request.
 
 ## Compaction Quality
 
@@ -231,9 +227,9 @@ tests/eval/compaction_eval.sh
 See `docs/compaction/evaluation.md` for the gold facts, scoring rubric, cache
 metrics, and report output shape. This is the project-level quality evaluation
 for long-running agent context retention. Normal e2e tests cover deterministic
-runtime behavior; the live compaction evaluation rotates one
-`compaction_eval_models` ref by default so routine validation stays cheap while
-covering the full list over time. The scorecard also cross-checks compacted
+runtime behavior; the live compaction evaluation selects one eligible
+provider-config ref by recorded seed so routine validation stays cheap. The
+scorecard also cross-checks compacted
 `Goal` content against `goal_state.json`, verifies unfinished Notes in `Next
 Steps`, and proves Notes remain unchanged and are recited after compaction.
 

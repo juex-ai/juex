@@ -42,7 +42,7 @@ help:
 	@echo "  snapshot      goreleaser cross-platform snapshot (dist/)"
 	@echo "  release-dry   goreleaser release without publishing"
 	@echo "  integration   isolated runtime with explicit live provider/Codex sources"
-	@echo "  provider-smoke live rotating provider:model smoke from tests/eval/live-models.yaml"
+	@echo "  provider-smoke live provider:model smoke selected from provider config"
 	@echo "  development-eval standard post-development validation record"
 	@echo "  web-check     install, type-check, test, lint, and build the frontend"
 	@echo "  clean         remove dist/"

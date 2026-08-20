@@ -150,11 +150,10 @@ juex/
 │   │   └── integration_test.go   #   live LLM (build-tag gated)
 │   └── eval/                     # local live-provider and quality eval tools
 │       ├── eval_scripts_test.go  #   eval wrapper contract tests
-│       ├── live-models.yaml
 │       ├── provider_model_smoke.sh
 │       ├── compaction_eval.sh
 │       ├── development_eval.sh
-│       └── juex_eval/            # uv-managed Python helper package
+│       └── juex_eval/            # uv-managed Python helpers, including shared provider-config selection
 ├── .github/workflows/
 │   ├── ci.yml                    # push/PR: lint + matrix tests + race
 │   ├── integration.yml           # workflow_dispatch: live LLM tests
@@ -3009,8 +3008,8 @@ automatic activation; the model loads a selected guide explicitly.
 | `make snapshot` | build the frontend through the GoReleaser before hook, then produce 7 snapshot archives in `dist/` |
 | `make release-dry` | build the frontend through the GoReleaser before hook, then run a non-publishing release |
 | `make integration` | resolve live provider/Codex source paths from the original environment, isolate writable runtime/user-tool state under a temporary `HOME`, then run verbose credential-backed `go test -tags=integration ./tests/e2e/...` |
-| `make provider-smoke` | build-dependent rotating live capability and Schedule-routing smoke for model refs in `tests/eval/live-models.yaml` using `~/.juex/juex.yaml` credentials |
-| `make development-eval` | deterministic tests, build, rotating live provider:model smoke, and a redacted validation record |
+| `make provider-smoke` | build-dependent live capability and Schedule-routing smoke for one seeded eligible ref from resolved provider config |
+| `make development-eval` | deterministic tests, build, seeded provider-config live smoke, and a redacted validation record |
 | `make clean` | `rm -rf dist` |
 
 The test-home wrapper resolves active mise runtime directories before replacing
@@ -3127,7 +3126,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flags including model, debug, and log-level |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
 | `tests/e2e` | full-stack tempdir scenario, installed Extension enable/disable flow, apply_patch builtin flow, resume round-trip, canonical session journals and debug logs, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
-| `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracles for conversation/event/tool and Schedule persistence artifacts; retry-isolated live Schedule routing; live-model rotation; eval shell wrappers; development step flags; report directory defaults |
+| `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracles for conversation/event/tool and Schedule persistence artifacts; retry-isolated live Schedule routing; provider-config candidate selection; eval shell wrappers; development step flags; report directory defaults |
 
 Run the deterministic suite with `make test`.
 Provider-quality smoke tests remain explicit because they use credentials.
@@ -3148,9 +3147,10 @@ There are two live layers:
   thinking-effort, and context-window overrides from the process environment
   or source YAML `environment.variables` retain normal configuration
   precedence.
-- `make provider-smoke` reads the provider:model refs from
-  `tests/eval/live-models.yaml`, verifies the selected ref exists in
-  `~/.juex/juex.yaml`, then runs isolated real-binary capability and Schedule
+- `make provider-smoke` resolves provider config from the explicit flag,
+  environment, or original user home, filters profiles whose effective tools
+  capability is false, then uses a recorded seed to select one stable ref and
+  runs isolated real-binary capability and Schedule
   routing workflows and writes a redacted report under
   `.tmp/reports/provider-model-smoke/`. Schedule routing deterministically
   selects an empty or seeded-equivalent sandbox from the run id. The empty
@@ -3160,9 +3160,9 @@ There are two live layers:
   route and validate the tagged `.juex/observables.json` outcome. Guide loading
   and incidental inspection commands do not affect the outcome; shell loops
   and scheduler commands remain rejected as competing recurring side effects.
-  The selected variant is recorded in result and summary artifacts. By default
-  the command rotates one
-  model using `.juex/live-model-rotation.json`; pass `--all-models` to
+  The selected variant and provider-config selection evidence are recorded in
+  result and summary artifacts. By default the command runs one seeded model;
+  pass `--all-models` to
   `tests/eval/provider_model_smoke.sh` only for provider matrix migrations or
   full local config audits.
 

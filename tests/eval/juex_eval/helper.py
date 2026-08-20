@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import pathlib
@@ -28,11 +29,11 @@ from typing import Any
 import yaml
 
 try:
-    from . import contract_oracle, rotation, schedule_routing
+    from . import contract_oracle, schedule_routing, selection
 except ImportError:  # pragma: no cover - direct script fallback.
     import contract_oracle  # type: ignore[no-redef]
-    import rotation  # type: ignore[no-redef]
     import schedule_routing  # type: ignore[no-redef]
+    import selection  # type: ignore[no-redef]
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -46,6 +47,15 @@ SELECTED_PROVIDER_ENVIRONMENT_KEYS = (
     "PROVIDER_THINKING_EFFORT",
     "PROVIDER_CONTEXT_WINDOW",
 )
+ISOLATED_PROVIDER_ENVIRONMENT_KEYS = (
+    "PROVIDER_API_ID",
+    "PROVIDER_API_PROTOCOL",
+    "PROVIDER_API_BASE",
+    "PROVIDER_API_KEY",
+    "PROVIDER_API_MODEL",
+    "PROVIDER_THINKING_EFFORT",
+    "PROVIDER_CONTEXT_WINDOW",
+)
 
 
 def main() -> int:
@@ -56,7 +66,7 @@ def main_with_args(argv: list[str]) -> int:
     if len(argv) < 1:
         print(
             "usage: evalhelper.py "
-            "<provider-smoke|list-models|write-model-config|run-timeout|append-command|write-development-record> ...",
+            "<provider-smoke|write-model-config|run-timeout|append-command|write-development-record> ...",
             file=sys.stderr,
         )
         return 2
@@ -66,8 +76,6 @@ def main_with_args(argv: list[str]) -> int:
     try:
         if command == "provider-smoke":
             return provider_smoke(args)
-        if command == "list-models":
-            return list_models(args)
         if command == "write-model-config":
             return write_model_config_command(args)
         if command == "run-timeout":
@@ -124,18 +132,16 @@ def provider_smoke(argv: list[str]) -> int:
     )
     parser.add_argument("--juex", default=env_default("JUEX_BIN", default_juex_bin()))
     parser.add_argument("--config", default=env_default("JUEX_PROVIDER_CONFIG", str(pathlib.Path.home() / ".juex" / "juex.yaml")))
-    parser.add_argument("--model-list", default=env_default("JUEX_LIVE_MODEL_LIST", str(REPO_ROOT / "tests" / "eval" / "live-models.yaml")))
+    parser.add_argument(
+        "--selection-seed",
+        default=env_default("JUEX_EVAL_SELECTION_SEED", selection.generated_seed()),
+        help="Reproducible seed for provider-config candidate selection.",
+    )
     parser.add_argument(
         "--all-models",
         action="store_true",
         default=env_bool("JUEX_PROVIDER_SMOKE_ALL_MODELS"),
-        help="Run every model ref listed in --model-list provider_smoke_models.",
-    )
-    parser.add_argument(
-        "--all-config-models",
-        action="store_true",
-        default=env_bool("JUEX_PROVIDER_SMOKE_ALL_CONFIG_MODELS"),
-        help="Run every provider:model found in the provider config.",
+        help="Run every eligible provider:model found in the provider config.",
     )
     parser.add_argument("--work-root", default=env_default("JUEX_PROVIDER_SMOKE_ROOT", ""))
     parser.add_argument("--report-dir", default=env_default("JUEX_PROVIDER_SMOKE_REPORT_DIR", ""))
@@ -150,21 +156,15 @@ def provider_smoke(argv: list[str]) -> int:
         raise ValueError("--timeout must be a positive integer")
     if parsed.retries < 0:
         raise ValueError("--retries must be a non-negative integer")
-    if parsed.only and (parsed.all_models or parsed.all_config_models):
-        raise ValueError("--only is mutually exclusive with --all-models and --all-config-models")
-    if parsed.all_models and parsed.all_config_models:
-        raise ValueError("--all-models and --all-config-models are mutually exclusive")
+    if parsed.only and parsed.all_models:
+        raise ValueError("--only is mutually exclusive with --all-models")
     if not parsed.juex:
         raise ValueError("juex binary not found; run 'make build' or pass --juex")
     if not os.access(parsed.juex, os.X_OK):
         raise ValueError(f"juex binary is not executable: {parsed.juex}")
-    config_path = pathlib.Path(parsed.config).expanduser()
-    model_list_path = pathlib.Path(parsed.model_list).expanduser()
-    if not config_path.is_file():
-        raise ValueError(f"provider config not found: {parsed.config}")
-
     report_dir = pathlib.Path(parsed.report_dir or default_report_dir("provider-model-smoke", parsed.run_id))
     (report_dir / "cases").mkdir(parents=True, exist_ok=True)
+    config_path = selection.resolved_path(parsed.config)
     work_root_created = False
     if parsed.work_root:
         work_root = pathlib.Path(parsed.work_root)
@@ -173,40 +173,70 @@ def provider_smoke(argv: list[str]) -> int:
         work_root = pathlib.Path(tempfile.mkdtemp(prefix="juex-provider-smoke."))
         work_root_created = True
 
+    matrix_file = report_dir / "matrix.tsv"
+    results_file = report_dir / "results.jsonl"
+    summary_json = report_dir / "summary.json"
+    summary_md = report_dir / "summary.md"
+    results_file.write_text("", encoding="utf-8")
+    command_prefix = [
+        sys.executable,
+        "-m",
+        "tests.eval.juex_eval",
+        "provider-smoke",
+        "--juex",
+        parsed.juex,
+        "--run-id",
+        parsed.run_id,
+        "--timeout",
+        str(parsed.timeout),
+        "--retries",
+        str(parsed.retries),
+    ]
+
     try:
-        cfg = load_yaml_file(config_path)
-        rows = enumerate_provider_matrix(cfg)
-        if not rows:
-            raise ValueError(f"no providers/models found in {parsed.config}")
+        try:
+            if not config_path.is_file():
+                raise FileNotFoundError(f"provider config not found: {config_path}")
+            validate_source_config(parsed.juex, config_path)
+            cfg = load_source_config(config_path)
+            rows, evidence = selection.select(
+                cfg,
+                kind="provider-smoke",
+                config_path=config_path,
+                seed=parsed.selection_seed,
+                only=[parsed.only] if parsed.only else [],
+                all_models=parsed.all_models,
+                command_prefix=command_prefix,
+            )
+        except selection.ProviderUnavailable as exc:
+            write_smoke_summary(
+                summary_json,
+                summary_md,
+                provider_summary(parsed, report_dir, work_root, exc.evidence, [], exc.failure_category, str(exc)),
+                [],
+            )
+            print(f"{selection.PROVIDER_UNAVAILABLE}: {exc}", file=sys.stderr)
+            print_selection_evidence(exc.evidence)
+            return 1
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            error = safe_config_error(exc)
+            evidence = selection.unavailable_evidence(
+                config_path=config_path,
+                seed=parsed.selection_seed,
+                command_prefix=command_prefix,
+                only=[parsed.only] if parsed.only else [],
+                all_models=parsed.all_models,
+            )
+            write_smoke_summary(
+                summary_json,
+                summary_md,
+                provider_summary(parsed, report_dir, work_root, evidence, [], selection.PROVIDER_UNAVAILABLE, error),
+                [],
+            )
+            print(f"{selection.PROVIDER_UNAVAILABLE}: {error}", file=sys.stderr)
+            print_selection_evidence(evidence)
+            return 1
 
-        model_specs = load_provider_model_specs(
-            model_list_path,
-            required=not (parsed.only or parsed.all_config_models),
-        )
-        spec_by_ref = {spec.ref: spec for spec in model_specs}
-        selected_refs: set[str] | None = None
-        model_list_label = "all provider config models"
-        if parsed.all_config_models:
-            pass
-        elif parsed.only:
-            model_list_label = f"filter {parsed.only}"
-        else:
-            selected = [spec.ref for spec in model_specs]
-            selected_refs = set(selected)
-            missing = sorted(ref for ref in selected if ref not in {row.ref for row in rows})
-            if missing:
-                raise ValueError(
-                    "model list refs are not present in provider config: "
-                    + ", ".join(missing)
-                    + f" (model list: {parsed.model_list})"
-                )
-            model_list_label = f"{parsed.model_list} ({'all listed models' if parsed.all_models else 'listed model scope'})"
-
-        matrix_file = report_dir / "matrix.tsv"
-        results_file = report_dir / "results.jsonl"
-        summary_json = report_dir / "summary.json"
-        summary_md = report_dir / "summary.md"
-        results_file.write_text("", encoding="utf-8")
         matrix_file.write_text(
             "".join(
                 "\t".join(
@@ -226,22 +256,15 @@ def provider_smoke(argv: list[str]) -> int:
         )
 
         print(f"juex: {parsed.juex}")
-        print(f"config: {config_path}")
-        print(f"model list: {model_list_label}")
+        print_selection_evidence(evidence)
         print(f"work root: {work_root}")
         print(f"report dir: {report_dir}")
         schedule_variant = schedule_routing.variant_for_run_id(parsed.run_id)
         print(f"schedule routing variant: {schedule_variant}")
 
-        total = 0
         failed = 0
         results: list[SmokeResult] = []
         for row in rows:
-            if parsed.only and parsed.only not in {row.provider_id, row.ref}:
-                continue
-            if selected_refs is not None and row.ref not in selected_refs:
-                continue
-            total += 1
             result = run_provider_smoke_case(
                 ProviderSmokeContext(
                     row=row,
@@ -253,11 +276,6 @@ def provider_smoke(argv: list[str]) -> int:
                     timeout_seconds=parsed.timeout,
                     retries=parsed.retries,
                     codex_home=env_default("CODEX_HOME", str(pathlib.Path.home() / ".codex")),
-                    schedule_routing_expectation=(
-                        spec_by_ref[row.ref].expectation("schedule-routing")
-                        if row.ref in spec_by_ref
-                        else "expected"
-                    ),
                 )
             )
             results.append(result)
@@ -265,78 +283,71 @@ def provider_smoke(argv: list[str]) -> int:
             if result.status != "pass":
                 failed += 1
 
-        if total == 0:
-            raise ValueError("no providers/models matched the requested scope")
-
+        summary = provider_summary(parsed, report_dir, work_root, evidence, results, "", "")
         write_smoke_summary(
             summary_json,
             summary_md,
-            {
-                "run_id": parsed.run_id,
-                "juex": parsed.juex,
-                "config": str(config_path),
-                "model_list": model_list_label,
-                "report_dir": str(report_dir),
-                "work_root": str(work_root) if parsed.keep else "cleaned",
-                "total": total,
-                "passed": total - failed,
-                "failed": failed,
-                "tool_use_recorded": sum(1 for result in results if result.tool_status == "yes"),
-                "exec_command_tool_use_recorded": sum(1 for result in results if result.exec_command_status == "yes"),
-                "tty_recorded": sum(1 for result in results if result.tty_status == "yes"),
-                "stdin_recorded": sum(1 for result in results if result.stdin_status == "yes"),
-                "filesystem_verified": sum(1 for result in results if result.filesystem_status == "yes"),
-                "terminal_event_verified": sum(1 for result in results if result.event_contract_status == "yes"),
-                "thinking_observed": sum(1 for result in results if result.thinking_status == "observed"),
-                "schedule_routing_verified": sum(
-                    1 for result in results if result.schedule_routing_status == "passed"
-                ),
-                "schedule_routing_expected_failures": sum(
-                    1 for result in results if result.schedule_routing_status == "failed_expected"
-                ),
-                "schedule_routing_optional_failures": sum(
-                    1 for result in results if result.schedule_routing_status == "failed_optional"
-                ),
-                "schedule_routing_hard_failures": sum(
-                    1 for result in results if result.schedule_routing_status == "hard_failed"
-                ),
-                "optional_failures": [
-                    {
-                        "ref": result.ref,
-                        "scenario": "schedule-routing",
-                        "error": result.error,
-                        "artifacts": result.artifacts,
-                    }
-                    for result in results
-                    if result.schedule_routing_status == "failed_optional"
-                ],
-                "schedule_routing_variant": schedule_variant,
-                "results_jsonl_path": str(results_file),
-            },
+            summary,
             results,
         )
-        optional_failures = sum(
-            1 for result in results if result.schedule_routing_status == "failed_optional"
-        )
-        print(
-            f"summary: total={total} failed={failed} "
-            f"optional_failures={optional_failures} report={summary_md}"
-        )
+        print(f"summary: total={len(results)} failed={failed} report={summary_md}")
         return 1 if failed else 0
     finally:
         if work_root_created and not parsed.keep:
             shutil.rmtree(work_root, ignore_errors=True)
 
 
-@dataclass(frozen=True)
-class MatrixRow:
-    provider_id: str
-    model_id: str
-    protocol: str
-    reasoning_effort_capability: str
-    tools_capability: str
-    thinking_effort: str
-    ref: str
+def provider_summary(
+    args: argparse.Namespace,
+    report_dir: pathlib.Path,
+    work_root: pathlib.Path,
+    evidence: selection.SelectionEvidence,
+    results: list[SmokeResult],
+    failure_category: str,
+    error: str,
+) -> dict[str, Any]:
+    total = len(results)
+    failed = sum(1 for result in results if result.status != "pass")
+    summary = {
+        "run_id": args.run_id,
+        "juex": args.juex,
+        "config": evidence.resolved_config_path,
+        "report_dir": str(report_dir),
+        "work_root": str(work_root) if args.keep else "cleaned",
+        "failure_category": failure_category or None,
+        "error": error or None,
+        "total": total,
+        "passed": total - failed,
+        "failed": failed,
+        "tool_use_recorded": sum(1 for result in results if result.tool_status == "yes"),
+        "exec_command_tool_use_recorded": sum(1 for result in results if result.exec_command_status == "yes"),
+        "tty_recorded": sum(1 for result in results if result.tty_status == "yes"),
+        "stdin_recorded": sum(1 for result in results if result.stdin_status == "yes"),
+        "filesystem_verified": sum(1 for result in results if result.filesystem_status == "yes"),
+        "terminal_event_verified": sum(1 for result in results if result.event_contract_status == "yes"),
+        "thinking_observed": sum(1 for result in results if result.thinking_status == "observed"),
+        "schedule_routing_verified": sum(1 for result in results if result.schedule_routing_status == "passed"),
+        "schedule_routing_failures": sum(1 for result in results if result.schedule_routing_status in {"failed", "hard_failed"}),
+        "schedule_routing_variant": schedule_routing.variant_for_run_id(args.run_id),
+        "results_jsonl_path": str(report_dir / "results.jsonl"),
+    }
+    summary.update(evidence.as_dict())
+    return summary
+
+
+def print_selection_evidence(evidence: selection.SelectionEvidence) -> None:
+    print(f"selection_source={selection.SELECTION_SOURCE}")
+    print(f"selected_provider_model={evidence.selected_refs[0] if len(evidence.selected_refs) == 1 else ''}")
+    print(f"selected_provider_models={','.join(evidence.selected_refs)}")
+    print(f"selection_seed={evidence.seed}")
+    print(f"eligible_candidate_count={len(evidence.eligible_refs)}")
+    print(f"eligible_candidate_refs={','.join(evidence.eligible_refs)}")
+    print(f"resolved_config_path={evidence.resolved_config_path}")
+    print(f"redacted_config_hash={evidence.redacted_config_hash}")
+    print(f"reproduction_command={evidence.reproduction_command}")
+
+
+MatrixRow = selection.Candidate
 
 
 @dataclass
@@ -358,7 +369,6 @@ class SmokeResult:
     filesystem_status: str = "no"
     event_contract_status: str = "no"
     thinking_status: str = "not_observed"
-    schedule_routing_expectation: str = "expected"
     schedule_routing_status: str = "not_run"
     schedule_routing_variant: str = ""
     schedule_routing_existing_id: str = ""
@@ -381,7 +391,6 @@ class ProviderSmokeContext:
     timeout_seconds: int
     retries: int
     codex_home: str
-    schedule_routing_expectation: str = "expected"
 
 
 @dataclass(frozen=True)
@@ -391,76 +400,14 @@ class ScenarioRunOutcome:
     session_id: str = ""
 
 
-@dataclass(frozen=True)
-class ScenarioVerdict:
-    passed: bool
-    status: str
-
-
-def scenario_verdict(expectation: str, outcome: str) -> ScenarioVerdict:
-    if expectation not in rotation.SCENARIO_EXPECTATIONS:
-        raise ValueError(f"unknown scenario expectation: {expectation}")
-    if outcome == SCENARIO_PASSED:
-        return ScenarioVerdict(True, "passed")
-    if outcome == SCENARIO_HARD_FAILED:
-        return ScenarioVerdict(False, "hard_failed")
-    if outcome == SCENARIO_CAPABILITY_FAILED:
-        if expectation == "optional":
-            return ScenarioVerdict(True, "failed_optional")
-        return ScenarioVerdict(False, "failed_expected")
-    raise ValueError(f"unknown scenario outcome: {outcome}")
-
-
 def enumerate_provider_matrix(cfg: dict[str, Any]) -> list[MatrixRow]:
-    providers = cfg.get("providers") or []
-    if isinstance(providers, dict):
-        providers = list(providers.values())
-    rows: list[MatrixRow] = []
-    for provider in providers:
-        if not isinstance(provider, dict):
-            continue
-        provider_id = str(provider.get("id") or "").strip()
-        if not provider_id:
-            continue
-        protocol = str(provider.get("protocol") or "").strip() or "preset"
-        capabilities = provider.get("capabilities")
-        if not isinstance(capabilities, dict):
-            capabilities = {}
-        reasoning_effort = jsonish(capabilities["reasoning_effort"]) if "reasoning_effort" in capabilities else "default"
-        tools = jsonish(capabilities["tools"]) if "tools" in capabilities else "default"
-        models = provider.get("models") or []
-        for model in models:
-            model_id = model_id_from(model)
-            if not model_id:
-                continue
-            thinking_effort = "unset"
-            if isinstance(model, dict) and "thinking_effort" in model:
-                thinking_effort = jsonish(model["thinking_effort"])
-            rows.append(
-                MatrixRow(
-                    provider_id=provider_id,
-                    model_id=model_id,
-                    protocol=protocol,
-                    reasoning_effort_capability=reasoning_effort,
-                    tools_capability=tools,
-                    thinking_effort=thinking_effort,
-                    ref=f"{provider_id}:{model_id}",
-                )
-            )
-    return rows
+    return selection.enumerate_candidates(cfg)
 
 
 def model_id_from(model: Any) -> str:
     if isinstance(model, dict):
         return str(model.get("id") or "").strip()
     return str(model or "").strip()
-
-
-def jsonish(value: Any) -> str:
-    try:
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    except TypeError:
-        return str(value)
 
 
 def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
@@ -481,7 +428,6 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
         reasoning_effort_capability=row.reasoning_effort_capability,
         tools_capability=row.tools_capability,
         thinking_effort=row.thinking_effort,
-        schedule_routing_expectation=ctx.schedule_routing_expectation,
         schedule_routing_variant=schedule_routing.variant_for_run_id(ctx.run_id),
         artifacts=str(artifact_dir),
     )
@@ -552,21 +498,15 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
         existing_schedule_id=existing_schedule_id,
     )
     schedule_outcome = run_schedule_routing_case(ctx, artifact_dir, expectation)
-    verdict = scenario_verdict(ctx.schedule_routing_expectation, schedule_outcome.kind)
-    result.schedule_routing_status = verdict.status
+    result.schedule_routing_status = "passed" if schedule_outcome.kind == SCENARIO_PASSED else (
+        "hard_failed" if schedule_outcome.kind == SCENARIO_HARD_FAILED else "failed"
+    )
     result.schedule_routing_existing_id = existing_schedule_id or ""
-    if not verdict.passed:
+    if schedule_outcome.kind != SCENARIO_PASSED:
         result.error_stage = "schedule-routing"
         result.error = schedule_outcome.report.message()
         print(f"FAIL {result.ref}: {result.error}", file=sys.stderr)
         return result
-    if schedule_outcome.kind == SCENARIO_CAPABILITY_FAILED:
-        result.error_stage = "schedule-routing"
-        result.error = schedule_outcome.report.message()
-        print(
-            f"WARN {result.ref}: optional schedule-routing capability failure recorded: {result.error}",
-            file=sys.stderr,
-        )
     result.status = "pass"
     print(
         f"ok  {row.ref} session={session_id} toolcall={result.tool_status} "
@@ -749,6 +689,8 @@ def run_turn(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pat
     (case_home / ".agents").mkdir(parents=True, exist_ok=True)
     (case_home / ".juex").mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
+    for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
+        env.pop(name, None)
     env.update(
         {
             "HOME": str(case_home),
@@ -757,13 +699,6 @@ def run_turn(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pat
             "GIT_CONFIG_GLOBAL": str(case_home / "gitconfig"),
             "GIT_CONFIG_NOSYSTEM": "1",
             "CODEX_HOME": ctx.codex_home,
-            "PROVIDER_API_ID": "",
-            "PROVIDER_API_PROTOCOL": "",
-            "PROVIDER_API_BASE": "",
-            "PROVIDER_API_KEY": "",
-            "PROVIDER_API_MODEL": "",
-            "PROVIDER_THINKING_EFFORT": "",
-            "PROVIDER_CONTEXT_WINDOW": "",
         }
     )
     command = [
@@ -946,7 +881,17 @@ def write_smoke_summary(summary_json: pathlib.Path, summary_md: pathlib.Path, su
         f"- Run ID: `{summary['run_id']}`",
         f"- Juex: `{summary['juex']}`",
         f"- Config: `{summary['config']}`",
-        f"- Model list: `{summary['model_list']}`",
+        f"- Selection source: `{summary['selection_source']}`",
+        f"- Selected provider/model: `{summary['selected_provider_model'] or ''}`",
+        f"- Selected provider/models: `{', '.join(summary['selected_provider_models'])}`",
+        f"- Selection seed: `{summary['selection_seed']}`",
+        f"- Eligible candidate count: {summary['eligible_candidate_count']}",
+        f"- Eligible candidate refs: `{', '.join(summary['eligible_candidate_refs'])}`",
+        f"- Resolved config path: `{summary['resolved_config_path']}`",
+        f"- Redacted config hash: `{summary['redacted_config_hash']}`",
+        f"- Reproduction command: `{summary['reproduction_command']}`",
+        f"- Failure category: `{summary['failure_category'] or ''}`",
+        f"- Error: {summary['error'] or ''}",
         f"- Work root: `{summary['work_root']}`",
         f"- Total: {summary['total']}",
         f"- Passed: {summary['passed']}",
@@ -959,13 +904,11 @@ def write_smoke_summary(summary_json: pathlib.Path, summary_md: pathlib.Path, su
         f"- Terminal event verified: {summary['terminal_event_verified']}",
         f"- Thinking observed: {summary['thinking_observed']}",
         f"- Schedule routing verified: {summary['schedule_routing_verified']}",
-        f"- Schedule routing expected failures: {summary['schedule_routing_expected_failures']}",
-        f"- Schedule routing optional failures: {summary['schedule_routing_optional_failures']}",
-        f"- Schedule routing hard failures: {summary['schedule_routing_hard_failures']}",
+        f"- Schedule routing failures: {summary['schedule_routing_failures']}",
         f"- Schedule routing variant: `{summary['schedule_routing_variant']}`",
         "",
-        "| Provider/model | Protocol | Thinking effort | Status | Tool use | Exec command | TTY | Stdin | Filesystem | Terminal events | Thinking | Schedule expectation | Schedule routing | Variant | Error stage |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Provider/model | Protocol | Thinking effort | Status | Tool use | Exec command | TTY | Stdin | Filesystem | Terminal events | Thinking | Schedule routing | Variant | Error stage |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for result in results:
         lines.append(
@@ -973,26 +916,16 @@ def write_smoke_summary(summary_json: pathlib.Path, summary_md: pathlib.Path, su
             f"{result.status} | {result.tool_status} | {result.exec_command_status} | "
             f"{result.tty_status} | {result.stdin_status} | {result.filesystem_status} | "
             f"{result.event_contract_status} | {result.thinking_status} | "
-            f"{result.schedule_routing_expectation} | "
             f"{schedule_routing_status_label(result.schedule_routing_status)} | "
             f"{result.schedule_routing_variant} | {result.error_stage} |"
         )
-    optional_failures = summary.get("optional_failures") or []
-    if optional_failures:
-        lines.extend(["", "## Optional Scenario Failures", ""])
-        for failure in optional_failures:
-            lines.append(
-                f"- `{failure['ref']}` `{failure['scenario']}`: "
-                f"{failure['error']} (artifacts: `{failure['artifacts']}`)"
-            )
     summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def schedule_routing_status_label(status: str) -> str:
     return {
         "passed": "passed",
-        "failed_expected": "failed (expected pass)",
-        "failed_optional": "failed (optional, recorded)",
+        "failed": "failed",
         "hard_failed": "failed (hard failure)",
         "not_run": "not run",
     }.get(status, status)
@@ -1011,11 +944,12 @@ def write_selected_config(
     provider = copy.deepcopy(provider)
     provider["models"] = [copy.deepcopy(selected_model)]
     if disable_tools:
-        capabilities = provider.get("capabilities")
-        if not isinstance(capabilities, dict):
-            capabilities = {}
-        capabilities["tools"] = False
-        provider["capabilities"] = capabilities
+        for target in (provider, provider["models"][0]):
+            capabilities = target.get("capabilities")
+            if not isinstance(capabilities, dict):
+                capabilities = {}
+            capabilities["tools"] = False
+            target["capabilities"] = capabilities
     out: dict[str, Any] = {
         "model": f"{provider_id}:{model_id}",
         "enable_user_agents_resources": False,
@@ -1039,11 +973,8 @@ def write_selected_config(
 
 
 def selected_provider_model(cfg: dict[str, Any], provider_id: str, model_id: str) -> tuple[dict[str, Any], Any]:
-    providers = cfg.get("providers") or []
-    if isinstance(providers, dict):
-        providers = list(providers.values())
-    for provider in providers:
-        if not isinstance(provider, dict) or str(provider.get("id") or "").strip() != provider_id:
+    for provider in selection.merged_providers(cfg):
+        if str(provider.get("id") or "").strip() != provider_id:
             continue
         for model in provider.get("models") or []:
             if model_id_from(model) == model_id:
@@ -1052,14 +983,40 @@ def selected_provider_model(cfg: dict[str, Any], provider_id: str, model_id: str
     raise ValueError(f"provider not found: {provider_id}")
 
 
-def list_models(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model-list", default=env_default("JUEX_LIVE_MODEL_LIST", str(REPO_ROOT / "tests" / "eval" / "live-models.yaml")))
-    parser.add_argument("--section", default="provider_smoke_models")
-    parsed = parser.parse_args(argv)
-    for ref in load_model_refs(pathlib.Path(parsed.model_list), parsed.section):
-        print(ref)
-    return 0
+def validate_source_config(juex_bin: str, config_path: pathlib.Path) -> None:
+    """Ask Juex to parse the complete source config without exposing diagnostics."""
+    config_path = selection.resolved_path(config_path)
+    with tempfile.TemporaryDirectory(prefix="juex-eval-config-check.") as work:
+        command = [juex_bin, "-C", work]
+        env = os.environ.copy()
+        for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
+            env.pop(name, None)
+        default_home, effective_home = provider_home_dirs()
+        home_config_paths = {home / "juex.yaml" for home in (default_home, effective_home)}
+        if config_path in home_config_paths:
+            env["JUEX_HOME"] = str(config_path.parent)
+        else:
+            command.extend(["--config", str(config_path)])
+        command.extend(["doctor", "--offline", "--format", "json"])
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=env,
+            )
+            result = json.loads(completed.stdout)
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+            raise ValueError("provider config validation through Juex failed") from exc
+    checks = result.get("checks") if isinstance(result, dict) else None
+    config_check = next(
+        (check for check in checks or [] if isinstance(check, dict) and check.get("name") == "config"),
+        None,
+    )
+    if not config_check or config_check.get("status") != "ok":
+        raise ValueError("provider config is not loadable by Juex")
 
 
 def write_model_config_command(argv: list[str]) -> int:
@@ -1086,7 +1043,7 @@ def write_model_config_command(argv: list[str]) -> int:
             "tool_result_max_chars": 1200,
             "user_input_inline_max_bytes": 524288,
         }
-    cfg = load_yaml_file(pathlib.Path(parsed.source).expanduser())
+    cfg = load_source_config(pathlib.Path(parsed.source).expanduser())
     if parsed.ref:
         provider_id, model_id = split_provider_model_ref(parsed.ref)
     elif parsed.provider:
@@ -1183,6 +1140,10 @@ def write_development_record(
     provider = None
     if provider_summary_path and provider_summary_path.is_file():
         provider = json.loads(provider_summary_path.read_text(encoding="utf-8"))
+    compaction = None
+    compaction_summary_path = pathlib.Path(compaction_dir) / "summary.json" if compaction_dir else None
+    if compaction_summary_path and compaction_summary_path.is_file():
+        compaction = json.loads(compaction_summary_path.read_text(encoding="utf-8"))
     branch = command_output(["git", "branch", "--show-current"]).strip()
     commit = command_output(["git", "rev-parse", "HEAD"]).strip()
     dirty = bool(command_output(["git", "status", "--short"]).strip())
@@ -1195,6 +1156,7 @@ def write_development_record(
         "status": record_status,
         "commands": commands,
         "provider_model_smoke": provider,
+        "compaction_eval": compaction,
         "compaction_eval_dir": compaction_dir or None,
     }
     record_json.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1218,6 +1180,7 @@ def write_development_record(
     lines.extend(["", "## Provider Model Smoke", ""])
     if provider:
         lines.append(f"- Summary: `{provider_summary_path}`")
+        append_selection_record(lines, provider)
         for key, label in [
             ("total", "Total"),
             ("passed", "Passed"),
@@ -1230,9 +1193,7 @@ def write_development_record(
             ("terminal_event_verified", "Terminal event verified"),
             ("thinking_observed", "Thinking observed"),
             ("schedule_routing_verified", "Schedule routing verified"),
-            ("schedule_routing_expected_failures", "Schedule routing expected failures"),
-            ("schedule_routing_optional_failures", "Schedule routing optional failures"),
-            ("schedule_routing_hard_failures", "Schedule routing hard failures"),
+            ("schedule_routing_failures", "Schedule routing failures"),
             ("schedule_routing_variant", "Schedule routing variant"),
         ]:
             if key in provider:
@@ -1242,12 +1203,35 @@ def write_development_record(
     lines.extend(["", "## Quality Evaluation", ""])
     if compaction_dir:
         lines.append(f"- Compaction evaluation: `{compaction_dir}`")
+        if compaction:
+            append_selection_record(lines, compaction)
         for scorecard in sorted(pathlib.Path(compaction_dir).glob("*/scorecard.md")):
             model, score = scorecard_model_and_score(scorecard)
             lines.append(f"- {model}: {score}")
     else:
         lines.append("- Not run. Run with `--compaction-eval` when touching compaction, context projection, provider replay, or long-session behavior.")
     record_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def append_selection_record(lines: list[str], summary: dict[str, Any]) -> None:
+    for key, label in [
+        ("selection_source", "Selection source"),
+        ("selected_provider_model", "Selected provider/model"),
+        ("selected_provider_models", "Selected provider/models"),
+        ("selection_seed", "Selection seed"),
+        ("eligible_candidate_count", "Eligible candidate count"),
+        ("eligible_candidate_refs", "Eligible candidate refs"),
+        ("resolved_config_path", "Resolved config path"),
+        ("redacted_config_hash", "Redacted config hash"),
+        ("reproduction_command", "Reproduction command"),
+        ("failure_category", "Failure category"),
+    ]:
+        if key not in summary:
+            continue
+        value = summary[key]
+        if isinstance(value, list):
+            value = ", ".join(str(item) for item in value)
+        lines.append(f"- {label}: {value or ''}")
 
 
 def scorecard_model_and_score(path: pathlib.Path) -> tuple[str, str]:
@@ -1274,21 +1258,205 @@ def append_jsonl(path: pathlib.Path, value: dict[str, Any]) -> None:
         handle.write(json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
-def load_provider_model_specs(path: pathlib.Path, *, required: bool) -> list[rotation.ModelSpec]:
-    if not path.exists() and not required:
-        return []
-    return rotation.load_model_specs(path, "provider_smoke_models")
-
-
-def load_model_refs(path: pathlib.Path, section: str) -> list[str]:
-    return rotation.load_model_refs(path, section)
-
-
 def load_yaml_file(path: pathlib.Path) -> dict[str, Any]:
-    value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    text = path.read_text(encoding="utf-8")
+    value = yaml.safe_load(text) or {}
     if not isinstance(value, dict):
         raise ValueError(f"{path} must contain a YAML mapping")
+    node = yaml.compose(text)
+    if isinstance(node, yaml.nodes.MappingNode):
+        _restore_runtime_string_values(value, node)
     return value
+
+
+def load_source_config(path: pathlib.Path) -> dict[str, Any]:
+    """Load the same Home layers plus explicit overlay used by Juex validation."""
+    config_path = selection.resolved_path(path)
+    default_home, effective_home = provider_home_dirs()
+    default_config = default_home / "juex.yaml"
+    effective_config = effective_home / "juex.yaml"
+    if config_path == default_config:
+        sources = [default_config]
+    elif config_path == effective_config:
+        sources = [default_config, effective_config]
+    else:
+        sources = [default_config, effective_config, config_path]
+    merged: dict[str, Any] = {}
+    seen: set[pathlib.Path] = set()
+    for source in sources:
+        source = selection.resolved_path(source)
+        if source in seen:
+            continue
+        seen.add(source)
+        if source != config_path and not source.is_file():
+            continue
+        merged = _merge_source_config(merged, load_yaml_file(source))
+    return merged
+
+
+def provider_home_dirs() -> tuple[pathlib.Path, pathlib.Path]:
+    default_home = selection.resolved_path(pathlib.Path.home() / ".juex")
+    configured_home = os.environ.get("JUEX_HOME", "").strip()
+    effective_home = selection.resolved_path(configured_home) if configured_home else default_home
+    return default_home, effective_home
+
+
+def _merge_source_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(base)
+    for name, value in override.items():
+        if name == "providers":
+            if value is None:
+                continue
+            if isinstance(value, list):
+                existing = merged.get(name)
+                merged[name] = [*(existing if isinstance(existing, list) else []), *copy.deepcopy(value)]
+            else:
+                merged[name] = copy.deepcopy(value)
+        elif name == "environment":
+            if value is None:
+                continue
+            if not isinstance(value, dict):
+                merged[name] = copy.deepcopy(value)
+                continue
+            environment = copy.deepcopy(merged.get(name)) if isinstance(merged.get(name), dict) else {}
+            for environment_name, environment_value in value.items():
+                if environment_name == "variables":
+                    if environment_value is None:
+                        continue
+                    if not isinstance(environment_value, dict):
+                        environment[environment_name] = copy.deepcopy(environment_value)
+                        continue
+                    variables = environment.get(environment_name)
+                    variables = copy.deepcopy(variables) if isinstance(variables, dict) else {}
+                    variables.update(copy.deepcopy(environment_value))
+                    environment[environment_name] = variables
+                else:
+                    environment[environment_name] = copy.deepcopy(environment_value)
+            merged[name] = environment
+        else:
+            merged[name] = copy.deepcopy(value)
+    return merged
+
+
+def _restore_runtime_string_values(value: dict[str, Any], root: yaml.nodes.MappingNode) -> None:
+    root_nodes = _mapping_nodes(root)
+    environment = value.get("environment")
+    environment_node = root_nodes.get("environment")
+    if isinstance(environment, dict) and isinstance(environment_node, yaml.nodes.MappingNode):
+        _restore_string_map_field(environment, environment_node, "variables")
+    providers = value.get("providers")
+    providers_node = root_nodes.get("providers")
+    if not isinstance(providers, list) or not isinstance(providers_node, yaml.nodes.SequenceNode):
+        return
+    for provider, provider_node in zip(providers, providers_node.value, strict=False):
+        if not isinstance(provider, dict) or not isinstance(provider_node, yaml.nodes.MappingNode):
+            continue
+        for name in ("id", "protocol", "base_url", "api_key"):
+            _restore_string_field(provider, provider_node, name)
+        _restore_compat_string_fields(provider, provider_node)
+        for name in ("headers", "query"):
+            _restore_string_map_field(provider, provider_node, name)
+        models = provider.get("models")
+        models_node = _mapping_nodes(provider_node).get("models")
+        if not isinstance(models, list) or not isinstance(models_node, yaml.nodes.SequenceNode):
+            continue
+        for model, model_node in zip(models, models_node.value, strict=False):
+            if not isinstance(model, dict) or not isinstance(model_node, yaml.nodes.MappingNode):
+                continue
+            for name in ("id", "thinking_effort"):
+                _restore_string_field(model, model_node, name)
+            _restore_compat_string_fields(model, model_node)
+            for name in ("headers", "query"):
+                _restore_string_map_field(model, model_node, name)
+
+
+def _restore_string_field(container: dict[str, Any], node: yaml.nodes.MappingNode, name: str) -> None:
+    field_node = _mapping_nodes(node).get(name)
+    if name in container and isinstance(field_node, yaml.nodes.ScalarNode):
+        container[name] = _runtime_string_node_value(field_node)
+
+
+def _restore_compat_string_fields(container: dict[str, Any], node: yaml.nodes.MappingNode) -> None:
+    compat = container.get("compat")
+    compat_node = _mapping_nodes(node).get("compat")
+    if not isinstance(compat, dict) or not isinstance(compat_node, yaml.nodes.MappingNode):
+        return
+    _restore_string_field(compat, compat_node, "codex_transport")
+    fields_node = _mapping_nodes(compat_node).get("reasoning_replay_fields")
+    fields = compat.get("reasoning_replay_fields")
+    if isinstance(fields, list) and isinstance(fields_node, yaml.nodes.SequenceNode):
+        compat["reasoning_replay_fields"] = [
+            _runtime_string_node_value(item) if isinstance(item, yaml.nodes.ScalarNode) else value
+            for value, item in zip(fields, fields_node.value, strict=False)
+        ]
+
+
+def _restore_string_map_field(container: dict[str, Any], node: yaml.nodes.MappingNode, name: str) -> None:
+    current = container.get(name)
+    field_node = _mapping_nodes(node).get(name)
+    if not isinstance(current, dict) or not isinstance(field_node, yaml.nodes.MappingNode):
+        return
+    container[name] = _runtime_string_map_node(field_node)
+
+
+def _runtime_string_map_node(node: yaml.nodes.MappingNode) -> dict[str, str]:
+    restored: dict[str, str] = {}
+    for key_node, value_node in node.value:
+        if isinstance(key_node, yaml.nodes.ScalarNode) and key_node.value == "<<":
+            restored.update(_runtime_merged_string_maps(value_node))
+    for key_node, value_node in node.value:
+        if (
+            isinstance(key_node, yaml.nodes.ScalarNode)
+            and key_node.value != "<<"
+            and isinstance(value_node, yaml.nodes.ScalarNode)
+        ):
+            restored[_runtime_string_node_value(key_node)] = _runtime_string_node_value(value_node)
+    return restored
+
+
+def _runtime_merged_string_maps(node: yaml.nodes.Node) -> dict[str, str]:
+    if isinstance(node, yaml.nodes.MappingNode):
+        return _runtime_string_map_node(node)
+    if isinstance(node, yaml.nodes.SequenceNode):
+        restored: dict[str, str] = {}
+        for item in reversed(node.value):
+            if isinstance(item, yaml.nodes.MappingNode):
+                restored.update(_runtime_string_map_node(item))
+        return restored
+    return {}
+
+
+def _runtime_string_node_value(node: yaml.nodes.ScalarNode) -> str:
+    return "" if node.tag == "tag:yaml.org,2002:null" else node.value
+
+
+def _mapping_nodes(node: yaml.nodes.MappingNode) -> dict[str, yaml.nodes.Node]:
+    restored: dict[str, yaml.nodes.Node] = {}
+    for key, value in node.value:
+        if isinstance(key, yaml.nodes.ScalarNode) and key.value == "<<":
+            restored.update(_merged_mapping_nodes(value))
+    for key, value in node.value:
+        if isinstance(key, yaml.nodes.ScalarNode) and key.value != "<<":
+            restored[key.value] = value
+    return restored
+
+
+def _merged_mapping_nodes(node: yaml.nodes.Node) -> dict[str, yaml.nodes.Node]:
+    if isinstance(node, yaml.nodes.MappingNode):
+        return _mapping_nodes(node)
+    if isinstance(node, yaml.nodes.SequenceNode):
+        restored: dict[str, yaml.nodes.Node] = {}
+        for item in reversed(node.value):
+            if isinstance(item, yaml.nodes.MappingNode):
+                restored.update(_mapping_nodes(item))
+        return restored
+    return {}
+
+
+def safe_config_error(exc: Exception) -> str:
+    if isinstance(exc, yaml.YAMLError):
+        return "provider config YAML is invalid"
+    return str(exc)
 
 
 def dump_yaml(value: Any) -> str:
@@ -1320,7 +1488,9 @@ def tail_file(path: pathlib.Path, lines: int) -> str:
 
 
 def safe_ref(ref: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]", "_", ref)
+    slug = re.sub(r"[^A-Za-z0-9._-]", "_", ref)[:80] or "ref"
+    digest = hashlib.sha256(ref.encode("utf-8")).hexdigest()[:12]
+    return f"{slug}-{digest}"
 
 
 if __name__ == "__main__":

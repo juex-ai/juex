@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-from . import compaction, helper, rotation
+from . import compaction, helper, selection
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -19,16 +19,12 @@ TEST_HOME_RUNNER = str(REPO_ROOT / "scripts" / "with-test-juex-home.sh")
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] in {
-        "list-models",
         "write-model-config",
         "run-timeout",
         "append-command",
         "write-development-record",
     }:
         return helper.main_with_args(argv)
-    if argv and argv[0] == "rotation":
-        return rotation.main_with_args(argv[1:])
-
     parser = argparse.ArgumentParser(prog="juex-eval", description="JueX local evaluation commands.")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -45,9 +41,6 @@ def main(argv: list[str] | None = None) -> int:
     compaction_parser = sub.add_parser("compaction", help="Run live compaction quality evaluation.")
     compaction.add_args(compaction_parser)
 
-    rotation_parser = sub.add_parser("rotation", help="Select or update rotating live-model targets.")
-    rotation_parser.add_argument("rotation_args", nargs=argparse.REMAINDER)
-
     parsed = parser.parse_args(argv)
     try:
         if parsed.command == "development":
@@ -56,8 +49,6 @@ def main(argv: list[str] | None = None) -> int:
             return run_provider_smoke(parsed)
         if parsed.command == "compaction":
             return compaction.run(parsed)
-        if parsed.command == "rotation":
-            return rotation.main_with_args(parsed.rotation_args)
     except Exception as exc:  # noqa: BLE001 - command-line entry should report succinctly.
         print(str(exc), file=sys.stderr)
         return 1
@@ -81,9 +72,18 @@ def add_development_args(parser: argparse.ArgumentParser) -> None:
         default=os.environ.get("JUEX_PROVIDER_SMOKE_ONLY") or "",
         help="Only run this provider:model ref for provider smoke.",
     )
+    parser.add_argument(
+        "--config",
+        default=os.environ.get("JUEX_PROVIDER_CONFIG") or str(pathlib.Path.home() / ".juex" / "juex.yaml"),
+        help="Provider config used by live evaluation steps.",
+    )
+    parser.add_argument(
+        "--selection-seed",
+        default=os.environ.get("JUEX_EVAL_SELECTION_SEED") or selection.generated_seed(),
+        help="Reproducible seed for provider-config candidate selection.",
+    )
     parser.add_argument("--provider-timeout", type=int, default=int(os.environ.get("JUEX_PROVIDER_SMOKE_TIMEOUT") or "240"))
     parser.add_argument("--provider-all-models", action="store_true")
-    parser.add_argument("--provider-all-config-models", action="store_true")
     parser.add_argument("--no-provider-smoke", action="store_true")
     parser.add_argument("--skip-tests", action="store_true")
     parser.add_argument("--compaction-eval", action="store_true")
@@ -105,24 +105,15 @@ def add_provider_args(parser: argparse.ArgumentParser) -> None:
         default=os.environ.get("JUEX_PROVIDER_CONFIG") or str(pathlib.Path.home() / ".juex" / "juex.yaml"),
     )
     parser.add_argument(
-        "--model-list",
-        default=os.environ.get("JUEX_LIVE_MODEL_LIST") or str(REPO_ROOT / "tests" / "eval" / "live-models.yaml"),
-    )
-    parser.add_argument(
-        "--rotation-state",
-        default=os.environ.get("JUEX_LIVE_MODEL_ROTATION_STATE") or str(REPO_ROOT / ".juex" / "live-model-rotation.json"),
+        "--selection-seed",
+        default=os.environ.get("JUEX_EVAL_SELECTION_SEED") or selection.generated_seed(),
+        help="Reproducible seed for provider-config candidate selection.",
     )
     parser.add_argument(
         "--all-models",
         action="store_true",
         default=truthy(os.environ.get("JUEX_PROVIDER_SMOKE_ALL_MODELS")),
-        help="Run every ref in provider_smoke_models.",
-    )
-    parser.add_argument(
-        "--all-config-models",
-        action="store_true",
-        default=truthy(os.environ.get("JUEX_PROVIDER_SMOKE_ALL_CONFIG_MODELS")),
-        help="Run every provider:model found in the provider config.",
+        help="Run every eligible provider:model found in the provider config.",
     )
     parser.add_argument("--work-root", default=os.environ.get("JUEX_PROVIDER_SMOKE_ROOT") or "")
     parser.add_argument(
@@ -137,7 +128,7 @@ def add_provider_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--only",
         default=os.environ.get("JUEX_PROVIDER_SMOKE_ONLY") or "",
-        help="Run one provider:model ref, or every model for one provider id.",
+        help="Run exactly one eligible provider:model ref.",
     )
     parser.add_argument("--timeout", type=int, default=int(os.environ.get("JUEX_PROVIDER_SMOKE_TIMEOUT") or "240"))
     parser.add_argument("--retries", type=int, default=int(os.environ.get("JUEX_PROVIDER_SMOKE_RETRIES") or "1"))
@@ -146,6 +137,7 @@ def add_provider_args(parser: argparse.ArgumentParser) -> None:
 
 def run_development(args: argparse.Namespace) -> int:
     validate_development_args(args)
+    args.config = str(selection.resolved_path(args.config))
 
     report_dir = pathlib.Path(args.report_dir or helper.default_report_dir("development-validation", args.run_id))
     command_logs = report_dir / "command-logs"
@@ -174,10 +166,8 @@ def run_development(args: argparse.Namespace) -> int:
 
 
 def validate_development_args(args: argparse.Namespace) -> None:
-    if args.provider_only and (args.provider_all_models or args.provider_all_config_models):
-        raise ValueError("--only cannot be combined with provider all-model options")
-    if args.provider_all_models and args.provider_all_config_models:
-        raise ValueError("--provider-all-models and --provider-all-config-models are mutually exclusive")
+    if args.provider_only and args.provider_all_models:
+        raise ValueError("--only cannot be combined with --provider-all-models")
     if args.compaction_all_models and args.compaction_only:
         raise ValueError("--compaction-all-models cannot be combined with --compaction-only")
 
@@ -206,18 +196,21 @@ def development_steps(args: argparse.Namespace, report_dir: pathlib.Path) -> tup
 def provider_smoke_development_command(args: argparse.Namespace, report_dir: pathlib.Path) -> list[str]:
     command = module_command("provider-smoke")
     append_value(command, "--juex", "./dist/juex")
+    append_value(command, "--config", args.config)
+    append_value(command, "--selection-seed", args.selection_seed)
     append_value(command, "--report-dir", report_dir)
     append_value(command, "--run-id", args.run_id)
     append_value(command, "--timeout", args.provider_timeout)
     append_value(command, "--only", args.provider_only)
     append_flag(command, "--all-models", args.provider_all_models)
-    append_flag(command, "--all-config-models", args.provider_all_config_models)
     return command
 
 
 def compaction_development_command(args: argparse.Namespace, report_dir: pathlib.Path) -> list[str]:
     command = module_command("compaction")
     append_value(command, "--juex", "./dist/juex")
+    append_value(command, "--config", args.config)
+    append_value(command, "--selection-seed", args.selection_seed)
     append_value(command, "--report-dir", report_dir)
     append_value(command, "--run-id", args.run_id)
     append_flag(command, "--all-models", args.compaction_all_models)
@@ -277,25 +270,7 @@ def print_tail(path: pathlib.Path, lines: int) -> None:
 
 
 def run_provider_smoke(args: argparse.Namespace) -> int:
-    helper_args = provider_helper_args(args)
-    if explicit_provider_scope(args):
-        return helper.provider_smoke(helper_args)
-
-    refs = rotation.load_model_refs(pathlib.Path(args.model_list).expanduser(), "provider_smoke_models")
-    rotation_state = pathlib.Path(args.rotation_state).expanduser()
-    state = rotation.load_state(rotation_state)
-    selected = rotation.select_next(refs, state, "provider_smoke_models")
-    print(f"rotated provider smoke model: {selected}")
-
-    status = helper.provider_smoke(["--only", selected, *helper_args])
-    if status == 0:
-        rotation.mark_success(state, "provider_smoke_models", selected)
-        rotation.write_state(rotation_state, state)
-    return status
-
-
-def explicit_provider_scope(args: argparse.Namespace) -> bool:
-    return bool(args.only or args.all_models or args.all_config_models)
+    return helper.provider_smoke(provider_helper_args(args))
 
 
 def provider_helper_args(args: argparse.Namespace) -> list[str]:
@@ -303,9 +278,9 @@ def provider_helper_args(args: argparse.Namespace) -> list[str]:
         "--juex",
         args.juex,
         "--config",
-        args.config,
-        "--model-list",
-        args.model_list,
+        str(selection.resolved_path(args.config)),
+        "--selection-seed",
+        args.selection_seed,
         "--run-id",
         args.run_id,
         "--timeout",
@@ -317,7 +292,6 @@ def provider_helper_args(args: argparse.Namespace) -> list[str]:
     append_value(out, "--report-dir", args.report_dir)
     append_value(out, "--only", args.only)
     append_flag(out, "--all-models", args.all_models)
-    append_flag(out, "--all-config-models", args.all_config_models)
     append_flag(out, "--keep", args.keep)
     return out
 

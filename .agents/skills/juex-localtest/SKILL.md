@@ -94,11 +94,10 @@ make build
 bash tests/eval/provider_model_smoke.sh --juex ./dist/juex
 ```
 
-The canonical script reads provider credentials from `~/.juex/juex.yaml`.
-Routine runs rotate one model ref from `tests/eval/live-models.yaml` to keep
-local validation bounded while covering the list over time. Successful runs
-advance `.juex/live-model-rotation.json`; failed runs do not. The script fails
-if the selected provider/model ref is missing from the provider config. For each
+The canonical script resolves `--config`, `JUEX_PROVIDER_CONFIG`, or the
+original user's `~/.juex/juex.yaml`. Routine runs use a recorded selection seed
+to choose one eligible ref from that config. The script fails with
+`provider_unavailable` when no eligible ref exists. For each
 selected model it creates an isolated temp workdir, copies only that
 provider/model into a temp config, and runs Juex with a temp `HOME` so global
 MCP servers and skills are not loaded; it also passes
@@ -116,18 +115,18 @@ unless `--report-dir` is passed.
 Useful options:
 
 ```bash
-bash tests/eval/provider_model_smoke.sh --only ark:doubao-seed-2.0-pro
+bash tests/eval/provider_model_smoke.sh --only provider:model
 bash tests/eval/provider_model_smoke.sh --all-models
-bash tests/eval/provider_model_smoke.sh --all-config-models
+bash tests/eval/provider_model_smoke.sh --selection-seed reproducible-seed
 bash tests/eval/provider_model_smoke.sh --work-root /tmp/juex-provider-smoke --keep
 bash tests/eval/provider_model_smoke.sh --report-dir /tmp/juex-provider-report
 bash tests/eval/provider_model_smoke.sh --timeout 360
 bash tests/eval/provider_model_smoke.sh --retries 0
 ```
 
-`--all-models` runs every ref in `provider_smoke_models`.
-`--all-config-models` is reserved for broad audits of every provider/model in
-`~/.juex/juex.yaml`.
+`--all-models` runs every eligible ref in the resolved provider config.
+Provider smoke excludes only profiles whose effective tools capability is
+explicitly false; every selected profile uses the same strict contract.
 
 ## Development Evaluation
 
@@ -137,23 +136,25 @@ bash tests/eval/development_eval.sh
 
 The development evaluator records command logs and summaries under
 `.tmp/reports/development-validation/<run-id>/`. It runs deterministic tests,
-build, and a rotating provider smoke by default. Use `--skip-tests` and
+build, and one seeded provider-config smoke by default. Use `--skip-tests` and
 `--no-provider-smoke` only for validating the harness itself or documentation
 examples where live providers are irrelevant.
 
 Use `--only provider:model` to bound provider smoke. Use `--compaction-eval`
 when a change touches compaction, context projection, provider reasoning replay,
-or long-session behavior. The compaction evaluator rotates one ref from
-`compaction_eval_models` by default, reads provider/model details from
-`~/.juex/juex.yaml`, and writes scorecards under the development record. Use
+or long-session behavior. The compaction evaluator selects one eligible ref
+from the resolved provider config by the recorded seed and writes scorecards
+under the development record. Models with an explicitly insufficient context
+window are excluded. Use
 `--compaction-only provider:model` for a focused compaction run and
-`--compaction-all-models` when a larger change needs every listed compaction
-model in one run.
+`--compaction-all-models` when a larger change needs every eligible configured
+model in one run. JSON, Markdown, and terminal summaries record the seed,
+candidate set, redacted config hash, and reproduction command.
 
 Direct compaction entrypoint:
 
 ```bash
-bash tests/eval/compaction_eval.sh --only ark:doubao-seed-2.0-pro
+bash tests/eval/compaction_eval.sh --only provider:model
 bash tests/eval/compaction_eval.sh --all-models
 ```
 
