@@ -52,6 +52,7 @@ absolute_source_path() {
     "~/"*) path="$original_home/${path#\~/}" ;;
   esac
   case "$path" in
+    [[:alpha:]]:[\\/]*) path="${path//\\//}" ;;
     /*) ;;
     *) path="$original_workdir/$path" ;;
   esac
@@ -94,6 +95,8 @@ trap cleanup EXIT
 export HOME="$test_root"
 export USERPROFILE="$test_root"
 export JUEX_HOME="$HOME/.juex"
+export XDG_CONFIG_HOME="$HOME/.config"
+export GIT_CONFIG_GLOBAL="$HOME/.gitconfig"
 if [[ "$mode" == "live" ]]; then
   if [[ -n "$live_provider_config" ]]; then
     export JUEX_PROVIDER_CONFIG="$live_provider_config"

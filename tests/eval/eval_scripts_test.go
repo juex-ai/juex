@@ -540,10 +540,14 @@ func TestTestJuexHomeWrapperIsolatesDeterministicEnvironment(t *testing.T) {
 	providerConfig := filepath.Join(productionJuexHome, "juex.yaml")
 	fleetMarker := filepath.Join(productionJuexHome, "fleet", "marker")
 	agentMarker := filepath.Join(productionJuexHome, "agents", "agent-a", "marker")
+	xdgMarker := filepath.Join(productionHome, "xdg-config", "marker")
+	globalGitConfig := filepath.Join(productionHome, "global.gitconfig")
 	for path, body := range map[string]string{
-		providerConfig: "model: private:model\n",
-		fleetMarker:    "fleet-unchanged\n",
-		agentMarker:    "agent-unchanged\n",
+		providerConfig:  "model: private:model\n",
+		fleetMarker:     "fleet-unchanged\n",
+		agentMarker:     "agent-unchanged\n",
+		xdgMarker:       "xdg-unchanged\n",
+		globalGitConfig: "git-unchanged\n",
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
@@ -569,14 +573,17 @@ func TestTestJuexHomeWrapperIsolatesDeterministicEnvironment(t *testing.T) {
 			`test "$HOME" = "$USERPROFILE"`,
 			`test "$JUEX_HOME" = "$HOME/.juex"`,
 			`test "$CODEX_HOME" = "$HOME/.codex"`,
+			`test "$XDG_CONFIG_HOME" = "$HOME/.config"`,
+			`test "$GIT_CONFIG_GLOBAL" = "$HOME/.gitconfig"`,
 			`test -z "${JUEX_PROVIDER_CONFIG:-}"`,
 			`test -z "${JUEX_TEST_PROVIDER_CONFIG_DEFAULT:-}"`,
 			`test "$GOCACHE" = "$1"`,
 			`test "$GOMODCACHE" = "$2"`,
 			`test "$UV_CACHE_DIR" = "$3"`,
 			`printf '%s\n' "$HOME" "$JUEX_HOME"`,
-			`mkdir -p "$JUEX_HOME/agents/test-agent" "$JUEX_HOME/fleet"`,
-			`touch "$JUEX_HOME/agents/test-agent/probe" "$JUEX_HOME/fleet/probe"`,
+			`mkdir -p "$JUEX_HOME/agents/test-agent" "$JUEX_HOME/fleet" "$XDG_CONFIG_HOME"`,
+			`touch "$JUEX_HOME/agents/test-agent/probe" "$JUEX_HOME/fleet/probe" "$XDG_CONFIG_HOME/probe"`,
+			`printf 'isolated\n' >"$GIT_CONFIG_GLOBAL"`,
 		}, "; "),
 		"wrapper-probe",
 		goCache,
@@ -589,6 +596,8 @@ func TestTestJuexHomeWrapperIsolatesDeterministicEnvironment(t *testing.T) {
 		"JUEX_HOME":            productionJuexHome,
 		"JUEX_PROVIDER_CONFIG": providerConfig,
 		"CODEX_HOME":           productionCodexHome,
+		"XDG_CONFIG_HOME":      filepath.Dir(xdgMarker),
+		"GIT_CONFIG_GLOBAL":    globalGitConfig,
 		"GOCACHE":              goCache,
 		"GOMODCACHE":           goModCache,
 		"UV_CACHE_DIR":         uvCache,
@@ -609,8 +618,10 @@ func TestTestJuexHomeWrapperIsolatesDeterministicEnvironment(t *testing.T) {
 		t.Fatalf("temporary HOME still exists after command: %v", err)
 	}
 	for path, want := range map[string]string{
-		fleetMarker: "fleet-unchanged\n",
-		agentMarker: "agent-unchanged\n",
+		fleetMarker:     "fleet-unchanged\n",
+		agentMarker:     "agent-unchanged\n",
+		xdgMarker:       "xdg-unchanged\n",
+		globalGitConfig: "git-unchanged\n",
 	} {
 		got, err := os.ReadFile(path)
 		if err != nil {
@@ -718,6 +729,32 @@ func TestTestJuexHomeWrapperLiveModePreservesExplicitSources(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(productionJuexHome, "live-runtime-probe")); !os.IsNotExist(err) {
 		t.Fatalf("live wrapper wrote production JUEX_HOME: %v", err)
+	}
+}
+
+func TestTestJuexHomeWrapperLiveModeAcceptsWindowsDrivePaths(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found; skipping shell wrapper test")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(
+		"bash",
+		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
+		"--live",
+		"sh",
+		"-c",
+		`test "$JUEX_PROVIDER_CONFIG" = 'C:/provider/juex.yaml'; test "$CODEX_HOME" = 'D:/Users/me/.codex'`,
+	)
+	cmd.Env = commandEnv(map[string]string{
+		"JUEX_PROVIDER_CONFIG": `C:/provider/juex.yaml`,
+		"CODEX_HOME":           `D:\Users\me\.codex`,
+	})
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("resolve Windows drive-rooted live paths: %v\n%s", err, out)
 	}
 }
 
