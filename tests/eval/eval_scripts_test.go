@@ -727,8 +727,8 @@ func TestTestJuexHomeWrapperLiveModePreservesExplicitSources(t *testing.T) {
 		"HOME":                 productionHome,
 		"USERPROFILE":          productionHome,
 		"JUEX_HOME":            productionJuexHome,
-		"JUEX_PROVIDER_CONFIG": providerConfig,
-		"CODEX_HOME":           codexHome,
+		"JUEX_PROVIDER_CONFIG": " \t" + providerConfig + " \r\n",
+		"CODEX_HOME":           " \t" + codexHome + " \r\n",
 		"GOCACHE":              goCache,
 		"GOMODCACHE":           goModCache,
 		"UV_CACHE_DIR":         uvCache,
@@ -849,9 +849,11 @@ func TestTestJuexHomeWrapperLiveModeResolvesOriginalHomeDefaults(t *testing.T) {
 		}, "; "),
 	)
 	cmd.Env = commandEnv(map[string]string{
-		"HOME":        productionHome,
-		"USERPROFILE": productionHome,
-	}, "JUEX_PROVIDER_CONFIG", "CODEX_HOME")
+		"HOME":                 productionHome,
+		"USERPROFILE":          productionHome,
+		"JUEX_PROVIDER_CONFIG": " \t\r\n",
+		"CODEX_HOME":           " \t\r\n",
+	})
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("resolve original live defaults: %v\n%s", err, out)
 	}

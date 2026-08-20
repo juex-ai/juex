@@ -94,18 +94,27 @@ absolute_source_path() {
   printf '%s/%s\n' "${parent%/}" "$name"
 }
 
+trim_space() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
 live_provider_config=""
 live_codex_home=""
 live_provider_config_is_default="false"
 if [[ "$mode" == "live" ]]; then
-  if [[ -n "${JUEX_PROVIDER_CONFIG:-}" ]]; then
-    live_provider_config="$(absolute_source_path "$JUEX_PROVIDER_CONFIG")"
+  configured_provider_config="$(trim_space "${JUEX_PROVIDER_CONFIG:-}")"
+  configured_codex_home="$(trim_space "${CODEX_HOME:-}")"
+  if [[ -n "$configured_provider_config" ]]; then
+    live_provider_config="$(absolute_source_path "$configured_provider_config")"
   elif [[ -n "$original_home" ]]; then
     live_provider_config="$(absolute_source_path "$original_home/.juex/juex.yaml")"
     live_provider_config_is_default="true"
   fi
-  if [[ -n "${CODEX_HOME:-}" ]]; then
-    live_codex_home="$(absolute_source_path "$CODEX_HOME")"
+  if [[ -n "$configured_codex_home" ]]; then
+    live_codex_home="$(absolute_source_path "$configured_codex_home")"
   elif [[ -n "$original_home" ]]; then
     live_codex_home="$(absolute_source_path "$original_home/.codex")"
   fi
