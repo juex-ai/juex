@@ -988,6 +988,8 @@ def validate_source_config(juex_bin: str, config_path: pathlib.Path) -> None:
     with tempfile.TemporaryDirectory(prefix="juex-eval-config-check.") as work:
         command = [juex_bin, "-C", work]
         env = os.environ.copy()
+        for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
+            env.pop(name, None)
         default_home, effective_home = provider_home_dirs()
         home_config_paths = {home / "juex.yaml" for home in (default_home, effective_home)}
         if config_path in home_config_paths:
@@ -1262,7 +1264,7 @@ def load_yaml_file(path: pathlib.Path) -> dict[str, Any]:
         raise ValueError(f"{path} must contain a YAML mapping")
     node = yaml.compose(text)
     if isinstance(node, yaml.nodes.MappingNode):
-        _restore_runtime_string_maps(value, node)
+        _restore_runtime_string_values(value, node)
     return value
 
 
@@ -1335,7 +1337,7 @@ def _merge_source_config(base: dict[str, Any], override: dict[str, Any]) -> dict
     return merged
 
 
-def _restore_runtime_string_maps(value: dict[str, Any], root: yaml.nodes.MappingNode) -> None:
+def _restore_runtime_string_values(value: dict[str, Any], root: yaml.nodes.MappingNode) -> None:
     root_nodes = _mapping_nodes(root)
     environment = value.get("environment")
     environment_node = root_nodes.get("environment")
@@ -1348,6 +1350,9 @@ def _restore_runtime_string_maps(value: dict[str, Any], root: yaml.nodes.Mapping
     for provider, provider_node in zip(providers, providers_node.value, strict=False):
         if not isinstance(provider, dict) or not isinstance(provider_node, yaml.nodes.MappingNode):
             continue
+        for name in ("id", "protocol", "base_url", "api_key"):
+            _restore_string_field(provider, provider_node, name)
+        _restore_compat_string_fields(provider, provider_node)
         for name in ("headers", "query"):
             _restore_string_map_field(provider, provider_node, name)
         models = provider.get("models")
@@ -1357,8 +1362,32 @@ def _restore_runtime_string_maps(value: dict[str, Any], root: yaml.nodes.Mapping
         for model, model_node in zip(models, models_node.value, strict=False):
             if not isinstance(model, dict) or not isinstance(model_node, yaml.nodes.MappingNode):
                 continue
+            for name in ("id", "thinking_effort"):
+                _restore_string_field(model, model_node, name)
+            _restore_compat_string_fields(model, model_node)
             for name in ("headers", "query"):
                 _restore_string_map_field(model, model_node, name)
+
+
+def _restore_string_field(container: dict[str, Any], node: yaml.nodes.MappingNode, name: str) -> None:
+    field_node = _mapping_nodes(node).get(name)
+    if name in container and isinstance(field_node, yaml.nodes.ScalarNode):
+        container[name] = _runtime_string_node_value(field_node)
+
+
+def _restore_compat_string_fields(container: dict[str, Any], node: yaml.nodes.MappingNode) -> None:
+    compat = container.get("compat")
+    compat_node = _mapping_nodes(node).get("compat")
+    if not isinstance(compat, dict) or not isinstance(compat_node, yaml.nodes.MappingNode):
+        return
+    _restore_string_field(compat, compat_node, "codex_transport")
+    fields_node = _mapping_nodes(compat_node).get("reasoning_replay_fields")
+    fields = compat.get("reasoning_replay_fields")
+    if isinstance(fields, list) and isinstance(fields_node, yaml.nodes.SequenceNode):
+        compat["reasoning_replay_fields"] = [
+            _runtime_string_node_value(item) if isinstance(item, yaml.nodes.ScalarNode) else value
+            for value, item in zip(fields, fields_node.value, strict=False)
+        ]
 
 
 def _restore_string_map_field(container: dict[str, Any], node: yaml.nodes.MappingNode, name: str) -> None:
@@ -1401,11 +1430,26 @@ def _runtime_string_node_value(node: yaml.nodes.ScalarNode) -> str:
 
 
 def _mapping_nodes(node: yaml.nodes.MappingNode) -> dict[str, yaml.nodes.Node]:
-    return {
-        key.value: value
-        for key, value in node.value
-        if isinstance(key, yaml.nodes.ScalarNode)
-    }
+    restored: dict[str, yaml.nodes.Node] = {}
+    for key, value in node.value:
+        if isinstance(key, yaml.nodes.ScalarNode) and key.value == "<<":
+            restored.update(_merged_mapping_nodes(value))
+    for key, value in node.value:
+        if isinstance(key, yaml.nodes.ScalarNode) and key.value != "<<":
+            restored[key.value] = value
+    return restored
+
+
+def _merged_mapping_nodes(node: yaml.nodes.Node) -> dict[str, yaml.nodes.Node]:
+    if isinstance(node, yaml.nodes.MappingNode):
+        return _mapping_nodes(node)
+    if isinstance(node, yaml.nodes.SequenceNode):
+        restored: dict[str, yaml.nodes.Node] = {}
+        for item in reversed(node.value):
+            if isinstance(item, yaml.nodes.MappingNode):
+                restored.update(_mapping_nodes(item))
+        return restored
+    return {}
 
 
 def safe_config_error(exc: Exception) -> str:
