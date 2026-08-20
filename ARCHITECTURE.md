@@ -1262,8 +1262,11 @@ active selection, and acquires its single-writer lock under the Session-root
 guard before the caller builds or validates Session Modules. Other processes
 may therefore observe the candidate in history before the current App runtime
 publishes it. A replacement rejection must delete the candidate and restore
-the captured previous selection; a restore failure is joined with the original
-error and requires history reconciliation before another attachment trusts it.
+the previously resident App Session as the persisted selection. This is not a
+compare-and-swap restore: a selection written by another process after the
+replacement began may be overwritten. A restore failure is joined with the
+original error and requires history reconciliation before another attachment
+trusts it.
 Web startup and MCP
 notification routing use exported app helpers for active-primary records and
 ids instead of duplicating those rules.
@@ -1422,10 +1425,12 @@ publishes the App Session, runtime status, chunked-write state, and Session
 lock. A pre-commit failure rolls back the captured Engine checkpoint and old
 event/observability targets before closing candidate resources no longer
 referenced by the Engine. The attachment caller then deletes the candidate and
-restores the captured active-history selection. Either rollback or history
-restore failure is joined with the original error; a failed history restore
-leaves persisted selection uncertain, and a failed Engine rollback prevents
-closing a still-published Module set. `ReadSession` and
+reasserts the previously resident App Session in active history. This is not a
+compare-and-swap restore of concurrent history changes. Either rollback or
+history restore failure is joined with the original error; a failed history
+restore leaves persisted selection uncertain, and a failed Engine rollback
+leaves the candidate Module set open because it may still be published.
+`ReadSession` and
 higher-level App status/context/pending-input/turn methods hold the matching
 read lock, so an old Session and lock cannot close underneath an in-flight
 reader. Only after App publication releases that lock are the old Module set,
