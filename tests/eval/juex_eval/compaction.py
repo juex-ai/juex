@@ -220,7 +220,7 @@ def run_model(args: argparse.Namespace, cfg: dict, model: str, out_root: pathlib
     except ValueError:
         print(f"FAIL {model}: invalid model ref format (expected provider:model)", file=sys.stderr)
         return 1
-    safe = model.replace(":", "__").replace("/", "__")
+    safe = helper.safe_ref(model)
     work = pathlib.Path(tempfile.mkdtemp(prefix=f"juex-compaction-eval.{safe}."))
     temp_dirs.append(work)
     out_dir = out_root / safe

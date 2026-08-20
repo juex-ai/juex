@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import pathlib
@@ -1365,15 +1366,34 @@ def _restore_string_map_field(container: dict[str, Any], node: yaml.nodes.Mappin
     field_node = _mapping_nodes(node).get(name)
     if not isinstance(current, dict) or not isinstance(field_node, yaml.nodes.MappingNode):
         return
-    loaded_items = list(current.items())
-    restored: dict[Any, Any] = {}
-    for index, (key_node, value_node) in enumerate(field_node.value):
-        if isinstance(key_node, yaml.nodes.ScalarNode) and isinstance(value_node, yaml.nodes.ScalarNode):
+    container[name] = _runtime_string_map_node(field_node)
+
+
+def _runtime_string_map_node(node: yaml.nodes.MappingNode) -> dict[str, str]:
+    restored: dict[str, str] = {}
+    for key_node, value_node in node.value:
+        if isinstance(key_node, yaml.nodes.ScalarNode) and key_node.value == "<<":
+            restored.update(_runtime_merged_string_maps(value_node))
+    for key_node, value_node in node.value:
+        if (
+            isinstance(key_node, yaml.nodes.ScalarNode)
+            and key_node.value != "<<"
+            and isinstance(value_node, yaml.nodes.ScalarNode)
+        ):
             restored[key_node.value] = value_node.value
-        elif index < len(loaded_items):
-            loaded_key, loaded_value = loaded_items[index]
-            restored[loaded_key] = loaded_value
-    container[name] = restored
+    return restored
+
+
+def _runtime_merged_string_maps(node: yaml.nodes.Node) -> dict[str, str]:
+    if isinstance(node, yaml.nodes.MappingNode):
+        return _runtime_string_map_node(node)
+    if isinstance(node, yaml.nodes.SequenceNode):
+        restored: dict[str, str] = {}
+        for item in reversed(node.value):
+            if isinstance(item, yaml.nodes.MappingNode):
+                restored.update(_runtime_string_map_node(item))
+        return restored
+    return {}
 
 
 def _mapping_nodes(node: yaml.nodes.MappingNode) -> dict[str, yaml.nodes.Node]:
@@ -1419,7 +1439,9 @@ def tail_file(path: pathlib.Path, lines: int) -> str:
 
 
 def safe_ref(ref: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]", "_", ref)
+    slug = re.sub(r"[^A-Za-z0-9._-]", "_", ref)[:80] or "ref"
+    digest = hashlib.sha256(ref.encode("utf-8")).hexdigest()[:12]
+    return f"{slug}-{digest}"
 
 
 if __name__ == "__main__":
