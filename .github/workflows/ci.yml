@@ -34,7 +34,7 @@ jobs:
           printf '<!doctype html><html><body></body></html>' > internal/web/dist/index.html
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: v2.13.1
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
