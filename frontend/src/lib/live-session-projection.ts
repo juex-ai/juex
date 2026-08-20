@@ -19,6 +19,7 @@ import {
   type QueuedInput,
   type QueuedInputState,
 } from "./queued-inputs.ts";
+import { messageCreatedAtFromID } from "./session-messages.ts";
 import type {
   BrowserEvent,
   Block,
@@ -252,6 +253,12 @@ export function projectLiveSessionEvent(
       const consumed = alreadyProjected
         ? { state: next }
         : consumeQueuedInput(next, event.payload.input, event.payload.kind);
+      const messageID =
+        event.payload.message_id ?? consumed.item?.messageID;
+      const createdAt =
+        messageCreatedAtFromID(messageID) ??
+        consumed.item?.createdAt ??
+        event.ts;
       next = consumed.state;
       next = {
         ...next,
@@ -262,8 +269,8 @@ export function projectLiveSessionEvent(
           event.payload.kind,
           "event",
           consumed.item?.attachments,
-          event.payload.message_id ?? consumed.item?.messageID,
-          consumed.item?.createdAt ?? event.ts,
+          messageID,
+          createdAt,
         ),
       };
       break;
@@ -344,7 +351,7 @@ export function projectLiveSessionEvent(
         event.payload.pending_count,
         [],
         event.payload.message_id,
-        event.ts,
+        messageCreatedAtFromID(event.payload.message_id) ?? event.ts,
       );
       break;
     case "pending_input.draining":

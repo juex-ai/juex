@@ -82,7 +82,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/runtime-display.ts` | pure runtime and session-state display formatting helpers |
 | `src/lib/runtime-navigation.ts` | pure Runtime subsection parsing, labels, and canonical nested paths |
 | `src/lib/runtime-tool-catalog.ts` | pure runtime tool group labels, timeout labels, parameter projection, and defensive schema formatting |
-| `src/lib/session-messages.ts` | pure helpers for merging paged transcript windows |
+| `src/lib/session-messages.ts` | pure helpers for canonical message-ID creation-time decoding and merging paged transcript windows |
 | `src/lib/session-read-controller.ts` | session-detail effect interpreter for route guards, fetch/context refresh, transcript SSE dispatch, reconnect-safe status calibration/application/cleanup, and navigation effects |
 | `src/lib/session-read-state.ts` | pure session read-model transitions, effect descriptors, route-stable live-subscription cursor capture, and replay overlap suppression |
 | `src/lib/session-transcript-renderers.ts` | pure message-group renderer-key contract used by the typed transcript registry |

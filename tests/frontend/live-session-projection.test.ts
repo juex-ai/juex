@@ -432,7 +432,7 @@ test("projectOptimisticTurn is replaced by the canonical turn.started event", ()
   assert.equal(state.messages.length, 2);
 });
 
-test("queued input keeps its enqueue time through canonical events and promotion", () => {
+test("queued input keeps its durable creation time through retry and promotion", () => {
   let state = projectQueuedInput(
     createLiveSessionProjection(),
     "queued follow-up",
@@ -455,14 +455,14 @@ test("queued input keeps its enqueue time through canonical events and promotion
     payload: {
       input: "queued follow-up",
       kind: "",
-      message_id: "msg-queued",
+      message_id: "msg-20260615T000002-abcdef12",
       pending_count: 1,
       max_pending_inputs: 4,
     },
   });
   assert.equal(
     state.queuedInput.items[0]?.createdAt,
-    "2026-06-15T00:00:03Z",
+    "2026-06-15T00:00:02Z",
   );
 
   state = apply(state, {
@@ -472,8 +472,23 @@ test("queued input keeps its enqueue time through canonical events and promotion
     turn_id: "turn-promoted",
     payload: { pending_count: 0, max_pending_inputs: 4 },
   });
-  assert.equal(state.messages[0]?.id, "msg-queued");
-  assert.equal(state.messages[0]?.created_at, "2026-06-15T00:00:03Z");
+  assert.equal(state.messages[0]?.id, "msg-20260615T000002-abcdef12");
+  assert.equal(state.messages[0]?.created_at, "2026-06-15T00:00:02Z");
+});
+
+test("turn.started derives durable creation time after a missed queue event", () => {
+  const state = apply(createLiveSessionProjection(), {
+    id: "e-started",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:05Z",
+    turn_id: "turn-replayed",
+    payload: {
+      input: "replayed follow-up",
+      message_id: "msg-20260615T000002-abcdef12",
+    },
+  });
+
+  assert.equal(state.messages[0]?.created_at, "2026-06-15T00:00:02Z");
 });
 
 test("projectOptimisticTurn renders attachment-only image blocks", () => {
