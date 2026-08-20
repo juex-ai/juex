@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -229,11 +230,66 @@ func TestSSEResumeCursorPrefersLastEventIDOnReconnect(t *testing.T) {
 	}
 }
 
-func TestSSEResumeCursorPreservesExplicitEmptySince(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "/events?since=", nil)
+// A blank since carries no resume position, so it must read as absent. Treating
+// it as a present-but-empty cursor made the events stream replay the whole
+// journal to any client that had lost its cursor. Asking for the journal start
+// through its own parameter still works, so genuine catch-up is not lost.
+func TestSSEResumeCursorTreatsExplicitEmptySinceAsAbsent(t *testing.T) {
+	for _, target := range []string{"/events?since=", "/events?since=%20", "/events"} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		cursor, present := sseResumeCursorWithPresence(request)
+		if cursor != "" || present {
+			t.Fatalf("%s: resume cursor = %q, present = %v; want empty and absent", target, cursor, present)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/events?since=real-cursor", nil)
 	cursor, present := sseResumeCursorWithPresence(request)
+	if cursor != "real-cursor" || !present {
+		t.Fatalf("resume cursor = %q, present = %v; want real-cursor and present", cursor, present)
+	}
+
+	request = httptest.NewRequest(
+		http.MethodGet,
+		"/events?"+sseReplayParam+"="+url.QueryEscape(sseReplayJournalStart),
+		nil,
+	)
+	cursor, present = sseResumeCursorWithPresence(request)
 	if cursor != "" || !present {
-		t.Fatalf("resume cursor = %q, present = %v; want empty and present", cursor, present)
+		t.Fatalf("journal-start replay cursor = %q, present = %v; want empty and present", cursor, present)
+	}
+}
+
+// Event IDs are opaque and events.Normalize keeps any non-empty caller-supplied
+// ID, so an extension can commit an event named after the replay marker. The
+// marker lives in its own parameter precisely so that such an ID stays a
+// resume cursor instead of turning into a full-journal replay.
+func TestSSEResumeCursorKeepsReplayMarkerOutOfCursorNamespace(t *testing.T) {
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/events?since="+url.QueryEscape(sseReplayJournalStart),
+		nil,
+	)
+	cursor, present := sseResumeCursorWithPresence(request)
+	if cursor != sseReplayJournalStart || !present {
+		t.Fatalf("resume cursor = %q, present = %v; want the literal event ID and present", cursor, present)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/events?since=@journal-start", nil)
+	cursor, present = sseResumeCursorWithPresence(request)
+	if cursor != "@journal-start" || !present {
+		t.Fatalf("resume cursor = %q, present = %v; want the literal event ID and present", cursor, present)
+	}
+
+	// An applied cursor outranks a stale replay request on the reconnect URL.
+	request = httptest.NewRequest(
+		http.MethodGet,
+		"/events?since=real-cursor&"+sseReplayParam+"="+url.QueryEscape(sseReplayJournalStart),
+		nil,
+	)
+	cursor, present = sseResumeCursorWithPresence(request)
+	if cursor != "real-cursor" || !present {
+		t.Fatalf("resume cursor = %q, present = %v; want real-cursor and present", cursor, present)
 	}
 }
 

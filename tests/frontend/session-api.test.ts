@@ -223,15 +223,24 @@ test("subscribeEvents forwards open and browser event callbacks", () => {
     assert.equal(eventID, "evt-1");
     assert.equal(source?.closed, true);
 
+    // An empty cursor means the journal was empty when the transcript snapshot
+    // was taken, so the browser still needs everything committed since. It asks
+    // through a separate `replay` parameter, keeping `since` an opaque event ID.
     const emptyCursorUnsubscribe = subscribeEvents("empty cursor", {
       since: "",
       onEvent: () => {},
     });
     assert.equal(
       source?.url,
-      "/api/sessions/empty%20cursor/events?since=",
+      "/api/sessions/empty%20cursor/events?replay=journal-start",
     );
     emptyCursorUnsubscribe();
+
+    const noCursorUnsubscribe = subscribeEvents("no cursor", {
+      onEvent: () => {},
+    });
+    assert.equal(source?.url, "/api/sessions/no%20cursor/events");
+    noCursorUnsubscribe();
   } finally {
     globalThis.EventSource = originalEventSource;
   }

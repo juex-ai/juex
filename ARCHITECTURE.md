@@ -1954,7 +1954,11 @@ lock with append and Session deletion, then derives that cursor from the latest
 newline-terminated record without repairing an incomplete journal tail. This
 prevents the cursor from observing bytes before their append has synced or
 rolled back, and prevents a concurrent delete from being undone by lock-file
-creation. The server deduplicates queued durable frames already covered by the
+creation. The active-session branch reads that cursor from the in-memory status
+store and falls back to the same journal read when the store carries none, still
+before the transcript page is read, so an empty `event_cursor` always means an
+empty journal rather than a session the browser has fully loaded. The server
+deduplicates queued durable frames already covered by the
 replay tail before continuing live delivery. It captures an open journal
 descriptor and byte boundary behind the
 durable commit barrier, ensuring every event in the snapshot has completed
@@ -1974,11 +1978,19 @@ work also remove projected messages whose stable IDs are already present in the
 new authoritative snapshot, while keeping unidentified provisional Tool and
 assistant output. The initial replay cursor is stable for
 the lifetime of the Session route, so a cursor-only transcript refresh does not
-tear down the live stream or clear canonical status. If Agent health or other
+tear down the live stream or clear canonical status. The one exception is a
+cursor captured while the journal was still empty: that placeholder is replaced
+by the first refresh carrying a real cursor, because keeping it would make every
+later reconnect claim the browser had seen nothing. If Agent health or other
 application lifecycle state replaces the EventSource, the session read
 controller resumes from the latest durable status cursor carried by an event it
 has applied. Status calibration remains independent and cannot advance this
-transcript resume point.
+transcript resume point. A resume cursor is only ever a durable event ID. An
+empty one carries no resume position, so a browser whose snapshot predates any
+committed event asks for `?replay=journal-start` instead of sending a blank
+cursor. That marker lives outside the cursor namespace because event IDs are
+opaque and caller-supplied ones are preserved, so a reserved cursor value could
+be committed by an extension and reopen the full-journal replay.
 
 Agent API routes are available directly as `/api/...` and through the fleet
 proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
@@ -2023,7 +2035,7 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | POST | `/api/sessions/<id>/interrupt` | cancel current turn |
 | GET | `/api/sessions/<id>/status` | authoritative layered runtime-status snapshot with event cursor |
 | GET | `/api/sessions/<id>/status/events` | resumable full runtime-status snapshot SSE stream after a cursor |
-| GET | `/api/sessions/<id>/events` | BrowserEvent SSE (`?since=<cursor>` resumes; explicit empty `?since=` replays from journal start) |
+| GET | `/api/sessions/<id>/events` | BrowserEvent SSE (`?since=<cursor>` resumes after that durable event; `?replay=journal-start` replays the whole journal; a blank or absent `since` carries no resume position and replays nothing) |
 | GET | `/api/observables` | list workspace Observables with runtime status |
 | POST | `/api/observables` | create and start a tagged Command Observable or Schedule |
 | GET | `/api/observables/<id>` | Observable status plus recent Observations |

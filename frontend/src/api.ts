@@ -181,14 +181,23 @@ export interface SubscribeOptions {
 // onEvent for each parsed BrowserEvent. Returns a function that closes the
 // connection. EventSource reconnects automatically with the last durable SSE
 // event ID; transient frames deliberately do not advance that cursor.
+//
+// An empty cursor means the journal was empty when the transcript snapshot was
+// taken: there is no event to resume after, but whatever was committed before
+// the stream attached is still needed. That is requested through a separate
+// `replay` parameter rather than a reserved `since` value, so the cursor stays
+// an opaque event ID and a cursor the client merely lost can never be read as
+// "replay everything".
 export function subscribeEvents(
   id: string,
   opts: SubscribeOptions,
 ): () => void {
-  const qs =
-    opts.since !== undefined
-      ? `?since=${encodeURIComponent(opts.since)}`
-      : "";
+  let qs = "";
+  if (opts.since) {
+    qs = `?since=${encodeURIComponent(opts.since)}`;
+  } else if (opts.since === "") {
+    qs = "?replay=journal-start";
+  }
   const url = agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/events${qs}`);
   const es = new EventSource(url);
   es.addEventListener("message", (ev) => {

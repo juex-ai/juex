@@ -60,11 +60,21 @@ export type SessionLiveSubscription = {
   cursor: string;
 };
 
+// captureSessionLiveSubscription holds the cursor the live SSE subscription
+// resumes from. It returns the identical object while that cursor is unchanged,
+// because the subscription effect keys off this value and would otherwise
+// rebuild the stream on every transcript refresh. A session whose journal is
+// still empty reports an empty cursor; that placeholder must be replaced once a
+// refresh carries a real one, or every later reconnect would claim the browser
+// has seen nothing and pull a full journal replay.
 export function captureSessionLiveSubscription(
   current: SessionLiveSubscription | null,
   data: SessionShowResponse,
 ): SessionLiveSubscription {
-  if (current?.sessionID === data.id) return current;
+  if (current?.sessionID !== data.id) {
+    return { sessionID: data.id, cursor: data.event_cursor };
+  }
+  if (current.cursor !== "" || data.event_cursor === "") return current;
   return { sessionID: data.id, cursor: data.event_cursor };
 }
 

@@ -75,14 +75,26 @@ only reads and transports that authoritative result.
 `GET /api/sessions/<id>` returns an `event_cursor` captured before its
 transcript page is read. The browser uses this cursor for the initial transcript
 subscription, so events committed between the transcript and status requests
-are replayed rather than skipped. An explicit empty `?since=` requests replay
-from the journal beginning; an omitted `since` starts with live delivery only.
+are replayed rather than skipped. That holds for both branches of the handler:
+the active-session branch falls back to the journal when the in-memory status
+store carries no cursor, and reads it before the transcript page too. The cursor
+is therefore empty only when the journal is empty. Such a browser has no event
+to resume after but still needs whatever was committed before its stream
+attached, so it subscribes with `?replay=journal-start` to replay the journal
+from the beginning. That marker is a separate parameter rather than a reserved
+cursor value, because event IDs are opaque and any caller-supplied ID is kept,
+so a reserved cursor could be committed by an extension. A blank or omitted
+`since` carries no resume position and starts with live delivery only, which
+keeps a cursor the client merely lost from replaying the whole transcript on
+every reconnect.
 Transcript-producing events carry the exact persisted message ID. If the
 initial transcript or current live projection already contains that ID, the
 browser applies event metadata but suppresses the duplicate transcript
 projection. Live user, assistant, hook, and queued-input state retain those
 persisted IDs. Tool replay uses the same rule with its globally unique tool-use
-ID. The replay cursor is captured once per Session route; later transcript
+ID. The replay cursor is captured once per Session route, except that a cursor
+captured while the journal was still empty is replaced by the first refresh
+carrying a real one; later transcript
 refreshes may advance their response cursor without restarting the existing
 EventSource or clearing its latest status.
 If application lifecycle state replaces that EventSource, the Session read

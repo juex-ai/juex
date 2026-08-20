@@ -15,6 +15,24 @@ func sseResumeCursor(r *http.Request) string {
 	return cursor
 }
 
+// sseReplayParam requests a replay position that is not a durable event ID. It
+// is deliberately a separate parameter rather than a reserved ?since= value:
+// event IDs are opaque and events.Normalize preserves any non-empty
+// caller-supplied ID, so a reserved cursor value could be produced by an
+// extension and turn into the full-journal replay this contract prevents.
+const (
+	sseReplayParam        = "replay"
+	sseReplayJournalStart = "journal-start"
+)
+
+// sseResumeCursorWithPresence reports the durable event the client has already
+// applied, and whether it asked to resume at all. A blank Last-Event-ID or a
+// blank ?since= carries no resume position and reads as absent: there is
+// nothing to replay. A client whose transcript snapshot was taken while the
+// journal was still empty has no event to resume after but still needs
+// everything committed since, and asks for that with ?replay=journal-start.
+// Keeping the two separate means "I lost my cursor" can never be mistaken for
+// "replay everything".
 func sseResumeCursorWithPresence(r *http.Request) (string, bool) {
 	if r == nil {
 		return "", false
@@ -22,14 +40,15 @@ func sseResumeCursorWithPresence(r *http.Request) (string, bool) {
 	if cursor := strings.TrimSpace(r.Header.Get("Last-Event-ID")); cursor != "" {
 		return cursor, true
 	}
-	values, ok := r.URL.Query()["since"]
-	if !ok {
-		return "", false
+	if values, ok := r.URL.Query()["since"]; ok && len(values) > 0 {
+		if cursor := strings.TrimSpace(values[0]); cursor != "" {
+			return cursor, true
+		}
 	}
-	if len(values) == 0 {
+	if strings.TrimSpace(r.URL.Query().Get(sseReplayParam)) == sseReplayJournalStart {
 		return "", true
 	}
-	return strings.TrimSpace(values[0]), true
+	return "", false
 }
 
 // writeSSEFrame writes one SSE frame to w using the documented shape:
