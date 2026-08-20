@@ -17,6 +17,7 @@ if [[ "${OS:-}" == "Windows_NT" && -n "${USERPROFILE:-}" ]]; then
   original_home="$USERPROFILE"
 fi
 original_workdir="$(pwd -W 2>/dev/null || pwd -P)"
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && (pwd -W 2>/dev/null || pwd -P))"
 
 temp_parent="${TMPDIR:-/tmp}"
 test_root="$(mktemp -d "$temp_parent/juex-test-home.XXXXXX")"
@@ -31,7 +32,10 @@ trap cleanup EXIT
 # selected runtime directories ahead of shims before HOME becomes temporary.
 tool_path_prefix=""
 if command -v mise >/dev/null 2>&1; then
-  if mise_bin_paths="$(mise bin-paths 2>/dev/null)"; then
+  bootstrap_mise_state="$test_root/.bootstrap-mise-state"
+  bootstrap_mise_cache="$test_root/.bootstrap-mise-cache"
+  bootstrap_mise_trusted_config="$repo_root/mise.toml"
+  if mise_bin_paths="$(MISE_STATE_DIR="$bootstrap_mise_state" MISE_CACHE_DIR="$bootstrap_mise_cache" MISE_TRUSTED_CONFIG_PATHS="$bootstrap_mise_trusted_config" mise bin-paths 2>/dev/null)"; then
     while IFS= read -r tool_dir; do
       if [[ -n "$tool_dir" ]]; then
         case "$tool_dir" in
@@ -129,6 +133,9 @@ export APPDATA="$HOME/AppData/Roaming"
 export LOCALAPPDATA="$HOME/AppData/Local"
 export TEST_TELEMETRY_DIR="$HOME/.config/go/telemetry"
 export GIT_CONFIG_GLOBAL="$HOME/.gitconfig"
+export MISE_STATE_DIR="$HOME/.local/state/mise"
+export MISE_CACHE_DIR="$HOME/.cache/mise"
+export MISE_CONFIG_DIR="$HOME/.config/mise"
 if [[ "$mode" == "live" ]]; then
   if [[ -n "$live_provider_config" ]]; then
     export JUEX_PROVIDER_CONFIG="$live_provider_config"

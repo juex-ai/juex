@@ -1122,7 +1122,12 @@ func TestTestJuexHomeWrapperResolvesMiseToolsBeforeHomeIsolation(t *testing.T) {
 	}
 	files := map[string]string{
 		filepath.Join(binDir, "mise"): "#!/bin/sh\n" +
+			`printf 'state=%s\ncache=%s\ndata=%s\ntrusted=%s\n' "$MISE_STATE_DIR" "$MISE_CACHE_DIR" "$MISE_DATA_DIR" "$MISE_TRUSTED_CONFIG_PATHS" >"$FAKE_MISE_LOG"` + "\n" +
 			`test "$1" = "bin-paths" || exit 64` + "\n" +
+			`case "$MISE_STATE_DIR" in *juex-test-home.*/.bootstrap-mise-state) ;; *) echo "unsafe mise state: $MISE_STATE_DIR" >&2; exit 67;; esac` + "\n" +
+			`case "$MISE_CACHE_DIR" in *juex-test-home.*/.bootstrap-mise-cache) ;; *) echo "unsafe mise cache: $MISE_CACHE_DIR" >&2; exit 68;; esac` + "\n" +
+			`test "$MISE_DATA_DIR" = "$FAKE_MISE_DATA_DIR" || { echo "mise data dir not preserved: $MISE_DATA_DIR" >&2; exit 69; }` + "\n" +
+			`test "$MISE_TRUSTED_CONFIG_PATHS" = "$FAKE_MISE_TRUSTED_CONFIG" || { echo "mise trusted config not preserved: $MISE_TRUSTED_CONFIG_PATHS" >&2; exit 70; }` + "\n" +
 			`printf '%s\n' "$FAKE_MISE_WINDOWS_BIN"` + "\n",
 		filepath.Join(binDir, "cygpath"): "#!/bin/sh\n" +
 			`test "$1" = "-u" || exit 65` + "\n" +
@@ -1136,6 +1141,10 @@ func TestTestJuexHomeWrapperResolvesMiseToolsBeforeHomeIsolation(t *testing.T) {
 			`if test "$1" = env && test "$2" = GOCACHE; then printf '%s\n' "$FAKE_CACHE/go-build"; exit; fi` + "\n" +
 			`if test "$1" = env && test "$2" = GOMODCACHE; then printf '%s\n' "$FAKE_CACHE/go-mod"; exit; fi` + "\n" +
 			`test "$TEST_TELEMETRY_DIR" = "$HOME/.config/go/telemetry" || { echo "unsafe child telemetry: $TEST_TELEMETRY_DIR" >&2; exit 92; }` + "\n" +
+			`test "$MISE_STATE_DIR" = "$HOME/.local/state/mise" || { echo "unsafe child mise state: $MISE_STATE_DIR" >&2; exit 93; }` + "\n" +
+			`test "$MISE_CACHE_DIR" = "$HOME/.cache/mise" || { echo "unsafe child mise cache: $MISE_CACHE_DIR" >&2; exit 94; }` + "\n" +
+			`test "$MISE_CONFIG_DIR" = "$HOME/.config/mise" || { echo "unsafe child mise config: $MISE_CONFIG_DIR" >&2; exit 95; }` + "\n" +
+			`test "$MISE_DATA_DIR" = "$FAKE_MISE_DATA_DIR" || { echo "child mise data dir not preserved: $MISE_DATA_DIR" >&2; exit 96; }` + "\n" +
 			`printf 'managed:%s\n' "$*"` + "\n",
 	}
 	for path, body := range files {
@@ -1150,16 +1159,25 @@ func TestTestJuexHomeWrapperResolvesMiseToolsBeforeHomeIsolation(t *testing.T) {
 		"go",
 		"probe",
 	)
+	miseLog := filepath.Join(fakeRoot, "mise.log")
 	cmd.Env = commandEnv(map[string]string{
-		"PATH":                  strings.Join([]string{binDir, shimDir, "/usr/bin", "/bin"}, string(os.PathListSeparator)),
-		"FAKE_MISE_WINDOWS_BIN": `C:\mise\managed`,
-		"FAKE_MISE_MANAGED_BIN": managedShellDir,
-		"FAKE_CACHE":            filepath.Join(fakeRoot, "cache"),
-		"TEST_TELEMETRY_DIR":    filepath.Join(fakeRoot, "real-go-telemetry"),
+		"PATH":                     strings.Join([]string{binDir, shimDir, "/usr/bin", "/bin"}, string(os.PathListSeparator)),
+		"FAKE_MISE_WINDOWS_BIN":    `C:\mise\managed`,
+		"FAKE_MISE_MANAGED_BIN":    managedShellDir,
+		"FAKE_MISE_DATA_DIR":       filepath.Join(fakeRoot, "real-mise-data"),
+		"FAKE_MISE_TRUSTED_CONFIG": filepath.ToSlash(filepath.Join(root, "mise.toml")),
+		"FAKE_MISE_LOG":            miseLog,
+		"FAKE_CACHE":               filepath.Join(fakeRoot, "cache"),
+		"TEST_TELEMETRY_DIR":       filepath.Join(fakeRoot, "real-go-telemetry"),
+		"MISE_STATE_DIR":           filepath.Join(fakeRoot, "real-mise-state"),
+		"MISE_CACHE_DIR":           filepath.Join(fakeRoot, "real-mise-cache"),
+		"MISE_CONFIG_DIR":          filepath.Join(fakeRoot, "real-mise-config"),
+		"MISE_DATA_DIR":            filepath.Join(fakeRoot, "real-mise-data"),
 	}, "GOCACHE", "GOMODCACHE", "UV_CACHE_DIR")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("run wrapper through fake mise environment: %v\n%s", err, out)
+		logged, _ := os.ReadFile(miseLog)
+		t.Fatalf("run wrapper through fake mise environment: %v\n%s\nmise probe:\n%s", err, out, logged)
 	}
 	if got := strings.TrimSpace(string(out)); got != "managed:probe" {
 		t.Fatalf("wrapper tool result = %q, want managed:probe", got)

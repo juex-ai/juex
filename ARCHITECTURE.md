@@ -2937,6 +2937,11 @@ automatic activation; the model loads a selected guide explicitly.
 | `make development-eval` | deterministic tests, build, rotating live provider:model smoke, and a redacted validation record |
 | `make clean` | `rm -rf dist` |
 
+The test-home wrapper resolves active mise runtime directories before replacing
+`HOME`, using the repository `mise.toml` and the caller's installation data but
+disposable bootstrap state/cache directories. Child processes receive isolated
+mise config/state/cache paths and direct runtime directories ahead of shims.
+
 ### `goreleaser`
 
 Config (`.goreleaser.yml`, schema v2) produces 7 binaries:

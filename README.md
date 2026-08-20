@@ -794,7 +794,9 @@ make race
 config/cache, Windows application-data, global Git config, Go telemetry, and
 Codex directories, so personal default-home provider config, Fleet, Agent, and
 tool state cannot affect deterministic results. Fresh-checkout ripgrep
-provisioning also redirects its bootstrap Go telemetry to a disposable path.
+provisioning redirects its bootstrap Go telemetry to a disposable path, and
+mise runtime discovery keeps installations available while redirecting mise
+state/cache writes.
 `make integration` uses the same writable-state isolation but resolves
 `JUEX_PROVIDER_CONFIG` and `CODEX_HOME` from the original native user home
 (`HOME` on Unix, `USERPROFILE` on Windows) first and passes those paths to the
