@@ -3097,6 +3097,16 @@ done:
 	_ = resource.Close()
 	registry.Register(nil)
 }
+func labeledBreakSkipsNestedTail(application *App) {
+outer:
+	for {
+		for {
+			break outer
+		}
+		_ = application.manager.Close()
+		application.registry.Register(nil)
+	}
+}
 func useMergedSwitchState(application *App, choice int) {
 	var resource closer = &unrelatedCloser{}
 	var registry registrar = &unrelatedRegistrar{}
@@ -4726,6 +4736,7 @@ func compositionBranchTarget(targets []*compositionFlowTarget, label *ast.Ident)
 
 func (router *compositionFlowRouter) pushBreakTarget() *compositionFlowTarget {
 	target := &compositionFlowTarget{label: router.pendingLabel}
+	router.pendingLabel = ""
 	router.breakTargets = append(router.breakTargets, target)
 	return target
 }
@@ -4737,8 +4748,8 @@ func (router *compositionFlowRouter) popBreakTarget(target *compositionFlowTarge
 	router.breakTargets = router.breakTargets[:len(router.breakTargets)-1]
 }
 
-func (router *compositionFlowRouter) pushContinueTarget() *compositionFlowTarget {
-	target := &compositionFlowTarget{label: router.pendingLabel}
+func (router *compositionFlowRouter) pushContinueTarget(label string) *compositionFlowTarget {
+	target := &compositionFlowTarget{label: label}
 	router.continueTargets = append(router.continueTargets, target)
 	return target
 }
@@ -5047,7 +5058,7 @@ func inspectCompositionCommClauses(body *ast.BlockStmt, visit func(ast.Node) boo
 
 func inspectCompositionLoopBody(body *ast.BlockStmt, visit func(ast.Node) bool, router *compositionFlowRouter) {
 	breakTarget := router.pushBreakTarget()
-	continueTarget := router.pushContinueTarget()
+	continueTarget := router.pushContinueTarget(breakTarget.label)
 	ast.Inspect(body, visit)
 	router.excludeTargetBindings(continueTarget, blockDeclaredCompositionBindings(body))
 	router.mergeTargetStates(continueTarget)
@@ -6276,7 +6287,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					ast.Inspect(value.Cond, visit)
 				}
 				breakTarget := router.pushBreakTarget()
-				continueTarget := router.pushContinueTarget()
+				continueTarget := router.pushContinueTarget(breakTarget.label)
 				for {
 					beforeValues := cloneStringMap(values)
 					beforeResources := cloneCleanupResourceMap(resources)
@@ -6394,7 +6405,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				}
 				ast.Inspect(value.X, visit)
 				breakTarget := router.pushBreakTarget()
-				continueTarget := router.pushContinueTarget()
+				continueTarget := router.pushContinueTarget(breakTarget.label)
 				for {
 					beforeValues := cloneStringMap(values)
 					beforeResources := cloneCleanupResourceMap(resources)
@@ -6730,7 +6741,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					ast.Inspect(value.Cond, visit)
 				}
 				breakTarget := router.pushBreakTarget()
-				continueTarget := router.pushContinueTarget()
+				continueTarget := router.pushContinueTarget(breakTarget.label)
 				for {
 					beforeValues := cloneStringMap(values)
 					beforeReferences := cloneBoolMap(references)
@@ -6819,7 +6830,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				}
 				ast.Inspect(value.X, visit)
 				breakTarget := router.pushBreakTarget()
-				continueTarget := router.pushContinueTarget()
+				continueTarget := router.pushContinueTarget(breakTarget.label)
 				for {
 					beforeValues := cloneStringMap(values)
 					beforeReferences := cloneBoolMap(references)
