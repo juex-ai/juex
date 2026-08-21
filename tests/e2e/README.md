@@ -59,7 +59,7 @@ Build-tagged live integration tests are opt-in because they use credentials
 and real providers:
 
 ```bash
-go test -tags=integration ./tests/e2e/... -run Live -count=1 -v
+go test -tags=integration ./tests/e2e/... -run '^TestLiveConfigs_' -count=1 -v
 ```
 
 They read the top-level model from `JUEX_PROVIDER_CONFIG` or
@@ -103,7 +103,7 @@ Use the smallest run set that still covers the changed behavior:
 | Go unit/package tests | `make test` | Every production code change. |
 | Race suite | `make race` | Concurrency, shutdown, runtime, MCP, tool, event, session, or web changes. |
 | Non-live e2e | `go test ./tests/e2e -count=1` | CLI/runtime/session/provider/web behavior that crosses package boundaries. |
-| Live integration build tag | `make integration` | Verbose credential-backed checks using `JUEX_PROVIDER_CONFIG` or `~/.juex/juex.yaml`. |
+| Integration build tag | `make integration` | Deterministic tagged contracts, then credential-backed `TestLiveConfigs_*` checks using `JUEX_PROVIDER_CONFIG` or `~/.juex/juex.yaml`. |
 
 Run evaluation-layer checks from `tests/eval` when the change affects the eval
 harness, provider smoke, compaction quality, or development validation records.

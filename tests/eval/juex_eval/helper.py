@@ -29,9 +29,10 @@ from typing import Any
 import yaml
 
 try:
-    from . import contract_oracle, schedule_routing, selection
+    from . import contract_oracle, outcomes, schedule_routing, selection
 except ImportError:  # pragma: no cover - direct script fallback.
     import contract_oracle  # type: ignore[no-redef]
+    import outcomes  # type: ignore[no-redef]
     import schedule_routing  # type: ignore[no-redef]
     import selection  # type: ignore[no-redef]
 
@@ -148,14 +149,12 @@ def provider_smoke(argv: list[str]) -> int:
     parser.add_argument("--run-id", default=env_default("JUEX_PROVIDER_SMOKE_RUN_ID", time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())))
     parser.add_argument("--only", default=env_default("JUEX_PROVIDER_SMOKE_ONLY", ""))
     parser.add_argument("--timeout", type=int, default=env_int("JUEX_PROVIDER_SMOKE_TIMEOUT", 240))
-    parser.add_argument("--retries", type=int, default=env_int("JUEX_PROVIDER_SMOKE_RETRIES", 1))
+    parser.add_argument("--retries", type=int, choices=(0, 1), default=env_int("JUEX_PROVIDER_SMOKE_RETRIES", 1))
     parser.add_argument("--keep", action="store_true", default=env_bool("JUEX_PROVIDER_SMOKE_KEEP"))
     parsed = parser.parse_args(argv)
 
     if parsed.timeout <= 0:
         raise ValueError("--timeout must be a positive integer")
-    if parsed.retries < 0:
-        raise ValueError("--retries must be a non-negative integer")
     if parsed.only and parsed.all_models:
         raise ValueError("--only is mutually exclusive with --all-models")
     if not parsed.juex:
@@ -209,14 +208,16 @@ def provider_smoke(argv: list[str]) -> int:
                 command_prefix=command_prefix,
             )
         except selection.ProviderUnavailable as exc:
+            summary = provider_summary(parsed, report_dir, work_root, exc.evidence, [], exc.failure_category, str(exc))
             write_smoke_summary(
                 summary_json,
                 summary_md,
-                provider_summary(parsed, report_dir, work_root, exc.evidence, [], exc.failure_category, str(exc)),
+                summary,
                 [],
             )
             print(f"{selection.PROVIDER_UNAVAILABLE}: {exc}", file=sys.stderr)
             print_selection_evidence(exc.evidence)
+            print_summary_outcome(summary)
             return 1
         except (OSError, ValueError, yaml.YAMLError) as exc:
             error = safe_config_error(exc)
@@ -227,14 +228,24 @@ def provider_smoke(argv: list[str]) -> int:
                 only=[parsed.only] if parsed.only else [],
                 all_models=parsed.all_models,
             )
+            summary = provider_summary(
+                parsed,
+                report_dir,
+                work_root,
+                evidence,
+                [],
+                outcomes.ENVIRONMENT_FAILURE,
+                error,
+            )
             write_smoke_summary(
                 summary_json,
                 summary_md,
-                provider_summary(parsed, report_dir, work_root, evidence, [], selection.PROVIDER_UNAVAILABLE, error),
+                summary,
                 [],
             )
-            print(f"{selection.PROVIDER_UNAVAILABLE}: {error}", file=sys.stderr)
+            print(f"{outcomes.ENVIRONMENT_FAILURE}: {error}", file=sys.stderr)
             print_selection_evidence(evidence)
+            print_summary_outcome(summary)
             return 1
 
         matrix_file.write_text(
@@ -291,6 +302,7 @@ def provider_smoke(argv: list[str]) -> int:
             results,
         )
         print(f"summary: total={len(results)} failed={failed} report={summary_md}")
+        print_summary_outcome(summary)
         return 1 if failed else 0
     finally:
         if work_root_created and not parsed.keep:
@@ -308,6 +320,7 @@ def provider_summary(
 ) -> dict[str, Any]:
     total = len(results)
     failed = sum(1 for result in results if result.status != "pass")
+    validation_outcome = aggregate_smoke_outcome(results, failure_category, error)
     summary = {
         "run_id": args.run_id,
         "juex": args.juex,
@@ -330,9 +343,51 @@ def provider_summary(
         "schedule_routing_failures": sum(1 for result in results if result.schedule_routing_status in {"failed", "hard_failed"}),
         "schedule_routing_variant": schedule_routing.variant_for_run_id(args.run_id),
         "results_jsonl_path": str(report_dir / "results.jsonl"),
+        **validation_outcome.as_dict(),
     }
     summary.update(evidence.as_dict())
     return summary
+
+
+def aggregate_smoke_outcome(
+    results: list[SmokeResult],
+    failure_category: str,
+    error: str,
+) -> outcomes.ValidationOutcome:
+    if failure_category == outcomes.ENVIRONMENT_FAILURE:
+        return outcomes.invalid_config_failure(error)
+    if failure_category == selection.PROVIDER_UNAVAILABLE:
+        return outcomes.ValidationOutcome(
+            outcomes.PROVIDER_UNAVAILABLE,
+            error or "no eligible provider/model is available",
+            "provider-selection-unavailable",
+            True,
+            "stop",
+        )
+    failed = [result for result in results if result.status != "pass"]
+    if failed:
+        priority = {
+            outcomes.PRODUCT_FAILURE: 0,
+            outcomes.ENVIRONMENT_FAILURE: 1,
+            outcomes.PROVIDER_UNAVAILABLE: 2,
+            outcomes.TRANSIENT_FAILURE: 3,
+        }
+        selected = min(failed, key=lambda result: priority.get(result.outcome, 99))
+        return outcomes.ValidationOutcome(
+            selected.outcome,
+            selected.reason,
+            selected.matched_rule,
+            True,
+            selected.recommended_action,
+            selected.retryable,
+        )
+    attempt_count = 2 if any(result.outcome == outcomes.FLAKY_PASS for result in results) else 1
+    return outcomes.success(attempt_count=attempt_count)
+
+
+def print_summary_outcome(summary: dict[str, Any]) -> None:
+    value = {key: summary.get(key) for key in outcomes.ValidationOutcome.__dataclass_fields__}
+    print(outcomes.STRUCTURED_PREFIX + json.dumps(value, ensure_ascii=False, separators=(",", ":")))
 
 
 def print_selection_evidence(evidence: selection.SelectionEvidence) -> None:
@@ -375,6 +430,12 @@ class SmokeResult:
     error_stage: str = ""
     error: str = ""
     artifacts: str = ""
+    outcome: str = outcomes.PRODUCT_FAILURE
+    reason: str = "provider smoke has not completed"
+    matched_rule: str = "provider-smoke-not-complete"
+    blocks_merge: bool = True
+    recommended_action: str = "fix_code"
+    retryable: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -398,6 +459,8 @@ class ScenarioRunOutcome:
     kind: str
     report: contract_oracle.ContractReport
     session_id: str = ""
+    validation_outcome: outcomes.ValidationOutcome | None = None
+    attempt_count: int = 1
 
 
 def enumerate_provider_matrix(cfg: dict[str, Any]) -> list[MatrixRow]:
@@ -456,8 +519,15 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
 
     installer_cmd = tty_installer_command(token)
     prompt = provider_smoke_agent_prompt(manifest_file, notes_file, token, installer_cmd)
-    if run_turn_with_retries(ctx, case_dir, case_config, "turn1", ["--new", prompt]) != 0:
-        return fail_smoke_case(result, case_dir, artifact_dir, "turn1", "turn1 failed")
+    turn_status, turn_outcome, turn_attempt_count = run_turn_with_retries(
+        ctx,
+        case_dir,
+        case_config,
+        "turn1",
+        ["--new", prompt],
+    )
+    if turn_status != 0:
+        return fail_smoke_case(result, case_dir, artifact_dir, "turn1", "turn1 failed", turn_outcome)
     session_id = json_file_value(case_dir / "turn1.stdout.json", "session_id")
     if not session_id:
         return fail_smoke_case(result, case_dir, artifact_dir, "turn1", "missing session_id")
@@ -505,9 +575,18 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
     if schedule_outcome.kind != SCENARIO_PASSED:
         result.error_stage = "schedule-routing"
         result.error = schedule_outcome.report.message()
+        apply_smoke_outcome(
+            result,
+            schedule_outcome.validation_outcome
+            or product_outcome("schedule routing contract failed", "schedule-routing-contract"),
+        )
         print(f"FAIL {result.ref}: {result.error}", file=sys.stderr)
         return result
     result.status = "pass"
+    apply_smoke_outcome(
+        result,
+        outcomes.success(attempt_count=2 if turn_attempt_count > 1 or schedule_outcome.attempt_count > 1 else 1),
+    )
     print(
         f"ok  {row.ref} session={session_id} toolcall={result.tool_status} "
         f"exec_command={result.exec_command_status} tty={result.tty_status} "
@@ -593,17 +672,32 @@ def events_have_agent_smoke_terminal_results(path: pathlib.Path, token: str) -> 
     return contract_oracle.events_have_agent_smoke_terminal_results(path, token)
 
 
-def run_turn_with_retries(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pathlib.Path, label: str, args: list[str]) -> int:
+def run_turn_with_retries(
+    ctx: ProviderSmokeContext,
+    case_dir: pathlib.Path,
+    case_config: pathlib.Path,
+    label: str,
+    args: list[str],
+) -> tuple[int, outcomes.ValidationOutcome, int]:
+    if ctx.retries not in {0, 1}:
+        raise ValueError("provider smoke retries must be 0 or 1")
     status = 1
-    for attempt in range(ctx.retries + 1):
+    result = product_outcome("provider turn did not run", "provider-turn-not-run")
+    for attempt in range(1, ctx.retries + 2):
         status = run_turn(ctx, case_dir, case_config, label, args)
+        archive_turn_attempt(case_dir, label, attempt)
         if status == 0:
-            return 0
-        if attempt >= ctx.retries or not turn_failure_retryable(case_dir, label, status):
-            return status
-        print(f"retry {ctx.row.ref} {label} after retryable failure (attempt {attempt + 1}/{ctx.retries + 1})", file=sys.stderr)
-        time.sleep(attempt + 1)
-    return status
+            return 0, outcomes.success(attempt_count=attempt), attempt
+        result = turn_failure_outcome(case_dir, label, status)
+        if attempt > ctx.retries or not result.retryable:
+            return status, result, attempt
+        print(
+            f"retry {ctx.row.ref} {label} after {result.outcome} "
+            f"(rule={result.matched_rule}, attempt {attempt}/{ctx.retries + 1})",
+            file=sys.stderr,
+        )
+        time.sleep(attempt)
+    return status, result, ctx.retries + 1
 
 
 def run_schedule_routing_case(
@@ -611,6 +705,8 @@ def run_schedule_routing_case(
     artifact_dir: pathlib.Path,
     expectation: schedule_routing.ScheduleRoutingExpectation,
 ) -> ScenarioRunOutcome:
+    if ctx.retries not in {0, 1}:
+        raise ValueError("provider smoke retries must be 0 or 1")
     work_root = ctx.work_root / safe_ref(ctx.row.ref) / "schedule-routing"
     report_root = artifact_dir / "schedule-routing"
     for attempt in range(1, ctx.retries + 2):
@@ -634,13 +730,25 @@ def run_schedule_routing_case(
             copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
             report = contract_oracle.ContractReport(False, [f"schedule routing config: {exc}"])
             write_contract_report(attempt_artifacts, SCENARIO_HARD_FAILED, report)
-            return ScenarioRunOutcome(SCENARIO_HARD_FAILED, report)
+            return ScenarioRunOutcome(
+                SCENARIO_HARD_FAILED,
+                report,
+                validation_outcome=outcomes.ValidationOutcome(
+                    outcomes.ENVIRONMENT_FAILURE,
+                    "schedule routing fixture could not be prepared",
+                    "environment-schedule-fixture",
+                    True,
+                    "fix_environment",
+                ),
+                attempt_count=attempt,
+            )
 
         status = run_turn(ctx, case_dir, case_config, "turn1", ["--new", prompt])
         copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
         if status != 0:
             write_error_tail(case_dir, attempt_artifacts)
-            if attempt <= ctx.retries and turn_failure_retryable(case_dir, "turn1", status):
+            failure = turn_failure_outcome(case_dir, "turn1", status)
+            if attempt <= ctx.retries and failure.retryable:
                 print(
                     f"retry {ctx.row.ref} schedule-routing after retryable failure "
                     f"(attempt {attempt}/{ctx.retries + 1})",
@@ -652,34 +760,59 @@ def run_schedule_routing_case(
             detail = combine_error(f"schedule routing turn failed with status {status}", provider_message)
             report = contract_oracle.ContractReport(False, [detail])
             write_contract_report(attempt_artifacts, SCENARIO_HARD_FAILED, report)
-            return ScenarioRunOutcome(SCENARIO_HARD_FAILED, report)
+            return ScenarioRunOutcome(
+                SCENARIO_HARD_FAILED,
+                report,
+                validation_outcome=failure,
+                attempt_count=attempt,
+            )
 
         session_id = json_file_value(case_dir / "turn1.stdout.json", "session_id")
         if not session_id:
             report = contract_oracle.ContractReport(False, ["schedule routing turn missing session_id"])
             write_contract_report(attempt_artifacts, SCENARIO_HARD_FAILED, report)
-            return ScenarioRunOutcome(SCENARIO_HARD_FAILED, report)
+            return ScenarioRunOutcome(
+                SCENARIO_HARD_FAILED,
+                report,
+                validation_outcome=product_outcome("schedule routing turn omitted its session ID", "schedule-routing-session"),
+                attempt_count=attempt,
+            )
         try:
             sessions = agent_sessions_dir(case_dir, case_dir / "home" / ".juex")
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             report = contract_oracle.ContractReport(False, [f"schedule routing session artifacts: {exc}"])
             write_contract_report(attempt_artifacts, SCENARIO_HARD_FAILED, report)
-            return ScenarioRunOutcome(SCENARIO_HARD_FAILED, report, session_id)
+            return ScenarioRunOutcome(
+                SCENARIO_HARD_FAILED,
+                report,
+                session_id,
+                outcomes.ValidationOutcome(
+                    outcomes.ENVIRONMENT_FAILURE,
+                    "schedule routing artifacts could not be read",
+                    "environment-schedule-artifacts",
+                    True,
+                    "fix_environment",
+                ),
+                attempt,
+            )
         conversation = sessions / session_id / "conversation.jsonl"
         observables = case_dir / ".juex" / "observables.json"
         validation = schedule_routing.validate_outcome(conversation, observables, expectation)
         copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
         write_contract_report(attempt_artifacts, validation.kind, validation.report)
-        if not validation.report.passed and attempt <= ctx.retries:
-            print(
-                f"retry {ctx.row.ref} schedule-routing after contract failure "
-                f"(attempt {attempt}/{ctx.retries + 1}): {validation.report.message()}",
-                file=sys.stderr,
-            )
-            continue
-        return ScenarioRunOutcome(validation.kind, validation.report, session_id)
+        validation_outcome = (
+            outcomes.success(attempt_count=attempt)
+            if validation.report.passed
+            else product_outcome(validation.report.message(), "schedule-routing-contract")
+        )
+        return ScenarioRunOutcome(validation.kind, validation.report, session_id, validation_outcome, attempt)
     report = contract_oracle.ContractReport(False, ["schedule routing retries exhausted"])
-    return ScenarioRunOutcome(SCENARIO_HARD_FAILED, report)
+    return ScenarioRunOutcome(
+        SCENARIO_HARD_FAILED,
+        report,
+        validation_outcome=product_outcome("schedule routing did not produce a result", "schedule-routing-no-result"),
+        attempt_count=ctx.retries + 1,
+    )
 
 
 def run_turn(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pathlib.Path, label: str, args: list[str]) -> int:
@@ -752,19 +885,77 @@ def run_subprocess_with_timeout(
 
 
 def turn_failure_retryable(case_dir: pathlib.Path, label: str, status: int) -> bool:
-    if status == 124:
-        return True
-    stderr = case_dir / f"{label}.stderr.log"
-    text = stderr.read_text(encoding="utf-8", errors="replace") if stderr.is_file() else ""
-    return re.search(r'"retryable"\s*:\s*true|TLS handshake timeout|context deadline exceeded|connection reset|temporary failure|timeout', text, re.I) is not None
+    return turn_failure_outcome(case_dir, label, status).retryable
 
 
-def fail_smoke_case(result: SmokeResult, case_dir: pathlib.Path, artifact_dir: pathlib.Path, stage: str, message: str) -> SmokeResult:
+def turn_failure_outcome(
+    case_dir: pathlib.Path,
+    label: str,
+    status: int,
+) -> outcomes.ValidationOutcome:
+    paths = (case_dir / f"{label}.stderr.log", case_dir / f"{label}.stdout.json")
+    text = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in paths
+        if path.is_file()
+    )
+    return outcomes.classify_failure(text, deterministic=False, exit_status=status)
+
+
+def archive_turn_attempt(case_dir: pathlib.Path, label: str, attempt: int) -> None:
+    for suffix in ("stdout.json", "stderr.log"):
+        source = case_dir / f"{label}.{suffix}"
+        if source.is_file():
+            shutil.copy2(source, case_dir / f"{label}.attempt-{attempt}.{suffix}")
+
+
+def product_outcome(reason: str, rule: str) -> outcomes.ValidationOutcome:
+    return outcomes.ValidationOutcome(
+        outcomes.PRODUCT_FAILURE,
+        reason,
+        rule,
+        True,
+        "fix_code",
+    )
+
+
+def apply_smoke_outcome(result: SmokeResult, outcome: outcomes.ValidationOutcome) -> None:
+    result.outcome = outcome.outcome
+    result.reason = outcome.reason
+    result.matched_rule = outcome.matched_rule
+    result.blocks_merge = outcome.blocks_merge
+    result.recommended_action = outcome.recommended_action
+    result.retryable = outcome.retryable
+
+
+def fail_smoke_case(
+    result: SmokeResult,
+    case_dir: pathlib.Path,
+    artifact_dir: pathlib.Path,
+    stage: str,
+    message: str,
+    outcome: outcomes.ValidationOutcome | None = None,
+) -> SmokeResult:
     copy_case_artifacts(case_dir, artifact_dir)
     write_error_tail(case_dir, artifact_dir)
     provider_message = provider_error_message(artifact_dir)
     result.error_stage = stage
     result.error = combine_error(message, provider_message)
+    apply_smoke_outcome(
+        result,
+        outcome
+        or (
+            outcomes.ValidationOutcome(
+                outcomes.ENVIRONMENT_FAILURE,
+                result.error,
+                "environment-provider-smoke-config",
+                True,
+                "fix_environment",
+            )
+            if stage == "config"
+            else product_outcome(result.error, f"provider-smoke-{stage}-contract")
+        ),
+    )
     print(f"FAIL {result.ref}: {message}", file=sys.stderr)
     return result
 
@@ -892,6 +1083,11 @@ def write_smoke_summary(summary_json: pathlib.Path, summary_md: pathlib.Path, su
         f"- Reproduction command: `{summary['reproduction_command']}`",
         f"- Failure category: `{summary['failure_category'] or ''}`",
         f"- Error: {summary['error'] or ''}",
+        f"- Outcome: `{summary.get('outcome') or ''}`",
+        f"- Reason: {summary.get('reason') or ''}",
+        f"- Matched rule: `{summary.get('matched_rule') or ''}`",
+        f"- Blocks merge: {str(bool(summary.get('blocks_merge'))).lower()}",
+        f"- Recommended action: `{summary.get('recommended_action') or ''}`",
         f"- Work root: `{summary['work_root']}`",
         f"- Total: {summary['total']}",
         f"- Passed: {summary['passed']}",
@@ -1148,12 +1344,14 @@ def write_development_record(
     commit = command_output(["git", "rev-parse", "HEAD"]).strip()
     dirty = bool(command_output(["git", "status", "--short"]).strip())
     record_status = "pass" if status == 0 else "fail"
+    outcome_summary = development_outcome_summary(commands, status)
     record = {
         "run_id": run_id,
         "branch": branch,
         "commit": commit,
         "dirty": dirty,
         "status": record_status,
+        **outcome_summary,
         "commands": commands,
         "provider_model_smoke": provider,
         "compaction_eval": compaction,
@@ -1169,14 +1367,21 @@ def write_development_record(
         f"- Commit: `{commit}`",
         f"- Dirty worktree at record time: {str(dirty).lower()}",
         f"- Status: {record_status}",
+        f"- Blocks merge: {str(outcome_summary['blocks_merge']).lower()}",
+        f"- Failure type: {outcome_summary['failure_type'] or 'none'}",
+        f"- Recommended action: {outcome_summary['recommended_action']}",
         "",
         "## Commands",
         "",
-        "| Label | Exit | Log |",
-        "| --- | ---: | --- |",
+        "| Label | Outcome | Reason | Rule | Attempts | Exit | Log |",
+        "| --- | --- | --- | --- | ---: | ---: | --- |",
     ]
     for command in commands:
-        lines.append(f"| `{command['label']}` | {command['exit_status']} | `{command['log']}` |")
+        lines.append(
+            f"| `{command['label']}` | {command.get('outcome') or ''} | "
+            f"{command.get('reason') or ''} | {command.get('matched_rule') or ''} | "
+            f"{len(command.get('attempts') or [])} | {command['exit_status']} | `{command['log']}` |"
+        )
     lines.extend(["", "## Provider Model Smoke", ""])
     if provider:
         lines.append(f"- Summary: `{provider_summary_path}`")
@@ -1211,6 +1416,29 @@ def write_development_record(
     else:
         lines.append("- Not run. Run with `--compaction-eval` when touching compaction, context projection, provider replay, or long-session behavior.")
     record_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def development_outcome_summary(commands: list[dict[str, Any]], status: int) -> dict[str, Any]:
+    blocking = [row for row in commands if row.get("blocks_merge") is True]
+    kinds = {str(row.get("outcome")) for row in blocking}
+    if outcomes.PRODUCT_FAILURE in kinds:
+        failure_type = "code_failure"
+        action = "fix_code"
+    elif outcomes.ENVIRONMENT_FAILURE in kinds:
+        failure_type = "validation_incomplete"
+        action = "fix_environment"
+    elif blocking or status:
+        failure_type = "validation_incomplete"
+        action = "stop"
+    else:
+        failure_type = None
+        action = "continue"
+    return {
+        "blocks_merge": bool(blocking or status),
+        "failure_type": failure_type,
+        "recommended_action": action,
+        "blocking_steps": [str(row.get("label")) for row in blocking],
+    }
 
 
 def append_selection_record(lines: list[str], summary: dict[str, Any]) -> None:

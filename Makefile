@@ -1,4 +1,4 @@
-.PHONY: test race verify-plan verify-focused verify-candidate verify-final lint build build-go snapshot release-dry integration provider-smoke development-eval clean help install-local cross web web-stub web-sync web-check web-dev ripgrep
+.PHONY: test race verify-plan verify-focused verify-candidate verify-final lint build build-go snapshot release-dry integration integration-contracts integration-live provider-smoke development-eval clean help install-local cross web web-stub web-sync web-check web-dev ripgrep
 
 VERIFY_CMD := uv run --quiet --project . python -m tests.eval.juex_eval verify
 PLAN_CMD := uv run --quiet --project . python -m tests.eval.juex_eval plan
@@ -113,8 +113,13 @@ snapshot:
 release-dry:
 	goreleaser release --skip=publish --clean
 
-integration:
-	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" ./scripts/with-test-juex-home.sh --live go test -tags=integration ./tests/e2e/... -count=1 -v
+integration: integration-contracts integration-live
+
+integration-contracts:
+	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" ./scripts/with-test-juex-home.sh go test -tags=integration ./tests/e2e/... -skip '^TestLiveConfigs_' -count=1 -v
+
+integration-live:
+	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" ./scripts/with-test-juex-home.sh --live go test -tags=integration ./tests/e2e/... -run '^TestLiveConfigs_' -count=1 -v
 
 provider-smoke: build
 	bash tests/eval/provider_model_smoke.sh --juex $(DIST_BIN)
