@@ -65,7 +65,9 @@ long-session behavior needs the live compaction quality gate. All tiers stop
 after the first failing step. `--config`, `--selection-seed`, and
 `--provider-timeout` are available on the underlying final CLI when an exact
 live rerun is required. Candidate and final also accept `--run-id`; their
-`--report-dir` override is a report root, not a single run directory.
+`--report-dir` override is a report root, not a single run directory. Run IDs
+must be safe basenames containing only letters, digits, `_`, `-`, and `.` and
+cannot begin with `.`.
 
 ## Deterministic Capability Harness
 
@@ -150,8 +152,11 @@ records instead use
 environment fingerprints, candidate binary fingerprint, redacted provider
 selection identity, and every reused, executed, invalidated, or
 fail-fast-not-run step. A missing or changed candidate binary invalidates reuse
-so final can rebuild the artifact required by live smoke. Directories are
-created on demand. If candidate and final explicitly share one run ID, final
+so final can rebuild the artifact required by live smoke. The environment
+fingerprint includes effective Go build flags, workspaces, experiments,
+toolchain, architecture, and CGO/compiler settings, preventing reuse across
+different inherited Go semantics. Directories are created on demand. If
+candidate and final explicitly share one run ID, final
 preserves the reusable source as `candidate-record.json` and
 `candidate-record.md` beside its own `record.json` and `record.md`, so a failed
 live-gate retry does not rerun the deterministic plan.

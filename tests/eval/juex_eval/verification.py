@@ -18,6 +18,31 @@ from typing import Any, Iterable, Protocol
 SCHEMA_VERSION = 1
 REPORT_KIND = "development-validation"
 CANDIDATE_RECORD_NAME = "candidate-record.json"
+GO_ENV_FINGERPRINT_KEYS = (
+    "GOOS",
+    "GOARCH",
+    "GO386",
+    "GOAMD64",
+    "GOARM",
+    "GOARM64",
+    "GOMIPS",
+    "GOMIPS64",
+    "GOPPC64",
+    "GORISCV64",
+    "GOWASM",
+    "CGO_ENABLED",
+    "CC",
+    "CXX",
+    "CGO_CFLAGS",
+    "CGO_CPPFLAGS",
+    "CGO_CXXFLAGS",
+    "CGO_LDFLAGS",
+    "GOENV",
+    "GOFLAGS",
+    "GOEXPERIMENT",
+    "GOWORK",
+    "GOTOOLCHAIN",
+)
 
 
 class StepLike(Protocol):
@@ -73,10 +98,8 @@ def default_report_dir(report_root: pathlib.Path, snapshot: RepositorySnapshot, 
 
 
 def validate_run_id(run_id: str) -> None:
-    if not run_id.strip():
-        raise ValueError("run_id cannot be empty")
-    if "/" in run_id or "\\" in run_id:
-        raise ValueError(f"run_id cannot contain path separators: {run_id}")
+    if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]*", run_id):
+        raise ValueError(f"run_id must be a safe basename: {run_id}")
 
 
 def stable_fingerprint(value: Any) -> str:
@@ -104,7 +127,7 @@ def environment_fingerprint(*, web: bool) -> str:
         "machine": platform.machine(),
         "python": platform.python_version(),
         "go_version": _version_output(["go", "version"]),
-        "go_environment": _version_output(["go", "env", "GOOS", "GOARCH", "CGO_ENABLED", "GOTOOLCHAIN"]),
+        "go_environment": _version_output(["go", "env", *GO_ENV_FINGERPRINT_KEYS]),
         "make": _version_output(["make", "--version"], first_line=True),
     }
     if web:
