@@ -61,7 +61,7 @@ func (*observablePolicyModule) ID() runtimemodule.ID { return "quota-policy" }
 func (*observablePolicyModule) ApplyTurnInput(_ context.Context, request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
 	execution := runtimemodule.PolicyExecution{
 		ModuleID: "forged-owner",
-		Point:    runtimemodule.PolicyPointTurnInput,
+		Point:    runtimemodule.PolicyPoint("forged-point"),
 		Name:     "quota-check",
 		Source:   "project",
 	}

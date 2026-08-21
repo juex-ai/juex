@@ -2483,7 +2483,7 @@ goal as read-only context, but hook output cannot mutate Goal or Notes.
 The Framework emits `policy.requested`, `policy.started`, `policy.completed`,
 `policy.errored`, and conversation-visible `policy.trace` Events; the existing
 Session bus persists those Events to `events.jsonl`. Lifecycle payloads carry
-the Framework-assigned `module_id`, canonical `policy_point`, and generic
+the Framework-assigned `module_id` and canonical `policy_point`, plus generic
 `name`, `source`, and optional `tool_name` metadata. They never translate a
 Policy Point into a Hook-specific `event_name`. The Hooks Module combines its
 own Hook event and command names for display while retaining the configured

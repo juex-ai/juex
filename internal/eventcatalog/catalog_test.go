@@ -189,6 +189,10 @@ func TestDefaultCatalogOwnsPolicyLifecycleFacts(t *testing.T) {
 	if _, err := Default().Prepare(events.Event{Type: "policy.completed", Payload: juexruntime.PolicyCompletedPayload{}}); err == nil {
 		t.Fatal("policy.completed without Framework ownership was accepted")
 	}
+	payload.PolicyPoint = runtimemodule.PolicyPoint("forged-point")
+	if _, err := Default().Prepare(events.Event{Type: "policy.completed", Payload: payload}); err == nil {
+		t.Fatal("policy.completed with noncanonical policy point was accepted")
+	}
 }
 
 func TestDefaultCatalogRequiresUncatalogedDurableEventsToDeclareReplayContract(t *testing.T) {

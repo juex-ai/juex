@@ -34,8 +34,8 @@ const (
 	PolicyPointCompactionAfter  PolicyPoint = "compaction_after"
 )
 
-// PolicyExecution is observer-only metadata. Framework assigns ModuleID before
-// forwarding it, so a policy cannot forge ownership.
+// PolicyExecution is observer-only metadata. Framework assigns ModuleID and
+// Point before forwarding it, so a policy cannot forge ownership or phase.
 type PolicyExecution struct {
 	ModuleID ID
 	Point    PolicyPoint
@@ -318,7 +318,7 @@ func (s *Set) applyTurnInputPolicies(ctx context.Context, request TurnInputReque
 	observer := request.Observer
 	for _, registered := range s.turnInputPolicies {
 		request.Message = cloneMessage(message)
-		request.Observer = ownedPolicyObserver{owner: registered.id, next: observer}
+		request.Observer = ownedPolicyObserver{owner: registered.id, point: PolicyPointTurnInput, next: observer}
 		decision, err := registered.module.(TurnInputPolicy).ApplyTurnInput(nonNilContext(ctx), request)
 		if err != nil {
 			return llm.Message{}, fmt.Errorf("runtime module %q turn input policy: %w", registered.id, err)
@@ -409,10 +409,14 @@ func (s *Set) applyToolPolicies(
 		return ToolPolicyEvaluation{}, fmt.Errorf("runtime modules: %s set is closed", s.scope)
 	}
 	observer := request.Observer
+	point := PolicyPointToolBefore
+	if request.Stage == ToolPolicyAfterExecution {
+		point = PolicyPointToolAfter
+	}
 	for _, registered := range s.toolPolicies {
 		request.Input = cloneAnyMap(evaluation.Input)
 		request.Result = evaluation.Result
-		request.Observer = ownedPolicyObserver{owner: registered.id, next: observer}
+		request.Observer = ownedPolicyObserver{owner: registered.id, point: point, next: observer}
 		decision, err := registered.module.(ToolPolicy).ApplyTool(nonNilContext(ctx), request)
 		combinedContext := append(append([]PolicyContext(nil), evaluation.Context...), decision.Context...)
 		if validationErr := validatePolicyContext(combinedContext); validationErr != nil {
@@ -477,7 +481,7 @@ func (s *Set) evaluateFinishPolicies(ctx context.Context, request FinishRequest)
 	var evaluation FinishEvaluation
 	observer := request.Observer
 	for _, registered := range s.finishPolicies {
-		request.Observer = ownedPolicyObserver{owner: registered.id, next: observer}
+		request.Observer = ownedPolicyObserver{owner: registered.id, point: PolicyPointFinish, next: observer}
 		decision, err := registered.module.(FinishPolicy).EvaluateFinish(nonNilContext(ctx), request)
 		if err != nil {
 			return FinishEvaluation{}, fmt.Errorf("runtime module %q finish policy: %w", registered.id, err)
@@ -522,7 +526,7 @@ func CommitFinishCandidate(ctx context.Context, request FinishRequest, candidate
 	if !ok {
 		return true, nil
 	}
-	request.Observer = ownedPolicyObserver{owner: candidate.ModuleID, next: request.Observer}
+	request.Observer = ownedPolicyObserver{owner: candidate.ModuleID, point: PolicyPointFinish, next: request.Observer}
 	applied, err := committer.CommitFinishDecision(nonNilContext(ctx), request, candidate.Decision)
 	if err != nil {
 		return false, fmt.Errorf("runtime module %q commit finish policy: %w", candidate.ModuleID, err)
@@ -543,7 +547,7 @@ func ObserveFinishContinuation(ctx context.Context, request FinishRequest, candi
 	if !ok {
 		return
 	}
-	request.Observer = ownedPolicyObserver{owner: candidate.ModuleID, next: request.Observer}
+	request.Observer = ownedPolicyObserver{owner: candidate.ModuleID, point: PolicyPointFinish, next: request.Observer}
 	observer.FinishContinuationCommitted(nonNilContext(ctx), request, candidate.Decision)
 }
 
@@ -575,7 +579,7 @@ func (s *Set) applySessionStartPolicies(ctx context.Context, request SessionStar
 	var contexts []PolicyContext
 	observer := request.Observer
 	for _, registered := range s.sessionStartPolicies {
-		request.Observer = ownedPolicyObserver{owner: registered.id, next: observer}
+		request.Observer = ownedPolicyObserver{owner: registered.id, point: PolicyPointSessionStart, next: observer}
 		decision, err := registered.module.(SessionStartPolicy).ApplySessionStart(nonNilContext(ctx), request)
 		if err != nil {
 			return nil, fmt.Errorf("runtime module %q session start policy: %w", registered.id, err)
@@ -620,8 +624,12 @@ func (s *Set) applyCompactionPolicies(ctx context.Context, request CompactionPol
 	}
 	var combined CompactionPolicyDecision
 	observer := request.Observer
+	point := PolicyPointCompactionBefore
+	if request.Stage == CompactionPolicyAfter {
+		point = PolicyPointCompactionAfter
+	}
 	for _, registered := range s.compactionPolicies {
-		request.Observer = ownedPolicyObserver{owner: registered.id, next: observer}
+		request.Observer = ownedPolicyObserver{owner: registered.id, point: point, next: observer}
 		decision, err := registered.module.(CompactionPolicy).ApplyCompaction(nonNilContext(ctx), request)
 		combinedContext := append(append([]PolicyContext(nil), combined.Context...), decision.Context...)
 		if err := validateDurablePolicyContext(combinedContext); err != nil {
@@ -770,11 +778,13 @@ func cloneAny(value any) any {
 
 type ownedPolicyObserver struct {
 	owner ID
+	point PolicyPoint
 	next  PolicyObserver
 }
 
 func (o ownedPolicyObserver) execution(execution PolicyExecution) PolicyExecution {
 	execution.ModuleID = o.owner
+	execution.Point = o.point
 	return execution
 }
 

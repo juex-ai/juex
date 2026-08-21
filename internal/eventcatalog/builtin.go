@@ -313,10 +313,21 @@ func validatePolicyErroredPayload(payload any) error {
 }
 
 func validatePolicyIdentity(moduleID runtimemodule.ID, point runtimemodule.PolicyPoint) error {
-	if moduleID == "" || point == "" {
+	if moduleID == "" {
 		return fmt.Errorf("policy lifecycle payload requires module_id and policy_point")
 	}
-	return nil
+	switch point {
+	case runtimemodule.PolicyPointSessionStart,
+		runtimemodule.PolicyPointTurnInput,
+		runtimemodule.PolicyPointToolBefore,
+		runtimemodule.PolicyPointToolAfter,
+		runtimemodule.PolicyPointFinish,
+		runtimemodule.PolicyPointCompactionBefore,
+		runtimemodule.PolicyPointCompactionAfter:
+		return nil
+	default:
+		return fmt.Errorf("policy lifecycle payload has invalid policy_point %q", point)
+	}
 }
 
 func validateRunningPayload(payload any) error {
