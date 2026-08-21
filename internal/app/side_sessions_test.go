@@ -79,6 +79,23 @@ type stubbornSideProvider struct {
 	release chan struct{}
 }
 
+type sideSessionStartupBarrier struct {
+	entered  chan<- context.Context
+	canceled chan<- error
+	release  <-chan struct{}
+}
+
+func (*sideSessionStartupBarrier) ID() runtimemodule.ID { return "side-session-startup-barrier" }
+
+func (b *sideSessionStartupBarrier) ApplySessionStart(ctx context.Context, _ runtimemodule.SessionStartRequest) (runtimemodule.SessionStartDecision, error) {
+	b.entered <- ctx
+	<-ctx.Done()
+	err := ctx.Err()
+	b.canceled <- err
+	<-b.release
+	return runtimemodule.SessionStartDecision{}, err
+}
+
 type sideHookRunnerFunc func(context.Context, hooks.Request) ([]hooks.Result, error)
 
 func (f sideHookRunnerFunc) Run(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
@@ -1555,14 +1572,38 @@ func TestSideSessionStopHonorsToolCancellation(t *testing.T) {
 func TestSideSessionCreateHonorsToolCancellationDuringStartup(t *testing.T) {
 	childProvider := &scriptedSideProvider{}
 	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, childProvider)
-	factoryEntered := make(chan context.Context, 1)
+	startupEntered := make(chan context.Context, 1)
 	factoryDone := make(chan error, 1)
+	startupCanceled := make(chan error, 1)
+	releaseStartup := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseStartup) }) }
+	t.Cleanup(release)
 	parent.sideSessions.factory = func(opts sideSessionChildOptions) (*App, error) {
-		factoryEntered <- opts.Context
-		<-opts.Context.Done()
-		err := opts.Context.Err()
+		child, err := New(Options{
+			Config:                  opts.Config,
+			Provider:                childProvider,
+			WorkDir:                 opts.Config.WorkDir,
+			DisableMCP:              true,
+			SessionMode:             SessionModeNewSide,
+			disableSideSessionTools: true,
+			sharedGoalState:         opts.GoalState,
+			sharedNotes:             opts.Notes,
+			startupContext:          opts.Context,
+			sessionModuleFactories: []runtimemodule.SessionFactorySpec{{
+				ID:      "side-session-startup-barrier",
+				Enabled: true,
+				New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+					return &sideSessionStartupBarrier{
+						entered:  startupEntered,
+						canceled: startupCanceled,
+						release:  releaseStartup,
+					}, nil
+				},
+			}},
+		})
 		factoryDone <- err
-		return nil, err
+		return child, err
 	}
 
 	ctx := newControlledDeadlineContext()
@@ -1574,9 +1615,9 @@ func TestSideSessionCreateHonorsToolCancellationDuringStartup(t *testing.T) {
 		createDone <- err
 	}()
 
-	var factoryCtx context.Context
+	var startupCtx context.Context
 	select {
-	case factoryCtx = <-factoryEntered:
+	case startupCtx = <-startupEntered:
 	case err := <-createDone:
 		t.Fatalf("create returned before child factory entered: %v", err)
 	case <-time.After(sideSessionTestTimeout):
@@ -1585,17 +1626,17 @@ func TestSideSessionCreateHonorsToolCancellationDuringStartup(t *testing.T) {
 	ctx.expire()
 
 	select {
-	case <-factoryCtx.Done():
+	case <-startupCtx.Done():
 	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("child factory context did not observe cancellation")
 	}
 	select {
-	case err := <-factoryDone:
+	case err := <-startupCanceled:
 		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("child factory context error = %v, want context deadline exceeded", err)
+			t.Fatalf("child startup context error = %v, want context deadline exceeded", err)
 		}
 	case <-time.After(sideSessionTestTimeout):
-		t.Fatal("child factory did not finish after observing cancellation")
+		t.Fatal("child startup did not observe cancellation")
 	}
 	select {
 	case err := <-createDone:
@@ -1603,7 +1644,21 @@ func TestSideSessionCreateHonorsToolCancellationDuringStartup(t *testing.T) {
 			t.Fatalf("create error = %v, want context deadline exceeded", err)
 		}
 	case <-time.After(sideSessionTestTimeout):
-		t.Fatal("create did not return after child factory cancellation")
+		t.Fatal("create waited for canceled child startup cleanup")
+	}
+	select {
+	case err := <-factoryDone:
+		t.Fatalf("child factory finished before startup cleanup was released: %v", err)
+	default:
+	}
+	release()
+	select {
+	case err := <-factoryDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("child factory error = %v, want context deadline exceeded", err)
+		}
+	case <-time.After(sideSessionTestTimeout):
+		t.Fatal("child factory did not finish after startup cleanup was released")
 	}
 	parent.sideSessions.mu.Lock()
 	active := len(parent.sideSessions.sessions)
