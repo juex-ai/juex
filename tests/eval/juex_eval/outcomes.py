@@ -141,14 +141,12 @@ def classify_failure(
             "fix_environment",
         )
     structured = _structured_outcome(log_text)
-    if (
-        structured is not None
-        and structured.blocks_merge
-        and (not deterministic or structured.outcome not in {TRANSIENT_FAILURE, PROVIDER_UNAVAILABLE})
-    ):
+    if structured is not None and structured.blocks_merge and (not deterministic or structured.outcome == PRODUCT_FAILURE):
         return structured
 
     for rule, pattern, reason in _ENVIRONMENT_RULES:
+        if deterministic and rule != "environment-command-missing":
+            continue
         if pattern.search(log_text):
             return ValidationOutcome(ENVIRONMENT_FAILURE, reason, rule, True, "fix_environment")
     if exit_status in {126, 127}:
