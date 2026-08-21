@@ -1363,6 +1363,10 @@ func dispatchRegistration(dispatcher registrationDispatcher, registry registrar)
 func configure(application *App) {
 	dispatchCleanup(cleanupDispatchImpl{}, application.manager)
 	dispatchRegistration(registrationDispatchImpl{}, application.registry)
+	cleanup := cleanupDispatchImpl{}.Run
+	cleanup(application.manager)
+	registration := registrationDispatchImpl{}.Run
+	registration(application.registry)
 }
 `
 	dir := t.TempDir()
@@ -1382,15 +1386,15 @@ func configure(application *App) {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",dispatchCleanup,") {
-		t.Fatalf("cleanup calls = %v, want interface-dispatched cleanup", cleanupCalls)
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",dispatchCleanup,") || !strings.Contains(cleanup, ",cleanup,") {
+		t.Fatalf("cleanup calls = %v, want interface-dispatched cleanup and helper method value", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",dispatchRegistration,") {
-		t.Fatalf("Tool registration calls = %v, want interface-dispatched registration", registrationCalls)
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",dispatchRegistration,") || !strings.Contains(registration, ",registration,") {
+		t.Fatalf("Tool registration calls = %v, want interface-dispatched registration and helper method value", registrationCalls)
 	}
 }
 
@@ -4740,6 +4744,11 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 		return canonicalType(value.Type, imports)
 	case *ast.SelectorExpr:
 		receiverType := expressionType(value.X, imports, values, types)
+		methodKey := receiverType + "." + value.Sel.Name
+		_, interfaceMethod := types.interfaceMethods[methodKey]
+		if !isTypeExpression(value.X, imports) && (types.appFunctionKeys[methodKey] || interfaceMethod) {
+			return localFunctionTypePrefix + methodKey
+		}
 		if receiverType == toolRegistryCollectionType {
 			return modulePath + "/internal/tools.Registry"
 		}
