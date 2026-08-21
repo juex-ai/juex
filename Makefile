@@ -7,6 +7,7 @@ VERIFY_WEB_FLAG := $(if $(filter 1,$(WEB)),--web,)
 VERIFY_COMPACTION_FLAG := $(if $(filter 1,$(COMPACTION)),--compaction,)
 VERIFY_BASE_FLAG := $(if $(BASE),--base $(BASE),)
 VERIFY_EXPLAIN_FLAG := $(if $(filter 1,$(EXPLAIN)),--explain,)
+VERIFY_PLANNED_FLAG := $(if $(filter 1,$(PLANNED)),--planned,)
 
 web:
 	cd frontend && pnpm install && pnpm build
@@ -49,7 +50,7 @@ LDFLAGS := -X github.com/juex-ai/juex/internal/version.Version=$(VERSION) \
 help:
 	@echo "Targets:"
 	@echo "  verify-plan [TIER=focused] [BASE=...] [EXPLAIN=1]  deterministic Git-diff gate plan"
-	@echo "  verify-focused [PKGS=...] [BASE=...]  dirty diff plan or explicit isolated package tests"
+	@echo "  verify-focused PKGS=... or PLANNED=1 [BASE=...]  explicit scope or dirty diff plan"
 	@echo "  verify-candidate [RACE=1] [WEB=1] [BASE=...]  planned commit-bound deterministic PR gate"
 	@echo "  verify-final [RACE=1] [WEB=1] [COMPACTION=1] [BASE=...]  reuse candidate and run planned live gates"
 	@echo "  test          go test ./... (isolated HOME/JUEX_HOME, auto-provisions ripgrep)"
@@ -79,7 +80,7 @@ verify-plan:
 	$(PLAN_CMD) --tier $(or $(TIER),focused) $(VERIFY_BASE_FLAG) $(VERIFY_EXPLAIN_FLAG)
 
 verify-focused:
-	$(VERIFY_CMD) focused $(PKGS) $(VERIFY_BASE_FLAG) $(VERIFY_EXPLAIN_FLAG)
+	$(VERIFY_CMD) focused $(strip $(VERIFY_PLANNED_FLAG) $(PKGS) $(VERIFY_BASE_FLAG) $(VERIFY_EXPLAIN_FLAG))
 
 verify-candidate:
 	$(VERIFY_CMD) candidate $(VERIFY_RACE_FLAG) $(VERIFY_WEB_FLAG) $(VERIFY_BASE_FLAG) $(VERIFY_EXPLAIN_FLAG)

@@ -103,7 +103,12 @@ def add_verify_args(parser: argparse.ArgumentParser) -> None:
     focused.add_argument(
         "packages",
         nargs="*",
-        help="Optional explicit Go package patterns; defaults to the dirty diff plan.",
+        help="Explicit Go package patterns; omit only together with --planned.",
+    )
+    focused.add_argument(
+        "--planned",
+        action="store_true",
+        help="Explicitly opt in to package and gate selection from the dirty diff plan.",
     )
     add_validation_plan_args(focused)
 
@@ -309,6 +314,8 @@ def execute_development_steps(steps: list[VerificationStep], run_step: Callable[
 
 def run_verify(args: argparse.Namespace) -> int:
     if args.tier == "focused":
+        if not getattr(args, "packages", ()) and not getattr(args, "planned", False):
+            raise ValueError("focused verification requires packages or --planned")
         plan = validation_plan.collect_plan(REPO_ROOT, "focused", base=getattr(args, "base", "") or None)
         plan = plan_with_cli_overrides(args, plan)
         apply_validation_plan(args, plan)

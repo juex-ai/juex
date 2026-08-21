@@ -794,8 +794,9 @@ func TestEvalValidationPlanRulesAreDeterministicAndConservative(t *testing.T) {
 		"    assert final <= set(plan.final_flags), (path, plan.as_dict())",
 		"    assert any(rule in row.rule_id for row in plan.matched_rules), (path, plan.as_dict())",
 		"docs = validation_plan.plan_for_changes('focused', [ChangedFile('M', 'docs/guide.md')], base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
-		"assert not docs.focused_packages and not docs.candidate_flags and not docs.final_flags",
-		"assert [row.rule_id for row in docs.matched_rules] == ['documentation-only']",
+		"assert not docs.focused_packages and not docs.candidate_flags",
+		"assert set(docs.final_flags) == {'integration', 'provider-smoke'}",
+		"assert [row.rule_id for row in docs.matched_rules] == ['documentation-only', 'final-baseline']",
 		"changes = [ChangedFile('M', 'internal/app/app.go'), ChangedFile('A', 'frontend/src/App.tsx')]",
 		"first = validation_plan.plan_for_changes('focused', changes, base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
 		"second = validation_plan.plan_for_changes('focused', list(reversed(changes)), base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
@@ -830,6 +831,10 @@ func TestEvalValidationPlanCollectsCleanAndDirtyGitChanges(t *testing.T) {
 		"    (repo / 'internal' / 'app').mkdir(parents=True)",
 		"    for name in ('app.go', 'old.go', 'deleted.go'):",
 		"        (repo / 'internal' / 'app' / name).write_text('package app\\n', encoding='utf-8')",
+		"    (repo / 'internal' / 'removed').mkdir(parents=True)",
+		"    (repo / 'internal' / 'removed' / 'only.go').write_text('package removed\\n', encoding='utf-8')",
+		"    (repo / 'internal' / 'legacy').mkdir(parents=True)",
+		"    (repo / 'internal' / 'legacy' / 'only.go').write_text('package legacy\\n', encoding='utf-8')",
 		"    git(repo, 'init', '--quiet')",
 		"    git(repo, 'add', '.')",
 		"    git(repo, '-c', 'user.name=Eval', '-c', 'user.email=eval@example.com', 'commit', '--quiet', '-m', 'base')",
@@ -859,11 +864,18 @@ func TestEvalValidationPlanCollectsCleanAndDirtyGitChanges(t *testing.T) {
 		"    git(repo, 'add', 'internal/app/app.go')",
 		"    app.write_text(app.read_text(encoding='utf-8') + '// unstaged\\n', encoding='utf-8')",
 		"    git(repo, 'mv', 'internal/app/old.go', 'internal/app/renamed.go')",
+		"    (repo / 'internal' / 'newpkg').mkdir()",
+		"    git(repo, 'mv', 'internal/legacy/only.go', 'internal/newpkg/only.go')",
 		"    (repo / 'internal' / 'app' / 'deleted.go').unlink()",
+		"    (repo / 'internal' / 'removed' / 'only.go').unlink()",
 		"    (repo / 'internal' / 'app' / 'untracked.go').write_text('package app\\n', encoding='utf-8')",
+		"    moved = validation_plan.plan_for_changes('focused', [validation_plan.ChangedFile('R', 'internal/newpkg/only.go', 'internal/legacy/only.go')], base_sha=base, head_sha=git(repo, 'rev-parse', 'HEAD'), dirty=True, repo_root=repo)",
+		"    assert './internal/newpkg' in moved.focused_packages and './internal/legacy' not in moved.focused_packages, moved.as_dict()",
+		"    removed = validation_plan.plan_for_changes('focused', [validation_plan.ChangedFile('D', 'internal/removed/only.go')], base_sha=base, head_sha=git(repo, 'rev-parse', 'HEAD'), dirty=True, repo_root=repo)",
+		"    assert removed.focused_packages == ('./...',), removed.as_dict()",
 		"    dirty = validation_plan.collect_plan(repo, 'focused')",
 		"    by_path = {row.path: row for row in dirty.changed_files}",
-		"    assert {'internal/app/app.go', 'internal/app/renamed.go', 'internal/app/deleted.go', 'internal/app/untracked.go'} <= set(by_path), dirty.as_dict()",
+		"    assert {'internal/app/app.go', 'internal/app/renamed.go', 'internal/app/deleted.go', 'internal/app/untracked.go', 'internal/newpkg/only.go', 'internal/removed/only.go'} <= set(by_path), dirty.as_dict()",
 		"    assert by_path['internal/app/renamed.go'].old_path == 'internal/app/old.go'",
 		"    assert 'D' in by_path['internal/app/deleted.go'].status",
 		"    assert 'U' in by_path['internal/app/untracked.go'].status",
@@ -885,20 +897,20 @@ func TestEvalVerificationTiersConsumeOneValidationPlan(t *testing.T) {
 		"from tests.eval.juex_eval import cli, validation_plan",
 		"changes = [validation_plan.ChangedFile('M', 'frontend/src/App.tsx'), validation_plan.ChangedFile('M', 'internal/runtime/compact.go')]",
 		"plan = validation_plan.plan_for_changes('focused', changes, base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
-		"focused = Namespace(tier='focused', packages=[])",
+		"focused = Namespace(tier='focused', packages=[], planned=True)",
 		"cli.apply_validation_plan(focused, plan)",
 		"focused_steps = cli.verification_steps(focused)",
 		"assert [step.label for step in focused_steps] == ['web-stub', 'go-test-focused', 'web-check', 'make-build-go']",
 		"assert '-race' in focused_steps[1].command and './internal/runtime' in focused_steps[1].command and './tests/e2e' in focused_steps[1].command",
 		"manual = Namespace(tier='focused', packages=['./internal/version'])",
 		"manual_plan = cli.plan_with_cli_overrides(manual, plan)",
-		"assert manual_plan.focused_packages == ('./internal/version',) and not manual_plan.candidate_flags and not manual_plan.final_flags",
+		"assert manual_plan.focused_packages == ('./internal/version',)",
 		"assert any(row.rule_id == 'explicit-cli-override' for row in manual_plan.matched_rules)",
 		"cli.apply_validation_plan(manual, manual_plan)",
 		"manual_steps = cli.verification_steps(manual)",
 		"assert [step.label for step in manual_steps] == ['web-stub', 'go-test-focused'] and '-race' not in manual_steps[1].command",
 		"frontend_plan = validation_plan.plan_for_changes('focused', [validation_plan.ChangedFile('M', 'frontend/src/App.tsx')], base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
-		"frontend = Namespace(tier='focused', packages=[])",
+		"frontend = Namespace(tier='focused', packages=[], planned=True)",
 		"cli.apply_validation_plan(frontend, frontend_plan)",
 		"assert [step.label for step in cli.verification_steps(frontend)] == ['web-check', 'make-build-go']",
 		"candidate = Namespace(tier='candidate', race=False, web=False)",
@@ -912,7 +924,7 @@ func TestEvalVerificationTiersConsumeOneValidationPlan(t *testing.T) {
 		"docs_plan = validation_plan.plan_for_changes('final', [validation_plan.ChangedFile('M', 'docs/guide.md')], base_sha='a' * 40, head_sha='b' * 40, dirty=False)",
 		"docs_final = Namespace(tier='final', race=False, web=False, compaction=False, config='/tmp/provider.yaml', selection_seed='seed', run_id='unit', provider_timeout=7)",
 		"cli.apply_validation_plan(docs_final, docs_plan)",
-		"assert [step.label for step in cli.verification_steps(docs_final)] == ['web-stub', 'go-test-all', 'make-build']",
+		"assert [step.label for step in cli.verification_steps(docs_final)] == ['web-stub', 'go-test-all', 'make-build', 'live-integration', 'provider-model-smoke']",
 		"forced_final = Namespace(tier='final', race=False, web=False, compaction=True)",
 		"forced_plan = cli.plan_with_cli_overrides(forced_final, docs_plan)",
 		"assert set(forced_plan.final_flags) == {'compaction', 'integration', 'provider-smoke'}",
@@ -939,7 +951,7 @@ func TestEvalPythonModuleAndShellWrappersExposeHelp(t *testing.T) {
 	verifyHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "--help")
 	assertHelpContains(t, verifyHelp, "focused", "candidate", "final")
 	focusedHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "focused", "--help")
-	assertHelpContains(t, focusedHelp, "packages", "--base", "--explain")
+	assertHelpContains(t, focusedHelp, "packages", "--planned", "--base", "--explain")
 	candidateHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "candidate", "--help")
 	assertHelpContains(t, candidateHelp, "--race", "--web", "--base", "--explain", "--run-id", "--report-dir")
 	finalHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "final", "--help")
@@ -1419,7 +1431,7 @@ func TestEvalVerificationCleanWorktreePolicy(t *testing.T) {
 		"    verification.write_record = lambda *args: None",
 		"    cli.provider_record_summary = lambda args: {}",
 		"    validation_plan.collect_plan = lambda root, mode, base=None: validation_plan.plan_for_changes(mode, [], base_sha='b' * 40, head_sha=snapshot.head_sha, dirty=(mode == 'focused'))",
-		"    assert cli.run_verify(Namespace(tier='focused')) == 0",
+		"    assert cli.run_verify(Namespace(tier='focused', packages=[], planned=True)) == 0",
 		"    assert calls == [], calls",
 		"    with tempfile.TemporaryDirectory() as tmp:",
 		"        common = dict(run_id='unit', race=False, web=False, report_dir=str(Path(tmp) / 'candidate'))",
@@ -1795,6 +1807,7 @@ func TestMakeVerificationTargetsAreThinPythonAdapters(t *testing.T) {
 		want string
 	}{
 		{name: "plan", args: []string{"-n", "verify-plan", "TIER=final", "BASE=abc123", "EXPLAIN=1"}, want: "plan --tier final --base abc123 --explain"},
+		{name: "planned-focused", args: []string{"-n", "verify-focused", "PLANNED=1"}, want: "verify focused --planned"},
 		{name: "focused", args: []string{"-n", "verify-focused", "PKGS=./internal/app ./internal/runtime"}, want: "verify focused ./internal/app ./internal/runtime"},
 		{name: "candidate", args: []string{"-n", "verify-candidate", "RACE=1", "WEB=1"}, want: "verify candidate --race --web"},
 		{name: "final", args: []string{"-n", "verify-final", "RACE=1", "WEB=1", "COMPACTION=1"}, want: "verify final --race --web --compaction"},
@@ -1818,19 +1831,22 @@ func TestMakeVerificationTargetsAreThinPythonAdapters(t *testing.T) {
 	}
 }
 
-func TestMakeVerifyFocusedAllowsAutomaticPlan(t *testing.T) {
+func TestMakeVerifyFocusedRejectsUnscopedDefault(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
 	root, err := findRepoRoot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("make", "-n", "verify-focused", "PKGS=")
+	cmd := exec.Command("make", "verify-focused", "PKGS=")
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("automatic focused plan dry run failed: %v\n%s", err, out)
+	if err == nil {
+		t.Fatalf("unscoped focused verification succeeded:\n%s", out)
 	}
-	if !strings.Contains(string(out), "verify focused") {
-		t.Fatalf("empty focused scope did not route through automatic planning:\n%s", out)
+	if !strings.Contains(string(out), "packages or --planned") {
+		t.Fatalf("unscoped focused verification did not explain opt-in:\n%s", out)
 	}
 }
 

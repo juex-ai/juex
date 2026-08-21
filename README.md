@@ -798,7 +798,7 @@ development stage:
 
 ```bash
 make verify-plan EXPLAIN=1
-make verify-focused
+make verify-focused PLANNED=1
 make verify-focused PKGS="./internal/app ./internal/runtime"
 make verify-candidate
 make verify-candidate RACE=1 WEB=1
@@ -808,8 +808,9 @@ make verify-final RACE=1 WEB=1 COMPACTION=1
 
 Validation planning uses the Git diff to select focused packages, web/race
 candidate flags, and live/compaction final flags. Focused verification permits
-a dirty worktree and automatically unions staged, unstaged, and untracked
-paths; `PKGS=...` remains an explicit targeted override. Candidate and final
+a dirty worktree; `PLANNED=1` explicitly opts in to the union of staged,
+unstaged, and untracked paths, while `PKGS=...` preserves a required targeted
+scope. Candidate and final
 default to `merge-base origin/main HEAD`, accept `BASE=<sha>`, and bind their
 reports to the full pre-run `HEAD` SHA. They require that snapshot to be clean
 before and after their
@@ -818,7 +819,8 @@ steps. Reports live under
 passing candidate's deterministic/build prefix only when the record schema,
 SHA, plan, and stable environment fingerprints all match; the stable inputs
 include effective Go settings, the build's Git description, and the resolved
-ripgrep binary. Live gates run when selected by the plan. `RACE=1`
+ripgrep binary. Final always runs live integration and provider smoke; the plan
+adds compaction when required. `RACE=1`
 replaces the ordinary deterministic suite, `WEB=1` adds the frontend gate
 without rebuilding it during the binary build, and `COMPACTION=1` adds the
 live compaction evaluator to final verification; explicit flags are additive

@@ -8,7 +8,7 @@ The stable agent-facing entrypoints are:
 
 ```bash
 make verify-plan EXPLAIN=1
-make verify-focused
+make verify-focused PLANNED=1
 make verify-focused PKGS="./internal/app ./internal/runtime"
 make verify-candidate RACE=1 WEB=1
 make verify-final RACE=1 WEB=1 COMPACTION=1
@@ -49,13 +49,14 @@ sorted changed files, matched rule IDs, selected gates, per-gate causes, and a
 stable behavioral fingerprint. Use `--explain` or `EXPLAIN=1` to print the
 human-readable explanation.
 
-`verify focused` consumes the dirty plan when no packages are supplied. Go
-paths select their package, cross-boundary paths add `./tests/e2e`, and
+`verify focused --planned` consumes the dirty plan after explicit opt-in; an
+unscoped invocation remains an error. Go paths select their package,
+cross-boundary paths add `./tests/e2e`, and
 frontend paths run `web-check` plus the binary build. Race-sensitive paths add
-`-race`. `PKGS=...` remains a targeted override for development loops and does
-not inherit broader diff-selected gates. Documentation-only or empty diffs may
-select no code gates. Unknown non-documentation paths use the full conservative
-plan instead of producing an empty scope.
+`-race`. `PKGS=...` remains a required targeted alternative for development
+loops and does not inherit broader diff-selected gates. Documentation-only or
+empty diffs may select no focused code gates. Unknown non-documentation paths
+use the full conservative plan instead of producing an empty scope.
 
 `verify candidate` captures the full `HEAD` SHA, branch, and porcelain status
 before it plans or prepares any gate, then requires the worktree to remain on
@@ -72,8 +73,8 @@ Go-only `build-go` target instead of rebuilding the frontend.
 looks for a passing candidate record with the same SHA, record schema,
 candidate-plan fingerprint, and stable toolchain/environment fingerprint. When
 one exists, final reuses its successful deterministic, build, web, and race
-steps, then runs the plan-selected live integration, provider smoke, and
-optional compaction gates. It never reuses live results. A missing or
+steps, then always runs live integration and provider smoke. The plan adds the
+optional compaction gate. It never reuses live results. A missing or
 incompatible candidate makes final execute the complete plan and records the
 exact invalidation reason. Set
 `COMPACTION=1` only when compaction, context projection, reasoning replay, or

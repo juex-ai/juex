@@ -105,6 +105,7 @@ RULE_DESCRIPTIONS = {
     "documentation-only": "Documentation-only changes are explained without inventing code gates.",
     "conservative-unknown": "Unclassified paths require the full conservative plan.",
     "explicit-cli-override": "Explicit CLI flags conservatively replace focused scope or add gates.",
+    "final-baseline": "Final verification always requires live integration and provider smoke.",
 }
 
 CROSS_BOUNDARY_PREFIXES = (
@@ -183,6 +184,7 @@ def plan_for_changes(
     base_sha: str,
     head_sha: str,
     dirty: bool,
+    repo_root: pathlib.Path | None = None,
 ) -> ValidationPlan:
     if mode not in {"focused", "candidate", "final"}:
         raise ValueError(f"unsupported validation plan mode: {mode}")
@@ -224,8 +226,7 @@ def plan_for_changes(
             )
             matched = True
 
-        go_packages = {_go_package(path) for path in paths if path.endswith(".go")}
-        go_packages.discard(None)
+        go_packages = _go_packages_for_change(changed, repo_root)
         if go_packages:
             add("go-package", changed, packages=sorted(go_packages))
             matched = True
@@ -268,6 +269,13 @@ def plan_for_changes(
                 candidate=CONSERVATIVE_CANDIDATE_FLAGS,
                 final=CONSERVATIVE_FINAL_FLAGS,
             )
+
+    baseline = accumulators.setdefault(
+        "final-baseline",
+        _RuleAccumulator(RULE_DESCRIPTIONS["final-baseline"], set(), set(), set(), set()),
+    )
+    baseline.files.add("<verification contract>")
+    baseline.final_flags.update(("integration", "provider-smoke"))
 
     matched_rules = tuple(
         MatchedRule(
@@ -321,8 +329,6 @@ def with_cli_overrides(
     if packages:
         if "./..." in packages:
             packages = ("./...",)
-        candidate_flags.clear()
-        final_flags.clear()
     else:
         packages = plan.focused_packages
         if race:
@@ -392,6 +398,7 @@ def collect_plan(repo_root: pathlib.Path, mode: str, *, base: str | None = None)
         base_sha=base_sha,
         head_sha=head_sha,
         dirty=dirty,
+        repo_root=repo_root,
     )
 
 
@@ -520,6 +527,33 @@ def _go_package(path: str) -> str | None:
     if parent == ".":
         return "./"
     return f"./{parent}"
+
+
+def _go_packages_for_change(
+    changed: ChangedFile,
+    repo_root: pathlib.Path | None,
+) -> set[str]:
+    packages: set[str] = set()
+    deleted = "D" in changed.status
+    if changed.path.endswith(".go"):
+        if deleted:
+            packages.add(_existing_go_package_or_full(changed.path, repo_root))
+        else:
+            package = _go_package(changed.path)
+            if package:
+                packages.add(package)
+    if changed.old_path and changed.old_path.endswith(".go") and not changed.path.endswith(".go"):
+        packages.add(_existing_go_package_or_full(changed.old_path, repo_root))
+    return packages
+
+
+def _existing_go_package_or_full(path: str, repo_root: pathlib.Path | None) -> str:
+    package = _go_package(path)
+    if package and repo_root is not None:
+        directory = repo_root / pathlib.PurePosixPath(path).parent
+        if directory.is_dir() and any(directory.glob("*.go")):
+            return package
+    return "./..."
 
 
 def _is_live_runtime_path(path: str) -> bool:
