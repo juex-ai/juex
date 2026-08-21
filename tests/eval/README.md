@@ -77,7 +77,7 @@ steps, then always runs live integration and provider smoke. The plan adds the
 optional compaction gate. It never reuses live results. A missing or
 incompatible candidate makes final execute the complete plan and records the
 exact invalidation reason. Set
-`COMPACTION=1` only when compaction, context projection, reasoning replay, or
+`COMPACTION=1` only when compaction, context projection, provider replay, or
 long-session behavior needs the live compaction quality gate as an additive
 override. All tiers stop after the first failing step. `--config`,
 `--selection-seed`, and
@@ -326,7 +326,7 @@ The deterministic phase reuses the candidate planner, so one `go test ./...`
 run includes `tests/e2e` without a duplicate standalone e2e run. The existing
 JSON/Markdown record shape and live selection evidence remain unchanged.
 
-Use `--compaction-eval` for compaction, context projection, reasoning replay,
+Use `--compaction-eval` for compaction, context projection, provider replay,
 or long-session changes. The record links command logs, provider:model smoke
 summary, Schedule routing coverage, and any scorecards so a later worker can
 tell whether behavior got better, stayed flat, or regressed.

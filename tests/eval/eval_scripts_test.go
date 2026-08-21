@@ -783,6 +783,8 @@ func TestEvalValidationPlanRulesAreDeterministicAndConservative(t *testing.T) {
 		"    ('internal/llm/openai_responses.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'live-runtime'),",
 		"    ('internal/runtime/compaction_policy.go', {'./internal/runtime', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
 		"    ('internal/runtime/context_projection.go', {'./internal/runtime', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/llm/provider_projection.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/llm/provider_projection_chunked_write.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
 		"    ('internal/version/version.go', {'./internal/version'}, set(), set(), 'go-package'),",
 		"    ('Makefile', {'./...'}, {'web', 'race'}, {'integration', 'provider-smoke', 'compaction'}, 'conservative'),",
 		"    ('scripts/unknown-new-tool.py', {'./...'}, {'web', 'race'}, {'integration', 'provider-smoke', 'compaction'}, 'conservative'),",

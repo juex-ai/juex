@@ -591,6 +591,7 @@ def _is_compaction_path(path: str) -> bool:
     return (
         "compact" in lowered
         or "context_projection" in lowered
+        or "provider_projection" in lowered
         or path.startswith("internal/runtime/contextbudget/")
     )
 
