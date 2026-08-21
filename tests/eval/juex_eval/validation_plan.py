@@ -110,14 +110,22 @@ RULE_DESCRIPTIONS = {
 
 CROSS_BOUNDARY_PREFIXES = (
     "cmd/juex/",
+    "internal/agentstate/",
     "internal/app/",
     "internal/cli/",
     "internal/config/",
+    "internal/endpoint/",
+    "internal/eventcatalog/",
+    "internal/events/",
+    "internal/fleet/",
     "internal/fleetweb/",
+    "internal/hooks/",
     "internal/llm/",
     "internal/mcp/",
+    "internal/observable/",
     "internal/providerreadiness/",
     "internal/runtime/",
+    "internal/sandbox/",
     "internal/session/",
     "internal/tools/",
     "tests/e2e/",
@@ -593,6 +601,7 @@ def _is_compaction_path(path: str) -> bool:
         "compact" in lowered
         or "context_projection" in lowered
         or "provider_projection" in lowered
+        or path == "internal/llm/history.go"
         or path.startswith("internal/runtime/contextbudget/")
     )
 
