@@ -334,6 +334,7 @@ import "github.com/juex-ai/juex/internal/mcp"
 type App struct { manager *mcp.Manager }
 type closer interface { Close() error }
 type cleanupFunc func() error
+type ownedHolder struct{ resource closer }
 func closeOwned(resource closer) { _ = resource.Close() }
 func closeTransitively(resource closer) { closeOwned(resource) }
 func runCleanup(cleanup cleanupFunc) { _ = cleanup() }
@@ -345,6 +346,10 @@ func namedOwned(application *App) (resource closer) {
 func identityOwned(resource closer) closer { return resource }
 func cleanupFromIdentity(application *App) {
 	_ = identityOwned(application.manager).Close()
+}
+func cleanupGeneric[T closer](resource T) { _ = resource.Close() }
+func cleanupFromGeneric(application *App) {
+	cleanupGeneric[*mcp.Manager](application.manager)
 }
 func cleanupFromLiteral(application *App) {
 	cleanup := func(resource closer) { _ = resource.Close() }
@@ -368,6 +373,10 @@ func cleanupFromInterfaceCollection(application *App) {
 	for _, resource := range resources {
 		_ = resource.Close()
 	}
+}
+func cleanupFromHolder(application *App) {
+	owned := ownedHolder{resource: application.manager}
+	_ = owned.resource.Close()
 }
 func cleanupFromIndexedAssignment(application *App) {
 	resources := map[string]closer{}
@@ -414,7 +423,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityOwned.Close", "cleanup", "cleanup", "application.manager.Close", "func", "resource.Close", "Close", "resource.Close", "Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
+	want := []string{"identityOwned.Close", "cleanupGeneric", "cleanup", "cleanup", "application.manager.Close", "func", "resource.Close", "resources.Close", "resource.Close", "owned.resource.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -456,9 +465,14 @@ func closeMany(clients []*mcp.Client, indexed map[*mcp.Client]struct{}, byName m
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"Close", "Close", "Close", "Close", "client.Close", "client.Close"}
-	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] {
+	want := []string{"clients.Close", "byName.Close", "named.Close", "clients.Close", "client.Close", "client.Close"}
+	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want %v", calls, want)
+	}
+	for index := range want {
+		if calls[index] != want[index] {
+			t.Fatalf("cleanup calls = %v, want %v", calls, want)
+		}
 	}
 }
 
@@ -494,6 +508,7 @@ type App struct{ registry *tools.Registry }
 type router struct{}
 type registrar interface{ Register(tools.Tool) error }
 type registryList []*tools.Registry
+type registryHolder struct{ registry registrar }
 func localRegistry() *tools.Registry { return nil }
 func localRegistrar(application *App) registrar { return application.registry }
 func namedLocalRegistrar(application *App) (result registrar) {
@@ -503,6 +518,10 @@ func namedLocalRegistrar(application *App) (result registrar) {
 func identityRegistrar(registry registrar) registrar { return registry }
 func registerFromIdentity(application *App) {
 	identityRegistrar(application.registry).Register(nil)
+}
+func registerGeneric[T registrar](registry T) { _ = registry.Register(nil) }
+func registerFromGeneric(application *App) {
+	registerGeneric[*tools.Registry](application.registry)
 }
 func registerFromLiteral(application *App) {
 	register := func(registry registrar) { _ = registry.Register(nil) }
@@ -526,6 +545,10 @@ func registerFromInterfaceCollection(application *App) {
 	for _, registry := range registries {
 		registry.Register(nil)
 	}
+}
+func registerFromHolder(application *App) {
+	owned := registryHolder{registry: application.registry}
+	owned.registry.Register(nil)
 }
 func registerFromIndexedAssignment(application *App) {
 	registries := map[string]registrar{}
@@ -595,7 +618,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityRegistrar.Register", "register", "register", "application.registry.Register", "func", "registry.Register", "Register", "registry.Register", "Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
+	want := []string{"identityRegistrar.Register", "registerGeneric", "register", "register", "application.registry.Register", "func", "registry.Register", "registries.Register", "registry.Register", "owned.registry.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -1910,12 +1933,17 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 			return paths
 		}
 		paths := make(map[string]bool)
+		_, structured := types.fields[resolveNamedType(canonicalType(value.Type, imports), types)]
 		for _, element := range value.Elts {
+			prefix := ""
 			if pair, ok := element.(*ast.KeyValueExpr); ok {
+				if field, ok := pair.Key.(*ast.Ident); structured && ok {
+					prefix = field.Name + "."
+				}
 				element = pair.Value
 			}
 			for path := range cleanupPathsForExpression(element, imports, values, resources, types) {
-				paths[path] = true
+				paths[prefix+path] = true
 			}
 		}
 		if len(paths) != 0 {
@@ -2065,6 +2093,10 @@ func assignedToolExpressionType(expressions []ast.Expr, index int, imports map[s
 
 func calledFunctionKey(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) string {
 	switch function := expression.(type) {
+	case *ast.IndexExpr:
+		return calledFunctionKey(function.X, imports, values, types)
+	case *ast.IndexListExpr:
+		return calledFunctionKey(function.X, imports, values, types)
 	case *ast.Ident:
 		if typeName := values[bindingKey(function)]; strings.HasPrefix(typeName, localFunctionTypePrefix) {
 			return strings.TrimPrefix(typeName, localFunctionTypePrefix)
@@ -2109,6 +2141,9 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 		return canonicalType(value.Type, imports)
 	case *ast.SelectorExpr:
 		receiverType := expressionType(value.X, imports, values, types)
+		if receiverType == toolRegistryCollectionType {
+			return modulePath + "/internal/tools.Registry"
+		}
 		return compositionFieldType(receiverType, value.Sel.Name, types, nil)
 	case *ast.IndexExpr:
 		_, valueType, _ := rangeTypes(expressionType(value.X, imports, values, types), types)
@@ -2245,6 +2280,10 @@ func isToolRegistrationCallableExpression(expression ast.Expr, imports map[strin
 
 func selectorChain(expression ast.Expr) string {
 	switch value := expression.(type) {
+	case *ast.IndexExpr:
+		return selectorChain(value.X)
+	case *ast.IndexListExpr:
+		return selectorChain(value.X)
 	case *ast.Ident:
 		return value.Name
 	case *ast.SelectorExpr:
