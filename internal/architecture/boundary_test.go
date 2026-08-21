@@ -369,6 +369,11 @@ func cleanupFromInterfaceCollection(application *App) {
 		_ = resource.Close()
 	}
 }
+func cleanupFromIndexedAssignment(application *App) {
+	resources := map[string]closer{}
+	resources["mcp"] = application.manager
+	_ = resources["mcp"].Close()
+}
 func cleanupAfterShadow(application *App, unrelated closer) {
 	manager := application.manager
 	{
@@ -409,7 +414,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityOwned.Close", "cleanup", "cleanup", "application.manager.Close", "func", "resource.Close", "Close", "resource.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
+	want := []string{"identityOwned.Close", "cleanup", "cleanup", "application.manager.Close", "func", "resource.Close", "Close", "resource.Close", "Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -522,6 +527,11 @@ func registerFromInterfaceCollection(application *App) {
 		registry.Register(nil)
 	}
 }
+func registerFromIndexedAssignment(application *App) {
+	registries := map[string]registrar{}
+	registries["tools"] = application.registry
+	registries["tools"].Register(nil)
+}
 func registerAfterShadow(application *App, unrelated *router) {
 	registry := application.registry
 	{
@@ -585,7 +595,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityRegistrar.Register", "register", "register", "application.registry.Register", "func", "registry.Register", "Register", "registry.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
+	want := []string{"identityRegistrar.Register", "register", "register", "application.registry.Register", "func", "registry.Register", "Register", "registry.Register", "Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -1048,8 +1058,8 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 		switch value := node.(type) {
 		case *ast.AssignStmt:
 			for index, left := range value.Lhs {
-				name, ok := left.(*ast.Ident)
-				if !ok {
+				name, indexed := assignmentBinding(left)
+				if name == nil {
 					continue
 				}
 				key := bindingKey(name)
@@ -1058,7 +1068,9 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 					resources[key] = paths
 				}
 				typeName := assignedToolExpressionType(value.Rhs, index, function.imports, values, types)
-				if localType := localFunctionType(function.key, name, value.Rhs, index); localType != "" {
+				if indexed && resolveNamedType(typeName, types) == modulePath+"/internal/tools.Registry" {
+					typeName = toolRegistryCollectionType
+				} else if localType := localFunctionType(function.key, name, value.Rhs, index); localType != "" {
 					typeName = localType
 				}
 				setMayValueType(values, key, typeName, types)
@@ -1144,19 +1156,21 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 		switch value := node.(type) {
 		case *ast.AssignStmt:
 			for index, left := range value.Lhs {
-				name, ok := left.(*ast.Ident)
-				if !ok {
+				name, indexed := assignmentBinding(left)
+				if name == nil {
 					continue
 				}
 				key := bindingKey(name)
 				if index < len(value.Rhs) {
 					mergeBindingOrigins(origins, key, originsForExpression(value.Rhs[index], origins))
 				}
-				typeName := assignedExpressionType(value.Rhs, index, function.imports, values, types)
-				if localType := localFunctionType(function.key, name, value.Rhs, index); localType != "" {
-					typeName = localType
+				if !indexed {
+					typeName := assignedExpressionType(value.Rhs, index, function.imports, values, types)
+					if localType := localFunctionType(function.key, name, value.Rhs, index); localType != "" {
+						typeName = localType
+					}
+					setMayValueType(values, key, typeName, types)
 				}
-				setMayValueType(values, key, typeName, types)
 			}
 		case *ast.DeclStmt:
 			general, ok := value.Decl.(*ast.GenDecl)
@@ -1224,19 +1238,21 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 		switch value := node.(type) {
 		case *ast.AssignStmt:
 			for index, left := range value.Lhs {
-				name, ok := left.(*ast.Ident)
-				if !ok {
+				name, indexed := assignmentBinding(left)
+				if name == nil {
 					continue
 				}
 				key := bindingKey(name)
 				if index < len(value.Rhs) {
 					mergeBindingOrigins(origins, key, originsForExpression(value.Rhs[index], origins))
 				}
-				typeName := assignedExpressionType(value.Rhs, index, function.imports, values, types)
-				if localType := localFunctionType(function.key, name, value.Rhs, index); localType != "" {
-					typeName = localType
+				if !indexed {
+					typeName := assignedExpressionType(value.Rhs, index, function.imports, values, types)
+					if localType := localFunctionType(function.key, name, value.Rhs, index); localType != "" {
+						typeName = localType
+					}
+					setMayValueType(values, key, typeName, types)
 				}
-				setMayValueType(values, key, typeName, types)
 			}
 		case *ast.DeclStmt:
 			general, ok := value.Decl.(*ast.GenDecl)
@@ -1324,6 +1340,8 @@ func originsForExpression(expression ast.Expr, origins map[string]map[int]bool) 
 	case *ast.ParenExpr:
 		return originsForExpression(value.X, origins)
 	case *ast.SelectorExpr:
+		return originsForExpression(value.X, origins)
+	case *ast.IndexExpr:
 		return originsForExpression(value.X, origins)
 	case *ast.UnaryExpr:
 		return originsForExpression(value.X, origins)
@@ -1438,19 +1456,21 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			switch value := node.(type) {
 			case *ast.AssignStmt:
 				for index, left := range value.Lhs {
-					name, ok := left.(*ast.Ident)
-					if !ok {
+					name, indexed := assignmentBinding(left)
+					if name == nil {
 						continue
 					}
 					key := bindingKey(name)
 					if paths := assignedCleanupPaths(value.Rhs, index, imports, values, resources, types); paths != nil {
 						resources[key] = paths
 					}
-					typeName := assignedExpressionType(value.Rhs, index, imports, values, types)
-					if localType := localFunctionType(functionKey, name, value.Rhs, index); localType != "" {
-						typeName = localType
+					if !indexed {
+						typeName := assignedExpressionType(value.Rhs, index, imports, values, types)
+						if localType := localFunctionType(functionKey, name, value.Rhs, index); localType != "" {
+							typeName = localType
+						}
+						setMayValueType(values, key, typeName, types)
 					}
-					setMayValueType(values, key, typeName, types)
 				}
 			case *ast.DeclStmt:
 				general, ok := value.Decl.(*ast.GenDecl)
@@ -1560,13 +1580,15 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			switch value := node.(type) {
 			case *ast.AssignStmt:
 				for index, left := range value.Lhs {
-					name, ok := left.(*ast.Ident)
-					if !ok {
+					name, indexed := assignmentBinding(left)
+					if name == nil {
 						continue
 					}
 					key := bindingKey(name)
 					typeName := assignedToolExpressionType(value.Rhs, index, imports, values, types)
-					if localType := localFunctionType(functionKey, name, value.Rhs, index); localType != "" {
+					if indexed && resolveNamedType(typeName, types) == modulePath+"/internal/tools.Registry" {
+						typeName = toolRegistryCollectionType
+					} else if localType := localFunctionType(functionKey, name, value.Rhs, index); localType != "" {
 						typeName = localType
 					}
 					setMayValueType(values, key, typeName, types)
@@ -1721,6 +1743,20 @@ func bindingKey(identifier *ast.Ident) string {
 		return identifier.Name
 	}
 	return fmt.Sprintf("%s@%p", identifier.Name, identifier.Obj)
+}
+
+func assignmentBinding(expression ast.Expr) (*ast.Ident, bool) {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		return value, false
+	case *ast.IndexExpr:
+		identifier, _ := assignmentBinding(value.X)
+		return identifier, identifier != nil
+	case *ast.ParenExpr:
+		return assignmentBinding(value.X)
+	default:
+		return nil, false
+	}
 }
 
 func setMayValueType(values map[string]string, key, typeName string, types compositionTypeIndex) {
