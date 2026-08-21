@@ -3147,6 +3147,30 @@ again:
 		goto again
 	}
 }
+func fallthroughBreakGotoRepeatsDeferredUse(application *App, again bool) {
+	var chainBreakResource closer = &unrelatedCloser{}
+	var chainBreakRegistry registrar = &unrelatedRegistrar{}
+again:
+	defer func() {
+		_ = chainBreakResource.Close()
+		chainBreakRegistry.Register(nil)
+		chainBreakResource = application.manager
+		chainBreakRegistry = application.registry
+	}()
+	switch 0 {
+	case 0:
+		if again {
+			break
+		}
+		fallthrough
+	default:
+		return
+	}
+	if again {
+		again = false
+		goto again
+	}
+}
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "deferred_closure_state.go")
@@ -3166,7 +3190,7 @@ again:
 		cleanupCalls = append(cleanupCalls, chain)
 	})
 	cleanup := "," + strings.Join(cleanupCalls, ",") + ","
-	if len(cleanupCalls) != 6 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") || !strings.Contains(cleanup, ",fallthroughResource.Close,") || !strings.Contains(cleanup, ",breakResource.Close,") {
+	if len(cleanupCalls) != 7 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") || !strings.Contains(cleanup, ",fallthroughResource.Close,") || !strings.Contains(cleanup, ",breakResource.Close,") || !strings.Contains(cleanup, ",chainBreakResource.Close,") {
 		t.Fatalf("cleanup calls = %v, want older and repeated deferred cleanup after assignment", cleanupCalls)
 	}
 	var registrationCalls []string
@@ -3174,7 +3198,7 @@ again:
 		registrationCalls = append(registrationCalls, chain)
 	})
 	registration := "," + strings.Join(registrationCalls, ",") + ","
-	if len(registrationCalls) != 6 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") || !strings.Contains(registration, ",fallthroughRegistry.Register,") || !strings.Contains(registration, ",breakRegistry.Register,") {
+	if len(registrationCalls) != 7 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") || !strings.Contains(registration, ",fallthroughRegistry.Register,") || !strings.Contains(registration, ",breakRegistry.Register,") || !strings.Contains(registration, ",chainBreakRegistry.Register,") {
 		t.Fatalf("Tool registration calls = %v, want older and repeated deferred registration after assignment", registrationCalls)
 	}
 }
@@ -6071,8 +6095,13 @@ func compositionStatementFallsThrough(statement ast.Stmt, packageConstants map[s
 		if !known || len(clauses) == 0 {
 			return true
 		}
+		for _, clause := range clauses {
+			if compositionSwitchClauseBreaksToExit(value, clause, packageConstants) {
+				return true
+			}
+		}
 		lastClause := clauses[len(clauses)-1]
-		return compositionSwitchClauseBreaksToExit(value, lastClause, packageConstants) || compositionStatementsFallThrough(lastClause.Body, packageConstants)
+		return compositionStatementsFallThrough(lastClause.Body, packageConstants)
 	default:
 		return statementFallsThrough(statement)
 	}
