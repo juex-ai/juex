@@ -2745,6 +2745,10 @@ func unreachableAfterReturn(application *App) {
 	return
 	_ = unreachableResource.Close()
 	unreachableRegistry.Register(nil)
+	var declaredResource *mcp.Manager
+	_ = declaredResource.Close()
+	declaredRegistry := tools.NewRegistry()
+	declaredRegistry.Register(nil)
 }
 `
 	dir := t.TempDir()
@@ -4661,6 +4665,7 @@ type delayedCompositionCall struct {
 }
 
 type compositionFlowState struct {
+	reachable  bool
 	origins    map[string]map[int]bool
 	values     map[string]string
 	resources  map[string]map[string]bool
@@ -4794,6 +4799,7 @@ func (router *compositionFlowRouter) enterLabel(label string) {
 
 func compositionFlowStateWithoutBindings(state compositionFlowState, excluded map[string]bool) compositionFlowState {
 	filtered := snapshotCompositionFlowState(state.origins, state.values, state.resources, state.references, nil)
+	filtered.reachable = state.reachable
 	for call := range state.delayed {
 		filtered.delayed[call] = true
 	}
@@ -4879,6 +4885,7 @@ func blockDeclaredCompositionBindings(block *ast.BlockStmt) map[string]bool {
 
 func snapshotCompositionFlowState(origins map[string]map[int]bool, values map[string]string, resources map[string]map[string]bool, references map[string]bool, aliases map[string]map[string]bool) compositionFlowState {
 	return compositionFlowState{
+		reachable:  true,
 		origins:    cloneBindingOrigins(origins),
 		values:     cloneStringMap(values),
 		resources:  cloneCleanupResourceMap(resources),
@@ -4898,6 +4905,7 @@ func mergeCompositionFlowStates(states []compositionFlowState, types composition
 		delayed:    make(map[*ast.CallExpr]bool),
 	}
 	for _, state := range states {
+		merged.reachable = merged.reachable || state.reachable
 		merged.origins = mergeBindingOriginMaps(merged.origins, state.origins)
 		merged.values = mergeCompositionValueMaps(merged.values, state.values, types)
 		merged.resources = mergeCleanupResourceMaps(merged.resources, state.resources)
@@ -5164,14 +5172,18 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 	origins, values := inferenceState(function)
 	references := functionReferenceValues(function, types)
 	aliases := make(map[string]map[string]bool)
+	reachable := true
 	snapshot := func() compositionFlowState {
-		return snapshotCompositionFlowState(origins, values, nil, references, aliases)
+		state := snapshotCompositionFlowState(origins, values, nil, references, aliases)
+		state.reachable = reachable
+		return state
 	}
 	restore := func(state compositionFlowState) {
 		origins = cloneBindingOrigins(state.origins)
 		values = cloneStringMap(state.values)
 		references = cloneBoolMap(state.references)
 		aliases = cloneCleanupResourceMap(state.aliases)
+		reachable = state.reachable
 	}
 	merge := func(states []compositionFlowState) compositionFlowState {
 		return mergeCompositionFlowStates(states, types)
@@ -5180,6 +5192,13 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 	returnTarget := router.pushReturnTarget()
 	var visit func(ast.Node) bool
 	visit = func(node ast.Node) bool {
+		if !reachable {
+			switch node.(type) {
+			case *ast.BlockStmt, *ast.LabeledStmt:
+			default:
+				return false
+			}
+		}
 		switch value := node.(type) {
 		case *ast.LabeledStmt:
 			router.enterLabel(value.Label.Name)
@@ -5385,14 +5404,18 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 	origins, values := inferenceState(function)
 	references := functionReferenceValues(function, types)
 	aliases := make(map[string]map[string]bool)
+	reachable := true
 	snapshot := func() compositionFlowState {
-		return snapshotCompositionFlowState(origins, values, nil, references, aliases)
+		state := snapshotCompositionFlowState(origins, values, nil, references, aliases)
+		state.reachable = reachable
+		return state
 	}
 	restore := func(state compositionFlowState) {
 		origins = cloneBindingOrigins(state.origins)
 		values = cloneStringMap(state.values)
 		references = cloneBoolMap(state.references)
 		aliases = cloneCleanupResourceMap(state.aliases)
+		reachable = state.reachable
 	}
 	merge := func(states []compositionFlowState) compositionFlowState {
 		return mergeCompositionFlowStates(states, types)
@@ -5401,6 +5424,13 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 	returnTarget := router.pushReturnTarget()
 	var visit func(ast.Node) bool
 	visit = func(node ast.Node) bool {
+		if !reachable {
+			switch node.(type) {
+			case *ast.BlockStmt, *ast.LabeledStmt:
+			default:
+				return false
+			}
+		}
 		switch value := node.(type) {
 		case *ast.LabeledStmt:
 			router.enterLabel(value.Label.Name)
@@ -6162,6 +6192,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			references[key] = true
 		}
 		aliases := make(map[string]map[string]bool)
+		reachable := true
 		reportedCalls := make(map[*ast.CallExpr]bool)
 		deferredSeen := make(map[*ast.CallExpr]bool)
 		var deferredCalls []delayedCompositionCall
@@ -6180,6 +6211,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			for call := range activeDelayed {
 				state.delayed[call] = true
 			}
+			state.reachable = reachable
 			return state
 		}
 		restore := func(state compositionFlowState) {
@@ -6191,6 +6223,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			for call := range state.delayed {
 				activeDelayed[call] = true
 			}
+			reachable = state.reachable
 		}
 		merge := func(states []compositionFlowState) compositionFlowState {
 			return mergeCompositionFlowStates(states, types)
@@ -6199,6 +6232,13 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 		returnTarget := router.pushReturnTarget()
 		var visit func(ast.Node) bool
 		visit = func(node ast.Node) bool {
+			if !reachable {
+				switch node.(type) {
+				case *ast.BlockStmt, *ast.LabeledStmt:
+				default:
+					return false
+				}
+			}
 			switch value := node.(type) {
 			case *ast.LabeledStmt:
 				router.enterLabel(value.Label.Name)
@@ -6617,6 +6657,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			references[key] = true
 		}
 		aliases := make(map[string]map[string]bool)
+		reachable := true
 		reportedCalls := make(map[*ast.CallExpr]bool)
 		deferredSeen := make(map[*ast.CallExpr]bool)
 		var deferredCalls []delayedCompositionCall
@@ -6635,6 +6676,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			for call := range activeDelayed {
 				state.delayed[call] = true
 			}
+			state.reachable = reachable
 			return state
 		}
 		restore := func(state compositionFlowState) {
@@ -6645,6 +6687,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			for call := range state.delayed {
 				activeDelayed[call] = true
 			}
+			reachable = state.reachable
 		}
 		merge := func(states []compositionFlowState) compositionFlowState {
 			return mergeCompositionFlowStates(states, types)
@@ -6653,6 +6696,13 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 		returnTarget := router.pushReturnTarget()
 		var visit func(ast.Node) bool
 		visit = func(node ast.Node) bool {
+			if !reachable {
+				switch node.(type) {
+				case *ast.BlockStmt, *ast.LabeledStmt:
+				default:
+					return false
+				}
+			}
 			switch value := node.(type) {
 			case *ast.LabeledStmt:
 				router.enterLabel(value.Label.Name)
