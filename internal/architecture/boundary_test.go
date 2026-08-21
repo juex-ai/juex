@@ -93,6 +93,22 @@ type compositionTypeIndex struct {
 	variadicParams   map[string]int
 	appFunctionKeys  map[string]bool
 	appFunctions     []indexedAppFunction
+	packageValues    map[string]string
+	packageResources map[string]map[string]bool
+	interfaceMethods map[string]methodShape
+	concreteMethods  map[string]methodShape
+	methodImpls      map[string][]string
+}
+
+type indexedAppSource struct {
+	file    *ast.File
+	imports map[string]string
+}
+
+type methodShape struct {
+	parameters []string
+	results    []string
+	variadic   bool
 }
 
 type indexedAppFunction struct {
@@ -668,6 +684,12 @@ func cleanupMapKeyDoesNotOwnValue(application *App, unrelated closer) {
 		break
 	}
 }
+func cleanupFromMapsCopyAlias(application *App) {
+	resources := map[string]closer{}
+	alias := resources
+	maps.Copy(alias, map[string]closer{"mcp": application.manager})
+	_ = resources["mcp"].Close()
+}
 func cleanupAfterShadow(application *App, unrelated closer) {
 	manager := application.manager
 	{
@@ -709,7 +731,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"packageManager.Close", "packageCleanup", "Run", "cleanupRunner.Run", "identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "closeOwned", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "Close", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "wrapCleanup.cleanup", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resources.Close", "resources.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
+	want := []string{"packageManager.Close", "packageCleanup", "Run", "cleanupRunner.Run", "identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "closeOwned", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "Close", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "wrapCleanup.cleanup", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resources.Close", "resources.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -1097,6 +1119,12 @@ func registrationMapKeyDoesNotOwnValue(application *App, unrelated registrar) {
 		break
 	}
 }
+func registerFromMapsCopyAlias(application *App) {
+	registries := map[string]registrar{}
+	alias := registries
+	maps.Copy(alias, map[string]registrar{"tools": application.registry})
+	registries["tools"].Register(nil)
+}
 func registerAfterShadow(application *App, unrelated *router) {
 	registry := application.registry
 	{
@@ -1162,7 +1190,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"packageRegistry.Register", "packageRegistration", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "registerOwned", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "callbacks.register", "callbacks.register", "callbacks", "wrapRegistration.register", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"packageRegistry.Register", "packageRegistration", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "registerOwned", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "callbacks.register", "callbacks.register", "callbacks", "wrapRegistration.register", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -1255,6 +1283,117 @@ func configure(application *App, unrelatedCloser closer, unrelatedRegistrar regi
 	}
 }
 
+func TestAppCompositionInspectionTracksCrossFilePackageBindings(t *testing.T) {
+	state := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+var managerSource *mcp.Manager
+var packageManager = managerSource
+var packageRegistry = tools.NewRegistryWithOptions(tools.RegistryOptions{})
+var packageCleanup = func(resource closer) { _ = resource.Close() }
+var packageRegistration = func(registry registrar) { _ = registry.Register(nil) }
+`
+	shutdown := `package app
+import "github.com/juex-ai/juex/internal/tools"
+type App struct{}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+func shutdown() {
+	_ = packageManager.Close()
+	packageCleanup(packageManager)
+	packageRegistry.Register(nil)
+	packageRegistration(packageRegistry)
+}
+`
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.go")
+	shutdownPath := filepath.Join(dir, "shutdown.go")
+	if err := os.WriteFile(statePath, []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shutdownPath, []byte(shutdown), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), shutdownPath, shutdown, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",packageManager.Close,") || !strings.Contains(cleanup, ",packageCleanup,") {
+		t.Fatalf("cleanup calls = %v, want cross-file package manager and callback", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",packageRegistry.Register,") || !strings.Contains(registration, ",packageRegistration,") {
+		t.Fatalf("Tool registration calls = %v, want cross-file package registry and callback", registrationCalls)
+	}
+}
+
+func TestAppCompositionInspectionTracksInterfaceDispatch(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type cleanupDispatcher interface { Run(closer) }
+type registrationDispatcher interface { Run(registrar) }
+type cleanupDispatchImpl struct{}
+type registrationDispatchImpl struct{}
+func (cleanupDispatchImpl) Run(resource closer) { _ = resource.Close() }
+func (registrationDispatchImpl) Run(registry registrar) { _ = registry.Register(nil) }
+func dispatchCleanup(dispatcher cleanupDispatcher, resource closer) { dispatcher.Run(resource) }
+func dispatchRegistration(dispatcher registrationDispatcher, registry registrar) { dispatcher.Run(registry) }
+func configure(application *App) {
+	dispatchCleanup(cleanupDispatchImpl{}, application.manager)
+	dispatchRegistration(registrationDispatchImpl{}, application.registry)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dispatch.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",dispatchCleanup,") {
+		t.Fatalf("cleanup calls = %v, want interface-dispatched cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",dispatchRegistration,") {
+		t.Fatalf("Tool registration calls = %v, want interface-dispatched registration", registrationCalls)
+	}
+}
+
 func checkImports(t *testing.T, root, relativeDir, layer string, forbidden func(string) bool) {
 	t.Helper()
 	dir := filepath.Join(root, filepath.FromSlash(relativeDir))
@@ -1343,7 +1482,11 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 		parameterWrites:  make(map[string]map[int]map[int]map[string]bool),
 		variadicParams:   make(map[string]int),
 		appFunctionKeys:  make(map[string]bool),
+		interfaceMethods: make(map[string]methodShape),
+		concreteMethods:  make(map[string]methodShape),
+		methodImpls:      make(map[string][]string),
 	}
+	var appSources []indexedAppSource
 	for typeName, methods := range featureResourceCleanupMethods {
 		types.cleanupMethods[typeName] = methods
 	}
@@ -1360,6 +1503,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 			return err
 		}
 		imports := importPaths(parsed)
+		appSources = append(appSources, indexedAppSource{file: parsed, imports: imports})
 		indexCleanupAndConstructors(parsed, modulePath+"/internal/app", imports, &types)
 		for _, declaration := range parsed.Decls {
 			general, ok := declaration.(*ast.GenDecl)
@@ -1405,7 +1549,9 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 	if err := indexConcreteFeatureSources(repositoryRootPath(), &types); err != nil {
 		return compositionTypeIndex{}, err
 	}
+	indexInterfaceMethodImplementations(&types)
 	indexLocalFlows(&types)
+	types.packageValues, types.packageResources = packageBindingStateForSources(appSources, types)
 	return types, nil
 }
 
@@ -1466,6 +1612,12 @@ func indexCleanupAndConstructors(file *ast.File, packagePath string, imports map
 				}
 				typeName := packagePath + "." + spec.Name.Name
 				indexTypeParameters(spec, typeName, packagePath, types)
+				if contract, ok := spec.Type.(*ast.InterfaceType); ok {
+					if packagePath == modulePath+"/internal/app" {
+						indexInterfaceMethods(contract, typeName, imports, packagePath, types)
+					}
+					continue
+				}
 				structure, ok := spec.Type.(*ast.StructType)
 				if !ok {
 					types.namedTypes[typeName] = canonicalTypeInPackage(spec.Type, imports, packagePath)
@@ -1502,6 +1654,9 @@ func indexCleanupAndConstructors(file *ast.File, packagePath string, imports map
 			}
 			types.appFunctions = append(types.appFunctions, indexed)
 			types.appFunctionKeys[indexed.key] = true
+			if function.Recv != nil {
+				types.concreteMethods[indexed.key] = methodShapeForFunction(function.Type, imports, packagePath)
+			}
 			indexVariadicParameter(indexed, types)
 			indexLocalFunctionLiterals(indexed, types)
 		}
@@ -1540,6 +1695,82 @@ func indexTypeParameters(spec *ast.TypeSpec, typeName, packagePath string, types
 			types.typeParameters[typeName] = append(types.typeParameters[typeName], packagePath+"."+name.Name)
 		}
 	}
+}
+
+func indexInterfaceMethods(contract *ast.InterfaceType, typeName string, imports map[string]string, packagePath string, types *compositionTypeIndex) {
+	for _, field := range contract.Methods.List {
+		function, ok := field.Type.(*ast.FuncType)
+		if !ok {
+			continue
+		}
+		for _, name := range field.Names {
+			key := typeName + "." + name.Name
+			shape := methodShapeForFunction(function, imports, packagePath)
+			types.interfaceMethods[key] = shape
+			types.functionResults[key] = append([]string(nil), shape.results...)
+			if index, variadic := variadicParameterIndex(function.Params); variadic {
+				types.variadicParams[key] = index
+			}
+		}
+	}
+}
+
+func methodShapeForFunction(function *ast.FuncType, imports map[string]string, packagePath string) methodShape {
+	parameters, variadic := methodFieldTypes(function.Params, imports, packagePath, true)
+	results, _ := methodFieldTypes(function.Results, imports, packagePath, false)
+	return methodShape{parameters: parameters, results: results, variadic: variadic}
+}
+
+func methodFieldTypes(fields *ast.FieldList, imports map[string]string, packagePath string, allowVariadic bool) ([]string, bool) {
+	if fields == nil {
+		return nil, false
+	}
+	var resolved []string
+	variadic := false
+	for index, field := range fields.List {
+		expression := field.Type
+		if ellipsis, ok := expression.(*ast.Ellipsis); ok && allowVariadic && index == len(fields.List)-1 {
+			variadic = true
+			expression = ellipsis.Elt
+		}
+		count := len(field.Names)
+		if count == 0 {
+			count = 1
+		}
+		typeName := canonicalTypeInPackage(expression, imports, packagePath)
+		for range count {
+			resolved = append(resolved, typeName)
+		}
+	}
+	return resolved, variadic
+}
+
+func indexInterfaceMethodImplementations(types *compositionTypeIndex) {
+	for interfaceKey, contract := range types.interfaceMethods {
+		methodName := interfaceKey[strings.LastIndex(interfaceKey, ".")+1:]
+		for concreteKey, implementation := range types.concreteMethods {
+			if concreteKey[strings.LastIndex(concreteKey, ".")+1:] == methodName && equalMethodShape(contract, implementation) {
+				types.methodImpls[interfaceKey] = append(types.methodImpls[interfaceKey], concreteKey)
+			}
+		}
+	}
+}
+
+func equalMethodShape(left, right methodShape) bool {
+	if left.variadic != right.variadic || len(left.parameters) != len(right.parameters) || len(left.results) != len(right.results) {
+		return false
+	}
+	for index := range left.parameters {
+		if left.parameters[index] != right.parameters[index] {
+			return false
+		}
+	}
+	for index := range left.results {
+		if left.results[index] != right.results[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func indexLocalFunctionLiterals(parent indexedAppFunction, types *compositionTypeIndex) {
@@ -1726,10 +1957,94 @@ func indexLocalFlows(types *compositionTypeIndex) {
 		before := localFlowCount(*types)
 		indexLocalResultFlows(types)
 		indexLocalCleanupParameters(types)
+		propagateInterfaceMethodFlows(types)
 		if localFlowCount(*types) == before {
 			return
 		}
 	}
+}
+
+func propagateInterfaceMethodFlows(types *compositionTypeIndex) {
+	for interfaceKey, implementations := range types.methodImpls {
+		for _, implementation := range implementations {
+			types.cleanupParams[interfaceKey] = mergeIntSet(types.cleanupParams[interfaceKey], types.cleanupParams[implementation])
+			types.toolParams[interfaceKey] = mergeIntSet(types.toolParams[interfaceKey], types.toolParams[implementation])
+			types.cleanupResults[interfaceKey] = mergeIndexedPathSets(types.cleanupResults[interfaceKey], types.cleanupResults[implementation])
+			types.toolResults[interfaceKey] = mergeIntSet(types.toolResults[interfaceKey], types.toolResults[implementation])
+			types.toolCallResults[interfaceKey] = mergeIntSet(types.toolCallResults[interfaceKey], types.toolCallResults[implementation])
+			types.toolCallPaths[interfaceKey] = mergeIndexedPathSets(types.toolCallPaths[interfaceKey], types.toolCallPaths[implementation])
+			types.resultParams[interfaceKey] = mergeIndexedIntSets(types.resultParams[interfaceKey], types.resultParams[implementation])
+			types.resultParamPaths[interfaceKey] = mergeDoubleIndexedPathSets(types.resultParamPaths[interfaceKey], types.resultParamPaths[implementation])
+			types.parameterWrites[interfaceKey] = mergeDoubleIndexedPathSets(types.parameterWrites[interfaceKey], types.parameterWrites[implementation])
+		}
+	}
+}
+
+func mergeIntSet(destination, source map[int]bool) map[int]bool {
+	if len(source) == 0 {
+		return destination
+	}
+	if destination == nil {
+		destination = make(map[int]bool)
+	}
+	for index := range source {
+		destination[index] = true
+	}
+	return destination
+}
+
+func mergeIndexedPathSets(destination, source map[int]map[string]bool) map[int]map[string]bool {
+	if len(source) == 0 {
+		return destination
+	}
+	if destination == nil {
+		destination = make(map[int]map[string]bool)
+	}
+	for index, paths := range source {
+		if destination[index] == nil {
+			destination[index] = make(map[string]bool)
+		}
+		for path := range paths {
+			destination[index][path] = true
+		}
+	}
+	return destination
+}
+
+func mergeIndexedIntSets(destination, source map[int]map[int]bool) map[int]map[int]bool {
+	if len(source) == 0 {
+		return destination
+	}
+	if destination == nil {
+		destination = make(map[int]map[int]bool)
+	}
+	for index, values := range source {
+		destination[index] = mergeIntSet(destination[index], values)
+	}
+	return destination
+}
+
+func mergeDoubleIndexedPathSets(destination, source map[int]map[int]map[string]bool) map[int]map[int]map[string]bool {
+	if len(source) == 0 {
+		return destination
+	}
+	if destination == nil {
+		destination = make(map[int]map[int]map[string]bool)
+	}
+	for outer, values := range source {
+		if destination[outer] == nil {
+			destination[outer] = make(map[int]map[string]bool)
+		}
+		for inner, paths := range values {
+			if destination[outer][inner] == nil {
+				destination[outer][inner] = make(map[string]bool)
+			}
+			for path := range paths {
+				destination[outer][inner][path] = true
+			}
+		}
+	}
+	return destination
 }
 
 func localFlowCount(types compositionTypeIndex) int {
@@ -2167,6 +2482,15 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 				}
 			}
 		case *ast.CallExpr:
+			if isMapsCopy(value, function.imports) {
+				destination := value.Args[0]
+				source := value.Args[1]
+				recordParameterWrite(originsForExpression(destination, origins), originsForExpression(source, origins), assignmentFieldPrefix(destination))
+				if destinationName, _ := assignmentBinding(destination); destinationName != nil {
+					paths := cleanupPathsForExpression(source, function.imports, values, resources, concreteTypes)
+					mergeAliasedCleanupPaths(resources, aliases, bindingKey(destinationName), paths)
+				}
+			}
 			callee := calledFunctionKey(value.Fun, function.imports, values, types)
 			for destinationIndex, sources := range types.parameterWrites[callee] {
 				for _, destination := range callArgumentsForParameter(value, callee, destinationIndex, function.imports, types) {
@@ -2984,7 +3308,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					mergeAliasedCleanupPaths(resources, aliases, key, paths)
 				}
 			case *ast.CallExpr:
-				if isBuiltinCopy(value) {
+				if isBuiltinCopy(value) || isMapsCopy(value, imports) {
 					if destination, _ := assignmentBinding(value.Args[0]); destination != nil {
 						paths := cleanupPathsForExpression(value.Args[1], imports, values, resources, types)
 						key := bindingKey(destination)
@@ -3162,9 +3486,14 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					}
 				}
 			case *ast.CallExpr:
-				if isBuiltinCopy(value) && isToolRegistryCollectionExpression(value.Args[1], imports, values, types) {
+				if isBuiltinCopy(value) || isMapsCopy(value, imports) {
 					if destination, _ := assignmentBinding(value.Args[0]); destination != nil {
-						setAliasedMayValueType(values, aliases, bindingKey(destination), toolRegistryCollectionType, types)
+						writeType := toolRegistryCollectionTypeForExpression(value.Args[1], imports, values, types)
+						if writeType != "" {
+							destinationKey := bindingKey(destination)
+							writeType = mergeToolRegistryCollectionTypes(values[destinationKey], writeType)
+							setAliasedMayValueType(values, aliases, destinationKey, writeType, types)
+						}
 					}
 				}
 				callee := calledFunctionKey(value.Fun, imports, values, types)
@@ -3177,12 +3506,15 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 						for sourceIndex, prefixes := range sources {
 							for _, source := range callArgumentsForParameter(value, callee, sourceIndex, imports, types) {
 								if isToolRegistryExpression(source, imports, values, types) || isToolRegistryCollectionExpression(source, imports, values, types) || isToolRegistryMapKeyCollectionExpression(source, imports, values, types) {
-									writeType := ""
-									for prefix := range prefixes {
-										if strings.Contains(prefix, mapKeyPathPrefix) {
-											writeType = mergeToolRegistryCollectionTypes(writeType, toolRegistryMapKeyCollectionType)
-										} else {
-											writeType = mergeToolRegistryCollectionTypes(writeType, toolRegistryCollectionType)
+									writeType := toolRegistryCollectionTypeForExpression(source, imports, values, types)
+									if isToolRegistryExpression(source, imports, values, types) {
+										writeType = ""
+										for prefix := range prefixes {
+											if strings.Contains(prefix, mapKeyPathPrefix) {
+												writeType = mergeToolRegistryCollectionTypes(writeType, toolRegistryMapKeyCollectionType)
+											} else {
+												writeType = mergeToolRegistryCollectionTypes(writeType, toolRegistryCollectionType)
+											}
 										}
 									}
 									destinationKey := bindingKey(destinationName)
@@ -3292,9 +3624,30 @@ func namedValueTypes(fields *ast.FieldList, imports map[string]string) map[strin
 	return values
 }
 
-func packageBindingState(file *ast.File, imports map[string]string, types compositionTypeIndex) (map[string]string, map[string]map[string]bool) {
+func packageBindingStateForSources(sources []indexedAppSource, types compositionTypeIndex) (map[string]string, map[string]map[string]bool) {
 	values := make(map[string]string)
 	resources := make(map[string]map[string]bool)
+	for {
+		beforeValues := cloneStringMap(values)
+		beforeResources := cloneCleanupResourceMap(resources)
+		for _, source := range sources {
+			mergePackageBindingSource(source.file, source.imports, types, values, resources)
+		}
+		if equalStringMap(values, beforeValues) && equalCleanupResourceMap(resources, beforeResources) {
+			break
+		}
+	}
+	return values, resources
+}
+
+func packageBindingState(file *ast.File, imports map[string]string, types compositionTypeIndex) (map[string]string, map[string]map[string]bool) {
+	values := cloneStringMap(types.packageValues)
+	resources := cloneCleanupResourceMap(types.packageResources)
+	mergePackageBindingSource(file, imports, types, values, resources)
+	return values, resources
+}
+
+func mergePackageBindingSource(file *ast.File, imports map[string]string, types compositionTypeIndex, values map[string]string, resources map[string]map[string]bool) {
 	for _, declaration := range file.Decls {
 		general, ok := declaration.(*ast.GenDecl)
 		if !ok || general.Tok != token.VAR {
@@ -3316,14 +3669,61 @@ func packageBindingState(file *ast.File, imports map[string]string, types compos
 				if localType := localFunctionType(packageFunctionScopeKey, name, spec.Values, index); localType != "" {
 					typeName = localType
 				}
-				setMayValueType(values, key, typeName, types)
-				if paths != nil {
-					resources[key] = paths
+				for _, binding := range []string{key, name.Name} {
+					setMayValueType(values, binding, typeName, types)
+					if paths != nil {
+						resources[binding] = mergeCleanupPaths(resources[binding], paths)
+					}
 				}
 			}
 		}
 	}
-	return values, resources
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	cloned := make(map[string]string, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneCleanupResourceMap(source map[string]map[string]bool) map[string]map[string]bool {
+	cloned := make(map[string]map[string]bool, len(source))
+	for key, paths := range source {
+		cloned[key] = mergeCleanupPaths(nil, paths)
+	}
+	return cloned
+}
+
+func equalStringMap(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func equalCleanupResourceMap(left, right map[string]map[string]bool) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, paths := range left {
+		other := right[key]
+		if len(paths) != len(other) {
+			return false
+		}
+		for path := range paths {
+			if !other[path] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func namedResultIdentifiers(fields *ast.FieldList) []*ast.Ident {
@@ -3611,6 +4011,18 @@ func isBuiltinCopy(call *ast.CallExpr) bool {
 	return ok && identifier.Name == "copy" && len(call.Args) == 2
 }
 
+func isMapsCopy(call *ast.CallExpr, imports map[string]string) bool {
+	if len(call.Args) != 2 {
+		return false
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "Copy" {
+		return false
+	}
+	qualifier, ok := selector.X.(*ast.Ident)
+	return ok && imports[qualifier.Name] == "maps"
+}
+
 func isBuiltinAppend(call *ast.CallExpr) bool {
 	identifier, ok := call.Fun.(*ast.Ident)
 	return ok && identifier.Name == "append" && len(call.Args) != 0
@@ -3804,6 +4216,17 @@ func mergeToolRegistryCollectionTypes(left, right string) string {
 	default:
 		return left
 	}
+}
+
+func toolRegistryCollectionTypeForExpression(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) string {
+	var typeName string
+	if isToolRegistryMapKeyCollectionExpression(expression, imports, values, types) {
+		typeName = mergeToolRegistryCollectionTypes(typeName, toolRegistryMapKeyCollectionType)
+	}
+	if isToolRegistryCollectionExpression(expression, imports, values, types) {
+		typeName = mergeToolRegistryCollectionTypes(typeName, toolRegistryCollectionType)
+	}
+	return typeName
 }
 
 func featureCleanupMethods(typeName string, types compositionTypeIndex) map[string]bool {
