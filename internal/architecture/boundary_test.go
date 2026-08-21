@@ -3128,6 +3128,25 @@ again:
 		}
 	}
 }
+func switchBreakGotoRepeatsDeferredUse(application *App, again bool) {
+	var breakResource closer = &unrelatedCloser{}
+	var breakRegistry registrar = &unrelatedRegistrar{}
+again:
+	defer func() {
+		_ = breakResource.Close()
+		breakRegistry.Register(nil)
+		breakResource = application.manager
+		breakRegistry = application.registry
+	}()
+	switch 0 {
+	case 0:
+		break
+	}
+	if again {
+		again = false
+		goto again
+	}
+}
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "deferred_closure_state.go")
@@ -3147,7 +3166,7 @@ again:
 		cleanupCalls = append(cleanupCalls, chain)
 	})
 	cleanup := "," + strings.Join(cleanupCalls, ",") + ","
-	if len(cleanupCalls) != 5 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") || !strings.Contains(cleanup, ",fallthroughResource.Close,") {
+	if len(cleanupCalls) != 6 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") || !strings.Contains(cleanup, ",fallthroughResource.Close,") || !strings.Contains(cleanup, ",breakResource.Close,") {
 		t.Fatalf("cleanup calls = %v, want older and repeated deferred cleanup after assignment", cleanupCalls)
 	}
 	var registrationCalls []string
@@ -3155,7 +3174,7 @@ again:
 		registrationCalls = append(registrationCalls, chain)
 	})
 	registration := "," + strings.Join(registrationCalls, ",") + ","
-	if len(registrationCalls) != 5 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") || !strings.Contains(registration, ",fallthroughRegistry.Register,") {
+	if len(registrationCalls) != 6 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") || !strings.Contains(registration, ",fallthroughRegistry.Register,") || !strings.Contains(registration, ",breakRegistry.Register,") {
 		t.Fatalf("Tool registration calls = %v, want older and repeated deferred registration after assignment", registrationCalls)
 	}
 }
@@ -4072,6 +4091,14 @@ func useShadowedBooleanSwitch(application *App) {
 		application.registry.Register(nil)
 	}
 }
+func useShadowedBooleanCondition(application *App) {
+	if true {
+		return
+	} else {
+		_ = application.manager.Close()
+		application.registry.Register(nil)
+	}
+}
 `
 	dir := t.TempDir()
 	declarationsPath := filepath.Join(dir, "shadowed_switch_boolean_types.go")
@@ -4102,14 +4129,14 @@ func useShadowedBooleanSwitch(application *App) {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if len(cleanupCalls) != 1 || cleanupCalls[0] != "application.manager.Close" {
+	if len(cleanupCalls) != 2 || cleanupCalls[0] != "application.manager.Close" || cleanupCalls[1] != "application.manager.Close" {
 		t.Fatalf("cleanup calls = %v, want reachable shadowed-boolean cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if len(registrationCalls) != 1 || registrationCalls[0] != "application.registry.Register" {
+	if len(registrationCalls) != 2 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.registry.Register" {
 		t.Fatalf("Tool registration calls = %v, want reachable shadowed-boolean registration", registrationCalls)
 	}
 }
@@ -5982,9 +6009,24 @@ func compositionStatementFallsThrough(statement ast.Stmt, packageConstants map[s
 		if !known || len(clauses) == 0 {
 			return true
 		}
-		return compositionStatementsFallThrough(clauses[len(clauses)-1].Body, packageConstants)
+		lastClause := clauses[len(clauses)-1]
+		return compositionStatementsEndWithSwitchBreak(lastClause.Body) || compositionStatementsFallThrough(lastClause.Body, packageConstants)
 	default:
 		return statementFallsThrough(statement)
+	}
+}
+
+func compositionStatementsEndWithSwitchBreak(statements []ast.Stmt) bool {
+	if len(statements) == 0 {
+		return false
+	}
+	switch statement := statements[len(statements)-1].(type) {
+	case *ast.BranchStmt:
+		return statement.Tok == token.BREAK && statement.Label == nil
+	case *ast.BlockStmt:
+		return compositionStatementsEndWithSwitchBreak(statement.List)
+	default:
+		return false
 	}
 }
 
@@ -6398,11 +6440,11 @@ func statementsEndWithBranch(statements []ast.Stmt, branchToken token.Token) boo
 	return ok && branch.Tok == branchToken
 }
 
-func inspectCompositionIf(statement *ast.IfStmt, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) {
+func inspectCompositionIf(statement *ast.IfStmt, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState, packageConstants map[string]constant.Value) {
 	if statement.Init != nil {
 		ast.Inspect(statement.Init, visit)
 	}
-	trueState, falseState := inspectCompositionCondition(statement.Cond, visit, snapshot, restore, merge)
+	trueState, falseState := inspectCompositionCondition(statement.Cond, visit, snapshot, restore, merge, packageConstants)
 	var exits []compositionFlowState
 	restore(trueState)
 	ast.Inspect(statement.Body, visit)
@@ -6421,35 +6463,35 @@ func inspectCompositionIf(statement *ast.IfStmt, visit func(ast.Node) bool, snap
 	restore(merge(exits))
 }
 
-func inspectCompositionLogicalExpression(expression *ast.BinaryExpr, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) {
-	trueState, falseState := inspectCompositionCondition(expression, visit, snapshot, restore, merge)
+func inspectCompositionLogicalExpression(expression *ast.BinaryExpr, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState, packageConstants map[string]constant.Value) {
+	trueState, falseState := inspectCompositionCondition(expression, visit, snapshot, restore, merge, packageConstants)
 	restore(merge([]compositionFlowState{trueState, falseState}))
 }
 
-func inspectCompositionCondition(expression ast.Expr, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) (compositionFlowState, compositionFlowState) {
+func inspectCompositionCondition(expression ast.Expr, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState, packageConstants map[string]constant.Value) (compositionFlowState, compositionFlowState) {
 	switch value := expression.(type) {
 	case *ast.ParenExpr:
-		return inspectCompositionCondition(value.X, visit, snapshot, restore, merge)
+		return inspectCompositionCondition(value.X, visit, snapshot, restore, merge, packageConstants)
 	case *ast.UnaryExpr:
 		if value.Op == token.NOT {
-			trueState, falseState := inspectCompositionCondition(value.X, visit, snapshot, restore, merge)
+			trueState, falseState := inspectCompositionCondition(value.X, visit, snapshot, restore, merge, packageConstants)
 			return falseState, trueState
 		}
 	}
 	if logical, ok := expression.(*ast.BinaryExpr); ok && (logical.Op == token.LAND || logical.Op == token.LOR) {
-		leftTrue, leftFalse := inspectCompositionCondition(logical.X, visit, snapshot, restore, merge)
+		leftTrue, leftFalse := inspectCompositionCondition(logical.X, visit, snapshot, restore, merge, packageConstants)
 		if logical.Op == token.LAND {
 			restore(leftTrue)
-			rightTrue, rightFalse := inspectCompositionCondition(logical.Y, visit, snapshot, restore, merge)
+			rightTrue, rightFalse := inspectCompositionCondition(logical.Y, visit, snapshot, restore, merge, packageConstants)
 			return rightTrue, merge([]compositionFlowState{leftFalse, rightFalse})
 		}
 		restore(leftFalse)
-		rightTrue, rightFalse := inspectCompositionCondition(logical.Y, visit, snapshot, restore, merge)
+		rightTrue, rightFalse := inspectCompositionCondition(logical.Y, visit, snapshot, restore, merge, packageConstants)
 		return merge([]compositionFlowState{leftTrue, rightTrue}), rightFalse
 	}
 	ast.Inspect(expression, visit)
 	state := snapshot()
-	if value, constant := constantBooleanExpression(expression); constant {
+	if value, constant := compositionBooleanExpressionInPackage(expression, packageConstants); constant {
 		if value {
 			return state, merge(nil)
 		}
@@ -6552,7 +6594,7 @@ func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, 
 		var matched []compositionFlowState
 		for _, expression := range clause.List {
 			if correlateCaseConditions {
-				trueState, falseState := inspectCompositionCondition(expression, visit, snapshot, restore, merge)
+				trueState, falseState := inspectCompositionCondition(expression, visit, snapshot, restore, merge, packageConstants)
 				if matchingBoolean {
 					matched = append(matched, trueState)
 					restore(falseState)
@@ -7065,11 +7107,11 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 			return false
 		case *ast.BinaryExpr:
 			if value.Op == token.LAND || value.Op == token.LOR {
-				inspectCompositionLogicalExpression(value, visit, snapshot, restore, merge)
+				inspectCompositionLogicalExpression(value, visit, snapshot, restore, merge, types.packageConstants)
 				return false
 			}
 		case *ast.IfStmt:
-			inspectCompositionIf(value, visit, snapshot, restore, merge)
+			inspectCompositionIf(value, visit, snapshot, restore, merge, types.packageConstants)
 			return false
 		case *ast.SwitchStmt:
 			if value.Init != nil {
@@ -7119,7 +7161,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 			}
 			breakTarget := router.pushBreakTarget()
 			if value.Cond != nil {
-				trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+				trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge, types.packageConstants)
 				breakTarget.states = append(breakTarget.states, falseState)
 				restore(trueState)
 			}
@@ -7131,7 +7173,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				ast.Inspect(value.Post, visit)
 			}
 			if value.Cond != nil {
-				trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+				trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge, types.packageConstants)
 				breakTarget.states = append(breakTarget.states, falseState)
 				restore(trueState)
 			}
@@ -7331,11 +7373,11 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 			return false
 		case *ast.BinaryExpr:
 			if value.Op == token.LAND || value.Op == token.LOR {
-				inspectCompositionLogicalExpression(value, visit, snapshot, restore, merge)
+				inspectCompositionLogicalExpression(value, visit, snapshot, restore, merge, types.packageConstants)
 				return false
 			}
 		case *ast.IfStmt:
-			inspectCompositionIf(value, visit, snapshot, restore, merge)
+			inspectCompositionIf(value, visit, snapshot, restore, merge, types.packageConstants)
 			return false
 		case *ast.SwitchStmt:
 			if value.Init != nil {
@@ -7385,7 +7427,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 			}
 			breakTarget := router.pushBreakTarget()
 			if value.Cond != nil {
-				trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+				trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge, types.packageConstants)
 				breakTarget.states = append(breakTarget.states, falseState)
 				restore(trueState)
 			}
@@ -7397,7 +7439,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				ast.Inspect(value.Post, visit)
 			}
 			if value.Cond != nil {
-				trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+				trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge, types.packageConstants)
 				breakTarget.states = append(breakTarget.states, falseState)
 				restore(trueState)
 			}
@@ -8174,7 +8216,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				return false
 			case *ast.BinaryExpr:
 				if value.Op == token.LAND || value.Op == token.LOR {
-					inspectCompositionLogicalExpression(value, visit, snapshot, restore, merge)
+					inspectCompositionLogicalExpression(value, visit, snapshot, restore, merge, types.packageConstants)
 					return false
 				}
 			case *ast.DeferStmt:
@@ -8206,7 +8248,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				inspectCompositionFunctionBody(value.Body, visit, router)
 				return false
 			case *ast.IfStmt:
-				inspectCompositionIf(value, visit, snapshot, restore, merge)
+				inspectCompositionIf(value, visit, snapshot, restore, merge, types.packageConstants)
 				return false
 			case *ast.SwitchStmt:
 				if value.Init != nil {
@@ -8261,7 +8303,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				}
 				var zeroIterationState *compositionFlowState
 				if value.Cond != nil {
-					trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+					trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge, types.packageConstants)
 					zeroIterationState = &falseState
 					restore(trueState)
 				}
@@ -8282,7 +8324,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 						ast.Inspect(value.Post, visit)
 					}
 					if value.Cond != nil {
-						trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+						trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge, types.packageConstants)
 						breakTarget.states = append(breakTarget.states, falseState)
 						restore(trueState)
 					}
@@ -8707,7 +8749,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				return false
 			case *ast.BinaryExpr:
 				if value.Op == token.LAND || value.Op == token.LOR {
-					inspectCompositionLogicalExpression(value, visit, snapshot, restore, merge)
+					inspectCompositionLogicalExpression(value, visit, snapshot, restore, merge, types.packageConstants)
 					return false
 				}
 			case *ast.DeferStmt:
@@ -8739,7 +8781,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				inspectCompositionFunctionBody(value.Body, visit, router)
 				return false
 			case *ast.IfStmt:
-				inspectCompositionIf(value, visit, snapshot, restore, merge)
+				inspectCompositionIf(value, visit, snapshot, restore, merge, types.packageConstants)
 				return false
 			case *ast.SwitchStmt:
 				if value.Init != nil {
@@ -8789,7 +8831,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				}
 				var zeroIterationState *compositionFlowState
 				if value.Cond != nil {
-					trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+					trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge, types.packageConstants)
 					zeroIterationState = &falseState
 					restore(trueState)
 				}
@@ -8809,7 +8851,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 						ast.Inspect(value.Post, visit)
 					}
 					if value.Cond != nil {
-						trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+						trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge, types.packageConstants)
 						breakTarget.states = append(breakTarget.states, falseState)
 						restore(trueState)
 					}
