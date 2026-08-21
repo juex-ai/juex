@@ -41,7 +41,7 @@ _ENVIRONMENT_RULES = (
     ),
     (
         "environment-invalid-config",
-        re.compile(r"(?:provider config not found|invalid (?:local |provider )?config|must contain a YAML mapping)", re.I),
+        re.compile(r"(?:provider config not found|missing live provider config|invalid (?:local |provider )?config|must contain a YAML mapping)", re.I),
         "local validation configuration is missing or invalid",
     ),
 )
