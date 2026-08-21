@@ -405,6 +405,8 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	registry.Register(nil)
 	register := registry.Register
 	register(nil)
+	converted := registrar(registry)
+	converted.Register(nil)
 	routes.Register(nil)
 	tools.RegisterBuiltins(registry, tools.BuiltinOptions{})
 	constructed := tools.NewRegistryWithOptions(tools.RegistryOptions{})
@@ -437,8 +439,8 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"registry.Register", "register", "tools.RegisterBuiltins", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
-	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] || calls[6] != want[6] || calls[7] != want[7] || calls[8] != want[8] || calls[9] != want[9] || calls[10] != want[10] {
+	want := []string{"registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] || calls[6] != want[6] || calls[7] != want[7] || calls[8] != want[8] || calls[9] != want[9] || calls[10] != want[10] || calls[11] != want[11] {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
 }
@@ -1391,6 +1393,9 @@ func assignedToolExpressionType(expressions []ast.Expr, index int, imports map[s
 	}
 	if expression != nil && isToolRegistrationCallableExpression(expression, imports, values, types) {
 		return toolRegistrationCallableType
+	}
+	if call, ok := expression.(*ast.CallExpr); ok && len(call.Args) == 1 && isToolRegistryExpression(call.Args[0], imports, values, types) {
+		return modulePath + "/internal/tools.Registry"
 	}
 	return assignedExpressionType(expressions, index, imports, values, types)
 }
