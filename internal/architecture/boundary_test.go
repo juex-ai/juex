@@ -1848,6 +1848,105 @@ func registerFromChunk(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionTracksAliasingSliceTransforms(t *testing.T) {
+	source := `package app
+import (
+	"slices"
+
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+func cleanupFromClippedAlias(application *App) {
+	resources := make([]closer, 1)
+	alias := slices.Clip(resources)
+	alias[0] = application.manager
+	_ = resources[0].Close()
+}
+func registerFromAppendedAlias(application *App) {
+	registries := make([]registrar, 1, 2)
+	alias := append(registries, nil)
+	alias[0] = application.registry
+	registries[0].Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "slice_transform_aliases.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resources.Close,") {
+		t.Fatalf("cleanup calls = %v, want slices.Clip alias cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registries.Register,") {
+		t.Fatalf("Tool registration calls = %v, want append alias registration", registrationCalls)
+	}
+}
+
+func TestAppCompositionInspectionTracksMapsCollect(t *testing.T) {
+	source := `package app
+import (
+	"maps"
+
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct { registry *tools.Registry }
+type registrar interface { Register(tools.Tool) error }
+func registerFromCollectedValues(application *App) {
+	registries := maps.Collect(maps.All(map[string]registrar{"main": application.registry}))
+	registries["main"].Register(nil)
+}
+func registerFromCollectedKeys(application *App) {
+	registries := maps.Collect(maps.All(map[registrar]struct{}{application.registry: {}}))
+	for registry := range registries {
+		registry.Register(nil)
+	}
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "maps_collect.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	registration := "," + strings.Join(registrationCalls, ",") + ","
+	if !strings.Contains(registration, ",registries.Register,") || !strings.Contains(registration, ",registry.Register,") {
+		t.Fatalf("Tool registration calls = %v, want maps.Collect value and key registration", registrationCalls)
+	}
+}
+
 func TestSliceCollectionSourceArguments(t *testing.T) {
 	tests := []struct {
 		expression string
@@ -4529,8 +4628,15 @@ func returnedReferenceSourceKeys(expressions []ast.Expr, resultIndex int, import
 	if !ok {
 		return nil
 	}
-	callee := calledFunctionKey(call.Fun, imports, values, types)
 	var keys []string
+	if resultIndex == 0 {
+		for _, argument := range referenceAliasingCallArguments(call, imports) {
+			if key := referenceSourceKey(argument); key != "" {
+				keys = append(keys, key)
+			}
+		}
+	}
+	callee := calledFunctionKey(call.Fun, imports, values, types)
 	for parameterIndex, prefixes := range resultParameterPathSummary(callee, resultIndex, types) {
 		for _, argument := range callArgumentsForParameter(call, callee, parameterIndex, imports, types) {
 			root := referenceSourceKey(argument)
@@ -4547,6 +4653,26 @@ func returnedReferenceSourceKeys(expressions []ast.Expr, resultIndex int, import
 		}
 	}
 	return keys
+}
+
+func referenceAliasingCallArguments(call *ast.CallExpr, imports map[string]string) []ast.Expr {
+	if isBuiltinAppend(call) {
+		return call.Args[:1]
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || len(call.Args) == 0 {
+		return nil
+	}
+	qualifier, ok := selector.X.(*ast.Ident)
+	if !ok || imports[qualifier.Name] != "slices" {
+		return nil
+	}
+	switch selector.Sel.Name {
+	case "AppendSeq", "Clip", "Delete", "DeleteFunc", "Compact", "CompactFunc", "Grow", "Insert", "Replace":
+		return call.Args[:1]
+	default:
+		return nil
+	}
 }
 
 func referenceSourceKey(expression ast.Expr) string {
@@ -4594,6 +4720,9 @@ func isReferenceExpression(expression ast.Expr, references map[string]bool, impo
 		return isReferenceTypeExpression(value.Type) || isReferenceTypeName(typeName)
 	case *ast.CallExpr:
 		if identifier, ok := value.Fun.(*ast.Ident); ok && (identifier.Name == "make" || identifier.Name == "new") {
+			return true
+		}
+		if len(referenceAliasingCallArguments(value, imports)) != 0 {
 			return true
 		}
 		return isReferenceTypeName(resolveNamedType(expressionType(value, imports, values, types), types))
@@ -4794,6 +4923,22 @@ func mapsCloneSource(expression ast.Expr, imports map[string]string) (ast.Expr, 
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || selector.Sel.Name != "Clone" {
+		return nil, false
+	}
+	qualifier, ok := selector.X.(*ast.Ident)
+	if !ok || imports[qualifier.Name] != "maps" {
+		return nil, false
+	}
+	return call.Args[0], true
+}
+
+func mapsCollectSource(expression ast.Expr, imports map[string]string) (ast.Expr, bool) {
+	call, ok := expression.(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return nil, false
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "Collect" {
 		return nil, false
 	}
 	qualifier, ok := selector.X.(*ast.Ident)
@@ -5775,6 +5920,10 @@ func isToolRegistryCollectionExpression(expression ast.Expr, imports map[string]
 	if source, ok := mapsCloneSource(expression, imports); ok {
 		return isToolRegistryCollectionExpression(source, imports, values, types)
 	}
+	if source, ok := mapsCollectSource(expression, imports); ok {
+		_, valueType, iterator := iteratorRangeToolTypes(source, imports, values, types)
+		return iterator && valueType == modulePath+"/internal/tools.Registry"
+	}
 	if call, ok := expression.(*ast.CallExpr); ok {
 		for _, argument := range sliceCollectionSourceArguments(call, imports) {
 			if isToolRegistryCollectionExpression(argument, imports, values, types) || isToolRegistryExpression(argument, imports, values, types) {
@@ -5815,6 +5964,10 @@ func isToolRegistryMapKeyCollectionExpression(expression ast.Expr, imports map[s
 	}
 	if source, ok := mapsCloneSource(expression, imports); ok {
 		return isToolRegistryMapKeyCollectionExpression(source, imports, values, types)
+	}
+	if source, ok := mapsCollectSource(expression, imports); ok {
+		keyType, _, iterator := iteratorRangeToolTypes(source, imports, values, types)
+		return iterator && keyType == modulePath+"/internal/tools.Registry"
 	}
 	if parenthesized, ok := expression.(*ast.ParenExpr); ok {
 		return isToolRegistryMapKeyCollectionExpression(parenthesized.X, imports, values, types)
