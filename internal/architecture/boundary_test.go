@@ -3091,6 +3091,23 @@ again:
 	return
 	goto again
 }
+func unselectedSwitchGotoDoesNotRepeatDeferredUse(application *App) {
+	var switchResource closer = &unrelatedCloser{}
+	var switchRegistry registrar = &unrelatedRegistrar{}
+again:
+	defer func() {
+		_ = switchResource.Close()
+		switchRegistry.Register(nil)
+		switchResource = application.manager
+		switchRegistry = application.registry
+	}()
+	switch 0 {
+	case 1:
+		goto again
+	default:
+		return
+	}
+}
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "deferred_closure_state.go")
@@ -3110,7 +3127,7 @@ again:
 		cleanupCalls = append(cleanupCalls, chain)
 	})
 	cleanup := "," + strings.Join(cleanupCalls, ",") + ","
-	if len(cleanupCalls) != 4 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") {
+	if len(cleanupCalls) != 4 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") {
 		t.Fatalf("cleanup calls = %v, want older and repeated deferred cleanup after assignment", cleanupCalls)
 	}
 	var registrationCalls []string
@@ -3118,7 +3135,7 @@ again:
 		registrationCalls = append(registrationCalls, chain)
 	})
 	registration := "," + strings.Join(registrationCalls, ",") + ","
-	if len(registrationCalls) != 4 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") {
+	if len(registrationCalls) != 4 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") {
 		t.Fatalf("Tool registration calls = %v, want older and repeated deferred registration after assignment", registrationCalls)
 	}
 }
@@ -4017,7 +4034,12 @@ type App struct {
 	manager *mcp.Manager
 	registry *tools.Registry
 }
-const true = false
+`
+	shadow := `package app
+const true = alias
+`
+	alias := `package app
+const alias = false
 `
 	source := `package app
 func useShadowedBooleanSwitch(application *App) {
@@ -4031,6 +4053,14 @@ func useShadowedBooleanSwitch(application *App) {
 	dir := t.TempDir()
 	declarationsPath := filepath.Join(dir, "shadowed_switch_boolean_types.go")
 	if err := os.WriteFile(declarationsPath, []byte(declarations), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shadowPath := filepath.Join(dir, "a_shadowed_switch_boolean.go")
+	if err := os.WriteFile(shadowPath, []byte(shadow), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	aliasPath := filepath.Join(dir, "z_shadowed_switch_alias.go")
+	if err := os.WriteFile(aliasPath, []byte(alias), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "shadowed_switch_boolean.go")
@@ -4365,7 +4395,6 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 		}
 		imports := importPaths(parsed)
 		appSources = append(appSources, indexedAppSource{file: parsed, imports: imports})
-		indexAppPackageConstants(parsed, &types)
 		indexCleanupAndConstructors(parsed, modulePath+"/internal/app", imports, &types)
 		for _, declaration := range parsed.Decls {
 			general, ok := declaration.(*ast.GenDecl)
@@ -4408,6 +4437,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 	if !foundApp {
 		return compositionTypeIndex{}, fs.ErrNotExist
 	}
+	indexAppPackageConstantsForSources(appSources, &types)
 	if err := indexConcreteFeatureSources(repositoryRootPath(), &types); err != nil {
 		return compositionTypeIndex{}, err
 	}
@@ -4419,7 +4449,20 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 	return types, nil
 }
 
-func indexAppPackageConstants(file *ast.File, types *compositionTypeIndex) {
+func indexAppPackageConstantsForSources(sources []indexedAppSource, types *compositionTypeIndex) {
+	for {
+		changed := false
+		for _, source := range sources {
+			changed = indexAppPackageConstants(source.file, types) || changed
+		}
+		if !changed {
+			return
+		}
+	}
+}
+
+func indexAppPackageConstants(file *ast.File, types *compositionTypeIndex) bool {
+	changed := false
 	for _, declaration := range file.Decls {
 		general, ok := declaration.(*ast.GenDecl)
 		if !ok || general.Tok != token.CONST {
@@ -4439,12 +4482,17 @@ func indexAppPackageConstants(file *ast.File, types *compositionTypeIndex) {
 				if expression == nil {
 					continue
 				}
-				if value, constantExpression := compositionConstantExpression(expression); constantExpression {
-					types.packageConstants[name.Name] = value
+				if value, constantExpression := compositionConstantExpressionInPackage(expression, types.packageConstants); constantExpression {
+					current, exists := types.packageConstants[name.Name]
+					if !exists || current.Kind() != value.Kind() || current.ExactString() != value.ExactString() {
+						types.packageConstants[name.Name] = value
+						changed = true
+					}
 				}
 			}
 		}
 	}
+	return changed
 }
 
 func indexConcreteFeatureSources(root string, types *compositionTypeIndex) error {
@@ -5653,7 +5701,7 @@ type delayedCompositionCall struct {
 	argumentCallees map[ast.Expr]string
 }
 
-func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]bool {
+func repeatedCompositionDeferredCalls(body *ast.BlockStmt, packageConstants map[string]constant.Value) map[*ast.CallExpr]bool {
 	repeated := make(map[*ast.CallExpr]bool)
 	parents := compositionParentNodes(body)
 	labels := compositionLabelStatements(body)
@@ -5661,7 +5709,7 @@ func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]boo
 		if _, nested := node.(*ast.FuncLit); nested {
 			return false
 		}
-		if statement, ok := node.(*ast.DeferStmt); ok && compositionDeferMayReachBackwardGoto(body, statement, parents, labels) {
+		if statement, ok := node.(*ast.DeferStmt); ok && compositionDeferMayReachBackwardGoto(body, statement, parents, labels, packageConstants) {
 			repeated[statement.Call] = true
 		}
 		return true
@@ -5684,7 +5732,7 @@ func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]boo
 			if _, nested := loopNode.(*ast.FuncLit); nested {
 				return false
 			}
-			if statement, ok := loopNode.(*ast.DeferStmt); ok && compositionDeferMayReachLoopBackEdge(node, loopBody, statement, parents, labels) {
+			if statement, ok := loopNode.(*ast.DeferStmt); ok && compositionDeferMayReachLoopBackEdge(node, loopBody, statement, parents, labels, packageConstants) {
 				repeated[statement.Call] = true
 			}
 			return true
@@ -5694,7 +5742,7 @@ func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]boo
 	return repeated
 }
 
-func compositionDeferMayReachBackwardGoto(body *ast.BlockStmt, target *ast.DeferStmt, parents map[ast.Node]ast.Node, labels map[string]*ast.LabeledStmt) bool {
+func compositionDeferMayReachBackwardGoto(body *ast.BlockStmt, target *ast.DeferStmt, parents map[ast.Node]ast.Node, labels map[string]*ast.LabeledStmt, packageConstants map[string]constant.Value) bool {
 	current := ast.Node(target)
 	for current != nil {
 		parent := parents[current]
@@ -5715,7 +5763,7 @@ func compositionDeferMayReachBackwardGoto(body *ast.BlockStmt, target *ast.Defer
 			statements = statementsAfterCompositionNode(container.Body, current)
 		}
 		if statements != nil {
-			if compositionStatementsGotoBefore(statements, target.Pos(), labels) {
+			if compositionStatementsGotoBefore(statements, target.Pos(), labels, packageConstants) {
 				return true
 			}
 			if !statementsFallThrough(statements) || parent == body {
@@ -5761,7 +5809,7 @@ func compositionParentNodes(root ast.Node) map[ast.Node]ast.Node {
 	return parents
 }
 
-func compositionDeferMayReachLoopBackEdge(loop ast.Node, loopBody *ast.BlockStmt, target *ast.DeferStmt, parents map[ast.Node]ast.Node, labels map[string]*ast.LabeledStmt) bool {
+func compositionDeferMayReachLoopBackEdge(loop ast.Node, loopBody *ast.BlockStmt, target *ast.DeferStmt, parents map[ast.Node]ast.Node, labels map[string]*ast.LabeledStmt, packageConstants map[string]constant.Value) bool {
 	current := ast.Node(target)
 	for current != nil {
 		parent := parents[current]
@@ -5782,7 +5830,7 @@ func compositionDeferMayReachLoopBackEdge(loop ast.Node, loopBody *ast.BlockStmt
 			statements = statementsAfterCompositionNode(container.Body, current)
 		}
 		if statements != nil {
-			if compositionStatementsContinueLoop(statements, loop, parents) || compositionStatementsGotoBefore(statements, target.Pos(), labels) {
+			if compositionStatementsContinueLoop(statements, loop, parents, packageConstants) || compositionStatementsGotoBefore(statements, target.Pos(), labels, packageConstants) {
 				return true
 			}
 			if !statementsFallThrough(statements) {
@@ -5797,14 +5845,14 @@ func compositionDeferMayReachLoopBackEdge(loop ast.Node, loopBody *ast.BlockStmt
 	return false
 }
 
-func compositionStatementsGotoBefore(statements []ast.Stmt, position token.Pos, labels map[string]*ast.LabeledStmt) bool {
+func compositionStatementsGotoBefore(statements []ast.Stmt, position token.Pos, labels map[string]*ast.LabeledStmt, packageConstants map[string]constant.Value) bool {
 	return compositionStatementsContainReachableBranch(statements, func(branch *ast.BranchStmt) bool {
 		if branch.Tok != token.GOTO || branch.Label == nil {
 			return false
 		}
 		target := labels[branch.Label.Name]
 		return target != nil && target.Pos() <= position
-	})
+	}, packageConstants)
 }
 
 func statementsAfterCompositionNode(statements []ast.Stmt, node ast.Node) []ast.Stmt {
@@ -5816,72 +5864,163 @@ func statementsAfterCompositionNode(statements []ast.Stmt, node ast.Node) []ast.
 	return nil
 }
 
-func compositionStatementsContinueLoop(statements []ast.Stmt, loop ast.Node, parents map[ast.Node]ast.Node) bool {
+func compositionStatementsContinueLoop(statements []ast.Stmt, loop ast.Node, parents map[ast.Node]ast.Node, packageConstants map[string]constant.Value) bool {
 	return compositionStatementsContainReachableBranch(statements, func(branch *ast.BranchStmt) bool {
 		return branch.Tok == token.CONTINUE && compositionContinueTargetsLoop(branch, loop, parents)
-	})
+	}, packageConstants)
 }
 
-func compositionStatementsContainReachableBranch(statements []ast.Stmt, matches func(*ast.BranchStmt) bool) bool {
+func compositionStatementsContainReachableBranch(statements []ast.Stmt, matches func(*ast.BranchStmt) bool, packageConstants map[string]constant.Value) bool {
 	for _, statement := range statements {
-		if compositionStatementContainsReachableBranch(statement, matches) {
+		if compositionStatementContainsReachableBranch(statement, matches, packageConstants) {
 			return true
 		}
-		if !statementFallsThrough(statement) {
+		if !compositionStatementFallsThrough(statement, packageConstants) {
 			return false
 		}
 	}
 	return false
 }
 
-func compositionStatementContainsReachableBranch(statement ast.Stmt, matches func(*ast.BranchStmt) bool) bool {
+func compositionStatementContainsReachableBranch(statement ast.Stmt, matches func(*ast.BranchStmt) bool, packageConstants map[string]constant.Value) bool {
 	switch value := statement.(type) {
 	case *ast.BranchStmt:
 		return matches(value)
 	case *ast.BlockStmt:
-		return compositionStatementsContainReachableBranch(value.List, matches)
+		return compositionStatementsContainReachableBranch(value.List, matches, packageConstants)
 	case *ast.LabeledStmt:
-		return compositionStatementContainsReachableBranch(value.Stmt, matches)
+		return compositionStatementContainsReachableBranch(value.Stmt, matches, packageConstants)
 	case *ast.IfStmt:
-		if condition, known := constantBooleanExpression(value.Cond); known {
+		if condition, known := compositionBooleanExpressionInPackage(value.Cond, packageConstants); known {
 			if condition {
-				return compositionStatementsContainReachableBranch(value.Body.List, matches)
+				return compositionStatementsContainReachableBranch(value.Body.List, matches, packageConstants)
 			}
 			if value.Else != nil {
-				return compositionStatementContainsReachableBranch(value.Else, matches)
+				return compositionStatementContainsReachableBranch(value.Else, matches, packageConstants)
 			}
 			return false
 		}
-		return compositionStatementsContainReachableBranch(value.Body.List, matches) || value.Else != nil && compositionStatementContainsReachableBranch(value.Else, matches)
+		return compositionStatementsContainReachableBranch(value.Body.List, matches, packageConstants) || value.Else != nil && compositionStatementContainsReachableBranch(value.Else, matches, packageConstants)
 	case *ast.ForStmt:
 		if value.Cond != nil {
-			if condition, known := constantBooleanExpression(value.Cond); known && !condition {
+			if condition, known := compositionBooleanExpressionInPackage(value.Cond, packageConstants); known && !condition {
 				return false
 			}
 		}
-		return compositionStatementsContainReachableBranch(value.Body.List, matches)
+		return compositionStatementsContainReachableBranch(value.Body.List, matches, packageConstants)
 	case *ast.RangeStmt:
-		return compositionStatementsContainReachableBranch(value.Body.List, matches)
+		return compositionStatementsContainReachableBranch(value.Body.List, matches, packageConstants)
 	case *ast.SwitchStmt:
-		for _, raw := range value.Body.List {
-			if compositionStatementsContainReachableBranch(raw.(*ast.CaseClause).Body, matches) {
+		for _, clause := range compositionSelectableSwitchClauses(value, packageConstants) {
+			if compositionStatementsContainReachableBranch(clause.Body, matches, packageConstants) {
 				return true
 			}
 		}
 	case *ast.TypeSwitchStmt:
 		for _, raw := range value.Body.List {
-			if compositionStatementsContainReachableBranch(raw.(*ast.CaseClause).Body, matches) {
+			if compositionStatementsContainReachableBranch(raw.(*ast.CaseClause).Body, matches, packageConstants) {
 				return true
 			}
 		}
 	case *ast.SelectStmt:
 		for _, raw := range value.Body.List {
-			if compositionStatementsContainReachableBranch(raw.(*ast.CommClause).Body, matches) {
+			if compositionStatementsContainReachableBranch(raw.(*ast.CommClause).Body, matches, packageConstants) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func compositionStatementFallsThrough(statement ast.Stmt, packageConstants map[string]constant.Value) bool {
+	switch value := statement.(type) {
+	case *ast.BlockStmt:
+		return compositionStatementsFallThrough(value.List, packageConstants)
+	case *ast.LabeledStmt:
+		return compositionStatementFallsThrough(value.Stmt, packageConstants)
+	case *ast.IfStmt:
+		if condition, known := compositionBooleanExpressionInPackage(value.Cond, packageConstants); known {
+			if condition {
+				return compositionStatementsFallThrough(value.Body.List, packageConstants)
+			}
+			return value.Else == nil || compositionStatementFallsThrough(value.Else, packageConstants)
+		}
+		return value.Else == nil || compositionStatementsFallThrough(value.Body.List, packageConstants) || compositionStatementFallsThrough(value.Else, packageConstants)
+	case *ast.SwitchStmt:
+		clauses, known := compositionSelectedSwitchClauses(value, packageConstants)
+		if !known || len(clauses) == 0 {
+			return true
+		}
+		for _, clause := range clauses {
+			if compositionStatementsFallThrough(clause.Body, packageConstants) {
+				return true
+			}
+		}
+		return false
+	default:
+		return statementFallsThrough(statement)
+	}
+}
+
+func compositionStatementsFallThrough(statements []ast.Stmt, packageConstants map[string]constant.Value) bool {
+	for _, statement := range statements {
+		if !compositionStatementFallsThrough(statement, packageConstants) {
+			return false
+		}
+	}
+	return true
+}
+
+func compositionSelectableSwitchClauses(statement *ast.SwitchStmt, packageConstants map[string]constant.Value) []*ast.CaseClause {
+	if selected, known := compositionSelectedSwitchClauses(statement, packageConstants); known {
+		return selected
+	}
+	clauses := make([]*ast.CaseClause, 0, len(statement.Body.List))
+	for _, raw := range statement.Body.List {
+		clauses = append(clauses, raw.(*ast.CaseClause))
+	}
+	return clauses
+}
+
+func compositionSelectedSwitchClauses(statement *ast.SwitchStmt, packageConstants map[string]constant.Value) ([]*ast.CaseClause, bool) {
+	var tag constant.Value
+	var known bool
+	if statement.Tag == nil {
+		tag, known = constant.MakeBool(true), true
+	} else {
+		tag, known = compositionConstantExpressionInPackage(statement.Tag, packageConstants)
+	}
+	if !known {
+		return nil, false
+	}
+	var defaultClause *ast.CaseClause
+	for _, raw := range statement.Body.List {
+		clause := raw.(*ast.CaseClause)
+		if len(clause.List) == 0 {
+			defaultClause = clause
+			continue
+		}
+		for _, expression := range clause.List {
+			caseValue, constantCase := compositionConstantExpressionInPackage(expression, packageConstants)
+			if !constantCase {
+				return nil, false
+			}
+			if compositionConstantsEqual(tag, caseValue) {
+				return []*ast.CaseClause{clause}, true
+			}
+		}
+	}
+	if defaultClause != nil {
+		return []*ast.CaseClause{defaultClause}, true
+	}
+	return nil, true
+}
+
+func compositionBooleanExpressionInPackage(expression ast.Expr, packageConstants map[string]constant.Value) (bool, bool) {
+	if value, ok := compositionConstantExpressionInPackage(expression, packageConstants); ok && value.Kind() == constant.Bool {
+		return constant.BoolVal(value), true
+	}
+	return constantBooleanExpression(expression)
 }
 
 func compositionContinueTargetsLoop(branch *ast.BranchStmt, loop ast.Node, parents map[ast.Node]ast.Node) bool {
@@ -7910,7 +8049,7 @@ func hasCompositionBackEdge(body *ast.BlockStmt) bool {
 func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types compositionTypeIndex, report func(*ast.CallExpr, string)) {
 	for _, function := range appCompositionScopes(file) {
 		functionKey := declaredFunctionKey(function, imports, modulePath+"/internal/app")
-		repeatedDeferredCalls := repeatedCompositionDeferredCalls(function.Body)
+		repeatedDeferredCalls := repeatedCompositionDeferredCalls(function.Body, types.packageConstants)
 		values, resources := packageBindingState(file, imports, types)
 		for name, typeName := range namedValueTypes(function.Recv, imports) {
 			values[name] = typeName
@@ -8450,7 +8589,7 @@ func isReceiverOwnedFeatureCleanup(function *ast.FuncDecl, call *ast.CallExpr, i
 func inspectAppToolRegistration(file *ast.File, imports map[string]string, types compositionTypeIndex, report func(*ast.CallExpr, string)) {
 	for _, function := range appCompositionScopes(file) {
 		functionKey := declaredFunctionKey(function, imports, modulePath+"/internal/app")
-		repeatedDeferredCalls := repeatedCompositionDeferredCalls(function.Body)
+		repeatedDeferredCalls := repeatedCompositionDeferredCalls(function.Body, types.packageConstants)
 		values, _ := packageBindingState(file, imports, types)
 		for name, typeName := range namedValueTypes(function.Recv, imports) {
 			values[name] = typeName
