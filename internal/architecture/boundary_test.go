@@ -318,14 +318,21 @@ type registrar interface { Register(tools.Tool) error }
 type App struct {
 	resource closer
 	registry registrar
+	literalResource closer
+	literalRegistry registrar
 }
 func (application *App) bind(manager *mcp.Manager, registry *tools.Registry) {
 	application.resource = manager
 	application.registry = registry
 }
+func newApp(manager *mcp.Manager, registry *tools.Registry) *App {
+	return &App{literalResource: manager, literalRegistry: registry}
+}
 func (application *App) bypass() {
 	_ = application.resource.Close()
 	application.registry.Register(nil)
+	_ = application.literalResource.Close()
+	application.literalRegistry.Register(nil)
 }
 `
 	dir := t.TempDir()
@@ -345,14 +352,14 @@ func (application *App) bypass() {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if len(cleanupCalls) != 1 || cleanupCalls[0] != "application.resource.Close" {
+	if len(cleanupCalls) != 2 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" {
 		t.Fatalf("cleanup calls = %v, want receiver field cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if len(registrationCalls) != 1 || registrationCalls[0] != "application.registry.Register" {
+	if len(registrationCalls) != 2 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" {
 		t.Fatalf("Tool registration calls = %v, want receiver field registration", registrationCalls)
 	}
 }
@@ -10005,15 +10012,8 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 		beforeValues := cloneStringMap(types.appFieldValues)
 		beforeResources := cloneCleanupResourceMap(types.appFieldResources)
 		for _, source := range sources {
-			for _, declaration := range source.file.Decls {
-				function, ok := declaration.(*ast.FuncDecl)
-				if !ok || function.Body == nil {
-					continue
-				}
+			for _, function := range appCompositionScopes(source.file) {
 				receivers := appReceiverBindingKeys(function.Recv, source.imports)
-				if len(receivers) == 0 {
-					continue
-				}
 				values := cloneStringMap(types.packageValues)
 				resources := cloneCleanupResourceMap(types.packageResources)
 				for name, typeName := range namedValueTypes(function.Recv, source.imports) {
@@ -10058,6 +10058,8 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 								}
 							}
 						}
+					case *ast.CompositeLit:
+						indexAppCompositeLiteralFields(statement, source.imports, values, resources, types)
 					}
 					return true
 				})
@@ -10065,6 +10067,36 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 		}
 		if equalStringMap(types.appFieldValues, beforeValues) && equalCleanupResourceMap(types.appFieldResources, beforeResources) {
 			return
+		}
+	}
+}
+
+func indexAppCompositeLiteralFields(literal *ast.CompositeLit, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types *compositionTypeIndex) {
+	typeName := canonicalType(literal.Type, imports)
+	if typeName != modulePath+"/internal/app.App" {
+		return
+	}
+	fieldOrder := types.fieldOrder[typeName]
+	for index, raw := range literal.Elts {
+		field := ""
+		expression := raw
+		if pair, ok := raw.(*ast.KeyValueExpr); ok {
+			name, ok := pair.Key.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			field = name.Name
+			expression = pair.Value
+		} else if index < len(fieldOrder) && !strings.HasPrefix(fieldOrder[index], embeddedPrefix) {
+			field = fieldOrder[index]
+		}
+		if field == "" {
+			continue
+		}
+		fieldType := assignedToolExpressionType([]ast.Expr{expression}, 0, imports, values, *types)
+		setMayValueType(types.appFieldValues, field, fieldType, *types)
+		if paths := cleanupPathsForExpression(expression, imports, values, resources, *types); paths != nil {
+			types.appFieldResources[field] = mergeCleanupPaths(types.appFieldResources[field], paths)
 		}
 	}
 }
