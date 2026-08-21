@@ -2294,6 +2294,102 @@ func cleanupFromCollectedIterator(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionTracksPackageInitializers(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+var manager = &mcp.Manager{}
+var registry = tools.NewRegistry()
+var _ = manager.Close()
+var _ = registry.Register(nil)
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "package_initializers.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",manager.Close,") {
+		t.Fatalf("cleanup calls = %v, want package initializer cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registry.Register,") {
+		t.Fatalf("Tool registration calls = %v, want package initializer registration", registrationCalls)
+	}
+}
+
+func TestAppCompositionInspectionConvergesBackwardGotos(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+func useBackwardGoto(application *App) {
+	var resource closer
+	var registry registrar
+again:
+	_ = resource.Close()
+	registry.Register(nil)
+	resource = application.manager
+	registry = application.registry
+	goto again
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "backward_goto.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resource.Close,") {
+		t.Fatalf("cleanup calls = %v, want backward goto cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registry.Register,") {
+		t.Fatalf("Tool registration calls = %v, want backward goto registration", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionTracksReferenceRangeValues(t *testing.T) {
 	source := `package app
 import (
@@ -4362,12 +4458,57 @@ func isFeatureCleanupMethodName(name string) bool {
 	}
 }
 
-func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types compositionTypeIndex, report func(*ast.CallExpr, string)) {
+func appCompositionScopes(file *ast.File) []*ast.FuncDecl {
+	packageScope := &ast.FuncDecl{
+		Name: ast.NewIdent("$package"),
+		Type: &ast.FuncType{Params: &ast.FieldList{}},
+		Body: &ast.BlockStmt{},
+	}
+	var functions []*ast.FuncDecl
 	for _, declaration := range file.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if !ok || function.Body == nil {
-			continue
+		switch value := declaration.(type) {
+		case *ast.FuncDecl:
+			if value.Body != nil {
+				functions = append(functions, value)
+			}
+		case *ast.GenDecl:
+			if value.Tok == token.VAR {
+				packageScope.Body.List = append(packageScope.Body.List, &ast.DeclStmt{Decl: value})
+			}
 		}
+	}
+	if len(packageScope.Body.List) != 0 {
+		functions = append([]*ast.FuncDecl{packageScope}, functions...)
+	}
+	return functions
+}
+
+func hasBackwardGoto(body *ast.BlockStmt) bool {
+	labels := make(map[string]token.Pos)
+	ast.Inspect(body, func(node ast.Node) bool {
+		if statement, ok := node.(*ast.LabeledStmt); ok {
+			labels[statement.Label.Name] = statement.Pos()
+		}
+		return true
+	})
+	backward := false
+	ast.Inspect(body, func(node ast.Node) bool {
+		statement, ok := node.(*ast.BranchStmt)
+		labelPosition, knownLabel := token.NoPos, false
+		if ok && statement.Label != nil {
+			labelPosition, knownLabel = labels[statement.Label.Name]
+		}
+		if ok && statement.Tok == token.GOTO && knownLabel && labelPosition < statement.Pos() {
+			backward = true
+			return false
+		}
+		return !backward
+	})
+	return backward
+}
+
+func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types compositionTypeIndex, report func(*ast.CallExpr, string)) {
+	for _, function := range appCompositionScopes(file) {
 		functionKey := declaredFunctionKey(function, imports, modulePath+"/internal/app")
 		values, resources := packageBindingState(file, imports, types)
 		for name, typeName := range namedValueTypes(function.Recv, imports) {
@@ -4618,7 +4759,17 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			}
 			return true
 		}
-		ast.Inspect(function.Body, visit)
+		backwardGoto := hasBackwardGoto(function.Body)
+		for {
+			beforeValues := cloneStringMap(values)
+			beforeResources := cloneCleanupResourceMap(resources)
+			beforeReferences := cloneBoolMap(references)
+			beforeAliases := cloneCleanupResourceMap(aliases)
+			ast.Inspect(function.Body, visit)
+			if !backwardGoto || equalStringMap(values, beforeValues) && equalCleanupResourceMap(resources, beforeResources) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
+				break
+			}
+		}
 	}
 }
 
@@ -4659,11 +4810,7 @@ func isReceiverOwnedFeatureCleanup(function *ast.FuncDecl, call *ast.CallExpr, i
 }
 
 func inspectAppToolRegistration(file *ast.File, imports map[string]string, types compositionTypeIndex, report func(*ast.CallExpr, string)) {
-	for _, declaration := range file.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if !ok || function.Body == nil {
-			continue
-		}
+	for _, function := range appCompositionScopes(file) {
 		functionKey := declaredFunctionKey(function, imports, modulePath+"/internal/app")
 		values, _ := packageBindingState(file, imports, types)
 		for name, typeName := range namedValueTypes(function.Recv, imports) {
@@ -4875,7 +5022,16 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			}
 			return true
 		}
-		ast.Inspect(function.Body, visit)
+		backwardGoto := hasBackwardGoto(function.Body)
+		for {
+			beforeValues := cloneStringMap(values)
+			beforeReferences := cloneBoolMap(references)
+			beforeAliases := cloneCleanupResourceMap(aliases)
+			ast.Inspect(function.Body, visit)
+			if !backwardGoto || equalStringMap(values, beforeValues) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
+				break
+			}
+		}
 	}
 }
 
