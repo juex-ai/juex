@@ -142,7 +142,9 @@ def verification_steps(args: argparse.Namespace) -> list[VerificationStep]:
                 environment={"JUEX_PROVIDER_CONFIG": args.config},
             )
         )
-        steps.append(VerificationStep("provider-model-smoke", final_provider_smoke_command(args)))
+        steps.append(
+            VerificationStep("provider-model-smoke", final_provider_smoke_command(args), test_environment=True)
+        )
         if args.compaction:
             steps.append(VerificationStep("compaction-eval", final_compaction_command(args)))
         return steps
@@ -423,7 +425,13 @@ def development_steps(args: argparse.Namespace, report_dir: pathlib.Path) -> tup
     steps = candidate_steps
 
     if not args.no_provider_smoke:
-        steps.append(VerificationStep("provider-model-smoke", provider_smoke_development_command(args, provider_report_dir)))
+        steps.append(
+            VerificationStep(
+                "provider-model-smoke",
+                provider_smoke_development_command(args, provider_report_dir),
+                test_environment=True,
+            )
+        )
     if compaction_report_dir is not None:
         steps.append(VerificationStep("compaction-eval", compaction_development_command(args, compaction_report_dir)))
     return steps, provider_report_dir, str(compaction_report_dir or "")

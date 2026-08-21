@@ -836,6 +836,7 @@ func TestEvalDevelopmentStepBuilderUsesConsistentFlags(t *testing.T) {
 		"    compaction_only=['openai:model', 'ark:other'],",
 		")",
 		"steps, _, _ = cli.development_steps(args, Path('reports'))",
+		"assert next(step.test_environment for step in steps if step.label == 'provider-model-smoke')",
 		"print(json.dumps([{'label': step.label, 'command': step.command} for step in steps]))",
 	}, "\n")
 	out := runUV(t, root, "python", "-c", program)
@@ -1134,23 +1135,25 @@ func TestEvalVerifyFinalExtendsCandidateWithConditionalLiveGates(t *testing.T) {
 		"from tests.eval.juex_eval import cli",
 		"def plan(compaction):",
 		"    args = Namespace(tier='final', race=False, web=False, compaction=compaction, config='/tmp/provider config.yaml', selection_seed='repeatable', run_id='unit', provider_timeout=7)",
-		"    return [{'label': step.label, 'command': step.command, 'environment': step.environment} for step in cli.verification_steps(args)]",
+		"    return [{'label': step.label, 'command': step.command, 'environment': step.environment, 'test_environment': step.test_environment} for step in cli.verification_steps(args)]",
 		"print(json.dumps({'default': plan(False), 'compaction': plan(True)}))",
 	}, "\n")
 	out := runUV(t, root, "python", "-c", program)
 
 	var plans map[string][]struct {
-		Label       string            `json:"label"`
-		Command     []string          `json:"command"`
-		Environment map[string]string `json:"environment"`
+		Label           string            `json:"label"`
+		Command         []string          `json:"command"`
+		Environment     map[string]string `json:"environment"`
+		TestEnvironment bool              `json:"test_environment"`
 	}
 	if err := json.Unmarshal([]byte(out), &plans); err != nil {
 		t.Fatalf("decode plans: %v\n%s", err, out)
 	}
 	labels := func(steps []struct {
-		Label       string            `json:"label"`
-		Command     []string          `json:"command"`
-		Environment map[string]string `json:"environment"`
+		Label           string            `json:"label"`
+		Command         []string          `json:"command"`
+		Environment     map[string]string `json:"environment"`
+		TestEnvironment bool              `json:"test_environment"`
 	}) []string {
 		out := make([]string, 0, len(steps))
 		for _, step := range steps {
@@ -1171,6 +1174,9 @@ func TestEvalVerifyFinalExtendsCandidateWithConditionalLiveGates(t *testing.T) {
 		t.Fatalf("integration provider config = %q", got)
 	}
 	provider := plans["default"][4].Command
+	if !plans["default"][4].TestEnvironment {
+		t.Fatal("provider smoke must inherit the provisioned ripgrep PATH")
+	}
 	assertCommandFlagValue(t, provider, "--juex", "./dist/juex")
 	assertCommandFlagValue(t, provider, "--config", "/tmp/provider config.yaml")
 	assertCommandFlagValue(t, provider, "--selection-seed", "repeatable")
