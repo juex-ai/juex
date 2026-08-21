@@ -2573,22 +2573,26 @@ Compaction summary input keeps readable reasoning summaries when providers
 expose them, but encrypted/redacted reasoning payloads are represented only as
 small metadata placeholders; those blobs are replay material for compatible
 providers, not useful content for the summary model.
-If a successful summary response contains no text, the runtime retries that
-provider once with up to twice the summary output budget and rebuilds the
-bounded summary request. The retry budget is capped so the fixed summary prompt
-and requested output remain within the compaction trigger budget. If the retry
-still has no summary, or the retry fails, an independently configured summary
-provider falls back once to the active provider. Compaction fails only after
-those bounded recovery steps are exhausted; generic provider failures are not
-treated as empty-summary retries. A canceled or expired parent context stops
-before fallback and does not emit a misleading fallback event. Manual and
-automatic compaction share the active Turn cancellation boundary. Cancellation
-reports `Compaction canceled` and returns before the compact marker append, so
-future active context is unchanged. The active-operation lock linearizes Web
-cancellation against marker commit; a standalone compaction retires its cancel
-function at a successful commit and publishes completion before observational
-post-compact hooks. Successful response attempts remain included in session
-token usage.
+Compaction summary candidates are the optional dedicated `summary_model`, then
+the effective primary and every configured `fallback_models` entry, in order
+and deduplicated by ref. Selection shares the runtime model-health state, so a
+candidate in cooldown or reserved for another half-open probe is skipped. Each
+actual attempt refits the bounded summary request to that candidate's context
+window and checkpoints a fresh Request Epoch. Generic provider failures advance
+directly through the chain. The first candidate anywhere in the chain that
+returns no text or a max-token-truncated summary receives one semantic retry
+with up to twice its summary output budget; the retry budget remains capped so
+the fixed prompt and requested output fit the compaction trigger budget. The
+runtime fails compaction only after the available chain and that bounded retry
+are exhausted, without adding a provider-visible `model_change` message.
+A canceled or expired parent context stops before fallback and does not emit a
+misleading fallback event. Manual and automatic compaction share the active Turn
+cancellation boundary. Cancellation reports `Compaction canceled` and returns
+before the compact marker append, so future active context is unchanged. The
+active-operation lock linearizes Web cancellation against marker commit; a
+standalone compaction retires its cancel function at a successful commit and
+publishes completion before observational post-compact hooks. Successful
+response attempts remain included in session token usage.
 The runtime also maintains model-owned Markdown in the session-local
 `notes.md`. The model rewrites the entire document through the `update_notes`
 tool; there is deliberately no `get_notes` tool. The store validates UTF-8 and
@@ -2652,8 +2656,14 @@ Notes items. Configured `compaction.instructions`, per-request instructions,
 and successful `PreCompact` stdout are merged in that order.
 Successful compaction records summary-call token usage and updates the session
 context usage snapshot to the estimated active context after the compact marker.
-`context.compact.summary_retry` records the empty-summary retry, stop reason,
-reasoning-only classification, and previous and increased output budgets.
+`context.compact.summary_retry` records the first incomplete candidate's one
+semantic retry, stop reason, reasoning-only classification, previous and
+increased output budgets, and failed Request Epoch link.
+`context.compact.summary_model_fallback` records every attempted-candidate
+transition with the failed ref, next selected ref (or empty when exhausted),
+error, and failed Request Epoch link. Model-health cooldown and half-open skips
+reuse `llm.fallback` diagnostics and never add a conversation `model_change`
+message during compaction.
 OpenAI-compatible providers receive a stable `prompt_cache_key` per session
 when called through `CompleteWithOptions`; Anthropic providers add ephemeral
 `cache_control` breakpoints to stable system/tool sections. Provider-reported
