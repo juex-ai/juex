@@ -4139,6 +4139,49 @@ func useShadowedBooleanCondition(application *App) {
 	if len(registrationCalls) != 2 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.registry.Register" {
 		t.Fatalf("Tool registration calls = %v, want reachable shadowed-boolean registration", registrationCalls)
 	}
+
+	variableDir := t.TempDir()
+	for name, content := range map[string]string{
+		"types.go":  declarations,
+		"shadow.go": "package app\nvar true bool\n",
+		"use.go": `package app
+func useVariableShadowedBoolean(application *App) {
+	if true {
+		return
+	} else {
+		_ = application.manager.Close()
+		application.registry.Register(nil)
+	}
+}
+`,
+	} {
+		if err := os.WriteFile(filepath.Join(variableDir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	variableTypes, err := appCompositionTypes(variableDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	variablePath := filepath.Join(variableDir, "use.go")
+	variableParsed, err := parser.ParseFile(token.NewFileSet(), variablePath, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupCalls = nil
+	inspectAppFeatureCleanup(variableParsed, importPaths(variableParsed), variableTypes, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 1 || cleanupCalls[0] != "application.manager.Close" {
+		t.Fatalf("cleanup calls = %v, want reachable package-variable-shadowed cleanup", cleanupCalls)
+	}
+	registrationCalls = nil
+	inspectAppToolRegistration(variableParsed, importPaths(variableParsed), variableTypes, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 1 || registrationCalls[0] != "application.registry.Register" {
+		t.Fatalf("Tool registration calls = %v, want reachable package-variable-shadowed registration", registrationCalls)
+	}
 }
 
 func TestAppCompositionInspectionBindsTypeSwitchGuardTypes(t *testing.T) {
@@ -4488,6 +4531,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 		return compositionTypeIndex{}, fs.ErrNotExist
 	}
 	indexAppPackageConstantsForSources(appSources, &types)
+	indexAppPackageValueShadows(appSources, &types)
 	if err := indexConcreteFeatureSources(repositoryRootPath(), &types); err != nil {
 		return compositionTypeIndex{}, err
 	}
@@ -4507,6 +4551,24 @@ func indexAppPackageConstantsForSources(sources []indexedAppSource, types *compo
 		}
 		if !changed {
 			return
+		}
+	}
+}
+
+func indexAppPackageValueShadows(sources []indexedAppSource, types *compositionTypeIndex) {
+	for _, source := range sources {
+		for _, declaration := range source.file.Decls {
+			general, ok := declaration.(*ast.GenDecl)
+			if !ok || general.Tok != token.VAR {
+				continue
+			}
+			for _, raw := range general.Specs {
+				for _, name := range raw.(*ast.ValueSpec).Names {
+					if name.Name == "true" || name.Name == "false" {
+						types.packageConstants[name.Name] = constant.MakeUnknown()
+					}
+				}
+			}
 		}
 	}
 }
@@ -6010,24 +6072,26 @@ func compositionStatementFallsThrough(statement ast.Stmt, packageConstants map[s
 			return true
 		}
 		lastClause := clauses[len(clauses)-1]
-		return compositionStatementsEndWithSwitchBreak(lastClause.Body) || compositionStatementsFallThrough(lastClause.Body, packageConstants)
+		return compositionSwitchClauseBreaksToExit(value, lastClause, packageConstants) || compositionStatementsFallThrough(lastClause.Body, packageConstants)
 	default:
 		return statementFallsThrough(statement)
 	}
 }
 
-func compositionStatementsEndWithSwitchBreak(statements []ast.Stmt) bool {
-	if len(statements) == 0 {
+func compositionSwitchClauseBreaksToExit(statement *ast.SwitchStmt, clause *ast.CaseClause, packageConstants map[string]constant.Value) bool {
+	parents := compositionParentNodes(statement)
+	return compositionStatementsContainReachableBranch(clause.Body, func(branch *ast.BranchStmt) bool {
+		if branch.Tok != token.BREAK || branch.Label != nil {
+			return false
+		}
+		for current := parents[branch]; current != nil; current = parents[current] {
+			switch current.(type) {
+			case *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+				return current == statement
+			}
+		}
 		return false
-	}
-	switch statement := statements[len(statements)-1].(type) {
-	case *ast.BranchStmt:
-		return statement.Tok == token.BREAK && statement.Label == nil
-	case *ast.BlockStmt:
-		return compositionStatementsEndWithSwitchBreak(statement.List)
-	default:
-		return false
-	}
+	}, packageConstants)
 }
 
 func compositionStatementsFallThrough(statements []ast.Stmt, packageConstants map[string]constant.Value) bool {
@@ -6097,6 +6161,11 @@ func compositionSwitchFallthroughChain(rawClauses []ast.Stmt, start int) []*ast.
 }
 
 func compositionBooleanExpressionInPackage(expression ast.Expr, packageConstants map[string]constant.Value) (bool, bool) {
+	if identifier, ok := expression.(*ast.Ident); ok && identifier.Obj == nil {
+		if value, shadowed := packageConstants[identifier.Name]; shadowed && value.Kind() == constant.Unknown {
+			return false, false
+		}
+	}
 	if value, ok := compositionConstantExpressionInPackage(expression, packageConstants); ok && value.Kind() == constant.Bool {
 		return constant.BoolVal(value), true
 	}
@@ -6660,6 +6729,9 @@ func switchCaseMode(statement *ast.SwitchStmt, packageConstants map[string]const
 	}
 	if identifier, ok := statement.Tag.(*ast.Ident); ok && identifier.Obj == nil {
 		if value, exists := packageConstants[identifier.Name]; exists {
+			if value.Kind() == constant.Unknown {
+				return false, false, nil
+			}
 			return false, false, value
 		}
 	}
@@ -6688,6 +6760,9 @@ func compositionConstantExpressionWithSeen(expression ast.Expr, packageConstants
 	case *ast.Ident:
 		if value.Obj == nil {
 			if result, ok := packageConstants[value.Name]; ok {
+				if result.Kind() == constant.Unknown {
+					return nil, false
+				}
 				return result, true
 			}
 			switch value.Name {
