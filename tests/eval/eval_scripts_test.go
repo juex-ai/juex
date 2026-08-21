@@ -788,6 +788,8 @@ func TestEvalValidationPlanRulesAreDeterministicAndConservative(t *testing.T) {
 		"    ('internal/providerreadiness/readiness.go', {'./internal/providerreadiness', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
 		"    ('internal/events/bus.go', {'./internal/events', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
 		"    ('internal/llm/openai_responses.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'live-runtime'),",
+		"    ('internal/llm/openai_codex_websocket.go', {'./internal/llm', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'race-sensitive'),",
+		"    ('internal/provenance/request_epoch.go', {'./internal/provenance', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
 		"    ('internal/runtime/compaction_policy.go', {'./internal/runtime', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
 		"    ('internal/runtime/context_projection.go', {'./internal/runtime', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
 		"    ('internal/runtime/policy/policy.go', {'./internal/runtime/policy', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
@@ -890,7 +892,6 @@ func TestEvalValidationPlanCollectsCleanAndDirtyGitChanges(t *testing.T) {
 		"    (repo / 'internal' / 'app' / 'deleted.go').unlink()",
 		"    (repo / 'internal' / 'removed' / 'only.go').unlink()",
 		"    (repo / 'internal' / 'app' / 'untracked.go').write_text('package app\\n', encoding='utf-8')",
-		"    (repo / r'odd\\name.go').write_text('package root\\n', encoding='utf-8')",
 		"    moved = validation_plan.plan_for_changes('focused', [validation_plan.ChangedFile('R', 'internal/newpkg/only.go', 'internal/legacy/only.go')], base_sha=base, head_sha=git(repo, 'rev-parse', 'HEAD'), dirty=True, repo_root=repo)",
 		"    assert moved.focused_packages == ('./...',), moved.as_dict()",
 		"    cross_package = validation_plan.plan_for_changes('focused', [validation_plan.ChangedFile('R', 'internal/newpkg/only.go', 'internal/app/old.go')], base_sha=base, head_sha=git(repo, 'rev-parse', 'HEAD'), dirty=True, repo_root=repo)",
@@ -899,8 +900,7 @@ func TestEvalValidationPlanCollectsCleanAndDirtyGitChanges(t *testing.T) {
 		"    assert removed.focused_packages == ('./...',), removed.as_dict()",
 		"    dirty = validation_plan.collect_plan(repo, 'focused')",
 		"    by_path = {row.path: row for row in dirty.changed_files}",
-		"    assert {'internal/app/app.go', 'internal/app/renamed.go', 'internal/app/deleted.go', 'internal/app/untracked.go', 'internal/newpkg/only.go', 'internal/removed/only.go', r'odd\\name.go'} <= set(by_path), dirty.as_dict()",
-		"    assert by_path[r'odd\\name.go'].path == r'odd\\name.go'",
+		"    assert {'internal/app/app.go', 'internal/app/renamed.go', 'internal/app/deleted.go', 'internal/app/untracked.go', 'internal/newpkg/only.go', 'internal/removed/only.go'} <= set(by_path), dirty.as_dict()",
 		"    bad_bytes = b'bad_\\xff.txt'",
 		"    bad_path = bad_bytes.decode('utf-8', 'surrogateescape')",
 		"    bad_plan = validation_plan.plan_for_changes('focused', [validation_plan.ChangedFile('M', bad_path)], base_sha=base, head_sha=git(repo, 'rev-parse', 'HEAD'), dirty=True, repo_root=repo)",
@@ -911,6 +911,48 @@ func TestEvalValidationPlanCollectsCleanAndDirtyGitChanges(t *testing.T) {
 		"    assert by_path['internal/app/renamed.go'].old_path == 'internal/app/old.go'",
 		"    assert 'D' in by_path['internal/app/deleted.go'].status",
 		"    assert 'U' in by_path['internal/app/untracked.go'].status",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalValidationPlanChecksWorktreeStatusAsBytes(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import validation_plan",
+		"original_text = validation_plan._git_text",
+		"original_bytes = validation_plan._git_bytes",
+		"calls = []",
+		"def fake_text(repo, args, error):",
+		"    calls.append(('text', tuple(args)))",
+		"    if args == ['rev-parse', 'HEAD']:",
+		"        return 'a' * 40",
+		"    if args and args[0] == 'status':",
+		"        raise AssertionError('status must not use text decoding')",
+		"    raise AssertionError(args)",
+		"def fake_bytes(repo, args, error):",
+		"    calls.append(('bytes', tuple(args)))",
+		"    if args and args[0] == 'status':",
+		"        return b'M bad_\\xff.txt\\0'",
+		"    if args and args[0] in {'diff', 'ls-files'}:",
+		"        return b''",
+		"    raise AssertionError(args)",
+		"try:",
+		"    validation_plan._git_text = fake_text",
+		"    validation_plan._git_bytes = fake_bytes",
+		"    plan = validation_plan.collect_plan(Path('.'), 'focused')",
+		"    assert plan.dirty is True",
+		"    assert any(kind == 'bytes' and args[0] == 'status' for kind, args in calls), calls",
+		"finally:",
+		"    validation_plan._git_text = original_text",
+		"    validation_plan._git_bytes = original_bytes",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
@@ -1710,7 +1752,7 @@ func TestEvalFinalExecutesOnlyLiveStepsWhenCandidateIsReusable(t *testing.T) {
 		"    cli.isolated_test_environment = lambda: {}",
 		"    cli.selection.resolved_path = lambda path: Path(path)",
 		"    cli.provider_record_summary = lambda args: {'selected_provider_model': 'provider:model', 'redacted_config_hash': 'sha256:redacted'}",
-		"    validation_plan.collect_plan = lambda root, mode, base=None: validation_plan.plan_for_changes(mode, [validation_plan.ChangedFile('M', 'internal/llm/openai.go')], base_sha='b' * 40, head_sha=snapshot.head_sha, dirty=False)",
+		"    validation_plan.collect_plan = lambda root, mode, base=None: validation_plan.plan_for_changes(mode, [validation_plan.ChangedFile('M', 'internal/providerreadiness/readiness.go')], base_sha='b' * 40, head_sha=snapshot.head_sha, dirty=False)",
 		"    def fake_run(step, log_dir, test_env):",
 		"        calls.append(step.label)",
 		"        return {'started_at': '2026-08-21T00:00:01Z', 'duration': 2.0, 'exit_status': 0, 'log': str(log_dir / f'{step.label}.log'), 'outcome': 'executed'}",

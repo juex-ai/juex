@@ -137,6 +137,7 @@ CROSS_BOUNDARY_PREFIXES = (
     "internal/llm/",
     "internal/mcp/",
     "internal/observable/",
+    "internal/provenance/",
     "internal/providerreadiness/",
     "internal/runtime/",
     "internal/sandbox/",
@@ -154,6 +155,7 @@ RACE_PREFIXES = (
     "internal/fleet/",
     "internal/fleetweb/",
     "internal/homestore/",
+    "internal/llm/",
     "internal/mcp/",
     "internal/observable/",
     "internal/runtime/",
@@ -399,7 +401,13 @@ def with_cli_overrides(
 def collect_plan(repo_root: pathlib.Path, mode: str, *, base: str | None = None) -> ValidationPlan:
     repo_root = repo_root.resolve()
     head_sha = _git_text(repo_root, ["rev-parse", "HEAD"], "git rev-parse HEAD failed")
-    dirty = bool(_git_text(repo_root, ["status", "--porcelain", "--untracked-files=all"], "git status failed"))
+    dirty = bool(
+        _git_bytes(
+            repo_root,
+            ["status", "--porcelain", "--untracked-files=all", "-z"],
+            "git status failed",
+        )
+    )
     if mode in {"candidate", "final"}:
         if dirty:
             raise ValueError(f"{mode} validation plan requires a clean worktree")
