@@ -1000,11 +1000,11 @@ func TestEvalVerificationTiersConsumeOneValidationPlan(t *testing.T) {
 		"final = Namespace(tier='final', race=False, web=False, compaction=False, config='/tmp/provider.yaml', selection_seed='seed', run_id='unit', provider_timeout=7)",
 		"cli.apply_validation_plan(final, plan)",
 		"final_steps = cli.verification_steps(final)",
-		"assert [step.label for step in final_steps] == ['web-stub', 'go-test-all-race', 'web-check', 'make-build-go', 'live-integration', 'provider-model-smoke', 'compaction-eval']",
+		"assert [step.label for step in final_steps] == ['web-stub', 'go-test-all-race', 'web-check', 'make-build-go', 'integration-contracts', 'live-integration', 'provider-model-smoke', 'compaction-eval']",
 		"docs_plan = validation_plan.plan_for_changes('final', [validation_plan.ChangedFile('M', 'docs/guide.md')], base_sha='a' * 40, head_sha='b' * 40, dirty=False)",
 		"docs_final = Namespace(tier='final', race=False, web=False, compaction=False, config='/tmp/provider.yaml', selection_seed='seed', run_id='unit', provider_timeout=7)",
 		"cli.apply_validation_plan(docs_final, docs_plan)",
-		"assert [step.label for step in cli.verification_steps(docs_final)] == ['web-stub', 'go-test-all', 'make-build', 'live-integration', 'provider-model-smoke']",
+		"assert [step.label for step in cli.verification_steps(docs_final)] == ['web-stub', 'go-test-all', 'make-build', 'integration-contracts', 'live-integration', 'provider-model-smoke']",
 		"forced_final = Namespace(tier='final', race=False, web=False, compaction=True)",
 		"forced_plan = cli.plan_with_cli_overrides(forced_final, docs_plan)",
 		"assert set(forced_plan.final_flags) == {'compaction', 'integration', 'provider-smoke'}",
@@ -1397,7 +1397,7 @@ func TestEvalVerifyFinalExtendsCandidateWithConditionalLiveGates(t *testing.T) {
 		"from tests.eval.juex_eval import cli",
 		"def plan(compaction):",
 		"    args = Namespace(tier='final', race=False, web=False, compaction=compaction, config='/tmp/provider config.yaml', selection_seed='repeatable', run_id='unit', provider_timeout=7)",
-		"    return [{'label': step.label, 'command': step.command, 'environment': step.environment, 'test_environment': step.test_environment} for step in cli.verification_steps(args)]",
+		"    return [{'label': step.label, 'command': step.command, 'environment': step.environment, 'test_environment': step.test_environment, 'retry_transient': step.retry_transient} for step in cli.verification_steps(args)]",
 		"print(json.dumps({'default': plan(False), 'compaction': plan(True)}))",
 	}, "\n")
 	out := runUV(t, root, "python", "-c", program)
@@ -1407,6 +1407,7 @@ func TestEvalVerifyFinalExtendsCandidateWithConditionalLiveGates(t *testing.T) {
 		Command         []string          `json:"command"`
 		Environment     map[string]string `json:"environment"`
 		TestEnvironment bool              `json:"test_environment"`
+		RetryTransient  bool              `json:"retry_transient"`
 	}
 	if err := json.Unmarshal([]byte(out), &plans); err != nil {
 		t.Fatalf("decode plans: %v\n%s", err, out)
@@ -1416,6 +1417,7 @@ func TestEvalVerifyFinalExtendsCandidateWithConditionalLiveGates(t *testing.T) {
 		Command         []string          `json:"command"`
 		Environment     map[string]string `json:"environment"`
 		TestEnvironment bool              `json:"test_environment"`
+		RetryTransient  bool              `json:"retry_transient"`
 	}) []string {
 		out := make([]string, 0, len(steps))
 		for _, step := range steps {
@@ -1423,20 +1425,23 @@ func TestEvalVerifyFinalExtendsCandidateWithConditionalLiveGates(t *testing.T) {
 		}
 		return out
 	}
-	if got := labels(plans["default"]); !reflect.DeepEqual(got, []string{"web-stub", "go-test-all", "make-build", "live-integration", "provider-model-smoke"}) {
+	if got := labels(plans["default"]); !reflect.DeepEqual(got, []string{"web-stub", "go-test-all", "make-build", "integration-contracts", "live-integration", "provider-model-smoke"}) {
 		t.Fatalf("default labels = %q", got)
 	}
-	if got := labels(plans["compaction"]); !reflect.DeepEqual(got, []string{"web-stub", "go-test-all", "make-build", "live-integration", "provider-model-smoke", "compaction-eval"}) {
+	if got := labels(plans["compaction"]); !reflect.DeepEqual(got, []string{"web-stub", "go-test-all", "make-build", "integration-contracts", "live-integration", "provider-model-smoke", "compaction-eval"}) {
 		t.Fatalf("compaction labels = %q", got)
 	}
-	if !reflect.DeepEqual(plans["default"][3].Command, []string{"make", "integration"}) {
-		t.Fatalf("integration command = %q", plans["default"][3].Command)
+	if !reflect.DeepEqual(plans["default"][3].Command, []string{"make", "integration-contracts"}) || plans["default"][3].RetryTransient {
+		t.Fatalf("integration contracts = %+v", plans["default"][3])
 	}
-	if got := plans["default"][3].Environment["JUEX_PROVIDER_CONFIG"]; got != "/tmp/provider config.yaml" {
+	if !reflect.DeepEqual(plans["default"][4].Command, []string{"make", "integration-live"}) || !plans["default"][4].RetryTransient {
+		t.Fatalf("live integration = %+v", plans["default"][4])
+	}
+	if got := plans["default"][4].Environment["JUEX_PROVIDER_CONFIG"]; got != "/tmp/provider config.yaml" {
 		t.Fatalf("integration provider config = %q", got)
 	}
-	provider := plans["default"][4].Command
-	if !plans["default"][4].TestEnvironment {
+	provider := plans["default"][5].Command
+	if !plans["default"][5].TestEnvironment {
 		t.Fatal("provider smoke must inherit the provisioned ripgrep PATH")
 	}
 	assertCommandFlagValue(t, provider, "--juex", "./dist/juex")
@@ -1444,7 +1449,7 @@ func TestEvalVerifyFinalExtendsCandidateWithConditionalLiveGates(t *testing.T) {
 	assertCommandFlagValue(t, provider, "--selection-seed", "repeatable")
 	assertCommandFlagValue(t, provider, "--run-id", "unit")
 	assertCommandFlagValue(t, provider, "--timeout", "7")
-	compaction := plans["compaction"][5].Command
+	compaction := plans["compaction"][6].Command
 	assertCommandFlagValue(t, compaction, "--juex", "./dist/juex")
 	assertCommandFlagValue(t, compaction, "--config", "/tmp/provider config.yaml")
 	assertCommandFlagValue(t, compaction, "--selection-seed", "repeatable")
@@ -2035,13 +2040,13 @@ func TestEvalFinalExecutesOnlyLiveStepsWhenCandidateIsReusable(t *testing.T) {
 		"    with tempfile.TemporaryDirectory() as tmp:",
 		"        args = Namespace(tier='final', run_id='final-unit', report_dir=tmp, race=False, web=False, compaction=False, config='/tmp/config.yaml', selection_seed='seed', provider_timeout=7)",
 		"        assert cli.run_verify(args) == 0",
-		"        assert calls == ['live-integration', 'provider-model-smoke'], calls",
+		"        assert calls == ['integration-contracts', 'live-integration', 'provider-model-smoke'], calls",
 		"        report_dir, record = records[-1]",
 		"        assert report_dir == Path(tmp) / 'development-validation' / snapshot.head_sha / 'final-unit', report_dir",
 		"        assert record['reused'] == ['web-stub', 'go-test-all', 'make-build'], record",
 		"        assert record['executed'] == calls and record['status'] == 'pass', record",
-		"        assert [row['execution_state'] for row in record['steps']] == ['reused', 'reused', 'reused', 'executed', 'executed'], record['steps']",
-		"        assert [row['outcome'] for row in record['steps']] == ['passed'] * 5 and record['blocks_merge'] is False, record",
+		"        assert [row['execution_state'] for row in record['steps']] == ['reused', 'reused', 'reused', 'executed', 'executed', 'executed'], record['steps']",
+		"        assert [row['outcome'] for row in record['steps']] == ['passed'] * 6 and record['blocks_merge'] is False, record",
 		"finally:",
 		"    cli.require_clean_worktree = original_clean",
 		"    verification.repository_snapshot = original_snapshot",

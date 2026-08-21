@@ -239,8 +239,15 @@ def verification_steps(args: argparse.Namespace) -> list[VerificationStep]:
         if getattr(args, "live_integration", True):
             steps.append(
                 VerificationStep(
+                    "integration-contracts",
+                    ["make", "integration-contracts"],
+                    test_environment=True,
+                )
+            )
+            steps.append(
+                VerificationStep(
                     "live-integration",
-                    ["make", "integration"],
+                    ["make", "integration-live"],
                     environment={"JUEX_PROVIDER_CONFIG": args.config},
                     retry_transient=True,
                 )

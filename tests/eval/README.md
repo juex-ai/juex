@@ -74,8 +74,10 @@ Go-only `build-go` target instead of rebuilding the frontend.
 looks for a passing candidate record with the same SHA, record schema,
 candidate-plan fingerprint, and stable toolchain/environment fingerprint. When
 one exists, final reuses its successful deterministic, build, web, and race
-steps, then always runs live integration and provider smoke. The plan adds the
-optional compaction gate. It never reuses live results. A missing or
+steps, then always runs build-tagged deterministic integration contracts
+without retries, followed by retry-eligible live integration and provider
+smoke. The plan adds the optional compaction gate. It never reuses final-only
+results. A missing or
 incompatible candidate makes final execute the complete plan and records the
 exact invalidation reason. Set
 `COMPACTION=1` only when compaction, context projection, provider replay, or
@@ -309,7 +311,9 @@ the original URI, user information, path, or query. A second opaque profile
 identity covers effective capabilities, compat, headers, and query settings.
 Unknown provider/model fields remain in the isolated config so Juex's strict
 loader rejects the same invalid source shape instead of silently normalizing it.
-Malformed provider/model container types and missing IDs fail selection as
+Missing, unreadable, or malformed local provider configuration fails as
+`environment_failure` with action `fix_environment`. A well-formed config with
+missing provider/model IDs or no eligible provider fails as
 `provider_unavailable` before any live request.
 
 ## Compaction Quality

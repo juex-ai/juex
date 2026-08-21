@@ -819,7 +819,8 @@ steps. Reports live under
 passing candidate's deterministic/build prefix only when the record schema,
 SHA, plan, and stable environment fingerprints all match; the stable inputs
 include effective Go settings, the build's Git description, and the resolved
-ripgrep binary. Final always runs live integration and provider smoke; the plan
+ripgrep binary. Final always runs the build-tagged deterministic integration
+contracts without retries, then live integration and provider smoke; the plan
 adds compaction when required. `RACE=1`
 replaces the ordinary deterministic suite, `WEB=1` adds the frontend gate
 without rebuilding it during the binary build, and `COMPACTION=1` adds the
@@ -836,10 +837,12 @@ tool state cannot affect deterministic results. Fresh-checkout ripgrep
 provisioning redirects its bootstrap Go telemetry to a disposable path, and
 mise runtime discovery keeps installations available while redirecting mise
 state/cache writes.
-`make integration` uses the same writable-state isolation but resolves
+`make integration` composes `integration-contracts` and `integration-live`.
+The first runs build-tagged deterministic e2e contracts without credentials;
+the second uses the same writable-state isolation but resolves
 `JUEX_PROVIDER_CONFIG` and `CODEX_HOME` from the original native user home
 (`HOME` on Unix, `USERPROFILE` on Windows) first and passes those paths to the
-live tests as read-only inputs.
+credential-backed tests as read-only inputs.
 
 The frontend lives in `frontend/`; `make build` runs the frontend build,
 copies it into `internal/web/dist`, and embeds it into `dist/juex`. `make
