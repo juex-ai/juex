@@ -3315,6 +3315,160 @@ func useMergedSwitchState(application *App, choice int) {
 	}
 }
 
+func TestAppCompositionInspectionRespectsLogicalShortCircuiting(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func assignCleanup(current *closer, next closer) bool { *current = next; return true }
+func assignRegistration(current *registrar, next registrar) bool { *current = next; return true }
+func skippedLogicalOperands(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	if true || func() bool {
+		resource = application.manager
+		registry = application.registry
+		return true
+	}() {}
+	_ = resource.Close()
+	registry.Register(nil)
+}
+func evaluatedLogicalOperands(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	if false || func() bool {
+		resource = application.manager
+		registry = application.registry
+		return true
+	}() {}
+	_ = resource.Close()
+	registry.Register(nil)
+}
+func cleanupAfterSkippedLogical(current, next closer) {
+	if true || assignCleanup(&current, next) {}
+	_ = current.Close()
+}
+func registerAfterSkippedLogical(current, next registrar) {
+	if true || assignRegistration(&current, next) {}
+	current.Register(nil)
+}
+func useLogicalHelpers(application *App) {
+	cleanupAfterSkippedLogical(&unrelatedCloser{}, application.manager)
+	registerAfterSkippedLogical(&unrelatedRegistrar{}, application.registry)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "logical_short_circuit.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	resourceCalls := 0
+	for _, call := range cleanupCalls {
+		if call == "resource.Close" {
+			resourceCalls++
+		}
+	}
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; resourceCalls != 1 || strings.Contains(cleanup, ",cleanupAfterSkippedLogical,") {
+		t.Fatalf("cleanup calls = %v, want only evaluated logical operand cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	registryCalls := 0
+	for _, call := range registrationCalls {
+		if call == "registry.Register" {
+			registryCalls++
+		}
+	}
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; registryCalls != 1 || strings.Contains(registration, ",registerAfterSkippedLogical,") {
+		t.Fatalf("Tool registration calls = %v, want only evaluated logical operand registration", registrationCalls)
+	}
+}
+
+func TestAppCompositionInspectionEvaluatesSelectOperandsOnce(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func selectOperandEvaluatedOnce(application *App, output chan<- bool, ready <-chan struct{}) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	select {
+	case output <- func() bool {
+		_ = resource.Close()
+		registry.Register(nil)
+		resource = application.manager
+		registry = application.registry
+		return true
+	}():
+	case <-ready:
+	}
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "select_operands_once.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 0 {
+		t.Fatalf("cleanup calls = %v, want select operand evaluated once", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 0 {
+		t.Fatalf("Tool registration calls = %v, want select operand evaluated once", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionBindsTypeSwitchGuardTypes(t *testing.T) {
 	source := `package app
 import (
@@ -5202,6 +5356,60 @@ func inspectCompositionIf(statement *ast.IfStmt, visit func(ast.Node) bool, snap
 	restore(merge(exits))
 }
 
+func inspectCompositionLogicalExpression(expression *ast.BinaryExpr, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) {
+	ast.Inspect(expression.X, visit)
+	leftState := snapshot()
+	if value, constant := constantBooleanExpression(expression.X); constant {
+		if (expression.Op == token.LAND && !value) || (expression.Op == token.LOR && value) {
+			return
+		}
+		ast.Inspect(expression.Y, visit)
+		return
+	}
+	ast.Inspect(expression.Y, visit)
+	rightState := snapshot()
+	restore(merge([]compositionFlowState{leftState, rightState}))
+}
+
+func constantBooleanExpression(expression ast.Expr) (bool, bool) {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		switch value.Name {
+		case "true":
+			return true, true
+		case "false":
+			return false, true
+		}
+	case *ast.ParenExpr:
+		return constantBooleanExpression(value.X)
+	case *ast.UnaryExpr:
+		if value.Op == token.NOT {
+			result, constant := constantBooleanExpression(value.X)
+			return !result, constant
+		}
+	case *ast.BinaryExpr:
+		left, leftConstant := constantBooleanExpression(value.X)
+		right, rightConstant := constantBooleanExpression(value.Y)
+		switch value.Op {
+		case token.LAND:
+			if (leftConstant && !left) || (rightConstant && !right) {
+				return false, true
+			}
+			if leftConstant && left {
+				return right, rightConstant
+			}
+		case token.LOR:
+			if (leftConstant && left) || (rightConstant && right) {
+				return true, true
+			}
+			if leftConstant && !left {
+				return right, rightConstant
+			}
+		}
+	}
+	return false, false
+}
+
 func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, allowFallthrough bool, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState, enterClause func(*ast.CaseClause)) {
 	base := snapshot()
 	selectedEntries := make(map[*ast.CaseClause]compositionFlowState)
@@ -5315,7 +5523,7 @@ func inspectCompositionCommClauses(body *ast.BlockStmt, visit func(ast.Node) boo
 		clause := raw.(*ast.CommClause)
 		restore(base)
 		if clause.Comm != nil {
-			ast.Inspect(clause.Comm, visit)
+			visit(clause.Comm)
 		}
 		for _, statement := range clause.Body {
 			ast.Inspect(statement, visit)
@@ -5487,6 +5695,11 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 			}
 			router.routeReturn()
 			return false
+		case *ast.BinaryExpr:
+			if value.Op == token.LAND || value.Op == token.LOR {
+				inspectCompositionLogicalExpression(value, visit, snapshot, restore, merge)
+				return false
+			}
 		case *ast.IfStmt:
 			inspectCompositionIf(value, visit, snapshot, restore, merge)
 			return false
@@ -5734,6 +5947,11 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 			}
 			router.routeReturn()
 			return false
+		case *ast.BinaryExpr:
+			if value.Op == token.LAND || value.Op == token.LOR {
+				inspectCompositionLogicalExpression(value, visit, snapshot, restore, merge)
+				return false
+			}
 		case *ast.IfStmt:
 			inspectCompositionIf(value, visit, snapshot, restore, merge)
 			return false
@@ -6557,6 +6775,11 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				}
 				router.routeReturn()
 				return false
+			case *ast.BinaryExpr:
+				if value.Op == token.LAND || value.Op == token.LOR {
+					inspectCompositionLogicalExpression(value, visit, snapshot, restore, merge)
+					return false
+				}
 			case *ast.DeferStmt:
 				if !deferredSeen[value.Call] {
 					deferredSeen[value.Call] = true
@@ -7048,6 +7271,11 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				}
 				router.routeReturn()
 				return false
+			case *ast.BinaryExpr:
+				if value.Op == token.LAND || value.Op == token.LOR {
+					inspectCompositionLogicalExpression(value, visit, snapshot, restore, merge)
+					return false
+				}
 			case *ast.DeferStmt:
 				if !deferredSeen[value.Call] {
 					deferredSeen[value.Call] = true
