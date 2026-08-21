@@ -15,12 +15,12 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/sandbox"
-	"github.com/juex-ai/juex/internal/session"
 )
 
 type runtimeStatusResponse struct {
 	StartTime    string              `json:"start_time"`
 	WorkDir      string              `json:"work_dir"`
+	Modules      []runtimeModuleInfo `json:"modules"`
 	Provider     providerStatus      `json:"provider"`
 	Shell        config.ShellProfile `json:"shell"`
 	Sandbox      sandbox.Policy      `json:"sandbox"`
@@ -30,6 +30,11 @@ type runtimeStatusResponse struct {
 	MCP          mcpStatus           `json:"mcp"`
 	Hooks        hooksStatus         `json:"hooks"`
 	Skills       skillsStatus        `json:"skills"`
+}
+
+type runtimeModuleInfo struct {
+	ID    string `json:"id"`
+	Scope string `json:"scope"`
 }
 
 type extensionsStatus struct {
@@ -253,7 +258,10 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	if err := s.ensureMCPStarted(context.Background()); err != nil {
 		return runtimeStatusResponse{}, err
 	}
-	scratchpadDir, err := s.runtimeScratchpadDir()
+	active, err := s.getCurrentActiveSession(context.Background())
+	if errors.Is(err, os.ErrNotExist) {
+		active, err = s.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	}
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
@@ -261,13 +269,17 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
-	status, err := app.NewRuntimeCatalogService(s.opts.Cfg).Snapshot(app.RuntimeStatusOptions{
-		MCPToolDescriptors: s.mcpToolDescriptors(),
-		MCPErrors:          s.mcpErrors(),
-		MCPConnectionSpecs: s.mcpConnectionSpecs(),
-		SkillCache:         s.runtimeSkills,
-		ScratchpadDir:      scratchpadDir,
-		AgentRuntime:       &agentRuntime,
+	var status app.RuntimeStatus
+	err = active.app.ReadRuntimeModuleSnapshot(func(snapshot app.RuntimeModuleSnapshot) error {
+		var snapshotErr error
+		status, snapshotErr = app.NewRuntimeCatalogService(s.opts.Cfg).Snapshot(app.RuntimeStatusOptions{
+			ActiveModules:      &snapshot,
+			MCPToolDescriptors: s.mcpToolDescriptors(),
+			MCPErrors:          s.mcpErrors(),
+			MCPConnectionSpecs: s.mcpConnectionSpecs(),
+			AgentRuntime:       &agentRuntime,
+		})
+		return snapshotErr
 	})
 	if err != nil {
 		return runtimeStatusResponse{}, err
@@ -277,30 +289,10 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	return response, nil
 }
 
-func (s *Server) runtimeScratchpadDir() (string, error) {
-	id, ok, err := s.activePrimarySessionID()
-	if err != nil || !ok {
-		return "", err
-	}
-	if active, exists := s.sessions.Load(id); exists {
-		var scratchpadDir string
-		err := active.(*activeSession).app.ReadSessionID(id, func(sess *session.Session) error {
-			scratchpadDir = sess.ScratchpadDir()
-			return nil
-		})
-		if err == nil {
-			return scratchpadDir, nil
-		}
-		if !errors.Is(err, app.ErrSessionChanged) && !errors.Is(err, app.ErrSessionUnavailable) {
-			return "", err
-		}
-	}
-	return session.ScratchpadDir(filepath.Join(s.opts.Cfg.SessionsDir(), id)), nil
-}
-
 func runtimeStatusResponseFromApp(status app.RuntimeStatus) runtimeStatusResponse {
 	return runtimeStatusResponse{
 		WorkDir:      status.WorkDir,
+		Modules:      runtimeModulesFromApp(status.Modules),
 		Provider:     providerStatusFromApp(status.Provider),
 		Shell:        status.Shell,
 		Sandbox:      status.Sandbox,
@@ -311,6 +303,14 @@ func runtimeStatusResponseFromApp(status app.RuntimeStatus) runtimeStatusRespons
 		Hooks:        hooksStatusFromApp(status.Hooks),
 		Skills:       skillsStatusFromApp(status.Skills),
 	}
+}
+
+func runtimeModulesFromApp(modules []app.RuntimeModuleStatus) []runtimeModuleInfo {
+	items := make([]runtimeModuleInfo, 0, len(modules))
+	for _, module := range modules {
+		items = append(items, runtimeModuleInfo{ID: module.ID, Scope: module.Scope})
+	}
+	return items
 }
 
 func extensionsStatusFromApp(status app.RuntimeExtensionsStatus) extensionsStatus {

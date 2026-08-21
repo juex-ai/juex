@@ -14,56 +14,83 @@ import (
 const ModuleID runtimemodule.ID = "mcp"
 
 type Module struct {
-	manager     *Manager
-	descriptors map[string][]ToolDescriptor
+	mu      sync.RWMutex
+	manager *Manager
+	configs []Config
+	options ConnectOptions
+	owned   bool
 }
 
 func NewModule(manager *Manager) *Module { return &Module{manager: manager} }
 
-// NewDescriptorModule builds the same Tool catalog without live clients. It is
-// used by read-only status projections that already have discovered descriptors.
-func NewDescriptorModule(descriptors map[string][]ToolDescriptor) *Module {
-	cloned := make(map[string][]ToolDescriptor, len(descriptors))
-	for serverName, tools := range descriptors {
-		cloned[serverName] = append([]ToolDescriptor(nil), tools...)
+// NewRuntimeModule defers MCP connection and discovery until the Module
+// lifecycle starts. Disabled factories therefore perform no process or
+// network work during composition.
+func NewRuntimeModule(configs []Config, options ConnectOptions) *Module {
+	return &Module{
+		configs: append([]Config(nil), configs...),
+		options: options,
+		owned:   true,
 	}
-	return &Module{descriptors: cloned}
 }
 
 func (*Module) ID() runtimemodule.ID { return ModuleID }
 
 func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
-	if m == nil || m.manager == nil {
-		if m == nil {
-			return nil, nil
-		}
-		return descriptorTools(m.descriptors)
+	if m == nil {
+		return nil, nil
 	}
-	return m.manager.Tools()
+	m.mu.RLock()
+	manager := m.manager
+	owned := m.owned
+	m.mu.RUnlock()
+	if manager == nil {
+		if owned {
+			return nil, fmt.Errorf("mcp module has not started")
+		}
+		return nil, nil
+	}
+	return manager.Tools()
 }
 
-func descriptorTools(descriptors map[string][]ToolDescriptor) ([]tools.Tool, error) {
-	serverNames := make([]string, 0, len(descriptors))
-	for serverName := range descriptors {
-		serverNames = append(serverNames, serverName)
+func (m *Module) StartRuntime(ctx context.Context, _ runtimemodule.RuntimeContext) error {
+	if m == nil || !m.owned {
+		return nil
 	}
-	sort.Strings(serverNames)
-	var provided []tools.Tool
-	for _, serverName := range serverNames {
-		if err := validateToolNameServer(serverName); err != nil {
-			return nil, &ServerError{Server: serverName, Op: "tool name", Err: err}
-		}
-		for _, descriptor := range descriptors[serverName] {
-			if err := validateToolNameParts(serverName, descriptor.Name); err != nil {
-				return nil, &ServerError{Server: serverName, Op: "tool name", Err: err}
-			}
-			toolName := ToolName(serverName, descriptor.Name)
-			provided = append(provided, toolDefinition(toolName, descriptor).Bind(func(context.Context, map[string]any) (string, error) {
-				return "", fmt.Errorf("mcp: descriptor-only tool %q is not executable", toolName)
-			}))
-		}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.manager != nil {
+		return nil
 	}
-	return provided, nil
+	manager, err := NewManagerLayeredSoft(ctx, m.configs, m.options)
+	if err != nil {
+		return err
+	}
+	m.manager = manager
+	return nil
+}
+
+func (m *Module) QuiesceRuntime(context.Context) error { return m.closeOwned() }
+
+func (m *Module) CloseRuntime(context.Context) error { return m.closeOwned() }
+
+func (m *Module) Manager() *Manager {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.manager
+}
+
+func (m *Module) closeOwned() error {
+	if m == nil || !m.owned {
+		return nil
+	}
+	m.mu.RLock()
+	manager := m.manager
+	m.mu.RUnlock()
+	return manager.Close()
 }
 
 // Manager owns process-scoped MCP client connections and can expose their

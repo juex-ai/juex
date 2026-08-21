@@ -128,6 +128,7 @@ type App struct {
 	skills                 []skills.Skill
 	skillPrompt            skills.PromptBudgetReport
 	skillFiltered          int
+	skillFilteredItems     []skills.FilteredSkill
 	mcp                    MCPStatus
 	obsv                   *observable.Manager
 	chunkedWrites          *tools.ChunkedWriteManager
@@ -227,6 +228,9 @@ func New(opts Options) (*App, error) {
 	}
 	if cfg.AgentStateDir == "" && cfg.AgentAddress.StateDir() != "" {
 		cfg.AgentStateDir = cfg.AgentAddress.StateDir()
+	}
+	if err := ValidateModuleConfig(cfg); err != nil {
+		return nil, err
 	}
 	runtimePaths := cfg.RuntimePaths()
 	runtimeLimits := cfg.RuntimeLimits()
@@ -340,7 +344,7 @@ func New(opts Options) (*App, error) {
 
 	var mcpConfigs []mcp.Config
 	var mergedMCP mcp.Config
-	if !opts.DisableMCP && opts.MCPManager == nil {
+	if cfg.ModuleEnabled(string(mcp.ModuleID)) && !opts.DisableMCP && opts.MCPManager == nil {
 		var err error
 		mcpConfigs, mergedMCP, _, err = loadMCPConfigRefsForRuntime(resourceGraph.MCPConfigs(), runtimePaths.WorkDir, runtimeEnvironment)
 		if err != nil {
@@ -418,12 +422,15 @@ func New(opts Options) (*App, error) {
 			return runtimemodule.CollectContext(appCtx, request, runtimeModules.set, activeSessionModules)
 		},
 	}
-	hookRunner, err := hooks.NewRunnerWithOptions(resourceGraph.HooksConfig(), hooks.RunnerOptions{
-		Environment: runtimeEnvironment,
-	})
-	if err != nil {
-		closeSessionResources()
-		return nil, err
+	var hookRunner hooks.PolicyRunner
+	if cfg.ModuleEnabled(string(hooks.ModuleID)) {
+		hookRunner, err = hooks.NewRunnerWithOptions(resourceGraph.HooksConfig(), hooks.RunnerOptions{
+			Environment: runtimeEnvironment,
+		})
+		if err != nil {
+			closeSessionResources()
+			return nil, err
+		}
 	}
 	hookBaseRequest := hooks.Request{
 		CWD:            runtimePaths.WorkDir,
@@ -474,11 +481,7 @@ func New(opts Options) (*App, error) {
 		cancel:                 appCancel,
 		cfg:                    cfg,
 		stderr:                 stderr,
-		skills:                 runtimeModules.skills.All(),
-		skillPrompt:            runtimeModules.skills.PromptReport(),
-		skillFiltered:          len(runtimeModules.skills.Filtered()),
 		chunkedWrites:          chunkedWrites,
-		shellSessions:          runtimeModules.builtinTools.ShellSessions(),
 		sessionLock:            sessLock,
 		sessionResource:        sess,
 		eventSink:              eventSink,
@@ -502,46 +505,17 @@ func New(opts Options) (*App, error) {
 		completeTurn: a.CompleteAdmittedTurn,
 	})
 	a.statusUnsubscribe = statusUnsubscribe
-	if sess.Kind == session.KindPrimary && sess.Active && !opts.disableSideSessionTools {
-		a.sideSessions = newSideSessionManager(a)
-	}
 	if err := a.attachObservability(sess); err != nil {
 		closeSessionResources()
 		return nil, err
 	}
-	obsv := opts.sharedObservables
-	ownedObservables := false
-	if obsv == nil && !opts.disableObservables {
-		obsv, err = observable.NewManager(observable.ManagerOptions{
-			ConfigPath:            cfg.ObservablesConfigPath(),
-			ReadOnlyConfigSources: observableReadOnlyConfigSources(resourceGraph.ObservableConfigs()),
-			StateDir:              cfg.ObservablesStateDir(),
-			WorkDir:               runtimePaths.WorkDir,
-			AgentStateDir:         runtimePaths.StateDir,
-			ArtifactDir:           runtimePaths.ArtifactDir,
-			Environment:           runtimeEnvironment,
-			Shell:                 cfg.Shell,
-			Sandbox:               cfg.SandboxPolicy(),
-			SandboxRunner:         sandboxRunner,
-			Bus:                   bus,
-			Deliver:               a.DeliverObservation,
-		})
-		ownedObservables = err == nil
-	}
-	if err != nil {
-		_ = a.detachObservability()
-		closeSessionResources()
-		return nil, err
-	}
-	a.obsv = obsv
 	a.mcp = buildMCPStatus(mergedMCP.MCPServers, nil, nil)
-	if a.sideSessions != nil {
-		a.cleanup = append(a.cleanup, a.sideSessions.StartClose)
-	}
-	if ownedObservables && obsv != nil {
-		a.cleanup = append(a.cleanup, obsv.Close)
-	}
 	a.cleanup = append(a.cleanup, func() error {
+		if a.runtimeModules == nil {
+			return nil
+		}
+		return a.runtimeModules.QuiesceRuntime(context.Background())
+	}, func() error {
 		if err := a.detachObservability(); err != nil {
 			return err
 		}
@@ -565,64 +539,105 @@ func New(opts Options) (*App, error) {
 		}
 		return a.runtimeModules.CloseRuntime(context.Background())
 	})
-	if a.sideSessions != nil {
-		a.cleanup = append(a.cleanup, a.sideSessions.WaitClose)
-	}
+
 	var notificationGate *mcpNotificationGate
-	if opts.MCPManager != nil {
-		a.mcp = buildMCPStatus(nil, opts.MCPManager.ToolCounts(), opts.MCPManager.StartupErrors())
-	} else if len(mcpConfigs) > 0 {
-		connectOpts := mcp.ConnectOptions{
-			Stderr:        stderr,
-			ForwardStderr: opts.Verbose,
-			Environment:   runtimeEnvironment,
-		}
-		if sess.Kind == session.KindPrimary {
-			connectOpts.EnableClaudeChannel = true
-			notificationGate = newMCPNotificationGate(func(n mcp.Notification) {
-				_ = a.HandleMCPNotification(a.ctx, n)
-			})
-			connectOpts.OnNotification = notificationGate.Enqueue
-		}
-		mgr, err := mcp.NewManagerLayeredSoft(context.Background(), mcpConfigs, connectOpts)
-		if err != nil {
-			_ = a.detachObservability()
-			closeSessionResources()
-			return nil, err
-		}
-		startupErrors := mgr.StartupErrors()
-		if !opts.SuppressMCPWarnings {
-			writeMCPStartupWarnings(stderr, startupErrors, runtimeEnvironment)
-		}
-		a.mcp = buildMCPStatus(mergedMCP.MCPServers, mgr.ToolCounts(), startupErrors)
-		a.mcpManager = mgr
-		a.cleanup = append(a.cleanup, mgr.Close)
+	connectOpts := mcp.ConnectOptions{
+		Stderr:        stderr,
+		ForwardStderr: opts.Verbose,
+		Environment:   runtimeEnvironment,
 	}
-	var extraRuntimeModules []runtimemodule.Module
-	if a.sideSessions != nil {
-		extraRuntimeModules = append(extraRuntimeModules, &sideSessionModule{manager: a.sideSessions})
+	if sess.Kind == session.KindPrimary {
+		connectOpts.EnableClaudeChannel = true
+		notificationGate = newMCPNotificationGate(func(n mcp.Notification) {
+			_ = a.HandleMCPNotification(a.ctx, n)
+		})
+		connectOpts.OnNotification = notificationGate.Enqueue
 	}
-	if obsv != nil {
-		extraRuntimeModules = append(extraRuntimeModules, observable.NewModule(obsv))
+	var mcpRuntimeModule *mcp.Module
+	var observableRuntimeModule *observable.Module
+	extraRuntimeSpecs := []runtimemodule.RuntimeFactorySpec{
+		{
+			ID:      mcp.ModuleID,
+			Enabled: cfg.ModuleEnabled(string(mcp.ModuleID)) && (opts.MCPManager != nil || !opts.DisableMCP),
+			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				if opts.MCPManager != nil {
+					mcpRuntimeModule = mcp.NewModule(opts.MCPManager)
+				} else {
+					mcpRuntimeModule = mcp.NewRuntimeModule(mcpConfigs, connectOpts)
+				}
+				return mcpRuntimeModule, nil
+			},
+		},
+		{
+			ID:      observable.ModuleID,
+			Enabled: cfg.ModuleEnabled(string(observable.ModuleID)) && (opts.sharedObservables != nil || !opts.disableObservables),
+			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				if opts.sharedObservables != nil {
+					observableRuntimeModule = observable.NewModule(opts.sharedObservables)
+				} else {
+					observableRuntimeModule = observable.NewRuntimeModule(observable.ManagerOptions{
+						ConfigPath:            cfg.ObservablesConfigPath(),
+						ReadOnlyConfigSources: observableReadOnlyConfigSources(resourceGraph.ObservableConfigs()),
+						StateDir:              cfg.ObservablesStateDir(),
+						WorkDir:               runtimePaths.WorkDir,
+						AgentStateDir:         runtimePaths.StateDir,
+						ArtifactDir:           runtimePaths.ArtifactDir,
+						Environment:           runtimeEnvironment,
+						Shell:                 cfg.Shell,
+						Sandbox:               cfg.SandboxPolicy(),
+						SandboxRunner:         sandboxRunner,
+						Bus:                   bus,
+						Deliver:               a.DeliverObservation,
+					}, sess.Kind == session.KindPrimary)
+				}
+				return observableRuntimeModule, nil
+			},
+		},
+		{
+			ID:      sideSessionModuleID,
+			Enabled: cfg.ModuleEnabled(string(sideSessionModuleID)) && sess.Kind == session.KindPrimary && sess.Active && !opts.disableSideSessionTools,
+			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				a.sideSessions = newSideSessionManager(a)
+				return &sideSessionModule{manager: a.sideSessions}, nil
+			},
+		},
 	}
-	if a.mcpManager != nil {
-		extraRuntimeModules = append(extraRuntimeModules, mcp.NewModule(a.mcpManager))
-	}
-	if err := runtimeModules.sealAndStart(startupCtx, extraRuntimeModules...); err != nil {
+	if err := runtimeModules.sealAndStart(startupCtx, extraRuntimeSpecs...); err != nil {
 		_ = a.Close()
 		return nil, err
 	}
 	a.runtimeModules = runtimeModules.set
 	eng.RuntimeModules = runtimeModules.set
+	if runtimeModules.skills != nil {
+		a.skills = runtimeModules.skills.All()
+		a.skillPrompt = runtimeModules.skills.PromptReport()
+		a.skillFilteredItems = runtimeModules.skills.Filtered()
+		a.skillFiltered = len(a.skillFilteredItems)
+	}
+	if runtimeModules.builtinTools != nil {
+		a.shellSessions = runtimeModules.builtinTools.ShellSessions()
+	}
+	if observableRuntimeModule != nil {
+		a.obsv = observableRuntimeModule.Manager()
+	}
+	if mcpRuntimeModule != nil {
+		a.mcpManager = mcpRuntimeModule.Manager()
+		startupErrors := a.mcpManager.StartupErrors()
+		if !opts.SuppressMCPWarnings {
+			writeMCPStartupWarnings(stderr, startupErrors, runtimeEnvironment)
+		}
+		a.mcp = buildMCPStatus(mergedMCP.MCPServers, a.mcpManager.ToolCounts(), startupErrors)
+	}
 	sessionModules, err = buildSessionModules(
 		startupCtx,
+		cfg,
 		opts.sessionModuleFactories,
 		runtimeModules.runtimeContext,
 		sess,
 		eng,
 		runtimePaths.WorkDir,
 		prompt.ShellProfileFromConfig(cfg.Shell),
-		runtimeModules.builtinTools.ShellSessions(),
+		a.shellSessions,
 		sessionModuleOptions{
 			hookRunner:               hookRunner,
 			hookBaseRequest:          hookBaseRequest,
@@ -642,10 +657,6 @@ func New(opts Options) (*App, error) {
 	reg, err = runtimemodule.BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: toolTimeoutSeconds}, runtimeModules.set, sessionModules)
 	if err != nil {
 		_ = sessionModules.CloseSession(context.Background())
-		_ = a.Close()
-		return nil, err
-	}
-	if err := sessionModules.StartSession(startupCtx, sessionModuleContext(sess)); err != nil {
 		_ = a.Close()
 		return nil, err
 	}
@@ -670,9 +681,6 @@ func New(opts Options) (*App, error) {
 	if err := startupCtx.Err(); err != nil {
 		_ = a.Close()
 		return nil, err
-	}
-	if sess.Kind == session.KindPrimary && obsv != nil {
-		_ = obsv.StartAll(appCtx)
 	}
 	appContextTransferred = true
 	if notificationGate != nil {
@@ -762,6 +770,7 @@ func (a *App) replaceSession(ctx context.Context, sess *session.Session, sessLoc
 	}
 	nextModules, err := buildSessionModules(
 		ctx,
+		a.cfg,
 		a.sessionModuleFactories,
 		a.runtimeModuleContext,
 		sess,
@@ -796,9 +805,6 @@ func (a *App) replaceSession(ctx context.Context, sess *session.Session, sessLoc
 		if err != nil {
 			return errors.Join(err, nextModules.CloseSession(context.Background()))
 		}
-	}
-	if err := nextModules.StartSession(ctx, sessionModuleContext(sess)); err != nil {
-		return errors.Join(err, nextModules.CloseSession(context.Background()))
 	}
 	if err := ctx.Err(); err != nil {
 		return errors.Join(err, nextModules.CloseSession(context.Background()))
@@ -1633,11 +1639,14 @@ func (a *App) BeginClose() error {
 		if a.cancel != nil {
 			a.cancel()
 		}
+		if a.runtimeModules != nil {
+			// BeginClose is intentionally non-blocking. Close/CloseAndWait
+			// serializes with this generic Module quiesce pass and reports its
+			// cached result before releasing later resources.
+			go func() { _ = a.runtimeModules.QuiesceRuntime(context.Background()) }()
+		}
 	})
-	if a.sideSessions == nil {
-		return nil
-	}
-	return a.sideSessions.StartClose()
+	return nil
 }
 
 // Close advances cleanup until it completes or an observable close must be

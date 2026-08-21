@@ -129,7 +129,12 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	if !strings.Contains(promptText, "external-memory-test") || !strings.Contains(promptText, "ext:memory") {
 		t.Fatalf("enabled extension skill is missing from prompt:\n%s", promptText)
 	}
-	status, err := app.NewRuntimeCatalogService(cfg).Snapshot(app.RuntimeStatusOptions{})
+	var status app.RuntimeStatus
+	err = enabled.ReadRuntimeModuleSnapshot(func(active app.RuntimeModuleSnapshot) error {
+		var snapshotErr error
+		status, snapshotErr = app.NewRuntimeCatalogService(cfg).Snapshot(app.RuntimeStatusOptions{ActiveModules: &active})
+		return snapshotErr
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +189,12 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDir, "hook-ran")); !os.IsNotExist(err) {
 		t.Fatalf("disabled extension hook ran, stat err=%v", err)
 	}
-	disabledStatus, err := app.NewRuntimeCatalogService(disabledCfg).Snapshot(app.RuntimeStatusOptions{})
+	var disabledStatus app.RuntimeStatus
+	err = disabled.ReadRuntimeModuleSnapshot(func(active app.RuntimeModuleSnapshot) error {
+		var snapshotErr error
+		disabledStatus, snapshotErr = app.NewRuntimeCatalogService(disabledCfg).Snapshot(app.RuntimeStatusOptions{ActiveModules: &active})
+		return snapshotErr
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

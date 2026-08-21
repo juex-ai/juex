@@ -2,22 +2,17 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
-	"sync"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/modules/builtintools"
-	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/observable"
-	"github.com/juex-ai/juex/internal/prompt"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/sandbox"
@@ -36,33 +31,29 @@ func NewRuntimeCatalogService(cfg config.Config) RuntimeCatalogService {
 }
 
 type RuntimeStatusOptions struct {
+	ActiveModules      *RuntimeModuleSnapshot
 	MCPToolDescriptors map[string][]mcp.ToolDescriptor
 	MCPErrors          map[string]string
 	MCPConnectionSpecs map[string]mcp.RuntimeConnectionSpec
-	SkillCache         *RuntimeStatusSkillCache
-	ScratchpadDir      string
 	AgentRuntime       *AgentRuntimeResolution
 }
 
-// RuntimeStatusSkillCache caches loaded skills for repeated status snapshots.
-// The cache is keyed by the resolved skill directory list, so tests and callers
-// that swap config directories get a fresh load without leaking skills.Loader
-// details into presentation layers.
-type RuntimeStatusSkillCache struct {
-	mu     sync.Mutex
-	dirs   []skills.Dir
-	policy config.SkillPolicy
-	status RuntimeSkillsStatus
-	loader *skills.Loader
-	loaded bool
-}
-
-func NewRuntimeStatusSkillCache() *RuntimeStatusSkillCache {
-	return &RuntimeStatusSkillCache{}
+// RuntimeModuleSnapshot is a leased view of the active, sealed Module sets.
+// Callers obtain it through App.ReadRuntimeModuleSnapshot so Session
+// replacement and shutdown cannot invalidate the sets during projection.
+type RuntimeModuleSnapshot struct {
+	Runtime        *runtimemodule.Set
+	Session        *runtimemodule.Set
+	RuntimeContext runtimemodule.RuntimeContext
+	SessionContext runtimemodule.SessionContext
+	Skills         []skills.Skill
+	FilteredSkills []skills.FilteredSkill
+	SkillPrompt    skills.PromptBudgetReport
 }
 
 type RuntimeStatus struct {
 	WorkDir      string
+	Modules      []RuntimeModuleStatus
 	Provider     RuntimeProviderStatus
 	Shell        config.ShellProfile
 	Sandbox      sandbox.Policy
@@ -72,6 +63,11 @@ type RuntimeStatus struct {
 	MCP          RuntimeMCPStatus
 	Hooks        RuntimeHooksStatus
 	Skills       RuntimeSkillsStatus
+}
+
+type RuntimeModuleStatus struct {
+	ID    string
+	Scope string
 }
 
 type RuntimeExtensionsStatus struct {
@@ -225,7 +221,44 @@ type RuntimeSkillOmittedInfo struct {
 	Reason string
 }
 
+// ReadRuntimeModuleSnapshot holds the App and Session publication leases while
+// fn projects the currently active Runtime and Session Module sets.
+func (a *App) ReadRuntimeModuleSnapshot(fn func(RuntimeModuleSnapshot) error) error {
+	if a == nil || fn == nil {
+		return fmt.Errorf("runtime status: active App and snapshot reader are required")
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	a.sessionMu.RLock()
+	defer a.sessionMu.RUnlock()
+	if a.Engine == nil || a.runtimeModules == nil {
+		return fmt.Errorf("runtime status: active Runtime Module set is unavailable")
+	}
+	sessionRuntime := a.Engine.SessionRuntimeSnapshot()
+	if sessionRuntime.Modules == nil || sessionRuntime.Session == nil {
+		return fmt.Errorf("runtime status: active Session Module set is unavailable")
+	}
+	return fn(RuntimeModuleSnapshot{
+		Runtime:        a.runtimeModules,
+		Session:        sessionRuntime.Modules,
+		RuntimeContext: a.runtimeModuleContext,
+		SessionContext: sessionModuleContext(sessionRuntime.Session),
+		Skills:         append([]skills.Skill(nil), a.skills...),
+		FilteredSkills: append([]skills.FilteredSkill(nil), a.skillFilteredItems...),
+		SkillPrompt:    cloneSkillPromptReport(a.skillPrompt),
+	})
+}
+
+func cloneSkillPromptReport(report skills.PromptBudgetReport) skills.PromptBudgetReport {
+	report.Omitted = append([]skills.PromptOmittedSkill(nil), report.Omitted...)
+	return report
+}
+
 func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus, error) {
+	active := opts.ActiveModules
+	if active == nil || active.Runtime == nil || active.Session == nil {
+		return RuntimeStatus{}, fmt.Errorf("runtime status: active sealed Runtime and Session Module sets are required")
+	}
 	var agentRuntime AgentRuntimeResolution
 	if opts.AgentRuntime != nil {
 		agentRuntime = *opts.AgentRuntime
@@ -237,29 +270,39 @@ func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatu
 		}
 	}
 	resourceGraph := agentRuntime.ResourceGraph()
-	skillStatus, skillLoader, err := s.skillsStatus(opts.SkillCache, resourceGraph.SkillDirs(), s.cfg.SkillPolicy())
+	skillStatus := runtimeSkillsStatusFromSnapshot(*active)
+	systemPrompt, err := systemPromptStatusFromActiveModules(*active)
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	systemPrompt, err := s.systemPromptStatus(skillLoader, opts.ScratchpadDir)
+	entries := activeToolEntries(*active)
+	mcpEnabled := activeModuleEnabled(*active, mcp.ModuleID)
+	mcpStatus, err := s.mcpStatus(opts, resourceGraph.MCPConfigs(), agentRuntime.Environment(), entries, mcpEnabled)
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	mcpStatus, err := s.mcpStatus(opts, resourceGraph.MCPConfigs(), agentRuntime.Environment())
+	toolsStatus, err := runtimeToolsStatusFromActiveCatalogs(durationSeconds(s.cfg.RuntimeLimits().ToolTimeout), entries)
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	toolsStatus, err := s.toolsStatus(skillLoader)
-	if err != nil {
-		return RuntimeStatus{}, err
+	hookStatus := RuntimeHooksStatus{Commands: []RuntimeHookInfo{}}
+	if activeModuleEnabled(*active, hooks.ModuleID) {
+		hookStatus = hooksStatus(resourceGraph.HooksConfig())
 	}
-	hookStatus := hooksStatus(resourceGraph.HooksConfig())
-	extensionsStatus, err := runtimeExtensionsStatus(resourceGraph, skillStatus, mcpStatus, hookStatus, agentRuntime.EnvironmentDeclarations())
+	extensionsStatus, err := runtimeExtensionsStatus(
+		resourceGraph,
+		skillStatus,
+		mcpStatus,
+		hookStatus,
+		agentRuntime.EnvironmentDeclarations(),
+		activeModuleEnabled(*active, observable.ModuleID),
+	)
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
 	return RuntimeStatus{
 		WorkDir:      s.absoluteWorkDir(),
+		Modules:      runtimeModuleStatuses(*active),
 		Provider:     providerRuntimeStatusFromConfig(s.cfg),
 		Shell:        s.cfg.Shell,
 		Sandbox:      s.cfg.SandboxPolicy(),
@@ -272,7 +315,7 @@ func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatu
 	}, nil
 }
 
-func runtimeExtensionsStatus(graph RuntimeResourceGraph, skills RuntimeSkillsStatus, mcpStatus RuntimeMCPStatus, hookStatus RuntimeHooksStatus, environmentDeclarations []RuntimeExtensionEnvironmentDeclaration) (RuntimeExtensionsStatus, error) {
+func runtimeExtensionsStatus(graph RuntimeResourceGraph, skills RuntimeSkillsStatus, mcpStatus RuntimeMCPStatus, hookStatus RuntimeHooksStatus, environmentDeclarations []RuntimeExtensionEnvironmentDeclaration, observablesEnabled bool) (RuntimeExtensionsStatus, error) {
 	descriptors := graph.Extensions()
 	items := make([]RuntimeExtensionStatus, 0, len(descriptors))
 	indexes := make(map[string]int, len(descriptors))
@@ -320,68 +363,37 @@ func runtimeExtensionsStatus(graph RuntimeResourceGraph, skills RuntimeSkillsSta
 			items[index].Resources.Hooks++
 		}
 	}
-	for _, ref := range graph.ObservableConfigs() {
-		index, ok := indexes[ref.Source]
-		if !ok {
-			continue
+	if observablesEnabled {
+		for _, ref := range graph.ObservableConfigs() {
+			index, ok := indexes[ref.Source]
+			if !ok {
+				continue
+			}
+			cfg, issues, err := observable.LoadConfigLenient(ref.Path)
+			if err != nil {
+				return RuntimeExtensionsStatus{}, err
+			}
+			items[index].Resources.Observables += len(cfg.Observables) + len(issues)
 		}
-		cfg, issues, err := observable.LoadConfigLenient(ref.Path)
-		if err != nil {
-			return RuntimeExtensionsStatus{}, err
-		}
-		items[index].Resources.Observables += len(cfg.Observables) + len(issues)
 	}
 	return RuntimeExtensionsStatus{Count: len(items), Items: items}, nil
 }
 
-func (s RuntimeCatalogService) toolsStatus(skillLoader *skills.Loader) (status RuntimeToolsStatus, err error) {
-	ctx := context.Background()
-	runtimeContext := runtimemodule.RuntimeContext{WorkDir: s.cfg.WorkDir}
-	builtin := builtintools.New(ctx, tools.BuiltinOptions{
-		WorkDir:            s.cfg.WorkDir,
-		Shell:              toolsShellProfile(s.cfg.Shell),
-		ToolTimeoutSeconds: durationSeconds(s.cfg.RuntimeLimits().ToolTimeout),
-	})
-	runtimeSet, err := runtimemodule.BuildRuntimeSet(ctx, []runtimemodule.RuntimeFactorySpec{
-		{ID: builtintools.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-			return builtin, nil
-		}},
-		{ID: skillsmodule.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-			return skillsmodule.NewWithLoader(skillLoader, s.cfg.WorkDir, s.cfg.SandboxPolicy()), nil
-		}},
-		{ID: sideSessionModuleID, Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-			return &sideSessionModule{}, nil
-		}},
-		{ID: observable.ModuleID, Enabled: true, New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-			return observable.NewModule(nil), nil
-		}},
-	}, runtimeContext, runtimemodule.ToolContext{Runtime: runtimeContext})
-	if err != nil {
-		_ = builtin.CloseRuntime(context.Background())
-		return RuntimeToolsStatus{}, err
+func activeToolEntries(active RuntimeModuleSnapshot) []runtimemodule.ToolEntry {
+	entries := active.Runtime.ToolCatalog().Entries()
+	entries = append(entries, active.Session.ToolCatalog().Entries()...)
+	return entries
+}
+
+func runtimeToolsStatusFromActiveCatalogs(defaultTimeoutSeconds int, entries []runtimemodule.ToolEntry) (RuntimeToolsStatus, error) {
+	filtered := make([]runtimemodule.ToolEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Tool.Group == tools.ToolGroupMCP {
+			continue
+		}
+		filtered = append(filtered, entry)
 	}
-	if err := runtimeSet.StartRuntime(ctx, runtimeContext); err != nil {
-		return RuntimeToolsStatus{}, err
-	}
-	defer func() {
-		err = errors.Join(err, runtimeSet.CloseRuntime(context.Background()))
-	}()
-	sessionContext := runtimemodule.SessionContext{}
-	sessionSet, err := runtimemodule.BuildSessionSet(ctx, []runtimemodule.SessionFactorySpec{
-		{ID: juexruntime.GoalModuleID, Enabled: true, New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
-			return juexruntime.NewGoalModule(nil), nil
-		}},
-		{ID: juexruntime.NotesModuleID, Enabled: true, New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
-			return juexruntime.NewNotesModule(nil), nil
-		}},
-	}, sessionContext, runtimemodule.ToolContext{Runtime: runtimeContext, Session: &sessionContext})
-	if err != nil {
-		return RuntimeToolsStatus{}, err
-	}
-	if _, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{}, runtimeSet, sessionSet); err != nil {
-		return RuntimeToolsStatus{}, err
-	}
-	return runtimeToolsStatusFromCatalogs(durationSeconds(s.cfg.RuntimeLimits().ToolTimeout), runtimeSet.ToolCatalog(), sessionSet.ToolCatalog())
+	return runtimeToolsStatusFromEntries(defaultTimeoutSeconds, filtered)
 }
 
 func runtimeToolsStatusFromCatalogs(defaultTimeoutSeconds int, catalogs ...runtimemodule.ToolCatalog) (RuntimeToolsStatus, error) {
@@ -389,6 +401,10 @@ func runtimeToolsStatusFromCatalogs(defaultTimeoutSeconds int, catalogs ...runti
 	for _, catalog := range catalogs {
 		entries = append(entries, catalog.Entries()...)
 	}
+	return runtimeToolsStatusFromEntries(defaultTimeoutSeconds, entries)
+}
+
+func runtimeToolsStatusFromEntries(defaultTimeoutSeconds int, entries []runtimemodule.ToolEntry) (RuntimeToolsStatus, error) {
 	definitions := make([]tools.ToolDefinition, 0, len(entries))
 	owners := make(map[string]string, len(entries))
 	for _, entry := range entries {
@@ -488,49 +504,12 @@ func hooksStatus(cfg hooks.Config) RuntimeHooksStatus {
 	return RuntimeHooksStatus{Configured: len(commands), Commands: commands}
 }
 
-func (s RuntimeCatalogService) systemPromptStatus(skillLoader *skills.Loader, scratchpadDir string) (RuntimeSystemPromptStatus, error) {
-	skillModule := skillsmodule.NewWithLoader(skillLoader, s.cfg.WorkDir, s.cfg.SandboxPolicy())
-	runtimeContext := runtimemodule.RuntimeContext{WorkDir: s.cfg.WorkDir}
-	runtimeSet, err := runtimemodule.BuildRuntimeSet(context.Background(), []runtimemodule.RuntimeFactorySpec{
-		{
-			ID:      prompt.GuidanceModuleID,
-			Enabled: true,
-			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				return &prompt.GuidanceModule{GlobalAgentsMDPath: s.cfg.GlobalAgentsMDPath(), AgentsMDDirs: s.cfg.AgentsMDDirs()}, nil
-			},
-		},
-		{
-			ID:      skillsmodule.ModuleID,
-			Enabled: true,
-			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				return skillModule, nil
-			},
-		},
-	}, runtimeContext, runtimemodule.ToolContext{Runtime: runtimeContext})
-	if err != nil {
-		return RuntimeSystemPromptStatus{}, err
-	}
-	sessionContext := runtimemodule.SessionContext{ScratchpadDir: scratchpadDir}
-	sessionSet, err := runtimemodule.BuildSessionSet(context.Background(), []runtimemodule.SessionFactorySpec{{
-		ID:      prompt.SessionContextModuleID,
-		Enabled: true,
-		New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
-			return &prompt.SessionContextModule{WorkDir: s.cfg.WorkDir, Shell: prompt.ShellProfileFromConfig(s.cfg.Shell)}, nil
-		},
-	}}, sessionContext, runtimemodule.ToolContext{Runtime: runtimeContext, Session: &sessionContext})
-	if err != nil {
-		return RuntimeSystemPromptStatus{}, err
-	}
-	builder := &prompt.Builder{
-		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
-			return runtimemodule.CollectContext(context.Background(), runtimemodule.ContextRequest{
-				Purpose: runtimemodule.ContextPurposeProviderIteration,
-				Runtime: runtimeContext,
-				Session: &sessionContext,
-			}, runtimeSet, sessionSet)
-		},
-	}
-	sections, err := builder.SectionsWithError()
+func systemPromptStatusFromActiveModules(active RuntimeModuleSnapshot) (RuntimeSystemPromptStatus, error) {
+	sections, err := runtimemodule.CollectContext(context.Background(), runtimemodule.ContextRequest{
+		Purpose: runtimemodule.ContextPurposeProviderIteration,
+		Runtime: active.RuntimeContext,
+		Session: &active.SessionContext,
+	}, active.Runtime, active.Session)
 	if err != nil {
 		return RuntimeSystemPromptStatus{}, err
 	}
@@ -548,57 +527,23 @@ func (s RuntimeCatalogService) systemPromptStatus(skillLoader *skills.Loader, sc
 	return RuntimeSystemPromptStatus{Count: len(items), Items: items}, nil
 }
 
-func runtimePromptLabel(section prompt.Section) string {
+func runtimePromptLabel(section runtimemodule.ContextSection) string {
 	if section.Label != "" {
 		return section.Label
 	}
 	return section.Key
 }
 
-func runtimePromptSource(section prompt.Section) string {
+func runtimePromptSource(section runtimemodule.ContextSection) string {
 	if section.Source != "" {
 		return section.Source
 	}
 	return "runtime"
 }
 
-func (s RuntimeCatalogService) skillsStatus(cache *RuntimeStatusSkillCache, dirs []skills.Dir, policy config.SkillPolicy) (RuntimeSkillsStatus, *skills.Loader, error) {
-	if cache != nil {
-		return cache.snapshot(dirs, policy)
-	}
-	return loadRuntimeSkills(dirs, policy)
-}
-
-func (c *RuntimeStatusSkillCache) snapshot(dirs []skills.Dir, policy config.SkillPolicy) (RuntimeSkillsStatus, *skills.Loader, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.loaded && skillDirsEqual(c.dirs, dirs) && skillPoliciesEqual(c.policy, policy) {
-		return cloneRuntimeSkillsStatus(c.status), c.loader, nil
-	}
-	status, loader, err := loadRuntimeSkills(dirs, policy)
-	if err != nil {
-		return RuntimeSkillsStatus{}, nil, err
-	}
-	c.dirs = append([]skills.Dir(nil), dirs...)
-	c.policy = cloneSkillPolicy(policy)
-	c.status = cloneRuntimeSkillsStatus(status)
-	c.loader = loader
-	c.loaded = true
-	return status, loader, nil
-}
-
-func loadRuntimeSkills(dirs []skills.Dir, policy config.SkillPolicy) (RuntimeSkillsStatus, *skills.Loader, error) {
-	skillLoader := skills.NewLoaderFromDirsWithOptions(dirs, skills.LoaderOptions{Policy: skills.Policy{
-		Include:           policy.Include,
-		Exclude:           policy.Exclude,
-		PromptBudgetChars: policy.PromptBudgetChars,
-	}})
-	if err := skillLoader.Load(); err != nil {
-		return RuntimeSkillsStatus{}, nil, err
-	}
-	loadedSkills := skillLoader.All()
-	items := make([]RuntimeSkillInfo, 0, len(loadedSkills))
-	for _, skill := range loadedSkills {
+func runtimeSkillsStatusFromSnapshot(active RuntimeModuleSnapshot) RuntimeSkillsStatus {
+	items := make([]RuntimeSkillInfo, 0, len(active.Skills))
+	for _, skill := range active.Skills {
 		items = append(items, RuntimeSkillInfo{
 			Name:        skill.Name,
 			Description: skill.Description,
@@ -610,11 +555,11 @@ func loadRuntimeSkills(dirs []skills.Dir, policy config.SkillPolicy) (RuntimeSki
 	sort.Slice(items, func(i, j int) bool {
 		return runtimeSourceLess(items[i].Source, items[i].Name, items[j].Source, items[j].Name)
 	})
-	filtered := make([]RuntimeSkillFilteredInfo, 0, len(skillLoader.Filtered()))
-	for _, item := range skillLoader.Filtered() {
+	filtered := make([]RuntimeSkillFilteredInfo, 0, len(active.FilteredSkills))
+	for _, item := range active.FilteredSkills {
 		filtered = append(filtered, RuntimeSkillFilteredInfo{Name: item.Name, Source: item.Source, Reason: item.Reason})
 	}
-	report := skillLoader.PromptReport()
+	report := active.SkillPrompt
 	omitted := make([]RuntimeSkillOmittedInfo, 0, len(report.Omitted))
 	for _, item := range report.Omitted {
 		omitted = append(omitted, RuntimeSkillOmittedInfo{Name: item.Name, Source: item.Source, Reason: item.Reason})
@@ -629,52 +574,31 @@ func loadRuntimeSkills(dirs []skills.Dir, policy config.SkillPolicy) (RuntimeSki
 			Compacted:   report.Compacted,
 			Omitted:     omitted,
 		},
-	}, skillLoader, nil
-}
-
-func cloneRuntimeSkillsStatus(status RuntimeSkillsStatus) RuntimeSkillsStatus {
-	status.Items = append([]RuntimeSkillInfo(nil), status.Items...)
-	status.Filtered = append([]RuntimeSkillFilteredInfo(nil), status.Filtered...)
-	status.Prompt.Omitted = append([]RuntimeSkillOmittedInfo(nil), status.Prompt.Omitted...)
-	return status
-}
-
-func skillDirsEqual(left, right []skills.Dir) bool {
-	if len(left) != len(right) {
-		return false
 	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
+}
+
+func runtimeModuleStatuses(active RuntimeModuleSnapshot) []RuntimeModuleStatus {
+	descriptors := active.Runtime.Descriptors()
+	descriptors = append(descriptors, active.Session.Descriptors()...)
+	items := make([]RuntimeModuleStatus, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		items = append(items, RuntimeModuleStatus{ID: string(descriptor.ID), Scope: string(descriptor.Scope)})
+	}
+	return items
+}
+
+func activeModuleEnabled(active RuntimeModuleSnapshot, id runtimemodule.ID) bool {
+	for _, descriptor := range active.Runtime.Descriptors() {
+		if descriptor.ID == id {
+			return true
 		}
 	}
-	return true
-}
-
-func skillPoliciesEqual(left, right config.SkillPolicy) bool {
-	if left.PromptBudgetChars != right.PromptBudgetChars {
-		return false
-	}
-	if len(left.Include) != len(right.Include) || len(left.Exclude) != len(right.Exclude) {
-		return false
-	}
-	for i := range left.Include {
-		if left.Include[i] != right.Include[i] {
-			return false
+	for _, descriptor := range active.Session.Descriptors() {
+		if descriptor.ID == id {
+			return true
 		}
 	}
-	for i := range left.Exclude {
-		if left.Exclude[i] != right.Exclude[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func cloneSkillPolicy(policy config.SkillPolicy) config.SkillPolicy {
-	policy.Include = append([]string(nil), policy.Include...)
-	policy.Exclude = append([]string(nil), policy.Exclude...)
-	return policy
+	return false
 }
 
 type runtimeMCPServerConfig struct {
@@ -683,7 +607,16 @@ type runtimeMCPServerConfig struct {
 	Spec   mcp.ServerSpec
 }
 
-func (s RuntimeCatalogService) mcpStatus(opts RuntimeStatusOptions, refs []mcpConfigRef, runtimeEnvironment environment.Snapshot) (RuntimeMCPStatus, error) {
+func (s RuntimeCatalogService) mcpStatus(opts RuntimeStatusOptions, refs []mcpConfigRef, runtimeEnvironment environment.Snapshot, entries []runtimemodule.ToolEntry, enabled bool) (RuntimeMCPStatus, error) {
+	if !enabled {
+		return RuntimeMCPStatus{Servers: []RuntimeMCPServerStatus{}}, nil
+	}
+	mcpCatalog := make(map[string]runtimemodule.ToolEntry)
+	for _, entry := range entries {
+		if entry.ModuleID == mcp.ModuleID {
+			mcpCatalog[entry.Tool.Name] = entry
+		}
+	}
 	var servers []runtimeMCPServerConfig
 	if opts.MCPConnectionSpecs != nil {
 		servers = runtimeMCPServersFromConnectionSpecs(opts.MCPConnectionSpecs)
@@ -720,7 +653,7 @@ func (s RuntimeCatalogService) mcpStatus(opts RuntimeStatusOptions, refs []mcpCo
 			connected = false
 		} else if connected {
 			status = "connected"
-			projectedTools, err = runtimeMCPToolInfos(server.Name, descriptors, defaultTimeoutSeconds)
+			projectedTools, err = runtimeMCPToolInfos(server.Name, descriptors, defaultTimeoutSeconds, mcpCatalog)
 			if err != nil {
 				return RuntimeMCPStatus{}, err
 			}
@@ -768,25 +701,10 @@ func runtimeMCPServersFromConnectionSpecs(specs map[string]mcp.RuntimeConnection
 	return servers
 }
 
-func runtimeMCPToolInfos(serverName string, descriptors []mcp.ToolDescriptor, defaultTimeoutSeconds int) ([]RuntimeToolInfo, error) {
-	module := mcp.NewDescriptorModule(map[string][]mcp.ToolDescriptor{serverName: descriptors})
-	set, err := runtimemodule.BuildRuntimeSet(context.Background(), []runtimemodule.RuntimeFactorySpec{{
-		ID:      mcp.ModuleID,
-		Enabled: true,
-		New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-			return module, nil
-		},
-	}}, runtimemodule.RuntimeContext{}, runtimemodule.ToolContext{})
-	if err != nil {
-		return nil, err
-	}
-	byName := make(map[string]runtimemodule.ToolEntry, len(descriptors))
-	for _, entry := range set.ToolCatalog().Entries() {
-		byName[entry.Tool.Name] = entry
-	}
+func runtimeMCPToolInfos(serverName string, descriptors []mcp.ToolDescriptor, defaultTimeoutSeconds int, catalog map[string]runtimemodule.ToolEntry) ([]RuntimeToolInfo, error) {
 	infos := make([]RuntimeToolInfo, 0, len(descriptors))
 	for _, descriptor := range descriptors {
-		entry, ok := byName[mcp.ToolName(serverName, descriptor.Name)]
+		entry, ok := catalog[mcp.ToolName(serverName, descriptor.Name)]
 		if !ok {
 			return nil, fmt.Errorf("mcp server %q tool %q missing from Module catalog", serverName, descriptor.Name)
 		}

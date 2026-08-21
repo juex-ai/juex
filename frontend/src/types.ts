@@ -993,6 +993,10 @@ export interface ExtensionInfo {
 export interface RuntimeStatusResponse {
   start_time: string;
   work_dir: string;
+  modules: Array<{
+    id: string;
+    scope: "runtime" | "session" | string;
+  }>;
   provider: {
     id?: string;
     protocol?: string;

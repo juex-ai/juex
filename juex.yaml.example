@@ -62,6 +62,17 @@ model: openai:gpt-4.1
 #   # include: [taskline-management] # whitelist mode; exclude is ignored.
 #   # exclude: [large-global-skill]  # blacklist mode when include is empty.
 
+# Compiled Modules default to enabled when omitted. Disable a Module by its
+# stable ID; disabled factories are filtered before construction. Supported
+# Runtime IDs are builtin-tools, project-guidance, skills, side-sessions,
+# observables, and mcp. Supported Session IDs are session-context, goal, notes,
+# and hooks. Unknown IDs or fields fail startup.
+# modules:
+#   skills:
+#     enabled: false
+#   side-sessions:
+#     enabled: false
+
 # Optional workspace command shell. Omitted is the same as profile: auto.
 # The field is always an object; scalar values like `shell: powershell` are not
 # accepted. Built-in profiles are auto, powershell, cmd, bash, zsh, sh,

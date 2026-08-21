@@ -57,6 +57,21 @@ body`)
 	if got.MCP.Configured != 1 || got.MCP.Connected != 1 {
 		t.Fatalf("mcp = %+v", got.MCP)
 	}
+	wantModules := []runtimeModuleInfo{
+		{ID: "builtin-tools", Scope: "runtime"},
+		{ID: "project-guidance", Scope: "runtime"},
+		{ID: "skills", Scope: "runtime"},
+		{ID: "mcp", Scope: "runtime"},
+		{ID: "observables", Scope: "runtime"},
+		{ID: "side-sessions", Scope: "runtime"},
+		{ID: "session-context", Scope: "session"},
+		{ID: "goal", Scope: "session"},
+		{ID: "notes", Scope: "session"},
+		{ID: "hooks", Scope: "session"},
+	}
+	if !reflect.DeepEqual(got.Modules, wantModules) {
+		t.Fatalf("modules = %+v, want active Module descriptors %+v", got.Modules, wantModules)
+	}
 	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "alpha" || got.MCP.Servers[0].Type != "stdio" || got.MCP.Servers[0].URL != "" || got.MCP.Servers[0].Command != os.Args[0] || got.MCP.Servers[0].Status != "connected" || got.MCP.Servers[0].ToolCount != 1 {
 		t.Fatalf("servers = %+v", got.MCP.Servers)
 	}
@@ -166,6 +181,37 @@ func TestRuntimeStatusReportsStableServerStartTime(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatusOmitsConfigDisabledModulesAndResources(t *testing.T) {
+	srv := newTestServer(t)
+	srv.opts.Cfg.Modules = config.ModulePolicy{
+		"mcp":           {Enabled: false},
+		"observables":   {Enabled: false},
+		"side-sessions": {Enabled: false},
+		"hooks":         {Enabled: false},
+	}
+	mustWriteWebFakeMCPConfig(t, srv.opts.Cfg.WorkDir, false)
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, module := range got.Modules {
+		if slices.Contains([]string{"mcp", "observables", "side-sessions", "hooks"}, module.ID) {
+			t.Fatalf("disabled Module remains active: %+v", got.Modules)
+		}
+	}
+	if got.MCP.Configured != 0 || len(got.MCP.Servers) != 0 || got.Hooks.Configured != 0 {
+		t.Fatalf("disabled status still exposes feature resources: mcp=%+v hooks=%+v", got.MCP, got.Hooks)
+	}
+	for _, group := range got.Tools.Groups {
+		if (group.Group == string(tools.ToolGroupObservable) || group.Group == string(tools.ToolGroupSideSession)) && len(group.Tools) != 0 {
+			t.Fatalf("disabled Module tools remain in group %q: %+v", group.Group, group.Tools)
+		}
+	}
+	if srv.mcpManagerSnapshot() != nil {
+		t.Fatal("disabled MCP Module started the process manager")
+	}
+}
+
 func TestRuntimeAPIAlwaysRedactsConfiguredEnvironmentValues(t *testing.T) {
 	const secret = "runtime-api-environment-secret"
 	home := t.TempDir()
@@ -188,6 +234,7 @@ func TestRuntimeAPIAlwaysRedactsConfiguredEnvironmentValues(t *testing.T) {
 	cfg.AgentStateDir = filepath.Join(work, ".juex")
 	cfg.ProviderID = "test"
 	cfg.ProviderProtocol = "openai/responses"
+	cfg.APIKey = "x"
 	cfg.Model = secret
 
 	srv := NewServer(Options{Cfg: cfg})
@@ -625,7 +672,7 @@ func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SystemPrompt.Count != 4 {
+	if got.SystemPrompt.Count != 5 {
 		t.Fatalf("system prompt = %+v", got.SystemPrompt)
 	}
 	want := []struct {
@@ -637,6 +684,7 @@ func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
 		{label: "Global AGENTS.md", source: "user", path: filepath.Join(homeAgents, "AGENTS.md"), text: "global runtime rule"},
 		{label: "Workspace AGENTS.md", source: "project", path: filepath.Join(work, "AGENTS.md"), text: "workspace root rule"},
 		{label: ".agents/AGENTS.md", source: "project", path: filepath.Join(work, ".agents", "AGENTS.md"), text: "workspace agents rule"},
+		{label: "Session Scratchpad", source: "runtime", path: got.SystemPrompt.Items[3].Path, text: "Session Scratchpad"},
 		{label: "Operating Context", source: "runtime", path: "", text: "Operating Context"},
 	}
 	for i, w := range want {
@@ -810,7 +858,7 @@ body`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.SystemPrompt.Items) != 3 {
+	if len(got.SystemPrompt.Items) != 4 {
 		t.Fatalf("system prompt = %+v", got.SystemPrompt)
 	}
 	if got.SystemPrompt.Items[0].Label != ".agents/AGENTS.md" || strings.Contains(got.SystemPrompt.Items[0].Text, "global runtime rule") {

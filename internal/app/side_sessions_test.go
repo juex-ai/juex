@@ -23,6 +23,26 @@ import (
 	"github.com/juex-ai/juex/internal/tools"
 )
 
+func TestSideSessionModuleOwnsManagerShutdownBoundary(t *testing.T) {
+	manager := newSideSessionManager(nil)
+	mod := &sideSessionModule{manager: manager}
+	if err := mod.StartRuntime(context.Background(), runtimemodule.RuntimeContext{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.QuiesceRuntime(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	closed := manager.closed
+	manager.mu.Unlock()
+	if !closed {
+		t.Fatal("side session manager remains open after Module quiesce")
+	}
+	if err := mod.CloseRuntime(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 const sideSessionTestTimeout = 5 * time.Second
 
 func removeSideSessionTestPath(t *testing.T, path string) {
@@ -69,6 +89,7 @@ func installSideHookRunner(t *testing.T, a *App, runner hooks.PolicyRunner) {
 	t.Helper()
 	nextModules, err := buildSessionModules(
 		context.Background(),
+		a.cfg,
 		a.sessionModuleFactories,
 		a.runtimeModuleContext,
 		a.Session,
@@ -92,10 +113,6 @@ func installSideHookRunner(t *testing.T, a *App, runner hooks.PolicyRunner) {
 		nextModules,
 	)
 	if err != nil {
-		_ = nextModules.CloseSession(context.Background())
-		t.Fatal(err)
-	}
-	if err := nextModules.StartSession(context.Background(), sessionModuleContext(a.Session)); err != nil {
 		_ = nextModules.CloseSession(context.Background())
 		t.Fatal(err)
 	}

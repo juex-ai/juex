@@ -52,6 +52,7 @@ type Config struct {
 	Shell                     ShellProfile
 	Sandbox                   sandbox.Policy
 	Skills                    SkillsConfig
+	Modules                   ModulePolicy
 	Extensions                ExtensionPolicy
 	Fleet                     FleetConfig
 	EnableUserAgentsResources bool
@@ -104,20 +105,21 @@ type EnvironmentStatus struct {
 }
 
 type fileConfig struct {
-	Model                     string            `yaml:"model"`
-	FallbackModels            *[]string         `yaml:"fallback_models"`
-	EnableUserAgentsResources optionalBool      `yaml:"enable_user_agents_resources"`
-	Providers                 []providerConfig  `yaml:"providers"`
-	Compaction                compactionConfig  `yaml:"compaction"`
-	ToolOutput                toolOutputConfig  `yaml:"tool_output"`
-	Hooks                     hooks.FileConfig  `yaml:"hooks"`
-	Runtime                   runtimeConfig     `yaml:"runtime"`
-	Shell                     *ShellConfig      `yaml:"shell"`
-	Sandbox                   *sandboxConfig    `yaml:"sandbox"`
-	Skills                    skillsConfig      `yaml:"skills"`
-	Extensions                extensionsConfig  `yaml:"extensions"`
-	Fleet                     *fleetFileConfig  `yaml:"fleet"`
-	Environment               environmentConfig `yaml:"environment"`
+	Model                     string                  `yaml:"model"`
+	FallbackModels            *[]string               `yaml:"fallback_models"`
+	EnableUserAgentsResources optionalBool            `yaml:"enable_user_agents_resources"`
+	Providers                 []providerConfig        `yaml:"providers"`
+	Compaction                compactionConfig        `yaml:"compaction"`
+	ToolOutput                toolOutputConfig        `yaml:"tool_output"`
+	Hooks                     hooks.FileConfig        `yaml:"hooks"`
+	Runtime                   runtimeConfig           `yaml:"runtime"`
+	Shell                     *ShellConfig            `yaml:"shell"`
+	Sandbox                   *sandboxConfig          `yaml:"sandbox"`
+	Skills                    skillsConfig            `yaml:"skills"`
+	Modules                   map[string]moduleConfig `yaml:"modules"`
+	Extensions                extensionsConfig        `yaml:"extensions"`
+	Fleet                     *fleetFileConfig        `yaml:"fleet"`
+	Environment               environmentConfig       `yaml:"environment"`
 }
 
 type environmentConfig struct {
@@ -866,6 +868,9 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 	applyToolOutputConfig(cfg, fc.ToolOutput)
 	applyRuntimeConfig(cfg, fc.Runtime)
 	if err := applySkillsConfig(cfg, fc.Skills); err != nil {
+		return fmt.Errorf("config: parse %s: %w", source.Path, err)
+	}
+	if err := applyModulesConfig(cfg, fc.Modules); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
 	if !opts.SkipExtensionPolicy {

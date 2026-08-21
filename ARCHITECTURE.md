@@ -284,7 +284,7 @@ A Module is a trusted in-process Feature value compiled into JueX. It has one
 stable `module.ID`, is registered once, and is indexed under every narrow typed
 capability it implements. The production Runtime set includes Builtin Tools,
 project guidance, Skills, and enabled Side Session, Observable, and MCP
-Modules. The Session set includes session context, Goal, Notes, and any
+Modules. The Session set includes session context, Goal, Notes, Hooks, and any
 caller-provided Session Modules. A Module may implement any combination of
 contribution, policy, observer, or scoped resource interfaces and is still
 registered only once.
@@ -313,14 +313,17 @@ type FinishPolicy interface {
 }
 ```
 
-Providers return values; they never mutate the serving Tool registry. After
-both sets are sealed, the Framework validates their complete Tool catalogs and
-builds a fresh serving registry. Only that fully built registry is published,
-so duplicate or invalid contributions cannot expose a partial catalog. The
-Framework assigns provenance, rejects invalid or duplicate Module identities,
-Tool names, and context keys with both owners in the error, and preserves
-explicit registration order. `Seal` freezes registration and capability
-indexes. A sealed set exposes defensive snapshots and cannot be extended.
+Providers return values; they never mutate the serving Tool registry. The
+Framework first freezes Module identity, registration order, and capability
+indexes, then starts scoped resources, and only then materializes Tool
+contributions that depend on those resources. After both candidate sets have
+valid catalogs, the Framework validates their complete union and builds a
+fresh serving registry. Only that fully built registry is published, so a
+duplicate, invalid, or post-start discovery failure cannot expose a partial
+catalog. The Framework assigns provenance, rejects invalid or duplicate Module
+identities, Tool names, and context keys with both owners in the error, and
+preserves explicit registration order. A sealed set exposes defensive
+snapshots and cannot be extended.
 
 Runtime and Session resources use different typed lifecycle interfaces. Runtime
 factories receive only immutable Runtime identity/path values; Session factories
@@ -332,17 +335,18 @@ services.
 The Framework lifecycle is:
 
 1. Resolve configuration and Extension resource references.
-2. Filter disabled factories, construct Runtime Modules in declared order,
-   register each once, validate contributions, and seal the Runtime set.
-3. Start Runtime resources in registration order. A failure closes only
+2. Filter disabled factories before construction, construct Runtime Modules in
+   declared order, register each once, and freeze the candidate Runtime set.
+3. Start Runtime resources in registration order, then materialize and validate
+   the candidate Tool catalog. A startup or catalog failure closes only
    successfully started resources in reverse order and joins cleanup failures
-   with the startup error.
+   with the primary error.
 4. Attach and lock a Session. A new Primary attachment may provisionally update
    persisted active history here; this selection record is distinct from App
    runtime publication. If its later lock acquisition fails, the candidate and
    selection may remain for reconciliation. After attachment succeeds,
-   construct, validate, seal, and start the Session set before publishing it to
-   App readers.
+   construct, freeze, start, and validate the Session candidate before
+   publishing it to App readers.
 5. Build one complete Tool registry from the sealed Runtime and Session
    catalogs, then publish the Session, sealed Session set, registry, prompt
    builder, and other Session dependencies together through `runtime.Engine`'s
@@ -351,8 +355,10 @@ The Framework lifecycle is:
 6. On a committed replacement, quiesce and close the old Session set in reverse
    order. Post-commit cleanup failures are diagnostics and never undo or delete
    the newly published Session.
-7. On shutdown, stop admission, quiesce and close Session Modules in reverse
-   order, then close Runtime Modules in reverse order. Every cleanup is
+7. On shutdown, stop admission and explicitly quiesce Runtime Modules while
+   Session delivery remains available. Then quiesce and close Session Modules,
+   release Session persistence, and close Runtime Modules in reverse order.
+   Deferred quiesce can be waited and retried; every resource cleanup is
    attempted and errors are joined with Module identity and lifecycle phase.
 
 Context requests identify their purpose (`session_start`, `turn_preparation`,
@@ -2256,6 +2262,9 @@ skills:
   prompt_budget_chars: 8000
   include: []
   exclude: []
+modules:
+  skills:
+    enabled: true
 extensions:
   allow: []
 shell:
@@ -2324,6 +2333,7 @@ tool_output:
 | `skills.prompt_budget_chars` | optional compact skill catalog budget in characters; defaults to `8000` and is capped by the model context-window policy |
 | `skills.include` | optional filesystem skill-name whitelist applied after user, extension, and project merging; when non-empty, `skills.exclude` is ignored; required builtin guides remain loaded |
 | `skills.exclude` | optional filesystem skill-name blacklist applied after merging when `skills.include` is empty; required builtin guides remain loaded |
+| `modules.<stable-id>.enabled` | optional layered boolean; omitted Modules default to enabled, later config layers replace one ID independently, and unknown IDs or fields fail startup; Runtime IDs are `builtin-tools`, `project-guidance`, `skills`, `side-sessions`, `observables`, and `mcp`, while Session IDs are `session-context`, `goal`, `notes`, and `hooks` |
 | `shell` | optional object; omitted or `{}` means `profile: auto`; scalar values are rejected |
 | `shell.profile` | `auto`, `powershell`, `cmd`, `bash`, `zsh`, `sh`, `git-bash`, `wsl`, or `custom`; auto uses the Juex process runtime OS |
 | `shell.binary` | optional executable override for built-in profiles; validated before startup and never silently falls back |
@@ -2890,9 +2900,10 @@ notification targets.
 MCP stdio stdout is treated as the JSON-RPC protocol stream. Non-JSON output on
 stdout fails the connection as a protocol error; server logs must go to stderr.
 The app runtime catalog service assembles read-only facts for `/api/runtime`:
-provider, shell, system prompt sections, hooks, skills, a fixed-order tool
-presentation populated from sealed Module catalogs, and configured MCP servers
-with their advertised tool details. MCP server entries expose canonical `stdio`
+provider, shell, ordered active Module descriptors, system prompt sections,
+hooks, skills, a fixed-order tool presentation populated from the active sealed
+Runtime and Session Module catalogs, and configured MCP servers with their
+advertised tool details. MCP server entries expose canonical `stdio`
 or `http` transport plus
 command metadata or an operator-facing URL with its query removed. Startup
 errors that echo the endpoint receive the same projection; the original URL
@@ -2900,20 +2911,22 @@ remains private to the connection layer. Tool entries expose normalized schema
 plus semantic timeout metadata: `bounded` carries the effective seconds and
 `disabled` means the tool owns its lifecycle. Module identity is the capability
 owner; fixed group ordering is presentation metadata, not a second capability
-list. The catalog is the process startup view: the sealed Runtime and preview
-Session Module definitions, manager-owned MCP row set, sources, transport
-metadata, and descriptors remain fixed until restart. No active session is
-required, and status reads do not reload unapplied MCP config or rediscover
-tools.
+list. Status holds the App publication lease while reading the current Runtime
+set and current Session set, so replacement or shutdown cannot mix
+generations. MCP tool rows must match entries owned by the active `mcp` Module
+catalog; status never constructs nil-backed or descriptor-only shadow Modules.
+The Web server establishes a lazy active Primary App when the runtime view is
+first requested and reuses its sealed catalogs until replacement or restart.
 The web layer adds the latest per-server startup error and translates the app
 status into the browser DTO.
 
 Production paths load user-global MCP configs, extension MCP configs, and
-project MCP configs, then start a best-effort process manager with
-`mcp.NewManagerLayeredSoft(ctx, configs, opts)`. `mcp.Module` exposes that
-manager's proxy tools through the Runtime `ToolProvider`; the Framework seals
-the contribution with the other Runtime Modules, validates it against the
-Session catalog, and atomically constructs the complete serving registry.
+project MCP configs. CLI Apps construct the best-effort process manager from
+`mcp.Module.StartRuntime`; the Web server owns one process manager and injects
+it into each non-owning App Module. The Module exposes proxy tools through the
+Runtime `ToolProvider`; the Framework starts the resource, materializes its
+contribution with the other Runtime Modules, validates it against the Session
+catalog, and atomically constructs the complete serving registry.
 Project `mcp.json` entries override user-level servers with the same name;
 extension MCP server names must be unique and reject collisions instead of
 overriding. Tests that cover layered config behavior exercise the same manager
