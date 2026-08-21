@@ -2016,6 +2016,84 @@ func useAcrossRangeIterations(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionKeepsZeroIterationLoopExits(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+func cleanupAfterConditionalLoop(resource closer, run bool) {
+	for run { return }
+	_ = resource.Close()
+}
+func cleanupAfterRangeLoop(resource closer, values []int) {
+	for range values { return }
+	_ = resource.Close()
+}
+func registerAfterConditionalLoop(registry registrar, run bool) {
+	for run { return }
+	registry.Register(nil)
+}
+func registerAfterRangeLoop(registry registrar, values []int) {
+	for range values { return }
+	registry.Register(nil)
+}
+func useLoopHelpers(application *App, run bool, values []int) {
+	cleanupAfterConditionalLoop(application.manager, run)
+	cleanupAfterRangeLoop(application.manager, values)
+	registerAfterConditionalLoop(application.registry, run)
+	registerAfterRangeLoop(application.registry, values)
+}
+func directAfterSkippedLoops(application *App, run bool, values []int) {
+	for run { return }
+	_ = application.manager.Close()
+	application.registry.Register(nil)
+	for range values { return }
+	_ = application.manager.Close()
+	application.registry.Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "zero_iteration_loops.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	cleanup := "," + strings.Join(cleanupCalls, ",") + ","
+	for _, want := range []string{"cleanupAfterConditionalLoop", "cleanupAfterRangeLoop", "application.manager.Close"} {
+		if !strings.Contains(cleanup, ","+want+",") {
+			t.Fatalf("cleanup calls = %v, want zero-iteration loop cleanup %q", cleanupCalls, want)
+		}
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	registration := "," + strings.Join(registrationCalls, ",") + ","
+	for _, want := range []string{"registerAfterConditionalLoop", "registerAfterRangeLoop", "application.registry.Register"} {
+		if !strings.Contains(registration, ","+want+",") {
+			t.Fatalf("Tool registration calls = %v, want zero-iteration loop registration %q", registrationCalls, want)
+		}
+	}
+}
+
 func TestAppCompositionInspectionTracksRegistrationFunctionConversions(t *testing.T) {
 	source := `package app
 import "github.com/juex-ai/juex/internal/tools"
@@ -3175,6 +3253,68 @@ func useMergedSwitchState(application *App, choice int) {
 	}
 	if registration := "," + strings.Join(registrationCalls, ",") + ","; len(registrationCalls) != 4 || registryRegistrationCalls != 3 || !strings.Contains(registration, ",registries.Register,") {
 		t.Fatalf("Tool registration calls = %v, want select-operand, loop-exit, label, and post-switch registration", registrationCalls)
+	}
+}
+
+func TestAppCompositionInspectionBindsTypeSwitchGuardTypes(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+func cleanupTypeSwitched(value any) {
+	switch resource := value.(type) {
+	case *mcp.Manager:
+		_ = resource.Close()
+	}
+}
+func registerTypeSwitched(value any) {
+	switch registry := value.(type) {
+	case *tools.Registry:
+		registry.Register(nil)
+	}
+}
+func useTypeSwitchHelpers(application *App) {
+	cleanupTypeSwitched(application.manager)
+	registerTypeSwitched(application.registry)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "type_switch_guards.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	cleanup := "," + strings.Join(cleanupCalls, ",") + ","
+	for _, want := range []string{"resource.Close", "cleanupTypeSwitched"} {
+		if !strings.Contains(cleanup, ","+want+",") {
+			t.Fatalf("cleanup calls = %v, want type-switch cleanup %q", cleanupCalls, want)
+		}
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	registration := "," + strings.Join(registrationCalls, ",") + ","
+	for _, want := range []string{"registry.Register", "registerTypeSwitched"} {
+		if !strings.Contains(registration, ","+want+",") {
+			t.Fatalf("Tool registration calls = %v, want type-switch registration %q", registrationCalls, want)
+		}
 	}
 }
 
@@ -5003,7 +5143,7 @@ func inspectCompositionIf(statement *ast.IfStmt, visit func(ast.Node) bool, snap
 	restore(merge(exits))
 }
 
-func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, allowFallthrough bool, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) {
+func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, allowFallthrough bool, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState, enterClause func(*ast.CaseClause)) {
 	base := snapshot()
 	selectedEntries := make(map[*ast.CaseClause]compositionFlowState)
 	remaining := base
@@ -5041,6 +5181,9 @@ func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, 
 			entry = merge([]compositionFlowState{entry, *fallthroughState})
 		}
 		restore(entry)
+		if enterClause != nil {
+			enterClause(clause)
+		}
 		for _, statement := range clause.Body {
 			ast.Inspect(statement, visit)
 		}
@@ -5058,6 +5201,38 @@ func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, 
 		exits = append(exits, remaining)
 	}
 	restore(merge(exits))
+}
+
+func typeSwitchGuard(statement *ast.TypeSwitchStmt) (*ast.Ident, ast.Expr) {
+	assignment, ok := statement.Assign.(*ast.AssignStmt)
+	if !ok || len(assignment.Lhs) != 1 || len(assignment.Rhs) != 1 {
+		return nil, nil
+	}
+	guard, ok := assignment.Lhs[0].(*ast.Ident)
+	if !ok || guard.Name == "_" {
+		return nil, nil
+	}
+	assertion, ok := assignment.Rhs[0].(*ast.TypeAssertExpr)
+	if !ok || assertion.Type != nil {
+		return nil, nil
+	}
+	return guard, assertion.X
+}
+
+func typeSwitchClauseBinder(statement *ast.TypeSwitchStmt, fallbackType string, imports map[string]string, bind func(string, string)) func(*ast.CaseClause) {
+	guard, _ := typeSwitchGuard(statement)
+	if guard == nil {
+		return nil
+	}
+	return func(clause *ast.CaseClause) {
+		typeName := fallbackType
+		if len(clause.List) == 1 {
+			if identifier, nilCase := clause.List[0].(*ast.Ident); !nilCase || identifier.Name != "nil" {
+				typeName = canonicalType(clause.List[0], imports)
+			}
+		}
+		bind(bindingKey(guard), typeName)
+	}
 }
 
 func inspectCompositionCommClauses(body *ast.BlockStmt, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) {
@@ -5093,8 +5268,11 @@ func inspectCompositionCommClauses(body *ast.BlockStmt, visit func(ast.Node) boo
 	restore(merge(exits))
 }
 
-func inspectCompositionLoopBody(body *ast.BlockStmt, visit func(ast.Node) bool, router *compositionFlowRouter) {
+func inspectCompositionLoopBody(body *ast.BlockStmt, visit func(ast.Node) bool, router *compositionFlowRouter, zeroIterationState *compositionFlowState) {
 	breakTarget := router.pushBreakTarget()
+	if zeroIterationState != nil {
+		breakTarget.states = append(breakTarget.states, *zeroIterationState)
+	}
 	continueTarget := router.pushContinueTarget(breakTarget.label)
 	ast.Inspect(body, visit)
 	router.excludeTargetBindings(continueTarget, blockDeclaredCompositionBindings(body))
@@ -5258,7 +5436,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				ast.Inspect(value.Tag, visit)
 			}
 			breakTarget := router.pushBreakTarget()
-			inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge)
+			inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge, nil)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -5266,11 +5444,22 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 			if value.Init != nil {
 				ast.Inspect(value.Init, visit)
 			}
+			guardType := ""
+			if _, expression := typeSwitchGuard(value); expression != nil {
+				guardType = expressionType(expression, function.imports, values, types)
+			}
 			if value.Assign != nil {
 				ast.Inspect(value.Assign, visit)
 			}
 			breakTarget := router.pushBreakTarget()
-			inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge)
+			bindGuard := typeSwitchClauseBinder(value, guardType, function.imports, func(key, typeName string) {
+				if typeName == "" {
+					delete(values, key)
+					return
+				}
+				values[key] = typeName
+			})
+			inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge, bindGuard)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -5284,10 +5473,13 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 			if value.Init != nil {
 				ast.Inspect(value.Init, visit)
 			}
+			var zeroIterationState *compositionFlowState
 			if value.Cond != nil {
 				ast.Inspect(value.Cond, visit)
+				state := snapshot()
+				zeroIterationState = &state
 			}
-			inspectCompositionLoopBody(value.Body, visit, router)
+			inspectCompositionLoopBody(value.Body, visit, router, zeroIterationState)
 			if value.Post != nil {
 				ast.Inspect(value.Post, visit)
 			}
@@ -5338,6 +5530,8 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				}
 			}
 		case *ast.RangeStmt:
+			ast.Inspect(value.X, visit)
+			zeroIterationState := snapshot()
 			origin := resultParameterOrigins(value.X, function.imports, values, origins, types, 0)
 			keyType, valueType, ok := rangeTypes(expressionType(value.X, function.imports, values, types), types)
 			if !ok {
@@ -5363,8 +5557,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 					values[key] = valueType
 				}
 			}
-			ast.Inspect(value.X, visit)
-			inspectCompositionLoopBody(value.Body, visit, router)
+			inspectCompositionLoopBody(value.Body, visit, router, &zeroIterationState)
 			return false
 		case *ast.CallExpr:
 			if callbacks := cleanupCallbackArgumentIndexes(value, function.imports, values, types); len(callbacks) != 0 {
@@ -5490,7 +5683,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				ast.Inspect(value.Tag, visit)
 			}
 			breakTarget := router.pushBreakTarget()
-			inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge)
+			inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge, nil)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -5498,11 +5691,22 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 			if value.Init != nil {
 				ast.Inspect(value.Init, visit)
 			}
+			guardType := ""
+			if _, expression := typeSwitchGuard(value); expression != nil {
+				guardType = expressionType(expression, function.imports, values, types)
+			}
 			if value.Assign != nil {
 				ast.Inspect(value.Assign, visit)
 			}
 			breakTarget := router.pushBreakTarget()
-			inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge)
+			bindGuard := typeSwitchClauseBinder(value, guardType, function.imports, func(key, typeName string) {
+				if typeName == "" {
+					delete(values, key)
+					return
+				}
+				values[key] = typeName
+			})
+			inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge, bindGuard)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -5516,10 +5720,13 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 			if value.Init != nil {
 				ast.Inspect(value.Init, visit)
 			}
+			var zeroIterationState *compositionFlowState
 			if value.Cond != nil {
 				ast.Inspect(value.Cond, visit)
+				state := snapshot()
+				zeroIterationState = &state
 			}
-			inspectCompositionLoopBody(value.Body, visit, router)
+			inspectCompositionLoopBody(value.Body, visit, router, zeroIterationState)
 			if value.Post != nil {
 				ast.Inspect(value.Post, visit)
 			}
@@ -5570,6 +5777,8 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				}
 			}
 		case *ast.RangeStmt:
+			ast.Inspect(value.X, visit)
+			zeroIterationState := snapshot()
 			origin := resultParameterOrigins(value.X, function.imports, values, origins, types, 0)
 			keyType, valueType, ok := rangeTypes(expressionType(value.X, function.imports, values, types), types)
 			if !ok {
@@ -5602,8 +5811,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 					values[key] = valueType
 				}
 			}
-			ast.Inspect(value.X, visit)
-			inspectCompositionLoopBody(value.Body, visit, router)
+			inspectCompositionLoopBody(value.Body, visit, router, &zeroIterationState)
 			return false
 		case *ast.CallExpr:
 			if callbacks := toolCallbackArgumentIndexes(value, function.imports, values, types); len(callbacks) != 0 {
@@ -6326,7 +6534,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					ast.Inspect(value.Tag, visit)
 				}
 				breakTarget := router.pushBreakTarget()
-				inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge)
+				inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge, nil)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -6334,11 +6542,27 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				if value.Init != nil {
 					ast.Inspect(value.Init, visit)
 				}
+				guardType := ""
+				if _, expression := typeSwitchGuard(value); expression != nil {
+					guardType = expressionType(expression, imports, values, types)
+				}
 				if value.Assign != nil {
 					ast.Inspect(value.Assign, visit)
 				}
 				breakTarget := router.pushBreakTarget()
-				inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge)
+				bindGuard := typeSwitchClauseBinder(value, guardType, imports, func(key, typeName string) {
+					if typeName == "" {
+						delete(values, key)
+						delete(resources, key)
+						return
+					}
+					values[key] = typeName
+					delete(resources, key)
+					if paths := cleanupPathsForType(typeName, types, nil); paths != nil {
+						resources[key] = paths
+					}
+				})
+				inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge, bindGuard)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -6352,10 +6576,16 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				if value.Init != nil {
 					ast.Inspect(value.Init, visit)
 				}
+				var zeroIterationState *compositionFlowState
 				if value.Cond != nil {
 					ast.Inspect(value.Cond, visit)
+					state := snapshot()
+					zeroIterationState = &state
 				}
 				breakTarget := router.pushBreakTarget()
+				if zeroIterationState != nil {
+					breakTarget.states = append(breakTarget.states, *zeroIterationState)
+				}
 				continueTarget := router.pushContinueTarget(breakTarget.label)
 				for {
 					beforeValues := cloneStringMap(values)
@@ -6433,6 +6663,8 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					}
 				}
 			case *ast.RangeStmt:
+				ast.Inspect(value.X, visit)
+				zeroIterationState := snapshot()
 				collectionPaths := cleanupPathsForExpression(value.X, imports, values, resources, types)
 				collectionType := resolveNamedType(expressionType(value.X, imports, values, types), types)
 				keyType, valueType, ok := rangeTypes(collectionType, types)
@@ -6472,8 +6704,8 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 						}
 					}
 				}
-				ast.Inspect(value.X, visit)
 				breakTarget := router.pushBreakTarget()
+				breakTarget.states = append(breakTarget.states, zeroIterationState)
 				continueTarget := router.pushContinueTarget(breakTarget.label)
 				for {
 					beforeValues := cloneStringMap(values)
@@ -6790,7 +7022,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					ast.Inspect(value.Tag, visit)
 				}
 				breakTarget := router.pushBreakTarget()
-				inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge)
+				inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge, nil)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -6798,11 +7030,22 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				if value.Init != nil {
 					ast.Inspect(value.Init, visit)
 				}
+				guardType := ""
+				if _, expression := typeSwitchGuard(value); expression != nil {
+					guardType = expressionType(expression, imports, values, types)
+				}
 				if value.Assign != nil {
 					ast.Inspect(value.Assign, visit)
 				}
 				breakTarget := router.pushBreakTarget()
-				inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge)
+				bindGuard := typeSwitchClauseBinder(value, guardType, imports, func(key, typeName string) {
+					if typeName == "" {
+						delete(values, key)
+						return
+					}
+					values[key] = typeName
+				})
+				inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge, bindGuard)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -6816,10 +7059,16 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				if value.Init != nil {
 					ast.Inspect(value.Init, visit)
 				}
+				var zeroIterationState *compositionFlowState
 				if value.Cond != nil {
 					ast.Inspect(value.Cond, visit)
+					state := snapshot()
+					zeroIterationState = &state
 				}
 				breakTarget := router.pushBreakTarget()
+				if zeroIterationState != nil {
+					breakTarget.states = append(breakTarget.states, *zeroIterationState)
+				}
 				continueTarget := router.pushContinueTarget(breakTarget.label)
 				for {
 					beforeValues := cloneStringMap(values)
@@ -6885,6 +7134,8 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					}
 				}
 			case *ast.RangeStmt:
+				ast.Inspect(value.X, visit)
+				zeroIterationState := snapshot()
 				collectionType := resolveNamedType(expressionType(value.X, imports, values, types), types)
 				keyType, valueType, ok := rangeTypes(collectionType, types)
 				if !ok {
@@ -6907,8 +7158,8 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 						values[bindingKey(name)] = valueType
 					}
 				}
-				ast.Inspect(value.X, visit)
 				breakTarget := router.pushBreakTarget()
+				breakTarget.states = append(breakTarget.states, zeroIterationState)
 				continueTarget := router.pushContinueTarget(breakTarget.label)
 				for {
 					beforeValues := cloneStringMap(values)
