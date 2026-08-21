@@ -83,6 +83,7 @@ type compositionTypeIndex struct {
 	toolCallResults  map[string]map[int]bool
 	resultParams     map[string]map[int]map[int]bool
 	resultParamPaths map[string]map[int]map[int]map[string]bool
+	parameterWrites  map[string]map[int]map[int]map[string]bool
 	variadicParams   map[string]int
 	appFunctionKeys  map[string]bool
 	appFunctions     []indexedAppFunction
@@ -511,6 +512,23 @@ func cleanupFromPointerAlias(application *App) {
 	alias.resource = application.manager
 	_ = owned.resource.Close()
 }
+func stashCloser(resources []closer, resource closer) { resources[0] = resource }
+func cleanupFromHelperWrite(application *App) {
+	resources := make([]closer, 1)
+	stashCloser(resources, application.manager)
+	_ = resources[0].Close()
+}
+func cleanupFromSliceAssignment(application *App) {
+	resources := make([]closer, 1)
+	resources[:][0] = application.manager
+	_ = resources[0].Close()
+}
+func cleanupFromFieldAddress(application *App) {
+	owned := ownedHolder{}
+	alias := &owned.resource
+	*alias = application.manager
+	_ = owned.resource.Close()
+}
 func cleanupAfterShadow(application *App, unrelated closer) {
 	manager := application.manager
 	{
@@ -552,7 +570,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"packageManager.Close", "Run", "cleanupRunner.Run", "identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "resources.Close", "owned.resource.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
+	want := []string{"packageManager.Close", "Run", "cleanupRunner.Run", "identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resources.Close", "resources.Close", "owned.resource.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -790,6 +808,23 @@ func registerFromPointerAlias(application *App) {
 	alias.registry = application.registry
 	owned.registry.Register(nil)
 }
+func stashRegistrar(registries []registrar, registry registrar) { registries[0] = registry }
+func registerFromHelperWrite(application *App) {
+	registries := make([]registrar, 1)
+	stashRegistrar(registries, application.registry)
+	registries[0].Register(nil)
+}
+func registerFromSliceAssignment(application *App) {
+	registries := make([]registrar, 1)
+	registries[:][0] = application.registry
+	registries[0].Register(nil)
+}
+func registerFromFieldAddress(application *App) {
+	owned := registryHolder{}
+	alias := &owned.registry
+	*alias = application.registry
+	owned.registry.Register(nil)
+}
 func registerAfterShadow(application *App, unrelated *router) {
 	registry := application.registry
 	{
@@ -855,7 +890,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"packageRegistry.Register", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"packageRegistry.Register", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -1032,6 +1067,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 		toolCallResults:  make(map[string]map[int]bool),
 		resultParams:     make(map[string]map[int]map[int]bool),
 		resultParamPaths: make(map[string]map[int]map[int]map[string]bool),
+		parameterWrites:  make(map[string]map[int]map[int]map[string]bool),
 		variadicParams:   make(map[string]int),
 		appFunctionKeys:  make(map[string]bool),
 	}
@@ -1372,6 +1408,13 @@ func localFlowCount(types compositionTypeIndex) int {
 			}
 		}
 	}
+	for _, destinations := range types.parameterWrites {
+		for _, sources := range destinations {
+			for _, paths := range sources {
+				count += len(paths)
+			}
+		}
+	}
 	return count
 }
 
@@ -1409,7 +1452,7 @@ func indexLocalResultFlows(types *compositionTypeIndex) {
 	for changed {
 		changed = false
 		for _, function := range types.appFunctions {
-			cleanupResults, toolResults, toolCallResults, resultParams, resultParamPaths := inferLocalResultFlows(function, *types)
+			cleanupResults, toolResults, toolCallResults, resultParams, resultParamPaths, parameterWrites := inferLocalResultFlows(function, *types)
 			if types.cleanupResults[function.key] == nil {
 				types.cleanupResults[function.key] = make(map[int]map[string]bool)
 			}
@@ -1475,16 +1518,36 @@ func indexLocalResultFlows(types *compositionTypeIndex) {
 					}
 				}
 			}
+			if types.parameterWrites[function.key] == nil {
+				types.parameterWrites[function.key] = make(map[int]map[int]map[string]bool)
+			}
+			for destinationIndex, sources := range parameterWrites {
+				if types.parameterWrites[function.key][destinationIndex] == nil {
+					types.parameterWrites[function.key][destinationIndex] = make(map[int]map[string]bool)
+				}
+				for sourceIndex, paths := range sources {
+					if types.parameterWrites[function.key][destinationIndex][sourceIndex] == nil {
+						types.parameterWrites[function.key][destinationIndex][sourceIndex] = make(map[string]bool)
+					}
+					for path := range paths {
+						if !types.parameterWrites[function.key][destinationIndex][sourceIndex][path] {
+							types.parameterWrites[function.key][destinationIndex][sourceIndex][path] = true
+							changed = true
+						}
+					}
+				}
+			}
 		}
 	}
 }
 
-func inferLocalResultFlows(function indexedAppFunction, types compositionTypeIndex) (map[int]map[string]bool, map[int]bool, map[int]bool, map[int]map[int]bool, map[int]map[int]map[string]bool) {
+func inferLocalResultFlows(function indexedAppFunction, types compositionTypeIndex) (map[int]map[string]bool, map[int]bool, map[int]bool, map[int]map[int]bool, map[int]map[int]map[string]bool, map[int]map[int]map[string]bool) {
 	cleanupResults := make(map[int]map[string]bool)
 	toolResults := make(map[int]bool)
 	toolCallResults := make(map[int]bool)
 	resultParams := make(map[int]map[int]bool)
 	resultParamPaths := make(map[int]map[int]map[string]bool)
+	parameterWrites := make(map[int]map[int]map[string]bool)
 	concreteTypes := types
 	concreteTypes.resultParams = nil
 	origins := functionParameterOrigins(function)
@@ -1504,6 +1567,19 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 	}
 	references := functionReferenceValues(function)
 	aliases := make(map[string]map[string]bool)
+	recordParameterWrite := func(destinations, sources map[int]bool, prefix string) {
+		for destination := range destinations {
+			if parameterWrites[destination] == nil {
+				parameterWrites[destination] = make(map[int]map[string]bool)
+			}
+			for source := range sources {
+				if parameterWrites[destination][source] == nil {
+					parameterWrites[destination][source] = make(map[string]bool)
+				}
+				parameterWrites[destination][source][prefix] = true
+			}
+		}
+	}
 	recordResult := func(index int, expression ast.Expr, expressionResultIndex int) {
 		var capturedCleanup, capturedTools map[int]bool
 		if literal := functionLiteralExpression(expression); literal != nil {
@@ -1568,6 +1644,9 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 				}
 				key := bindingKey(name)
 				assignedOrigins := assignedResultParameterOrigins(value.Rhs, index, function.imports, values, origins, types)
+				if isMutatingAssignmentTarget(left) && references[key] {
+					recordParameterWrite(originsForExpression(left, origins), assignedOrigins, assignmentFieldPrefix(left))
+				}
 				for alias := range referenceAliasKeys(aliases, key) {
 					mergeBindingOrigins(origins, alias, assignedOrigins)
 				}
@@ -1635,6 +1714,28 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 					resources[key] = collectionPaths
 				}
 			}
+		case *ast.CallExpr:
+			callee := calledFunctionKey(value.Fun, function.imports, values, types)
+			for destinationIndex, sources := range types.parameterWrites[callee] {
+				for _, destination := range callArgumentsForParameter(value, callee, destinationIndex, function.imports, types) {
+					destinationName, _ := assignmentBinding(destination)
+					if destinationName == nil {
+						continue
+					}
+					destinationKey := bindingKey(destinationName)
+					for sourceIndex, prefixes := range sources {
+						for _, source := range callArgumentsForParameter(value, callee, sourceIndex, function.imports, types) {
+							sourceOrigins := originsForExpression(source, origins)
+							for prefix := range prefixes {
+								recordParameterWrite(originsForExpression(destination, origins), sourceOrigins, assignmentFieldPrefix(destination)+prefix)
+							}
+							for alias := range referenceAliasKeys(aliases, destinationKey) {
+								mergeBindingOrigins(origins, alias, sourceOrigins)
+							}
+						}
+					}
+				}
+			}
 		case *ast.FuncLit:
 			return false
 		case *ast.ReturnStmt:
@@ -1660,7 +1761,7 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 		}
 		return true
 	})
-	return cleanupResults, toolResults, toolCallResults, resultParams, resultParamPaths
+	return cleanupResults, toolResults, toolCallResults, resultParams, resultParamPaths, parameterWrites
 }
 
 func inferenceState(function indexedAppFunction) (map[string]map[int]bool, map[string]string) {
@@ -1747,6 +1848,22 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				values[key] = valueType
 			}
 		case *ast.CallExpr:
+			callee := calledFunctionKey(value.Fun, function.imports, values, types)
+			for destinationIndex, sources := range types.parameterWrites[callee] {
+				for _, destination := range callArgumentsForParameter(value, callee, destinationIndex, function.imports, types) {
+					destinationName, _ := assignmentBinding(destination)
+					if destinationName == nil {
+						continue
+					}
+					for sourceIndex := range sources {
+						for _, source := range callArgumentsForParameter(value, callee, sourceIndex, function.imports, types) {
+							for alias := range referenceAliasKeys(aliases, bindingKey(destinationName)) {
+								mergeBindingOrigins(origins, alias, originsForExpression(source, origins))
+							}
+						}
+					}
+				}
+			}
 			callbackOrigins := callableOrigins(value.Fun, origins)
 			if !function.captureOnly {
 				mergeOrigins(cleaned, callbackOrigins)
@@ -1759,7 +1876,6 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 					mergeOrigins(cleaned, originsForExpression(selector.X, origins))
 				}
 			}
-			callee := calledFunctionKey(value.Fun, function.imports, values, types)
 			for index := range types.cleanupParams[callee] {
 				for _, argument := range callArgumentsForParameter(value, callee, index, function.imports, types) {
 					mergeOrigins(cleaned, originsForExpression(argument, origins))
@@ -1834,6 +1950,22 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				values[key] = valueType
 			}
 		case *ast.CallExpr:
+			callee := calledFunctionKey(value.Fun, function.imports, values, types)
+			for destinationIndex, sources := range types.parameterWrites[callee] {
+				for _, destination := range callArgumentsForParameter(value, callee, destinationIndex, function.imports, types) {
+					destinationName, _ := assignmentBinding(destination)
+					if destinationName == nil {
+						continue
+					}
+					for sourceIndex := range sources {
+						for _, source := range callArgumentsForParameter(value, callee, sourceIndex, function.imports, types) {
+							for alias := range referenceAliasKeys(aliases, bindingKey(destinationName)) {
+								mergeBindingOrigins(origins, alias, originsForExpression(source, origins))
+							}
+						}
+					}
+				}
+			}
 			callbackOrigins := callableOrigins(value.Fun, origins)
 			if !function.captureOnly {
 				mergeOrigins(registered, callbackOrigins)
@@ -1852,7 +1984,6 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 					mergeOrigins(registered, originsForExpression(selector.X, origins))
 				}
 			}
-			callee := calledFunctionKey(value.Fun, function.imports, values, types)
 			for index := range types.toolParams[callee] {
 				for _, argument := range callArgumentsForParameter(value, callee, index, function.imports, types) {
 					mergeOrigins(registered, originsForExpression(argument, origins))
@@ -2342,6 +2473,24 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					}
 				}
 				callee := calledFunctionKey(value.Fun, imports, values, types)
+				for destinationIndex, sources := range types.parameterWrites[callee] {
+					for _, destination := range callArgumentsForParameter(value, callee, destinationIndex, imports, types) {
+						destinationName, _ := assignmentBinding(destination)
+						if destinationName == nil {
+							continue
+						}
+						destinationKey := bindingKey(destinationName)
+						for sourceIndex, prefixes := range sources {
+							for _, source := range callArgumentsForParameter(value, callee, sourceIndex, imports, types) {
+								sourcePaths := cleanupPathsForExpression(source, imports, values, resources, types)
+								for prefix := range prefixes {
+									paths := prefixCleanupPaths(assignmentFieldPrefix(destination)+prefix, sourcePaths)
+									mergeAliasedCleanupPaths(resources, aliases, destinationKey, paths)
+								}
+							}
+						}
+					}
+				}
 				cleanupParams := types.cleanupParams[callee]
 				variadicIndex, variadic := types.variadicParams[callee]
 				if literal := functionLiteralExpression(value.Fun); literal != nil {
@@ -2480,6 +2629,21 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					}
 				}
 				callee := calledFunctionKey(value.Fun, imports, values, types)
+				for destinationIndex, sources := range types.parameterWrites[callee] {
+					for _, destination := range callArgumentsForParameter(value, callee, destinationIndex, imports, types) {
+						destinationName, _ := assignmentBinding(destination)
+						if destinationName == nil {
+							continue
+						}
+						for sourceIndex := range sources {
+							for _, source := range callArgumentsForParameter(value, callee, sourceIndex, imports, types) {
+								if isToolRegistryExpression(source, imports, values, types) || isToolRegistryCollectionExpression(source, imports, values, types) {
+									setAliasedMayValueType(values, aliases, bindingKey(destinationName), toolRegistryCollectionType, types)
+								}
+							}
+						}
+					}
+				}
 				toolParams := types.toolParams[callee]
 				variadicIndex, variadic := types.variadicParams[callee]
 				if literal := functionLiteralExpression(value.Fun); literal != nil {
@@ -2665,6 +2829,8 @@ func assignmentValueKey(expression ast.Expr) string {
 			return ""
 		}
 		return prefix + "[]"
+	case *ast.SliceExpr:
+		return assignmentValueKey(value.X)
 	case *ast.ParenExpr:
 		return assignmentValueKey(value.X)
 	case *ast.StarExpr:
@@ -2696,10 +2862,38 @@ func trackReferenceAssignment(references map[string]bool, aliases map[string]map
 		return
 	}
 	references[key] = true
-	source, sourceIndexed := assignmentBinding(expression)
-	if source != nil && !sourceIndexed && references[bindingKey(source)] {
-		addReferenceAlias(aliases, key, bindingKey(source))
+	sourceKey := referenceSourceKey(expression)
+	if sourceKey != "" && (references[sourceKey] || isAddressExpression(expression)) {
+		addReferenceAlias(aliases, key, sourceKey)
 	}
+}
+
+func referenceSourceKey(expression ast.Expr) string {
+	for {
+		switch value := expression.(type) {
+		case *ast.ParenExpr:
+			expression = value.X
+		case *ast.UnaryExpr:
+			if value.Op != token.AND {
+				return ""
+			}
+			expression = value.X
+		default:
+			return assignmentValueKey(expression)
+		}
+	}
+}
+
+func isAddressExpression(expression ast.Expr) bool {
+	for {
+		parenthesized, ok := expression.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expression = parenthesized.X
+	}
+	unary, ok := expression.(*ast.UnaryExpr)
+	return ok && unary.Op == token.AND
 }
 
 func isReferenceExpression(expression ast.Expr, references map[string]bool) bool {
@@ -2755,14 +2949,34 @@ func referenceAliasKeys(aliases map[string]map[string]bool, key string) map[stri
 
 func mergeAliasedCleanupPaths(resources map[string]map[string]bool, aliases map[string]map[string]bool, key string, paths map[string]bool) {
 	for alias := range referenceAliasKeys(aliases, key) {
-		resources[alias] = mergeCleanupPaths(resources[alias], paths)
+		root, prefix := splitAssignmentValueKey(alias)
+		resources[root] = mergeCleanupPaths(resources[root], prefixCleanupPaths(prefix, paths))
 	}
 }
 
 func setAliasedMayValueType(values map[string]string, aliases map[string]map[string]bool, key, typeName string, types compositionTypeIndex) {
 	for alias := range referenceAliasKeys(aliases, key) {
-		setMayValueType(values, alias, typeName, types)
+		root, _ := splitAssignmentValueKey(alias)
+		setMayValueType(values, root, typeName, types)
 	}
+}
+
+func splitAssignmentValueKey(key string) (string, string) {
+	index := len(key)
+	if dot := strings.IndexByte(key, '.'); dot >= 0 && dot < index {
+		index = dot
+	}
+	if bracket := strings.IndexByte(key, '['); bracket >= 0 && bracket < index {
+		index = bracket
+	}
+	root := key[:index]
+	suffix := key[index:]
+	suffix = strings.ReplaceAll(suffix, "[]", "")
+	suffix = strings.TrimPrefix(suffix, ".")
+	if suffix != "" {
+		suffix += "."
+	}
+	return root, suffix
 }
 
 func assignmentBinding(expression ast.Expr) (*ast.Ident, bool) {
@@ -2772,15 +2986,31 @@ func assignmentBinding(expression ast.Expr) (*ast.Ident, bool) {
 	case *ast.IndexExpr:
 		identifier, _ := assignmentBinding(value.X)
 		return identifier, identifier != nil
+	case *ast.SliceExpr:
+		return assignmentBinding(value.X)
 	case *ast.SelectorExpr:
 		identifier, _ := assignmentBinding(value.X)
 		return identifier, identifier != nil
 	case *ast.ParenExpr:
 		return assignmentBinding(value.X)
 	case *ast.StarExpr:
-		return assignmentBinding(value.X)
+		identifier, _ := assignmentBinding(value.X)
+		return identifier, identifier != nil
 	default:
 		return nil, false
+	}
+}
+
+func isMutatingAssignmentTarget(expression ast.Expr) bool {
+	switch value := expression.(type) {
+	case *ast.IndexExpr, *ast.SelectorExpr, *ast.StarExpr:
+		return true
+	case *ast.ParenExpr:
+		return isMutatingAssignmentTarget(value.X)
+	case *ast.SliceExpr:
+		return isMutatingAssignmentTarget(value.X)
+	default:
+		return false
 	}
 }
 
@@ -2789,6 +3019,8 @@ func assignmentFieldPrefix(expression ast.Expr) string {
 	case *ast.SelectorExpr:
 		return assignmentFieldPrefix(value.X) + value.Sel.Name + "."
 	case *ast.IndexExpr:
+		return assignmentFieldPrefix(value.X)
+	case *ast.SliceExpr:
 		return assignmentFieldPrefix(value.X)
 	case *ast.ParenExpr:
 		return assignmentFieldPrefix(value.X)
