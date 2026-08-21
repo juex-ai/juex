@@ -1527,6 +1527,92 @@ func registerFromField(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionTracksMultiArgumentSliceTransforms(t *testing.T) {
+	source := `package app
+import (
+	"slices"
+
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+func cleanupFromRepeat(application *App) {
+	resources := slices.Repeat([]closer{application.manager}, 2)
+	_ = resources[0].Close()
+}
+func registerFromRepeat(application *App) {
+	registries := slices.Repeat([]registrar{application.registry}, 2)
+	registries[0].Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "slice_transforms.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resources.Close,") {
+		t.Fatalf("cleanup calls = %v, want slices.Repeat cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registries.Register,") {
+		t.Fatalf("Tool registration calls = %v, want slices.Repeat registration", registrationCalls)
+	}
+}
+
+func TestSliceCollectionSourceArguments(t *testing.T) {
+	tests := []struct {
+		expression string
+		want       string
+	}{
+		{expression: "slices.Concat(a, b)", want: "a,b"},
+		{expression: "slices.AppendSeq(a, b)", want: "a,b"},
+		{expression: "slices.Repeat(a, b)", want: "a"},
+		{expression: "slices.Delete(a, b, c)", want: "a"},
+		{expression: "slices.DeleteFunc(a, b)", want: "a"},
+		{expression: "slices.CompactFunc(a, b)", want: "a"},
+		{expression: "slices.Grow(a, b)", want: "a"},
+		{expression: "slices.Insert(a, b, c, d)", want: "a,c,d"},
+		{expression: "slices.Replace(a, b, c, d)", want: "a,d"},
+		{expression: "slices.Clone(a)", want: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.expression, func(t *testing.T) {
+			expression, err := parser.ParseExpr(test.expression)
+			if err != nil {
+				t.Fatal(err)
+			}
+			call := expression.(*ast.CallExpr)
+			var sources []string
+			for _, source := range sliceCollectionSourceArguments(call, map[string]string{"slices": "slices"}) {
+				sources = append(sources, selectorChain(source))
+			}
+			if got := strings.Join(sources, ","); got != test.want {
+				t.Fatalf("sources = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func checkImports(t *testing.T, root, relativeDir, layer string, forbidden func(string) bool) {
 	t.Helper()
 	dir := filepath.Join(root, filepath.FromSlash(relativeDir))
@@ -4473,13 +4559,32 @@ func iteratorRangeToolTypes(expression ast.Expr, imports map[string]string, valu
 	}
 }
 
-func isSlicesConcatCall(call *ast.CallExpr, imports map[string]string) bool {
+func sliceCollectionSourceArguments(call *ast.CallExpr, imports map[string]string) []ast.Expr {
 	selector, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || selector.Sel.Name != "Concat" {
-		return false
+	if !ok {
+		return nil
 	}
 	qualifier, ok := selector.X.(*ast.Ident)
-	return ok && imports[qualifier.Name] == "slices"
+	if !ok || imports[qualifier.Name] != "slices" {
+		return nil
+	}
+	switch selector.Sel.Name {
+	case "Concat", "AppendSeq":
+		return call.Args
+	case "Repeat", "Delete", "DeleteFunc", "CompactFunc", "Grow":
+		if len(call.Args) != 0 {
+			return call.Args[:1]
+		}
+	case "Insert":
+		if len(call.Args) >= 2 {
+			return append([]ast.Expr{call.Args[0]}, call.Args[2:]...)
+		}
+	case "Replace":
+		if len(call.Args) >= 3 {
+			return append([]ast.Expr{call.Args[0]}, call.Args[3:]...)
+		}
+	}
+	return nil
 }
 
 func prefixCleanupPaths(prefix string, paths map[string]bool) map[string]bool {
@@ -4773,9 +4878,13 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 	case *ast.TypeAssertExpr:
 		return cleanupPathsForExpression(value.X, imports, values, resources, types)
 	case *ast.CallExpr:
-		if isBuiltinAppend(value) || isSlicesConcatCall(value, imports) {
+		sources := sliceCollectionSourceArguments(value, imports)
+		if isBuiltinAppend(value) {
+			sources = value.Args
+		}
+		if len(sources) != 0 {
 			var paths map[string]bool
-			for _, argument := range value.Args {
+			for _, argument := range sources {
 				paths = mergeCleanupPaths(paths, cleanupPathsForExpression(argument, imports, values, resources, types))
 			}
 			if paths != nil {
@@ -5268,13 +5377,12 @@ func isToolRegistryCollectionExpression(expression ast.Expr, imports map[string]
 	if call, ok := expression.(*ast.CallExpr); ok && valueIteratorArity(call, imports) != 0 {
 		return isToolRegistryCollectionExpression(call.Args[0], imports, values, types)
 	}
-	if call, ok := expression.(*ast.CallExpr); ok && isSlicesConcatCall(call, imports) {
-		for _, argument := range call.Args {
+	if call, ok := expression.(*ast.CallExpr); ok {
+		for _, argument := range sliceCollectionSourceArguments(call, imports) {
 			if isToolRegistryCollectionExpression(argument, imports, values, types) || isToolRegistryExpression(argument, imports, values, types) {
 				return true
 			}
 		}
-		return false
 	}
 	if call, ok := expression.(*ast.CallExpr); ok && isBuiltinAppend(call) {
 		for _, argument := range call.Args {
