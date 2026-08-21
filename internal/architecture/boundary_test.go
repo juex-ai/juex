@@ -16,6 +16,7 @@ import (
 const modulePath = "github.com/juex-ai/juex"
 
 const callableCleanupPath = "$call"
+const toolRegistrationCallableType = "$tool-registration-callable"
 
 const (
 	sliceTypePrefix = "$slice:"
@@ -66,6 +67,7 @@ type compositionTypeIndex struct {
 	fields          map[string]map[string]string
 	cleanupMethods  map[string]map[string]bool
 	functionResults map[string][]string
+	namedTypes      map[string]string
 	cleanupParams   map[string]map[int]bool
 	toolParams      map[string]map[int]bool
 	appFunctions    []indexedAppFunction
@@ -324,9 +326,11 @@ func TestAppFeatureCleanupInspectionTracksRangeValues(t *testing.T) {
 	source := `package app
 import "github.com/juex-ai/juex/internal/mcp"
 type App struct{}
-func closeMany(clients []*mcp.Client, indexed map[*mcp.Client]struct{}, byName map[string]*mcp.Client) {
+type clientList []*mcp.Client
+func closeMany(clients []*mcp.Client, indexed map[*mcp.Client]struct{}, byName map[string]*mcp.Client, named clientList) {
 	_ = clients[0].Close()
 	_ = byName["primary"].Close()
+	_ = named[0].Close()
 	for _, client := range clients { _ = client.Close() }
 	for client := range indexed { _ = client.Close() }
 }`
@@ -347,8 +351,8 @@ func closeMany(clients []*mcp.Client, indexed map[*mcp.Client]struct{}, byName m
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"Close", "Close", "client.Close", "client.Close"}
-	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] {
+	want := []string{"Close", "Close", "Close", "client.Close", "client.Close"}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] {
 		t.Fatalf("cleanup calls = %v, want %v", calls, want)
 	}
 }
@@ -384,12 +388,15 @@ import "github.com/juex-ai/juex/internal/tools"
 type App struct{ registry *tools.Registry }
 type router struct{}
 type registrar interface{ Register(tools.Tool) error }
+type registryList []*tools.Registry
 func localRegistry() *tools.Registry { return nil }
 func registerOwned(registry registrar) { _ = registry.Register(nil) }
 func registerTransitively(registry registrar) { registerOwned(registry) }
 func runRegistration(register func(tools.Tool) error) { _ = register(nil) }
 func configure(application *App, registry *tools.Registry, routes *router) {
 	registry.Register(nil)
+	register := registry.Register
+	register(nil)
 	routes.Register(nil)
 	tools.RegisterBuiltins(registry, tools.BuiltinOptions{})
 	constructed := tools.NewRegistryWithOptions(tools.RegistryOptions{})
@@ -398,6 +405,8 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	localRegistry().Register(nil)
 	registries := []*tools.Registry{registry}
 	registries[0].Register(nil)
+	named := registryList{registry}
+	named[0].Register(nil)
 	registerTransitively(registry)
 	runRegistration(registry.Register)
 }`
@@ -418,8 +427,8 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"registry.Register", "tools.RegisterBuiltins", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "Register", "registerTransitively", "runRegistration"}
-	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] || calls[6] != want[6] || calls[7] != want[7] {
+	want := []string{"registry.Register", "register", "tools.RegisterBuiltins", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "Register", "Register", "registerTransitively", "runRegistration"}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] || calls[6] != want[6] || calls[7] != want[7] || calls[8] != want[8] || calls[9] != want[9] {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
 }
@@ -498,6 +507,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 		fields:          make(map[string]map[string]string),
 		cleanupMethods:  make(map[string]map[string]bool),
 		functionResults: make(map[string][]string),
+		namedTypes:      make(map[string]string),
 		cleanupParams:   make(map[string]map[int]bool),
 		toolParams:      make(map[string]map[int]bool),
 	}
@@ -603,11 +613,12 @@ func indexCleanupAndConstructors(file *ast.File, packagePath string, imports map
 				if !ok {
 					continue
 				}
+				typeName := packagePath + "." + spec.Name.Name
 				structure, ok := spec.Type.(*ast.StructType)
 				if !ok {
+					types.namedTypes[typeName] = canonicalTypeInPackage(spec.Type, imports, packagePath)
 					continue
 				}
-				typeName := packagePath + "." + spec.Name.Name
 				if types.fields[typeName] == nil {
 					types.fields[typeName] = make(map[string]string)
 				}
@@ -734,7 +745,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 			}
 		case *ast.RangeStmt:
 			origin := originsForExpression(value.X, origins)
-			keyType, valueType, _ := rangeTypes(expressionType(value.X, function.imports, values, types))
+			keyType, valueType, _ := rangeTypes(expressionType(value.X, function.imports, values, types), types)
 			if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" {
 				origins[name.Name] = origin
 				values[name.Name] = keyType
@@ -797,7 +808,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 			}
 		case *ast.RangeStmt:
 			origin := originsForExpression(value.X, origins)
-			keyType, valueType, _ := rangeTypes(expressionType(value.X, function.imports, values, types))
+			keyType, valueType, _ := rangeTypes(expressionType(value.X, function.imports, values, types), types)
 			if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" {
 				origins[name.Name] = origin
 				values[name.Name] = keyType
@@ -967,7 +978,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					}
 				}
 			case *ast.RangeStmt:
-				keyType, valueType, ok := rangeTypes(expressionType(value.X, imports, values, types))
+				keyType, valueType, ok := rangeTypes(expressionType(value.X, imports, values, types), types)
 				if !ok {
 					break
 				}
@@ -1040,7 +1051,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					if !ok {
 						continue
 					}
-					if typeName := assignedExpressionType(value.Rhs, index, imports, values, types); typeName != "" {
+					if typeName := assignedToolExpressionType(value.Rhs, index, imports, values, types); typeName != "" {
 						values[name.Name] = typeName
 					} else {
 						delete(values, name.Name)
@@ -1056,7 +1067,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					typeName := canonicalType(spec.Type, imports)
 					for index, name := range spec.Names {
 						if len(spec.Values) != 0 {
-							typeName = assignedExpressionType(spec.Values, index, imports, values, types)
+							typeName = assignedToolExpressionType(spec.Values, index, imports, values, types)
 						}
 						if typeName != "" {
 							values[name.Name] = typeName
@@ -1064,7 +1075,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					}
 				}
 			case *ast.RangeStmt:
-				keyType, valueType, ok := rangeTypes(expressionType(value.X, imports, values, types))
+				keyType, valueType, ok := rangeTypes(expressionType(value.X, imports, values, types), types)
 				if !ok {
 					break
 				}
@@ -1183,7 +1194,8 @@ func featureCleanupMethods(typeName string, types compositionTypeIndex) map[stri
 }
 
 func cleanupPathsForType(typeName string, types compositionTypeIndex, visiting map[string]bool) map[string]bool {
-	if keyType, valueType, ok := rangeTypes(typeName); ok {
+	typeName = resolveNamedType(typeName, types)
+	if keyType, valueType, ok := rangeTypes(typeName, types); ok {
 		_ = keyType
 		return cleanupPathsForType(valueType, types, visiting)
 	}
@@ -1218,7 +1230,21 @@ func cleanupPathsForType(typeName string, types compositionTypeIndex, visiting m
 	return paths
 }
 
-func rangeTypes(typeName string) (string, string, bool) {
+func resolveNamedType(typeName string, types compositionTypeIndex) string {
+	seen := make(map[string]bool)
+	for typeName != "" && !seen[typeName] {
+		seen[typeName] = true
+		underlying := types.namedTypes[typeName]
+		if underlying == "" {
+			return typeName
+		}
+		typeName = underlying
+	}
+	return typeName
+}
+
+func rangeTypes(typeName string, types compositionTypeIndex) (string, string, bool) {
+	typeName = resolveNamedType(typeName, types)
 	if strings.HasPrefix(typeName, sliceTypePrefix) {
 		return "", strings.TrimPrefix(typeName, sliceTypePrefix), true
 	}
@@ -1253,7 +1279,7 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 			return trimmed
 		}
 	case *ast.IndexExpr:
-		if _, valueType, ok := rangeTypes(expressionType(value.X, imports, values, types)); ok {
+		if _, valueType, ok := rangeTypes(expressionType(value.X, imports, values, types), types); ok {
 			return cleanupPathsForType(valueType, types, nil)
 		}
 		return cleanupPathsForExpression(value.X, imports, values, resources, types)
@@ -1339,6 +1365,20 @@ func assignedExpressionType(expressions []ast.Expr, index int, imports map[strin
 	return expressionType(expressions[index], imports, values, types)
 }
 
+func assignedToolExpressionType(expressions []ast.Expr, index int, imports map[string]string, values map[string]string, types compositionTypeIndex) string {
+	var expression ast.Expr
+	switch {
+	case len(expressions) == 1 && index == 0:
+		expression = expressions[0]
+	case len(expressions) > 1 && index < len(expressions):
+		expression = expressions[index]
+	}
+	if expression != nil && isToolRegistrationCallableExpression(expression, imports, values, types) {
+		return toolRegistrationCallableType
+	}
+	return assignedExpressionType(expressions, index, imports, values, types)
+}
+
 func calledFunctionKey(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) string {
 	switch function := expression.(type) {
 	case *ast.Ident:
@@ -1377,7 +1417,7 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 		receiverType := expressionType(value.X, imports, values, types)
 		return compositionFieldType(receiverType, value.Sel.Name, types, nil)
 	case *ast.IndexExpr:
-		_, valueType, _ := rangeTypes(expressionType(value.X, imports, values, types))
+		_, valueType, _ := rangeTypes(expressionType(value.X, imports, values, types), types)
 		return valueType
 	case *ast.CallExpr:
 		if results := expressionResultTypes(value, imports, values, types); len(results) != 0 {
@@ -1415,12 +1455,12 @@ func isToolRegistrationCall(call *ast.CallExpr, imports map[string]string, value
 	const registryType = modulePath + "/internal/tools.Registry"
 	switch function := call.Fun.(type) {
 	case *ast.Ident:
-		return imports["."] == modulePath+"/internal/tools" && isToolRegistrationName(function.Name)
+		return values[function.Name] == toolRegistrationCallableType || imports["."] == modulePath+"/internal/tools" && isToolRegistrationName(function.Name)
 	case *ast.SelectorExpr:
 		if qualifier, ok := function.X.(*ast.Ident); ok && imports[qualifier.Name] == modulePath+"/internal/tools" {
 			return isToolRegistrationName(function.Sel.Name)
 		}
-		return expressionType(function.X, imports, values, types) == registryType && isToolRegistrationName(function.Sel.Name)
+		return resolveNamedType(expressionType(function.X, imports, values, types), types) == registryType && isToolRegistrationName(function.Sel.Name)
 	default:
 		return false
 	}
@@ -1428,11 +1468,11 @@ func isToolRegistrationCall(call *ast.CallExpr, imports map[string]string, value
 
 func isToolRegistryExpression(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
 	const registryType = modulePath + "/internal/tools.Registry"
-	if expressionType(expression, imports, values, types) == registryType {
+	if resolveNamedType(expressionType(expression, imports, values, types), types) == registryType {
 		return true
 	}
 	results := expressionResultTypes(expression, imports, values, types)
-	return len(results) != 0 && results[0] == registryType
+	return len(results) != 0 && resolveNamedType(results[0], types) == registryType
 }
 
 func isToolRegistrationValueExpression(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
@@ -1441,6 +1481,17 @@ func isToolRegistrationValueExpression(expression ast.Expr, imports map[string]s
 		return false
 	}
 	return isToolRegistryExpression(selector.X, imports, values, types)
+}
+
+func isToolRegistrationCallableExpression(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		return values[value.Name] == toolRegistrationCallableType
+	case *ast.ParenExpr:
+		return isToolRegistrationCallableExpression(value.X, imports, values, types)
+	default:
+		return isToolRegistrationValueExpression(expression, imports, values, types)
+	}
 }
 
 func selectorChain(expression ast.Expr) string {
