@@ -29,9 +29,7 @@ jobs:
           go-version: stable
           cache: true
       - name: Prepare embedded web dist
-        run: |
-          mkdir -p internal/web/dist
-          printf '<!doctype html><html><body></body></html>' > internal/web/dist/index.html
+        run: make web-stub
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13.1
@@ -68,9 +66,7 @@ jobs:
           fi
           bwrap --die-with-parent --ro-bind / / --dev /dev -- /bin/true
       - name: Prepare embedded web dist
-        run: |
-          mkdir -p internal/web/dist
-          printf '<!doctype html><html><body></body></html>' > internal/web/dist/index.html
+        run: make web-stub
         shell: bash
       - name: Prepare pinned ripgrep
         shell: bash

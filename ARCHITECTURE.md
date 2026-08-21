@@ -3000,7 +3000,7 @@ automatic activation; the model loads a selected guide explicitly.
 | Target | Effect |
 |---|---|
 | `make verify-focused PKGS="..."` | require explicit Go package patterns, provision ripgrep, isolate writable user/Juex/tool state, and run only those packages; permits a dirty worktree |
-| `make verify-candidate [RACE=1] [WEB=1]` | require a clean worktree, run one deterministic full Go suite (race replaces normal), then build one executable; `WEB=1` runs the frontend gate before the Go-only build |
+| `make verify-candidate [RACE=1] [WEB=1]` | require a clean worktree, prepare a non-overwriting embedded-web stub for fresh checkouts, run one deterministic full Go suite (race replaces normal), then build one executable; `WEB=1` runs the frontend gate before the Go-only build |
 | `make verify-final [RACE=1] [WEB=1] [COMPACTION=1]` | require a clean worktree, run the candidate plan, live integration, one provider-config-selected smoke, and optional compaction quality evaluation |
 | `make test` | provision ripgrep on `PATH` with disposable bootstrap Go telemetry, isolate writable user/Juex/Codex/XDG/Windows-app-data/global-Git/Go-telemetry state under a temporary `HOME`, then run `go test ./... -count=1` |
 | `make race` | provision ripgrep on `PATH` with disposable bootstrap Go telemetry, isolate writable user/Juex/Codex/XDG/Windows-app-data/global-Git/Go-telemetry state under a temporary `HOME`, then run `go test ./... -race -count=1` |
@@ -3008,6 +3008,7 @@ automatic activation; the model loads a selected guide explicitly.
 | `make lint` | `golangci-lint run` |
 | `make build` | `dist/juex` with `git describe`-derived version, commit, build time embedded via `-ldflags -X internal/version.*` |
 | `make build-go` | compile `dist/juex` from the existing synchronized `internal/web/dist` without rebuilding the frontend |
+| `make web-stub` | create a lightweight `internal/web/dist/index.html` only when embedded assets are missing, without overwriting a real frontend build |
 | `make cross` | build the frontend, then produce all 7 managed archives without GoReleaser |
 | `make snapshot` | build the frontend through the GoReleaser before hook, then produce 7 snapshot archives in `dist/` |
 | `make release-dry` | build the frontend through the GoReleaser before hook, then run a non-publishing release |

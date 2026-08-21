@@ -886,7 +886,7 @@ func TestEvalDevelopmentUsesSingleCandidateGoSuite(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &labels); err != nil {
 		t.Fatalf("decode labels: %v\n%s", err, out)
 	}
-	if !reflect.DeepEqual(labels, []string{"go-test-all", "make-build"}) {
+	if !reflect.DeepEqual(labels, []string{"web-stub", "go-test-all", "make-build"}) {
 		t.Fatalf("development labels = %q, want one full Go suite and one build", labels)
 	}
 }
@@ -959,19 +959,22 @@ func TestEvalVerifyCandidateRaceReplacesNormalSuite(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &plans); err != nil {
 		t.Fatalf("decode plans: %v\n%s", err, out)
 	}
-	if got := []string{plans["normal"][0].Label, plans["normal"][1].Label}; !reflect.DeepEqual(got, []string{"go-test-all", "make-build"}) {
+	if got := []string{plans["normal"][0].Label, plans["normal"][1].Label, plans["normal"][2].Label}; !reflect.DeepEqual(got, []string{"web-stub", "go-test-all", "make-build"}) {
 		t.Fatalf("normal labels = %q", got)
 	}
-	if got := plans["normal"][0].Command; !reflect.DeepEqual(got, []string{filepath.Join(root, "scripts", "with-test-juex-home.sh"), "go", "test", "./...", "-count=1"}) {
+	if got := plans["normal"][0].Command; !reflect.DeepEqual(got, []string{"make", "web-stub"}) {
+		t.Fatalf("normal web stub command = %q", got)
+	}
+	if got := plans["normal"][1].Command; !reflect.DeepEqual(got, []string{filepath.Join(root, "scripts", "with-test-juex-home.sh"), "go", "test", "./...", "-count=1"}) {
 		t.Fatalf("normal test command = %q", got)
 	}
-	if got := []string{plans["race"][0].Label, plans["race"][1].Label}; !reflect.DeepEqual(got, []string{"go-test-all-race", "make-build"}) {
+	if got := []string{plans["race"][0].Label, plans["race"][1].Label, plans["race"][2].Label}; !reflect.DeepEqual(got, []string{"web-stub", "go-test-all-race", "make-build"}) {
 		t.Fatalf("race labels = %q", got)
 	}
-	if got := plans["race"][0].Command; !reflect.DeepEqual(got, []string{filepath.Join(root, "scripts", "with-test-juex-home.sh"), "go", "test", "./...", "-race", "-count=1"}) {
+	if got := plans["race"][1].Command; !reflect.DeepEqual(got, []string{filepath.Join(root, "scripts", "with-test-juex-home.sh"), "go", "test", "./...", "-race", "-count=1"}) {
 		t.Fatalf("race test command = %q", got)
 	}
-	if !plans["normal"][0].TestEnvironment || !plans["race"][0].TestEnvironment {
+	if !plans["normal"][1].TestEnvironment || !plans["race"][1].TestEnvironment {
 		t.Fatal("candidate Go suites must provision ripgrep and isolated test Home")
 	}
 }
@@ -1005,14 +1008,14 @@ func TestEvalVerifyCandidateWebCheckDoesNotRebuildFrontend(t *testing.T) {
 	for _, step := range steps {
 		labels = append(labels, step.Label)
 	}
-	if !reflect.DeepEqual(labels, []string{"go-test-all", "web-check", "make-build-go"}) {
+	if !reflect.DeepEqual(labels, []string{"web-stub", "go-test-all", "web-check", "make-build-go"}) {
 		t.Fatalf("labels = %q", labels)
 	}
-	if !reflect.DeepEqual(steps[1].Command, []string{"make", "web-check"}) {
-		t.Fatalf("web command = %q", steps[1].Command)
+	if !reflect.DeepEqual(steps[2].Command, []string{"make", "web-check"}) {
+		t.Fatalf("web command = %q", steps[2].Command)
 	}
-	if !reflect.DeepEqual(steps[2].Command, []string{"make", "build-go"}) {
-		t.Fatalf("binary command = %q", steps[2].Command)
+	if !reflect.DeepEqual(steps[3].Command, []string{"make", "build-go"}) {
+		t.Fatalf("binary command = %q", steps[3].Command)
 	}
 	for _, step := range steps {
 		if reflect.DeepEqual(step.Command, []string{"make", "build"}) {
@@ -1060,25 +1063,25 @@ func TestEvalVerifyFinalExtendsCandidateWithConditionalLiveGates(t *testing.T) {
 		}
 		return out
 	}
-	if got := labels(plans["default"]); !reflect.DeepEqual(got, []string{"go-test-all", "make-build", "live-integration", "provider-model-smoke"}) {
+	if got := labels(plans["default"]); !reflect.DeepEqual(got, []string{"web-stub", "go-test-all", "make-build", "live-integration", "provider-model-smoke"}) {
 		t.Fatalf("default labels = %q", got)
 	}
-	if got := labels(plans["compaction"]); !reflect.DeepEqual(got, []string{"go-test-all", "make-build", "live-integration", "provider-model-smoke", "compaction-eval"}) {
+	if got := labels(plans["compaction"]); !reflect.DeepEqual(got, []string{"web-stub", "go-test-all", "make-build", "live-integration", "provider-model-smoke", "compaction-eval"}) {
 		t.Fatalf("compaction labels = %q", got)
 	}
-	if !reflect.DeepEqual(plans["default"][2].Command, []string{"make", "integration"}) {
-		t.Fatalf("integration command = %q", plans["default"][2].Command)
+	if !reflect.DeepEqual(plans["default"][3].Command, []string{"make", "integration"}) {
+		t.Fatalf("integration command = %q", plans["default"][3].Command)
 	}
-	if got := plans["default"][2].Environment["JUEX_PROVIDER_CONFIG"]; got != "/tmp/provider config.yaml" {
+	if got := plans["default"][3].Environment["JUEX_PROVIDER_CONFIG"]; got != "/tmp/provider config.yaml" {
 		t.Fatalf("integration provider config = %q", got)
 	}
-	provider := plans["default"][3].Command
+	provider := plans["default"][4].Command
 	assertCommandFlagValue(t, provider, "--juex", "./dist/juex")
 	assertCommandFlagValue(t, provider, "--config", "/tmp/provider config.yaml")
 	assertCommandFlagValue(t, provider, "--selection-seed", "repeatable")
 	assertCommandFlagValue(t, provider, "--run-id", "unit")
 	assertCommandFlagValue(t, provider, "--timeout", "7")
-	compaction := plans["compaction"][4].Command
+	compaction := plans["compaction"][5].Command
 	assertCommandFlagValue(t, compaction, "--juex", "./dist/juex")
 	assertCommandFlagValue(t, compaction, "--config", "/tmp/provider config.yaml")
 	assertCommandFlagValue(t, compaction, "--selection-seed", "repeatable")
@@ -1207,6 +1210,42 @@ func TestMakeBuildGoDoesNotBuildFrontend(t *testing.T) {
 	}
 	if strings.Contains(rendered, "pnpm") {
 		t.Fatalf("build-go rebuilt the frontend:\n%s", rendered)
+	}
+}
+
+func TestMakeWebStubPreparesMissingAssetsWithoutOverwriting(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	run := func() {
+		cmd := exec.Command("make", "--no-print-directory", "-f", filepath.Join(root, "Makefile"), "web-stub")
+		cmd.Dir = work
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("make web-stub failed: %v\n%s", err, out)
+		}
+	}
+
+	run()
+	index := filepath.Join(work, "internal", "web", "dist", "index.html")
+	data, err := os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "<!doctype html><html><body></body></html>\n"; got != want {
+		t.Fatalf("stub index = %q, want %q", got, want)
+	}
+	if err := os.WriteFile(index, []byte("real frontend\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run()
+	data, err = os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got != "real frontend\n" {
+		t.Fatalf("web-stub overwrote existing frontend assets: %q", got)
 	}
 }
 

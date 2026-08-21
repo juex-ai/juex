@@ -33,6 +33,11 @@ test("CI runs the frontend gate separately without slowing Go jobs", () => {
     2,
     "the existing Go jobs must keep using the lightweight embedded-web stub",
   );
+  assert.equal(
+    ciSource.match(/run: make web-stub/g)?.length,
+    2,
+    "CI and local candidate verification must share the web-stub target",
+  );
 });
 
 test("frontend tool versions and contributor guidance stay explicit", () => {

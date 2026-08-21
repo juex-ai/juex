@@ -47,7 +47,8 @@ Run commands directly from the repository root.
    verify-candidate`. Add `RACE=1` for concurrency, shutdown, runtime turn,
    MCP, tool, event, session, web request, or shared-state changes. Add
    `WEB=1` for frontend changes. Race replaces the ordinary suite; web-check
-   feeds the Go-only binary build without a second frontend build.
+   feeds the Go-only binary build without a second frontend build. A
+   non-overwriting lightweight web stub makes Go checks work in fresh checkouts.
 3. **Final candidate** - run `make verify-final` before delivery. It repeats
    the candidate plan, then runs live integration and one dynamically selected
    provider smoke. Add `COMPACTION=1` for compaction, context projection,

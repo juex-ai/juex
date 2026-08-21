@@ -135,6 +135,7 @@ def candidate_verification_steps(*, race: bool, web: bool) -> list[VerificationS
         test_command.append("-race")
     test_command.append("-count=1")
     steps = [
+        VerificationStep("web-stub", ["make", "web-stub"]),
         VerificationStep("go-test-all-race" if race else "go-test-all", test_command, test_environment=True),
     ]
     if web:

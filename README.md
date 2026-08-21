@@ -796,7 +796,8 @@ replaces the ordinary deterministic suite, `WEB=1` adds the frontend gate
 without rebuilding it during the binary build, and `COMPACTION=1` adds the
 live compaction evaluator to final verification. Final verification otherwise
 runs the candidate gate, live integration, and one provider-config-selected
-provider smoke.
+provider smoke. Candidate/final also prepare a lightweight embedded-web stub
+before Go-only checks, so a fresh checkout does not need a prior frontend build.
 
 The lower-level `make test` and `make race` targets run with temporary `HOME`, `JUEX_HOME`, XDG
 config/cache, Windows application-data, global Git config, Go telemetry, and

@@ -1,4 +1,4 @@
-.PHONY: test race verify-focused verify-candidate verify-final lint build build-go snapshot release-dry integration provider-smoke development-eval clean help install-local cross web web-sync web-check web-dev ripgrep
+.PHONY: test race verify-focused verify-candidate verify-final lint build build-go snapshot release-dry integration provider-smoke development-eval clean help install-local cross web web-stub web-sync web-check web-dev ripgrep
 
 VERIFY_CMD := uv run --quiet --project . python -m tests.eval.juex_eval verify
 VERIFY_RACE_FLAG := $(if $(filter 1,$(RACE)),--race,)
@@ -8,6 +8,10 @@ VERIFY_COMPACTION_FLAG := $(if $(filter 1,$(COMPACTION)),--compaction,)
 web:
 	cd frontend && pnpm install && pnpm build
 	$(MAKE) web-sync
+
+web-stub:
+	mkdir -p internal/web/dist
+	@test -f internal/web/dist/index.html || printf '%s\n' '<!doctype html><html><body></body></html>' > internal/web/dist/index.html
 
 web-sync:
 	rm -rf internal/web/dist
@@ -50,6 +54,7 @@ help:
 	@echo "  lint          golangci-lint run"
 	@echo "  build         produce $(DIST_BIN) with embedded version metadata"
 	@echo "  build-go      produce $(DIST_BIN) from existing embedded frontend assets"
+	@echo "  web-stub      prepare lightweight embedded assets for Go-only checks"
 	@echo "  install-local install ~/.local/bin/juex (builds via dist/)"
 	@echo "  cross         build all 7 platform archives in dist/ (no goreleaser)"
 	@echo "  snapshot      goreleaser cross-platform snapshot (dist/)"

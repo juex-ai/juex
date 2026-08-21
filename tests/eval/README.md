@@ -43,7 +43,9 @@ dirty worktree so it can be used during implementation. An empty scope is an
 error; focused verification never falls back to `./...`.
 
 `verify candidate` requires a clean worktree. It runs exactly one full
-deterministic Go suite followed by one executable build. `RACE=1` replaces the
+deterministic Go suite followed by one executable build. Before the Go suite it
+uses the shared non-overwriting `web-stub` target so fresh checkouts satisfy
+the Go embed contract without a frontend build. `RACE=1` replaces the
 ordinary Go suite with the race suite. `WEB=1` runs `web-check`, synchronizes
 the resulting frontend assets into `internal/web/dist`, and invokes the
 Go-only `build-go` target instead of rebuilding the frontend.
