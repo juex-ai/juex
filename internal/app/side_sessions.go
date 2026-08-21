@@ -126,8 +126,9 @@ type managedSideSession struct {
 }
 
 type sideSessionManager struct {
-	parent  *App
-	factory sideSessionFactory
+	parent                      *App
+	factory                     sideSessionFactory
+	childSessionModuleFactories []runtimemodule.SessionFactorySpec
 
 	lifecycleMu     sync.RWMutex
 	transitionMu    sync.Mutex
@@ -194,6 +195,7 @@ func (m *sideSessionManager) newChildApp(child sideSessionChildOptions) (*App, e
 		sharedGoalState:         child.GoalState,
 		sharedNotes:             child.Notes,
 		sharedObservables:       child.Observables,
+		sessionModuleFactories:  append([]runtimemodule.SessionFactorySpec(nil), m.childSessionModuleFactories...),
 		startupContext:          child.Context,
 	}
 	if child.UseParentProvider {
