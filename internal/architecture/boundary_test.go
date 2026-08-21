@@ -3358,12 +3358,24 @@ func evaluatedLogicalOperands(application *App) {
 func correlatedLogicalBranches(application *App, condition bool) {
 	var resource closer = &unrelatedCloser{}
 	var registry registrar = &unrelatedRegistrar{}
-	if condition && func() bool {
+	if (condition && func() bool {
 		resource = application.manager
 		registry = application.registry
 		return true
-	}() {
+	}()) {
 	} else {
+		_ = resource.Close()
+		registry.Register(nil)
+	}
+}
+func negatedCorrelatedLogicalBranches(application *App, condition bool) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	if !(condition && func() bool {
+		resource = application.manager
+		registry = application.registry
+		return true
+	}()) {
 		_ = resource.Close()
 		registry.Register(nil)
 	}
@@ -3550,6 +3562,66 @@ func selectOperandEvaluatedOnce(application *App, output chan<- bool, ready <-ch
 	})
 	if len(registrationCalls) != 0 {
 		t.Fatalf("Tool registration calls = %v, want select operand evaluated once", registrationCalls)
+	}
+}
+
+func TestAppCompositionInspectionRoutesTaglessSwitchConditions(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func firstTaglessCaseAlwaysMatches(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	switch {
+	case func() bool {
+		resource = application.manager
+		registry = application.registry
+		return true
+	}():
+	case true:
+		_ = resource.Close()
+		registry.Register(nil)
+	}
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tagless_switch_conditions.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 0 {
+		t.Fatalf("cleanup calls = %v, want later tagless case unreachable", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 0 {
+		t.Fatalf("Tool registration calls = %v, want later tagless case unreachable", registrationCalls)
 	}
 }
 
@@ -5443,6 +5515,15 @@ func inspectCompositionLogicalExpression(expression *ast.BinaryExpr, visit func(
 }
 
 func inspectCompositionCondition(expression ast.Expr, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) (compositionFlowState, compositionFlowState) {
+	switch value := expression.(type) {
+	case *ast.ParenExpr:
+		return inspectCompositionCondition(value.X, visit, snapshot, restore, merge)
+	case *ast.UnaryExpr:
+		if value.Op == token.NOT {
+			trueState, falseState := inspectCompositionCondition(value.X, visit, snapshot, restore, merge)
+			return falseState, trueState
+		}
+	}
 	if logical, ok := expression.(*ast.BinaryExpr); ok && (logical.Op == token.LAND || logical.Op == token.LOR) {
 		leftTrue, leftFalse := inspectCompositionCondition(logical.X, visit, snapshot, restore, merge)
 		if logical.Op == token.LAND {
@@ -5511,7 +5592,7 @@ func constantBooleanExpression(expression ast.Expr) (bool, bool) {
 	return false, false
 }
 
-func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, allowFallthrough bool, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState, enterClause func(*ast.CaseClause)) {
+func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, correlateCaseConditions, allowFallthrough bool, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState, enterClause func(*ast.CaseClause)) {
 	base := snapshot()
 	selectedEntries := make(map[*ast.CaseClause]compositionFlowState)
 	remaining := base
@@ -5529,8 +5610,14 @@ func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, 
 		restore(remaining)
 		var matched []compositionFlowState
 		for _, expression := range clause.List {
-			ast.Inspect(expression, visit)
-			matched = append(matched, snapshot())
+			if correlateCaseConditions {
+				trueState, falseState := inspectCompositionCondition(expression, visit, snapshot, restore, merge)
+				matched = append(matched, trueState)
+				restore(falseState)
+			} else {
+				ast.Inspect(expression, visit)
+				matched = append(matched, snapshot())
+			}
 		}
 		remaining = snapshot()
 		selectedEntries[clause] = merge(matched)
@@ -5812,7 +5899,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				ast.Inspect(value.Tag, visit)
 			}
 			breakTarget := router.pushBreakTarget()
-			inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge, nil)
+			inspectCompositionCaseClauses(value.Body, true, value.Tag == nil, true, visit, snapshot, restore, merge, nil)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -5835,7 +5922,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				}
 				values[key] = typeName
 			})
-			inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge, bindGuard)
+			inspectCompositionCaseClauses(value.Body, false, false, false, visit, snapshot, restore, merge, bindGuard)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -6073,7 +6160,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				ast.Inspect(value.Tag, visit)
 			}
 			breakTarget := router.pushBreakTarget()
-			inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge, nil)
+			inspectCompositionCaseClauses(value.Body, true, value.Tag == nil, true, visit, snapshot, restore, merge, nil)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -6096,7 +6183,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				}
 				values[key] = typeName
 			})
-			inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge, bindGuard)
+			inspectCompositionCaseClauses(value.Body, false, false, false, visit, snapshot, restore, merge, bindGuard)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -6938,7 +7025,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					ast.Inspect(value.Tag, visit)
 				}
 				breakTarget := router.pushBreakTarget()
-				inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge, nil)
+				inspectCompositionCaseClauses(value.Body, true, value.Tag == nil, true, visit, snapshot, restore, merge, nil)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -6966,7 +7053,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 						resources[key] = paths
 					}
 				})
-				inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge, bindGuard)
+				inspectCompositionCaseClauses(value.Body, false, false, false, visit, snapshot, restore, merge, bindGuard)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -7434,7 +7521,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					ast.Inspect(value.Tag, visit)
 				}
 				breakTarget := router.pushBreakTarget()
-				inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge, nil)
+				inspectCompositionCaseClauses(value.Body, true, value.Tag == nil, true, visit, snapshot, restore, merge, nil)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -7457,7 +7544,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					}
 					values[key] = typeName
 				})
-				inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge, bindGuard)
+				inspectCompositionCaseClauses(value.Body, false, false, false, visit, snapshot, restore, merge, bindGuard)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
