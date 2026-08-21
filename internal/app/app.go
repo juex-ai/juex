@@ -324,8 +324,6 @@ func New(opts Options) (*App, error) {
 		if !appContextTransferred {
 			if runtimeModules.set != nil {
 				_ = runtimeModules.set.CloseRuntime(context.Background())
-			} else if runtimeModules.builtinTools != nil {
-				_ = runtimeModules.builtinTools.CloseRuntime(context.Background())
 			}
 			appCancel()
 		}
