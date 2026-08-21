@@ -2094,6 +2094,60 @@ func directAfterSkippedLoops(application *App, run bool, values []int) {
 	}
 }
 
+func TestAppCompositionInspectionSkipsImpossibleRangeZeroExit(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func replaceDuringKnownNonemptyRange(application *App) {
+	var resource closer = application.manager
+	var registry registrar = application.registry
+	for _, resource = range [1]closer{&unrelatedCloser{}} {}
+	for _, registry = range [1]registrar{&unrelatedRegistrar{}} {}
+	_ = resource.Close()
+	registry.Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nonempty_range.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 0 {
+		t.Fatalf("cleanup calls = %v, want no impossible zero-iteration range cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 0 {
+		t.Fatalf("Tool registration calls = %v, want no impossible zero-iteration range registration", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionRejectsImplicitInfiniteLoopExits(t *testing.T) {
 	source := `package app
 import (
@@ -2912,6 +2966,22 @@ func singleIterationDeferredUse(application *App) {
 			registry = application.registry
 		}()
 		break
+	}
+}
+func disjointBackEdgeDeferredUse(application *App, stop bool) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	for {
+		if stop {
+			defer func() {
+				_ = resource.Close()
+				registry.Register(nil)
+				resource = application.manager
+				registry = application.registry
+			}()
+			break
+		}
+		continue
 	}
 }
 `
@@ -5377,14 +5447,14 @@ func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]boo
 		case *ast.RangeStmt:
 			loopBody = loop.Body
 		}
-		if loopBody == nil || !compositionLoopBodyMayRepeat(loopBody) {
+		if loopBody == nil {
 			return true
 		}
 		ast.Inspect(loopBody, func(loopNode ast.Node) bool {
 			if _, nested := loopNode.(*ast.FuncLit); nested {
 				return false
 			}
-			if statement, ok := loopNode.(*ast.DeferStmt); ok {
+			if statement, ok := loopNode.(*ast.DeferStmt); ok && compositionDeferMayReachLoopBackEdge(loopBody, statement) {
 				repeated[statement.Call] = true
 			}
 			return true
@@ -5394,22 +5464,85 @@ func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]boo
 	return repeated
 }
 
-func compositionLoopBodyMayRepeat(body *ast.BlockStmt) bool {
-	if blockFallsThrough(body) || hasBackwardGoto(body) {
-		return true
-	}
-	mayContinue := false
-	ast.Inspect(body, func(node ast.Node) bool {
+func compositionDeferMayReachLoopBackEdge(loopBody *ast.BlockStmt, target *ast.DeferStmt) bool {
+	parents := make(map[ast.Node]ast.Node)
+	var stack []ast.Node
+	ast.Inspect(loopBody, func(node ast.Node) bool {
+		if node == nil {
+			stack = stack[:len(stack)-1]
+			return false
+		}
 		if _, nested := node.(*ast.FuncLit); nested {
 			return false
 		}
-		if statement, ok := node.(*ast.BranchStmt); ok && statement.Tok == token.CONTINUE {
-			mayContinue = true
-			return false
+		if len(stack) != 0 {
+			parents[node] = stack[len(stack)-1]
 		}
-		return !mayContinue
+		stack = append(stack, node)
+		return true
 	})
-	return mayContinue
+	current := ast.Node(target)
+	for current != nil {
+		parent := parents[current]
+		var statements []ast.Stmt
+		switch container := parent.(type) {
+		case *ast.BlockStmt:
+			if grandparent := parents[container]; grandparent != nil {
+				switch grandparent.(type) {
+				case *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+					current = parent
+					continue
+				}
+			}
+			statements = statementsAfterCompositionNode(container.List, current)
+		case *ast.CaseClause:
+			statements = statementsAfterCompositionNode(container.Body, current)
+		case *ast.CommClause:
+			statements = statementsAfterCompositionNode(container.Body, current)
+		}
+		if statements != nil {
+			if compositionStatementsContainContinue(statements) || hasBackwardGoto(&ast.BlockStmt{List: statements}) {
+				return true
+			}
+			if !statementsFallThrough(statements) {
+				return false
+			}
+			if parent == loopBody {
+				return true
+			}
+		}
+		current = parent
+	}
+	return false
+}
+
+func statementsAfterCompositionNode(statements []ast.Stmt, node ast.Node) []ast.Stmt {
+	for index, statement := range statements {
+		if statement == node {
+			return statements[index+1:]
+		}
+	}
+	return nil
+}
+
+func compositionStatementsContainContinue(statements []ast.Stmt) bool {
+	found := false
+	for _, statement := range statements {
+		ast.Inspect(statement, func(node ast.Node) bool {
+			if _, nested := node.(*ast.FuncLit); nested {
+				return false
+			}
+			if branch, ok := node.(*ast.BranchStmt); ok && branch.Tok == token.CONTINUE {
+				found = true
+				return false
+			}
+			return !found
+		})
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 type compositionFlowState struct {
@@ -6021,11 +6154,49 @@ func inspectCompositionLoopBody(body *ast.BlockStmt, visit func(ast.Node) bool, 
 	router.excludeTargetBindings(continueTarget, blockDeclaredCompositionBindings(body))
 	router.mergeTargetStates(continueTarget)
 	router.popContinueTarget(continueTarget)
-	if zeroIterationState == nil {
-		router.terminate()
-	}
 	router.popBreakTarget(breakTarget)
 	router.mergeTargetStates(breakTarget)
+}
+
+func compositionRangeMayBeEmpty(expression ast.Expr) bool {
+	switch value := expression.(type) {
+	case *ast.ParenExpr:
+		return compositionRangeMayBeEmpty(value.X)
+	case *ast.CompositeLit:
+		switch collection := value.Type.(type) {
+		case *ast.ArrayType:
+			if collection.Len == nil {
+				return len(value.Elts) == 0
+			}
+			if _, inferred := collection.Len.(*ast.Ellipsis); inferred {
+				return len(value.Elts) == 0
+			}
+			if length, ok := positiveIntegerConstant(collection.Len); ok {
+				return !length
+			}
+		case *ast.MapType:
+			return len(value.Elts) == 0
+		}
+	case *ast.BasicLit:
+		switch value.Kind {
+		case token.STRING:
+			text, err := strconv.Unquote(value.Value)
+			return err != nil || text == ""
+		case token.INT:
+			positive, ok := positiveIntegerConstant(value)
+			return !ok || !positive
+		}
+	}
+	return true
+}
+
+func positiveIntegerConstant(expression ast.Expr) (bool, bool) {
+	literal, ok := expression.(*ast.BasicLit)
+	if !ok || literal.Kind != token.INT {
+		return false, false
+	}
+	value, err := strconv.ParseUint(strings.ReplaceAll(literal.Value, "_", ""), 0, 64)
+	return value > 0, err == nil
 }
 
 func inspectCompositionFunctionBody(body *ast.BlockStmt, visit func(ast.Node) bool, router *compositionFlowRouter) {
@@ -6292,7 +6463,11 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 			}
 		case *ast.RangeStmt:
 			ast.Inspect(value.X, visit)
-			zeroIterationState := snapshot()
+			var zeroIterationState *compositionFlowState
+			if compositionRangeMayBeEmpty(value.X) {
+				state := snapshot()
+				zeroIterationState = &state
+			}
 			origin := resultParameterOrigins(value.X, function.imports, values, origins, types, 0)
 			keyType, valueType, ok := rangeTypes(expressionType(value.X, function.imports, values, types), types)
 			if !ok {
@@ -6318,7 +6493,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 					values[key] = valueType
 				}
 			}
-			inspectCompositionLoopBody(value.Body, visit, router, &zeroIterationState)
+			inspectCompositionLoopBody(value.Body, visit, router, zeroIterationState)
 			return false
 		case *ast.CallExpr:
 			if callbacks := cleanupCallbackArgumentIndexes(value, function.imports, values, types); len(callbacks) != 0 {
@@ -6554,7 +6729,11 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 			}
 		case *ast.RangeStmt:
 			ast.Inspect(value.X, visit)
-			zeroIterationState := snapshot()
+			var zeroIterationState *compositionFlowState
+			if compositionRangeMayBeEmpty(value.X) {
+				state := snapshot()
+				zeroIterationState = &state
+			}
 			origin := resultParameterOrigins(value.X, function.imports, values, origins, types, 0)
 			keyType, valueType, ok := rangeTypes(expressionType(value.X, function.imports, values, types), types)
 			if !ok {
@@ -6587,7 +6766,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 					values[key] = valueType
 				}
 			}
-			inspectCompositionLoopBody(value.Body, visit, router, &zeroIterationState)
+			inspectCompositionLoopBody(value.Body, visit, router, zeroIterationState)
 			return false
 		case *ast.CallExpr:
 			if callbacks := toolCallbackArgumentIndexes(value, function.imports, values, types); len(callbacks) != 0 {
@@ -7450,18 +7629,30 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				}
 			case *ast.RangeStmt:
 				ast.Inspect(value.X, visit)
-				zeroIterationState := snapshot()
+				var zeroIterationState *compositionFlowState
+				if compositionRangeMayBeEmpty(value.X) {
+					state := snapshot()
+					zeroIterationState = &state
+				}
 				collectionPaths := cleanupPathsForExpression(value.X, imports, values, resources, types)
 				collectionType := resolveNamedType(expressionType(value.X, imports, values, types), types)
 				keyType, valueType, ok := rangeTypes(collectionType, types)
 				if !ok {
 					keyPaths, valuePaths, iterator := iteratorRangeCleanupPaths(value.X, collectionPaths, imports)
 					if iterator {
-						if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" && keyPaths != nil {
-							resources[bindingKey(name)] = keyPaths
+						if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" {
+							key := bindingKey(name)
+							delete(resources, key)
+							if keyPaths != nil {
+								resources[key] = keyPaths
+							}
 						}
-						if name, ok := value.Value.(*ast.Ident); ok && name.Name != "_" && valuePaths != nil {
-							resources[bindingKey(name)] = valuePaths
+						if name, ok := value.Value.(*ast.Ident); ok && name.Name != "_" {
+							key := bindingKey(name)
+							delete(resources, key)
+							if valuePaths != nil {
+								resources[key] = valuePaths
+							}
 						}
 					}
 				} else {
@@ -7470,6 +7661,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" {
 						key := bindingKey(name)
 						values[key] = keyType
+						delete(resources, key)
 						if paths := cleanupPathsForType(keyType, types, nil); paths != nil {
 							resources[key] = paths
 						} else if strings.HasPrefix(collectionType, mapTypePrefix) {
@@ -7483,6 +7675,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					if name, ok := value.Value.(*ast.Ident); ok && name.Name != "_" {
 						key := bindingKey(name)
 						values[key] = valueType
+						delete(resources, key)
 						if paths := cleanupPathsForType(valueType, types, nil); paths != nil {
 							resources[key] = paths
 						} else if paths := cleanupMapValuePaths(collectionPaths); paths != nil {
@@ -7491,7 +7684,9 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					}
 				}
 				breakTarget := router.pushBreakTarget()
-				breakTarget.states = append(breakTarget.states, zeroIterationState)
+				if zeroIterationState != nil {
+					breakTarget.states = append(breakTarget.states, *zeroIterationState)
+				}
 				continueTarget := router.pushContinueTarget(breakTarget.label)
 				for {
 					beforeValues := cloneStringMap(values)
@@ -7950,7 +8145,11 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				}
 			case *ast.RangeStmt:
 				ast.Inspect(value.X, visit)
-				zeroIterationState := snapshot()
+				var zeroIterationState *compositionFlowState
+				if compositionRangeMayBeEmpty(value.X) {
+					state := snapshot()
+					zeroIterationState = &state
+				}
 				collectionType := resolveNamedType(expressionType(value.X, imports, values, types), types)
 				keyType, valueType, ok := rangeTypes(collectionType, types)
 				if !ok {
@@ -7974,7 +8173,9 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					}
 				}
 				breakTarget := router.pushBreakTarget()
-				breakTarget.states = append(breakTarget.states, zeroIterationState)
+				if zeroIterationState != nil {
+					breakTarget.states = append(breakTarget.states, *zeroIterationState)
+				}
 				continueTarget := router.pushContinueTarget(breakTarget.label)
 				for {
 					beforeValues := cloneStringMap(values)
