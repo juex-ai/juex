@@ -2889,6 +2889,18 @@ func assignAfterNewerDeferredUse(application *App) {
 		registry.Register(nil)
 	}()
 }
+func repeatedDeferredUse(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	for range []int{0, 1} {
+		defer func() {
+			_ = resource.Close()
+			registry.Register(nil)
+			resource = application.manager
+			registry = application.registry
+		}()
+	}
+}
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "deferred_closure_state.go")
@@ -2907,15 +2919,15 @@ func assignAfterNewerDeferredUse(application *App) {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if len(cleanupCalls) != 1 || cleanupCalls[0] != "resource.Close" {
-		t.Fatalf("cleanup calls = %v, want only older deferred cleanup after assignment", cleanupCalls)
+	if len(cleanupCalls) != 2 || cleanupCalls[0] != "resource.Close" || cleanupCalls[1] != "resource.Close" {
+		t.Fatalf("cleanup calls = %v, want older and repeated deferred cleanup after assignment", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if len(registrationCalls) != 1 || registrationCalls[0] != "registry.Register" {
-		t.Fatalf("Tool registration calls = %v, want only older deferred registration after assignment", registrationCalls)
+	if len(registrationCalls) != 2 || registrationCalls[0] != "registry.Register" || registrationCalls[1] != "registry.Register" {
+		t.Fatalf("Tool registration calls = %v, want older and repeated deferred registration after assignment", registrationCalls)
 	}
 }
 
@@ -5339,6 +5351,36 @@ type delayedCompositionCall struct {
 	argumentCallees map[ast.Expr]string
 }
 
+func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]bool {
+	repeated := make(map[*ast.CallExpr]bool)
+	ast.Inspect(body, func(node ast.Node) bool {
+		if _, nested := node.(*ast.FuncLit); nested {
+			return false
+		}
+		var loopBody *ast.BlockStmt
+		switch loop := node.(type) {
+		case *ast.ForStmt:
+			loopBody = loop.Body
+		case *ast.RangeStmt:
+			loopBody = loop.Body
+		}
+		if loopBody == nil {
+			return true
+		}
+		ast.Inspect(loopBody, func(loopNode ast.Node) bool {
+			if _, nested := loopNode.(*ast.FuncLit); nested {
+				return false
+			}
+			if statement, ok := loopNode.(*ast.DeferStmt); ok {
+				repeated[statement.Call] = true
+			}
+			return true
+		})
+		return true
+	})
+	return repeated
+}
+
 type compositionFlowState struct {
 	reachable  bool
 	origins    map[string]map[int]bool
@@ -5591,6 +5633,28 @@ func mergeCompositionFlowStates(states []compositionFlowState, types composition
 		}
 	}
 	return merged
+}
+
+func equalCompositionFlowStates(left, right compositionFlowState) bool {
+	return left.reachable == right.reachable &&
+		equalBindingOrigins(left.origins, right.origins) &&
+		equalStringMap(left.values, right.values) &&
+		equalCleanupResourceMap(left.resources, right.resources) &&
+		equalBoolMap(left.references, right.references) &&
+		equalCleanupResourceMap(left.aliases, right.aliases) &&
+		equalDelayedCompositionCalls(left.delayed, right.delayed)
+}
+
+func equalDelayedCompositionCalls(left, right map[*ast.CallExpr]bool) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for call, active := range left {
+		if right[call] != active {
+			return false
+		}
+	}
+	return true
 }
 
 func blockFallsThrough(block *ast.BlockStmt) bool {
@@ -7092,6 +7156,7 @@ func hasCompositionBackEdge(body *ast.BlockStmt) bool {
 func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types compositionTypeIndex, report func(*ast.CallExpr, string)) {
 	for _, function := range appCompositionScopes(file) {
 		functionKey := declaredFunctionKey(function, imports, modulePath+"/internal/app")
+		repeatedDeferredCalls := repeatedCompositionDeferredCalls(function.Body)
 		values, resources := packageBindingState(file, imports, types)
 		for name, typeName := range namedValueTypes(function.Recv, imports) {
 			values[name] = typeName
@@ -7525,6 +7590,16 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			}
 		}
 		router.popReturnTarget(returnTarget)
+		applyDeferred := func(exitState compositionFlowState, deferred delayedCompositionCall) compositionFlowState {
+			restore(exitState)
+			delete(activeDelayed, deferred.call)
+			if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
+				inspectCompositionFunctionBody(literal.Body, visit, router)
+			} else if delayedInvokesCapturedCleanup(deferred, function.Body, imports, values, resources, types) {
+				reportCleanup(deferred.call, selectorChain(deferred.call.Fun))
+			}
+			return snapshot()
+		}
 		deferredExitStates := functionExitStates
 		for index := len(deferredCalls) - 1; index >= 0; index-- {
 			deferred := deferredCalls[index]
@@ -7534,14 +7609,18 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					nextExitStates = append(nextExitStates, exitState)
 					continue
 				}
-				restore(exitState)
-				delete(activeDelayed, deferred.call)
-				if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
-					inspectCompositionFunctionBody(literal.Body, visit, router)
-				} else if delayedInvokesCapturedCleanup(deferred, function.Body, imports, values, resources, types) {
-					reportCleanup(deferred.call, selectorChain(deferred.call.Fun))
+				result := applyDeferred(exitState, deferred)
+				if repeatedDeferredCalls[deferred.call] {
+					for {
+						repeatedResult := applyDeferred(result, deferred)
+						merged := merge([]compositionFlowState{result, repeatedResult})
+						if equalCompositionFlowStates(result, merged) {
+							break
+						}
+						result = merged
+					}
 				}
-				nextExitStates = append(nextExitStates, snapshot())
+				nextExitStates = append(nextExitStates, result)
 			}
 			deferredExitStates = nextExitStates
 		}
@@ -7601,6 +7680,7 @@ func isReceiverOwnedFeatureCleanup(function *ast.FuncDecl, call *ast.CallExpr, i
 func inspectAppToolRegistration(file *ast.File, imports map[string]string, types compositionTypeIndex, report func(*ast.CallExpr, string)) {
 	for _, function := range appCompositionScopes(file) {
 		functionKey := declaredFunctionKey(function, imports, modulePath+"/internal/app")
+		repeatedDeferredCalls := repeatedCompositionDeferredCalls(function.Body)
 		values, _ := packageBindingState(file, imports, types)
 		for name, typeName := range namedValueTypes(function.Recv, imports) {
 			values[name] = typeName
@@ -7988,6 +8068,16 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			}
 		}
 		router.popReturnTarget(returnTarget)
+		applyDeferred := func(exitState compositionFlowState, deferred delayedCompositionCall) compositionFlowState {
+			restore(exitState)
+			delete(activeDelayed, deferred.call)
+			if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
+				inspectCompositionFunctionBody(literal.Body, visit, router)
+			} else if delayedInvokesCapturedToolRegistration(deferred, function.Body, imports, values, types) {
+				reportTool(deferred.call, selectorChain(deferred.call.Fun))
+			}
+			return snapshot()
+		}
 		deferredExitStates := functionExitStates
 		for index := len(deferredCalls) - 1; index >= 0; index-- {
 			deferred := deferredCalls[index]
@@ -7997,14 +8087,18 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					nextExitStates = append(nextExitStates, exitState)
 					continue
 				}
-				restore(exitState)
-				delete(activeDelayed, deferred.call)
-				if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
-					inspectCompositionFunctionBody(literal.Body, visit, router)
-				} else if delayedInvokesCapturedToolRegistration(deferred, function.Body, imports, values, types) {
-					reportTool(deferred.call, selectorChain(deferred.call.Fun))
+				result := applyDeferred(exitState, deferred)
+				if repeatedDeferredCalls[deferred.call] {
+					for {
+						repeatedResult := applyDeferred(result, deferred)
+						merged := merge([]compositionFlowState{result, repeatedResult})
+						if equalCompositionFlowStates(result, merged) {
+							break
+						}
+						result = merged
+					}
 				}
-				nextExitStates = append(nextExitStates, snapshot())
+				nextExitStates = append(nextExitStates, result)
 			}
 			deferredExitStates = nextExitStates
 		}
