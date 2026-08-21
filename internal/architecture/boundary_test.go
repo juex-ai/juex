@@ -2259,6 +2259,41 @@ func useReferenceConversions(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionTracksSlicesCollectIteratorOwnership(t *testing.T) {
+	source := `package app
+import (
+	"slices"
+	"github.com/juex-ai/juex/internal/mcp"
+)
+type App struct { manager *mcp.Manager }
+type closer interface { Close() error }
+func cleanupFromCollectedIterator(application *App) {
+	resources := slices.Collect(slices.Values([]closer{application.manager}))
+	_ = resources[0].Close()
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "slices_collect.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resources.Close,") {
+		t.Fatalf("cleanup calls = %v, want collected iterator cleanup", cleanupCalls)
+	}
+}
+
 func TestAppCompositionInspectionTracksReferenceRangeValues(t *testing.T) {
 	source := `package app
 import (
@@ -2350,6 +2385,38 @@ func TestSliceCollectionSourceArguments(t *testing.T) {
 			}
 			if got := strings.Join(sources, ","); got != test.want {
 				t.Fatalf("sources = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSliceIteratorMaterializingArguments(t *testing.T) {
+	tests := []struct {
+		expression string
+		want       string
+	}{
+		{expression: "slices.Collect(a)", want: "0"},
+		{expression: "slices.Sorted(a)", want: "0"},
+		{expression: "slices.SortedFunc(a, less)", want: "0"},
+		{expression: "slices.SortedStableFunc(a, less)", want: "0"},
+		{expression: "slices.AppendSeq(a, b)", want: "1"},
+		{expression: "slices.Clone(a)", want: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.expression, func(t *testing.T) {
+			expression, err := parser.ParseExpr(test.expression)
+			if err != nil {
+				t.Fatal(err)
+			}
+			call := expression.(*ast.CallExpr)
+			var materialized []string
+			for index := range call.Args {
+				if sliceMaterializesIteratorArgument(call, index, map[string]string{"slices": "slices"}) {
+					materialized = append(materialized, strconv.Itoa(index))
+				}
+			}
+			if got := strings.Join(materialized, ","); got != test.want {
+				t.Fatalf("materialized arguments = %q, want %q", got, test.want)
 			}
 		})
 	}
@@ -5576,6 +5643,14 @@ func materializeIteratorCleanupPaths(paths map[string]bool) map[string]bool {
 	return mergeCleanupPaths(materialized, valuePaths)
 }
 
+func materializeIteratorValueCleanupPaths(paths map[string]bool) map[string]bool {
+	keyPaths, valuePaths, iterator := decodeIteratorCleanupPaths(paths)
+	if !iterator {
+		return paths
+	}
+	return mergeCleanupPaths(keyPaths, valuePaths)
+}
+
 func valueIteratorArity(expression ast.Expr, imports map[string]string) int {
 	call, ok := expression.(*ast.CallExpr)
 	if !ok {
@@ -5743,6 +5818,25 @@ func sliceCollectionSourceArguments(call *ast.CallExpr, imports map[string]strin
 		}
 	}
 	return nil
+}
+
+func sliceMaterializesIteratorArgument(call *ast.CallExpr, index int, imports map[string]string) bool {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	qualifier, ok := selector.X.(*ast.Ident)
+	if !ok || imports[qualifier.Name] != "slices" {
+		return false
+	}
+	switch selector.Sel.Name {
+	case "Collect", "Sorted", "SortedFunc", "SortedStableFunc":
+		return index == 0
+	case "AppendSeq":
+		return index == 1
+	default:
+		return false
+	}
 }
 
 func prefixCleanupPaths(prefix string, paths map[string]bool) map[string]bool {
@@ -6055,8 +6149,12 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 		}
 		if len(sources) != 0 {
 			var paths map[string]bool
-			for _, argument := range sources {
-				paths = mergeCleanupPaths(paths, cleanupPathsForExpression(argument, imports, values, resources, types))
+			for index, argument := range sources {
+				argumentPaths := cleanupPathsForExpression(argument, imports, values, resources, types)
+				if sliceMaterializesIteratorArgument(value, index, imports) {
+					argumentPaths = materializeIteratorValueCleanupPaths(argumentPaths)
+				}
+				paths = mergeCleanupPaths(paths, argumentPaths)
 			}
 			if paths != nil {
 				return paths
