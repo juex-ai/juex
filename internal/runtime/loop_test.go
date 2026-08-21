@@ -4009,16 +4009,21 @@ func TestCompactCapsSummaryRetryToBoundedRequest(t *testing.T) {
 	if provider.calls != 2 || len(provider.options) != 2 || len(provider.systems) != 2 || len(provider.histories) != 2 {
 		t.Fatalf("calls/options/systems/histories = %d/%d/%d/%d", provider.calls, len(provider.options), len(provider.systems), len(provider.histories))
 	}
+	policy := effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow)
+	initialBudget := provider.options[0].MaxOutputTokens
+	initialInputTokens := estimateContextTokens(provider.systems[0], nil, provider.histories[0])
+	if initialBudget >= eng.Compaction.SummaryMaxTokens || initialInputTokens+initialBudget > policy.TriggerTokens {
+		t.Fatalf("initial input + output = %d + %d, want clamped below configured %d and total <= trigger %d", initialInputTokens, initialBudget, eng.Compaction.SummaryMaxTokens, policy.TriggerTokens)
+	}
 	retryBudget := provider.options[1].MaxOutputTokens
 	if retryBudget >= 1200 {
 		t.Fatalf("retry budget = %d, want less than uncapped double 1200", retryBudget)
 	}
-	policy := effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow)
 	retryInputTokens := estimateContextTokens(provider.systems[1], nil, provider.histories[1])
 	if retryInputTokens+retryBudget > policy.TriggerTokens {
 		t.Fatalf("retry input + output = %d + %d, want <= trigger %d", retryInputTokens, retryBudget, policy.TriggerTokens)
 	}
-	if retry.PreviousMaxOutputTokens != 600 || retry.MaxOutputTokens != retryBudget {
+	if retry.PreviousMaxOutputTokens != initialBudget || retry.MaxOutputTokens != retryBudget {
 		t.Fatalf("retry payload = %+v, want bounded budget %d", retry, retryBudget)
 	}
 }
