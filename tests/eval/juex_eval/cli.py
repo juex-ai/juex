@@ -12,7 +12,9 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from . import compaction, helper, selection
+import yaml
+
+from . import compaction, helper, selection, verification
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -98,15 +100,13 @@ def add_verify_args(parser: argparse.ArgumentParser) -> None:
     candidate = tiers.add_parser("candidate", help="Verify a deterministic PR candidate.")
     candidate.add_argument("--race", action="store_true")
     candidate.add_argument("--web", action="store_true")
+    add_commit_verification_record_args(candidate, "candidate")
 
     final = tiers.add_parser("final", help="Verify a final candidate with live gates.")
     final.add_argument("--race", action="store_true")
     final.add_argument("--web", action="store_true")
     final.add_argument("--compaction", action="store_true")
-    final.add_argument(
-        "--run-id",
-        default=os.environ.get("JUEX_VERIFY_RUN_ID") or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()),
-    )
+    add_commit_verification_record_args(final, "final")
     final.add_argument(
         "--config",
         default=os.environ.get("JUEX_PROVIDER_CONFIG") or str(pathlib.Path.home() / ".juex" / "juex.yaml"),
@@ -116,6 +116,19 @@ def add_verify_args(parser: argparse.ArgumentParser) -> None:
         default=os.environ.get("JUEX_EVAL_SELECTION_SEED") or selection.generated_seed(),
     )
     final.add_argument("--provider-timeout", type=int, default=int(os.environ.get("JUEX_PROVIDER_SMOKE_TIMEOUT") or "240"))
+
+
+def add_commit_verification_record_args(parser: argparse.ArgumentParser, tier: str) -> None:
+    parser.add_argument(
+        "--run-id",
+        default=os.environ.get("JUEX_VERIFY_RUN_ID")
+        or f"{tier}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}",
+    )
+    parser.add_argument(
+        "--report-dir",
+        default=os.environ.get("JUEX_VERIFY_REPORT_DIR") or "",
+        help="Store the commit-bound development-validation hierarchy below this report root.",
+    )
 
 
 def verification_steps(args: argparse.Namespace) -> list[VerificationStep]:
@@ -179,6 +192,8 @@ def final_provider_smoke_command(args: argparse.Namespace) -> list[str]:
     append_value(command, "--selection-seed", args.selection_seed)
     append_value(command, "--run-id", args.run_id)
     append_value(command, "--timeout", args.provider_timeout)
+    report_dir = getattr(args, "verification_report_dir", "")
+    append_value(command, "--report-dir", pathlib.Path(report_dir) / "provider-model-smoke" if report_dir else "")
     return command
 
 
@@ -188,6 +203,8 @@ def final_compaction_command(args: argparse.Namespace) -> list[str]:
     append_value(command, "--config", args.config)
     append_value(command, "--selection-seed", args.selection_seed)
     append_value(command, "--run-id", args.run_id)
+    report_dir = getattr(args, "verification_report_dir", "")
+    append_value(command, "--report-dir", pathlib.Path(report_dir) / "compaction-eval" if report_dir else "")
     return command
 
 
@@ -207,33 +224,131 @@ def execute_development_steps(steps: list[VerificationStep], run_step: Callable[
 
 
 def run_verify(args: argparse.Namespace) -> int:
-    requires_clean_worktree = args.tier != "focused"
-    if requires_clean_worktree:
-        require_clean_worktree()
+    if args.tier == "focused":
+        steps = verification_steps(args)
+        test_env = isolated_test_environment() if any(step.test_environment for step in steps) else None
+        return execute_verification_steps(steps, lambda step: run_visible(step, test_env))
+
+    snapshot = require_clean_worktree()
     if args.tier == "final":
         args.config = str(selection.resolved_path(args.config))
-    steps = verification_steps(args)
-    test_env = isolated_test_environment() if any(step.test_environment for step in steps) else None
-    status = execute_verification_steps(steps, lambda step: run_visible(step, test_env))
-    if status:
-        return status
-    if requires_clean_worktree:
-        require_clean_worktree()
-    return 0
-
-
-def require_clean_worktree() -> None:
-    completed = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=all"],
-        cwd=REPO_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
+    candidate_steps = candidate_verification_steps(race=args.race, web=args.web)
+    candidate_plan_fingerprint = verification.plan_fingerprint(candidate_steps)
+    candidate_test_env = (
+        isolated_test_environment() if any(step.test_environment for step in candidate_steps) else None
     )
-    if completed.returncode != 0:
-        raise ValueError("cannot verify candidate: git status failed")
-    if completed.stdout.strip():
+    environment_fingerprint = verification.environment_fingerprint(
+        web=args.web,
+        repo_root=REPO_ROOT,
+        test_environment=candidate_test_env,
+    )
+    report_root = pathlib.Path(args.report_dir) if args.report_dir else helper.REPORT_ROOT
+    report_dir = verification.default_report_dir(report_root, snapshot, args.run_id)
+    args.verification_report_dir = str(report_dir)
+    steps = verification_steps(args)
+    planned_provider_summary = provider_record_summary(args) if args.tier == "final" else None
+    decision = verification.ReuseDecision(None, {}, [])
+    if args.tier == "final":
+        decision = verification.find_reusable_candidate(
+            report_root,
+            snapshot,
+            candidate_plan_fingerprint,
+            environment_fingerprint,
+            candidate_steps,
+            verification.artifact_fingerprints(REPO_ROOT),
+        )
+        if decision.source == report_dir / "record.json":
+            preserved = verification.preserve_candidate_record(report_dir)
+            if preserved is not None:
+                decision = verification.ReuseDecision(preserved, decision.reusable, decision.invalidated)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    command_logs = report_dir / "command-logs"
+    command_logs.mkdir(parents=True, exist_ok=True)
+    rows = [verification.planned_step_record(step) for step in steps]
+    row_by_label = {row["label"]: row for row in rows}
+    steps_to_execute = [step for step in steps if step.label not in decision.reusable]
+    test_env = candidate_test_env if any(step.test_environment for step in steps_to_execute) else None
+    executed: list[str] = []
+    reused: list[str] = []
+    status = 0
+    started_at = verification.utc_now()
+    for step in steps:
+        reusable = decision.reusable.get(step.label)
+        if reusable is not None:
+            row = row_by_label[step.label]
+            for key in ("started_at", "duration", "exit_status", "log"):
+                row[key] = reusable.get(key)
+            row["outcome"] = "reused"
+            row["reused_from"] = str(decision.source) if decision.source else None
+            reused.append(step.label)
+            print(f"reused: {step.label} ({decision.source})")
+            continue
+        row_by_label[step.label].update(run_recorded_verification_step(step, command_logs, test_env))
+        executed.append(step.label)
+        print(f"executed: {step.label}")
+        if row_by_label[step.label]["exit_status"]:
+            status = 1
+            break
+
+    invalidated = list(decision.invalidated)
+    if status == 0:
+        post_snapshot = verification.repository_snapshot(REPO_ROOT)
+        if post_snapshot.head_sha != snapshot.head_sha:
+            status = 1
+            invalidated.append(
+                {
+                    "record": None,
+                    "reason": "head_sha changed during verification",
+                    "steps": [step.label for step in steps],
+                }
+            )
+        if post_snapshot.dirty:
+            status = 1
+            invalidated.append(
+                {
+                    "record": None,
+                    "reason": "worktree became dirty during verification",
+                    "steps": [step.label for step in steps],
+                }
+            )
+
+    for item in invalidated:
+        affected = ", ".join(item.get("steps") or []) or "candidate plan"
+        print(f"invalidated: {affected}: {item['reason']} ({item.get('record') or 'no record'})")
+    invalidated_labels = sorted({label for item in invalidated for label in item.get("steps") or []})
+    print(f"reused steps: {', '.join(reused) or 'none'}")
+    print(f"executed steps: {', '.join(executed) or 'none'}")
+    print(f"invalidated steps: {', '.join(invalidated_labels) or 'none'}")
+
+    provider_summary = (
+        load_optional_json(report_dir / "provider-model-smoke" / "summary.json")
+        or planned_provider_summary
+    )
+    record = verification.build_record(
+        tier=args.tier,
+        run_id=args.run_id,
+        snapshot=snapshot,
+        plan_fingerprint=candidate_plan_fingerprint,
+        environment_fingerprint=environment_fingerprint,
+        steps=rows,
+        status="pass" if status == 0 else "fail",
+        reused=reused,
+        executed=executed,
+        invalidated=invalidated,
+        provider_summary=provider_summary,
+        artifacts=verification.artifact_fingerprints(REPO_ROOT),
+        started_at=started_at,
+    )
+    verification.write_record(report_dir, record)
+    print(f"record: {report_dir / 'record.md'}")
+    return status
+
+
+def require_clean_worktree() -> verification.RepositorySnapshot:
+    snapshot = verification.repository_snapshot(REPO_ROOT)
+    if snapshot.dirty:
         raise ValueError("candidate and final verification require a clean worktree")
+    return snapshot
 
 
 def isolated_test_environment() -> dict[str, str]:
@@ -288,6 +403,75 @@ def run_visible(step: VerificationStep, test_env: dict[str, str] | None) -> int:
         return 1
     print(f"ok  {step.label}")
     return 0
+
+
+def run_recorded_verification_step(
+    step: VerificationStep,
+    log_dir: pathlib.Path,
+    test_env: dict[str, str] | None,
+) -> dict[str, object]:
+    log_path = log_dir / f"{step.label}.log"
+    rendered = shlex.join(step.command)
+    print(f"==> {step.label}: {rendered}")
+    env = test_env.copy() if step.test_environment and test_env is not None else None
+    if step.environment:
+        if env is None:
+            env = os.environ.copy()
+        env.update(step.environment)
+    started_at = verification.utc_now()
+    started = time.monotonic()
+    with log_path.open("wb") as log:
+        completed = subprocess.run(
+            step.command,
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+    duration = round(time.monotonic() - started, 6)
+    if completed.returncode:
+        print(f"FAIL {step.label} (exit {completed.returncode}), log: {log_path}", file=sys.stderr)
+        print_tail(log_path, 40)
+    else:
+        print(f"ok  {step.label}")
+    return {
+        "started_at": started_at,
+        "duration": duration,
+        "exit_status": completed.returncode,
+        "log": str(log_path),
+        "outcome": "executed",
+    }
+
+
+def load_optional_json(path: pathlib.Path) -> dict[str, object] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def provider_record_summary(args: argparse.Namespace) -> dict[str, object]:
+    config_path = pathlib.Path(args.config)
+    try:
+        config = helper.load_source_config(config_path)
+        _, evidence = selection.select(
+            config,
+            kind="provider-smoke",
+            config_path=config_path,
+            seed=args.selection_seed,
+            command_prefix=module_command("provider-smoke"),
+        )
+    except selection.ProviderUnavailable as exc:
+        evidence = exc.evidence
+    except (OSError, ValueError, yaml.YAMLError):
+        evidence = selection.unavailable_evidence(
+            config_path=config_path,
+            seed=args.selection_seed,
+            command_prefix=module_command("provider-smoke"),
+        )
+    return evidence.as_dict()
 
 
 def add_development_args(parser: argparse.ArgumentParser) -> None:
