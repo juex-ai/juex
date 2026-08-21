@@ -98,10 +98,6 @@ type ContextSection struct {
 	Budget     ContextBudget
 }
 
-// PromptSection remains an alias while prompt callers migrate to the broader
-// Context Provider vocabulary.
-type PromptSection = ContextSection
-
 type ToolProvider interface {
 	Tools(context.Context, ToolContext) ([]tools.Tool, error)
 }

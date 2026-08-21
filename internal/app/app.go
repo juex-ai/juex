@@ -36,6 +36,7 @@ import (
 	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
@@ -87,8 +88,8 @@ type Options struct {
 	// Internal child-runtime seams for managed Side Sessions.
 	disableSideSessionTools bool
 	disableObservables      bool
-	sharedGoalState         *runtime.GoalStateStore
-	sharedNotes             *runtime.NotesStore
+	sharedGoalState         *workmem.GoalStateStore
+	sharedNotes             *workmem.NotesStore
 	sharedObservables       *observable.Manager
 	sideSessionFactory      sideSessionFactory
 	sessionModuleFactories  []runtimemodule.SessionFactorySpec
@@ -407,7 +408,7 @@ func New(opts Options) (*App, error) {
 	}
 	var eng *runtime.Engine
 	pb := &prompt.Builder{
-		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+		ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 			request := runtimemodule.ContextRequest{
 				Purpose: runtimemodule.ContextPurposeProviderIteration,
 				Runtime: runtimeModules.runtimeContext,
@@ -686,18 +687,18 @@ func New(opts Options) (*App, error) {
 	return a, nil
 }
 
-func goalStateStore(sess *session.Session) *runtime.GoalStateStore {
+func goalStateStore(sess *session.Session) *workmem.GoalStateStore {
 	if sess == nil || sess.Dir == "" {
 		return nil
 	}
-	return runtime.NewGoalStateStore(sess.Dir, runtime.GoalStateOptions{})
+	return workmem.NewGoalStateStore(sess.Dir, workmem.GoalStateOptions{})
 }
 
-func notesStore(sess *session.Session) *runtime.NotesStore {
+func notesStore(sess *session.Session) *workmem.NotesStore {
 	if sess == nil || sess.Dir == "" {
 		return nil
 	}
-	return runtime.NewNotesStore(sess.Dir)
+	return workmem.NewNotesStore(sess.Dir)
 }
 
 func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {

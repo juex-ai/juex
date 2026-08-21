@@ -7,6 +7,7 @@ import (
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -138,7 +139,7 @@ func (a *App) ActiveContextForSession(id string) (runtime.ActiveContextSnapshot,
 	return snapshot, err == nil
 }
 
-func (a *App) SessionStateStatus() (*runtime.GoalStatusSnapshot, *runtime.NotesSnapshot) {
+func (a *App) SessionStateStatus() (*workmem.GoalStatusSnapshot, *workmem.NotesSnapshot) {
 	if a == nil || a.Engine == nil {
 		return nil, nil
 	}

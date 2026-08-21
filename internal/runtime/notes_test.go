@@ -11,12 +11,13 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestNotesToolDefinitionsBindSessionStateGroup(t *testing.T) {
 	reg := tools.NewRegistry()
-	installModuleTools(t, reg, NewNotesModule(NewNotesStore(t.TempDir())))
+	installModuleTools(t, reg, NewNotesModule(workmem.NewNotesStore(t.TempDir())))
 	definitions := NotesToolDefinitions()
 	if len(definitions) != 1 {
 		t.Fatalf("definition count = %d, want 1", len(definitions))
@@ -76,7 +77,7 @@ func TestNotesToolRewritesSessionNotesAndEmitsEvent(t *testing.T) {
 	}
 
 	_, err = eng.Tools.Call(context.Background(), NotesToolUpdate, map[string]any{
-		"content": strings.Repeat("x", MaxNotesCharacters+1),
+		"content": strings.Repeat("x", workmem.MaxNotesCharacters+1),
 	})
 	if err == nil || !strings.Contains(err.Error(), "maximum is 2048") {
 		t.Fatalf("oversize tool error = %v", err)
@@ -85,10 +86,10 @@ func TestNotesToolRewritesSessionNotesAndEmitsEvent(t *testing.T) {
 
 func TestNotesSnapshotEntrypointsUseModuleStore(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	if _, err := NewNotesStore(eng.Session.Dir).Update("session directory store"); err != nil {
+	if _, err := workmem.NewNotesStore(eng.Session.Dir).Update("session directory store"); err != nil {
 		t.Fatal(err)
 	}
-	injected := NewNotesStore(t.TempDir())
+	injected := workmem.NewNotesStore(t.TempDir())
 	if _, err := injected.Update("module-owned store"); err != nil {
 		t.Fatal(err)
 	}
@@ -108,10 +109,10 @@ func TestNotesSnapshotEntrypointsUseModuleStore(t *testing.T) {
 }
 
 func TestNotesModuleReturnsOneOwnedStoreInstance(t *testing.T) {
-	store := NewNotesStore(t.TempDir())
+	store := workmem.NewNotesStore(t.TempDir())
 	module := NewNotesModule(store)
 	const callers = 32
-	stores := make([]*NotesStore, callers)
+	stores := make([]*workmem.NotesStore, callers)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 
@@ -164,8 +165,8 @@ func TestNotesToolRecitesRewriteOnNextProviderRequest(t *testing.T) {
 
 func TestActiveContextAppendsGoalThenNotes(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	notesStore := NewNotesStore(eng.Session.Dir)
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	notesStore := workmem.NewNotesStore(eng.Session.Dir)
 	if _, err := goalState.Create("ship notes", "tests pass"); err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +207,7 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 	}{
 		{
 			name:      "oversized",
-			corrupt:   []byte(strings.Repeat("x", MaxNotesCharacters+1)),
+			corrupt:   []byte(strings.Repeat("x", workmem.MaxNotesCharacters+1)),
 			wantError: "maximum is 2048",
 		},
 		{
@@ -220,7 +221,7 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			eng, bus := newEngine(t, &mockProvider{}, false)
 			installSessionStateModules(t, eng)
-			notesPath := filepath.Join(eng.Session.Dir, NotesFileName)
+			notesPath := filepath.Join(eng.Session.Dir, workmem.NotesFileName)
 			if err := os.WriteFile(notesPath, tt.corrupt, 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -238,7 +239,7 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 					t.Fatalf("active context missing Notes error placeholder: %+v", snapshot.Messages)
 				}
 				text := message.FirstText()
-				relativePath := filepath.ToSlash(filepath.Join(".juex", "sessions", filepath.Base(eng.Session.Dir), NotesFileName))
+				relativePath := filepath.ToSlash(filepath.Join(".juex", "sessions", filepath.Base(eng.Session.Dir), workmem.NotesFileName))
 				for _, want := range []string{"Working notes unavailable", tt.wantError, relativePath, "update_notes"} {
 					if !strings.Contains(text, want) {
 						t.Fatalf("Notes placeholder missing %q: %q", want, text)
@@ -275,7 +276,7 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 
 func TestNotesContextFromStoreHandlesNil(t *testing.T) {
 	var nilModule *NotesModule
-	if text, ok := nilModule.notesContextFromStore(NewNotesStore(t.TempDir())); ok || text != "" {
+	if text, ok := nilModule.notesContextFromStore(workmem.NewNotesStore(t.TempDir())); ok || text != "" {
 		t.Fatalf("nil module notes context = %q, %v", text, ok)
 	}
 
@@ -297,7 +298,7 @@ func TestTurnRecitesNotesReadFailurePlaceholderAfterAutoCompaction(t *testing.T)
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(eng.Session.Dir, NotesFileName), []byte{0xff}, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(eng.Session.Dir, workmem.NotesFileName), []byte{0xff}, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -333,7 +334,7 @@ func TestTurnRecitesNotesReadFailurePlaceholder(t *testing.T) {
 	}}}
 	eng, bus := newEngine(t, prov, false)
 	installSessionStateModules(t, eng)
-	notesPath := filepath.Join(eng.Session.Dir, NotesFileName)
+	notesPath := filepath.Join(eng.Session.Dir, workmem.NotesFileName)
 	if err := os.WriteFile(notesPath, []byte{0xff}, 0o600); err != nil {
 		t.Fatal(err)
 	}

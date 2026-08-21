@@ -15,6 +15,7 @@ import (
 	"github.com/juex-ai/juex/internal/prompt"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
@@ -38,8 +39,8 @@ type constructedRuntimeModules struct {
 type sessionModuleOptions struct {
 	hookRunner               hooks.PolicyRunner
 	hookBaseRequest          hooks.Request
-	goalState                *juexruntime.GoalStateStore
-	notes                    *juexruntime.NotesStore
+	goalState                *workmem.GoalStateStore
+	notes                    *workmem.NotesStore
 	goalContinuation         bool
 	goalContinuationDeferrer juexruntime.GoalContinuationDeferrer
 }

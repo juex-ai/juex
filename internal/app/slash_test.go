@@ -13,6 +13,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
@@ -411,7 +412,7 @@ func TestAppStatusIncludesGoalState(t *testing.T) {
 	}
 
 	status := a.StatusSnapshot()
-	if status.Goal == nil || status.Goal.Description != "finish goal tools" || status.Goal.Status != runtime.GoalStatusInProgress {
+	if status.Goal == nil || status.Goal.Description != "finish goal tools" || status.Goal.Status != workmem.GoalStatusInProgress {
 		t.Fatalf("goal status = %+v", status.Goal)
 	}
 	text := status.Text()

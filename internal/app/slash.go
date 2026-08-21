@@ -10,6 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -177,7 +178,7 @@ type StatusSnapshot struct {
 	Compaction   StatusCompactionSnapshot    `json:"compaction"`
 	SuccessRates StatusSuccessRatesSnapshot  `json:"success_rates"`
 	PendingInput runtime.PendingInputStatus  `json:"pending_input"`
-	Goal         *runtime.GoalStatusSnapshot `json:"goal,omitempty"`
+	Goal         *workmem.GoalStatusSnapshot `json:"goal,omitempty"`
 }
 
 type ProviderStatusSnapshot struct {
@@ -261,7 +262,7 @@ func (a *App) StatusSnapshot() StatusSnapshot {
 	}
 	observables := observablesStatusFromManager(a.obsv)
 	pending := runtime.PendingInputStatus{}
-	var goal *runtime.GoalStatusSnapshot
+	var goal *workmem.GoalStatusSnapshot
 	if a.Engine != nil {
 		pending = a.Engine.PendingInputStatus()
 		goal, _ = a.Engine.SessionStateStatus()
@@ -345,7 +346,7 @@ func (s StatusSnapshot) Text() string {
 	return strings.Join(lines, "\n")
 }
 
-func formatGoalStatus(goal *runtime.GoalStatusSnapshot) string {
+func formatGoalStatus(goal *workmem.GoalStatusSnapshot) string {
 	if goal == nil {
 		return "goal: none"
 	}

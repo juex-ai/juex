@@ -8,6 +8,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -23,18 +24,18 @@ type NotesModuleOptions struct {
 }
 
 type NotesModule struct {
-	store                *NotesStore
+	store                *workmem.NotesStore
 	eventSink            func(events.Event) error
 	currentTurnID        func() string
 	notesContextErrorMu  sync.Mutex
 	notesContextErrorKey string
 }
 
-func NewNotesModule(store *NotesStore) *NotesModule {
+func NewNotesModule(store *workmem.NotesStore) *NotesModule {
 	return NewNotesModuleWithOptions(store, NotesModuleOptions{})
 }
 
-func NewNotesModuleWithOptions(store *NotesStore, opts NotesModuleOptions) *NotesModule {
+func NewNotesModuleWithOptions(store *workmem.NotesStore, opts NotesModuleOptions) *NotesModule {
 	return &NotesModule{store: store, eventSink: opts.EventSink, currentTurnID: opts.CurrentTurnID}
 }
 

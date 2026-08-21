@@ -4,16 +4,17 @@ import (
 	"fmt"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 )
 
-func (m *GoalModule) GoalStateStore() *GoalStateStore {
+func (m *GoalModule) GoalStateStore() *workmem.GoalStateStore {
 	if m == nil {
 		return nil
 	}
 	return m.store
 }
 
-func (m *GoalModule) GoalStatusSnapshot() (*GoalStatusSnapshot, error) {
+func (m *GoalModule) GoalStatusSnapshot() (*workmem.GoalStatusSnapshot, error) {
 	store := m.GoalStateStore()
 	if store == nil {
 		return nil, nil
@@ -54,7 +55,7 @@ func (m *GoalModule) GoalCompactionState() (*CompactionSummaryGoal, error) {
 	}, nil
 }
 
-func goalStateContextFromStore(store *GoalStateStore) (string, bool) {
+func goalStateContextFromStore(store *workmem.GoalStateStore) (string, bool) {
 	if store == nil {
 		return "", false
 	}
@@ -94,7 +95,7 @@ func (m *GoalModule) emit(event events.Event) error {
 	return m.eventSink(event)
 }
 
-func goalUpdatedPayload(snapshot *GoalStatusSnapshot) GoalUpdatedPayload {
+func goalUpdatedPayload(snapshot *workmem.GoalStatusSnapshot) GoalUpdatedPayload {
 	if snapshot == nil {
 		return GoalUpdatedPayload{}
 	}
@@ -108,7 +109,7 @@ func goalUpdatedPayload(snapshot *GoalStatusSnapshot) GoalUpdatedPayload {
 	}
 }
 
-func goalContinuedPayload(decision GoalGateDecision, snapshot *GoalStatusSnapshot) GoalContinuedPayload {
+func goalContinuedPayload(decision workmem.GoalGateDecision, snapshot *workmem.GoalStatusSnapshot) GoalContinuedPayload {
 	count := decision.ContinuationCount
 	if snapshot != nil {
 		count = snapshot.ContinuationCount

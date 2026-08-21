@@ -33,6 +33,7 @@ import (
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/statusapi"
 	"github.com/juex-ai/juex/internal/usermedia"
@@ -1646,10 +1647,10 @@ func TestGetSessionShow_ReturnsSessionRuntimeState(t *testing.T) {
 	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n"
 	seedSession(t, srv.opts.Cfg.WorkDir, id, body)
 	dir := filepath.Join(srv.opts.Cfg.SessionsDir(), id)
-	if _, err := juexruntime.NewGoalStateStore(dir, juexruntime.GoalStateOptions{}).Create("show session state near composer", "visible near composer"); err != nil {
+	if _, err := workmem.NewGoalStateStore(dir, workmem.GoalStateOptions{}).Create("show session state near composer", "visible near composer"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := juexruntime.NewNotesStore(dir).Update("- [x] keep state visible\n- [ ] session DTO owns this state"); err != nil {
+	if _, err := workmem.NewNotesStore(dir).Update("- [x] keep state visible\n- [ ] session DTO owns this state"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1677,7 +1678,7 @@ func TestGetSessionShow_ReturnsSessionRuntimeState(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		t.Fatal(err)
 	}
-	if parsed.Goal.Description != "show session state near composer" || parsed.Goal.Status != string(juexruntime.GoalStatusInProgress) {
+	if parsed.Goal.Description != "show session state near composer" || parsed.Goal.Status != string(workmem.GoalStatusInProgress) {
 		t.Fatalf("goal = %+v", parsed.Goal)
 	}
 	if parsed.Notes.Content != "- [x] keep state visible\n- [ ] session DTO owns this state" {

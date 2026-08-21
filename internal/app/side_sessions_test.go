@@ -19,6 +19,7 @@ import (
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -217,8 +218,8 @@ func (p *goalSideQueueProvider) Complete(ctx context.Context, _ string, history 
 		if goalState == nil {
 			return llm.Response{}, errors.New("goal module store is unavailable")
 		}
-		if _, err := goalState.Update(runtime.GoalStateUpdate{
-			Status:       runtime.GoalStatusSuccess,
+		if _, err := goalState.Update(workmem.GoalStateUpdate{
+			Status:       workmem.GoalStatusSuccess,
 			StatusReason: &reason,
 		}); err != nil {
 			return llm.Response{}, err
@@ -1266,7 +1267,7 @@ func TestPrimaryGoalContinuationDefersWhileSubscribedResultIsQueued(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			if goal.Status != runtime.GoalStatusSuccess || goal.ContinuationCount != 0 {
+			if goal.Status != workmem.GoalStatusSuccess || goal.ContinuationCount != 0 {
 				t.Fatalf("goal state = %+v, want success without synthetic continuation", goal)
 			}
 			if parent.sideSessions.shouldDeferGoalContinuation() {
@@ -1325,7 +1326,7 @@ func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goal.Status != runtime.GoalStatusInProgress || goal.ContinuationCount != 0 {
+	if goal.Status != workmem.GoalStatusInProgress || goal.ContinuationCount != 0 {
 		t.Fatalf("goal state = %+v", goal)
 	}
 

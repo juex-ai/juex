@@ -36,7 +36,7 @@ func TestBuilder_AllSourcesPresent(t *testing.T) {
 	}
 
 	b := &Builder{
-		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+		ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 			request := runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration}
 			guidance, err := (&GuidanceModule{GlobalAgentsMDPath: globalAgents, AgentsMDDirs: []string{root, subdir}}).Context(context.Background(), request)
 			if err != nil {
@@ -48,7 +48,7 @@ func TestBuilder_AllSourcesPresent(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			return append(append(guidance, []runtimemodule.PromptSection{
+			return append(append(guidance, []runtimemodule.ContextSection{
 				{Key: "skills", Label: "Available Skills", Source: "runtime", Text: "## Available Skills\n- x: do X", Projection: runtimemodule.ContextProjectionSystemPrompt, Budget: runtimemodule.UnboundedContextBudget()},
 				{Key: "demo", Label: "Demo Module", Source: "runtime", Text: "## Demo Module\nmodule context", Projection: runtimemodule.ContextProjectionSystemPrompt, Budget: runtimemodule.UnboundedContextBudget()},
 			}...), runtimeSections...), nil
@@ -366,8 +366,8 @@ func TestBuilder_OperatingContextNormalizesRelativeWorkDir(t *testing.T) {
 
 func TestBuilder_ModuleSectionRendersProvidedContent(t *testing.T) {
 	b := &Builder{
-		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
-			return []runtimemodule.PromptSection{{
+		ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
+			return []runtimemodule.ContextSection{{
 				Key: "example", Label: "Example Module", Source: "runtime", Text: "## Example Module\nfirst desc\nsecond desc\nthird desc", Projection: runtimemodule.ContextProjectionSystemPrompt, Budget: runtimemodule.UnboundedContextBudget(),
 			}}, nil
 		},
@@ -400,8 +400,8 @@ func TestBuilder_SectionsSeparatedByDivider(t *testing.T) {
 func TestBuilder_RebuildsFreshEachCall(t *testing.T) {
 	moduleText := "before"
 	b := &Builder{
-		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
-			return []runtimemodule.PromptSection{{Key: "dynamic", Label: "Dynamic", Source: "runtime", Text: moduleText, Projection: runtimemodule.ContextProjectionSystemPrompt, Budget: runtimemodule.UnboundedContextBudget()}}, nil
+		ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
+			return []runtimemodule.ContextSection{{Key: "dynamic", Label: "Dynamic", Source: "runtime", Text: moduleText, Projection: runtimemodule.ContextProjectionSystemPrompt, Budget: runtimemodule.UnboundedContextBudget()}}, nil
 		},
 	}
 
@@ -418,7 +418,7 @@ func TestBuilder_RebuildsFreshEachCall(t *testing.T) {
 
 func TestBuilderBuildWithErrorReturnsModuleContextFailure(t *testing.T) {
 	b := &Builder{
-		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+		ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 			return nil, errors.New("context unavailable")
 		},
 	}
@@ -436,7 +436,7 @@ func (p staticContextProvider) Context(context.Context, runtimemodule.ContextReq
 }
 
 func builderFromProviders(request runtimemodule.ContextRequest, providers ...runtimemodule.ContextProvider) *Builder {
-	return &Builder{ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+	return &Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		var sections []runtimemodule.ContextSection
 		for _, provider := range providers {
 			provided, err := provider.Context(context.Background(), request)

@@ -11,6 +11,7 @@ import (
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -202,7 +203,7 @@ func (e *Engine) SystemPromptWithError() (string, error) {
 }
 
 // SessionStateStatus reads Goal and Notes from the active Session Modules.
-func (e *Engine) SessionStateStatus() (*GoalStatusSnapshot, *NotesSnapshot) {
+func (e *Engine) SessionStateStatus() (*workmem.GoalStatusSnapshot, *workmem.NotesSnapshot) {
 	snapshot := e.SessionRuntimeSnapshot()
 	return SessionStateStatusFromModules(snapshot.Modules)
 }
@@ -294,8 +295,8 @@ func (e *Engine) publishSessionRuntimeLocked(next sessionRuntimeState) {
 	published.SessionRuntimeSnapshot = cloneSessionRuntimeSnapshot(next.SessionRuntimeSnapshot)
 	e.sessionRuntime = &published
 
-	// Keep the generic compatibility fields aligned for constructors and
-	// existing tests. Feature state belongs to Session Modules.
+	// Keep the bootstrap fields aligned with the published session bundle.
+	// Feature state belongs to Session Modules.
 	e.Session = next.Session
 	e.Prompt = next.prompt
 	e.PendingInputQueue = next.PendingInputQueue

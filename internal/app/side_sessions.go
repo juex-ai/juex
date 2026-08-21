@@ -18,6 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -103,8 +104,8 @@ type sideSessionChildOptions struct {
 	Config            config.Config
 	Model             string
 	UseParentProvider bool
-	GoalState         *runtime.GoalStateStore
-	Notes             *runtime.NotesStore
+	GoalState         *workmem.GoalStateStore
+	Notes             *workmem.NotesStore
 	Observables       *observable.Manager
 }
 

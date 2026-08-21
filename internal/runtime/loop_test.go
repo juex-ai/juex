@@ -26,6 +26,7 @@ import (
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
@@ -436,7 +437,7 @@ func TestTurnStopsBeforeProviderWhenModulePromptContextFails(t *testing.T) {
 		Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn,
 	}}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Prompt.ModulePromptContext = func() ([]runtimemodule.PromptSection, error) {
+	eng.Prompt.ModulePromptContext = func() ([]runtimemodule.ContextSection, error) {
 		return nil, errors.New("memory unavailable")
 	}
 
@@ -847,7 +848,7 @@ func TestTurn_RequestEpochCheckpointConsumesPolicyContextAndLinksResponse(t *tes
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
 	}}}
 	eng, bus := newEngine(t, prov, false)
-	notesStore := NewNotesStore(eng.Session.Dir)
+	notesStore := workmem.NewNotesStore(eng.Session.Dir)
 	if _, err := notesStore.Update("- [ ] retain the exact runtime note"); err != nil {
 		t.Fatal(err)
 	}
@@ -3007,14 +3008,14 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
 	eng.Compaction.Instructions = "Preserve configured release criteria."
-	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	if _, err := goalState.CreateWithContract(GoalStateCreate{
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	if _, err := goalState.CreateWithContract(workmem.GoalStateCreate{
 		Description: "Ship authoritative compaction state",
 		Acceptance:  "The persisted goal remains exact:\n- [ ] preserve acceptance line one\n- [ ] preserve acceptance line two",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	notesStore := NewNotesStore(eng.Session.Dir)
+	notesStore := workmem.NewNotesStore(eng.Session.Dir)
 	if _, err := notesStore.Update("- [x] map the runtime\n- [ ] run the live compaction evaluation"); err != nil {
 		t.Fatal(err)
 	}
@@ -3073,7 +3074,7 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	}
 	if goal.Description != "Ship authoritative compaction state" ||
 		goal.Acceptance != "The persisted goal remains exact:\n- [ ] preserve acceptance line one\n- [ ] preserve acceptance line two" ||
-		goal.Status != string(GoalStatusInProgress) {
+		goal.Status != string(workmem.GoalStatusInProgress) {
 		t.Fatalf("summary goal contract = %+v", goal)
 	}
 }
@@ -3517,8 +3518,8 @@ func TestCompactRetriesPartialSummaryStoppedAtMaxTokens(t *testing.T) {
 
 func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 	var eng *Engine
-	var goalState *GoalStateStore
-	var notesStore *NotesStore
+	var goalState *workmem.GoalStateStore
+	var notesStore *workmem.NotesStore
 	provider := &scriptedCompactionProvider{
 		name: "thinking:model",
 		attempts: []scriptedCompactionAttempt{
@@ -3526,7 +3527,7 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 				response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant}},
 				beforeReturn: func() {
 					updated := "Mutated after the first summary request"
-					if _, err := goalState.Update(GoalStateUpdate{Description: &updated}); err != nil {
+					if _, err := goalState.Update(workmem.GoalStateUpdate{Description: &updated}); err != nil {
 						t.Fatal(err)
 					}
 					if _, err := notesStore.Update("- [ ] mutated after first request"); err != nil {
@@ -3543,11 +3544,11 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 	eng.ContextWindow = 5000
 	eng.Compaction.ReserveTokens = 1000
 	eng.Compaction.SummaryMaxTokens = 1000
-	goalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	goalState = workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
 	if _, err := goalState.Create("Original compact goal", "Original acceptance"); err != nil {
 		t.Fatal(err)
 	}
-	notesStore = NewNotesStore(eng.Session.Dir)
+	notesStore = workmem.NewNotesStore(eng.Session.Dir)
 	if _, err := notesStore.Update("- [ ] original compact note"); err != nil {
 		t.Fatal(err)
 	}
@@ -4721,7 +4722,7 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "goal_update_1", ToolName: GoalToolUpdate, Input: map[string]any{
-				"status":        string(GoalStatusSuccess),
+				"status":        string(workmem.GoalStatusSuccess),
 				"status_reason": "tests passed",
 			}},
 		}}, StopReason: llm.StopToolUse},
@@ -4762,7 +4763,7 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusSuccess || state.StatusReason != "tests passed" || state.ContinuationCount != 1 || !strings.Contains(state.Acceptance, "artifact.txt") {
+	if state.Status != workmem.GoalStatusSuccess || state.StatusReason != "tests passed" || state.ContinuationCount != 1 || !strings.Contains(state.Acceptance, "artifact.txt") {
 		t.Fatalf("goal state = %+v", state)
 	}
 }
@@ -4772,14 +4773,14 @@ func TestTurn_GoalCompletionGateAcceptsMaximumGoalContract(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "goal_update_max", ToolName: GoalToolUpdate, Input: map[string]any{
-				"status":        string(GoalStatusSuccess),
+				"status":        string(workmem.GoalStatusSuccess),
 				"status_reason": "maximum contract preserved",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
 	acceptance := strings.Repeat("a", 32*1024)
 	if _, err := goalState.Create("ship the maximum contract", acceptance); err != nil {
 		t.Fatal(err)
@@ -4803,7 +4804,7 @@ func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "waiting for delegated work"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
 	if _, err := goalState.Create("finish delegated work", "all delegated results are incorporated"); err != nil {
 		t.Fatal(err)
 	}
@@ -4828,7 +4829,7 @@ func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusInProgress || state.ContinuationCount != 0 {
+	if state.Status != workmem.GoalStatusInProgress || state.ContinuationCount != 0 {
 		t.Fatalf("goal state = %+v", state)
 	}
 }
@@ -4839,7 +4840,7 @@ func TestTurn_DeferredGoalStillHonorsStopHookContinuation(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
 	if _, err := goalState.Create("finish delegated work", "all checks pass"); err != nil {
 		t.Fatal(err)
 	}
@@ -4870,14 +4871,14 @@ func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "goal_wait_1", ToolName: GoalToolUpdate, Input: map[string]any{
-				"status":        string(GoalStatusWaitForUser),
+				"status":        string(workmem.GoalStatusWaitForUser),
 				"status_reason": "waiting for the deployment choice",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "Which deployment should I use?"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
 	if _, err := goalState.Create("deploy the service", "the chosen deployment is healthy"); err != nil {
 		t.Fatal(err)
 	}
@@ -4902,7 +4903,7 @@ func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusWaitForUser || state.ContinuationCount != 0 {
+	if state.Status != workmem.GoalStatusWaitForUser || state.ContinuationCount != 0 {
 		t.Fatalf("goal state = %+v", state)
 	}
 }
@@ -4912,7 +4913,7 @@ func TestTurn_UserMessageDoesNotCreateGoalState(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
 	installSessionStateModulesWithStores(t, eng, goalState, nil)
 
 	out, err := eng.Turn(context.Background(), "this is normal context, not a goal")
@@ -4936,7 +4937,7 @@ func TestTurn_HookGoalStateOutputDoesNotModifyGoal(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
 	installSessionStateModulesWithStores(t, eng, goalState, nil)
 	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
 		Name:    "ignored-goal-output",
@@ -7024,7 +7025,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 			ToolUseID: "goal-update",
 			ToolName:  GoalToolUpdate,
 			Input: map[string]any{
-				"status":        string(GoalStatusSuccess),
+				"status":        string(workmem.GoalStatusSuccess),
 				"status_reason": "ordered update applied",
 			},
 		},
@@ -7041,7 +7042,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Status != GoalStatusSuccess || snapshot.StatusReason != "ordered update applied" {
+	if snapshot.Status != workmem.GoalStatusSuccess || snapshot.StatusReason != "ordered update applied" {
 		t.Fatalf("goal state = %+v, want provider-ordered success update", snapshot)
 	}
 }
