@@ -17,6 +17,12 @@ func TestModuleContributesDefaultBuiltinTools(t *testing.T) {
 	if mod.ID() != ModuleID {
 		t.Fatalf("ID() = %q, want %q", mod.ID(), ModuleID)
 	}
+	if mod.ShellSessions() != nil {
+		t.Fatal("Module constructed an owned shell session manager before StartRuntime")
+	}
+	if err := mod.StartRuntime(context.Background(), runtimemodule.RuntimeContext{}); err != nil {
+		t.Fatal(err)
+	}
 	provided, err := mod.Tools(context.Background(), runtimemodule.ToolContext{})
 	if err != nil {
 		t.Fatal(err)
@@ -29,9 +35,6 @@ func TestModuleContributesDefaultBuiltinTools(t *testing.T) {
 		if provided[i].Name != want[i].Name {
 			t.Fatalf("tool[%d] = %q, want %q", i, provided[i].Name, want[i].Name)
 		}
-	}
-	if err := mod.StartRuntime(context.Background(), runtimemodule.RuntimeContext{}); err != nil {
-		t.Fatal(err)
 	}
 	if err := mod.CloseRuntime(context.Background()); err != nil {
 		t.Fatal(err)

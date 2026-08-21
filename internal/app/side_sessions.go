@@ -30,6 +30,24 @@ type sideSessionModule struct {
 
 func (*sideSessionModule) ID() runtimemodule.ID { return sideSessionModuleID }
 
+func (*sideSessionModule) StartRuntime(context.Context, runtimemodule.RuntimeContext) error {
+	return nil
+}
+
+func (m *sideSessionModule) QuiesceRuntime(context.Context) error {
+	if m == nil || m.manager == nil {
+		return nil
+	}
+	return m.manager.StartClose()
+}
+
+func (m *sideSessionModule) CloseRuntime(context.Context) error {
+	if m == nil || m.manager == nil {
+		return nil
+	}
+	return m.manager.WaitClose()
+}
+
 func (m *sideSessionModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
 	return sideSessionTools(m.manager), nil
 }

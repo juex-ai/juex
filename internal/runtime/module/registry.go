@@ -193,6 +193,24 @@ func (r *Registry) Seal(ctx context.Context, toolContext ToolContext) (*Set, err
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	set, err := r.freeze()
+	if err != nil {
+		return nil, err
+	}
+	if err := set.materializeToolCatalog(ctx, toolContext); err != nil {
+		return nil, err
+	}
+	return set, nil
+}
+
+// freeze seals structural identity, registration order, and capability
+// indexes without evaluating contributions that may depend on started
+// resources. Pure callers use Seal; lifecycle composition uses freeze, starts
+// resources, then materializes the catalog before publication.
+func (r *Registry) freeze() (*Set, error) {
+	if r == nil {
+		return nil, fmt.Errorf("runtime modules: nil registry")
+	}
 
 	r.mu.Lock()
 	if r.sealed {
@@ -211,14 +229,10 @@ func (r *Registry) Seal(ctx context.Context, toolContext ToolContext) (*Set, err
 	pendingInputObservers := append([]registeredModule(nil), r.pendingInputObservers...)
 	r.mu.Unlock()
 
-	catalog, err := buildToolCatalog(ctx, toolContext, toolProviders)
-	if err != nil {
-		return nil, err
-	}
 	return &Set{
 		modules:               modules,
+		toolProviders:         toolProviders,
 		contextProviders:      contextProviders,
-		toolCatalog:           catalog,
 		turnInputPolicies:     turnInputPolicies,
 		toolPolicies:          toolPolicies,
 		finishPolicies:        finishPolicies,
@@ -311,6 +325,7 @@ func buildToolCatalog(ctx context.Context, toolContext ToolContext, providers []
 // private and does not permit capability registration after publication.
 type Set struct {
 	modules               []registeredModule
+	toolProviders         []registeredModule
 	contextProviders      []registeredModule
 	toolCatalog           ToolCatalog
 	turnInputPolicies     []registeredModule
@@ -320,9 +335,42 @@ type Set struct {
 	compactionPolicies    []registeredModule
 	pendingInputObservers []registeredModule
 
-	scope Scope
-	mu    sync.RWMutex
-	state lifecycleState
+	scope       Scope
+	mu          sync.RWMutex
+	lifecycleMu sync.Mutex
+	state       lifecycleState
+}
+
+type Descriptor struct {
+	ID    ID
+	Scope Scope
+}
+
+func (s *Set) Descriptors() []Descriptor {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	descriptors := make([]Descriptor, 0, len(s.modules))
+	for _, registered := range s.modules {
+		descriptors = append(descriptors, Descriptor{ID: registered.id, Scope: s.scope})
+	}
+	return descriptors
+}
+
+func (s *Set) materializeToolCatalog(ctx context.Context, toolContext ToolContext) error {
+	if s == nil {
+		return nil
+	}
+	catalog, err := buildToolCatalog(nonNilContext(ctx), toolContext, s.toolProviders)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.toolCatalog = catalog
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *Set) Modules() []Module {

@@ -44,6 +44,43 @@ type SessionFactorySpec struct {
 }
 
 func BuildRuntimeSet(ctx context.Context, specs []RuntimeFactorySpec, runtimeContext RuntimeContext, toolContext ToolContext) (*Set, error) {
+	registry, err := constructRuntimeRegistry(ctx, specs, runtimeContext)
+	if err != nil {
+		return nil, err
+	}
+	set, err := registry.Seal(nonNilContext(ctx), toolContext)
+	if err != nil {
+		return nil, err
+	}
+	set.scope = ScopeRuntime
+	return set, nil
+}
+
+// BuildAndStartRuntimeSet freezes structural capability indexes before
+// starting resources, then materializes and validates resource-dependent Tool
+// contributions before returning a publishable set.
+func BuildAndStartRuntimeSet(ctx context.Context, specs []RuntimeFactorySpec, runtimeContext RuntimeContext, toolContext ToolContext) (*Set, error) {
+	registry, err := constructRuntimeRegistry(ctx, specs, runtimeContext)
+	if err != nil {
+		return nil, err
+	}
+	set, err := registry.freeze()
+	if err != nil {
+		return nil, err
+	}
+	set.scope = ScopeRuntime
+	if err := set.StartRuntime(ctx, runtimeContext); err != nil {
+		return nil, err
+	}
+	if err := set.materializeToolCatalog(ctx, toolContext); err != nil {
+		catalogErr := fmt.Errorf("runtime modules: materialize runtime tool catalog: %w", err)
+		rollbackErr := set.rollbackStartedRuntime(nonNilContext(ctx), "catalog rollback runtime")
+		return nil, errors.Join(catalogErr, rollbackErr)
+	}
+	return set, nil
+}
+
+func constructRuntimeRegistry(ctx context.Context, specs []RuntimeFactorySpec, runtimeContext RuntimeContext) (*Registry, error) {
 	registry := NewRegistry()
 	for _, spec := range specs {
 		if !spec.Enabled {
@@ -67,15 +104,46 @@ func BuildRuntimeSet(ctx context.Context, specs []RuntimeFactorySpec, runtimeCon
 			return nil, err
 		}
 	}
+	return registry, nil
+}
+
+func BuildSessionSet(ctx context.Context, specs []SessionFactorySpec, sessionContext SessionContext, toolContext ToolContext) (*Set, error) {
+	registry, err := constructSessionRegistry(ctx, specs, sessionContext)
+	if err != nil {
+		return nil, err
+	}
 	set, err := registry.Seal(nonNilContext(ctx), toolContext)
 	if err != nil {
 		return nil, err
 	}
-	set.scope = ScopeRuntime
+	set.scope = ScopeSession
 	return set, nil
 }
 
-func BuildSessionSet(ctx context.Context, specs []SessionFactorySpec, sessionContext SessionContext, toolContext ToolContext) (*Set, error) {
+// BuildAndStartSessionSet is the Session-scoped counterpart to
+// BuildAndStartRuntimeSet.
+func BuildAndStartSessionSet(ctx context.Context, specs []SessionFactorySpec, sessionContext SessionContext, toolContext ToolContext) (*Set, error) {
+	registry, err := constructSessionRegistry(ctx, specs, sessionContext)
+	if err != nil {
+		return nil, err
+	}
+	set, err := registry.freeze()
+	if err != nil {
+		return nil, err
+	}
+	set.scope = ScopeSession
+	if err := set.StartSession(ctx, sessionContext); err != nil {
+		return nil, err
+	}
+	if err := set.materializeToolCatalog(ctx, toolContext); err != nil {
+		catalogErr := fmt.Errorf("runtime modules: materialize session tool catalog: %w", err)
+		rollbackErr := set.rollbackStartedSession(nonNilContext(ctx), "catalog rollback session")
+		return nil, errors.Join(catalogErr, rollbackErr)
+	}
+	return set, nil
+}
+
+func constructSessionRegistry(ctx context.Context, specs []SessionFactorySpec, sessionContext SessionContext) (*Registry, error) {
 	registry := NewRegistry()
 	for _, spec := range specs {
 		if !spec.Enabled {
@@ -99,12 +167,7 @@ func BuildSessionSet(ctx context.Context, specs []SessionFactorySpec, sessionCon
 			return nil, err
 		}
 	}
-	set, err := registry.Seal(nonNilContext(ctx), toolContext)
-	if err != nil {
-		return nil, err
-	}
-	set.scope = ScopeSession
-	return set, nil
+	return registry, nil
 }
 
 func validateFactoryModule(factoryID ID, mod Module) error {
@@ -119,15 +182,19 @@ func validateFactoryModule(factoryID ID, mod Module) error {
 }
 
 type lifecycleState struct {
-	started  []registeredModule
-	closed   bool
-	closeErr error
+	started    []registeredModule
+	quiesced   bool
+	quiesceErr error
+	closed     bool
+	closeErr   error
 }
 
 func (s *Set) StartRuntime(ctx context.Context, runtimeContext RuntimeContext) error {
 	if s == nil {
 		return nil
 	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.scope != ScopeRuntime {
@@ -146,7 +213,7 @@ func (s *Set) StartRuntime(ctx context.Context, runtimeContext RuntimeContext) e
 		}
 		if err := resource.StartRuntime(nonNilContext(ctx), runtimeContext); err != nil {
 			startErr := fmt.Errorf("runtime module %q start runtime: %w", registered.id, err)
-			rollbackErr := closeStartedRuntime(nonNilContext(ctx), s.state.started)
+			rollbackErr := closeStartedRuntime(nonNilContext(ctx), s.state.started, "rollback runtime")
 			s.state.closed = true
 			s.state.closeErr = rollbackErr
 			return errors.Join(startErr, rollbackErr)
@@ -159,27 +226,58 @@ func (s *Set) StartRuntime(ctx context.Context, runtimeContext RuntimeContext) e
 	return nil
 }
 
+// QuiesceRuntime stops new asynchronous work while the Set remains readable.
+// A deferred cleanup error is deliberately not cached so callers can wait and
+// retry the same quiesce boundary before closing resources.
+func (s *Set) QuiesceRuntime(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	return s.quiesceRuntime(nonNilContext(ctx))
+}
+
 func (s *Set) CloseRuntime(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+
+	quiesceErr := s.quiesceRuntime(nonNilContext(ctx))
+	if isDeferredLifecycleError(quiesceErr) {
+		return quiesceErr
+	}
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.scope != ScopeRuntime {
+		s.mu.Unlock()
 		return fmt.Errorf("runtime modules: cannot close %q set as runtime", s.scope)
 	}
 	if s.state.closed {
-		return s.state.closeErr
+		err := s.state.closeErr
+		s.mu.Unlock()
+		return err
 	}
 	s.state.closed = true
-	s.state.closeErr = quiesceAndCloseRuntime(nonNilContext(ctx), s.state.started)
-	return s.state.closeErr
+	started := append([]registeredModule(nil), s.state.started...)
+	s.mu.Unlock()
+
+	closeErr := closeStartedRuntime(nonNilContext(ctx), started, "close runtime")
+	result := errors.Join(quiesceErr, closeErr)
+	s.mu.Lock()
+	s.state.closeErr = result
+	s.mu.Unlock()
+	return result
 }
 
 func (s *Set) StartSession(ctx context.Context, sessionContext SessionContext) error {
 	if s == nil {
 		return nil
 	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.scope != ScopeSession {
@@ -198,7 +296,7 @@ func (s *Set) StartSession(ctx context.Context, sessionContext SessionContext) e
 		}
 		if err := resource.StartSession(nonNilContext(ctx), sessionContext); err != nil {
 			startErr := fmt.Errorf("runtime module %q start session: %w", registered.id, err)
-			rollbackErr := closeStartedSession(nonNilContext(ctx), s.state.started)
+			rollbackErr := closeStartedSession(nonNilContext(ctx), s.state.started, "rollback session")
 			s.state.closed = true
 			s.state.closeErr = rollbackErr
 			return errors.Join(startErr, rollbackErr)
@@ -211,35 +309,167 @@ func (s *Set) StartSession(ctx context.Context, sessionContext SessionContext) e
 	return nil
 }
 
+func (s *Set) QuiesceSession(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	return s.quiesceSession(nonNilContext(ctx))
+}
+
 func (s *Set) CloseSession(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+
+	quiesceErr := s.quiesceSession(nonNilContext(ctx))
+	if isDeferredLifecycleError(quiesceErr) {
+		return quiesceErr
+	}
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.scope != ScopeSession {
+		s.mu.Unlock()
 		return fmt.Errorf("runtime modules: cannot close %q set as session", s.scope)
 	}
 	if s.state.closed {
-		return s.state.closeErr
+		err := s.state.closeErr
+		s.mu.Unlock()
+		return err
 	}
 	s.state.closed = true
-	s.state.closeErr = quiesceAndCloseSession(nonNilContext(ctx), s.state.started)
-	return s.state.closeErr
+	started := append([]registeredModule(nil), s.state.started...)
+	s.mu.Unlock()
+
+	closeErr := closeStartedSession(nonNilContext(ctx), started, "close session")
+	result := errors.Join(quiesceErr, closeErr)
+	s.mu.Lock()
+	s.state.closeErr = result
+	s.mu.Unlock()
+	return result
 }
 
-func closeStartedRuntime(ctx context.Context, started []registeredModule) error {
+func (s *Set) quiesceRuntime(ctx context.Context) error {
+	s.mu.RLock()
+	if s.scope != ScopeRuntime {
+		scope := s.scope
+		s.mu.RUnlock()
+		return fmt.Errorf("runtime modules: cannot quiesce %q set as runtime", scope)
+	}
+	if s.state.closed {
+		err := s.state.closeErr
+		s.mu.RUnlock()
+		return err
+	}
+	if s.state.quiesced {
+		err := s.state.quiesceErr
+		s.mu.RUnlock()
+		return err
+	}
+	started := append([]registeredModule(nil), s.state.started...)
+	s.mu.RUnlock()
+
+	result := quiesceStartedRuntime(ctx, started)
+	if isDeferredLifecycleError(result) {
+		return result
+	}
+	s.mu.Lock()
+	s.state.quiesced = true
+	s.state.quiesceErr = result
+	s.mu.Unlock()
+	return result
+}
+
+func (s *Set) quiesceSession(ctx context.Context) error {
+	s.mu.RLock()
+	if s.scope != ScopeSession {
+		scope := s.scope
+		s.mu.RUnlock()
+		return fmt.Errorf("runtime modules: cannot quiesce %q set as session", scope)
+	}
+	if s.state.closed {
+		err := s.state.closeErr
+		s.mu.RUnlock()
+		return err
+	}
+	if s.state.quiesced {
+		err := s.state.quiesceErr
+		s.mu.RUnlock()
+		return err
+	}
+	started := append([]registeredModule(nil), s.state.started...)
+	s.mu.RUnlock()
+
+	result := quiesceStartedSession(ctx, started)
+	if isDeferredLifecycleError(result) {
+		return result
+	}
+	s.mu.Lock()
+	s.state.quiesced = true
+	s.state.quiesceErr = result
+	s.mu.Unlock()
+	return result
+}
+
+func (s *Set) rollbackStartedRuntime(ctx context.Context, phase string) error {
+	if s == nil {
+		return nil
+	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.mu.Lock()
+	if s.state.closed {
+		err := s.state.closeErr
+		s.mu.Unlock()
+		return err
+	}
+	s.state.closed = true
+	started := append([]registeredModule(nil), s.state.started...)
+	s.mu.Unlock()
+	err := closeStartedRuntime(ctx, started, phase)
+	s.mu.Lock()
+	s.state.closeErr = err
+	s.mu.Unlock()
+	return err
+}
+
+func (s *Set) rollbackStartedSession(ctx context.Context, phase string) error {
+	if s == nil {
+		return nil
+	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.mu.Lock()
+	if s.state.closed {
+		err := s.state.closeErr
+		s.mu.Unlock()
+		return err
+	}
+	s.state.closed = true
+	started := append([]registeredModule(nil), s.state.started...)
+	s.mu.Unlock()
+	err := closeStartedSession(ctx, started, phase)
+	s.mu.Lock()
+	s.state.closeErr = err
+	s.mu.Unlock()
+	return err
+}
+
+func closeStartedRuntime(ctx context.Context, started []registeredModule, phase string) error {
 	var result error
 	for i := len(started) - 1; i >= 0; i-- {
 		registered := started[i]
 		if err := registered.module.(RuntimeResource).CloseRuntime(ctx); err != nil {
-			result = errors.Join(result, fmt.Errorf("runtime module %q rollback runtime: %w", registered.id, err))
+			result = errors.Join(result, fmt.Errorf("runtime module %q %s: %w", registered.id, phase, err))
 		}
 	}
 	return result
 }
 
-func quiesceAndCloseRuntime(ctx context.Context, started []registeredModule) error {
+func quiesceStartedRuntime(ctx context.Context, started []registeredModule) error {
 	var result error
 	for i := len(started) - 1; i >= 0; i-- {
 		registered := started[i]
@@ -249,27 +479,21 @@ func quiesceAndCloseRuntime(ctx context.Context, started []registeredModule) err
 			}
 		}
 	}
-	for i := len(started) - 1; i >= 0; i-- {
-		registered := started[i]
-		if err := registered.module.(RuntimeResource).CloseRuntime(ctx); err != nil {
-			result = errors.Join(result, fmt.Errorf("runtime module %q close runtime: %w", registered.id, err))
-		}
-	}
 	return result
 }
 
-func closeStartedSession(ctx context.Context, started []registeredModule) error {
+func closeStartedSession(ctx context.Context, started []registeredModule, phase string) error {
 	var result error
 	for i := len(started) - 1; i >= 0; i-- {
 		registered := started[i]
 		if err := registered.module.(SessionResource).CloseSession(ctx); err != nil {
-			result = errors.Join(result, fmt.Errorf("runtime module %q rollback session: %w", registered.id, err))
+			result = errors.Join(result, fmt.Errorf("runtime module %q %s: %w", registered.id, phase, err))
 		}
 	}
 	return result
 }
 
-func quiesceAndCloseSession(ctx context.Context, started []registeredModule) error {
+func quiesceStartedSession(ctx context.Context, started []registeredModule) error {
 	var result error
 	for i := len(started) - 1; i >= 0; i-- {
 		registered := started[i]
@@ -279,13 +503,15 @@ func quiesceAndCloseSession(ctx context.Context, started []registeredModule) err
 			}
 		}
 	}
-	for i := len(started) - 1; i >= 0; i-- {
-		registered := started[i]
-		if err := registered.module.(SessionResource).CloseSession(ctx); err != nil {
-			result = errors.Join(result, fmt.Errorf("runtime module %q close session: %w", registered.id, err))
-		}
-	}
 	return result
+}
+
+func isDeferredLifecycleError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var deferred interface{ Wait() error }
+	return errors.As(err, &deferred)
 }
 
 func nonNilContext(ctx context.Context) context.Context {

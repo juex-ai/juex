@@ -172,6 +172,72 @@ fleet:
 	}
 }
 
+func TestModulePolicyDefaultsEnabledAndLayersByCanonicalID(t *testing.T) {
+	cfg := Config{}
+	if !cfg.ModuleEnabled("skills") {
+		t.Fatal("unconfigured Module must default to enabled")
+	}
+	if err := applyYAMLData(&cfg, []byte(`modules:
+  skills:
+    enabled: false
+  mcp:
+    enabled: false
+`), yamlConfigSource{Path: "base.yaml", Scope: configScopeDefaultHome}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ModuleEnabled("skills") || cfg.ModuleEnabled("mcp") {
+		t.Fatalf("base Module policy = %+v, want skills and mcp disabled", cfg.Modules)
+	}
+	if err := applyYAMLData(&cfg, []byte(`modules:
+  skills:
+    enabled: true
+`), yamlConfigSource{Path: "workspace.yaml", Scope: configScopeWorkspace}); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ModuleEnabled("skills") || cfg.ModuleEnabled("mcp") {
+		t.Fatalf("layered Module policy = %+v, want skills re-enabled and mcp unchanged", cfg.Modules)
+	}
+}
+
+func TestModulePolicyRejectsUnknownEnvelopeFieldAndUnsupportedID(t *testing.T) {
+	t.Run("unknown envelope field", func(t *testing.T) {
+		cfg := Config{}
+		err := applyYAMLData(&cfg, []byte(`modules:
+  skills:
+    enabled: false
+    priority: 10
+`), yamlConfigSource{Path: "modules.yaml", Scope: configScopeWorkspace})
+		if err == nil || !strings.Contains(err.Error(), "priority") {
+			t.Fatalf("applyYAMLData() error = %v, want unknown priority", err)
+		}
+	})
+
+	t.Run("non-canonical id", func(t *testing.T) {
+		cfg := Config{}
+		err := applyYAMLData(&cfg, []byte(`modules:
+  " skills ":
+    enabled: false
+`), yamlConfigSource{Path: "modules.yaml", Scope: configScopeWorkspace})
+		if err == nil || !strings.Contains(err.Error(), `invalid module id " skills "`) {
+			t.Fatalf("applyYAMLData() error = %v, want non-canonical id rejection", err)
+		}
+	})
+
+	t.Run("unsupported id", func(t *testing.T) {
+		cfg := Config{}
+		if err := applyYAMLData(&cfg, []byte(`modules:
+  skillz:
+    enabled: false
+`), yamlConfigSource{Path: "modules.yaml", Scope: configScopeWorkspace}); err != nil {
+			t.Fatal(err)
+		}
+		err := cfg.ValidateModuleIDs([]string{"skills", "mcp"})
+		if err == nil || !strings.Contains(err.Error(), `unsupported module "skillz"`) {
+			t.Fatalf("ValidateModuleIDs() error = %v", err)
+		}
+	})
+}
+
 func TestLoadWithOptionsNonDefaultHomePrecedence(t *testing.T) {
 	userHome := prepareConfigTest(t)
 	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), `model: local:base

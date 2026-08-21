@@ -24,10 +24,83 @@ import (
 	"github.com/juex-ai/juex/internal/tools"
 )
 
+type runtimeStatusTestModule struct {
+	id    runtimemodule.ID
+	tools []tools.Tool
+}
+
+func (m runtimeStatusTestModule) ID() runtimemodule.ID { return m.id }
+
+func (m runtimeStatusTestModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+	return append([]tools.Tool(nil), m.tools...), nil
+}
+
+func snapshotRuntimeStatus(t *testing.T, cfg config.Config, opts RuntimeStatusOptions) (RuntimeStatus, error) {
+	t.Helper()
+	manager, err := mcp.NewManagerLayeredSoft(context.Background(), nil, mcp.ConnectOptions{})
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	a, err := New(Options{
+		Config:      cfg,
+		Provider:    &stubProvider{},
+		WorkDir:     cfg.WorkDir,
+		MCPManager:  manager,
+		DisableMCP:  true,
+		LazySession: true,
+	})
+	if err != nil {
+		_ = manager.Close()
+		return RuntimeStatus{}, err
+	}
+	t.Cleanup(func() {
+		_ = a.CloseAndWait()
+		_ = manager.Close()
+	})
+	var status RuntimeStatus
+	err = a.ReadRuntimeModuleSnapshot(func(snapshot RuntimeModuleSnapshot) error {
+		opts.ActiveModules = &snapshot
+		var snapshotErr error
+		status, snapshotErr = NewRuntimeCatalogService(cfg).Snapshot(opts)
+		return snapshotErr
+	})
+	return status, err
+}
+
+func mcpRuntimeStatusSnapshot(t *testing.T, serverTools map[string][]mcp.ToolDescriptor) RuntimeModuleSnapshot {
+	t.Helper()
+	var provided []tools.Tool
+	for serverName, descriptors := range serverTools {
+		for _, descriptor := range descriptors {
+			provided = append(provided, tools.Tool{
+				Name:        mcp.ToolName(serverName, descriptor.Name),
+				Group:       tools.ToolGroupMCP,
+				Description: descriptor.Description,
+				Schema:      descriptor.InputSchema,
+				Handler:     func(context.Context, map[string]any) (string, error) { return "", nil },
+			})
+		}
+	}
+	runtimeSet, err := runtimemodule.BuildRuntimeSet(context.Background(), []runtimemodule.RuntimeFactorySpec{{
+		ID: mcp.ModuleID, Enabled: true,
+		New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+			return runtimeStatusTestModule{id: mcp.ModuleID, tools: provided}, nil
+		},
+	}}, runtimemodule.RuntimeContext{}, runtimemodule.ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionSet, err := runtimemodule.BuildSessionSet(context.Background(), nil, runtimemodule.SessionContext{}, runtimemodule.ToolContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return RuntimeModuleSnapshot{Runtime: runtimeSet, Session: sessionSet}
+}
+
 func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 	work := t.TempDir()
 	cfg := config.Config{WorkDir: work, ToolTimeout: 1500 * time.Millisecond}
-	status, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{})
+	status, err := snapshotRuntimeStatus(t, cfg, RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +144,7 @@ func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 }
 
 func TestRuntimeStatusTierTwoToolsUseBuiltinGuidesWithinBudget(t *testing.T) {
-	status, err := NewRuntimeCatalogService(config.Config{WorkDir: t.TempDir()}).Snapshot(RuntimeStatusOptions{})
+	status, err := snapshotRuntimeStatus(t, config.Config{WorkDir: t.TempDir()}, RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,9 +243,23 @@ func TestRuntimeCatalogServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = a.Close() })
 
-	status, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{})
+	var status RuntimeStatus
+	err = a.ReadRuntimeModuleSnapshot(func(snapshot RuntimeModuleSnapshot) error {
+		var snapshotErr error
+		status, snapshotErr = NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{ActiveModules: &snapshot})
+		return snapshotErr
+	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	var wantModules []RuntimeModuleStatus
+	for _, set := range []*runtimemodule.Set{a.Engine.RuntimeModules, a.Engine.SessionRuntimeSnapshot().Modules} {
+		for _, descriptor := range set.Descriptors() {
+			wantModules = append(wantModules, RuntimeModuleStatus{ID: string(descriptor.ID), Scope: string(descriptor.Scope)})
+		}
+	}
+	if !reflect.DeepEqual(status.Modules, wantModules) {
+		t.Fatalf("runtime Module status = %#v, want active descriptors %#v", status.Modules, wantModules)
 	}
 	type catalogEntry struct {
 		group string
@@ -295,6 +382,68 @@ func TestAppDisabledModulesLeaveNoToolsOrCatalogEntries(t *testing.T) {
 	}
 }
 
+func TestAppModuleConfigDisablesEveryCompiledModuleBeforeConstruction(t *testing.T) {
+	work := t.TempDir()
+	policy := config.ModulePolicy{}
+	for _, id := range compiledModuleIDs() {
+		policy[id] = config.ModuleSettings{Enabled: false}
+	}
+	a, err := New(Options{
+		Config:   config.Config{WorkDir: work, Modules: policy},
+		Provider: &stubProvider{},
+		WorkDir:  work,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+
+	if descriptors := a.runtimeModules.Descriptors(); len(descriptors) != 0 {
+		t.Fatalf("Runtime Modules = %#v, want none", descriptors)
+	}
+	if descriptors := a.Engine.SessionRuntimeSnapshot().Modules.Descriptors(); len(descriptors) != 0 {
+		t.Fatalf("Session Modules = %#v, want none", descriptors)
+	}
+	if tools := a.Engine.Tools.List(); len(tools) != 0 {
+		t.Fatalf("serving Tools = %#v, want none", tools)
+	}
+	if a.shellSessions != nil || a.sideSessions != nil || a.obsv != nil || a.mcpManager != nil {
+		t.Fatalf("disabled resources were constructed: shell=%p side=%p observable=%p mcp=%p", a.shellSessions, a.sideSessions, a.obsv, a.mcpManager)
+	}
+	if err := a.ReadRuntimeModuleSnapshot(func(active RuntimeModuleSnapshot) error {
+		status, statusErr := NewRuntimeCatalogService(a.cfg).Snapshot(RuntimeStatusOptions{ActiveModules: &active})
+		if statusErr != nil {
+			return statusErr
+		}
+		if len(status.Modules) != 0 || status.Tools.Count != 0 || status.MCP.Configured != 0 || status.Hooks.Configured != 0 || status.Skills.Count != 0 {
+			t.Fatalf("disabled runtime status = %+v", status)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAppRejectsUnknownModuleConfigBeforeSessionSideEffects(t *testing.T) {
+	work := t.TempDir()
+	_, err := New(Options{
+		Config: config.Config{
+			WorkDir: work,
+			Modules: config.ModulePolicy{
+				"typo-module": {Enabled: false},
+			},
+		},
+		Provider: &stubProvider{},
+		WorkDir:  work,
+	})
+	if err == nil || !strings.Contains(err.Error(), `unsupported module "typo-module"`) {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(work, ".juex", "sessions")); !os.IsNotExist(statErr) {
+		t.Fatalf("unknown Module config created Session state: %v", statErr)
+	}
+}
+
 func TestRuntimeToolsStatusRejectsInvalidBuiltinGroups(t *testing.T) {
 	for _, group := range []tools.ToolGroup{"", tools.ToolGroupMCP, "unknown"} {
 		t.Run(string(group), func(t *testing.T) {
@@ -343,7 +492,12 @@ func TestRuntimeMCPToolSchemaMatchesNormalizedRegistryDefinition(t *testing.T) {
 		t.Fatal("normalized MCP tool was not registered")
 	}
 
-	projected, err := runtimeMCPToolInfos("catalog", []mcp.ToolDescriptor{descriptor}, 0)
+	active := mcpRuntimeStatusSnapshot(t, map[string][]mcp.ToolDescriptor{"catalog": {descriptor}})
+	catalog := map[string]runtimemodule.ToolEntry{}
+	for _, entry := range active.Runtime.ToolCatalog().Entries() {
+		catalog[entry.Tool.Name] = entry
+	}
+	projected, err := runtimeMCPToolInfos("catalog", []mcp.ToolDescriptor{descriptor}, 0, catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +535,7 @@ body`)
 		EnableUserAgentsResources: true,
 	}
 
-	status, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{})
+	status, err := snapshotRuntimeStatus(t, cfg, RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,17 +591,15 @@ body`)
 
 func TestRuntimeCatalogServiceIncludesSessionScratchpadPrompt(t *testing.T) {
 	work := t.TempDir()
-	scratchpadDir := filepath.Join(work, ".juex", "sessions", "session-1", "scratchpad")
-	status, err := NewRuntimeCatalogService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{
-		ScratchpadDir: scratchpadDir,
-	})
+	cfg := config.Config{WorkDir: work}
+	status, err := snapshotRuntimeStatus(t, cfg, RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, item := range status.SystemPrompt.Items {
 		if item.Key == "session_scratchpad" {
-			if item.Path != scratchpadDir || !strings.Contains(item.Text, scratchpadDir) {
-				t.Fatalf("scratchpad prompt = %+v, want path %q", item, scratchpadDir)
+			if item.Path == "" || !strings.Contains(item.Text, item.Path) {
+				t.Fatalf("scratchpad prompt = %+v, want active Session scratchpad path", item)
 			}
 			return
 		}
@@ -476,12 +628,17 @@ func TestRuntimeCatalogServiceMCPStatusSourcesAndOverrides(t *testing.T) {
 		EnableUserAgentsResources: true,
 	}
 
+	descriptors := map[string][]mcp.ToolDescriptor{
+		"shared": {
+			{Name: "alpha", Description: "first", InputSchema: map[string]any{"type": "object"}},
+			{Name: "zeta", Description: "last", InputSchema: map[string]any{"type": "object"}},
+		},
+	}
+	active := mcpRuntimeStatusSnapshot(t, descriptors)
 	status, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{
+		ActiveModules: &active,
 		MCPToolDescriptors: map[string][]mcp.ToolDescriptor{
-			"shared": {
-				{Name: "alpha", Description: "first", InputSchema: map[string]any{"type": "object"}},
-				{Name: "zeta", Description: "last", InputSchema: map[string]any{"type": "object"}},
-			},
+			"shared": descriptors["shared"],
 		},
 		MCPErrors: map[string]string{"zeta": "boom"},
 	})
@@ -516,7 +673,7 @@ func TestRuntimeCatalogServiceMCPTransportMetadata(t *testing.T) {
   }
 }`)
 
-	status, err := NewRuntimeCatalogService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{})
+	status, err := snapshotRuntimeStatus(t, config.Config{WorkDir: work}, RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,7 +699,10 @@ func TestRuntimeCatalogServiceTreatsZeroToolDescriptorMembershipAsConnected(t *t
     "empty": { "command": "empty-server" }
   }
 }`)
+	descriptors := map[string][]mcp.ToolDescriptor{"empty": {}}
+	active := mcpRuntimeStatusSnapshot(t, descriptors)
 	status, err := NewRuntimeCatalogService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{
+		ActiveModules:      &active,
 		MCPToolDescriptors: map[string][]mcp.ToolDescriptor{"empty": {}},
 	})
 	if err != nil {
@@ -569,7 +729,7 @@ func TestRuntimeCatalogServiceIncludesHookStatus(t *testing.T) {
 		}}},
 	}
 
-	status, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{})
+	status, err := snapshotRuntimeStatus(t, cfg, RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -603,7 +763,7 @@ func TestRuntimeCatalogServiceIncludesSandboxPolicy(t *testing.T) {
 		},
 	}
 
-	status, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{})
+	status, err := snapshotRuntimeStatus(t, cfg, RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,12 +822,13 @@ commands:
   ]
 }`)
 
-	status, err := NewRuntimeCatalogService(config.Config{
+	cfg := config.Config{
 		WorkDir:      work,
 		AgentAddress: address,
 		Extensions:   allowExtensions("demo"),
 		Skills:       config.SkillsConfig{Include: []string{"alpha"}},
-	}).Snapshot(RuntimeStatusOptions{})
+	}
+	status, err := snapshotRuntimeStatus(t, cfg, RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -692,7 +853,7 @@ commands:
 	}
 }
 
-func TestRuntimeCatalogServiceCachesSkillsWhenProvided(t *testing.T) {
+func TestRuntimeCatalogServiceReadsFrozenActiveSkillModule(t *testing.T) {
 	work := t.TempDir()
 	skillPath := filepath.Join(work, ".agents", "skills", "review", "SKILL.md")
 	mustWriteRuntimeStatusFile(t, skillPath, `---
@@ -701,21 +862,36 @@ description: cached
 ---
 body`)
 	cfg := config.Config{WorkDir: work}
-	cache := NewRuntimeStatusSkillCache()
-
-	first, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{SkillCache: cache})
+	manager, err := mcp.NewManagerLayeredSoft(context.Background(), nil, mcp.ConnectOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	a, err := New(Options{Config: cfg, Provider: &stubProvider{}, WorkDir: work, MCPManager: manager, DisableMCP: true, LazySession: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = a.CloseAndWait()
+		_ = manager.Close()
+	})
+	snapshot := func() RuntimeStatus {
+		var status RuntimeStatus
+		if err := a.ReadRuntimeModuleSnapshot(func(active RuntimeModuleSnapshot) error {
+			var snapshotErr error
+			status, snapshotErr = NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{ActiveModules: &active})
+			return snapshotErr
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return status
+	}
+	first := snapshot()
 	mustWriteRuntimeStatusFile(t, skillPath, `---
 name: review
 description: changed
 ---
 body`)
-	second, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{SkillCache: cache})
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := snapshot()
 	if first.Skills.Items[0].Description != "cached" || second.Skills.Items[0].Description != "cached" {
 		t.Fatalf("skills cache did not preserve first load: first=%+v second=%+v", first.Skills.Items, second.Skills.Items)
 	}
@@ -734,7 +910,7 @@ func TestRuntimeCatalogServiceRejectsExtensionResourceDuplicates(t *testing.T) {
     "shared": { "command": "extension" }
   }
 }`)
-		_, err := NewRuntimeCatalogService(config.Config{WorkDir: work, Extensions: allowExtensions("demo")}).Snapshot(RuntimeStatusOptions{})
+		_, err := snapshotRuntimeStatus(t, config.Config{WorkDir: work, Extensions: allowExtensions("demo")}, RuntimeStatusOptions{})
 		if err == nil || !strings.Contains(err.Error(), `duplicate MCP server "shared"`) {
 			t.Fatalf("err = %v, want duplicate MCP error", err)
 		}
@@ -752,7 +928,7 @@ name: shared
 description: extension
 ---
 body`)
-		_, err := NewRuntimeCatalogService(config.Config{WorkDir: work, Extensions: allowExtensions("demo")}).Snapshot(RuntimeStatusOptions{})
+		_, err := snapshotRuntimeStatus(t, config.Config{WorkDir: work, Extensions: allowExtensions("demo")}, RuntimeStatusOptions{})
 		if err == nil || !strings.Contains(err.Error(), `duplicate skill "shared"`) {
 			t.Fatalf("err = %v, want duplicate skill error", err)
 		}
@@ -776,7 +952,7 @@ commands:
 				Source:  "project",
 			}}},
 		}
-		_, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{})
+		_, err := snapshotRuntimeStatus(t, cfg, RuntimeStatusOptions{})
 		if err == nil || !strings.Contains(err.Error(), `duplicate hook "shared"`) {
 			t.Fatalf("err = %v, want duplicate hook error", err)
 		}

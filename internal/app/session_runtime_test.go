@@ -198,6 +198,7 @@ func (m *trackedSessionModule) CloseSession(context.Context) error {
 
 type duplicateSessionToolModule struct {
 	starts *int
+	closes *int
 }
 
 func (*duplicateSessionToolModule) ID() runtimemodule.ID { return "duplicate-session-tool" }
@@ -214,10 +215,14 @@ func (m *duplicateSessionToolModule) StartSession(context.Context, runtimemodule
 	return nil
 }
 
-func (*duplicateSessionToolModule) CloseSession(context.Context) error { return nil }
+func (m *duplicateSessionToolModule) CloseSession(context.Context) error {
+	*m.closes = *m.closes + 1
+	return nil
+}
 
 type duplicateSessionContextModule struct {
 	starts *int
+	closes *int
 }
 
 func (*duplicateSessionContextModule) ID() runtimemodule.ID { return "duplicate-session-context" }
@@ -237,11 +242,15 @@ func (m *duplicateSessionContextModule) StartSession(context.Context, runtimemod
 	return nil
 }
 
-func (*duplicateSessionContextModule) CloseSession(context.Context) error { return nil }
+func (m *duplicateSessionContextModule) CloseSession(context.Context) error {
+	*m.closes = *m.closes + 1
+	return nil
+}
 
-func TestAppValidatesCompleteModuleCatalogBeforeSessionStart(t *testing.T) {
+func TestAppRollsBackStartedSessionModulesAfterCompleteCatalogValidation(t *testing.T) {
 	dir := t.TempDir()
 	starts := 0
+	closes := 0
 	_, err := New(Options{
 		Config: config.Config{
 			ProviderID:    "openai",
@@ -258,19 +267,19 @@ func TestAppValidatesCompleteModuleCatalogBeforeSessionStart(t *testing.T) {
 			ID:      "duplicate-session-tool",
 			Enabled: true,
 			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
-				return &duplicateSessionToolModule{starts: &starts}, nil
+				return &duplicateSessionToolModule{starts: &starts, closes: &closes}, nil
 			},
 		}},
 	})
 	if err == nil || !strings.Contains(err.Error(), `tool "read"`) || !strings.Contains(err.Error(), `module "builtin-tools"`) || !strings.Contains(err.Error(), `module "duplicate-session-tool"`) {
 		t.Fatalf("New() error = %v", err)
 	}
-	if starts != 0 {
-		t.Fatalf("Session Module started before catalog validation: %d", starts)
+	if starts != 1 || closes != 1 {
+		t.Fatalf("Session Module lifecycle = starts %d, closes %d; want post-start validation followed by rollback", starts, closes)
 	}
 }
 
-func TestAppValidatesCompleteModuleContextBeforeSessionStart(t *testing.T) {
+func TestAppRollsBackStartedSessionModulesAfterCompleteContextValidation(t *testing.T) {
 	dir := t.TempDir()
 	skillDir := filepath.Join(dir, ".agents", "skills", "context-test")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
@@ -280,6 +289,7 @@ func TestAppValidatesCompleteModuleContextBeforeSessionStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	starts := 0
+	closes := 0
 	_, err := New(Options{
 		Config: config.Config{
 			ProviderID:    "openai",
@@ -297,15 +307,15 @@ func TestAppValidatesCompleteModuleContextBeforeSessionStart(t *testing.T) {
 			ID:      "duplicate-session-context",
 			Enabled: true,
 			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
-				return &duplicateSessionContextModule{starts: &starts}, nil
+				return &duplicateSessionContextModule{starts: &starts, closes: &closes}, nil
 			},
 		}},
 	})
 	if err == nil || !strings.Contains(err.Error(), `context key "skills"`) || !strings.Contains(err.Error(), `module "skills"`) || !strings.Contains(err.Error(), `module "duplicate-session-context"`) {
 		t.Fatalf("New() error = %v", err)
 	}
-	if starts != 0 {
-		t.Fatalf("Session Module started before context validation: %d", starts)
+	if starts != 1 || closes != 1 {
+		t.Fatalf("Session Module lifecycle = starts %d, closes %d; want post-start validation followed by rollback", starts, closes)
 	}
 }
 

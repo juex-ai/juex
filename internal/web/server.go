@@ -68,7 +68,6 @@ type Server struct {
 
 	runtimeMu     sync.Mutex
 	runtimeMCPErr map[string]string
-	runtimeSkills *app.RuntimeStatusSkillCache
 
 	mcpMu       sync.Mutex
 	mcpStarted  bool
@@ -112,7 +111,6 @@ func NewServer(opts Options) *Server {
 		statusStream:  statusapi.NewActivityStore(),
 		resources:     resources,
 		runtimeMCPErr: map[string]string{},
-		runtimeSkills: app.NewRuntimeStatusSkillCache(),
 	}
 }
 
@@ -676,6 +674,12 @@ func (s *Server) hasSessionProvider() bool {
 }
 
 func (s *Server) ensureMCPStarted(ctx context.Context) (err error) {
+	if err := app.ValidateModuleConfig(s.opts.Cfg); err != nil {
+		return err
+	}
+	if !s.opts.Cfg.ModuleEnabled(string(mcp.ModuleID)) {
+		return nil
+	}
 	s.mcpMu.Lock()
 	if s.mcpStarted {
 		starting := s.mcpStarting
@@ -721,9 +725,6 @@ func (s *Server) ensureMCPStarted(ctx context.Context) (err error) {
 	mcpConfigs, err := s.loadMCPConfigs(agentRuntime)
 	if err != nil {
 		return err
-	}
-	if len(mcpConfigs) == 0 {
-		return nil
 	}
 	var ready atomic.Bool
 	var queuedMu sync.Mutex

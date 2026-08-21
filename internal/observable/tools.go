@@ -8,6 +8,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/tools"
@@ -22,18 +23,80 @@ const (
 const ModuleID runtimemodule.ID = "observables"
 
 type Module struct {
-	manager *Manager
+	mu       sync.RWMutex
+	manager  *Manager
+	options  ManagerOptions
+	startAll bool
+	owned    bool
 }
 
 func NewModule(manager *Manager) *Module { return &Module{manager: manager} }
 
+// NewRuntimeModule defers config loading, durable store construction, and
+// worker startup until the runtime Module lifecycle starts.
+func NewRuntimeModule(options ManagerOptions, startAll bool) *Module {
+	return &Module{options: options, startAll: startAll, owned: true}
+}
+
 func (*Module) ID() runtimemodule.ID { return ModuleID }
 
 func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
-	if m == nil || m.manager == nil {
+	if m == nil {
 		return unavailableObservableTools(), nil
 	}
-	return observableTools(m.manager), nil
+	m.mu.RLock()
+	manager := m.manager
+	m.mu.RUnlock()
+	if manager == nil {
+		return unavailableObservableTools(), nil
+	}
+	return observableTools(manager), nil
+}
+
+func (m *Module) StartRuntime(ctx context.Context, _ runtimemodule.RuntimeContext) error {
+	if m == nil || !m.owned {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.manager != nil {
+		return nil
+	}
+	manager, err := NewManager(m.options)
+	if err != nil {
+		return err
+	}
+	if m.startAll {
+		// Individual startup failures remain visible in Manager status and do
+		// not prevent the rest of the runtime from serving, matching the
+		// optional Observable startup contract.
+		_ = manager.StartAll(ctx)
+	}
+	m.manager = manager
+	return nil
+}
+
+func (m *Module) QuiesceRuntime(context.Context) error { return m.closeOwned() }
+
+func (m *Module) CloseRuntime(context.Context) error { return m.closeOwned() }
+
+func (m *Module) Manager() *Manager {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.manager
+}
+
+func (m *Module) closeOwned() error {
+	if m == nil || !m.owned {
+		return nil
+	}
+	m.mu.RLock()
+	manager := m.manager
+	m.mu.RUnlock()
+	return manager.Close()
 }
 
 func unavailableObservableTools() []tools.Tool {

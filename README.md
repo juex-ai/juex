@@ -78,6 +78,20 @@ environment:
     NODE_ENV: production
 ```
 
+Compiled Runtime and Session Modules default to enabled. Disable one by its
+stable ID when a runtime must omit the capability and its resources entirely;
+unknown Module IDs or fields fail startup. Runtime IDs are `builtin-tools`,
+`project-guidance`, `skills`, `side-sessions`, `observables`, and `mcp`;
+Session IDs are `session-context`, `goal`, `notes`, and `hooks`.
+
+```yaml
+modules:
+  skills:
+    enabled: false
+  side-sessions:
+    enabled: false
+```
+
 First-party Memory is an external Extension distributed by the
 `juex-extensions` repository. Install its `memory` bundle into an Extension
 root, then select it with the standard allowlist:
