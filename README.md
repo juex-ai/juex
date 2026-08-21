@@ -793,18 +793,29 @@ compatibility contract of `conversation.jsonl` or `events.jsonl`.
 
 ## Development
 
-From the repository root, run the project Make targets and Go tests directly:
+From the repository root, use the verification tier that matches the current
+development stage:
 
 ```bash
-make test
-make integration
-make provider-smoke
-make development-eval
-make build
-make race
+make verify-focused PKGS="./internal/app ./internal/runtime"
+make verify-candidate
+make verify-candidate RACE=1 WEB=1
+make verify-final
+make verify-final RACE=1 WEB=1 COMPACTION=1
 ```
 
-`make test` and `make race` run with temporary `HOME`, `JUEX_HOME`, XDG
+Focused verification requires explicit package patterns and permits a dirty
+worktree. Candidate and final verification require a clean worktree before
+and after their steps. `RACE=1`
+replaces the ordinary deterministic suite, `WEB=1` adds the frontend gate
+without rebuilding it during the binary build, and `COMPACTION=1` adds the
+live compaction evaluator to final verification. Final verification otherwise
+runs the candidate gate, live integration, and one provider-config-selected
+provider smoke. Every tier also prepares a lightweight embedded-web stub
+before Go-only checks, so focused web packages and full suites work in a fresh
+checkout without a prior frontend build.
+
+The lower-level `make test` and `make race` targets run with temporary `HOME`, `JUEX_HOME`, XDG
 config/cache, Windows application-data, global Git config, Go telemetry, and
 Codex directories, so personal default-home provider config, Fleet, Agent, and
 tool state cannot affect deterministic results. Fresh-checkout ripgrep
@@ -817,7 +828,8 @@ state/cache writes.
 live tests as read-only inputs.
 
 The frontend lives in `frontend/`; `make build` runs the frontend build,
-copies it into `internal/web/dist`, and embeds it into `dist/juex`.
+copies it into `internal/web/dist`, and embeds it into `dist/juex`. `make
+build-go` compiles only the binary from the already synchronized embed assets.
 
 ## Documentation
 

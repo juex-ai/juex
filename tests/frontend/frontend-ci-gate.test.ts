@@ -33,6 +33,11 @@ test("CI runs the frontend gate separately without slowing Go jobs", () => {
     2,
     "the existing Go jobs must keep using the lightweight embedded-web stub",
   );
+  assert.equal(
+    ciSource.match(/run: make web-stub/g)?.length,
+    2,
+    "CI and local candidate verification must share the web-stub target",
+  );
 });
 
 test("frontend tool versions and contributor guidance stay explicit", () => {
@@ -42,6 +47,6 @@ test("frontend tool versions and contributor guidance stay explicit", () => {
   assert.equal(packageJSON.packageManager, "pnpm@11.6.0");
   assert.match(
     agentsSource,
-    /Web work: run `make web-check`; build the frontend and verify the UI in a browser when behavior is visible\./,
+    /Web work: use `WEB=1` on the candidate\/final tier and verify the UI in a browser when behavior is visible\./,
   );
 });

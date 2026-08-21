@@ -3012,17 +3012,22 @@ automatic activation; the model loads a selected guide explicitly.
 
 | Target | Effect |
 |---|---|
+| `make verify-focused PKGS="..."` | require explicit Go package patterns, prepare a non-overwriting embedded-web stub, provision ripgrep, isolate writable user/Juex/tool state, and run only those packages; permits a dirty worktree |
+| `make verify-candidate [RACE=1] [WEB=1]` | require a clean worktree before and after the gate, prepare a non-overwriting embedded-web stub for fresh checkouts, run one deterministic full Go suite (race replaces normal), then build one executable; `WEB=1` runs the frontend gate before the Go-only build |
+| `make verify-final [RACE=1] [WEB=1] [COMPACTION=1]` | require a clean worktree before and after the gate, run the candidate plan, live integration, one provider-config-selected smoke, and optional compaction quality evaluation |
 | `make test` | provision ripgrep on `PATH` with disposable bootstrap Go telemetry, isolate writable user/Juex/Codex/XDG/Windows-app-data/global-Git/Go-telemetry state under a temporary `HOME`, then run `go test ./... -count=1` |
 | `make race` | provision ripgrep on `PATH` with disposable bootstrap Go telemetry, isolate writable user/Juex/Codex/XDG/Windows-app-data/global-Git/Go-telemetry state under a temporary `HOME`, then run `go test ./... -race -count=1` |
 | `make ripgrep` | resolve system ripgrep or cache the verified pinned binary for local tests |
 | `make lint` | `golangci-lint run` |
 | `make build` | `dist/juex` with `git describe`-derived version, commit, build time embedded via `-ldflags -X internal/version.*` |
+| `make build-go` | compile `dist/juex` from the existing synchronized `internal/web/dist` without rebuilding the frontend |
+| `make web-stub` | create a lightweight `internal/web/dist/index.html` only when embedded assets are missing, without overwriting a real frontend build |
 | `make cross` | build the frontend, then produce all 7 managed archives without GoReleaser |
 | `make snapshot` | build the frontend through the GoReleaser before hook, then produce 7 snapshot archives in `dist/` |
 | `make release-dry` | build the frontend through the GoReleaser before hook, then run a non-publishing release |
 | `make integration` | resolve live provider/Codex source paths from the original environment, isolate writable runtime/user-tool state under a temporary `HOME`, then run verbose credential-backed `go test -tags=integration ./tests/e2e/...` |
 | `make provider-smoke` | build-dependent live capability and Schedule-routing smoke for one seeded eligible ref from resolved provider config |
-| `make development-eval` | deterministic tests, build, seeded provider-config live smoke, and a redacted validation record |
+| `make development-eval` | shared candidate deterministic plan, build, seeded provider-config live smoke, and a redacted validation record; the full Go suite already includes `tests/e2e` and is run once |
 | `make clean` | `rm -rf dist` |
 
 The test-home wrapper resolves active mise runtime directories before replacing
@@ -3141,8 +3146,10 @@ and `tests/eval/` covers the local evaluation harness.
 | `tests/e2e` | full-stack tempdir scenario, installed Extension enable/disable flow, apply_patch builtin flow, resume round-trip, canonical session journals and debug logs, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
 | `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracles for conversation/event/tool and Schedule persistence artifacts; retry-isolated live Schedule routing; provider-config candidate selection; eval shell wrappers; development step flags; report directory defaults |
 
-Run the deterministic suite with `make test`.
-Provider-quality smoke tests remain explicit because they use credentials.
+Agents use `make verify-focused`, `make verify-candidate`, and `make
+verify-final` as the stable orchestration surface. Lower-level deterministic
+and live commands remain available for harness development and exact reruns.
+Provider-quality smoke tests remain credential-backed.
 There are two live layers:
 
 - `make integration` resolves `JUEX_PROVIDER_CONFIG` (or the original native
@@ -3179,8 +3186,9 @@ There are two live layers:
   `tests/eval/provider_model_smoke.sh` only for provider matrix migrations or
   full local config audits.
 
-Every feature validation should leave a development record with
-`make development-eval` or `bash tests/eval/development_eval.sh`.
+`make verify-final` is the complete local merge-candidate gate. When a
+standalone development record is required, use `make development-eval` or
+`bash tests/eval/development_eval.sh`.
 The record captures the commit, command exits, provider:model smoke summary,
 Schedule routing coverage, and any quality evaluation results. The live
 compaction quality evaluation is documented in

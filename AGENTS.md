@@ -81,28 +81,34 @@ cannot be explained by updating the canonical docs alone. Put new ADRs under
 - Every new behavior ships with a unit test.
 - Cross-cutting runtime, session, CLI, or web changes also update `tests/e2e` when the behavior crosses package boundaries.
 - Backend/API work: add or update handler or CLI tests and run the affected Go packages.
-- Web work: run `make web-check`; build the frontend and verify the UI in a browser when behavior is visible.
+- Web work: use `WEB=1` on the candidate/final tier and verify the UI in a browser when behavior is visible.
 - Documentation-only work: check filenames, headings, links, and stale references.
 - Live integration tests are behind the `integration` build tag and read selected local provider configs from `.juex/*.yaml`; never commit real credentials.
 
-Prefer project tooling:
+Use the verification tier for the current stage; do not compose overlapping
+test, build, integration, and eval targets manually:
 
 ```bash
-make test
-make integration
-make provider-smoke
-make development-eval
-make build
-make race
+make verify-focused PKGS="./internal/app ./internal/runtime"
+make verify-candidate
+make verify-candidate RACE=1 WEB=1
+make verify-final
+make verify-final RACE=1 WEB=1 COMPACTION=1
 ```
 
-Before declaring feature work complete, run the relevant deterministic tests and
-write a development validation record with `make development-eval`
-or `bash tests/eval/development_eval.sh` when a narrower command set is justified.
-For provider/protocol, reasoning, tool-call, session, compaction, CLI, or web
-runtime changes, include the real local provider/model sweep from
-`~/.juex/juex.yaml`. If an evaluation score or smoke result regresses, record
-the failure and investigate before merging.
+Focused verification accepts a dirty worktree but requires explicit packages.
+Candidate and final verification require a clean worktree before and after
+their steps; use `RACE=1` for
+concurrency-sensitive changes, `WEB=1` for frontend changes, and
+`COMPACTION=1` on final when compaction, context projection, provider replay,
+or long-session behavior changes. Every tier prepares a lightweight embed stub
+before Go-only checks, so focused web packages and full suites also work in a
+fresh checkout. `make
+verify-final` includes live integration
+and one provider-config-selected smoke from `~/.juex/juex.yaml`. If an
+evaluation score or smoke result regresses, retain the report and investigate
+before merging. `make development-eval` remains available when a standalone
+redacted development record is required.
 
 ## Documentation
 
