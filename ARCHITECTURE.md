@@ -2580,7 +2580,9 @@ window and checkpoints a fresh Request Epoch. Request fitting lowers the
 existing block serialization cap and removes the oldest complete assistant Tool
 Call plus matching user-role Tool Result batches atomically until the estimate
 fits. It preserves every user-authored message and never changes the durable
-transcript or compact selection metadata. Generic provider failures advance
+transcript or compact selection metadata. If the irreducible request still
+exceeds a candidate's summary-request envelope, the runtime skips that candidate
+without dispatching a Provider request. Generic provider failures advance
 directly through the chain. The first candidate anywhere in the chain that
 returns no text or a max-token-truncated summary receives one semantic retry
 with up to twice its summary output budget; the retry budget remains capped so

@@ -468,15 +468,16 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 	eng, _ := newEngine(t, primary, false)
 	eng.ContextWindow = 10_000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1900
 	eng.ModelCandidates = []ModelCandidate{
 		{Ref: "primary:model", Provider: primary, ContextWindow: 10_000},
-		{Ref: "backup:model", Provider: backup, ContextWindow: 120},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 2_000},
 	}
 	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPostCompact: {{Stdout: "Use the refreshed fallback context now."}},
 	}})
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("large history ", 300))); err != nil {
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("large history ", 200))); err != nil {
 		t.Fatal(err)
 	}
 	previous := llm.TextMessage(llm.RoleAssistant, "primary before failure")
@@ -491,8 +492,8 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 	if primary.calls != 1 || backup.calls != 2 {
 		t.Fatalf("calls primary=%d backup=%d", primary.calls, backup.calls)
 	}
-	if len(backup.opts) != 2 || backup.opts[0].Purpose != "compaction" || backup.opts[0].MaxOutputTokens <= 0 || backup.opts[0].MaxOutputTokens >= 120 {
-		t.Fatalf("backup compaction options = %+v, want output clamped below 120-token context", backup.opts)
+	if len(backup.opts) != 2 || backup.opts[0].Purpose != "compaction" || backup.opts[0].MaxOutputTokens != 10 {
+		t.Fatalf("backup compaction options = %+v, want 0.5%% of 2000-token context", backup.opts)
 	}
 	foundCompact := false
 	for _, message := range eng.Session.History {

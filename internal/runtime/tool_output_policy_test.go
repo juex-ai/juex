@@ -19,3 +19,29 @@ func TestEffectiveToolOutputPolicyPreservesStricterOverrides(t *testing.T) {
 		t.Fatalf("policy = %+v", p)
 	}
 }
+
+func TestEffectiveToolOutputPolicyClampsSinglePreviewOverrideBeforeDerivingRemainder(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy ToolOutputPolicy
+		want   ToolOutputPolicy
+	}{
+		{
+			name:   "head only",
+			policy: ToolOutputPolicy{PreviewHeadBytes: 300},
+			want:   ToolOutputPolicy{InlineMaxBytes: 150, PreviewHeadBytes: 150, PreviewTailBytes: 0},
+		},
+		{
+			name:   "tail only",
+			policy: ToolOutputPolicy{PreviewTailBytes: 300},
+			want:   ToolOutputPolicy{InlineMaxBytes: 150, PreviewHeadBytes: 0, PreviewTailBytes: 150},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := effectiveToolOutputPolicy(tt.policy, 30_000); got != tt.want {
+				t.Fatalf("policy = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}

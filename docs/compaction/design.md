@@ -31,7 +31,8 @@ Implemented:
   model-health cooldown and half-open reservations, and refits each request to
   the selected candidate's context window. Candidate-specific fitting removes
   only the oldest complete Tool Call/Tool Result batches and preserves all
-  user-authored messages.
+  user-authored messages; an irreducible oversized request skips that candidate
+  before Provider dispatch.
 
 Still future work:
 

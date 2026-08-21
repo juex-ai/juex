@@ -1500,10 +1500,10 @@ func TestTurn_CompactionKeepsRecentRealInputInProviderContext(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn, Usage: llm.Usage{InputTokens: 20, OutputTokens: 3}},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.ContextWindow = 200
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 80
-	eng.Compaction.ReserveTokens = 50
+	eng.Compaction.ReserveTokens = 1850
 	for _, item := range []struct {
 		role llm.Role
 		text string
@@ -2083,8 +2083,9 @@ func TestTurn_AutoCompactionCircuitBreakerStopsRepeatedSummaryAttempts(t *testin
 		},
 	}
 	eng, _ := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1930
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2109,7 +2110,7 @@ func TestCompactWithInstructionsResetsAutoCompactionFailures(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "manual summary"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.autoCompactFailures = 3
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
@@ -2157,7 +2158,7 @@ func TestCancelActiveTurnCancelsRuntimeOwnedProviderRequest(t *testing.T) {
 func TestCancelActiveTurnCancelsCompactionWithoutAppendingMarker(t *testing.T) {
 	prov := &cancellableProvider{started: make(chan struct{}, 1)}
 	eng, bus := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
@@ -2212,7 +2213,7 @@ func TestCancelActiveTurnRejectsCancellationAfterCompactionCommit(t *testing.T) 
 		StopReason: llm.StopEndTurn,
 	}}}
 	eng, bus := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
@@ -2286,8 +2287,9 @@ func TestCancelActiveTurnRejectsCancellationAfterCompactionCommit(t *testing.T) 
 func TestTurn_CompactionFailureDoesNotAppendMarker(t *testing.T) {
 	prov := &mockProviderWithErrors{errs: []error{fmt.Errorf("summary failed")}}
 	eng, _ := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1930
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2310,8 +2312,9 @@ func TestTurnMessage_MCPEventContinuesAfterAutoCompactionFailure(t *testing.T) {
 		},
 	}
 	eng, bus := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1930
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2357,8 +2360,9 @@ func TestTurnMessage_SideSessionContinuesAfterAutoCompactionFailure(t *testing.T
 		},
 	}
 	eng, bus := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1930
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2396,8 +2400,9 @@ func TestTurnMessage_MCPEventStripsRedactedReasoningWhenAutoCompactionPaused(t *
 		{Message: llm.TextMessage(llm.RoleAssistant, "handled event"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.ContextWindow = 120
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1900
 	eng.autoCompactFailures = effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow).MaxAutoFailures
 	secret := "enc_" + strings.Repeat("secret ", 200)
 	if err := eng.Session.Append(llm.Message{
@@ -2885,8 +2890,9 @@ func TestTurn_CompactsWhenProjectedContextExceedsThreshold(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "answered latest"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.ContextWindow = 120
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1900
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -3510,6 +3516,40 @@ func TestCompactRefitsSummaryRequestForFallbackContextWindow(t *testing.T) {
 	}
 	if len(epochs) != 2 || epochs[1].Provider.Model != "backup:model" || epochs[1].ContextWindow != 10000 {
 		t.Fatalf("epochs = %+v, want fallback context window 10000", epochs)
+	}
+}
+
+func TestCompactSkipsSummaryCandidateWhenPreservedUserMessagesCannotFit(t *testing.T) {
+	small := &namedCompactionProvider{name: "small:model", text: "unexpected small summary"}
+	large := &namedCompactionProvider{name: "large:model", text: "large summary"}
+	eng, bus := newEngine(t, small, false)
+	eng.ContextWindow = 1_000
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "small:model", Provider: small, ContextWindow: 1_000},
+		{Ref: "large:model", Provider: large, ContextWindow: 10_000},
+	}
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("preserved older user detail ", 300))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("newest oversized input ", 300))); err != nil {
+		t.Fatal(err)
+	}
+	var fallback ContextCompactSummaryFallbackPayload
+	bus.Subscribe("context.compact.summary_model_fallback", func(event events.Event) {
+		fallback = event.Payload.(ContextCompactSummaryFallbackPayload)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if small.calls != 0 || large.calls != 1 || result.SummaryModel != "large:model" {
+		t.Fatalf("small/large/result = %d/%d/%+v, want unfittable small candidate skipped", small.calls, large.calls, result)
+	}
+	if fallback.ConfiguredModel != "small:model" || fallback.FallbackModel != "large:model" || !strings.Contains(fallback.Error, "cannot fit") {
+		t.Fatalf("fallback = %+v, want explicit candidate-fit failure", fallback)
 	}
 }
 

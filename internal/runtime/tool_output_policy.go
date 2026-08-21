@@ -19,11 +19,22 @@ func effectiveToolOutputPolicy(policy ToolOutputPolicy, contextWindow int) ToolO
 		policy.InlineMaxBytes = limit
 	}
 	previewLimit := policy.InlineMaxBytes
-	if policy.PreviewHeadBytes <= 0 {
+	headConfigured := policy.PreviewHeadBytes > 0
+	tailConfigured := policy.PreviewTailBytes > 0
+	switch {
+	case !headConfigured && !tailConfigured:
 		policy.PreviewHeadBytes = previewLimit / 2
-	}
-	if policy.PreviewTailBytes <= 0 {
 		policy.PreviewTailBytes = previewLimit - policy.PreviewHeadBytes
+	case headConfigured && !tailConfigured:
+		if policy.PreviewHeadBytes > previewLimit {
+			policy.PreviewHeadBytes = previewLimit
+		}
+		policy.PreviewTailBytes = previewLimit - policy.PreviewHeadBytes
+	case !headConfigured && tailConfigured:
+		if policy.PreviewTailBytes > previewLimit {
+			policy.PreviewTailBytes = previewLimit
+		}
+		policy.PreviewHeadBytes = previewLimit - policy.PreviewTailBytes
 	}
 	if total := policy.PreviewHeadBytes + policy.PreviewTailBytes; total > previewLimit {
 		policy.PreviewHeadBytes = previewLimit / 2

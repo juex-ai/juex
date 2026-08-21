@@ -76,7 +76,12 @@ func (e *Engine) generateCompactionSummaryLocked(
 	maxOutputTokens := candidatePolicy.SummaryMaxTokens
 	summarySystem, summaryHistory := buildCompactionSummaryRequest(baseSystem, previous, input, state, candidatePolicy, instructions)
 	attempt := 1
-	resp, epoch, err := e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+	var resp llm.Response
+	var epoch provenance.RequestEpoch
+	err := compactionSummaryRequestFitError(summarySystem, summaryHistory, candidatePolicy, maxOutputTokens)
+	if err == nil {
+		resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+	}
 	var usage llm.Usage
 	usage.Add(resp.Usage)
 	if isCompactionSummaryJournalError(err) {
@@ -110,7 +115,10 @@ func (e *Engine) generateCompactionSummaryLocked(
 		summarySystem, summaryHistory = buildCompactionSummaryRequest(baseSystem, previous, input, state, retryPolicy, instructions)
 		maxOutputTokens = retryMaxOutputTokens
 		attempt++
-		resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+		err = compactionSummaryRequestFitError(summarySystem, summaryHistory, retryPolicy, maxOutputTokens)
+		if err == nil {
+			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+		}
 		usage.Add(resp.Usage)
 		if isCompactionSummaryJournalError(err) {
 			health.Complete(ticket, llm.ModelHealthNeutral, "")
@@ -174,7 +182,12 @@ func (e *Engine) generateCompactionSummaryLocked(
 		ticket = selection.Ticket
 		provider = nextCandidate.Provider
 		attempt++
-		resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+		resp = llm.Response{}
+		epoch = provenance.RequestEpoch{}
+		err = compactionSummaryRequestFitError(summarySystem, summaryHistory, candidatePolicy, maxOutputTokens)
+		if err == nil {
+			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+		}
 		usage.Add(resp.Usage)
 		if isCompactionSummaryJournalError(err) {
 			health.Complete(ticket, llm.ModelHealthNeutral, "")
@@ -207,7 +220,10 @@ func (e *Engine) generateCompactionSummaryLocked(
 				summarySystem, summaryHistory = buildCompactionSummaryRequest(baseSystem, previous, input, state, retryPolicy, instructions)
 				maxOutputTokens = retryMaxOutputTokens
 				attempt++
-				resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+				err = compactionSummaryRequestFitError(summarySystem, summaryHistory, retryPolicy, maxOutputTokens)
+				if err == nil {
+					resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+				}
 				usage.Add(resp.Usage)
 				if isCompactionSummaryJournalError(err) {
 					health.Complete(ticket, llm.ModelHealthNeutral, "")
@@ -226,6 +242,27 @@ func (e *Engine) generateCompactionSummaryLocked(
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, ctxErr
 		}
 	}
+}
+
+func compactionSummaryRequestFitError(system string, history []llm.Message, policy compactionPolicy, maxOutputTokens int) error {
+	requestBudget := policy.SummaryRequestTokens
+	if requestBudget <= 0 {
+		requestBudget = policy.TriggerTokens
+	}
+	if requestBudget <= 0 {
+		return nil
+	}
+	inputTokens := estimateContextTokens(system, nil, history)
+	if inputTokens+maxOutputTokens <= requestBudget {
+		return nil
+	}
+	return fmt.Errorf(
+		"compaction summary request cannot fit candidate context budget: input=%d output=%d budget=%d context_window=%d",
+		inputTokens,
+		maxOutputTokens,
+		requestBudget,
+		policy.ContextWindow,
+	)
 }
 
 func acquireCompactionSummaryCandidate(health *llm.ModelHealth, refs []string, attempted map[string]struct{}, reservedRef string) (llm.ModelSelection, bool) {

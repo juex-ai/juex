@@ -292,8 +292,9 @@ func TestTurnRecitesNotesReadFailurePlaceholderAfterAutoCompaction(t *testing.T)
 		{Message: llm.TextMessage(llm.RoleAssistant, "acknowledged"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1930
 	installSessionStateModules(t, eng)
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
