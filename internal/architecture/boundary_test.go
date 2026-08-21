@@ -350,6 +350,7 @@ func cleanupThroughAlias(application *App) {
 }
 func cleanupFromIIFE(application *App) {
 	func() { _ = application.manager.Close() }()
+	func(resource closer) { _ = resource.Close() }(application.manager)
 }
 func cleanupFromAssertion(application *App) {
 	resource, _ := any(application.manager).(closer)
@@ -395,7 +396,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"cleanup", "cleanup", "application.manager.Close", "resource.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
+	want := []string{"cleanup", "cleanup", "application.manager.Close", "func", "resource.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -491,6 +492,7 @@ func registerThroughAlias(application *App) {
 }
 func registerFromIIFE(application *App) {
 	func() { _ = application.registry.Register(nil) }()
+	func(registry registrar) { _ = registry.Register(nil) }(application.registry)
 }
 func registerFromAssertion(application *App) {
 	registry, _ := any(application.registry).(registrar)
@@ -559,7 +561,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"register", "register", "application.registry.Register", "registry.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
+	want := []string{"register", "register", "application.registry.Register", "func", "registry.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -872,6 +874,10 @@ func assignedFunctionLiteral(expressions []ast.Expr, index int) *ast.FuncLit {
 	case len(expressions) > 1 && index < len(expressions):
 		expression = expressions[index]
 	}
+	return functionLiteralExpression(expression)
+}
+
+func functionLiteralExpression(expression ast.Expr) *ast.FuncLit {
 	for {
 		parenthesized, ok := expression.(*ast.ParenExpr)
 		if !ok {
@@ -1407,7 +1413,11 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				}
 			case *ast.CallExpr:
 				callee := calledFunctionKey(value.Fun, imports, values, types)
-				for index := range types.cleanupParams[callee] {
+				cleanupParams := types.cleanupParams[callee]
+				if literal := functionLiteralExpression(value.Fun); literal != nil {
+					cleanupParams = inferCleanupParameters(indexedAppFunction{literal: literal, imports: imports}, types)
+				}
+				for index := range cleanupParams {
 					if index < len(value.Args) && cleanupPathsForExpression(value.Args[index], imports, values, resources, types) != nil {
 						report(value, selectorChain(value.Fun))
 						break
@@ -1503,7 +1513,11 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				}
 			case *ast.CallExpr:
 				callee := calledFunctionKey(value.Fun, imports, values, types)
-				for index := range types.toolParams[callee] {
+				toolParams := types.toolParams[callee]
+				if literal := functionLiteralExpression(value.Fun); literal != nil {
+					toolParams = inferToolRegistrationParameters(indexedAppFunction{literal: literal, imports: imports}, types)
+				}
+				for index := range toolParams {
 					if index >= len(value.Args) {
 						continue
 					}
@@ -2037,6 +2051,8 @@ func selectorChain(expression ast.Expr) string {
 		return prefix + "." + value.Sel.Name
 	case *ast.CallExpr:
 		return selectorChain(value.Fun)
+	case *ast.FuncLit:
+		return "func"
 	default:
 		return ""
 	}
