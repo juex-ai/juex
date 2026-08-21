@@ -3108,6 +3108,26 @@ again:
 		return
 	}
 }
+func fallthroughSwitchGotoRepeatsDeferredUse(application *App, again bool) {
+	var fallthroughResource closer = &unrelatedCloser{}
+	var fallthroughRegistry registrar = &unrelatedRegistrar{}
+again:
+	defer func() {
+		_ = fallthroughResource.Close()
+		fallthroughRegistry.Register(nil)
+		fallthroughResource = application.manager
+		fallthroughRegistry = application.registry
+	}()
+	switch 0 {
+	case 0:
+		fallthrough
+	case 1:
+		if again {
+			again = false
+			goto again
+		}
+	}
+}
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "deferred_closure_state.go")
@@ -3127,7 +3147,7 @@ again:
 		cleanupCalls = append(cleanupCalls, chain)
 	})
 	cleanup := "," + strings.Join(cleanupCalls, ",") + ","
-	if len(cleanupCalls) != 4 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") {
+	if len(cleanupCalls) != 5 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") || !strings.Contains(cleanup, ",fallthroughResource.Close,") {
 		t.Fatalf("cleanup calls = %v, want older and repeated deferred cleanup after assignment", cleanupCalls)
 	}
 	var registrationCalls []string
@@ -3135,7 +3155,7 @@ again:
 		registrationCalls = append(registrationCalls, chain)
 	})
 	registration := "," + strings.Join(registrationCalls, ",") + ","
-	if len(registrationCalls) != 4 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") {
+	if len(registrationCalls) != 5 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") || !strings.Contains(registration, ",fallthroughRegistry.Register,") {
 		t.Fatalf("Tool registration calls = %v, want older and repeated deferred registration after assignment", registrationCalls)
 	}
 }
@@ -4039,7 +4059,10 @@ type App struct {
 const true = alias
 `
 	alias := `package app
-const alias = false
+const (
+	first = iota == 0
+	alias
+)
 `
 	source := `package app
 func useShadowedBooleanSwitch(application *App) {
@@ -4469,7 +4492,7 @@ func indexAppPackageConstants(file *ast.File, types *compositionTypeIndex) bool 
 			continue
 		}
 		var previous []ast.Expr
-		for _, raw := range general.Specs {
+		for specIndex, raw := range general.Specs {
 			spec := raw.(*ast.ValueSpec)
 			values := spec.Values
 			if len(values) == 0 {
@@ -4477,12 +4500,20 @@ func indexAppPackageConstants(file *ast.File, types *compositionTypeIndex) bool 
 			} else {
 				previous = values
 			}
+			evaluationConstants := make(map[string]constant.Value, len(types.packageConstants)+1)
+			for name, value := range types.packageConstants {
+				evaluationConstants[name] = value
+			}
+			evaluationConstants["iota"] = constant.MakeInt64(int64(specIndex))
 			for index, name := range spec.Names {
+				if name.Name == "_" {
+					continue
+				}
 				expression := assignedExpression(values, index)
 				if expression == nil {
 					continue
 				}
-				if value, constantExpression := compositionConstantExpressionInPackage(expression, types.packageConstants); constantExpression {
+				if value, constantExpression := compositionConstantExpressionInPackage(expression, evaluationConstants); constantExpression {
 					current, exists := types.packageConstants[name.Name]
 					if !exists || current.Kind() != value.Kind() || current.ExactString() != value.ExactString() {
 						types.packageConstants[name.Name] = value
@@ -5951,12 +5982,7 @@ func compositionStatementFallsThrough(statement ast.Stmt, packageConstants map[s
 		if !known || len(clauses) == 0 {
 			return true
 		}
-		for _, clause := range clauses {
-			if compositionStatementsFallThrough(clause.Body, packageConstants) {
-				return true
-			}
-		}
-		return false
+		return compositionStatementsFallThrough(clauses[len(clauses)-1].Body, packageConstants)
 	default:
 		return statementFallsThrough(statement)
 	}
@@ -5993,11 +6019,11 @@ func compositionSelectedSwitchClauses(statement *ast.SwitchStmt, packageConstant
 	if !known {
 		return nil, false
 	}
-	var defaultClause *ast.CaseClause
-	for _, raw := range statement.Body.List {
+	defaultIndex := -1
+	for index, raw := range statement.Body.List {
 		clause := raw.(*ast.CaseClause)
 		if len(clause.List) == 0 {
-			defaultClause = clause
+			defaultIndex = index
 			continue
 		}
 		for _, expression := range clause.List {
@@ -6006,14 +6032,26 @@ func compositionSelectedSwitchClauses(statement *ast.SwitchStmt, packageConstant
 				return nil, false
 			}
 			if compositionConstantsEqual(tag, caseValue) {
-				return []*ast.CaseClause{clause}, true
+				return compositionSwitchFallthroughChain(statement.Body.List, index), true
 			}
 		}
 	}
-	if defaultClause != nil {
-		return []*ast.CaseClause{defaultClause}, true
+	if defaultIndex >= 0 {
+		return compositionSwitchFallthroughChain(statement.Body.List, defaultIndex), true
 	}
 	return nil, true
+}
+
+func compositionSwitchFallthroughChain(rawClauses []ast.Stmt, start int) []*ast.CaseClause {
+	clauses := make([]*ast.CaseClause, 0, len(rawClauses)-start)
+	for index := start; index < len(rawClauses); index++ {
+		clause := rawClauses[index].(*ast.CaseClause)
+		clauses = append(clauses, clause)
+		if !clauseEndsWithFallthrough(clause) {
+			break
+		}
+	}
+	return clauses
 }
 
 func compositionBooleanExpressionInPackage(expression ast.Expr, packageConstants map[string]constant.Value) (bool, bool) {
