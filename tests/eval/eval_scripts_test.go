@@ -948,7 +948,9 @@ func TestEvalIsolatedEnvironmentRunsShellProvisionerThroughBash(t *testing.T) {
 		"from tests.eval.juex_eval import cli",
 		"calls = []",
 		"original_run = cli.subprocess.run",
+		"original_which = cli.shutil.which",
 		"try:",
+		"    cli.shutil.which = lambda name: None",
 		"    def fake_run(command, **kwargs):",
 		"        calls.append(command)",
 		"        return SimpleNamespace(returncode=0, stdout='/tmp/rg\\n')",
@@ -958,6 +960,33 @@ func TestEvalIsolatedEnvironmentRunsShellProvisionerThroughBash(t *testing.T) {
 		"    assert env['PATH'].split(os.pathsep)[0] == '/tmp/rg', env['PATH']",
 		"finally:",
 		"    cli.subprocess.run = original_run",
+		"    cli.shutil.which = original_which",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalIsolatedEnvironmentReusesRipgrepFromPath(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import os",
+		"from tests.eval.juex_eval import cli",
+		"original_run = cli.subprocess.run",
+		"original_which = cli.shutil.which",
+		"try:",
+		"    cli.shutil.which = lambda name: '/tmp/rg-bin/rg'",
+		"    cli.subprocess.run = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('unexpected provisioner'))",
+		"    env = cli.isolated_test_environment()",
+		"    assert env['PATH'].split(os.pathsep)[0] == '/tmp/rg-bin', env['PATH']",
+		"finally:",
+		"    cli.subprocess.run = original_run",
+		"    cli.shutil.which = original_which",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }

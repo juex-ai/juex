@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -201,6 +202,17 @@ def require_clean_worktree() -> None:
 
 
 def isolated_test_environment() -> dict[str, str]:
+    existing_ripgrep = shutil.which("rg")
+    if existing_ripgrep:
+        ripgrep_dir = os.path.dirname(os.path.abspath(existing_ripgrep))
+    else:
+        ripgrep_dir = provisioned_ripgrep_directory()
+    env = os.environ.copy()
+    env["PATH"] = ripgrep_dir + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def provisioned_ripgrep_directory() -> str:
     completed = subprocess.run(
         bash_script_command(ENSURE_RIPGREP),
         cwd=REPO_ROOT,
@@ -210,10 +222,12 @@ def isolated_test_environment() -> dict[str, str]:
     )
     ripgrep_dir = completed.stdout.strip()
     if completed.returncode != 0 or not ripgrep_dir:
-        raise ValueError("failed to provision ripgrep for isolated Go tests")
-    env = os.environ.copy()
-    env["PATH"] = ripgrep_dir + os.pathsep + env.get("PATH", "")
-    return env
+        detail = completed.stderr.strip()
+        suffix = f": {detail}" if detail else ""
+        raise ValueError(f"failed to provision ripgrep for isolated Go tests{suffix}")
+    if os.name == "nt":
+        return str(REPO_ROOT / ".tmp" / "dev-ripgrep" / "juex-path")
+    return ripgrep_dir
 
 
 def bash_script_command(script: str, *args: str) -> list[str]:
