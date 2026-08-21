@@ -326,6 +326,8 @@ type App struct {
 	iifeRegistry registrar
 	variadicResource closer
 	variadicRegistry registrar
+	namedClosureResource closer
+	namedClosureRegistry registrar
 }
 type AppAlias = App
 var appFactory = func(manager *mcp.Manager, registry *tools.Registry) *App {
@@ -353,6 +355,15 @@ func newVariadicRegistryApp(registry *tools.Registry) *App {
 		return &AppAlias{variadicRegistry: registries[0]}
 	}(registry)
 }
+func newNamedClosureApp(manager *mcp.Manager, registry *tools.Registry) *App {
+	factory := func(resource any, registrarValue any) *App {
+		return &AppAlias{
+			namedClosureResource: resource.(closer),
+			namedClosureRegistry: registrarValue.(registrar),
+		}
+	}
+	return factory(manager, registry)
+}
 func (application *App) bypass() {
 	_ = application.resource.Close()
 	application.registry.Register(nil)
@@ -364,6 +375,8 @@ func (application *App) bypass() {
 	application.iifeRegistry.Register(nil)
 	_ = application.variadicResource.Close()
 	application.variadicRegistry.Register(nil)
+	_ = application.namedClosureResource.Close()
+	application.namedClosureRegistry.Register(nil)
 }
 `
 	dir := t.TempDir()
@@ -383,14 +396,14 @@ func (application *App) bypass() {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if len(cleanupCalls) != 5 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" || cleanupCalls[2] != "application.closureResource.Close" || cleanupCalls[3] != "application.iifeResource.Close" || cleanupCalls[4] != "application.variadicResource.Close" {
+	if len(cleanupCalls) != 6 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" || cleanupCalls[2] != "application.closureResource.Close" || cleanupCalls[3] != "application.iifeResource.Close" || cleanupCalls[4] != "application.variadicResource.Close" || cleanupCalls[5] != "application.namedClosureResource.Close" {
 		t.Fatalf("cleanup calls = %v, want receiver field cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if len(registrationCalls) != 5 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" || registrationCalls[2] != "application.closureRegistry.Register" || registrationCalls[3] != "application.iifeRegistry.Register" || registrationCalls[4] != "application.variadicRegistry.Register" {
+	if len(registrationCalls) != 6 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" || registrationCalls[2] != "application.closureRegistry.Register" || registrationCalls[3] != "application.iifeRegistry.Register" || registrationCalls[4] != "application.variadicRegistry.Register" || registrationCalls[5] != "application.namedClosureRegistry.Register" {
 		t.Fatalf("Tool registration calls = %v, want receiver field registration", registrationCalls)
 	}
 }
@@ -10044,6 +10057,7 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 		beforeResources := cloneCleanupResourceMap(types.appFieldResources)
 		for _, source := range sources {
 			for _, function := range appCompositionScopes(source.file) {
+				functionKey := declaredFunctionKey(function, source.imports, modulePath+"/internal/app")
 				receivers := appReceiverBindingKeys(function.Recv, source.imports)
 				values := cloneStringMap(types.packageValues)
 				resources := cloneCleanupResourceMap(types.packageResources)
@@ -10060,11 +10074,27 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 					resources[name] = paths
 				}
 				seedAppReceiverFieldState(values, resources, receivers, *types)
-				ast.Inspect(function.Body, func(node ast.Node) bool {
+				activeLiterals := make(map[*ast.FuncLit]bool)
+				var visit func(ast.Node) bool
+				visit = func(node ast.Node) bool {
 					switch statement := node.(type) {
 					case *ast.CallExpr:
-						if literal := functionLiteralExpression(statement.Fun); literal != nil {
+						literal := functionLiteralExpression(statement.Fun)
+						namedLiteral := false
+						if literal == nil {
+							callee := calledFunctionKey(statement.Fun, source.imports, values, *types)
+							if indexed, ok := indexedAppFunctionForKey(callee, *types); ok && indexed.literal != nil {
+								literal = indexed.literal
+								namedLiteral = true
+							}
+						}
+						if literal != nil {
 							seedAppFieldLiteralArguments(statement, literal, source.imports, values, resources, *types)
+							if namedLiteral && !activeLiterals[literal] {
+								activeLiterals[literal] = true
+								ast.Inspect(literal.Body, visit)
+								delete(activeLiterals, literal)
+							}
 						}
 					case *ast.FuncLit:
 						for name, typeName := range namedValueTypes(statement.Type.Params, source.imports) {
@@ -10076,6 +10106,9 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 					case *ast.AssignStmt:
 						for index, left := range statement.Lhs {
 							indexAppReceiverFieldAssignment(left, statement.Rhs, index, receivers, source.imports, values, resources, types)
+							if localType := localFunctionType(functionKey, left, statement.Rhs, index); localType != "" {
+								setMayValueType(values, assignmentValueKey(left), localType, *types)
+							}
 						}
 					case *ast.DeclStmt:
 						general, ok := statement.Decl.(*ast.GenDecl)
@@ -10091,6 +10124,9 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 									typeName = assignedToolExpressionType(spec.Values, index, source.imports, values, *types)
 									paths = assignedCleanupPaths(spec.Values, index, source.imports, values, resources, *types)
 								}
+								if localType := localFunctionType(functionKey, name, spec.Values, index); localType != "" {
+									typeName = localType
+								}
 								setMayValueType(values, bindingKey(name), typeName, *types)
 								if paths != nil {
 									resources[bindingKey(name)] = mergeCleanupPaths(resources[bindingKey(name)], paths)
@@ -10101,7 +10137,8 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 						indexAppCompositeLiteralFields(statement, source.imports, values, resources, types)
 					}
 					return true
-				})
+				}
+				ast.Inspect(function.Body, visit)
 			}
 		}
 		if equalStringMap(types.appFieldValues, beforeValues) && equalCleanupResourceMap(types.appFieldResources, beforeResources) {
