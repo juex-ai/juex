@@ -70,6 +70,7 @@ var appFeatureCleanupOwners = map[string]bool{
 
 type compositionTypeIndex struct {
 	fields          map[string]map[string]string
+	fieldOrder      map[string][]string
 	cleanupMethods  map[string]map[string]bool
 	functionResults map[string][]string
 	namedTypes      map[string]string
@@ -86,10 +87,13 @@ type compositionTypeIndex struct {
 }
 
 type indexedAppFunction struct {
-	key     string
-	decl    *ast.FuncDecl
-	literal *ast.FuncLit
-	imports map[string]string
+	key         string
+	decl        *ast.FuncDecl
+	literal     *ast.FuncLit
+	imports     map[string]string
+	seedOrigins map[string]map[int]bool
+	seedValues  map[string]string
+	captureOnly bool
 }
 
 func (function indexedAppFunction) receiver() *ast.FieldList {
@@ -409,6 +413,10 @@ func cleanupFromHolder(application *App) {
 	owned := ownedHolder{resource: application.manager}
 	_ = owned.resource.Close()
 }
+func cleanupFromPositionalHolder(application *App) {
+	owned := ownedHolder{application.manager}
+	_ = owned.resource.Close()
+}
 func cleanupFromAssignedHolder(application *App) {
 	owned := ownedHolder{}
 	owned.resource = application.manager
@@ -474,7 +482,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
+	want := []string{"identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "owned.resource.Close", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -622,6 +630,10 @@ func registerFromHolder(application *App) {
 	owned := registryHolder{registry: application.registry}
 	owned.registry.Register(nil)
 }
+func registerFromPositionalHolder(application *App) {
+	owned := registryHolder{application.registry}
+	owned.registry.Register(nil)
+}
 func registerFromAssignedHolder(application *App) {
 	owned := registryHolder{}
 	owned.registry = application.registry
@@ -711,7 +723,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "registry.Register", "registries.Register", "registry.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "registry.Register", "registries.Register", "registry.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "owned.registry.Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -743,6 +755,7 @@ func closePair(unrelated closer, resource closer) {
 func closeVariadic(resources ...closer) { _ = resources[1].Close() }
 func cleanupCallable(resource closer) func() error { return resource.Close }
 func relayCleanupCallable(resource closer) func() error { return cleanupCallable(resource) }
+func cleanupClosure(resource closer) func() { return func() { _ = resource.Close() } }
 func registrarPair(unrelated registrar, registry registrar) (error, registrar) { return nil, registry }
 func registerPair(unrelated registrar, registry registrar) {
 	_, owned := registrarPair(unrelated, registry)
@@ -753,17 +766,22 @@ func registrationCallable(registry registrar) func(tools.Tool) error { return re
 func relayRegistrationCallable(registry registrar) func(tools.Tool) error {
 	return registrationCallable(registry)
 }
+func registrationClosure(registry registrar) func(tools.Tool) error {
+	return func(tool tools.Tool) error { return registry.Register(tool) }
+}
 func configure(application *App, unrelatedCloser closer, unrelatedRegistrar registrar) {
 	closePair(unrelatedCloser, application.manager)
 	closeVariadic(unrelatedCloser, application.manager)
 	_ = cleanupCallable(application.manager)()
 	_ = relayCleanupCallable(application.manager)()
+	cleanupClosure(application.manager)()
 	cleanup := cleanupCallable(application.manager)
 	_ = cleanup()
 	registerPair(unrelatedRegistrar, application.registry)
 	registerVariadic(unrelatedRegistrar, application.registry)
 	_ = registrationCallable(application.registry)(nil)
 	_ = relayRegistrationCallable(application.registry)(nil)
+	_ = registrationClosure(application.registry)(nil)
 	register := registrationCallable(application.registry)
 	_ = register(nil)
 }`
@@ -785,7 +803,7 @@ func configure(application *App, unrelatedCloser closer, unrelatedRegistrar regi
 		cleanupCalls = append(cleanupCalls, chain)
 	})
 	cleanup := "," + strings.Join(cleanupCalls, ",") + ","
-	if !strings.Contains(cleanup, ",closePair,") || !strings.Contains(cleanup, ",closeVariadic,") || !strings.Contains(cleanup, ",cleanupCallable,") || !strings.Contains(cleanup, ",relayCleanupCallable,") || !strings.Contains(cleanup, ",cleanup,") {
+	if !strings.Contains(cleanup, ",closePair,") || !strings.Contains(cleanup, ",closeVariadic,") || !strings.Contains(cleanup, ",cleanupCallable,") || !strings.Contains(cleanup, ",relayCleanupCallable,") || !strings.Contains(cleanup, ",cleanupClosure,") || !strings.Contains(cleanup, ",cleanup,") {
 		t.Fatalf("cleanup calls = %v, want multi-result, variadic, and callable helper calls", cleanupCalls)
 	}
 	var registrationCalls []string
@@ -793,7 +811,7 @@ func configure(application *App, unrelatedCloser closer, unrelatedRegistrar regi
 		registrationCalls = append(registrationCalls, chain)
 	})
 	registration := "," + strings.Join(registrationCalls, ",") + ","
-	if !strings.Contains(registration, ",registerPair,") || !strings.Contains(registration, ",registerVariadic,") || !strings.Contains(registration, ",registrationCallable,") || !strings.Contains(registration, ",relayRegistrationCallable,") || !strings.Contains(registration, ",register,") {
+	if !strings.Contains(registration, ",registerPair,") || !strings.Contains(registration, ",registerVariadic,") || !strings.Contains(registration, ",registrationCallable,") || !strings.Contains(registration, ",relayRegistrationCallable,") || !strings.Contains(registration, ",registrationClosure,") || !strings.Contains(registration, ",register,") {
 		t.Fatalf("Tool registration calls = %v, want multi-result, variadic, and callable helper calls", registrationCalls)
 	}
 }
@@ -870,6 +888,7 @@ func isToolRegistrationName(name string) bool {
 func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 	types := compositionTypeIndex{
 		fields:          make(map[string]map[string]string),
+		fieldOrder:      make(map[string][]string),
 		cleanupMethods:  make(map[string]map[string]bool),
 		functionResults: make(map[string][]string),
 		namedTypes:      make(map[string]string),
@@ -998,11 +1017,14 @@ func indexCleanupAndConstructors(file *ast.File, packagePath string, imports map
 				for _, field := range structure.Fields.List {
 					if len(field.Names) == 0 {
 						fieldType := canonicalTypeInPackage(field.Type, imports, packagePath)
-						types.fields[typeName][embeddedPrefix+fieldType] = fieldType
+						fieldName := embeddedPrefix + fieldType
+						types.fields[typeName][fieldName] = fieldType
+						types.fieldOrder[typeName] = append(types.fieldOrder[typeName], fieldName)
 						continue
 					}
 					for _, name := range field.Names {
 						types.fields[typeName][name.Name] = canonicalTypeInPackage(field.Type, imports, packagePath)
+						types.fieldOrder[typeName] = append(types.fieldOrder[typeName], name.Name)
 					}
 				}
 			}
@@ -1322,6 +1344,18 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 		resources[name] = paths
 	}
 	recordResult := func(index int, expression ast.Expr, expressionResultIndex int) {
+		var capturedCleanup, capturedTools map[int]bool
+		if literal := functionLiteralExpression(expression); literal != nil {
+			closure := indexedAppFunction{
+				literal:     literal,
+				imports:     function.imports,
+				seedOrigins: origins,
+				seedValues:  values,
+				captureOnly: true,
+			}
+			capturedCleanup = inferCleanupParameters(closure, types)
+			capturedTools = inferToolRegistrationParameters(closure, types)
+		}
 		if paths := assignedCleanupPaths([]ast.Expr{expression}, expressionResultIndex, function.imports, values, resources, concreteTypes); paths != nil {
 			if cleanupResults[index] == nil {
 				cleanupResults[index] = make(map[string]bool)
@@ -1330,7 +1364,7 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 				cleanupResults[index][path] = true
 			}
 		}
-		if isCleanupCallableResultExpression(expression, expressionResultIndex, function.imports, values, origins, types) {
+		if len(capturedCleanup) != 0 || isCleanupCallableResultExpression(expression, expressionResultIndex, function.imports, values, origins, types) {
 			if cleanupResults[index] == nil {
 				cleanupResults[index] = make(map[string]bool)
 			}
@@ -1339,13 +1373,15 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 		if isToolRegistryResultExpression(expression, expressionResultIndex, function.imports, values, concreteTypes) {
 			toolResults[index] = true
 		}
-		if isToolRegistrationCallableResultExpression(expression, expressionResultIndex, function.imports, values, origins, types) {
+		if len(capturedTools) != 0 || isToolRegistrationCallableResultExpression(expression, expressionResultIndex, function.imports, values, origins, types) {
 			toolCallResults[index] = true
 		}
 		if resultParams[index] == nil {
 			resultParams[index] = make(map[int]bool)
 		}
 		mergeOrigins(resultParams[index], resultParameterOrigins(expression, function.imports, values, origins, types, expressionResultIndex))
+		mergeOrigins(resultParams[index], capturedCleanup)
+		mergeOrigins(resultParams[index], capturedTools)
 	}
 	ast.Inspect(function.body(), func(node ast.Node) bool {
 		switch value := node.(type) {
@@ -1446,13 +1482,32 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 	return cleanupResults, toolResults, toolCallResults, resultParams
 }
 
-func inferCleanupParameters(function indexedAppFunction, types compositionTypeIndex) map[int]bool {
-	cleaned := make(map[int]bool)
-	origins := parameterOrigins(function.parameters())
-	values := namedValueTypes(function.receiver(), function.imports)
+func inferenceState(function indexedAppFunction) (map[string]map[int]bool, map[string]string) {
+	origins := make(map[string]map[int]bool)
+	if function.seedOrigins == nil {
+		origins = parameterOrigins(function.parameters())
+	} else {
+		for key, source := range function.seedOrigins {
+			origins[key] = make(map[int]bool, len(source))
+			mergeOrigins(origins[key], source)
+		}
+	}
+	values := make(map[string]string)
+	for key, typeName := range function.seedValues {
+		values[key] = typeName
+	}
+	for name, typeName := range namedValueTypes(function.receiver(), function.imports) {
+		values[name] = typeName
+	}
 	for name, typeName := range namedValueTypes(function.parameters(), function.imports) {
 		values[name] = typeName
 	}
+	return origins, values
+}
+
+func inferCleanupParameters(function indexedAppFunction, types compositionTypeIndex) map[int]bool {
+	cleaned := make(map[int]bool)
+	origins, values := inferenceState(function)
 	ast.Inspect(function.body(), func(node ast.Node) bool {
 		switch value := node.(type) {
 		case *ast.AssignStmt:
@@ -1503,7 +1558,9 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 			}
 		case *ast.CallExpr:
 			callbackOrigins := callableOrigins(value.Fun, origins)
-			mergeOrigins(cleaned, callbackOrigins)
+			if !function.captureOnly {
+				mergeOrigins(cleaned, callbackOrigins)
+			}
 			mergeOrigins(cleaned, callbackArgumentOrigins(value, origins))
 			if selector, ok := value.Fun.(*ast.SelectorExpr); ok && isFeatureCleanupMethodName(selector.Sel.Name) {
 				if isFeatureCleanupMethodExpression(selector, function.imports, types) && len(value.Args) != 0 {
@@ -1528,11 +1585,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 
 func inferToolRegistrationParameters(function indexedAppFunction, types compositionTypeIndex) map[int]bool {
 	registered := make(map[int]bool)
-	origins := parameterOrigins(function.parameters())
-	values := namedValueTypes(function.receiver(), function.imports)
-	for name, typeName := range namedValueTypes(function.parameters(), function.imports) {
-		values[name] = typeName
-	}
+	origins, values := inferenceState(function)
 	ast.Inspect(function.body(), func(node ast.Node) bool {
 		switch value := node.(type) {
 		case *ast.AssignStmt:
@@ -1583,7 +1636,9 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 			}
 		case *ast.CallExpr:
 			callbackOrigins := callableOrigins(value.Fun, origins)
-			mergeOrigins(registered, callbackOrigins)
+			if !function.captureOnly {
+				mergeOrigins(registered, callbackOrigins)
+			}
 			mergeOrigins(registered, callbackArgumentOrigins(value, origins))
 			if selector, ok := value.Fun.(*ast.SelectorExpr); ok && isToolRegistrationName(selector.Sel.Name) {
 				if isToolRegistrationMethodExpression(selector, function.imports, types) {
@@ -2337,6 +2392,20 @@ func instantiatedFields(typeName string, types compositionTypeIndex) map[string]
 	return instantiated
 }
 
+func instantiatedFieldOrder(typeName string, types compositionTypeIndex) []string {
+	if order := types.fieldOrder[typeName]; len(order) != 0 {
+		return order
+	}
+	if !strings.HasPrefix(typeName, genericTypePrefix) {
+		return nil
+	}
+	parts := strings.Split(strings.TrimPrefix(typeName, genericTypePrefix), genericTypeSeparator)
+	if len(parts) < 2 {
+		return nil
+	}
+	return types.fieldOrder[parts[0]]
+}
+
 func rangeTypes(typeName string, types compositionTypeIndex) (string, string, bool) {
 	typeName = resolveNamedType(typeName, types)
 	if typeName == toolRegistryCollectionType {
@@ -2416,18 +2485,22 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 	case *ast.StarExpr:
 		return cleanupPathsForExpression(value.X, imports, values, resources, types)
 	case *ast.CompositeLit:
-		if paths := cleanupPathsForType(canonicalType(value.Type, imports), types, nil); paths != nil {
+		typeName := canonicalType(value.Type, imports)
+		if paths := cleanupPathsForType(typeName, types, nil); paths != nil {
 			return paths
 		}
 		paths := make(map[string]bool)
-		_, structured := types.fields[resolveNamedType(canonicalType(value.Type, imports), types)]
-		for _, element := range value.Elts {
+		structured := len(instantiatedFields(typeName, types)) != 0
+		fieldOrder := instantiatedFieldOrder(typeName, types)
+		for index, element := range value.Elts {
 			prefix := ""
 			if pair, ok := element.(*ast.KeyValueExpr); ok {
 				if field, ok := pair.Key.(*ast.Ident); structured && ok {
 					prefix = field.Name + "."
 				}
 				element = pair.Value
+			} else if structured && index < len(fieldOrder) && !strings.HasPrefix(fieldOrder[index], embeddedPrefix) {
+				prefix = fieldOrder[index] + "."
 			}
 			for path := range cleanupPathsForExpression(element, imports, values, resources, types) {
 				paths[prefix+path] = true
