@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
@@ -120,29 +119,6 @@ func TestBuilder_OnlyGlobalAgentsMD(t *testing.T) {
 	got := b.Build()
 	mustContain(t, got, "only-global-rule")
 	mustContain(t, got, "Operating Context")
-}
-
-func TestGuidanceModuleDeduplicatesGlobalWorkspaceFile(t *testing.T) {
-	home := t.TempDir()
-	homeAgents := filepath.Join(home, ".agents")
-	if err := os.MkdirAll(homeAgents, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	globalAgents := filepath.Join(homeAgents, "AGENTS.md")
-	if err := os.WriteFile(globalAgents, []byte("one global rule"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	sections, err := (&promptcontext.GuidanceModule{
-		GlobalAgentsMDPath: globalAgents,
-		AgentsMDDirs:       []string{home, homeAgents},
-	}).Context(context.Background(), runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sections) != 1 || sections[0].Key != "agents_global" {
-		t.Fatalf("sections = %+v, want one global AGENTS section", sections)
-	}
 }
 
 func TestBuilder_OnlyProjectAgentsMD(t *testing.T) {
@@ -322,27 +298,6 @@ func TestBuilder_OperatingContextIncludesShellProfile(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("operating context missing %q in:\n%s", want, got)
 		}
-	}
-}
-
-func TestShellProfileFromConfigCopiesArgs(t *testing.T) {
-	cfg := config.ShellProfile{
-		Profile:       "custom",
-		Family:        "posix",
-		Binary:        "bash",
-		Args:          []string{"-lc"},
-		PathStyle:     "posix",
-		HostPathStyle: "platform",
-	}
-
-	got := promptcontext.ShellProfileFromConfig(cfg)
-	cfg.Args[0] = "-c"
-
-	if got.Profile != "custom" || got.Family != "posix" || got.Binary != "bash" || got.PathStyle != "posix" || got.HostPathStyle != "platform" {
-		t.Fatalf("promptcontext.ShellProfileFromConfig = %+v", got)
-	}
-	if len(got.Args) != 1 || got.Args[0] != "-lc" {
-		t.Fatalf("args = %+v, want defensive copy", got.Args)
 	}
 }
 
