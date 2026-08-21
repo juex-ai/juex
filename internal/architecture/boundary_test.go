@@ -1947,6 +1947,68 @@ func registerFromCollectedKeys(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionTracksLoopBackEdges(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+func useAcrossIterations(application *App) {
+	var resource closer
+	var registry registrar
+	for iteration := 0; iteration < 2; iteration++ {
+		if resource != nil { _ = resource.Close() }
+		if registry != nil { registry.Register(nil) }
+		resource = application.manager
+		registry = application.registry
+	}
+}
+func useAcrossRangeIterations(application *App) {
+	var rangedResource closer
+	var rangedRegistry registrar
+	for range []int{0, 1} {
+		if rangedResource != nil { _ = rangedResource.Close() }
+		if rangedRegistry != nil { rangedRegistry.Register(nil) }
+		rangedResource = application.manager
+		rangedRegistry = application.registry
+	}
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "loop_back_edges.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resource.Close,") || !strings.Contains(cleanup, ",rangedResource.Close,") {
+		t.Fatalf("cleanup calls = %v, want loop-carried cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registry.Register,") || !strings.Contains(registration, ",rangedRegistry.Register,") {
+		t.Fatalf("Tool registration calls = %v, want loop-carried registration", registrationCalls)
+	}
+}
+
 func TestSliceCollectionSourceArguments(t *testing.T) {
 	tests := []struct {
 		expression string
@@ -3936,13 +3998,40 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			references[key] = true
 		}
 		aliases := make(map[string]map[string]bool)
+		reportedCalls := make(map[*ast.CallExpr]bool)
 		reportCleanup := func(call *ast.CallExpr, chain string) {
-			if !isReceiverOwnedFeatureCleanup(function, call, imports, values, types) {
+			if !reportedCalls[call] && !isReceiverOwnedFeatureCleanup(function, call, imports, values, types) {
+				reportedCalls[call] = true
 				report(call, chain)
 			}
 		}
-		ast.Inspect(function.Body, func(node ast.Node) bool {
+		var visit func(ast.Node) bool
+		visit = func(node ast.Node) bool {
 			switch value := node.(type) {
+			case *ast.ForStmt:
+				if value.Init != nil {
+					ast.Inspect(value.Init, visit)
+				}
+				if value.Cond != nil {
+					ast.Inspect(value.Cond, visit)
+				}
+				for {
+					beforeValues := cloneStringMap(values)
+					beforeResources := cloneCleanupResourceMap(resources)
+					beforeReferences := cloneBoolMap(references)
+					beforeAliases := cloneCleanupResourceMap(aliases)
+					ast.Inspect(value.Body, visit)
+					if value.Post != nil {
+						ast.Inspect(value.Post, visit)
+					}
+					if value.Cond != nil {
+						ast.Inspect(value.Cond, visit)
+					}
+					if equalStringMap(values, beforeValues) && equalCleanupResourceMap(resources, beforeResources) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
+						break
+					}
+				}
+				return false
 			case *ast.AssignStmt:
 				for index, left := range value.Lhs {
 					trackReferenceAssignment(references, aliases, left, nil, value.Rhs, index, imports, values, types)
@@ -4010,30 +4099,42 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 							resources[bindingKey(name)] = valuePaths
 						}
 					}
-					break
-				}
-				if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" {
-					key := bindingKey(name)
-					values[key] = keyType
-					if paths := cleanupPathsForType(keyType, types, nil); paths != nil {
-						resources[key] = paths
-					} else if strings.HasPrefix(collectionType, mapTypePrefix) {
-						if paths := cleanupMapKeyPaths(collectionPaths); paths != nil {
+				} else {
+					if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" {
+						key := bindingKey(name)
+						values[key] = keyType
+						if paths := cleanupPathsForType(keyType, types, nil); paths != nil {
+							resources[key] = paths
+						} else if strings.HasPrefix(collectionType, mapTypePrefix) {
+							if paths := cleanupMapKeyPaths(collectionPaths); paths != nil {
+								resources[key] = paths
+							}
+						} else if strings.HasPrefix(collectionType, channelTypePrefix) && collectionPaths != nil {
+							resources[key] = collectionPaths
+						}
+					}
+					if name, ok := value.Value.(*ast.Ident); ok && name.Name != "_" {
+						key := bindingKey(name)
+						values[key] = valueType
+						if paths := cleanupPathsForType(valueType, types, nil); paths != nil {
+							resources[key] = paths
+						} else if paths := cleanupMapValuePaths(collectionPaths); paths != nil {
 							resources[key] = paths
 						}
-					} else if strings.HasPrefix(collectionType, channelTypePrefix) && collectionPaths != nil {
-						resources[key] = collectionPaths
 					}
 				}
-				if name, ok := value.Value.(*ast.Ident); ok && name.Name != "_" {
-					key := bindingKey(name)
-					values[key] = valueType
-					if paths := cleanupPathsForType(valueType, types, nil); paths != nil {
-						resources[key] = paths
-					} else if paths := cleanupMapValuePaths(collectionPaths); paths != nil {
-						resources[key] = paths
+				ast.Inspect(value.X, visit)
+				for {
+					beforeValues := cloneStringMap(values)
+					beforeResources := cloneCleanupResourceMap(resources)
+					beforeReferences := cloneBoolMap(references)
+					beforeAliases := cloneCleanupResourceMap(aliases)
+					ast.Inspect(value.Body, visit)
+					if equalStringMap(values, beforeValues) && equalCleanupResourceMap(resources, beforeResources) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
+						break
 					}
 				}
+				return false
 			case *ast.SendStmt:
 				name, _ := assignmentBinding(value.Chan)
 				if name != nil {
@@ -4125,7 +4226,8 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				}
 			}
 			return true
-		})
+		}
+		ast.Inspect(function.Body, visit)
 	}
 }
 
@@ -4184,8 +4286,39 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			references[key] = true
 		}
 		aliases := make(map[string]map[string]bool)
-		ast.Inspect(function.Body, func(node ast.Node) bool {
+		reportedCalls := make(map[*ast.CallExpr]bool)
+		reportTool := func(call *ast.CallExpr, chain string) {
+			if !reportedCalls[call] {
+				reportedCalls[call] = true
+				report(call, chain)
+			}
+		}
+		var visit func(ast.Node) bool
+		visit = func(node ast.Node) bool {
 			switch value := node.(type) {
+			case *ast.ForStmt:
+				if value.Init != nil {
+					ast.Inspect(value.Init, visit)
+				}
+				if value.Cond != nil {
+					ast.Inspect(value.Cond, visit)
+				}
+				for {
+					beforeValues := cloneStringMap(values)
+					beforeReferences := cloneBoolMap(references)
+					beforeAliases := cloneCleanupResourceMap(aliases)
+					ast.Inspect(value.Body, visit)
+					if value.Post != nil {
+						ast.Inspect(value.Post, visit)
+					}
+					if value.Cond != nil {
+						ast.Inspect(value.Cond, visit)
+					}
+					if equalStringMap(values, beforeValues) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
+						break
+					}
+				}
+				return false
 			case *ast.AssignStmt:
 				for index, left := range value.Lhs {
 					trackReferenceAssignment(references, aliases, left, nil, value.Rhs, index, imports, values, types)
@@ -4232,23 +4365,33 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				keyType, valueType, ok := rangeTypes(expressionType(value.X, imports, values, types), types)
 				if !ok {
 					keyType, valueType, iterator := iteratorRangeToolTypes(value.X, imports, values, types)
-					if !iterator {
-						break
+					if iterator {
+						if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" && keyType != "" {
+							values[bindingKey(name)] = keyType
+						}
+						if name, ok := value.Value.(*ast.Ident); ok && name.Name != "_" && valueType != "" {
+							values[bindingKey(name)] = valueType
+						}
 					}
-					if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" && keyType != "" {
+				} else {
+					if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" {
 						values[bindingKey(name)] = keyType
 					}
-					if name, ok := value.Value.(*ast.Ident); ok && name.Name != "_" && valueType != "" {
+					if name, ok := value.Value.(*ast.Ident); ok && name.Name != "_" {
 						values[bindingKey(name)] = valueType
 					}
-					break
 				}
-				if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" {
-					values[bindingKey(name)] = keyType
+				ast.Inspect(value.X, visit)
+				for {
+					beforeValues := cloneStringMap(values)
+					beforeReferences := cloneBoolMap(references)
+					beforeAliases := cloneCleanupResourceMap(aliases)
+					ast.Inspect(value.Body, visit)
+					if equalStringMap(values, beforeValues) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
+						break
+					}
 				}
-				if name, ok := value.Value.(*ast.Ident); ok && name.Name != "_" {
-					values[bindingKey(name)] = valueType
-				}
+				return false
 			case *ast.SendStmt:
 				if isToolRegistryExpression(value.Value, imports, values, types) || isToolRegistrationValueExpression(value.Value, imports, values, types) {
 					if name, _ := assignmentBinding(value.Chan); name != nil {
@@ -4275,7 +4418,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					callbackReported := false
 					for index, argument := range value.Args {
 						if !callbacks[index] && (isToolRegistryExpression(argument, imports, values, types) || isToolRegistryCollectionExpression(argument, imports, values, types) || isToolRegistryMapKeyCollectionExpression(argument, imports, values, types)) {
-							report(value, selectorChain(value.Fun))
+							reportTool(value, selectorChain(value.Fun))
 							callbackReported = true
 							break
 						}
@@ -4323,7 +4466,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				for index := range toolParams {
 					for _, argument := range callArgumentsForParameterAt(value, index, variadicIndex, variadic, imports) {
 						if isToolRegistryExpression(argument, imports, values, types) || isToolRegistryCollectionExpression(argument, imports, values, types) || isToolRegistrationValueExpression(argument, imports, values, types) {
-							report(value, selectorChain(value.Fun))
+							reportTool(value, selectorChain(value.Fun))
 							reported = true
 							break
 						}
@@ -4333,11 +4476,12 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					}
 				}
 				if isToolRegistrationCall(value, imports, values, types) {
-					report(value, selectorChain(value.Fun))
+					reportTool(value, selectorChain(value.Fun))
 				}
 			}
 			return true
-		})
+		}
+		ast.Inspect(function.Body, visit)
 	}
 }
 
@@ -4480,6 +4624,14 @@ func cloneStringMap(source map[string]string) map[string]string {
 	return cloned
 }
 
+func cloneBoolMap(source map[string]bool) map[string]bool {
+	cloned := make(map[string]bool, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
+}
+
 func cloneCleanupResourceMap(source map[string]map[string]bool) map[string]map[string]bool {
 	cloned := make(map[string]map[string]bool, len(source))
 	for key, paths := range source {
@@ -4489,6 +4641,18 @@ func cloneCleanupResourceMap(source map[string]map[string]bool) map[string]map[s
 }
 
 func equalStringMap(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func equalBoolMap(left, right map[string]bool) bool {
 	if len(left) != len(right) {
 		return false
 	}
