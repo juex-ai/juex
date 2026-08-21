@@ -348,6 +348,13 @@ func cleanupThroughAlias(application *App) {
 	cleanup := closeOwned
 	cleanup(application.manager)
 }
+func cleanupFromIIFE(application *App) {
+	func() { _ = application.manager.Close() }()
+}
+func cleanupFromAssertion(application *App) {
+	resource, _ := any(application.manager).(closer)
+	_ = resource.Close()
+}
 func cleanupAfterShadow(application *App, unrelated closer) {
 	manager := application.manager
 	{
@@ -388,7 +395,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"cleanup", "cleanup", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
+	want := []string{"cleanup", "cleanup", "application.manager.Close", "resource.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -482,6 +489,13 @@ func registerThroughAlias(application *App) {
 	register := registerOwned
 	register(application.registry)
 }
+func registerFromIIFE(application *App) {
+	func() { _ = application.registry.Register(nil) }()
+}
+func registerFromAssertion(application *App) {
+	registry, _ := any(application.registry).(registrar)
+	registry.Register(nil)
+}
 func registerAfterShadow(application *App, unrelated *router) {
 	registry := application.registry
 	{
@@ -501,6 +515,9 @@ func registerOwned(registry registrar) { _ = registry.Register(nil) }
 func registerTransitively(registry registrar) { registerOwned(registry) }
 func runRegistration(register func(tools.Tool) error) { _ = register(nil) }
 func configure(application *App, registry *tools.Registry, routes *router) {
+	(*tools.Registry).Register(registry, nil)
+	registerExpression := (*tools.Registry).Register
+	registerExpression(registry, nil)
 	registry.Register(nil)
 	register := registry.Register
 	register(nil)
@@ -542,7 +559,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"register", "register", "registry.Register", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
+	want := []string{"register", "register", "application.registry.Register", "registry.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -1197,7 +1214,11 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 		case *ast.CallExpr:
 			mergeOrigins(registered, callableOrigins(value.Fun, origins))
 			if selector, ok := value.Fun.(*ast.SelectorExpr); ok && isToolRegistrationName(selector.Sel.Name) {
-				if qualifier, ok := selector.X.(*ast.Ident); ok && function.imports[qualifier.Name] == modulePath+"/internal/tools" {
+				if isToolRegistrationMethodExpression(selector, function.imports, types) {
+					if len(value.Args) != 0 {
+						mergeOrigins(registered, originsForExpression(value.Args[0], origins))
+					}
+				} else if qualifier, ok := selector.X.(*ast.Ident); ok && function.imports[qualifier.Name] == modulePath+"/internal/tools" {
 					if len(value.Args) != 0 {
 						mergeOrigins(registered, originsForExpression(value.Args[0], origins))
 					}
@@ -1410,8 +1431,6 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				if paths[selector.Sel.Name] {
 					report(value, selectorChain(selector))
 				}
-			case *ast.FuncLit:
-				return false
 			}
 			return true
 		})
@@ -1497,8 +1516,6 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				if isToolRegistrationCall(value, imports, values, types) {
 					report(value, selectorChain(value.Fun))
 				}
-			case *ast.FuncLit:
-				return false
 			}
 			return true
 		})
@@ -1724,6 +1741,8 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 			return cleanupPathsForType(valueType, types, nil)
 		}
 		return cleanupPathsForExpression(value.X, imports, values, resources, types)
+	case *ast.TypeAssertExpr:
+		return cleanupPathsForExpression(value.X, imports, values, resources, types)
 	case *ast.CallExpr:
 		callee := calledFunctionKey(value.Fun, imports, values, types)
 		if paths := types.cleanupResults[callee][0]; paths != nil {
@@ -1759,7 +1778,9 @@ func assignedCleanupPaths(expressions []ast.Expr, index int, imports map[string]
 			}
 		}
 		if results := expressionResultTypes(expressions[0], imports, values, types); index < len(results) {
-			return cleanupPathsForType(results[index], types, nil)
+			if paths := cleanupPathsForType(results[index], types, nil); paths != nil {
+				return paths
+			}
 		}
 		if index == 0 {
 			return cleanupPathsForExpression(expressions[0], imports, values, resources, types)
@@ -1897,6 +1918,8 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 	case *ast.IndexExpr:
 		_, valueType, _ := rangeTypes(expressionType(value.X, imports, values, types), types)
 		return valueType
+	case *ast.TypeAssertExpr:
+		return canonicalType(value.Type, imports)
 	case *ast.CallExpr:
 		callee := calledFunctionKey(value.Fun, imports, values, types)
 		if types.toolResults[callee][0] {
@@ -1939,6 +1962,9 @@ func isToolRegistrationCall(call *ast.CallExpr, imports map[string]string, value
 	case *ast.Ident:
 		return values[bindingKey(function)] == toolRegistrationCallableType || imports["."] == modulePath+"/internal/tools" && isToolRegistrationName(function.Name)
 	case *ast.SelectorExpr:
+		if isToolRegistrationMethodExpression(function, imports, types) {
+			return true
+		}
 		if qualifier, ok := function.X.(*ast.Ident); ok && imports[qualifier.Name] == modulePath+"/internal/tools" {
 			return isToolRegistrationName(function.Sel.Name)
 		}
@@ -1950,9 +1976,15 @@ func isToolRegistrationCall(call *ast.CallExpr, imports map[string]string, value
 
 func isToolRegistryExpression(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
 	const registryType = modulePath + "/internal/tools.Registry"
+	if assertion, ok := expression.(*ast.TypeAssertExpr); ok {
+		return isToolRegistryExpression(assertion.X, imports, values, types)
+	}
 	if call, ok := expression.(*ast.CallExpr); ok {
 		callee := calledFunctionKey(call.Fun, imports, values, types)
 		if types.toolResults[callee][0] {
+			return true
+		}
+		if len(call.Args) == 1 && isToolRegistryExpression(call.Args[0], imports, values, types) {
 			return true
 		}
 	}
@@ -1968,10 +2000,18 @@ func isToolRegistrationValueExpression(expression ast.Expr, imports map[string]s
 	if !ok || !isToolRegistrationName(selector.Sel.Name) {
 		return false
 	}
+	if isToolRegistrationMethodExpression(selector, imports, types) {
+		return true
+	}
 	if qualifier, ok := selector.X.(*ast.Ident); ok && imports[qualifier.Name] == modulePath+"/internal/tools" {
 		return true
 	}
 	return isToolRegistryExpression(selector.X, imports, values, types)
+}
+
+func isToolRegistrationMethodExpression(selector *ast.SelectorExpr, imports map[string]string, types compositionTypeIndex) bool {
+	const registryType = modulePath + "/internal/tools.Registry"
+	return resolveNamedType(canonicalType(selector.X, imports), types) == registryType && isToolRegistrationName(selector.Sel.Name)
 }
 
 func isToolRegistrationCallableExpression(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
