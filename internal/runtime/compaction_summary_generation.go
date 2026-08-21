@@ -147,6 +147,9 @@ func (e *Engine) generateCompactionSummaryLocked(
 			EpochID:         epoch.EpochID,
 			RequestDigest:   epoch.RequestDigest,
 		}}); emitErr != nil {
+			if ok {
+				health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			}
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, fmt.Errorf("commit compaction summary model fallback: %w", emitErr)
 		}
 		if !ok {

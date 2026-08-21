@@ -3322,6 +3322,46 @@ func TestCompactFallsBackToMainProviderWhenSummaryProviderFails(t *testing.T) {
 	}
 }
 
+func TestCompactFallbackEventFailureReleasesSelectedHalfOpenProbe(t *testing.T) {
+	now := time.Unix(40_000, 0)
+	health := llm.NewModelHealth(llm.ModelHealthOptions{Now: func() time.Time { return now }})
+	backupOnly := []string{"backup:model"}
+	backupFailure, ok := health.Acquire(backupOnly, nil)
+	if !ok {
+		t.Fatal("acquire backup health ticket")
+	}
+	health.Complete(backupFailure.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	now = now.Add(30 * time.Second)
+
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &namedCompactionProvider{name: "backup:model", text: "backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = health
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("fallback event sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: "context.compact.summary_model_fallback", err: want})
+
+	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); !errors.Is(err, want) {
+		t.Fatalf("Compact() error = %v, want %v", err, want)
+	}
+	if primary.calls != 1 || backup.calls != 0 {
+		t.Fatalf("provider calls primary/backup = %d/%d, want 1/0", primary.calls, backup.calls)
+	}
+	retry, ok := health.Acquire(backupOnly, nil)
+	if !ok || retry.Ticket.Ref != "backup:model" || !retry.Ticket.Probe {
+		t.Fatalf("backup probe after journal failure = %+v, %v", retry, ok)
+	}
+	health.Complete(retry.Ticket, llm.ModelHealthNeutral, "")
+}
+
 func TestCompactFallsBackThroughConfiguredModelChainWithoutModelChangeNotice(t *testing.T) {
 	summary := &namedCompactionProvider{name: "summary:model", err: errors.New("status 503: summary unavailable")}
 	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 401: token expired")}
