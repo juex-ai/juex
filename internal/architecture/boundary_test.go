@@ -111,12 +111,12 @@ func TestAppCompositionDoesNotBypassModuleCatalogOrLifecycle(t *testing.T) {
 			position := files.Position(call.Pos())
 			switch function := call.Fun.(type) {
 			case *ast.Ident:
-				if strings.HasPrefix(function.Name, "Register") && strings.Contains(function.Name, "Tool") {
+				if isToolRegistrationName(function.Name) {
 					t.Errorf("%s:%d directly calls %s; serving Tools must come from sealed Module catalogs", relative, position.Line, function.Name)
 				}
 			case *ast.SelectorExpr:
 				chain := selectorChain(function)
-				if function.Sel.Name == "Register" || function.Sel.Name == "MustRegister" {
+				if isToolRegistrationName(function.Sel.Name) {
 					t.Errorf("%s:%d directly calls %s; internal/app must not mutate a serving Tool registry", relative, position.Line, chain)
 				}
 			}
@@ -178,6 +178,19 @@ func TestImportBoundaryClassifiesPromptContextAsConcreteFeature(t *testing.T) {
 	}
 }
 
+func TestToolRegistrationNameClassificationIncludesBulkHelpers(t *testing.T) {
+	for _, name := range []string{"Register", "MustRegister", "RegisterTool", "MustRegisterTools", "RegisterBuiltins"} {
+		if !isToolRegistrationName(name) {
+			t.Errorf("%s was not classified as a Tool registration call", name)
+		}
+	}
+	for _, name := range []string{"Registration", "RegisterHook", "RegisterSession"} {
+		if isToolRegistrationName(name) {
+			t.Errorf("%s was incorrectly classified as a Tool registration call", name)
+		}
+	}
+}
+
 func checkImports(t *testing.T, root, relativeDir, layer string, forbidden func(string) bool) {
 	t.Helper()
 	dir := filepath.Join(root, filepath.FromSlash(relativeDir))
@@ -235,6 +248,16 @@ func matchesImportRoot(importPath string, roots []string) bool {
 		}
 	}
 	return false
+}
+
+func isToolRegistrationName(name string) bool {
+	if name == "Register" || name == "MustRegister" {
+		return true
+	}
+	if !strings.HasPrefix(name, "Register") && !strings.HasPrefix(name, "MustRegister") {
+		return false
+	}
+	return strings.Contains(name, "Tool") || strings.Contains(name, "Builtin")
 }
 
 func appFeatureResourceFields(appDir string) (map[string]map[string]bool, error) {
