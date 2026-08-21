@@ -3322,6 +3322,100 @@ func TestCompactFallsBackToMainProviderWhenSummaryProviderFails(t *testing.T) {
 	}
 }
 
+func TestCompactFallsBackThroughConfiguredModelChainWithoutModelChangeNotice(t *testing.T) {
+	summary := &namedCompactionProvider{name: "summary:model", err: errors.New("status 503: summary unavailable")}
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 401: token expired")}
+	backup := &namedCompactionProvider{name: "backup:model", text: "backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.SummaryProvider = summary
+	eng.SummaryProvenance = provenance.SafeProvider{ID: "summary", Model: "summary:model"}
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.NotifyModelChanges = true
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.SummaryModel = "summary:model"
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	var epochs []provenance.RequestEpoch
+	var fallbacks []ContextCompactSummaryFallbackPayload
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+	bus.Subscribe("context.compact.summary_model_fallback", func(event events.Event) {
+		fallbacks = append(fallbacks, event.Payload.(ContextCompactSummaryFallbackPayload))
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.calls != 1 || primary.calls != 1 || backup.calls != 1 {
+		t.Fatalf("summary/primary/backup calls = %d/%d/%d, want 1/1/1", summary.calls, primary.calls, backup.calls)
+	}
+	if result.SummaryModel != "backup:model" {
+		t.Fatalf("summary model = %q, want backup:model", result.SummaryModel)
+	}
+	if len(epochs) != 3 {
+		t.Fatalf("epochs = %+v, want one per provider attempt", epochs)
+	}
+	for i, wantModel := range []string{"summary:model", "primary:model", "backup:model"} {
+		if epochs[i].Attempt != i+1 || epochs[i].Purpose != "compaction" || epochs[i].Provider.Model != wantModel {
+			t.Fatalf("epoch[%d] = %+v, want attempt %d model %s", i, epochs[i], i+1, wantModel)
+		}
+	}
+	if len(fallbacks) != 2 || fallbacks[0].ConfiguredModel != "summary:model" || fallbacks[0].FallbackModel != "primary:model" || fallbacks[1].ConfiguredModel != "primary:model" || fallbacks[1].FallbackModel != "backup:model" {
+		t.Fatalf("fallbacks = %+v", fallbacks)
+	}
+	for _, message := range eng.Session.History {
+		if message.Kind == llm.MessageKindModelChange {
+			t.Fatalf("compaction persisted model-change notice: %+v", message)
+		}
+	}
+}
+
+func TestCompactUsesConfiguredFallbackModelsWithoutDedicatedSummaryModel(t *testing.T) {
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &namedCompactionProvider{name: "backup:model", text: "backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	var fallback ContextCompactSummaryFallbackPayload
+	bus.Subscribe("context.compact.summary_model_fallback", func(event events.Event) {
+		fallback = event.Payload.(ContextCompactSummaryFallbackPayload)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primary.calls != 1 || backup.calls != 1 || result.SummaryModel != "backup:model" {
+		t.Fatalf("primary/backup/result = %d/%d/%+v", primary.calls, backup.calls, result)
+	}
+	if fallback.ConfiguredModel != "primary:model" || fallback.FallbackModel != "backup:model" {
+		t.Fatalf("fallback = %+v", fallback)
+	}
+}
+
 func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	provider := &scriptedCompactionProvider{
 		name: "thinking:model",

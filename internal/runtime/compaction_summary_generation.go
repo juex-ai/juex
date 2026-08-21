@@ -41,7 +41,13 @@ func (e *Engine) generateCompactionSummaryLocked(
 	policy compactionPolicy,
 	instructions string,
 ) (compactionSummaryGeneration, error) {
-	provider := e.compactionSummaryProviderLocked()
+	candidates := e.compactionSummaryCandidatesLocked(policy)
+	if len(candidates) == 0 {
+		return compactionSummaryGeneration{}, fmt.Errorf("no compaction summary model candidates configured")
+	}
+	candidateIndex := 0
+	provider := candidates[candidateIndex].Provider
+	var failures []modelAttemptFailure
 	maxOutputTokens := policy.SummaryMaxTokens
 	summarySystem, summaryHistory := buildCompactionSummaryRequest(baseSystem, previous, input, state, policy, instructions)
 	attempt := 1
@@ -90,17 +96,24 @@ func (e *Engine) generateCompactionSummaryLocked(
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, ctxErr
 	}
-	if e.Provider != nil && provider != e.Provider {
+	for candidateIndex+1 < len(candidates) {
+		failedCandidate := candidates[candidateIndex]
+		failures = append(failures, modelAttemptFailure{
+			ref: compactionSummaryCandidateRef(failedCandidate),
+			err: compactionSummaryAttemptError(resp, err),
+		})
+		candidateIndex++
+		nextCandidate := candidates[candidateIndex]
 		if emitErr := e.emit(events.Event{Type: "context.compact.summary_model_fallback", TurnID: turnID, Payload: ContextCompactSummaryFallbackPayload{
-			ConfiguredModel: policy.SummaryModel,
-			FallbackModel:   e.Provider.Name(),
+			ConfiguredModel: compactionSummaryCandidateRef(failedCandidate),
+			FallbackModel:   compactionSummaryCandidateRef(nextCandidate),
 			Error:           compactionSummaryFailure(resp, err),
 			EpochID:         epoch.EpochID,
 			RequestDigest:   epoch.RequestDigest,
 		}}); emitErr != nil {
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, fmt.Errorf("commit compaction summary model fallback: %w", emitErr)
 		}
-		provider = e.Provider
+		provider = nextCandidate.Provider
 		attempt++
 		resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, maxOutputTokens, attempt)
 		usage.Add(resp.Usage)
@@ -112,15 +125,45 @@ func (e *Engine) generateCompactionSummaryLocked(
 				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
 			}
 		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, ctxErr
+		}
 	}
 
 	if err != nil {
+		if len(failures) > 0 {
+			failures = append(failures, modelAttemptFailure{
+				ref: compactionSummaryCandidateRef(candidates[candidateIndex]),
+				err: err,
+			})
+			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, modelChainError(failures, nil)
+		}
 		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
 	}
 	if resp.StopReason == llm.StopMaxTokens && compactionSummaryText(resp) != "" {
-		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, fmt.Errorf("truncated summary (stop_reason=%s)", resp.StopReason)
+		err := fmt.Errorf("truncated summary (stop_reason=%s)", resp.StopReason)
+		if len(failures) > 0 {
+			failures = append(failures, modelAttemptFailure{ref: compactionSummaryCandidateRef(candidates[candidateIndex]), err: err})
+			err = modelChainError(failures, nil)
+		}
+		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
 	}
-	return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, errEmptyCompactionSummary
+	err = errEmptyCompactionSummary
+	if len(failures) > 0 {
+		failures = append(failures, modelAttemptFailure{ref: compactionSummaryCandidateRef(candidates[candidateIndex]), err: err})
+		err = modelChainError(failures, nil)
+	}
+	return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
+}
+
+func compactionSummaryAttemptError(resp llm.Response, err error) error {
+	if err != nil {
+		return err
+	}
+	if resp.StopReason == llm.StopMaxTokens && compactionSummaryText(resp) != "" {
+		return fmt.Errorf("truncated summary (stop_reason=%s)", resp.StopReason)
+	}
+	return errEmptyCompactionSummary
 }
 
 func (e *Engine) completeCompactionSummary(
