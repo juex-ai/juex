@@ -90,6 +90,7 @@ var foundationDirs = []string{
 	"internal/errorclass",
 	"internal/eventmedia",
 	"internal/events",
+	"internal/frontmatter",
 	"internal/homestore",
 	"internal/llm",
 	"internal/provenance",
@@ -383,6 +384,7 @@ import "github.com/juex-ai/juex/internal/tools"
 type App struct{ registry *tools.Registry }
 type router struct{}
 type registrar interface{ Register(tools.Tool) error }
+func localRegistry() *tools.Registry { return nil }
 func registerOwned(registry registrar) { _ = registry.Register(nil) }
 func registerTransitively(registry registrar) { registerOwned(registry) }
 func runRegistration(register func(tools.Tool) error) { _ = register(nil) }
@@ -393,6 +395,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	constructed := tools.NewRegistryWithOptions(tools.RegistryOptions{})
 	constructed.MustRegister(nil)
 	application.registry.Register(nil)
+	localRegistry().Register(nil)
 	registries := []*tools.Registry{registry}
 	registries[0].Register(nil)
 	registerTransitively(registry)
@@ -415,8 +418,8 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"registry.Register", "tools.RegisterBuiltins", "constructed.MustRegister", "application.registry.Register", "Register", "registerTransitively", "runRegistration"}
-	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] || calls[6] != want[6] {
+	want := []string{"registry.Register", "tools.RegisterBuiltins", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "Register", "registerTransitively", "runRegistration"}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] || calls[6] != want[6] || calls[7] != want[7] {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
 }
@@ -1377,23 +1380,8 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 		_, valueType, _ := rangeTypes(expressionType(value.X, imports, values, types))
 		return valueType
 	case *ast.CallExpr:
-		selector, ok := value.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return ""
-		}
-		qualifier, ok := selector.X.(*ast.Ident)
-		if !ok {
-			return ""
-		}
-		switch imports[qualifier.Name] {
-		case modulePath + "/internal/tools":
-			if selector.Sel.Name == "NewRegistry" || selector.Sel.Name == "NewRegistryWithOptions" {
-				return modulePath + "/internal/tools.Registry"
-			}
-		case modulePath + "/internal/runtime/module":
-			if selector.Sel.Name == "BuildToolRegistry" {
-				return modulePath + "/internal/tools.Registry"
-			}
+		if results := expressionResultTypes(value, imports, values, types); len(results) != 0 {
+			return results[0]
 		}
 	}
 	return ""
