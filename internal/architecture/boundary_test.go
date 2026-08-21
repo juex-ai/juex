@@ -82,33 +82,35 @@ var appFeatureCleanupOwners = map[string]bool{
 }
 
 type compositionTypeIndex struct {
-	fields           map[string]map[string]string
-	fieldOrder       map[string][]string
-	cleanupMethods   map[string]map[string]bool
-	functionResults  map[string][]string
-	namedTypes       map[string]string
-	functionTypes    map[string]bool
-	referenceTypes   map[string]bool
-	typeParameters   map[string][]string
-	cleanupParams    map[string]map[int]bool
-	toolParams       map[string]map[int]bool
-	cleanupResults   map[string]map[int]map[string]bool
-	toolResults      map[string]map[int]bool
-	toolCallResults  map[string]map[int]bool
-	toolCallPaths    map[string]map[int]map[string]bool
-	resultParams     map[string]map[int]map[int]bool
-	resultParamPaths map[string]map[int]map[int]map[string]bool
-	parameterWrites  map[string]map[int]map[int]map[string]bool
-	variadicParams   map[string]int
-	appFunctionKeys  map[string]bool
-	appFunctions     []indexedAppFunction
-	packageConstants map[string]constant.Value
-	packageValues    map[string]string
-	packageResources map[string]map[string]bool
-	interfaceMethods map[string]methodShape
-	interfaceEmbeds  map[string][]string
-	concreteMethods  map[string]methodShape
-	methodImpls      map[string][]string
+	fields            map[string]map[string]string
+	fieldOrder        map[string][]string
+	cleanupMethods    map[string]map[string]bool
+	functionResults   map[string][]string
+	namedTypes        map[string]string
+	functionTypes     map[string]bool
+	referenceTypes    map[string]bool
+	typeParameters    map[string][]string
+	cleanupParams     map[string]map[int]bool
+	toolParams        map[string]map[int]bool
+	cleanupResults    map[string]map[int]map[string]bool
+	toolResults       map[string]map[int]bool
+	toolCallResults   map[string]map[int]bool
+	toolCallPaths     map[string]map[int]map[string]bool
+	resultParams      map[string]map[int]map[int]bool
+	resultParamPaths  map[string]map[int]map[int]map[string]bool
+	parameterWrites   map[string]map[int]map[int]map[string]bool
+	variadicParams    map[string]int
+	appFunctionKeys   map[string]bool
+	appFunctions      []indexedAppFunction
+	packageConstants  map[string]constant.Value
+	packageValues     map[string]string
+	packageResources  map[string]map[string]bool
+	appFieldValues    map[string]string
+	appFieldResources map[string]map[string]bool
+	interfaceMethods  map[string]methodShape
+	interfaceEmbeds   map[string][]string
+	concreteMethods   map[string]methodShape
+	methodImpls       map[string][]string
 }
 
 type indexedAppSource struct {
@@ -302,6 +304,56 @@ func (application *App) Close() error {
 	})
 	if len(calls) != 2 || calls[0] != "manager.Close" || calls[1] != "closer.Close" {
 		t.Fatalf("cleanup calls = %v, want type-derived manager.Close", calls)
+	}
+}
+
+func TestAppCompositionInspectionTracksReceiverFieldWritesAcrossFunctions(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type App struct {
+	resource closer
+	registry registrar
+}
+func (application *App) bind(manager *mcp.Manager, registry *tools.Registry) {
+	application.resource = manager
+	application.registry = registry
+}
+func (application *App) bypass() {
+	_ = application.resource.Close()
+	application.registry.Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "receiver_fields.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 1 || cleanupCalls[0] != "application.resource.Close" {
+		t.Fatalf("cleanup calls = %v, want receiver field cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 1 || registrationCalls[0] != "application.registry.Register" {
+		t.Fatalf("Tool registration calls = %v, want receiver field registration", registrationCalls)
 	}
 }
 
@@ -4758,30 +4810,32 @@ func isToolRegistrationName(name string) bool {
 
 func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 	types := compositionTypeIndex{
-		fields:           make(map[string]map[string]string),
-		fieldOrder:       make(map[string][]string),
-		cleanupMethods:   make(map[string]map[string]bool),
-		functionResults:  make(map[string][]string),
-		namedTypes:       make(map[string]string),
-		functionTypes:    make(map[string]bool),
-		referenceTypes:   make(map[string]bool),
-		typeParameters:   make(map[string][]string),
-		cleanupParams:    make(map[string]map[int]bool),
-		toolParams:       make(map[string]map[int]bool),
-		cleanupResults:   make(map[string]map[int]map[string]bool),
-		toolResults:      make(map[string]map[int]bool),
-		toolCallResults:  make(map[string]map[int]bool),
-		toolCallPaths:    make(map[string]map[int]map[string]bool),
-		resultParams:     make(map[string]map[int]map[int]bool),
-		resultParamPaths: make(map[string]map[int]map[int]map[string]bool),
-		parameterWrites:  make(map[string]map[int]map[int]map[string]bool),
-		variadicParams:   make(map[string]int),
-		appFunctionKeys:  make(map[string]bool),
-		packageConstants: make(map[string]constant.Value),
-		interfaceMethods: make(map[string]methodShape),
-		interfaceEmbeds:  make(map[string][]string),
-		concreteMethods:  make(map[string]methodShape),
-		methodImpls:      make(map[string][]string),
+		fields:            make(map[string]map[string]string),
+		fieldOrder:        make(map[string][]string),
+		cleanupMethods:    make(map[string]map[string]bool),
+		functionResults:   make(map[string][]string),
+		namedTypes:        make(map[string]string),
+		functionTypes:     make(map[string]bool),
+		referenceTypes:    make(map[string]bool),
+		typeParameters:    make(map[string][]string),
+		cleanupParams:     make(map[string]map[int]bool),
+		toolParams:        make(map[string]map[int]bool),
+		cleanupResults:    make(map[string]map[int]map[string]bool),
+		toolResults:       make(map[string]map[int]bool),
+		toolCallResults:   make(map[string]map[int]bool),
+		toolCallPaths:     make(map[string]map[int]map[string]bool),
+		resultParams:      make(map[string]map[int]map[int]bool),
+		resultParamPaths:  make(map[string]map[int]map[int]map[string]bool),
+		parameterWrites:   make(map[string]map[int]map[int]map[string]bool),
+		variadicParams:    make(map[string]int),
+		appFunctionKeys:   make(map[string]bool),
+		packageConstants:  make(map[string]constant.Value),
+		appFieldValues:    make(map[string]string),
+		appFieldResources: make(map[string]map[string]bool),
+		interfaceMethods:  make(map[string]methodShape),
+		interfaceEmbeds:   make(map[string][]string),
+		concreteMethods:   make(map[string]methodShape),
+		methodImpls:       make(map[string][]string),
 	}
 	var appSources []indexedAppSource
 	for typeName, methods := range featureResourceCleanupMethods {
@@ -4863,6 +4917,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 	indexInterfaceMethodImplementations(&types)
 	indexLocalFlows(&types)
 	types.packageValues, types.packageResources = packageBindingStateForSources(appSources, types)
+	indexAppReceiverFieldWrites(appSources, &types)
 	return types, nil
 }
 
@@ -8884,6 +8939,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 		for name, paths := range namedCleanupValues(function.Recv, imports, types) {
 			resources[name] = paths
 		}
+		seedAppReceiverFieldState(values, resources, appReceiverBindingKeys(function.Recv, imports), types)
 		references := namedReferenceValues(function.Recv, imports, types)
 		for key := range namedReferenceValues(function.Type.Params, imports, types) {
 			references[key] = true
@@ -9418,6 +9474,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 		for name, typeName := range namedValueTypes(function.Type.Params, imports) {
 			values[name] = typeName
 		}
+		seedAppReceiverFieldState(values, nil, appReceiverBindingKeys(function.Recv, imports), types)
 		references := namedReferenceValues(function.Recv, imports, types)
 		for key := range namedReferenceValues(function.Type.Params, imports, types) {
 			references[key] = true
@@ -9941,6 +9998,148 @@ func namedValueTypes(fields *ast.FieldList, imports map[string]string) map[strin
 		}
 	}
 	return values
+}
+
+func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionTypeIndex) {
+	for {
+		beforeValues := cloneStringMap(types.appFieldValues)
+		beforeResources := cloneCleanupResourceMap(types.appFieldResources)
+		for _, source := range sources {
+			for _, declaration := range source.file.Decls {
+				function, ok := declaration.(*ast.FuncDecl)
+				if !ok || function.Body == nil {
+					continue
+				}
+				receivers := appReceiverBindingKeys(function.Recv, source.imports)
+				if len(receivers) == 0 {
+					continue
+				}
+				values := cloneStringMap(types.packageValues)
+				resources := cloneCleanupResourceMap(types.packageResources)
+				for name, typeName := range namedValueTypes(function.Recv, source.imports) {
+					values[name] = typeName
+				}
+				for name, typeName := range namedValueTypes(function.Type.Params, source.imports) {
+					values[name] = typeName
+				}
+				for name, paths := range namedCleanupValues(function.Recv, source.imports, *types) {
+					resources[name] = paths
+				}
+				for name, paths := range namedCleanupValues(function.Type.Params, source.imports, *types) {
+					resources[name] = paths
+				}
+				seedAppReceiverFieldState(values, resources, receivers, *types)
+				ast.Inspect(function.Body, func(node ast.Node) bool {
+					if _, nested := node.(*ast.FuncLit); nested {
+						return false
+					}
+					switch statement := node.(type) {
+					case *ast.AssignStmt:
+						for index, left := range statement.Lhs {
+							indexAppReceiverFieldAssignment(left, statement.Rhs, index, receivers, source.imports, values, resources, types)
+						}
+					case *ast.DeclStmt:
+						general, ok := statement.Decl.(*ast.GenDecl)
+						if !ok || general.Tok != token.VAR {
+							break
+						}
+						for _, raw := range general.Specs {
+							spec := raw.(*ast.ValueSpec)
+							for index, name := range spec.Names {
+								typeName := canonicalType(spec.Type, source.imports)
+								paths := cleanupPathsForType(typeName, *types, nil)
+								if len(spec.Values) != 0 {
+									typeName = assignedToolExpressionType(spec.Values, index, source.imports, values, *types)
+									paths = assignedCleanupPaths(spec.Values, index, source.imports, values, resources, *types)
+								}
+								setMayValueType(values, bindingKey(name), typeName, *types)
+								if paths != nil {
+									resources[bindingKey(name)] = mergeCleanupPaths(resources[bindingKey(name)], paths)
+								}
+							}
+						}
+					}
+					return true
+				})
+			}
+		}
+		if equalStringMap(types.appFieldValues, beforeValues) && equalCleanupResourceMap(types.appFieldResources, beforeResources) {
+			return
+		}
+	}
+}
+
+func appReceiverBindingKeys(fields *ast.FieldList, imports map[string]string) map[string]bool {
+	receivers := make(map[string]bool)
+	if fields == nil {
+		return receivers
+	}
+	for _, field := range fields.List {
+		if canonicalType(field.Type, imports) != modulePath+"/internal/app.App" {
+			continue
+		}
+		for _, name := range field.Names {
+			receivers[bindingKey(name)] = true
+		}
+	}
+	return receivers
+}
+
+func seedAppReceiverFieldState(values map[string]string, resources map[string]map[string]bool, receivers map[string]bool, types compositionTypeIndex) {
+	for receiver := range receivers {
+		for field, typeName := range types.appFieldValues {
+			setMayValueType(values, receiver+"."+field, typeName, types)
+		}
+		if resources != nil {
+			for field, paths := range types.appFieldResources {
+				resources[receiver] = mergeCleanupPaths(resources[receiver], prefixCleanupPaths(field+".", paths))
+			}
+		}
+	}
+}
+
+func indexAppReceiverFieldAssignment(left ast.Expr, right []ast.Expr, index int, receivers map[string]bool, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types *compositionTypeIndex) {
+	name, indexed := assignmentBinding(left)
+	if name == nil {
+		return
+	}
+	typeName := assignedToolExpressionType(right, index, imports, values, *types)
+	paths := assignedCleanupPaths(right, index, imports, values, resources, *types)
+	if field := directAppReceiverField(left, receivers); field != "" {
+		setMayValueType(types.appFieldValues, field, typeName, *types)
+		if paths != nil {
+			types.appFieldResources[field] = mergeCleanupPaths(types.appFieldResources[field], paths)
+		}
+	}
+	key := bindingKey(name)
+	setMayValueType(values, assignmentValueKey(left), typeName, *types)
+	if !indexed {
+		setMayValueType(values, key, typeName, *types)
+	}
+	if paths != nil {
+		paths = prefixCleanupPaths(assignmentFieldPrefix(left), paths)
+		resources[key] = mergeCleanupPaths(resources[key], paths)
+	}
+}
+
+func directAppReceiverField(expression ast.Expr, receivers map[string]bool) string {
+	for {
+		switch value := expression.(type) {
+		case *ast.ParenExpr:
+			expression = value.X
+		case *ast.SelectorExpr:
+			if assignmentFieldPrefix(value.X) != "" {
+				return ""
+			}
+			root, _ := assignmentBinding(value.X)
+			if root != nil && receivers[bindingKey(root)] {
+				return value.Sel.Name
+			}
+			return ""
+		default:
+			return ""
+		}
+	}
 }
 
 func packageBindingStateForSources(sources []indexedAppSource, types compositionTypeIndex) (map[string]string, map[string]map[string]bool) {
