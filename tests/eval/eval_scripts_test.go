@@ -921,7 +921,8 @@ func TestEvalVerifyFocusedPlansOnlyExplicitIsolatedPackages(t *testing.T) {
 		t.Fatalf("steps = %+v, want one focused test step", steps)
 	}
 	want := []string{
-		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
+		"bash",
+		filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")),
 		"go", "test", "./internal/app", "./internal/runtime", "-count=1",
 	}
 	if !reflect.DeepEqual(steps[0].Command, want) {
@@ -930,6 +931,35 @@ func TestEvalVerifyFocusedPlansOnlyExplicitIsolatedPackages(t *testing.T) {
 	if !steps[0].TestEnvironment {
 		t.Fatal("focused test step must provision ripgrep and isolated test Home")
 	}
+}
+
+func TestEvalIsolatedEnvironmentRunsShellProvisionerThroughBash(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import os",
+		"from types import SimpleNamespace",
+		"from tests.eval.juex_eval import cli",
+		"calls = []",
+		"original_run = cli.subprocess.run",
+		"try:",
+		"    def fake_run(command, **kwargs):",
+		"        calls.append(command)",
+		"        return SimpleNamespace(returncode=0, stdout='/tmp/rg\\n')",
+		"    cli.subprocess.run = fake_run",
+		"    env = cli.isolated_test_environment()",
+		"    assert calls == [['bash', cli.ENSURE_RIPGREP]], calls",
+		"    assert env['PATH'].split(os.pathsep)[0] == '/tmp/rg', env['PATH']",
+		"finally:",
+		"    cli.subprocess.run = original_run",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
 }
 
 func TestEvalVerifyCandidateRaceReplacesNormalSuite(t *testing.T) {
@@ -965,13 +995,13 @@ func TestEvalVerifyCandidateRaceReplacesNormalSuite(t *testing.T) {
 	if got := plans["normal"][0].Command; !reflect.DeepEqual(got, []string{"make", "web-stub"}) {
 		t.Fatalf("normal web stub command = %q", got)
 	}
-	if got := plans["normal"][1].Command; !reflect.DeepEqual(got, []string{filepath.Join(root, "scripts", "with-test-juex-home.sh"), "go", "test", "./...", "-count=1"}) {
+	if got := plans["normal"][1].Command; !reflect.DeepEqual(got, []string{"bash", filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")), "go", "test", "./...", "-count=1"}) {
 		t.Fatalf("normal test command = %q", got)
 	}
 	if got := []string{plans["race"][0].Label, plans["race"][1].Label, plans["race"][2].Label}; !reflect.DeepEqual(got, []string{"web-stub", "go-test-all-race", "make-build"}) {
 		t.Fatalf("race labels = %q", got)
 	}
-	if got := plans["race"][1].Command; !reflect.DeepEqual(got, []string{filepath.Join(root, "scripts", "with-test-juex-home.sh"), "go", "test", "./...", "-race", "-count=1"}) {
+	if got := plans["race"][1].Command; !reflect.DeepEqual(got, []string{"bash", filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")), "go", "test", "./...", "-race", "-count=1"}) {
 		t.Fatalf("race test command = %q", got)
 	}
 	if !plans["normal"][1].TestEnvironment || !plans["race"][1].TestEnvironment {
@@ -1361,7 +1391,7 @@ func TestEvalDevelopmentGoTestsUseIsolatedJuexHome(t *testing.T) {
 		t.Fatalf("decode steps: %v\n%s", err, out)
 	}
 	command := findEvalCommand(t, steps, "go-test-all")
-	if len(command) == 0 || command[0] != filepath.Join(root, "scripts", "with-test-juex-home.sh") {
+	if len(command) < 2 || command[0] != "bash" || command[1] != filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")) {
 		t.Fatalf("go-test-all command = %q, want isolated HOME/JUEX_HOME wrapper", command)
 	}
 	for _, step := range steps {

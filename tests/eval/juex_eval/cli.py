@@ -15,8 +15,8 @@ from . import compaction, helper, selection
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-TEST_HOME_RUNNER = str(REPO_ROOT / "scripts" / "with-test-juex-home.sh")
-ENSURE_RIPGREP = str(REPO_ROOT / "scripts" / "ensure-ripgrep.sh")
+TEST_HOME_RUNNER = (REPO_ROOT / "scripts" / "with-test-juex-home.sh").as_posix()
+ENSURE_RIPGREP = (REPO_ROOT / "scripts" / "ensure-ripgrep.sh").as_posix()
 
 
 @dataclass(frozen=True)
@@ -107,7 +107,7 @@ def verification_steps(args: argparse.Namespace) -> list[VerificationStep]:
         return [
             VerificationStep(
                 "go-test-focused",
-                [TEST_HOME_RUNNER, "go", "test", *packages, "-count=1"],
+                bash_script_command(TEST_HOME_RUNNER, "go", "test", *packages, "-count=1"),
                 test_environment=True,
             )
         ]
@@ -130,7 +130,7 @@ def verification_steps(args: argparse.Namespace) -> list[VerificationStep]:
 
 
 def candidate_verification_steps(*, race: bool, web: bool) -> list[VerificationStep]:
-    test_command = [TEST_HOME_RUNNER, "go", "test", "./..."]
+    test_command = bash_script_command(TEST_HOME_RUNNER, "go", "test", "./...")
     if race:
         test_command.append("-race")
     test_command.append("-count=1")
@@ -202,7 +202,7 @@ def require_clean_worktree() -> None:
 
 def isolated_test_environment() -> dict[str, str]:
     completed = subprocess.run(
-        [ENSURE_RIPGREP],
+        bash_script_command(ENSURE_RIPGREP),
         cwd=REPO_ROOT,
         check=False,
         capture_output=True,
@@ -214,6 +214,10 @@ def isolated_test_environment() -> dict[str, str]:
     env = os.environ.copy()
     env["PATH"] = ripgrep_dir + os.pathsep + env.get("PATH", "")
     return env
+
+
+def bash_script_command(script: str, *args: str) -> list[str]:
+    return ["bash", script, *args]
 
 
 def run_visible(step: VerificationStep, test_env: dict[str, str] | None) -> int:
