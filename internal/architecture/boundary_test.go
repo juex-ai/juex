@@ -379,6 +379,10 @@ func cleanupFromIIFE(application *App) {
 	func() { _ = application.manager.Close() }()
 	func(resource closer) { _ = resource.Close() }(application.manager)
 }
+func withResource(resource closer, callback func(closer)) { callback(resource) }
+func cleanupFromCallback(application *App) {
+	withResource(application.manager, func(resource closer) { _ = resource.Close() })
+}
 func cleanupFromAssertion(application *App) {
 	resource, _ := any(application.manager).(closer)
 	_ = resource.Close()
@@ -463,7 +467,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "resource.Close", "Close", "resources.Close", "resource.Close", "owned.resource.Close", "owned.resource.Close", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
+	want := []string{"identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "owned.resource.Close", "owned.resource.Close", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -587,6 +591,10 @@ func registerFromIIFE(application *App) {
 	func() { _ = application.registry.Register(nil) }()
 	func(registry registrar) { _ = registry.Register(nil) }(application.registry)
 }
+func withRegistrar(registry registrar, callback func(registrar)) { callback(registry) }
+func registerFromCallback(application *App) {
+	withRegistrar(application.registry, func(registry registrar) { _ = registry.Register(nil) })
+}
 func registerFromAssertion(application *App) {
 	registry, _ := any(application.registry).(registrar)
 	registry.Register(nil)
@@ -690,7 +698,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "registry.Register", "registries.Register", "registry.Register", "owned.registry.Register", "owned.registry.Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "registry.Register", "registries.Register", "registry.Register", "owned.registry.Register", "owned.registry.Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -1323,7 +1331,9 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				values[key] = valueType
 			}
 		case *ast.CallExpr:
-			mergeOrigins(cleaned, callableOrigins(value.Fun, origins))
+			callbackOrigins := callableOrigins(value.Fun, origins)
+			mergeOrigins(cleaned, callbackOrigins)
+			mergeOrigins(cleaned, callbackArgumentOrigins(value, origins))
 			if selector, ok := value.Fun.(*ast.SelectorExpr); ok && isFeatureCleanupMethodName(selector.Sel.Name) {
 				if isFeatureCleanupMethodExpression(selector, function.imports, types) && len(value.Args) != 0 {
 					mergeOrigins(cleaned, originsForExpression(value.Args[0], origins))
@@ -1405,7 +1415,9 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				values[key] = valueType
 			}
 		case *ast.CallExpr:
-			mergeOrigins(registered, callableOrigins(value.Fun, origins))
+			callbackOrigins := callableOrigins(value.Fun, origins)
+			mergeOrigins(registered, callbackOrigins)
+			mergeOrigins(registered, callbackArgumentOrigins(value, origins))
 			if selector, ok := value.Fun.(*ast.SelectorExpr); ok && isToolRegistrationName(selector.Sel.Name) {
 				if isToolRegistrationMethodExpression(selector, function.imports, types) {
 					if len(value.Args) != 0 {
@@ -1479,6 +1491,18 @@ func callableOrigins(expression ast.Expr, origins map[string]map[int]bool) map[i
 	default:
 		return nil
 	}
+}
+
+func callbackArgumentOrigins(call *ast.CallExpr, origins map[string]map[int]bool) map[int]bool {
+	if len(callableOrigins(call.Fun, origins)) == 0 {
+		return nil
+	}
+	// A function-valued parameter may clean or mutate every helper argument it receives.
+	result := make(map[int]bool)
+	for _, argument := range call.Args {
+		mergeOrigins(result, originsForExpression(argument, origins))
+	}
+	return result
 }
 
 func resultParameterOrigins(expression ast.Expr, imports map[string]string, values map[string]string, origins map[string]map[int]bool, types compositionTypeIndex, resultIndex int) map[int]bool {
