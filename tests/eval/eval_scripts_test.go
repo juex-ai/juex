@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -764,9 +765,16 @@ func TestEvalPythonModuleAndShellWrappersExposeHelp(t *testing.T) {
 	}
 
 	moduleHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "--help")
-	for _, want := range []string{"development", "provider-smoke", "compaction"} {
+	for _, want := range []string{"verify", "development", "provider-smoke", "compaction"} {
 		assertHelpContains(t, moduleHelp, want)
 	}
+
+	verifyHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "--help")
+	assertHelpContains(t, verifyHelp, "focused", "candidate", "final")
+	focusedHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "focused", "--help")
+	assertHelpContains(t, focusedHelp, "packages")
+	finalHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "final", "--help")
+	assertHelpContains(t, finalHelp, "--race", "--web", "--compaction", "--config", "--selection-seed")
 
 	providerHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "provider-smoke", "--help")
 	assertHelpContains(t, providerHelp, "--only", "--all-models", "--config", "--selection-seed", "--report-dir")
@@ -827,7 +835,7 @@ func TestEvalDevelopmentStepBuilderUsesConsistentFlags(t *testing.T) {
 		"    compaction_only=['openai:model', 'ark:other'],",
 		")",
 		"steps, _, _ = cli.development_steps(args, Path('reports'))",
-		"print(json.dumps([{'label': label, 'command': command} for label, command in steps]))",
+		"print(json.dumps([{'label': step.label, 'command': step.command} for step in steps]))",
 	}, "\n")
 	out := runUV(t, root, "python", "-c", program)
 
@@ -853,6 +861,425 @@ func TestEvalDevelopmentStepBuilderUsesConsistentFlags(t *testing.T) {
 	assertCommandFlagValue(t, compactionCmd, "--selection-seed", "repeatable")
 	assertCommandHasFlag(t, compactionCmd, "--report-dir")
 	assertCommandLacks(t, compactionCmd, "--out-root")
+}
+
+func TestEvalDevelopmentUsesSingleCandidateGoSuite(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"from argparse import Namespace",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli",
+		"args = Namespace(skip_tests=False, no_provider_smoke=True, compaction_eval=False, run_id='unit', config='/tmp/provider.yaml', selection_seed='repeatable', provider_timeout=7, provider_only='', provider_all_models=False, compaction_all_models=False, compaction_only=[])",
+		"steps, _, _ = cli.development_steps(args, Path('reports'))",
+		"print(json.dumps([step.label for step in steps]))",
+	}, "\n")
+	out := runUV(t, root, "python", "-c", program)
+	var labels []string
+	if err := json.Unmarshal([]byte(out), &labels); err != nil {
+		t.Fatalf("decode labels: %v\n%s", err, out)
+	}
+	if !reflect.DeepEqual(labels, []string{"go-test-all", "make-build"}) {
+		t.Fatalf("development labels = %q, want one full Go suite and one build", labels)
+	}
+}
+
+func TestEvalVerifyFocusedPlansOnlyExplicitIsolatedPackages(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"from argparse import Namespace",
+		"from tests.eval.juex_eval import cli",
+		"steps = cli.verification_steps(Namespace(tier='focused', packages=['./internal/app', './internal/runtime']))",
+		"print(json.dumps([{'label': step.label, 'command': step.command, 'test_environment': step.test_environment} for step in steps]))",
+	}, "\n")
+	out := runUV(t, root, "python", "-c", program)
+
+	var steps []struct {
+		Label           string   `json:"label"`
+		Command         []string `json:"command"`
+		TestEnvironment bool     `json:"test_environment"`
+	}
+	if err := json.Unmarshal([]byte(out), &steps); err != nil {
+		t.Fatalf("decode steps: %v\n%s", err, out)
+	}
+	if len(steps) != 1 || steps[0].Label != "go-test-focused" {
+		t.Fatalf("steps = %+v, want one focused test step", steps)
+	}
+	want := []string{
+		filepath.Join(root, "scripts", "with-test-juex-home.sh"),
+		"go", "test", "./internal/app", "./internal/runtime", "-count=1",
+	}
+	if !reflect.DeepEqual(steps[0].Command, want) {
+		t.Fatalf("command = %q, want %q", steps[0].Command, want)
+	}
+	if !steps[0].TestEnvironment {
+		t.Fatal("focused test step must provision ripgrep and isolated test Home")
+	}
+}
+
+func TestEvalVerifyCandidateRaceReplacesNormalSuite(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"from argparse import Namespace",
+		"from tests.eval.juex_eval import cli",
+		"def plan(race):",
+		"    return [{'label': step.label, 'command': step.command, 'test_environment': step.test_environment} for step in cli.verification_steps(Namespace(tier='candidate', race=race, web=False))]",
+		"print(json.dumps({'normal': plan(False), 'race': plan(True)}))",
+	}, "\n")
+	out := runUV(t, root, "python", "-c", program)
+
+	var plans map[string][]struct {
+		Label           string   `json:"label"`
+		Command         []string `json:"command"`
+		TestEnvironment bool     `json:"test_environment"`
+	}
+	if err := json.Unmarshal([]byte(out), &plans); err != nil {
+		t.Fatalf("decode plans: %v\n%s", err, out)
+	}
+	if got := []string{plans["normal"][0].Label, plans["normal"][1].Label}; !reflect.DeepEqual(got, []string{"go-test-all", "make-build"}) {
+		t.Fatalf("normal labels = %q", got)
+	}
+	if got := plans["normal"][0].Command; !reflect.DeepEqual(got, []string{filepath.Join(root, "scripts", "with-test-juex-home.sh"), "go", "test", "./...", "-count=1"}) {
+		t.Fatalf("normal test command = %q", got)
+	}
+	if got := []string{plans["race"][0].Label, plans["race"][1].Label}; !reflect.DeepEqual(got, []string{"go-test-all-race", "make-build"}) {
+		t.Fatalf("race labels = %q", got)
+	}
+	if got := plans["race"][0].Command; !reflect.DeepEqual(got, []string{filepath.Join(root, "scripts", "with-test-juex-home.sh"), "go", "test", "./...", "-race", "-count=1"}) {
+		t.Fatalf("race test command = %q", got)
+	}
+	if !plans["normal"][0].TestEnvironment || !plans["race"][0].TestEnvironment {
+		t.Fatal("candidate Go suites must provision ripgrep and isolated test Home")
+	}
+}
+
+func TestEvalVerifyCandidateWebCheckDoesNotRebuildFrontend(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"from argparse import Namespace",
+		"from tests.eval.juex_eval import cli",
+		"steps = cli.verification_steps(Namespace(tier='candidate', race=False, web=True))",
+		"print(json.dumps([{'label': step.label, 'command': step.command} for step in steps]))",
+	}, "\n")
+	out := runUV(t, root, "python", "-c", program)
+
+	var steps []struct {
+		Label   string   `json:"label"`
+		Command []string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(out), &steps); err != nil {
+		t.Fatalf("decode steps: %v\n%s", err, out)
+	}
+	labels := make([]string, 0, len(steps))
+	for _, step := range steps {
+		labels = append(labels, step.Label)
+	}
+	if !reflect.DeepEqual(labels, []string{"go-test-all", "web-check", "make-build-go"}) {
+		t.Fatalf("labels = %q", labels)
+	}
+	if !reflect.DeepEqual(steps[1].Command, []string{"make", "web-check"}) {
+		t.Fatalf("web command = %q", steps[1].Command)
+	}
+	if !reflect.DeepEqual(steps[2].Command, []string{"make", "build-go"}) {
+		t.Fatalf("binary command = %q", steps[2].Command)
+	}
+	for _, step := range steps {
+		if reflect.DeepEqual(step.Command, []string{"make", "build"}) {
+			t.Fatalf("WEB=1 plan retained duplicate frontend build: %+v", steps)
+		}
+	}
+}
+
+func TestEvalVerifyFinalExtendsCandidateWithConditionalLiveGates(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"from argparse import Namespace",
+		"from tests.eval.juex_eval import cli",
+		"def plan(compaction):",
+		"    args = Namespace(tier='final', race=False, web=False, compaction=compaction, config='/tmp/provider config.yaml', selection_seed='repeatable', run_id='unit', provider_timeout=7)",
+		"    return [{'label': step.label, 'command': step.command, 'environment': step.environment} for step in cli.verification_steps(args)]",
+		"print(json.dumps({'default': plan(False), 'compaction': plan(True)}))",
+	}, "\n")
+	out := runUV(t, root, "python", "-c", program)
+
+	var plans map[string][]struct {
+		Label       string            `json:"label"`
+		Command     []string          `json:"command"`
+		Environment map[string]string `json:"environment"`
+	}
+	if err := json.Unmarshal([]byte(out), &plans); err != nil {
+		t.Fatalf("decode plans: %v\n%s", err, out)
+	}
+	labels := func(steps []struct {
+		Label       string            `json:"label"`
+		Command     []string          `json:"command"`
+		Environment map[string]string `json:"environment"`
+	}) []string {
+		out := make([]string, 0, len(steps))
+		for _, step := range steps {
+			out = append(out, step.Label)
+		}
+		return out
+	}
+	if got := labels(plans["default"]); !reflect.DeepEqual(got, []string{"go-test-all", "make-build", "live-integration", "provider-model-smoke"}) {
+		t.Fatalf("default labels = %q", got)
+	}
+	if got := labels(plans["compaction"]); !reflect.DeepEqual(got, []string{"go-test-all", "make-build", "live-integration", "provider-model-smoke", "compaction-eval"}) {
+		t.Fatalf("compaction labels = %q", got)
+	}
+	if !reflect.DeepEqual(plans["default"][2].Command, []string{"make", "integration"}) {
+		t.Fatalf("integration command = %q", plans["default"][2].Command)
+	}
+	if got := plans["default"][2].Environment["JUEX_PROVIDER_CONFIG"]; got != "/tmp/provider config.yaml" {
+		t.Fatalf("integration provider config = %q", got)
+	}
+	provider := plans["default"][3].Command
+	assertCommandFlagValue(t, provider, "--juex", "./dist/juex")
+	assertCommandFlagValue(t, provider, "--config", "/tmp/provider config.yaml")
+	assertCommandFlagValue(t, provider, "--selection-seed", "repeatable")
+	assertCommandFlagValue(t, provider, "--run-id", "unit")
+	assertCommandFlagValue(t, provider, "--timeout", "7")
+	compaction := plans["compaction"][4].Command
+	assertCommandFlagValue(t, compaction, "--juex", "./dist/juex")
+	assertCommandFlagValue(t, compaction, "--config", "/tmp/provider config.yaml")
+	assertCommandFlagValue(t, compaction, "--selection-seed", "repeatable")
+	assertCommandFlagValue(t, compaction, "--run-id", "unit")
+}
+
+func TestEvalVerificationExecutorStopsAtFirstFailure(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from tests.eval.juex_eval import cli",
+		"steps = [cli.VerificationStep('first', ['first']), cli.VerificationStep('fail', ['fail']), cli.VerificationStep('never', ['never'])]",
+		"calls = []",
+		"def run(step):",
+		"    calls.append(step.label)",
+		"    return 1 if step.label == 'fail' else 0",
+		"status = cli.execute_verification_steps(steps, run)",
+		"assert status == 1, status",
+		"assert calls == ['first', 'fail'], calls",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalVerificationCleanWorktreePolicy(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from argparse import Namespace",
+		"from tests.eval.juex_eval import cli",
+		"calls = []",
+		"original_clean = cli.require_clean_worktree",
+		"original_steps = cli.verification_steps",
+		"original_resolved_path = cli.selection.resolved_path",
+		"try:",
+		"    cli.require_clean_worktree = lambda: calls.append('clean')",
+		"    cli.verification_steps = lambda args: []",
+		"    cli.selection.resolved_path = lambda path: path",
+		"    assert cli.run_verify(Namespace(tier='focused')) == 0",
+		"    assert calls == [], calls",
+		"    assert cli.run_verify(Namespace(tier='candidate')) == 0",
+		"    assert calls == ['clean'], calls",
+		"    assert cli.run_verify(Namespace(tier='final', config='/tmp/config')) == 0",
+		"    assert calls == ['clean', 'clean'], calls",
+		"finally:",
+		"    cli.require_clean_worktree = original_clean",
+		"    cli.verification_steps = original_steps",
+		"    cli.selection.resolved_path = original_resolved_path",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalRequireCleanWorktreeRejectsDirtyRepository(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import subprocess",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli",
+		"original_root = cli.REPO_ROOT",
+		"try:",
+		"    with tempfile.TemporaryDirectory() as tmp:",
+		"        repo = Path(tmp)",
+		"        subprocess.run(['git', 'init', '--quiet'], cwd=repo, check=True)",
+		"        cli.REPO_ROOT = repo",
+		"        cli.require_clean_worktree()",
+		"        (repo / 'dirty.txt').write_text('dirty\\n', encoding='utf-8')",
+		"        try:",
+		"            cli.require_clean_worktree()",
+		"        except ValueError as exc:",
+		"            assert str(exc) == 'candidate and final verification require a clean worktree'",
+		"        else:",
+		"            raise AssertionError('dirty repository was accepted')",
+		"finally:",
+		"    cli.REPO_ROOT = original_root",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalVerifyFocusedRunsThroughPublicCLI(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "focused", "./internal/version")
+	if !strings.Contains(out, "ok  go-test-focused") {
+		t.Fatalf("focused verification did not report success:\n%s", out)
+	}
+}
+
+func TestMakeBuildGoDoesNotBuildFrontend(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("make", "-n", "build-go")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("make -n build-go failed: %v\n%s", err, out)
+	}
+	rendered := string(out)
+	if !strings.Contains(rendered, "go build") {
+		t.Fatalf("build-go does not compile the binary:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "pnpm") {
+		t.Fatalf("build-go rebuilt the frontend:\n%s", rendered)
+	}
+}
+
+func TestMakeWebCheckBuildsAndSynchronizesFrontendOnce(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("make", "-n", "web-check")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("make -n web-check failed: %v\n%s", err, out)
+	}
+	rendered := string(out)
+	if count := strings.Count(rendered, "pnpm build"); count != 1 {
+		t.Fatalf("web-check pnpm build count = %d, want 1:\n%s", count, rendered)
+	}
+	if !strings.Contains(rendered, "cp -R frontend/dist/. internal/web/dist/") {
+		t.Fatalf("web-check did not synchronize the built embed assets:\n%s", rendered)
+	}
+}
+
+func TestMakeVerificationTargetsAreThinPythonAdapters(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "focused", args: []string{"-n", "verify-focused", "PKGS=./internal/app ./internal/runtime"}, want: "verify focused ./internal/app ./internal/runtime"},
+		{name: "candidate", args: []string{"-n", "verify-candidate", "RACE=1", "WEB=1"}, want: "verify candidate --race --web"},
+		{name: "final", args: []string{"-n", "verify-final", "RACE=1", "WEB=1", "COMPACTION=1"}, want: "verify final --race --web --compaction"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("make", tc.args...)
+			cmd.Dir = root
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("make %v failed: %v\n%s", tc.args, err, out)
+			}
+			rendered := string(out)
+			if !strings.Contains(rendered, tc.want) {
+				t.Fatalf("make output missing %q:\n%s", tc.want, rendered)
+			}
+			if strings.Contains(rendered, "go test") {
+				t.Fatalf("Make target contains orchestration instead of a thin CLI adapter:\n%s", rendered)
+			}
+		})
+	}
+}
+
+func TestMakeVerifyFocusedRejectsEmptyPackageScope(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("make", "verify-focused", "PKGS=")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("empty focused scope succeeded:\n%s", out)
+	}
+	if !strings.Contains(string(out), "packages") {
+		t.Fatalf("empty focused scope did not explain the required package argument:\n%s", out)
+	}
 }
 
 func TestEvalDevelopmentGoTestsUseIsolatedJuexHome(t *testing.T) {
@@ -883,7 +1310,7 @@ func TestEvalDevelopmentGoTestsUseIsolatedJuexHome(t *testing.T) {
 		"    compaction_only=[],",
 		")",
 		"steps, _, _ = cli.development_steps(args, Path('reports'))",
-		"print(json.dumps([{'label': label, 'command': command} for label, command in steps]))",
+		"print(json.dumps([{'label': step.label, 'command': step.command} for step in steps]))",
 	}, "\n")
 	out := runUV(t, root, "python", "-c", program)
 
@@ -894,10 +1321,13 @@ func TestEvalDevelopmentGoTestsUseIsolatedJuexHome(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &steps); err != nil {
 		t.Fatalf("decode steps: %v\n%s", err, out)
 	}
-	for _, label := range []string{"go-test-e2e", "go-test-all"} {
-		command := findEvalCommand(t, steps, label)
-		if len(command) == 0 || command[0] != filepath.Join(root, "scripts", "with-test-juex-home.sh") {
-			t.Fatalf("%s command = %q, want isolated HOME/JUEX_HOME wrapper", label, command)
+	command := findEvalCommand(t, steps, "go-test-all")
+	if len(command) == 0 || command[0] != filepath.Join(root, "scripts", "with-test-juex-home.sh") {
+		t.Fatalf("go-test-all command = %q, want isolated HOME/JUEX_HOME wrapper", command)
+	}
+	for _, step := range steps {
+		if step.Label == "go-test-e2e" {
+			t.Fatalf("development eval retained duplicate e2e step: %+v", steps)
 		}
 	}
 }

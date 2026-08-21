@@ -1,7 +1,15 @@
-.PHONY: test race lint build snapshot release-dry integration provider-smoke development-eval clean help install-local cross web web-check web-dev ripgrep
+.PHONY: test race verify-focused verify-candidate verify-final lint build build-go snapshot release-dry integration provider-smoke development-eval clean help install-local cross web web-sync web-check web-dev ripgrep
+
+VERIFY_CMD := uv run --quiet --project . python -m tests.eval.juex_eval verify
+VERIFY_RACE_FLAG := $(if $(filter 1,$(RACE)),--race,)
+VERIFY_WEB_FLAG := $(if $(filter 1,$(WEB)),--web,)
+VERIFY_COMPACTION_FLAG := $(if $(filter 1,$(COMPACTION)),--compaction,)
 
 web:
 	cd frontend && pnpm install && pnpm build
+	$(MAKE) web-sync
+
+web-sync:
 	rm -rf internal/web/dist
 	mkdir -p internal/web/dist
 	cp -R frontend/dist/. internal/web/dist/
@@ -12,6 +20,7 @@ web-check:
 	cd frontend && pnpm test
 	cd frontend && pnpm lint
 	cd frontend && pnpm build
+	$(MAKE) web-sync
 
 web-dev:
 	cd frontend && pnpm dev
@@ -32,11 +41,15 @@ LDFLAGS := -X github.com/juex-ai/juex/internal/version.Version=$(VERSION) \
 
 help:
 	@echo "Targets:"
+	@echo "  verify-focused PKGS=...  explicit isolated package tests; dirty worktree allowed"
+	@echo "  verify-candidate [RACE=1] [WEB=1]  deterministic clean-worktree PR gate"
+	@echo "  verify-final [RACE=1] [WEB=1] [COMPACTION=1]  candidate plus live gates"
 	@echo "  test          go test ./... (isolated HOME/JUEX_HOME, auto-provisions ripgrep)"
 	@echo "  race          go test ./... -race (isolated HOME/JUEX_HOME, auto-provisions ripgrep)"
 	@echo "  ripgrep       ensure a resolvable ripgrep and print its path"
 	@echo "  lint          golangci-lint run"
 	@echo "  build         produce $(DIST_BIN) with embedded version metadata"
+	@echo "  build-go      produce $(DIST_BIN) from existing embedded frontend assets"
 	@echo "  install-local install ~/.local/bin/juex (builds via dist/)"
 	@echo "  cross         build all 7 platform archives in dist/ (no goreleaser)"
 	@echo "  snapshot      goreleaser cross-platform snapshot (dist/)"
@@ -53,6 +66,15 @@ test:
 race:
 	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" ./scripts/with-test-juex-home.sh go test ./... -race -count=1
 
+verify-focused:
+	$(VERIFY_CMD) focused $(PKGS)
+
+verify-candidate:
+	$(VERIFY_CMD) candidate $(VERIFY_RACE_FLAG) $(VERIFY_WEB_FLAG)
+
+verify-final:
+	$(VERIFY_CMD) final $(VERIFY_RACE_FLAG) $(VERIFY_WEB_FLAG) $(VERIFY_COMPACTION_FLAG)
+
 ripgrep:
 	@scripts/ensure-ripgrep.sh
 
@@ -60,6 +82,9 @@ lint:
 	golangci-lint run
 
 build: web
+	$(MAKE) build-go
+
+build-go:
 	mkdir -p dist
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST_BIN) ./cmd/juex
 

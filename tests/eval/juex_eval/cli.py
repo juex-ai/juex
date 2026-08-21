@@ -8,12 +8,23 @@ import shlex
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
+from typing import Callable
 
 from . import compaction, helper, selection
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 TEST_HOME_RUNNER = str(REPO_ROOT / "scripts" / "with-test-juex-home.sh")
+ENSURE_RIPGREP = str(REPO_ROOT / "scripts" / "ensure-ripgrep.sh")
+
+
+@dataclass(frozen=True)
+class VerificationStep:
+    label: str
+    command: list[str]
+    test_environment: bool = False
+    environment: dict[str, str] | None = None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,6 +38,9 @@ def main(argv: list[str] | None = None) -> int:
         return helper.main_with_args(argv)
     parser = argparse.ArgumentParser(prog="juex-eval", description="JueX local evaluation commands.")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    verify_parser = sub.add_parser("verify", help="Run a stable local verification tier.")
+    add_verify_args(verify_parser)
 
     development_parser = sub.add_parser(
         "development",
@@ -43,6 +57,8 @@ def main(argv: list[str] | None = None) -> int:
 
     parsed = parser.parse_args(argv)
     try:
+        if parsed.command == "verify":
+            return run_verify(parsed)
         if parsed.command == "development":
             return run_development(parsed)
         if parsed.command == "provider-smoke":
@@ -53,6 +69,171 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 1
     return 2
+
+
+def add_verify_args(parser: argparse.ArgumentParser) -> None:
+    tiers = parser.add_subparsers(dest="tier", required=True)
+    focused = tiers.add_parser("focused", help="Run explicitly scoped deterministic Go tests.")
+    focused.add_argument("packages", nargs="+", help="One or more explicit Go package patterns.")
+
+    candidate = tiers.add_parser("candidate", help="Verify a deterministic PR candidate.")
+    candidate.add_argument("--race", action="store_true")
+    candidate.add_argument("--web", action="store_true")
+
+    final = tiers.add_parser("final", help="Verify a final candidate with live gates.")
+    final.add_argument("--race", action="store_true")
+    final.add_argument("--web", action="store_true")
+    final.add_argument("--compaction", action="store_true")
+    final.add_argument(
+        "--run-id",
+        default=os.environ.get("JUEX_VERIFY_RUN_ID") or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()),
+    )
+    final.add_argument(
+        "--config",
+        default=os.environ.get("JUEX_PROVIDER_CONFIG") or str(pathlib.Path.home() / ".juex" / "juex.yaml"),
+    )
+    final.add_argument(
+        "--selection-seed",
+        default=os.environ.get("JUEX_EVAL_SELECTION_SEED") or selection.generated_seed(),
+    )
+    final.add_argument("--provider-timeout", type=int, default=int(os.environ.get("JUEX_PROVIDER_SMOKE_TIMEOUT") or "240"))
+
+
+def verification_steps(args: argparse.Namespace) -> list[VerificationStep]:
+    if args.tier == "focused":
+        packages = [str(package).strip() for package in args.packages if str(package).strip()]
+        if not packages:
+            raise ValueError("focused verification requires at least one package")
+        return [
+            VerificationStep(
+                "go-test-focused",
+                [TEST_HOME_RUNNER, "go", "test", *packages, "-count=1"],
+                test_environment=True,
+            )
+        ]
+    if args.tier == "candidate":
+        return candidate_verification_steps(race=args.race, web=args.web)
+    if args.tier == "final":
+        steps = candidate_verification_steps(race=args.race, web=args.web)
+        steps.append(
+            VerificationStep(
+                "live-integration",
+                ["make", "integration"],
+                environment={"JUEX_PROVIDER_CONFIG": args.config},
+            )
+        )
+        steps.append(VerificationStep("provider-model-smoke", final_provider_smoke_command(args)))
+        if args.compaction:
+            steps.append(VerificationStep("compaction-eval", final_compaction_command(args)))
+        return steps
+    raise ValueError(f"unsupported verification tier: {args.tier}")
+
+
+def candidate_verification_steps(*, race: bool, web: bool) -> list[VerificationStep]:
+    test_command = [TEST_HOME_RUNNER, "go", "test", "./..."]
+    if race:
+        test_command.append("-race")
+    test_command.append("-count=1")
+    steps = [
+        VerificationStep("go-test-all-race" if race else "go-test-all", test_command, test_environment=True),
+    ]
+    if web:
+        steps.extend(
+            [
+                VerificationStep("web-check", ["make", "web-check"]),
+                VerificationStep("make-build-go", ["make", "build-go"]),
+            ]
+        )
+    else:
+        steps.append(VerificationStep("make-build", ["make", "build"]))
+    return steps
+
+
+def final_provider_smoke_command(args: argparse.Namespace) -> list[str]:
+    command = module_command("provider-smoke")
+    append_value(command, "--juex", "./dist/juex")
+    append_value(command, "--config", args.config)
+    append_value(command, "--selection-seed", args.selection_seed)
+    append_value(command, "--run-id", args.run_id)
+    append_value(command, "--timeout", args.provider_timeout)
+    return command
+
+
+def final_compaction_command(args: argparse.Namespace) -> list[str]:
+    command = module_command("compaction")
+    append_value(command, "--juex", "./dist/juex")
+    append_value(command, "--config", args.config)
+    append_value(command, "--selection-seed", args.selection_seed)
+    append_value(command, "--run-id", args.run_id)
+    return command
+
+
+def execute_verification_steps(steps: list[VerificationStep], run_step: Callable[[VerificationStep], int]) -> int:
+    for step in steps:
+        if run_step(step):
+            return 1
+    return 0
+
+
+def run_verify(args: argparse.Namespace) -> int:
+    if args.tier != "focused":
+        require_clean_worktree()
+    if args.tier == "final":
+        args.config = str(selection.resolved_path(args.config))
+    steps = verification_steps(args)
+    test_env = isolated_test_environment() if any(step.test_environment for step in steps) else None
+    return execute_verification_steps(steps, lambda step: run_visible(step, test_env))
+
+
+def require_clean_worktree() -> None:
+    completed = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise ValueError("cannot verify candidate: git status failed")
+    if completed.stdout.strip():
+        raise ValueError("candidate and final verification require a clean worktree")
+
+
+def isolated_test_environment() -> dict[str, str]:
+    completed = subprocess.run(
+        [ENSURE_RIPGREP],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    ripgrep_dir = completed.stdout.strip()
+    if completed.returncode != 0 or not ripgrep_dir:
+        raise ValueError("failed to provision ripgrep for isolated Go tests")
+    env = os.environ.copy()
+    env["PATH"] = ripgrep_dir + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def run_visible(step: VerificationStep, test_env: dict[str, str] | None) -> int:
+    rendered = shlex.join(step.command)
+    print(f"==> {step.label}: {rendered}")
+    env = test_env.copy() if step.test_environment and test_env is not None else None
+    if step.environment:
+        if env is None:
+            env = os.environ.copy()
+        env.update(step.environment)
+    completed = subprocess.run(
+        step.command,
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+    )
+    if completed.returncode:
+        print(f"FAIL {step.label} (exit {completed.returncode})", file=sys.stderr)
+        return 1
+    print(f"ok  {step.label}")
+    return 0
 
 
 def add_development_args(parser: argparse.ArgumentParser) -> None:
@@ -147,9 +328,17 @@ def run_development(args: argparse.Namespace) -> int:
 
     steps, provider_report_dir, compaction_report_dir = development_steps(args, report_dir)
 
-    overall = 0
-    for label, command in steps:
-        overall |= run_logged(label, command, command_logs, commands_file)
+    test_env = isolated_test_environment() if any(step.test_environment for step in steps) else None
+    overall = execute_verification_steps(
+        steps,
+        lambda step: run_logged(
+            step.label,
+            step.command,
+            command_logs,
+            commands_file,
+            env=test_env if step.test_environment else None,
+        ),
+    )
 
     helper.write_development_record(
         report_dir,
@@ -172,24 +361,19 @@ def validate_development_args(args: argparse.Namespace) -> None:
         raise ValueError("--compaction-all-models cannot be combined with --compaction-only")
 
 
-def development_steps(args: argparse.Namespace, report_dir: pathlib.Path) -> tuple[list[tuple[str, list[str]]], pathlib.Path, str]:
+def development_steps(args: argparse.Namespace, report_dir: pathlib.Path) -> tuple[list[VerificationStep], pathlib.Path, str]:
     provider_report_dir = report_dir / "provider-model-smoke"
     compaction_report_dir = report_dir / "compaction-eval" if args.compaction_eval else None
 
-    steps: list[tuple[str, list[str]]] = []
-    if not args.skip_tests:
-        steps.extend(
-            [
-                ("go-test-e2e", [TEST_HOME_RUNNER, "go", "test", "./tests/e2e", "-count=1"]),
-                ("go-test-all", [TEST_HOME_RUNNER, "go", "test", "./...", "-count=1"]),
-            ]
-        )
-    steps.append(("make-build", ["make", "build"]))
+    candidate_steps = candidate_verification_steps(race=False, web=False)
+    if args.skip_tests:
+        candidate_steps = [step for step in candidate_steps if not step.test_environment]
+    steps = candidate_steps
 
     if not args.no_provider_smoke:
-        steps.append(("provider-model-smoke", provider_smoke_development_command(args, provider_report_dir)))
+        steps.append(VerificationStep("provider-model-smoke", provider_smoke_development_command(args, provider_report_dir)))
     if compaction_report_dir is not None:
-        steps.append(("compaction-eval", compaction_development_command(args, compaction_report_dir)))
+        steps.append(VerificationStep("compaction-eval", compaction_development_command(args, compaction_report_dir)))
     return steps, provider_report_dir, str(compaction_report_dir or "")
 
 
@@ -237,12 +421,19 @@ def append_flag(command: list[str], flag: str, enabled: bool) -> None:
         command.append(flag)
 
 
-def run_logged(label: str, command: list[str], log_dir: pathlib.Path, commands_file: pathlib.Path) -> int:
+def run_logged(
+    label: str,
+    command: list[str],
+    log_dir: pathlib.Path,
+    commands_file: pathlib.Path,
+    *,
+    env: dict[str, str] | None = None,
+) -> int:
     log_path = log_dir / f"{label}.log"
     rendered = " ".join(shlex.quote(part) for part in command)
     print(f"==> {label}: {rendered}")
     with log_path.open("wb") as log:
-        proc = subprocess.run(command, cwd=REPO_ROOT, stdout=log, stderr=subprocess.STDOUT, check=False)
+        proc = subprocess.run(command, cwd=REPO_ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, check=False)
     helper.append_jsonl(
         commands_file,
         {

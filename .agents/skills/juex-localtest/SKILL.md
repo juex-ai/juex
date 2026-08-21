@@ -22,76 +22,72 @@ the system PATH. The package source never matches under `go test` (the test
 binary lives in the Go build cache, not a release package), so local runs need
 `rg` on `PATH` (or a `JUEX_RG` override).
 
-`make test`, `make race`, `make integration`, and `make ripgrep` provision this
-automatically: they run `scripts/ensure-ripgrep.sh`, which prints the directory
+The `make verify-*` tiers and the lower-level `make test`, `make race`,
+`make integration`, and `make ripgrep` targets provision this automatically.
+The verification orchestrator or Make target runs
+`scripts/ensure-ripgrep.sh`, which prints the directory
 of a usable `rg` (a system one if present, otherwise the pinned ripgrep
 downloaded into `.tmp/dev-ripgrep`, cached and gitignored) and prepend it to
 `PATH` for that run. This mirrors CI, which adds ripgrep to `PATH` rather than
 setting `JUEX_RG`. Provision via `PATH`, not `JUEX_RG`: `JUEX_RG` is an override
 that short-circuits every other resolver source, so exporting it for the whole
 `go test` process would also override the resolver's own unit tests that read
-the ambient environment. All focused `go test ...` commands must run through
-`scripts/with-test-juex-home.sh` so config loading and live runtime setup cannot
-register test Agents in the developer's Fleet. When a command also touches
-grep, use:
-`PATH="$(scripts/ensure-ripgrep.sh):$PATH" ./scripts/with-test-juex-home.sh go test ...`.
+the ambient environment. `make verify-focused` always provisions ripgrep and
+runs through `scripts/with-test-juex-home.sh`, so focused tests cannot register
+test Agents in the developer's Fleet.
 
 ## Execution Steps
 
 Run commands directly from the repository root.
 
-1. **Focused tests first** - run
-   `./scripts/with-test-juex-home.sh go test -v ./path/to/package/...` for each changed Go package
-   that has `*_test.go` files. For cross-package CLI,
-   runtime, session, provider, web, MCP, shell, or eval behavior, include
-   `./tests/e2e/...`.
-2. **Full deterministic suite** - `make test` runs
-   `go test ./... -count=1`, including non-live e2e tests.
-3. **Frontend and embedded binary build** - `make build` runs the
-   frontend build, copies it into `internal/web/dist`, and builds `dist/juex`.
-4. **Live integration entrypoint** - `make integration` runs
-   verbose `go test -tags=integration ./tests/e2e/... -count=1`. It reads the
-   top-level model from `JUEX_PROVIDER_CONFIG` or `~/.juex/juex.yaml`.
-   `JUEX_PROVIDER_SMOKE_ONLY=provider:model` reuses provider smoke's explicit
-   model-ref override; integration requires the complete ref, not only a
-   provider id. The harness uses the uv-managed eval helper to extract that
-   selection into an isolated minimal config. It keeps non-selector
-   `PROVIDER_API_*` credentials and tuning overrides from the inherited
-   environment and source YAML `environment.variables`. A missing default
-   config skips with its expected path, while an explicit missing path or
-   unusable existing config fails.
-5. **Race parity when risky** - run `make race` after changes to concurrency,
-   server shutdown, runtime turn loops, MCP, tools, events, sessions, web
-   request handling, or shared mutable state.
+1. **Focused tests while editing** - run `make verify-focused PKGS="..."`
+   with explicit changed packages. It permits a dirty worktree and never
+   widens an empty scope to the full repository.
+2. **PR candidate** - after committing the implementation, run `make
+   verify-candidate`. Add `RACE=1` for concurrency, shutdown, runtime turn,
+   MCP, tool, event, session, web request, or shared-state changes. Add
+   `WEB=1` for frontend changes. Race replaces the ordinary suite; web-check
+   feeds the Go-only binary build without a second frontend build.
+3. **Final candidate** - run `make verify-final` before delivery. It repeats
+   the candidate plan, then runs live integration and one dynamically selected
+   provider smoke. Add `COMPACTION=1` for compaction, context projection,
+   reasoning replay, or long-session changes. Candidate and final require a
+   clean worktree and stop on the first failing step.
+
+Do not manually compose `make test`, `make race`, `make integration`,
+`make provider-smoke`, and `make build` for routine agent delivery. They remain
+available as lower-level exact-rerun and harness-development targets.
 
 There is no local service startup step for the current suite. Web tests use
 `httptest`, and live integration tests drive the runtime directly.
 
 ## Focus Areas
 
-- **Shell/tool/runtime changes** - include focused `./internal/tools`,
-  `./internal/runtime`, and `./tests/e2e` tests. For cross-platform shell
+- **Shell/tool/runtime changes** - use `make verify-focused
+  PKGS="./internal/tools ./internal/runtime ./tests/e2e"`. For cross-platform shell
   behavior, also run Windows target compile checks for touched packages, for
   example:
 
   ```bash
   GOOS=windows GOARCH=amd64 ./scripts/with-test-juex-home.sh go test -c ./internal/tools -o /tmp/juex-tools-windows.test.exe
   ```
-- **Eval harness changes** - run the eval module help checks plus
-  `./scripts/with-test-juex-home.sh go test ./tests/eval -count=1`.
+- **Eval harness changes** - run `make verify-focused PKGS="./tests/eval"`;
+  its contract suite includes the module and wrapper help checks.
 - **Docs or skill-only changes** - run `git diff --check`, stale-reference
   searches, and the smallest focused tests for affected command examples.
-- **Web-visible changes** - run `make build` and a browser/API
+- **Web-visible changes** - use `WEB=1` on candidate/final, then run a browser/API
   smoke against a rebuilt binary when behavior is visible in the UI.
 
 ## Live Provider/Model Sweep
 
-When the user asks to "test all provider/model" or a provider compatibility
-change needs live coverage, build the current binary and run the smoke script:
+Routine delivery gets one dynamically selected provider:model smoke through
+`make verify-final`. When the user asks to test every configured model, or a
+provider compatibility change needs a broader matrix, run the lower-level
+smoke explicitly against the final candidate binary:
 
 ```bash
-make build
-bash tests/eval/provider_model_smoke.sh --juex ./dist/juex
+make verify-final
+bash tests/eval/provider_model_smoke.sh --juex ./dist/juex --all-models
 ```
 
 The canonical script resolves `--config`, `JUEX_PROVIDER_CONFIG`, or the
@@ -136,7 +132,10 @@ bash tests/eval/development_eval.sh
 
 The development evaluator records command logs and summaries under
 `.tmp/reports/development-validation/<run-id>/`. It runs deterministic tests,
-build, and one seeded provider-config smoke by default. Use `--skip-tests` and
+build, and one seeded provider-config smoke by default. Its deterministic plan
+reuses the candidate orchestrator and does not add a second E2E run. Use it
+when a durable development-validation report is required; the `make verify-*`
+tiers remain the routine delivery gates. Use `--skip-tests` and
 `--no-provider-smoke` only for validating the harness itself or documentation
 examples where live providers are irrelevant.
 

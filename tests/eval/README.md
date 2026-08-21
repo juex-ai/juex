@@ -4,7 +4,16 @@ This directory contains local evaluation tooling that exercises real providers
 or longer multi-turn behavior. Keep deterministic cross-platform e2e tests in
 `tests/e2e`; put provider-config selection and quality-evaluation helpers here.
 
-The stable command entrypoints live next to the evaluation code:
+The stable agent-facing entrypoints are:
+
+```bash
+make verify-focused PKGS="./internal/app ./internal/runtime"
+make verify-candidate RACE=1 WEB=1
+make verify-final RACE=1 WEB=1 COMPACTION=1
+```
+
+They delegate to `python -m tests.eval.juex_eval verify`. Lower-level harness
+entrypoints live next to the evaluation code:
 
 - `tests/eval/eval_scripts_test.go`
 - `tests/eval/provider_model_smoke.sh`
@@ -25,6 +34,27 @@ The shell scripts are thin wrappers around the Python module:
 ```bash
 uv run --project . python -m tests.eval.juex_eval --help
 ```
+
+## Verification Tiers
+
+`verify focused` requires one or more explicit Go package patterns. It
+provisions ripgrep, runs through `scripts/with-test-juex-home.sh`, and permits a
+dirty worktree so it can be used during implementation. An empty scope is an
+error; focused verification never falls back to `./...`.
+
+`verify candidate` requires a clean worktree. It runs exactly one full
+deterministic Go suite followed by one executable build. `RACE=1` replaces the
+ordinary Go suite with the race suite. `WEB=1` runs `web-check`, synchronizes
+the resulting frontend assets into `internal/web/dist`, and invokes the
+Go-only `build-go` target instead of rebuilding the frontend.
+
+`verify final` also requires a clean worktree. It runs the candidate plan,
+then live integration and one provider-config-selected provider smoke. Set
+`COMPACTION=1` only when compaction, context projection, reasoning replay, or
+long-session behavior needs the live compaction quality gate. All tiers stop
+after the first failing step. `--config`, `--selection-seed`, and
+`--provider-timeout` are available on the underlying final CLI when an exact
+live rerun is required.
 
 ## Deterministic Capability Harness
 
@@ -240,6 +270,10 @@ Every completed development task should leave a validation record:
 ```bash
 bash tests/eval/development_eval.sh
 ```
+
+The deterministic phase reuses the candidate planner, so one `go test ./...`
+run includes `tests/e2e` without a duplicate standalone e2e run. The existing
+JSON/Markdown record shape and live selection evidence remain unchanged.
 
 Use `--compaction-eval` for compaction, context projection, reasoning replay,
 or long-session changes. The record links command logs, provider:model smoke
