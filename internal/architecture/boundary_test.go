@@ -1734,8 +1734,12 @@ type App struct {
 }
 type closer interface { Close() error }
 type registrar interface { Register(tools.Tool) error }
+type cleanupHolder struct { resources []closer }
+type registrationHolder struct { registries map[string]registrar }
 func sameClosers(resources []closer) []closer { return resources }
 func sameRegistrars(registries map[string]registrar) map[string]registrar { return registries }
+func exposeClosers(holder *cleanupHolder) []closer { return holder.resources }
+func exposeRegistrars(holder *registrationHolder) map[string]registrar { return holder.registries }
 func cleanupFromReturnedAlias(application *App) {
 	resources := make([]closer, 1)
 	alias := sameClosers(resources)
@@ -1747,6 +1751,18 @@ func registerFromReturnedAlias(application *App) {
 	alias := sameRegistrars(registries)
 	alias["main"] = application.registry
 	registries["main"].Register(nil)
+}
+func cleanupFromReturnedFieldAlias(application *App) {
+	owned := &cleanupHolder{resources: make([]closer, 1)}
+	alias := exposeClosers(owned)
+	alias[0] = application.manager
+	_ = owned.resources[0].Close()
+}
+func registerFromReturnedFieldAlias(application *App) {
+	owned := &registrationHolder{registries: map[string]registrar{}}
+	alias := exposeRegistrars(owned)
+	alias["main"] = application.registry
+	owned.registries["main"].Register(nil)
 }
 `
 	dir := t.TempDir()
@@ -1766,15 +1782,69 @@ func registerFromReturnedAlias(application *App) {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resources.Close,") {
-		t.Fatalf("cleanup calls = %v, want helper-returned slice alias cleanup", cleanupCalls)
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resources.Close,") || !strings.Contains(cleanup, ",owned.resources.Close,") {
+		t.Fatalf("cleanup calls = %v, want helper-returned whole and field slice alias cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registries.Register,") {
-		t.Fatalf("Tool registration calls = %v, want helper-returned map alias registration", registrationCalls)
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registries.Register,") || !strings.Contains(registration, ",owned.registries.Register,") {
+		t.Fatalf("Tool registration calls = %v, want helper-returned whole and field map alias registration", registrationCalls)
+	}
+}
+
+func TestAppCompositionInspectionTracksSliceChunks(t *testing.T) {
+	source := `package app
+import (
+	"slices"
+
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+func cleanupFromChunk(application *App) {
+	for chunk := range slices.Chunk([]closer{application.manager}, 1) {
+		_ = chunk[0].Close()
+	}
+}
+func registerFromChunk(application *App) {
+	for chunk := range slices.Chunk([]registrar{application.registry}, 1) {
+		chunk[0].Register(nil)
+	}
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "slice_chunks.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",chunk.Close,") {
+		t.Fatalf("cleanup calls = %v, want slices.Chunk cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",chunk.Register,") {
+		t.Fatalf("Tool registration calls = %v, want slices.Chunk registration", registrationCalls)
 	}
 }
 
@@ -3545,14 +3615,16 @@ func resultParameterOrigins(expression ast.Expr, imports map[string]string, valu
 
 func resultParameterPaths(expression ast.Expr, imports map[string]string, values map[string]string, origins map[string]map[int]bool, types compositionTypeIndex, resultIndex int) map[int]map[string]bool {
 	result := make(map[int]map[string]bool)
-	addOriginsWithPrefix(result, originsForExpression(expression, origins), "")
+	if _, selector := expression.(*ast.SelectorExpr); !selector {
+		addOriginsWithPrefix(result, originsForExpression(expression, origins), "")
+	}
 	switch value := expression.(type) {
 	case *ast.ParenExpr:
 		mergeResultParameterPaths(result, resultParameterPaths(value.X, imports, values, origins, types, resultIndex), "")
 	case *ast.TypeAssertExpr:
 		mergeResultParameterPaths(result, resultParameterPaths(value.X, imports, values, origins, types, 0), "")
 	case *ast.SelectorExpr:
-		mergeResultParameterPaths(result, resultParameterPaths(value.X, imports, values, origins, types, 0), "")
+		appendResultParameterPath(result, resultParameterPaths(value.X, imports, values, origins, types, 0), value.Sel.Name+".")
 	case *ast.IndexExpr:
 		mergeResultParameterPaths(result, resultParameterPaths(value.X, imports, values, origins, types, 0), "")
 	case *ast.SliceExpr:
@@ -3621,6 +3693,17 @@ func mergeResultParameterPaths(destination, source map[int]map[string]bool, pref
 		}
 		for path := range paths {
 			destination[parameterIndex][prefix+path] = true
+		}
+	}
+}
+
+func appendResultParameterPath(destination, source map[int]map[string]bool, suffix string) {
+	for parameterIndex, paths := range source {
+		if destination[parameterIndex] == nil {
+			destination[parameterIndex] = make(map[string]bool)
+		}
+		for path := range paths {
+			destination[parameterIndex][path+suffix] = true
 		}
 	}
 }
@@ -4449,11 +4532,16 @@ func returnedReferenceSourceKeys(expressions []ast.Expr, resultIndex int, import
 	callee := calledFunctionKey(call.Fun, imports, values, types)
 	var keys []string
 	for parameterIndex, prefixes := range resultParameterPathSummary(callee, resultIndex, types) {
-		if !prefixes[""] {
-			continue
-		}
 		for _, argument := range callArgumentsForParameter(call, callee, parameterIndex, imports, types) {
-			if key := referenceSourceKey(argument); key != "" {
+			root := referenceSourceKey(argument)
+			if root == "" {
+				continue
+			}
+			for prefix := range prefixes {
+				key := root
+				if fieldPath := strings.TrimSuffix(prefix, "."); fieldPath != "" {
+					key += "." + fieldPath
+				}
 				keys = append(keys, key)
 			}
 		}
@@ -4739,7 +4827,7 @@ func isBuiltinAppend(call *ast.CallExpr) bool {
 
 func valueIteratorArity(expression ast.Expr, imports map[string]string) int {
 	call, ok := expression.(*ast.CallExpr)
-	if !ok || len(call.Args) != 1 {
+	if !ok {
 		return 0
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
@@ -4751,6 +4839,12 @@ func valueIteratorArity(expression ast.Expr, imports map[string]string) int {
 		return 0
 	}
 	if imports[qualifier.Name] != "maps" && imports[qualifier.Name] != "slices" {
+		return 0
+	}
+	if imports[qualifier.Name] == "slices" && selector.Sel.Name == "Chunk" && len(call.Args) == 2 {
+		return 1
+	}
+	if len(call.Args) != 1 {
 		return 0
 	}
 	switch selector.Sel.Name {
@@ -4770,7 +4864,7 @@ func valueIteratorArity(expression ast.Expr, imports map[string]string) int {
 
 func iteratorRangeCleanupPaths(expression ast.Expr, paths map[string]bool, imports map[string]string) (map[string]bool, map[string]bool, bool) {
 	call, ok := expression.(*ast.CallExpr)
-	if !ok || len(call.Args) != 1 {
+	if !ok {
 		return nil, nil, false
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
@@ -4779,6 +4873,12 @@ func iteratorRangeCleanupPaths(expression ast.Expr, paths map[string]bool, impor
 	}
 	qualifier, ok := selector.X.(*ast.Ident)
 	if !ok {
+		return nil, nil, false
+	}
+	if imports[qualifier.Name] == "slices" && selector.Sel.Name == "Chunk" && len(call.Args) == 2 {
+		return paths, nil, true
+	}
+	if len(call.Args) != 1 {
 		return nil, nil, false
 	}
 	switch imports[qualifier.Name] + "." + selector.Sel.Name {
@@ -4797,7 +4897,7 @@ func iteratorRangeCleanupPaths(expression ast.Expr, paths map[string]bool, impor
 
 func iteratorRangeToolTypes(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) (string, string, bool) {
 	call, ok := expression.(*ast.CallExpr)
-	if !ok || len(call.Args) != 1 {
+	if !ok {
 		return "", "", false
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
@@ -4806,6 +4906,15 @@ func iteratorRangeToolTypes(expression ast.Expr, imports map[string]string, valu
 	}
 	qualifier, ok := selector.X.(*ast.Ident)
 	if !ok {
+		return "", "", false
+	}
+	if imports[qualifier.Name] == "slices" && selector.Sel.Name == "Chunk" && len(call.Args) == 2 {
+		if isToolRegistryCollectionExpression(call.Args[0], imports, values, types) {
+			return toolRegistryCollectionType, "", true
+		}
+		return "", "", true
+	}
+	if len(call.Args) != 1 {
 		return "", "", false
 	}
 	registryType := modulePath + "/internal/tools.Registry"
@@ -4853,7 +4962,7 @@ func sliceCollectionSourceArguments(call *ast.CallExpr, imports map[string]strin
 	switch selector.Sel.Name {
 	case "Concat", "AppendSeq":
 		return call.Args
-	case "Clone", "Clip", "Compact", "Collect", "Sorted", "SortedFunc", "SortedStableFunc",
+	case "Clone", "Clip", "Compact", "Collect", "Sorted", "SortedFunc", "SortedStableFunc", "Chunk",
 		"Repeat", "Delete", "DeleteFunc", "CompactFunc", "Grow":
 		if len(call.Args) != 0 {
 			return call.Args[:1]
