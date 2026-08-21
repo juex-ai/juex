@@ -64,7 +64,7 @@ type Engine struct {
 	RuntimeModules    *runtimemodule.Set
 	RuntimeContext    runtimemodule.RuntimeContext
 	Bus               *events.Bus
-	// Session, Prompt, PendingInputQueue, Notes, and GoalState
+	// Session, Prompt, and PendingInputQueue
 	// are constructor/test compatibility fields. Concurrent production code
 	// must use the synchronized session-runtime methods instead of reading or
 	// replacing these fields directly.
@@ -83,10 +83,6 @@ type Engine struct {
 	// directory. When omitted, the engine creates a session-local queue on
 	// first use.
 	PendingInputQueue *PendingInputQueue
-	// Notes persists model-owned session working notes.
-	Notes *NotesStore
-	// GoalState persists the current session goal and latest completion check.
-	GoalState *GoalStateStore
 	// ShowBuiltinPolicyTraces includes built-in runtime gates in UI-only policy
 	// trace messages. Module-provided policy traces are always shown.
 	ShowBuiltinPolicyTraces bool
@@ -136,9 +132,6 @@ type Engine struct {
 
 	tokenCalibrationMu sync.RWMutex
 	tokenCalibration   tokenEstimateCalibration
-
-	notesContextErrorMu  sync.Mutex
-	notesContextErrorKey string
 }
 
 var (

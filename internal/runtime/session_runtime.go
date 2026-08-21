@@ -24,8 +24,6 @@ type SessionRuntimeSnapshot struct {
 	Session           *session.Session
 	ScratchpadDir     string
 	PendingInputQueue *PendingInputQueue
-	Notes             *NotesStore
-	GoalState         *GoalStateStore
 	Modules           *runtimemodule.Set
 	Tools             *tools.Registry
 }
@@ -203,18 +201,10 @@ func (e *Engine) SystemPromptWithError() (string, error) {
 	return prompt.JoinSections(sections), nil
 }
 
-// SessionStateStatus reads Goal and Notes from one runtime snapshot.
+// SessionStateStatus reads Goal and Notes from the active Session Modules.
 func (e *Engine) SessionStateStatus() (*GoalStatusSnapshot, *NotesSnapshot) {
 	snapshot := e.SessionRuntimeSnapshot()
-	var goal *GoalStatusSnapshot
-	if snapshot.GoalState != nil {
-		goal, _ = snapshot.GoalState.StatusSnapshot()
-	}
-	var notes *NotesSnapshot
-	if snapshot.Notes != nil {
-		notes, _ = snapshot.Notes.StatusSnapshot()
-	}
-	return goal, notes
+	return SessionStateStatusFromModules(snapshot.Modules)
 }
 
 func (e *Engine) currentSession() *session.Session {
@@ -248,69 +238,6 @@ func (e *Engine) currentPendingInputQueue() *PendingInputQueue {
 	return queue
 }
 
-func (e *Engine) currentNotesStore() *NotesStore {
-	if e == nil {
-		return nil
-	}
-	e.sessionRuntimeMu.Lock()
-	state := e.sessionRuntimeStateLocked()
-	store := state.Notes
-	if store == nil && state.Session != nil && state.Session.Dir != "" {
-		store = NewNotesStore(state.Session.Dir)
-		e.Notes = store
-		if e.sessionRuntime != nil {
-			next := *e.sessionRuntime
-			next.Notes = store
-			e.sessionRuntime = &next
-		}
-	}
-	e.sessionRuntimeMu.Unlock()
-	return store
-}
-
-func (e *Engine) currentGoalStateStore() *GoalStateStore {
-	if e == nil {
-		return nil
-	}
-	e.sessionRuntimeMu.RLock()
-	state := e.sessionRuntimeStateLocked()
-	store := state.GoalState
-	e.sessionRuntimeMu.RUnlock()
-	return store
-}
-
-func (e *Engine) setNotesStore(store *NotesStore) {
-	if e == nil {
-		return
-	}
-	e.sessionRuntimeMu.Lock()
-	e.Notes = store
-	if e.sessionRuntime != nil {
-		next := *e.sessionRuntime
-		next.Notes = store
-		e.sessionRuntime = &next
-	}
-	e.sessionRuntimeMu.Unlock()
-}
-
-// ShareSessionState replaces the Goal and Notes stores without changing the
-// Session, transcript, scratchpad, pending-input queue, or policy identity. It is
-// used by a Primary Session to make its model-owned state authoritative for a
-// managed Side Session.
-func (e *Engine) ShareSessionState(goal *GoalStateStore, notes *NotesStore) {
-	if e == nil {
-		return
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.sessionRuntimeMu.Lock()
-	state := e.sessionRuntimeStateLocked()
-	state.GoalState = goal
-	state.Notes = notes
-	e.publishSessionRuntimeLocked(state)
-	e.sessionRuntimeMu.Unlock()
-}
-
 func (e *Engine) sessionRuntimeStateLocked() sessionRuntimeState {
 	if e.sessionRuntime != nil {
 		return *e.sessionRuntime
@@ -324,8 +251,6 @@ func (e *Engine) sessionRuntimeStateLocked() sessionRuntimeState {
 			Session:           e.Session,
 			ScratchpadDir:     scratchpadDir,
 			PendingInputQueue: e.PendingInputQueue,
-			Notes:             e.Notes,
-			GoalState:         e.GoalState,
 			Tools:             e.Tools,
 		},
 		prompt: e.Prompt,
@@ -343,14 +268,6 @@ func buildSessionRuntimeState(current sessionRuntimeState, sess *session.Session
 	if current.PendingInputQueue != nil && filepath.Dir(current.PendingInputQueue.path) == sess.Dir {
 		queue = current.PendingInputQueue
 	}
-	notes := NewNotesStore(sess.Dir)
-	if current.Notes != nil && current.Notes.SessionDir == sess.Dir {
-		notes = current.Notes
-	}
-	goal := NewGoalStateStore(sess.Dir, GoalStateOptions{})
-	if current.GoalState != nil && current.GoalState.SessionDir == sess.Dir {
-		goal = current.GoalState
-	}
 	modules := current.Modules
 	if replacement.Modules != nil {
 		modules = replacement.Modules
@@ -365,8 +282,6 @@ func buildSessionRuntimeState(current sessionRuntimeState, sess *session.Session
 			Session:           sess,
 			ScratchpadDir:     scratchpadDir,
 			PendingInputQueue: queue,
-			Notes:             notes,
-			GoalState:         goal,
 			Modules:           modules,
 			Tools:             toolRegistry,
 		},
@@ -379,13 +294,11 @@ func (e *Engine) publishSessionRuntimeLocked(next sessionRuntimeState) {
 	published.SessionRuntimeSnapshot = cloneSessionRuntimeSnapshot(next.SessionRuntimeSnapshot)
 	e.sessionRuntime = &published
 
-	// Keep the compatibility fields aligned for constructors and existing
-	// tests. Production readers use SessionRuntimeSnapshot and helpers above.
+	// Keep the generic compatibility fields aligned for constructors and
+	// existing tests. Feature state belongs to Session Modules.
 	e.Session = next.Session
 	e.Prompt = next.prompt
 	e.PendingInputQueue = next.PendingInputQueue
-	e.Notes = next.Notes
-	e.GoalState = next.GoalState
 	if next.Tools != nil {
 		e.Tools = next.Tools
 	}

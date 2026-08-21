@@ -1697,7 +1697,11 @@ func TestGetSessionShowAndContextReturnDuringRunningTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := as.app.Session.ID
-	if _, err := as.app.Engine.Notes.Update("- [ ] visible while running"); err != nil {
+	_, notes := juexruntime.SessionStateStoresFromModules(as.app.Engine.SessionRuntimeSnapshot().Modules)
+	if notes == nil {
+		t.Fatal("active Notes Module did not provide a store")
+	}
+	if _, err := notes.Update("- [ ] visible while running"); err != nil {
 		t.Fatal(err)
 	}
 

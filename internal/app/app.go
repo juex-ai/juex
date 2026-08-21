@@ -461,10 +461,8 @@ func New(opts Options) (*App, error) {
 		WorkDir:                 runtimePaths.WorkDir,
 		ArtifactDir:             runtimePaths.ArtifactDir,
 		PendingInputQueue:       runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{}),
-		Notes:                   notesStore(sess),
 		PendingInputTTL:         pendingInputTTL,
 		ExternalEventTTL:        externalEventTTL,
-		GoalState:               goalStateStore(sess),
 		ShowBuiltinPolicyTraces: runtimeLimits.ShowBuiltinPolicyTraces,
 		NotifyModelChanges:      runtimeLimits.NotifyModelChanges,
 		ContextWindow:           runtimeLimits.ContextWindow,
@@ -641,6 +639,8 @@ func New(opts Options) (*App, error) {
 		sessionModuleOptions{
 			hookRunner:               hookRunner,
 			hookBaseRequest:          hookBaseRequest,
+			goalState:                opts.sharedGoalState,
+			notes:                    opts.sharedNotes,
 			goalContinuation:         opts.sharedGoalState == nil,
 			goalContinuationDeferrer: a.sideSessions,
 		},
@@ -664,9 +664,6 @@ func New(opts Options) (*App, error) {
 		_ = sessionModules.CloseSession(context.Background())
 		_ = a.Close()
 		return nil, err
-	}
-	if opts.sharedGoalState != nil || opts.sharedNotes != nil {
-		eng.ShareSessionState(opts.sharedGoalState, opts.sharedNotes)
 	}
 	if err := eng.RecoverTranscript("load"); err != nil {
 		_ = a.Close()

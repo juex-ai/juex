@@ -406,7 +406,7 @@ func TestApp_REPLProcessesStatusSlash(t *testing.T) {
 
 func TestAppStatusIncludesGoalState(t *testing.T) {
 	a, _ := newStubApp(t)
-	if _, err := a.Engine.GoalState.Create("finish goal tools", "tests pass"); err != nil {
+	if _, err := appGoalStateStore(t, a).Create("finish goal tools", "tests pass"); err != nil {
 		t.Fatal(err)
 	}
 

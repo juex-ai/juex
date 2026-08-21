@@ -1418,12 +1418,13 @@ func (e *Engine) Turn(ctx, userInput) (string, error)
 
 Session switching publishes one `SessionRuntimeSnapshot` in
 `internal/runtime`. The snapshot keeps the active `Session`, scratchpad-aware
-prompt builder, persistent pending-input queue, Notes store, Goal store, and
-session-specific hook paths coherent. `ReplaceSessionRuntime` serializes with
-turns and compaction and rejects an active reservation or in-memory pending
-input. The exported session-scoped `Engine` fields remain a constructor and
-test compatibility surface; production readers use snapshot methods such as
-`ActiveContext`, `PromptSections`, and `SessionStateStatus`.
+prompt builder, persistent pending-input queue, sealed Session Module set, Tool
+registry, and session-specific hook paths coherent. Goal and Notes stores are
+owned by their Session Modules inside that set; they are not fields on the
+Framework Engine or its snapshot. `ReplaceSessionRuntime` serializes with turns
+and compaction and rejects an active reservation or in-memory pending input.
+Production readers use snapshot methods such as `ActiveContext`,
+`PromptSections`, and `SessionStateStatus`.
 
 `internal/app` owns the wider lifecycle boundary. It builds, validates, and
 starts the candidate Module set and complete Tool registry after attachment has
@@ -2522,8 +2523,9 @@ provider-visible continuation prompts. Stop authority belongs to configured
 Stop hooks and the goal completion gate.
 
 Finish attempts also pass through the Goal Session Module's typed
-`goal-completion-gate` before the Hooks Module policies. The runtime stores a session-local
-`goal_state.json` owned by model-facing goal tools. Its public contract is
+`goal-completion-gate` before the Hooks Module policies. The Goal Module owns
+the session-local `goal_state.json` store used by model-facing goal tools. Its
+public contract is
 `description`, `acceptance`, `status`, optional `status_reason`,
 `continuation_count`, and `updated_at`; statuses are `in_progress`,
 `wait_for_user`, `success`, and `failure`. `acceptance` is one free-text field
@@ -2601,10 +2603,11 @@ the sidecar, so Notes survive compaction without being copied into
 session UI renders the Markdown plus progress derived from `- [ ]` and `- [x]`
 task items.
 
-Each Engine owns one session NotesStore shared by status snapshots, context
-recitation, tools, and compaction. Application session attachment installs the
-store eagerly; partially composed Engines initialize it once from `Session.Dir`
-on first use.
+Each Notes Session Module owns one `NotesStore` shared by its status snapshot,
+context recitation, tool, and compaction capabilities. Application composition
+constructs the default store from the Session directory or explicitly injects
+the Primary Module's store into a managed Side Session. Framework code discovers
+these capabilities through narrow Module interfaces instead of owning the store.
 
 If `notes.md` exists but fails read or validation, the runtime keeps the Notes
 context position and replaces its content with a recovery message containing

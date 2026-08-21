@@ -8,65 +8,68 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 )
 
-func (e *Engine) notesStoreLocked() *NotesStore {
-	return e.currentNotesStore()
+func (m *NotesModule) NotesStore() *NotesStore {
+	if m == nil {
+		return nil
+	}
+	return m.store
 }
 
-// SetNotesStore installs the store used by all Notes runtime paths.
-func (e *Engine) SetNotesStore(store *NotesStore) {
-	e.setNotesStore(store)
-	e.clearNotesContextError()
-}
-
-func (e *Engine) NotesStatusSnapshot() (*NotesSnapshot, error) {
-	store := e.notesStoreLocked()
+func (m *NotesModule) NotesStatusSnapshot() (*NotesSnapshot, error) {
+	store := m.NotesStore()
 	if store == nil {
 		return nil, nil
 	}
 	return store.StatusSnapshot()
 }
 
-func (e *Engine) notesContextSnapshot() (string, bool) {
-	store := e.notesStoreLocked()
+func (m *NotesModule) NotesCompactionState() (string, error) {
+	store := m.NotesStore()
 	if store == nil {
-		return "", false
+		return "", nil
 	}
-	return e.notesContextFromStore(store)
+	snapshot, err := store.Snapshot()
+	if err != nil {
+		m.recordNotesContextError(store, err)
+		return "", nil
+	}
+	m.clearNotesContextError()
+	return snapshot.Content, nil
 }
 
-func (e *Engine) notesContextFromStore(store *NotesStore) (string, bool) {
-	if e == nil || store == nil {
+func (m *NotesModule) notesContextFromStore(store *NotesStore) (string, bool) {
+	if m == nil || store == nil {
 		return "", false
 	}
 	snapshot, err := store.Snapshot()
 	if err != nil {
-		return e.notesUnavailableContext(store, err), true
+		return m.notesUnavailableContext(store, err), true
 	}
-	e.clearNotesContextError()
+	m.clearNotesContextError()
 	return snapshot.RenderProviderContext()
 }
 
-func (e *Engine) notesUnavailableContext(store *NotesStore, err error) string {
+func (m *NotesModule) notesUnavailableContext(store *NotesStore, err error) string {
 	errorText := err.Error()
-	e.recordNotesContextError(store, err)
+	m.recordNotesContextError(store, err)
 
 	reason := strings.Join(strings.Fields(errorText), " ")
 	return fmt.Sprintf("Working notes unavailable (%s); fix %s or rewrite with update_notes", reason, notesProviderPath(store))
 }
 
-func (e *Engine) recordNotesContextError(store *NotesStore, err error) {
-	if e == nil || store == nil || err == nil {
+func (m *NotesModule) recordNotesContextError(store *NotesStore, err error) {
+	if m == nil || store == nil || err == nil {
 		return
 	}
 	notesPath := filepath.Join(store.SessionDir, NotesFileName)
 	errorText := err.Error()
 	errorKey := notesPath + "\x00" + errorText
-	e.notesContextErrorMu.Lock()
-	emit := e.notesContextErrorKey != errorKey
-	e.notesContextErrorKey = errorKey
-	e.notesContextErrorMu.Unlock()
+	m.notesContextErrorMu.Lock()
+	emit := m.notesContextErrorKey != errorKey
+	m.notesContextErrorKey = errorKey
+	m.notesContextErrorMu.Unlock()
 	if emit {
-		_ = e.emit(events.Event{Type: "notes.errored", TurnID: e.PendingInputStatus().TurnID, Payload: NotesErroredPayload{
+		_ = m.emit(events.Event{Type: "notes.errored", TurnID: m.activeTurnID(), Payload: NotesErroredPayload{
 			Error: errorText,
 			Path:  notesPath,
 		}})
@@ -78,22 +81,36 @@ func notesProviderPath(store *NotesStore) string {
 	return filepath.ToSlash(filepath.Join(".juex", "sessions", sessionID, NotesFileName))
 }
 
-func (e *Engine) clearNotesContextError() {
-	if e == nil {
+func (m *NotesModule) clearNotesContextError() {
+	if m == nil {
 		return
 	}
-	e.notesContextErrorMu.Lock()
-	e.notesContextErrorKey = ""
-	e.notesContextErrorMu.Unlock()
+	m.notesContextErrorMu.Lock()
+	m.notesContextErrorKey = ""
+	m.notesContextErrorMu.Unlock()
 }
 
-func (e *Engine) emitNotesUpdated(turnID string, snapshot NotesSnapshot) {
-	if e == nil {
+func (m *NotesModule) emitNotesUpdated(turnID string, snapshot NotesSnapshot) {
+	if m == nil {
 		return
 	}
-	e.clearNotesContextError()
-	_ = e.emit(events.Event{Type: "notes.updated", TurnID: turnID, Payload: NotesUpdatedPayload{
+	m.clearNotesContextError()
+	_ = m.emit(events.Event{Type: "notes.updated", TurnID: turnID, Payload: NotesUpdatedPayload{
 		Content:   snapshot.Content,
 		UpdatedAt: snapshot.UpdatedAt,
 	}})
+}
+
+func (m *NotesModule) activeTurnID() string {
+	if m == nil || m.currentTurnID == nil {
+		return ""
+	}
+	return m.currentTurnID()
+}
+
+func (m *NotesModule) emit(event events.Event) error {
+	if m == nil || m.eventSink == nil {
+		return nil
+	}
+	return m.eventSink(event)
 }

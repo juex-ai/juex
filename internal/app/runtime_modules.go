@@ -6,6 +6,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
@@ -37,6 +38,8 @@ type constructedRuntimeModules struct {
 type sessionModuleOptions struct {
 	hookRunner               hooks.PolicyRunner
 	hookBaseRequest          hooks.Request
+	goalState                *juexruntime.GoalStateStore
+	notes                    *juexruntime.NotesStore
 	goalContinuation         bool
 	goalContinuationDeferrer juexruntime.GoalContinuationDeferrer
 }
@@ -157,6 +160,26 @@ func buildSessionModules(
 	shellSessions *tools.ShellSessionManager,
 	opts sessionModuleOptions,
 ) (*runtimemodule.Set, error) {
+	goalState := opts.goalState
+	if goalState == nil && cfg.ModuleEnabled(string(juexruntime.GoalModuleID)) {
+		goalState = goalStateStore(sess)
+	}
+	notes := opts.notes
+	if notes == nil && cfg.ModuleEnabled(string(juexruntime.NotesModuleID)) {
+		notes = notesStore(sess)
+	}
+	eventSink := func(event events.Event) error {
+		if engine == nil || engine.Bus == nil {
+			return nil
+		}
+		return engine.Bus.Emit(event)
+	}
+	currentTurnID := func() string {
+		if engine == nil {
+			return ""
+		}
+		return engine.PendingInputStatus().TurnID
+	}
 	builtinSpecs := []runtimemodule.SessionFactorySpec{
 		{
 			ID:      prompt.SessionContextModuleID,
@@ -169,9 +192,11 @@ func buildSessionModules(
 			ID:      juexruntime.GoalModuleID,
 			Enabled: cfg.ModuleEnabled(string(juexruntime.GoalModuleID)),
 			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
-				return juexruntime.NewGoalModuleWithOptions(engine, juexruntime.GoalModuleOptions{
+				return juexruntime.NewGoalModuleWithOptions(goalState, juexruntime.GoalModuleOptions{
 					EnableContinuation:   opts.goalContinuation,
 					ContinuationDeferrer: opts.goalContinuationDeferrer,
+					EventSink:            eventSink,
+					CurrentTurnID:        currentTurnID,
 				}), nil
 			},
 		},
@@ -179,10 +204,14 @@ func buildSessionModules(
 			ID:      juexruntime.NotesModuleID,
 			Enabled: cfg.ModuleEnabled(string(juexruntime.NotesModuleID)),
 			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
-				return juexruntime.NewNotesModule(engine), nil
+				return juexruntime.NewNotesModuleWithOptions(notes, juexruntime.NotesModuleOptions{
+					EventSink:     eventSink,
+					CurrentTurnID: currentTurnID,
+				}), nil
 			},
 		},
 	}
+	var set *runtimemodule.Set
 	if opts.hookRunner != nil && cfg.ModuleEnabled(string(hooks.ModuleID)) {
 		builtinSpecs = append(builtinSpecs, runtimemodule.SessionFactorySpec{
 			ID:      hooks.ModuleID,
@@ -194,27 +223,15 @@ func buildSessionModules(
 				base.EventsPath = filepath.Join(sess.Dir, "events.jsonl")
 				return hooks.NewModule(opts.hookRunner, hooks.ModuleOptions{
 					BaseRequest: base,
-					GoalState: func() []byte {
-						if engine == nil {
-							return nil
-						}
-						store := engine.SessionRuntimeSnapshot().GoalState
-						if store == nil {
-							return nil
-						}
-						state, err := store.Snapshot()
-						if err != nil {
-							return nil
-						}
-						return state.RawMessage()
-					},
+					GoalState:   func() []byte { return juexruntime.HookGoalStateFromModules(set) },
 				}), nil
 			},
 		})
 	}
 	specs = append(builtinSpecs, specs...)
 	sessionContext := sessionModuleContext(sess)
-	set, err := runtimemodule.BuildAndStartSessionSet(ctx, specs, sessionContext, runtimemodule.ToolContext{
+	var err error
+	set, err = runtimemodule.BuildAndStartSessionSet(ctx, specs, sessionContext, runtimemodule.ToolContext{
 		Runtime: runtimeContext,
 		Session: &sessionContext,
 	})

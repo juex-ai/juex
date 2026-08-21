@@ -11,8 +11,8 @@ import (
 
 func TestGoalToolDefinitionsBindSessionStateGroup(t *testing.T) {
 	reg := tools.NewRegistry()
-	eng := &Engine{Tools: reg, GoalState: NewGoalStateStore(t.TempDir(), GoalStateOptions{})}
-	installModuleTools(t, reg, NewGoalModule(eng))
+	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
+	installModuleTools(t, reg, NewGoalModule(store))
 	definitions := GoalToolDefinitions()
 	if len(definitions) != 3 {
 		t.Fatalf("definition count = %d, want 3", len(definitions))
@@ -34,8 +34,8 @@ func TestGoalToolDefinitionsBindSessionStateGroup(t *testing.T) {
 
 func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 	reg := tools.NewRegistry()
-	eng := &Engine{Tools: reg, GoalState: NewGoalStateStore(t.TempDir(), GoalStateOptions{})}
-	installModuleTools(t, reg, NewGoalModule(eng))
+	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
+	installModuleTools(t, reg, NewGoalModule(store))
 	createTool, ok := reg.Get(GoalToolCreate)
 	if !ok {
 		t.Fatal("create_goal is not registered")

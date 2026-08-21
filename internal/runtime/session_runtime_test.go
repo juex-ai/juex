@@ -25,8 +25,6 @@ func TestReplaceSessionRuntimePublishesCoherentBundle(t *testing.T) {
 	engine := &Engine{
 		Session:           first,
 		PendingInputQueue: NewPendingInputQueue(first.Dir, PendingInputQueueOptions{}),
-		Notes:             NewNotesStore(first.Dir),
-		GoalState:         NewGoalStateStore(first.Dir, GoalStateOptions{}),
 	}
 	engine.Prompt = sessionRuntimeTestPrompt(engine, root)
 	firstModules := newSessionRuntimeTestModuleSet(t)
@@ -64,8 +62,6 @@ func TestReplaceSessionRuntimeRejectsBusyRuntimeAtomically(t *testing.T) {
 		Session:           first,
 		Prompt:            &prompt.Builder{},
 		PendingInputQueue: NewPendingInputQueue(first.Dir, PendingInputQueueOptions{}),
-		Notes:             NewNotesStore(first.Dir),
-		GoalState:         NewGoalStateStore(first.Dir, GoalStateOptions{}),
 	}
 	if err := engine.ReplaceSessionRuntime(first); err != nil {
 		t.Fatal(err)
@@ -312,12 +308,6 @@ func assertSessionRuntimeBundle(t *testing.T, snapshot SessionRuntimeSnapshot, w
 	}
 	if snapshot.PendingInputQueue == nil || filepath.Dir(snapshot.PendingInputQueue.path) != want.Dir {
 		t.Fatalf("pending queue = %+v, want session dir %q", snapshot.PendingInputQueue, want.Dir)
-	}
-	if snapshot.Notes == nil || snapshot.Notes.SessionDir != want.Dir {
-		t.Fatalf("notes = %+v, want session dir %q", snapshot.Notes, want.Dir)
-	}
-	if snapshot.GoalState == nil || snapshot.GoalState.SessionDir != want.Dir {
-		t.Fatalf("goal state = %+v, want session dir %q", snapshot.GoalState, want.Dir)
 	}
 }
 

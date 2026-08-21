@@ -213,7 +213,11 @@ func (p *goalSideQueueProvider) Complete(ctx context.Context, _ string, history 
 			continue
 		}
 		reason := "subscribed result incorporated"
-		if _, err := p.app.Engine.GoalState.Update(runtime.GoalStateUpdate{
+		goalState, _ := runtime.SessionStateStoresFromModules(p.app.Engine.SessionRuntimeSnapshot().Modules)
+		if goalState == nil {
+			return llm.Response{}, errors.New("goal module store is unavailable")
+		}
+		if _, err := goalState.Update(runtime.GoalStateUpdate{
 			Status:       runtime.GoalStatusSuccess,
 			StatusReason: &reason,
 		}); err != nil {
@@ -485,7 +489,8 @@ func TestSideSessionCreateRunsThreeChildrenConcurrently(t *testing.T) {
 func TestManagedSideSessionSharesPrimaryGoalAndNotes(t *testing.T) {
 	child := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
 	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, child)
-	if _, err := parent.Engine.Notes.Update("primary notes"); err != nil {
+	parentGoal, parentNotes := appSessionStateStores(t, parent)
+	if _, err := parentNotes.Update("primary notes"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -505,16 +510,17 @@ func TestManagedSideSessionSharesPrimaryGoalAndNotes(t *testing.T) {
 	}
 	childRuntime := managed.app.Engine.SessionRuntimeSnapshot()
 	parentRuntime := parent.Engine.SessionRuntimeSnapshot()
-	if childRuntime.GoalState != parentRuntime.GoalState || childRuntime.Notes != parentRuntime.Notes {
-		t.Fatalf("shared stores differ: child=%p/%p parent=%p/%p", childRuntime.GoalState, childRuntime.Notes, parentRuntime.GoalState, parentRuntime.Notes)
+	childGoal, childNotes := runtime.SessionStateStoresFromModules(childRuntime.Modules)
+	if childGoal != parentGoal || childNotes != parentNotes {
+		t.Fatalf("shared stores differ: child=%p/%p parent=%p/%p", childGoal, childNotes, parentGoal, parentNotes)
 	}
 	if childRuntime.Session.Dir == parentRuntime.Session.Dir {
 		t.Fatal("side session reused primary transcript directory")
 	}
-	if _, err := childRuntime.Notes.Update("updated by side"); err != nil {
+	if _, err := childNotes.Update("updated by side"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := parentRuntime.Notes.Snapshot()
+	got, err := parentNotes.Snapshot()
 	if err != nil || got.Content != "updated by side" {
 		t.Fatalf("primary notes = %+v, err=%v", got, err)
 	}
@@ -1131,7 +1137,7 @@ func TestSideSessionDoesNotDeliverAfterPrimaryLosesWorkspaceOwnership(t *testing
 func TestManagedSideSessionSkipsSharedGoalCompletionGate(t *testing.T) {
 	child := &scriptedSideProvider{}
 	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, child)
-	if _, err := parent.Engine.GoalState.Create("primary owns this goal", "primary completes it"); err != nil {
+	if _, err := appGoalStateStore(t, parent).Create("primary owns this goal", "primary completes it"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1223,7 +1229,8 @@ func TestPrimaryGoalContinuationDefersWhileSubscribedResultIsQueued(t *testing.T
 	primaryProvider := &goalSideQueueProvider{started: make(chan struct{}), release: make(chan struct{})}
 	parent := newSideSessionTestApp(t, primaryProvider, &scriptedSideProvider{})
 	primaryProvider.app = parent
-	if _, err := parent.Engine.GoalState.Create("finish delegated work", "incorporate the subscribed result"); err != nil {
+	goalState := appGoalStateStore(t, parent)
+	if _, err := goalState.Create("finish delegated work", "incorporate the subscribed result"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1255,7 +1262,7 @@ func TestPrimaryGoalContinuationDefersWhileSubscribedResultIsQueued(t *testing.T
 			if err := <-primaryDone; err != nil {
 				t.Fatal(err)
 			}
-			goal, err := parent.Engine.GoalState.Snapshot()
+			goal, err := goalState.Snapshot()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1277,7 +1284,8 @@ func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testin
 	firstChild := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
 	secondChild := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
 	parent := newSideSessionTestApp(t, primaryProvider, firstChild, secondChild)
-	if _, err := parent.Engine.GoalState.Create("finish delegated work", "both worker results are incorporated"); err != nil {
+	goalState := appGoalStateStore(t, parent)
+	if _, err := goalState.Create("finish delegated work", "both worker results are incorporated"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1313,7 +1321,7 @@ func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testin
 	if primaryCalls != 1 {
 		t.Fatalf("primary provider calls = %d, want 1 without Goal continuation", primaryCalls)
 	}
-	goal, err := parent.Engine.GoalState.Snapshot()
+	goal, err := goalState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1992,10 +2000,10 @@ func TestSideSessionDefaultChildInheritsSummaryProvider(t *testing.T) {
 			t.Errorf("close parent app: %v", err)
 		}
 	})
-	state := parent.Engine.SessionRuntimeSnapshot()
+	goalState, notes := appSessionStateStores(t, parent)
 	child, err := parent.sideSessions.newChildApp(sideSessionChildOptions{
 		Config: parent.cfg, Model: "openai:primary", UseParentProvider: true,
-		GoalState: state.GoalState, Notes: state.Notes, Observables: parent.obsv,
+		GoalState: goalState, Notes: notes, Observables: parent.obsv,
 	})
 	if err != nil {
 		t.Fatal(err)

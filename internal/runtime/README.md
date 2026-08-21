@@ -54,7 +54,7 @@ The required order is:
 
 The lock order for replacement and Turn work is App Session lifecycle,
 `Engine.mu`, `Engine.sessionRuntimeMu`, `Engine.pendingMu`, then Session or
-store locks. Do not acquire these in reverse order.
+Module-owned store locks. Do not acquire these in reverse order.
 
 Tool handler output is not automatically the Provider-visible result. The raw
 text, structured result, timeout, exit code, and cause belong to the Tool call's
