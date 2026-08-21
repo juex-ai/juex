@@ -1722,6 +1722,62 @@ func registerFromClonedKeys(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionTracksReturnedReferenceAliases(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+func sameClosers(resources []closer) []closer { return resources }
+func sameRegistrars(registries map[string]registrar) map[string]registrar { return registries }
+func cleanupFromReturnedAlias(application *App) {
+	resources := make([]closer, 1)
+	alias := sameClosers(resources)
+	alias[0] = application.manager
+	_ = resources[0].Close()
+}
+func registerFromReturnedAlias(application *App) {
+	registries := map[string]registrar{}
+	alias := sameRegistrars(registries)
+	alias["main"] = application.registry
+	registries["main"].Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "returned_aliases.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resources.Close,") {
+		t.Fatalf("cleanup calls = %v, want helper-returned slice alias cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registries.Register,") {
+		t.Fatalf("Tool registration calls = %v, want helper-returned map alias registration", registrationCalls)
+	}
+}
+
 func TestSliceCollectionSourceArguments(t *testing.T) {
 	tests := []struct {
 		expression string
@@ -4373,10 +4429,36 @@ func trackReferenceAssignment(references map[string]bool, aliases map[string]map
 		return
 	}
 	references[key] = true
-	sourceKey := referenceSourceKey(expression)
-	if sourceKey != "" && (references[sourceKey] || isAddressExpression(expression) || referenceExpression) {
-		addReferenceAlias(aliases, key, sourceKey)
+	sourceKeys := []string{referenceSourceKey(expression)}
+	sourceKeys = append(sourceKeys, returnedReferenceSourceKeys(expressions, index, imports, values, types)...)
+	for _, sourceKey := range sourceKeys {
+		if sourceKey != "" && (references[sourceKey] || isAddressExpression(expression) || referenceExpression) {
+			addReferenceAlias(aliases, key, sourceKey)
+		}
 	}
+}
+
+func returnedReferenceSourceKeys(expressions []ast.Expr, resultIndex int, imports map[string]string, values map[string]string, types compositionTypeIndex) []string {
+	if len(expressions) != 1 {
+		return nil
+	}
+	call, ok := expressions[0].(*ast.CallExpr)
+	if !ok {
+		return nil
+	}
+	callee := calledFunctionKey(call.Fun, imports, values, types)
+	var keys []string
+	for parameterIndex, prefixes := range resultParameterPathSummary(callee, resultIndex, types) {
+		if !prefixes[""] {
+			continue
+		}
+		for _, argument := range callArgumentsForParameter(call, callee, parameterIndex, imports, types) {
+			if key := referenceSourceKey(argument); key != "" {
+				keys = append(keys, key)
+			}
+		}
+	}
+	return keys
 }
 
 func referenceSourceKey(expression ast.Expr) string {
@@ -4423,8 +4505,10 @@ func isReferenceExpression(expression ast.Expr, references map[string]bool, impo
 		typeName := resolveNamedType(canonicalType(value.Type, imports), types)
 		return isReferenceTypeExpression(value.Type) || isReferenceTypeName(typeName)
 	case *ast.CallExpr:
-		identifier, ok := value.Fun.(*ast.Ident)
-		return ok && (identifier.Name == "make" || identifier.Name == "new")
+		if identifier, ok := value.Fun.(*ast.Ident); ok && (identifier.Name == "make" || identifier.Name == "new") {
+			return true
+		}
+		return isReferenceTypeName(resolveNamedType(expressionType(value, imports, values, types), types))
 	default:
 		return false
 	}
