@@ -26,7 +26,13 @@ var concreteFeatureImports = []string{
 // Framework package roots are explicit for the same reason as Foundation
 // directories: adding a new Framework root must be an architectural decision.
 var frameworkImports = []string{
+	modulePath + "/internal/prompt",
 	modulePath + "/internal/runtime",
+}
+
+var frameworkDirs = []string{
+	"internal/prompt",
+	"internal/runtime",
 }
 
 var featureResourceCleanupMethods = map[string]map[string]bool{
@@ -67,7 +73,10 @@ func TestFoundationDoesNotImportFrameworkOrConcreteFeatures(t *testing.T) {
 }
 
 func TestFrameworkDoesNotImportConcreteFeatures(t *testing.T) {
-	checkImports(t, repositoryRoot(t), "internal/runtime", "Framework", isConcreteFeatureImport)
+	root := repositoryRoot(t)
+	for _, dir := range frameworkDirs {
+		checkImports(t, root, dir, "Framework", isConcreteFeatureImport)
+	}
 }
 
 func TestAppCompositionDoesNotBypassModuleCatalogOrLifecycle(t *testing.T) {
@@ -163,6 +172,9 @@ func TestImportBoundaryClassifiesPromptContextAsConcreteFeature(t *testing.T) {
 	}
 	if !isFrameworkOrConcreteFeatureImport(modulePath + "/internal/runtime/module") {
 		t.Fatal("runtime Module package is not classified as Framework")
+	}
+	if !isFrameworkOrConcreteFeatureImport(modulePath + "/internal/prompt") {
+		t.Fatal("prompt assembly package is not classified as Framework")
 	}
 }
 
