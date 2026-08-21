@@ -2537,6 +2537,69 @@ func useReassignedCaptures(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionTracksCrossFilePackageCaptures(t *testing.T) {
+	state := `package app
+import "github.com/juex-ai/juex/internal/tools"
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+var resource closer = &unrelatedCloser{}
+var registry registrar = &unrelatedRegistrar{}
+var cleanup = func() { _ = resource.Close() }
+var register = func() { registry.Register(nil) }
+`
+	invoke := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+func usePackageCaptures(application *App) {
+	resource = application.manager
+	registry = application.registry
+	cleanup()
+	register()
+}
+`
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "capture_state.go")
+	invokePath := filepath.Join(dir, "capture_invoke.go")
+	if err := os.WriteFile(statePath, []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(invokePath, []byte(invoke), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), invokePath, invoke, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",cleanup,") {
+		t.Fatalf("cleanup calls = %v, want cross-file package capture cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",register,") {
+		t.Fatalf("Tool registration calls = %v, want cross-file package capture registration", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionTracksReferenceRangeValues(t *testing.T) {
 	source := `package app
 import (
@@ -3957,7 +4020,7 @@ func toolCaptureBindings(values map[string]string, types compositionTypeIndex) m
 
 func stableBindingKey(identifier *ast.Ident) string {
 	if identifier.Obj == nil || identifier.Obj.Pos() == token.NoPos {
-		return ""
+		return "$package:" + identifier.Name
 	}
 	return fmt.Sprintf("%s@%d", identifier.Name, identifier.Obj.Pos())
 }
@@ -3991,10 +4054,21 @@ func capturedInvocationState(literal *ast.FuncLit, scope ast.Node, eligible map[
 			return true
 		}
 		stableKey := stableBindingKey(identifier)
-		if stableOrigins[stableKey] {
+		originKey := stableKey
+		valueKey := stableKey
+		if identifier.Obj != nil && (identifier.Obj.Pos() < literal.Pos() || identifier.Obj.Pos() > literal.End()) {
+			packageKey := "$package:" + identifier.Name
+			if !stableOrigins[originKey] && stableOrigins[packageKey] {
+				originKey = packageKey
+			}
+			if stableValues[valueKey] == "" && stableValues[packageKey] != "" {
+				valueKey = packageKey
+			}
+		}
+		if stableOrigins[originKey] {
 			origins[bindingKey(identifier)] = map[int]bool{capturedInvocationParameterIndex: true}
 		}
-		if typeName := stableValues[stableKey]; typeName != "" {
+		if typeName := stableValues[valueKey]; typeName != "" {
 			values[bindingKey(identifier)] = typeName
 		}
 		return true
