@@ -332,6 +332,8 @@ type App struct {
 	nestedClosureRegistry registrar
 	correlatedResource closer
 	correlatedRegistry registrar
+	namedHelperResource closer
+	namedHelperRegistry registrar
 }
 type AppAlias = App
 var appFactory = func(manager *mcp.Manager, registry *tools.Registry) *App {
@@ -391,6 +393,16 @@ func (application *App) bindCorrelated(manager *mcp.Manager, registry *tools.Reg
 	setter(application, struct{}{}, struct{}{})
 	setter(&App{}, manager, registry)
 }
+func setAppFields(target *App, resource any, registryValue any) {
+	target.namedHelperResource = resource.(closer)
+	target.namedHelperRegistry = registryValue.(registrar)
+}
+func delegateAppFields(target *App, resource any, registryValue any) {
+	setAppFields(target, resource, registryValue)
+}
+func (application *App) bindNamedHelper(manager *mcp.Manager, registry *tools.Registry) {
+	delegateAppFields(application, manager, registry)
+}
 func (application *App) bypass() {
 	_ = application.resource.Close()
 	application.registry.Register(nil)
@@ -408,6 +420,8 @@ func (application *App) bypass() {
 	application.nestedClosureRegistry.Register(nil)
 	_ = application.correlatedResource.Close()
 	application.correlatedRegistry.Register(nil)
+	_ = application.namedHelperResource.Close()
+	application.namedHelperRegistry.Register(nil)
 }
 `
 	dir := t.TempDir()
@@ -427,14 +441,14 @@ func (application *App) bypass() {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if len(cleanupCalls) != 7 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" || cleanupCalls[2] != "application.closureResource.Close" || cleanupCalls[3] != "application.iifeResource.Close" || cleanupCalls[4] != "application.variadicResource.Close" || cleanupCalls[5] != "application.namedClosureResource.Close" || cleanupCalls[6] != "application.nestedClosureResource.Close" {
+	if len(cleanupCalls) != 8 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" || cleanupCalls[2] != "application.closureResource.Close" || cleanupCalls[3] != "application.iifeResource.Close" || cleanupCalls[4] != "application.variadicResource.Close" || cleanupCalls[5] != "application.namedClosureResource.Close" || cleanupCalls[6] != "application.nestedClosureResource.Close" || cleanupCalls[7] != "application.namedHelperResource.Close" {
 		t.Fatalf("cleanup calls = %v, want receiver field cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if len(registrationCalls) != 7 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" || registrationCalls[2] != "application.closureRegistry.Register" || registrationCalls[3] != "application.iifeRegistry.Register" || registrationCalls[4] != "application.variadicRegistry.Register" || registrationCalls[5] != "application.namedClosureRegistry.Register" || registrationCalls[6] != "application.nestedClosureRegistry.Register" {
+	if len(registrationCalls) != 8 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" || registrationCalls[2] != "application.closureRegistry.Register" || registrationCalls[3] != "application.iifeRegistry.Register" || registrationCalls[4] != "application.variadicRegistry.Register" || registrationCalls[5] != "application.namedClosureRegistry.Register" || registrationCalls[6] != "application.nestedClosureRegistry.Register" || registrationCalls[7] != "application.namedHelperRegistry.Register" {
 		t.Fatalf("Tool registration calls = %v, want receiver field registration", registrationCalls)
 	}
 }
@@ -10089,6 +10103,7 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 		for _, source := range sources {
 			for _, function := range appCompositionScopes(source.file) {
 				functionKey := declaredFunctionKey(function, source.imports, modulePath+"/internal/app")
+				currentImports := source.imports
 				receivers := appReceiverBindingKeys(function.Recv, source.imports)
 				values := cloneStringMap(types.packageValues)
 				resources := cloneCleanupResourceMap(types.packageResources)
@@ -10106,39 +10121,56 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 				}
 				seedAppReceiverFieldState(values, resources, receivers, *types)
 				activeLiterals := make(map[*ast.FuncLit]bool)
+				activeFunctions := map[string]bool{functionKey: true}
 				activeFunctionKey := functionKey
 				var visit func(ast.Node) bool
 				visit = func(node ast.Node) bool {
 					switch statement := node.(type) {
 					case *ast.CallExpr:
 						literal := functionLiteralExpression(statement.Fun)
-						literalKey := ""
+						called := indexedAppFunction{literal: literal, imports: currentImports}
 						if literal != nil {
-							literalKey = localFunctionKey(activeFunctionKey, literal)
+							called.key = localFunctionKey(activeFunctionKey, literal)
+						} else {
+							callee := calledFunctionKey(statement.Fun, currentImports, values, *types)
+							called, _ = indexedAppFunctionForKey(callee, *types)
 						}
-						if literal == nil {
-							callee := calledFunctionKey(statement.Fun, source.imports, values, *types)
-							if indexed, ok := indexedAppFunctionForKey(callee, *types); ok && indexed.literal != nil {
-								literal = indexed.literal
-								literalKey = indexed.key
-							}
-						}
-						if literal != nil {
+						if called.decl != nil || called.literal != nil {
 							outerValues := values
 							outerResources := resources
 							outerReceivers := receivers
+							callerImports := currentImports
 							values = cloneStringMap(values)
 							resources = cloneCleanupResourceMap(resources)
 							receivers = cloneBoolMap(receivers)
-							seedAppFieldLiteralParameters(literal, source.imports, values, resources, *types)
-							seedAppFieldLiteralArguments(statement, literal, source.imports, values, resources, receivers, *types)
-							if !activeLiterals[literal] {
-								activeLiterals[literal] = true
+							seedAppFieldParameters(called.parameters(), called.imports, values, resources, *types)
+							seedAppFieldArguments(statement, called.parameters(), callerImports, values, resources, receivers, *types)
+							for name, typeName := range namedValueTypes(called.receiver(), called.imports) {
+								values[name] = typeName
+							}
+							for name, paths := range namedCleanupValues(called.receiver(), called.imports, *types) {
+								resources[name] = paths
+							}
+							for receiver := range appReceiverBindingKeys(called.receiver(), called.imports) {
+								receivers[receiver] = true
+							}
+							seedAppReceiverFieldState(values, resources, receivers, *types)
+							literalActive := called.literal != nil && activeLiterals[called.literal]
+							if !literalActive && !activeFunctions[called.key] {
+								if called.literal != nil {
+									activeLiterals[called.literal] = true
+								}
+								activeFunctions[called.key] = true
 								previousFunctionKey := activeFunctionKey
-								activeFunctionKey = literalKey
-								ast.Inspect(literal.Body, visit)
+								activeFunctionKey = called.key
+								currentImports = called.imports
+								ast.Inspect(called.body(), visit)
+								currentImports = callerImports
 								activeFunctionKey = previousFunctionKey
-								delete(activeLiterals, literal)
+								delete(activeFunctions, called.key)
+								if called.literal != nil {
+									delete(activeLiterals, called.literal)
+								}
 							}
 							values = outerValues
 							resources = outerResources
@@ -10149,12 +10181,14 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 							return false
 						}
 					case *ast.FuncLit:
-						seedAppFieldLiteralParameters(statement, source.imports, values, resources, *types)
+						seedAppFieldParameters(statement.Type.Params, currentImports, values, resources, *types)
 						if !activeLiterals[statement] {
 							activeLiterals[statement] = true
 							previousFunctionKey := activeFunctionKey
 							activeFunctionKey = localFunctionKey(activeFunctionKey, statement)
+							activeFunctions[activeFunctionKey] = true
 							ast.Inspect(statement.Body, visit)
+							delete(activeFunctions, activeFunctionKey)
 							activeFunctionKey = previousFunctionKey
 							delete(activeLiterals, statement)
 						}
@@ -10162,7 +10196,7 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 					case *ast.AssignStmt:
 						for index, left := range statement.Lhs {
 							trackAppReceiverAlias(left, statement.Rhs, index, receivers)
-							indexAppReceiverFieldAssignment(left, statement.Rhs, index, receivers, source.imports, values, resources, types)
+							indexAppReceiverFieldAssignment(left, statement.Rhs, index, receivers, currentImports, values, resources, types)
 							if localType := localFunctionType(activeFunctionKey, left, statement.Rhs, index); localType != "" {
 								setMayValueType(values, assignmentValueKey(left), localType, *types)
 							}
@@ -10176,11 +10210,11 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 							spec := raw.(*ast.ValueSpec)
 							for index, name := range spec.Names {
 								trackAppReceiverAlias(name, spec.Values, index, receivers)
-								typeName := canonicalType(spec.Type, source.imports)
+								typeName := canonicalType(spec.Type, currentImports)
 								paths := cleanupPathsForType(typeName, *types, nil)
 								if len(spec.Values) != 0 {
-									typeName = assignedToolExpressionType(spec.Values, index, source.imports, values, *types)
-									paths = assignedCleanupPaths(spec.Values, index, source.imports, values, resources, *types)
+									typeName = assignedToolExpressionType(spec.Values, index, currentImports, values, *types)
+									paths = assignedCleanupPaths(spec.Values, index, currentImports, values, resources, *types)
 								}
 								if localType := localFunctionType(activeFunctionKey, name, spec.Values, index); localType != "" {
 									typeName = localType
@@ -10192,7 +10226,7 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 							}
 						}
 					case *ast.CompositeLit:
-						indexAppCompositeLiteralFields(statement, source.imports, values, resources, types)
+						indexAppCompositeLiteralFields(statement, currentImports, values, resources, types)
 					}
 					return true
 				}
@@ -10205,19 +10239,19 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 	}
 }
 
-func seedAppFieldLiteralParameters(literal *ast.FuncLit, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types compositionTypeIndex) {
-	for name, typeName := range namedValueTypes(literal.Type.Params, imports) {
+func seedAppFieldParameters(parameters *ast.FieldList, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types compositionTypeIndex) {
+	for name, typeName := range namedValueTypes(parameters, imports) {
 		setMayValueType(values, name, typeName, types)
 	}
-	for name, paths := range namedCleanupValues(literal.Type.Params, imports, types) {
+	for name, paths := range namedCleanupValues(parameters, imports, types) {
 		resources[name] = mergeCleanupPaths(resources[name], paths)
 	}
 }
 
-func seedAppFieldLiteralArguments(call *ast.CallExpr, literal *ast.FuncLit, imports map[string]string, values map[string]string, resources map[string]map[string]bool, receivers map[string]bool, types compositionTypeIndex) {
-	variadicIndex, variadic := variadicParameterIndex(literal.Type.Params)
+func seedAppFieldArguments(call *ast.CallExpr, parameters *ast.FieldList, imports map[string]string, values map[string]string, resources map[string]map[string]bool, receivers map[string]bool, types compositionTypeIndex) {
+	variadicIndex, variadic := variadicParameterIndex(parameters)
 	parameterIndex := 0
-	for _, field := range literal.Type.Params.List {
+	for _, field := range parameters.List {
 		for _, name := range field.Names {
 			key := bindingKey(name)
 			arguments := callArgumentsForParameterAt(call, parameterIndex, variadicIndex, variadic, imports)
