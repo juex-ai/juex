@@ -25,6 +25,7 @@ const localFunctionTypePrefix = "$local-function:"
 const genericTypePrefix = "$generic:"
 const genericTypeSeparator = "\x01"
 const receiverParameterIndex = -1
+const capturedInvocationParameterIndex = -2
 const packageFunctionScopeKey = modulePath + "/internal/app.$package"
 
 const (
@@ -2480,6 +2481,62 @@ func registerMetric() {
 	}
 }
 
+func TestAppCompositionInspectionTracksReassignedClosureCaptures(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func useReassignedCaptures(application *App) {
+	var resource closer = &unrelatedCloser{}
+	cleanup := func() { _ = resource.Close() }
+	var registry registrar = &unrelatedRegistrar{}
+	register := func() { registry.Register(nil) }
+	resource = application.manager
+	registry = application.registry
+	cleanup()
+	register()
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "reassigned_captures.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",cleanup,") {
+		t.Fatalf("cleanup calls = %v, want reassigned capture cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",register,") {
+		t.Fatalf("Tool registration calls = %v, want reassigned capture registration", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionTracksReferenceRangeValues(t *testing.T) {
 	source := `package app
 import (
@@ -3846,14 +3903,12 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 }
 
 func inferenceState(function indexedAppFunction) (map[string]map[int]bool, map[string]string) {
-	origins := make(map[string]map[int]bool)
-	if function.seedOrigins == nil {
-		origins = functionParameterOrigins(function)
-	} else {
-		for key, source := range function.seedOrigins {
+	origins := functionParameterOrigins(function)
+	for key, source := range function.seedOrigins {
+		if origins[key] == nil {
 			origins[key] = make(map[int]bool, len(source))
-			mergeOrigins(origins[key], source)
 		}
+		mergeOrigins(origins[key], source)
 	}
 	values := make(map[string]string)
 	for key, typeName := range function.seedValues {
@@ -3866,6 +3921,103 @@ func inferenceState(function indexedAppFunction) (map[string]map[int]bool, map[s
 		values[name] = typeName
 	}
 	return origins, values
+}
+
+func indexedAppFunctionForKey(key string, types compositionTypeIndex) (indexedAppFunction, bool) {
+	for _, function := range types.appFunctions {
+		if function.key == key {
+			return function, true
+		}
+	}
+	return indexedAppFunction{}, false
+}
+
+func cleanupCaptureBindings(resources map[string]map[string]bool) map[string]bool {
+	bindings := make(map[string]bool)
+	for key, paths := range resources {
+		if len(paths) != 0 {
+			bindings[key] = true
+		}
+	}
+	return bindings
+}
+
+func toolCaptureBindings(values map[string]string, types compositionTypeIndex) map[string]bool {
+	bindings := make(map[string]bool)
+	for key, typeName := range values {
+		resolved := resolveNamedType(typeName, types)
+		if resolved != modulePath+"/internal/tools.Registry" && typeName != toolRegistryCollectionType && typeName != toolRegistryMapKeyCollectionType && typeName != toolRegistryMapKeyValueCollectionType && typeName != channelTypePrefix+modulePath+"/internal/tools.Registry" && typeName != toolRegistrationCallableType {
+			continue
+		}
+		root, _ := splitAssignmentValueKey(key)
+		bindings[root] = true
+	}
+	return bindings
+}
+
+func stableBindingKey(identifier *ast.Ident) string {
+	if identifier.Obj == nil || identifier.Obj.Pos() == token.NoPos {
+		return ""
+	}
+	return fmt.Sprintf("%s@%d", identifier.Name, identifier.Obj.Pos())
+}
+
+func capturedInvocationState(literal *ast.FuncLit, scope ast.Node, eligible map[string]bool, currentValues map[string]string) (map[string]map[int]bool, map[string]string) {
+	stableOrigins := make(map[string]bool)
+	stableValues := make(map[string]string)
+	ast.Inspect(scope, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		stableKey := stableBindingKey(identifier)
+		if stableKey == "" {
+			return true
+		}
+		key := bindingKey(identifier)
+		if eligible[key] {
+			stableOrigins[stableKey] = true
+		}
+		if typeName := currentValues[key]; typeName != "" {
+			stableValues[stableKey] = typeName
+		}
+		return true
+	})
+	origins := make(map[string]map[int]bool)
+	values := make(map[string]string)
+	ast.Inspect(literal, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		stableKey := stableBindingKey(identifier)
+		if stableOrigins[stableKey] {
+			origins[bindingKey(identifier)] = map[int]bool{capturedInvocationParameterIndex: true}
+		}
+		if typeName := stableValues[stableKey]; typeName != "" {
+			values[bindingKey(identifier)] = typeName
+		}
+		return true
+	})
+	return origins, values
+}
+
+func invokesCapturedCleanup(callee string, scope ast.Node, values map[string]string, resources map[string]map[string]bool, types compositionTypeIndex) bool {
+	function, ok := indexedAppFunctionForKey(callee, types)
+	if !ok || function.literal == nil {
+		return false
+	}
+	function.seedOrigins, function.seedValues = capturedInvocationState(function.literal, scope, cleanupCaptureBindings(resources), values)
+	return inferCleanupParameters(function, types)[capturedInvocationParameterIndex]
+}
+
+func invokesCapturedToolRegistration(callee string, scope ast.Node, values map[string]string, types compositionTypeIndex) bool {
+	function, ok := indexedAppFunctionForKey(callee, types)
+	if !ok || function.literal == nil {
+		return false
+	}
+	function.seedOrigins, function.seedValues = capturedInvocationState(function.literal, scope, toolCaptureBindings(values, types), values)
+	return inferToolRegistrationParameters(function, types)[capturedInvocationParameterIndex]
 }
 
 func inferCleanupParameters(function indexedAppFunction, types compositionTypeIndex) map[int]bool {
@@ -4862,6 +5014,9 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					}
 				}
 				callee := calledFunctionKey(value.Fun, imports, values, types)
+				if invokesCapturedCleanup(callee, function.Body, values, resources, types) {
+					reportCleanup(value, selectorChain(value.Fun))
+				}
 				for destinationIndex, sources := range types.parameterWrites[callee] {
 					for _, destination := range callArgumentsForParameter(value, callee, destinationIndex, imports, types) {
 						destinationName, _ := assignmentBinding(destination)
@@ -5134,6 +5289,9 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					}
 				}
 				callee := calledFunctionKey(value.Fun, imports, values, types)
+				if invokesCapturedToolRegistration(callee, function.Body, values, types) {
+					reportTool(value, selectorChain(value.Fun))
+				}
 				for destinationIndex, sources := range types.parameterWrites[callee] {
 					for _, destination := range callArgumentsForParameter(value, callee, destinationIndex, imports, types) {
 						destinationName, _ := assignmentBinding(destination)
