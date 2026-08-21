@@ -21,6 +21,7 @@ const (
 	sliceTypePrefix = "$slice:"
 	mapTypePrefix   = "$map:"
 	typeSeparator   = "\x00"
+	embeddedPrefix  = "$embedded:"
 )
 
 var concreteFeatureImports = []string{
@@ -92,6 +93,7 @@ var foundationDirs = []string{
 	"internal/homestore",
 	"internal/llm",
 	"internal/provenance",
+	"internal/processmetrics",
 	"internal/sandbox",
 	"internal/session",
 	"internal/statusstream",
@@ -207,10 +209,14 @@ func closeFeature(module *mcp.Module) {
 func TestAppFeatureCleanupInspectionResolvesNestedSelectors(t *testing.T) {
 	source := `package app
 import "github.com/juex-ai/juex/internal/modules/builtintools"
-type App struct { composition runtimeModuleComposition }
+type App struct {
+	composition runtimeModuleComposition
+	runtimeModuleComposition
+}
 type runtimeModuleComposition struct { builtinTools *builtintools.Module }
 func closeFeature(application *App) {
 	_ = application.composition.builtinTools.CloseRuntime(nil)
+	_ = application.builtinTools.CloseRuntime(nil)
 }`
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested.go")
@@ -229,7 +235,7 @@ func closeFeature(application *App) {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	if len(calls) != 1 || calls[0] != "application.composition.builtinTools.CloseRuntime" {
+	if len(calls) != 2 || calls[0] != "application.composition.builtinTools.CloseRuntime" || calls[1] != "application.builtinTools.CloseRuntime" {
 		t.Fatalf("cleanup calls = %v, want nested Feature Module cleanup", calls)
 	}
 }
@@ -527,6 +533,11 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 					types.fields[typeName] = make(map[string]string)
 				}
 				for _, field := range structure.Fields.List {
+					if len(field.Names) == 0 {
+						fieldType := canonicalType(field.Type, imports)
+						types.fields[typeName][embeddedPrefix+fieldType] = fieldType
+						continue
+					}
 					for _, name := range field.Names {
 						types.fields[typeName][name.Name] = canonicalType(field.Type, imports)
 					}
@@ -594,6 +605,11 @@ func indexCleanupAndConstructors(file *ast.File, packagePath string, imports map
 					types.fields[typeName] = make(map[string]string)
 				}
 				for _, field := range structure.Fields.List {
+					if len(field.Names) == 0 {
+						fieldType := canonicalTypeInPackage(field.Type, imports, packagePath)
+						types.fields[typeName][embeddedPrefix+fieldType] = fieldType
+						continue
+					}
 					for _, name := range field.Names {
 						types.fields[typeName][name.Name] = canonicalTypeInPackage(field.Type, imports, packagePath)
 					}
@@ -1182,7 +1198,11 @@ func cleanupPathsForType(typeName string, types compositionTypeIndex, visiting m
 	paths := make(map[string]bool)
 	for field, fieldType := range fields {
 		for path := range cleanupPathsForType(fieldType, types, visiting) {
-			paths[field+"."+path] = true
+			if strings.HasPrefix(field, embeddedPrefix) {
+				paths[path] = true
+			} else {
+				paths[field+"."+path] = true
+			}
 		}
 	}
 	if len(paths) == 0 {
@@ -1343,7 +1363,7 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 		return canonicalType(value.Type, imports)
 	case *ast.SelectorExpr:
 		receiverType := expressionType(value.X, imports, values, types)
-		return types.fields[receiverType][value.Sel.Name]
+		return compositionFieldType(receiverType, value.Sel.Name, types, nil)
 	case *ast.CallExpr:
 		selector, ok := value.Fun.(*ast.SelectorExpr)
 		if !ok {
@@ -1362,6 +1382,30 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 			if selector.Sel.Name == "BuildToolRegistry" {
 				return modulePath + "/internal/tools.Registry"
 			}
+		}
+	}
+	return ""
+}
+
+func compositionFieldType(typeName, fieldName string, types compositionTypeIndex, visiting map[string]bool) string {
+	if visiting[typeName] {
+		return ""
+	}
+	if visiting == nil {
+		visiting = make(map[string]bool)
+	}
+	visiting[typeName] = true
+	defer delete(visiting, typeName)
+	fields := types.fields[typeName]
+	if fieldType := fields[fieldName]; fieldType != "" {
+		return fieldType
+	}
+	for field, embeddedType := range fields {
+		if !strings.HasPrefix(field, embeddedPrefix) {
+			continue
+		}
+		if fieldType := compositionFieldType(embeddedType, fieldName, types, visiting); fieldType != "" {
+			return fieldType
 		}
 	}
 	return ""
