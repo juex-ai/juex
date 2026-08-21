@@ -30,6 +30,7 @@ const packageFunctionScopeKey = modulePath + "/internal/app.$package"
 const (
 	sliceTypePrefix    = "$slice:"
 	arrayTypePrefix    = "$array:"
+	pointerTypePrefix  = "$pointer:"
 	mapTypePrefix      = "$map:"
 	channelTypePrefix  = "$channel:"
 	typeSeparator      = "\x00"
@@ -2258,6 +2259,62 @@ func useReferenceConversions(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionTracksReferenceRangeValues(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type holder struct {
+	resource closer
+	registry registrar
+}
+func useReferenceRange(application *App) {
+	holders := []*holder{{}}
+	for _, item := range holders {
+		item.resource = application.manager
+		item.registry = application.registry
+		break
+	}
+	_ = holders[0].resource.Close()
+	holders[0].registry.Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "reference_range.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",holders.resource.Close,") {
+		t.Fatalf("cleanup calls = %v, want reference range cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",holders.registry.Register,") {
+		t.Fatalf("Tool registration calls = %v, want reference range registration", registrationCalls)
+	}
+}
+
 func TestSliceCollectionSourceArguments(t *testing.T) {
 	tests := []struct {
 		expression string
@@ -3884,7 +3941,7 @@ func namedReferenceValues(fields *ast.FieldList, imports map[string]string, type
 func isReferenceTypeName(typeName string, types compositionTypeIndex) bool {
 	visited := make(map[string]bool)
 	for typeName != "" && !visited[typeName] {
-		if strings.HasPrefix(typeName, sliceTypePrefix) || strings.HasPrefix(typeName, mapTypePrefix) || strings.HasPrefix(typeName, channelTypePrefix) || types.referenceTypes[typeName] {
+		if strings.HasPrefix(typeName, pointerTypePrefix) || strings.HasPrefix(typeName, sliceTypePrefix) || strings.HasPrefix(typeName, mapTypePrefix) || strings.HasPrefix(typeName, channelTypePrefix) || types.referenceTypes[typeName] {
 			return true
 		}
 		visited[typeName] = true
@@ -4365,6 +4422,8 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 						}
 					}
 				} else {
+					trackReferenceRangeBinding(references, aliases, value.Key, value.X, collectionType, keyType, types)
+					trackReferenceRangeBinding(references, aliases, value.Value, value.X, collectionType, valueType, types)
 					if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" {
 						key := bindingKey(name)
 						values[key] = keyType
@@ -4627,7 +4686,8 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					}
 				}
 			case *ast.RangeStmt:
-				keyType, valueType, ok := rangeTypes(expressionType(value.X, imports, values, types), types)
+				collectionType := resolveNamedType(expressionType(value.X, imports, values, types), types)
+				keyType, valueType, ok := rangeTypes(collectionType, types)
 				if !ok {
 					keyType, valueType, iterator := iteratorRangeToolTypes(value.X, imports, values, types)
 					if iterator {
@@ -4639,6 +4699,8 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 						}
 					}
 				} else {
+					trackReferenceRangeBinding(references, aliases, value.Key, value.X, collectionType, keyType, types)
+					trackReferenceRangeBinding(references, aliases, value.Value, value.X, collectionType, valueType, types)
 					if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" {
 						values[bindingKey(name)] = keyType
 					}
@@ -4798,15 +4860,28 @@ func canonicalTypeInPackage(expression ast.Expr, imports map[string]string, pack
 			if value.Len == nil {
 				prefix = sliceTypePrefix
 			}
-			return prefix + canonicalTypeInPackage(value.Elt, imports, packagePath)
+			return prefix + canonicalCollectionElementType(value.Elt, imports, packagePath)
 		case *ast.MapType:
-			return mapTypePrefix + canonicalTypeInPackage(value.Key, imports, packagePath) + typeSeparator + canonicalTypeInPackage(value.Value, imports, packagePath)
+			return mapTypePrefix + canonicalCollectionElementType(value.Key, imports, packagePath) + typeSeparator + canonicalCollectionElementType(value.Value, imports, packagePath)
 		case *ast.ChanType:
-			return channelTypePrefix + canonicalTypeInPackage(value.Value, imports, packagePath)
+			return channelTypePrefix + canonicalCollectionElementType(value.Value, imports, packagePath)
 		case *ast.Ident:
 			return packagePath + "." + value.Name
 		default:
 			return ""
+		}
+	}
+}
+
+func canonicalCollectionElementType(expression ast.Expr, imports map[string]string, packagePath string) string {
+	for {
+		switch value := expression.(type) {
+		case *ast.ParenExpr:
+			expression = value.X
+		case *ast.StarExpr:
+			return pointerTypePrefix + canonicalTypeInPackage(value.X, imports, packagePath)
+		default:
+			return canonicalTypeInPackage(expression, imports, packagePath)
 		}
 	}
 }
@@ -5201,6 +5276,29 @@ func addReferenceAlias(aliases map[string]map[string]bool, left, right string) {
 	}
 }
 
+func trackReferenceRangeBinding(references map[string]bool, aliases map[string]map[string]bool, binding ast.Expr, collection ast.Expr, collectionType, typeName string, types compositionTypeIndex) {
+	name, ok := binding.(*ast.Ident)
+	if !ok || name.Name == "_" || !isReferenceTypeName(typeName, types) || !isReferenceAliasingCollection(collectionType, types) {
+		return
+	}
+	collectionKey := assignmentValueKey(collection)
+	if collectionKey == "" {
+		return
+	}
+	bindingID := bindingKey(name)
+	elementKey := collectionKey + "[]"
+	references[bindingID] = true
+	references[collectionKey] = true
+	references[elementKey] = true
+	addReferenceAlias(aliases, bindingID, collectionKey)
+	addReferenceAlias(aliases, bindingID, elementKey)
+}
+
+func isReferenceAliasingCollection(typeName string, types compositionTypeIndex) bool {
+	typeName = resolveNamedType(typeName, types)
+	return strings.HasPrefix(typeName, sliceTypePrefix) || strings.HasPrefix(typeName, arrayTypePrefix) || strings.HasPrefix(typeName, mapTypePrefix)
+}
+
 func referenceAliasKeys(aliases map[string]map[string]bool, key string) map[string]bool {
 	if len(aliases[key]) != 0 {
 		return aliases[key]
@@ -5228,6 +5326,14 @@ func setAliasedMayValueTypeAt(values map[string]string, aliases map[string]map[s
 			target += "." + suffix
 		}
 		setMayValueType(values, target, typeName, types)
+		exactSuffix := strings.TrimSuffix(prefix, ".")
+		exactTarget := alias
+		if exactSuffix != "" {
+			exactTarget += "." + exactSuffix
+		}
+		if exactTarget != target {
+			setMayValueType(values, exactTarget, typeName, types)
+		}
 	}
 }
 
@@ -5739,6 +5845,7 @@ func featureCleanupMethods(typeName string, types compositionTypeIndex) map[stri
 }
 
 func cleanupPathsForType(typeName string, types compositionTypeIndex, visiting map[string]bool) map[string]bool {
+	typeName = strings.TrimPrefix(typeName, pointerTypePrefix)
 	typeName = resolveNamedType(typeName, types)
 	if keyType, valueType, ok := rangeTypes(typeName, types); ok {
 		_ = keyType
@@ -6305,6 +6412,7 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 }
 
 func compositionFieldType(typeName, fieldName string, types compositionTypeIndex, visiting map[string]bool) string {
+	typeName = strings.TrimPrefix(typeName, pointerTypePrefix)
 	if visiting[typeName] {
 		return ""
 	}
