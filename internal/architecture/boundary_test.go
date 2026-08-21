@@ -2820,6 +2820,73 @@ func preserveGoroutineReceivers(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionForksAndMergesIfBranchState(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func mutuallyExclusiveBranches(application *App, owned bool) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	if owned {
+		resource = application.manager
+		registry = application.registry
+	} else {
+		_ = resource.Close()
+		registry.Register(nil)
+	}
+}
+func useMergedBranchState(application *App, owned bool) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	if owned {
+		resource = application.manager
+		registry = application.registry
+	}
+	_ = resource.Close()
+	registry.Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "if_branches.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 1 || cleanupCalls[0] != "resource.Close" {
+		t.Fatalf("cleanup calls = %v, want only post-branch cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 1 || registrationCalls[0] != "registry.Register" {
+		t.Fatalf("Tool registration calls = %v, want only post-branch registration", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionTracksReferenceRangeValues(t *testing.T) {
 	source := `package app
 import (
@@ -5256,6 +5323,34 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				if delayedEvaluation {
 					return false
 				}
+			case *ast.IfStmt:
+				if value.Init != nil {
+					ast.Inspect(value.Init, visit)
+				}
+				if value.Cond != nil {
+					ast.Inspect(value.Cond, visit)
+				}
+				baseValues := cloneStringMap(values)
+				baseResources := cloneCleanupResourceMap(resources)
+				baseReferences := cloneBoolMap(references)
+				baseAliases := cloneCleanupResourceMap(aliases)
+				ast.Inspect(value.Body, visit)
+				bodyValues := values
+				bodyResources := resources
+				bodyReferences := references
+				bodyAliases := aliases
+				values = cloneStringMap(baseValues)
+				resources = cloneCleanupResourceMap(baseResources)
+				references = cloneBoolMap(baseReferences)
+				aliases = cloneCleanupResourceMap(baseAliases)
+				if value.Else != nil {
+					ast.Inspect(value.Else, visit)
+				}
+				values = mergeCompositionValueMaps(bodyValues, values, types)
+				resources = mergeCleanupResourceMaps(bodyResources, resources)
+				references = mergeBoolMaps(bodyReferences, references)
+				aliases = mergeReferenceAliasMaps(bodyAliases, aliases)
+				return false
 			case *ast.ForStmt:
 				if value.Init != nil {
 					ast.Inspect(value.Init, visit)
@@ -5604,6 +5699,30 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				if delayedEvaluation {
 					return false
 				}
+			case *ast.IfStmt:
+				if value.Init != nil {
+					ast.Inspect(value.Init, visit)
+				}
+				if value.Cond != nil {
+					ast.Inspect(value.Cond, visit)
+				}
+				baseValues := cloneStringMap(values)
+				baseReferences := cloneBoolMap(references)
+				baseAliases := cloneCleanupResourceMap(aliases)
+				ast.Inspect(value.Body, visit)
+				bodyValues := values
+				bodyReferences := references
+				bodyAliases := aliases
+				values = cloneStringMap(baseValues)
+				references = cloneBoolMap(baseReferences)
+				aliases = cloneCleanupResourceMap(baseAliases)
+				if value.Else != nil {
+					ast.Inspect(value.Else, visit)
+				}
+				values = mergeCompositionValueMaps(bodyValues, values, types)
+				references = mergeBoolMaps(bodyReferences, references)
+				aliases = mergeReferenceAliasMaps(bodyAliases, aliases)
+				return false
 			case *ast.ForStmt:
 				if value.Init != nil {
 					ast.Inspect(value.Init, visit)
@@ -5994,6 +6113,53 @@ func cloneCleanupResourceMap(source map[string]map[string]bool) map[string]map[s
 		cloned[key] = mergeCleanupPaths(nil, paths)
 	}
 	return cloned
+}
+
+func mergeCompositionValueMaps(left, right map[string]string, types compositionTypeIndex) map[string]string {
+	merged := cloneStringMap(left)
+	for key, typeName := range right {
+		existing := merged[key]
+		if isToolRegistryCollectionMarker(existing) || isToolRegistryCollectionMarker(typeName) {
+			merged[key] = mergeToolRegistryCollectionTypes(existing, typeName)
+			continue
+		}
+		setMayValueType(merged, key, typeName, types)
+	}
+	return merged
+}
+
+func isToolRegistryCollectionMarker(typeName string) bool {
+	return typeName == toolRegistryCollectionType || typeName == toolRegistryMapKeyCollectionType || typeName == toolRegistryMapKeyValueCollectionType
+}
+
+func mergeBoolMaps(left, right map[string]bool) map[string]bool {
+	merged := cloneBoolMap(left)
+	for key, value := range right {
+		if value {
+			merged[key] = true
+		}
+	}
+	return merged
+}
+
+func mergeCleanupResourceMaps(left, right map[string]map[string]bool) map[string]map[string]bool {
+	merged := cloneCleanupResourceMap(left)
+	for key, paths := range right {
+		merged[key] = mergeCleanupPaths(merged[key], paths)
+	}
+	return merged
+}
+
+func mergeReferenceAliasMaps(left, right map[string]map[string]bool) map[string]map[string]bool {
+	merged := make(map[string]map[string]bool)
+	for _, aliases := range []map[string]map[string]bool{left, right} {
+		for key, group := range aliases {
+			for member := range group {
+				addReferenceAlias(merged, key, member)
+			}
+		}
+	}
+	return merged
 }
 
 func equalStringMap(left, right map[string]string) bool {
