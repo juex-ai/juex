@@ -1553,67 +1553,57 @@ func TestSideSessionStopHonorsToolCancellation(t *testing.T) {
 }
 
 func TestSideSessionCreateHonorsToolCancellationDuringStartup(t *testing.T) {
-	workDir := t.TempDir()
-	stateDir := filepath.Join(workDir, ".juex")
 	childProvider := &scriptedSideProvider{}
-	factoryDone := make(chan struct{})
-	parent, err := New(Options{
-		Config: config.Config{
-			ProviderID:    "openai",
-			APIKey:        "test",
-			Model:         "primary",
-			WorkDir:       workDir,
-			AgentStateDir: stateDir,
-		},
-		Provider:   &scriptedSideProvider{},
-		WorkDir:    workDir,
-		DisableMCP: true,
-		sideSessionFactory: func(opts sideSessionChildOptions) (*App, error) {
-			defer close(factoryDone)
-			cfg := opts.Config
-			cfg.Hooks = hooks.Config{Commands: []hooks.CommandHook{{
-				Name:    "wait-for-cancellation",
-				Events:  []hooks.EventName{hooks.EventSessionStart},
-				Command: appHookCommand("wait"),
-			}}}
-			return New(Options{
-				Config:                  cfg,
-				Provider:                childProvider,
-				WorkDir:                 cfg.WorkDir,
-				DisableMCP:              true,
-				SessionMode:             SessionModeNewSide,
-				disableSideSessionTools: true,
-				sharedGoalState:         opts.GoalState,
-				sharedNotes:             opts.Notes,
-				startupContext:          opts.Context,
-			})
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
+	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, childProvider)
+	factoryEntered := make(chan context.Context, 1)
+	factoryDone := make(chan error, 1)
+	parent.sideSessions.factory = func(opts sideSessionChildOptions) (*App, error) {
+		factoryEntered <- opts.Context
+		<-opts.Context.Done()
+		err := opts.Context.Err()
+		factoryDone <- err
+		return nil, err
 	}
-	t.Cleanup(func() {
-		if err := parent.CloseAndWait(); err != nil {
-			t.Errorf("close parent app: %v", err)
-		}
-	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
-	defer cancel()
-	started := time.Now()
-	_, err = parent.Engine.Tools.Call(ctx, SideSessionToolCreate, map[string]any{
-		"query": "must not outlive create timeout",
-	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("create error = %v, want context deadline exceeded", err)
+	ctx := newControlledDeadlineContext()
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := parent.Engine.Tools.Call(ctx, SideSessionToolCreate, map[string]any{
+			"query": "must not outlive create timeout",
+		})
+		createDone <- err
+	}()
+
+	var factoryCtx context.Context
+	select {
+	case factoryCtx = <-factoryEntered:
+	case err := <-createDone:
+		t.Fatalf("create returned before child factory entered: %v", err)
+	case <-time.After(sideSessionTestTimeout):
+		t.Fatal("child factory did not enter")
 	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("create returned after %s, want prompt context cancellation", elapsed)
+	ctx.expire()
+
+	select {
+	case <-factoryCtx.Done():
+	case <-time.After(sideSessionTestTimeout):
+		t.Fatal("child factory context did not observe cancellation")
 	}
 	select {
-	case <-factoryDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("cancelled child factory did not finish")
+	case err := <-factoryDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("child factory context error = %v, want context deadline exceeded", err)
+		}
+	case <-time.After(sideSessionTestTimeout):
+		t.Fatal("child factory did not finish after observing cancellation")
+	}
+	select {
+	case err := <-createDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("create error = %v, want context deadline exceeded", err)
+		}
+	case <-time.After(sideSessionTestTimeout):
+		t.Fatal("create did not return after child factory cancellation")
 	}
 	parent.sideSessions.mu.Lock()
 	active := len(parent.sideSessions.sessions)
