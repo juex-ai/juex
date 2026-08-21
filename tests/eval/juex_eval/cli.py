@@ -14,7 +14,7 @@ from typing import Callable
 
 import yaml
 
-from . import compaction, helper, selection, verification
+from . import compaction, helper, selection, validation_plan, verification
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -60,6 +60,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="juex-eval", description="JueX local evaluation commands.")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    plan_parser = sub.add_parser("plan", help="Generate a deterministic Git-diff validation plan.")
+    add_plan_args(plan_parser)
+
     verify_parser = sub.add_parser("verify", help="Run a stable local verification tier.")
     add_verify_args(verify_parser)
 
@@ -78,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
 
     parsed = parser.parse_args(argv)
     try:
+        if parsed.command == "plan":
+            return run_plan(parsed)
         if parsed.command == "verify":
             return run_verify(parsed)
         if parsed.command == "development":
@@ -95,17 +100,24 @@ def main(argv: list[str] | None = None) -> int:
 def add_verify_args(parser: argparse.ArgumentParser) -> None:
     tiers = parser.add_subparsers(dest="tier", required=True)
     focused = tiers.add_parser("focused", help="Run explicitly scoped deterministic Go tests.")
-    focused.add_argument("packages", nargs="+", help="One or more explicit Go package patterns.")
+    focused.add_argument(
+        "packages",
+        nargs="*",
+        help="Optional explicit Go package patterns; defaults to the dirty diff plan.",
+    )
+    add_validation_plan_args(focused)
 
     candidate = tiers.add_parser("candidate", help="Verify a deterministic PR candidate.")
     candidate.add_argument("--race", action="store_true")
     candidate.add_argument("--web", action="store_true")
+    add_validation_plan_args(candidate)
     add_commit_verification_record_args(candidate, "candidate")
 
     final = tiers.add_parser("final", help="Verify a final candidate with live gates.")
     final.add_argument("--race", action="store_true")
     final.add_argument("--web", action="store_true")
     final.add_argument("--compaction", action="store_true")
+    add_validation_plan_args(final)
     add_commit_verification_record_args(final, "final")
     final.add_argument(
         "--config",
@@ -116,6 +128,18 @@ def add_verify_args(parser: argparse.ArgumentParser) -> None:
         default=os.environ.get("JUEX_EVAL_SELECTION_SEED") or selection.generated_seed(),
     )
     final.add_argument("--provider-timeout", type=int, default=int(os.environ.get("JUEX_PROVIDER_SMOKE_TIMEOUT") or "240"))
+
+
+def add_plan_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--tier", choices=("focused", "candidate", "final"), default="focused")
+    parser.add_argument("--base", default="", help="Use this exact commit instead of the default diff base.")
+    parser.add_argument("--output-dir", default="", help="Write plan.json and plan.md in this directory.")
+    parser.add_argument("--explain", action="store_true", help="Print the human-readable gate explanation.")
+
+
+def add_validation_plan_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--base", default="", help="Use this exact commit instead of the default diff base.")
+    parser.add_argument("--explain", action="store_true", help="Print the selected gates and their causes.")
 
 
 def add_commit_verification_record_args(parser: argparse.ArgumentParser, tier: str) -> None:
@@ -131,33 +155,93 @@ def add_commit_verification_record_args(parser: argparse.ArgumentParser, tier: s
     )
 
 
+def run_plan(args: argparse.Namespace) -> int:
+    plan = validation_plan.collect_plan(REPO_ROOT, args.tier, base=args.base or None)
+    output_dir = (
+        pathlib.Path(args.output_dir)
+        if args.output_dir
+        else helper.REPORT_ROOT / "validation-plan" / plan.fingerprint.removeprefix("sha256:")
+    )
+    json_path, markdown_path = validation_plan.write_plan(output_dir, plan)
+    print(f"plan: {json_path}")
+    print(f"explanation: {markdown_path}")
+    if args.explain:
+        print(markdown_path.read_text(encoding="utf-8"), end="")
+    return 0
+
+
+def apply_validation_plan(args: argparse.Namespace, plan: validation_plan.ValidationPlan) -> None:
+    explicit_packages = [str(package).strip() for package in getattr(args, "packages", []) if str(package).strip()]
+    if args.tier == "focused":
+        args.packages = explicit_packages or list(plan.focused_packages)
+        args.race = False if explicit_packages else "race" in plan.candidate_flags
+        args.web = False if explicit_packages else "web" in plan.candidate_flags
+        return
+    args.race = bool(getattr(args, "race", False) or "race" in plan.candidate_flags)
+    args.web = bool(getattr(args, "web", False) or "web" in plan.candidate_flags)
+    args.live_integration = "integration" in plan.final_flags
+    args.provider_smoke = "provider-smoke" in plan.final_flags
+    explicit_compaction = bool(getattr(args, "compaction", False))
+    args.compaction = explicit_compaction or "compaction" in plan.final_flags
+    if args.tier == "final" and explicit_compaction:
+        args.live_integration = True
+        args.provider_smoke = True
+
+
+def plan_with_cli_overrides(
+    args: argparse.Namespace,
+    plan: validation_plan.ValidationPlan,
+) -> validation_plan.ValidationPlan:
+    return validation_plan.with_cli_overrides(
+        plan,
+        focused_packages=getattr(args, "packages", ()),
+        race=bool(getattr(args, "race", False)),
+        web=bool(getattr(args, "web", False)),
+        compaction=bool(getattr(args, "compaction", False)),
+    )
+
+
 def verification_steps(args: argparse.Namespace) -> list[VerificationStep]:
     if args.tier == "focused":
         packages = [str(package).strip() for package in args.packages if str(package).strip()]
-        if not packages:
-            raise ValueError("focused verification requires at least one package")
-        return [
-            VerificationStep("web-stub", ["make", "web-stub"]),
-            VerificationStep(
-                "go-test-focused",
-                bash_script_command(TEST_HOME_RUNNER, "go", "test", *packages, "-count=1"),
-                test_environment=True,
+        steps: list[VerificationStep] = []
+        if packages:
+            if "./..." in packages:
+                packages = ["./..."]
+            command = bash_script_command(TEST_HOME_RUNNER, "go", "test", *packages)
+            if getattr(args, "race", False):
+                command.append("-race")
+            command.append("-count=1")
+            steps.extend(
+                [
+                    VerificationStep("web-stub", ["make", "web-stub"]),
+                    VerificationStep("go-test-focused", command, test_environment=True),
+                ]
             )
-        ]
+        if getattr(args, "web", False):
+            steps.extend(
+                [
+                    VerificationStep("web-check", ["make", "web-check"]),
+                    VerificationStep("make-build-go", ["make", "build-go"]),
+                ]
+            )
+        return steps
     if args.tier == "candidate":
         return candidate_verification_steps(race=args.race, web=args.web)
     if args.tier == "final":
         steps = candidate_verification_steps(race=args.race, web=args.web)
-        steps.append(
-            VerificationStep(
-                "live-integration",
-                ["make", "integration"],
-                environment={"JUEX_PROVIDER_CONFIG": args.config},
+        if getattr(args, "live_integration", True):
+            steps.append(
+                VerificationStep(
+                    "live-integration",
+                    ["make", "integration"],
+                    environment={"JUEX_PROVIDER_CONFIG": args.config},
+                )
             )
-        )
-        steps.append(
-            VerificationStep("provider-model-smoke", final_provider_smoke_command(args), test_environment=True)
-        )
+        if getattr(args, "provider_smoke", True):
+            steps.append(
+                VerificationStep("provider-model-smoke", final_provider_smoke_command(args), test_environment=True)
+            )
         if args.compaction:
             steps.append(VerificationStep("compaction-eval", final_compaction_command(args)))
         return steps
@@ -225,15 +309,36 @@ def execute_development_steps(steps: list[VerificationStep], run_step: Callable[
 
 def run_verify(args: argparse.Namespace) -> int:
     if args.tier == "focused":
+        plan = validation_plan.collect_plan(REPO_ROOT, "focused", base=getattr(args, "base", "") or None)
+        plan = plan_with_cli_overrides(args, plan)
+        apply_validation_plan(args, plan)
+        plan_dir = helper.REPORT_ROOT / "validation-plan" / plan.fingerprint.removeprefix("sha256:")
+        _, markdown_path = validation_plan.write_plan(plan_dir, plan)
+        print(f"plan: {plan_dir / 'plan.json'}")
+        if getattr(args, "explain", False):
+            print(markdown_path.read_text(encoding="utf-8"), end="")
         steps = verification_steps(args)
+        if not steps:
+            print("no code gates selected")
+            return 0
         test_env = isolated_test_environment() if any(step.test_environment for step in steps) else None
         return execute_verification_steps(steps, lambda step: run_visible(step, test_env))
 
     snapshot = require_clean_worktree()
+    plan = validation_plan.collect_plan(REPO_ROOT, args.tier, base=getattr(args, "base", "") or None)
+    if plan.head_sha != snapshot.head_sha:
+        raise ValueError("HEAD changed during validation planning")
+    plan = plan_with_cli_overrides(args, plan)
+    apply_validation_plan(args, plan)
     if args.tier == "final":
         args.config = str(selection.resolved_path(args.config))
     candidate_steps = candidate_verification_steps(race=args.race, web=args.web)
-    candidate_plan_fingerprint = verification.plan_fingerprint(candidate_steps)
+    candidate_plan_fingerprint = verification.stable_fingerprint(
+        {
+            "validation_plan": plan.fingerprint,
+            "candidate_steps": verification.plan_fingerprint(candidate_steps),
+        }
+    )
     candidate_test_env = (
         isolated_test_environment() if any(step.test_environment for step in candidate_steps) else None
     )
@@ -245,8 +350,16 @@ def run_verify(args: argparse.Namespace) -> int:
     report_root = pathlib.Path(args.report_dir) if args.report_dir else helper.REPORT_ROOT
     report_dir = verification.default_report_dir(report_root, snapshot, args.run_id)
     args.verification_report_dir = str(report_dir)
+    _, plan_markdown_path = validation_plan.write_plan(report_dir, plan)
+    print(f"plan: {report_dir / 'plan.json'}")
+    if getattr(args, "explain", False):
+        print(plan_markdown_path.read_text(encoding="utf-8"), end="")
     steps = verification_steps(args)
-    planned_provider_summary = provider_record_summary(args) if args.tier == "final" else None
+    planned_provider_summary = (
+        provider_record_summary(args)
+        if args.tier == "final" and getattr(args, "provider_smoke", True)
+        else None
+    )
     decision = verification.ReuseDecision(None, {}, [])
     if args.tier == "final":
         decision = verification.find_reusable_candidate(
@@ -320,10 +433,12 @@ def run_verify(args: argparse.Namespace) -> int:
     print(f"executed steps: {', '.join(executed) or 'none'}")
     print(f"invalidated steps: {', '.join(invalidated_labels) or 'none'}")
 
-    provider_summary = (
-        load_optional_json(report_dir / "provider-model-smoke" / "summary.json")
-        or planned_provider_summary
-    )
+    provider_summary = planned_provider_summary
+    if args.tier == "final" and getattr(args, "provider_smoke", True):
+        provider_summary = (
+            load_optional_json(report_dir / "provider-model-smoke" / "summary.json")
+            or planned_provider_summary
+        )
     record = verification.build_record(
         tier=args.tier,
         run_id=args.run_id,

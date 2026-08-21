@@ -797,6 +797,8 @@ From the repository root, use the verification tier that matches the current
 development stage:
 
 ```bash
+make verify-plan EXPLAIN=1
+make verify-focused
 make verify-focused PKGS="./internal/app ./internal/runtime"
 make verify-candidate
 make verify-candidate RACE=1 WEB=1
@@ -804,20 +806,24 @@ make verify-final
 make verify-final RACE=1 WEB=1 COMPACTION=1
 ```
 
-Focused verification requires explicit package patterns and permits a dirty
-worktree. Candidate and final verification bind their reports to the full
-pre-run `HEAD` SHA and require that snapshot to be clean before and after their
+Validation planning uses the Git diff to select focused packages, web/race
+candidate flags, and live/compaction final flags. Focused verification permits
+a dirty worktree and automatically unions staged, unstaged, and untracked
+paths; `PKGS=...` remains an explicit targeted override. Candidate and final
+default to `merge-base origin/main HEAD`, accept `BASE=<sha>`, and bind their
+reports to the full pre-run `HEAD` SHA. They require that snapshot to be clean
+before and after their
 steps. Reports live under
 `.tmp/reports/development-validation/<full-head-sha>/<run-id>/`. Final reuses a
 passing candidate's deterministic/build prefix only when the record schema,
 SHA, plan, and stable environment fingerprints all match; the stable inputs
 include effective Go settings, the build's Git description, and the resolved
-ripgrep binary. Live gates always run. `RACE=1`
+ripgrep binary. Live gates run when selected by the plan. `RACE=1`
 replaces the ordinary deterministic suite, `WEB=1` adds the frontend gate
 without rebuilding it during the binary build, and `COMPACTION=1` adds the
-live compaction evaluator to final verification. Final verification otherwise
-runs the candidate gate, live integration, and one provider-config-selected
-provider smoke. Every tier also prepares a lightweight embedded-web stub
+live compaction evaluator to final verification; explicit flags are additive
+and never remove planned gates. Every Go tier also prepares a lightweight
+embedded-web stub
 before Go-only checks, so focused web packages and full suites work in a fresh
 checkout without a prior frontend build.
 

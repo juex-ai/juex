@@ -1,9 +1,12 @@
-.PHONY: test race verify-focused verify-candidate verify-final lint build build-go snapshot release-dry integration provider-smoke development-eval clean help install-local cross web web-stub web-sync web-check web-dev ripgrep
+.PHONY: test race verify-plan verify-focused verify-candidate verify-final lint build build-go snapshot release-dry integration provider-smoke development-eval clean help install-local cross web web-stub web-sync web-check web-dev ripgrep
 
 VERIFY_CMD := uv run --quiet --project . python -m tests.eval.juex_eval verify
+PLAN_CMD := uv run --quiet --project . python -m tests.eval.juex_eval plan
 VERIFY_RACE_FLAG := $(if $(filter 1,$(RACE)),--race,)
 VERIFY_WEB_FLAG := $(if $(filter 1,$(WEB)),--web,)
 VERIFY_COMPACTION_FLAG := $(if $(filter 1,$(COMPACTION)),--compaction,)
+VERIFY_BASE_FLAG := $(if $(BASE),--base $(BASE),)
+VERIFY_EXPLAIN_FLAG := $(if $(filter 1,$(EXPLAIN)),--explain,)
 
 web:
 	cd frontend && pnpm install && pnpm build
@@ -45,9 +48,10 @@ LDFLAGS := -X github.com/juex-ai/juex/internal/version.Version=$(VERSION) \
 
 help:
 	@echo "Targets:"
-	@echo "  verify-focused PKGS=...  explicit isolated package tests with embed stub; dirty allowed"
-	@echo "  verify-candidate [RACE=1] [WEB=1]  commit-bound deterministic PR gate"
-	@echo "  verify-final [RACE=1] [WEB=1] [COMPACTION=1]  reuse matching candidate, then run live gates"
+	@echo "  verify-plan [TIER=focused] [BASE=...] [EXPLAIN=1]  deterministic Git-diff gate plan"
+	@echo "  verify-focused [PKGS=...] [BASE=...]  dirty diff plan or explicit isolated package tests"
+	@echo "  verify-candidate [RACE=1] [WEB=1] [BASE=...]  planned commit-bound deterministic PR gate"
+	@echo "  verify-final [RACE=1] [WEB=1] [COMPACTION=1] [BASE=...]  reuse candidate and run planned live gates"
 	@echo "  test          go test ./... (isolated HOME/JUEX_HOME, auto-provisions ripgrep)"
 	@echo "  race          go test ./... -race (isolated HOME/JUEX_HOME, auto-provisions ripgrep)"
 	@echo "  ripgrep       ensure a resolvable ripgrep and print its path"
@@ -71,14 +75,17 @@ test:
 race:
 	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" ./scripts/with-test-juex-home.sh go test ./... -race -count=1
 
+verify-plan:
+	$(PLAN_CMD) --tier $(or $(TIER),focused) $(VERIFY_BASE_FLAG) $(VERIFY_EXPLAIN_FLAG)
+
 verify-focused:
-	$(VERIFY_CMD) focused $(PKGS)
+	$(VERIFY_CMD) focused $(PKGS) $(VERIFY_BASE_FLAG) $(VERIFY_EXPLAIN_FLAG)
 
 verify-candidate:
-	$(VERIFY_CMD) candidate $(VERIFY_RACE_FLAG) $(VERIFY_WEB_FLAG)
+	$(VERIFY_CMD) candidate $(VERIFY_RACE_FLAG) $(VERIFY_WEB_FLAG) $(VERIFY_BASE_FLAG) $(VERIFY_EXPLAIN_FLAG)
 
 verify-final:
-	$(VERIFY_CMD) final $(VERIFY_RACE_FLAG) $(VERIFY_WEB_FLAG) $(VERIFY_COMPACTION_FLAG)
+	$(VERIFY_CMD) final $(VERIFY_RACE_FLAG) $(VERIFY_WEB_FLAG) $(VERIFY_COMPACTION_FLAG) $(VERIFY_BASE_FLAG) $(VERIFY_EXPLAIN_FLAG)
 
 ripgrep:
 	@scripts/ensure-ripgrep.sh
