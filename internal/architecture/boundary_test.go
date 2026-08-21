@@ -29,6 +29,7 @@ const packageFunctionScopeKey = modulePath + "/internal/app.$package"
 
 const (
 	sliceTypePrefix   = "$slice:"
+	arrayTypePrefix   = "$array:"
 	mapTypePrefix     = "$map:"
 	channelTypePrefix = "$channel:"
 	typeSeparator     = "\x00"
@@ -1545,9 +1546,17 @@ func cleanupFromRepeat(application *App) {
 	resources := slices.Repeat([]closer{application.manager}, 2)
 	_ = resources[0].Close()
 }
+func cleanupFromClone(application *App) {
+	clonedResources := slices.Clone([]closer{application.manager})
+	_ = clonedResources[0].Close()
+}
 func registerFromRepeat(application *App) {
 	registries := slices.Repeat([]registrar{application.registry}, 2)
 	registries[0].Register(nil)
+}
+func registerFromClone(application *App) {
+	clonedRegistries := slices.Clone([]registrar{application.registry})
+	clonedRegistries[0].Register(nil)
 }
 `
 	dir := t.TempDir()
@@ -1567,15 +1576,67 @@ func registerFromRepeat(application *App) {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resources.Close,") {
-		t.Fatalf("cleanup calls = %v, want slices.Repeat cleanup", cleanupCalls)
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resources.Close,") || !strings.Contains(cleanup, ",clonedResources.Close,") {
+		t.Fatalf("cleanup calls = %v, want slices.Repeat and slices.Clone cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registries.Register,") {
-		t.Fatalf("Tool registration calls = %v, want slices.Repeat registration", registrationCalls)
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registries.Register,") || !strings.Contains(registration, ",clonedRegistries.Register,") {
+		t.Fatalf("Tool registration calls = %v, want slices.Repeat and slices.Clone registration", registrationCalls)
+	}
+}
+
+func TestAppCompositionInspectionDoesNotAliasArrays(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+func arraysDoNotAlias(application *App, unrelated closer, unrelatedRegistry registrar) {
+	resources := [1]closer{unrelated}
+	resourceAlias := resources
+	resourceAlias[0] = application.manager
+	_ = resources[0].Close()
+	registries := [1]registrar{unrelatedRegistry}
+	registryAlias := registries
+	registryAlias[0] = application.registry
+	registries[0].Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "array_aliases.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; strings.Contains(cleanup, ",resources.Close,") {
+		t.Fatalf("cleanup calls = %v, array copy must not alias cleanup ownership", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; strings.Contains(registration, ",registries.Register,") {
+		t.Fatalf("Tool registration calls = %v, array copy must not alias registry ownership", registrationCalls)
 	}
 }
 
@@ -1593,7 +1654,13 @@ func TestSliceCollectionSourceArguments(t *testing.T) {
 		{expression: "slices.Grow(a, b)", want: "a"},
 		{expression: "slices.Insert(a, b, c, d)", want: "a,c,d"},
 		{expression: "slices.Replace(a, b, c, d)", want: "a,d"},
-		{expression: "slices.Clone(a)", want: ""},
+		{expression: "slices.Clone(a)", want: "a"},
+		{expression: "slices.Clip(a)", want: "a"},
+		{expression: "slices.Compact(a)", want: "a"},
+		{expression: "slices.Collect(a)", want: "a"},
+		{expression: "slices.Sorted(a)", want: "a"},
+		{expression: "slices.SortedFunc(a, b)", want: "a"},
+		{expression: "slices.SortedStableFunc(a, b)", want: "a"},
 	}
 	for _, test := range tests {
 		t.Run(test.expression, func(t *testing.T) {
@@ -3969,7 +4036,11 @@ func canonicalTypeInPackage(expression ast.Expr, imports map[string]string, pack
 			}
 			return genericTypePrefix + strings.Join(parts, genericTypeSeparator)
 		case *ast.ArrayType:
-			return sliceTypePrefix + canonicalTypeInPackage(value.Elt, imports, packagePath)
+			prefix := arrayTypePrefix
+			if value.Len == nil {
+				prefix = sliceTypePrefix
+			}
+			return prefix + canonicalTypeInPackage(value.Elt, imports, packagePath)
 		case *ast.MapType:
 			return mapTypePrefix + canonicalTypeInPackage(value.Key, imports, packagePath) + typeSeparator + canonicalTypeInPackage(value.Value, imports, packagePath)
 		case *ast.ChanType:
@@ -4397,7 +4468,7 @@ func isCollectionElementAssignment(expression ast.Expr, imports map[string]strin
 			expression = value.X
 		case *ast.IndexExpr:
 			typeName := resolveNamedType(expressionType(value.X, imports, values, types), types)
-			return strings.HasPrefix(typeName, sliceTypePrefix) || strings.HasPrefix(typeName, mapTypePrefix)
+			return strings.HasPrefix(typeName, sliceTypePrefix) || strings.HasPrefix(typeName, arrayTypePrefix) || strings.HasPrefix(typeName, mapTypePrefix)
 		default:
 			return false
 		}
@@ -4571,7 +4642,8 @@ func sliceCollectionSourceArguments(call *ast.CallExpr, imports map[string]strin
 	switch selector.Sel.Name {
 	case "Concat", "AppendSeq":
 		return call.Args
-	case "Repeat", "Delete", "DeleteFunc", "CompactFunc", "Grow":
+	case "Clone", "Clip", "Compact", "Collect", "Sorted", "SortedFunc", "SortedStableFunc",
+		"Repeat", "Delete", "DeleteFunc", "CompactFunc", "Grow":
 		if len(call.Args) != 0 {
 			return call.Args[:1]
 		}
@@ -4828,6 +4900,9 @@ func rangeTypes(typeName string, types compositionTypeIndex) (string, string, bo
 	}
 	if strings.HasPrefix(typeName, sliceTypePrefix) {
 		return "", strings.TrimPrefix(typeName, sliceTypePrefix), true
+	}
+	if strings.HasPrefix(typeName, arrayTypePrefix) {
+		return "", strings.TrimPrefix(typeName, arrayTypePrefix), true
 	}
 	if strings.HasPrefix(typeName, mapTypePrefix) {
 		parts := strings.SplitN(strings.TrimPrefix(typeName, mapTypePrefix), typeSeparator, 2)
