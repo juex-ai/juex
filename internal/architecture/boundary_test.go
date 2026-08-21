@@ -2390,6 +2390,96 @@ again:
 	}
 }
 
+func TestAppCompositionInspectionConvergesHelperLoopSummaries(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+func rotate(current, next closer) {
+	for iteration := 0; iteration < 2; iteration++ {
+		_ = current.Close()
+		current = next
+	}
+}
+func rotateRegistration(current, next registrar) {
+	for iteration := 0; iteration < 2; iteration++ {
+		current.Register(nil)
+		current = next
+	}
+}
+func useHelperLoop(application *App) {
+	rotate(nil, application.manager)
+	rotateRegistration(nil, application.registry)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "helper_loop.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",rotate,") {
+		t.Fatalf("cleanup calls = %v, want helper loop cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",rotateRegistration,") {
+		t.Fatalf("Tool registration calls = %v, want helper loop registration", registrationCalls)
+	}
+}
+
+func TestAppCompositionInspectionIgnoresUnrelatedRegisterMethodExpressions(t *testing.T) {
+	source := `package app
+type App struct{}
+type metricsRegistry struct{}
+func (metricsRegistry) Register(string) {}
+func registerMetric() {
+	var registry metricsRegistry
+	metricsRegistry.Register(registry, "metric")
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "metrics_registry.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 0 {
+		t.Fatalf("Tool registration calls = %v, want unrelated method expression ignored", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionTracksReferenceRangeValues(t *testing.T) {
 	source := `package app
 import (
@@ -3783,7 +3873,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 	origins, values := inferenceState(function)
 	references := functionReferenceValues(function, types)
 	aliases := make(map[string]map[string]bool)
-	ast.Inspect(function.body(), func(node ast.Node) bool {
+	visit := func(node ast.Node) bool {
 		switch value := node.(type) {
 		case *ast.AssignStmt:
 			for index, left := range value.Lhs {
@@ -3899,7 +3989,18 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 			return false
 		}
 		return true
-	})
+	}
+	backEdge := hasCompositionBackEdge(function.body())
+	for {
+		beforeOrigins := cloneBindingOrigins(origins)
+		beforeValues := cloneStringMap(values)
+		beforeReferences := cloneBoolMap(references)
+		beforeAliases := cloneCleanupResourceMap(aliases)
+		ast.Inspect(function.body(), visit)
+		if !backEdge || equalBindingOrigins(origins, beforeOrigins) && equalStringMap(values, beforeValues) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
+			break
+		}
+	}
 	return cleaned
 }
 
@@ -3908,7 +4009,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 	origins, values := inferenceState(function)
 	references := functionReferenceValues(function, types)
 	aliases := make(map[string]map[string]bool)
-	ast.Inspect(function.body(), func(node ast.Node) bool {
+	visit := func(node ast.Node) bool {
 		switch value := node.(type) {
 		case *ast.AssignStmt:
 			for index, left := range value.Lhs {
@@ -4037,7 +4138,18 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 			return false
 		}
 		return true
-	})
+	}
+	backEdge := hasCompositionBackEdge(function.body())
+	for {
+		beforeOrigins := cloneBindingOrigins(origins)
+		beforeValues := cloneStringMap(values)
+		beforeReferences := cloneBoolMap(references)
+		beforeAliases := cloneCleanupResourceMap(aliases)
+		ast.Inspect(function.body(), visit)
+		if !backEdge || equalBindingOrigins(origins, beforeOrigins) && equalStringMap(values, beforeValues) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
+			break
+		}
+	}
 	return registered
 }
 
@@ -4416,6 +4528,33 @@ func mergeBindingOrigins(bindings map[string]map[int]bool, key string, source ma
 	mergeOrigins(bindings[key], source)
 }
 
+func cloneBindingOrigins(source map[string]map[int]bool) map[string]map[int]bool {
+	cloned := make(map[string]map[int]bool, len(source))
+	for key, origins := range source {
+		cloned[key] = make(map[int]bool, len(origins))
+		mergeOrigins(cloned[key], origins)
+	}
+	return cloned
+}
+
+func equalBindingOrigins(left, right map[string]map[int]bool) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, leftOrigins := range left {
+		rightOrigins, ok := right[key]
+		if !ok || len(leftOrigins) != len(rightOrigins) {
+			return false
+		}
+		for index := range leftOrigins {
+			if !rightOrigins[index] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func resultTypes(results *ast.FieldList, imports map[string]string, packagePath string) []string {
 	if results == nil {
 		return nil
@@ -4486,6 +4625,9 @@ func appCompositionScopes(file *ast.File) []*ast.FuncDecl {
 func hasBackwardGoto(body *ast.BlockStmt) bool {
 	labels := make(map[string]token.Pos)
 	ast.Inspect(body, func(node ast.Node) bool {
+		if _, nested := node.(*ast.FuncLit); nested {
+			return false
+		}
 		if statement, ok := node.(*ast.LabeledStmt); ok {
 			labels[statement.Label.Name] = statement.Pos()
 		}
@@ -4493,6 +4635,9 @@ func hasBackwardGoto(body *ast.BlockStmt) bool {
 	})
 	backward := false
 	ast.Inspect(body, func(node ast.Node) bool {
+		if _, nested := node.(*ast.FuncLit); nested {
+			return false
+		}
 		statement, ok := node.(*ast.BranchStmt)
 		labelPosition, knownLabel := token.NoPos, false
 		if ok && statement.Label != nil {
@@ -4505,6 +4650,26 @@ func hasBackwardGoto(body *ast.BlockStmt) bool {
 		return !backward
 	})
 	return backward
+}
+
+func hasCompositionBackEdge(body *ast.BlockStmt) bool {
+	if hasBackwardGoto(body) {
+		return true
+	}
+	backEdge := false
+	ast.Inspect(body, func(node ast.Node) bool {
+		if _, nested := node.(*ast.FuncLit); nested {
+			return false
+		}
+		switch node.(type) {
+		case *ast.ForStmt, *ast.RangeStmt:
+			backEdge = true
+			return false
+		default:
+			return !backEdge
+		}
+	})
+	return backEdge
 }
 
 func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types compositionTypeIndex, report func(*ast.CallExpr, string)) {
@@ -6902,8 +7067,15 @@ func isToolRegistrationValueExpression(expression ast.Expr, imports map[string]s
 }
 
 func isToolRegistrationMethodExpression(selector *ast.SelectorExpr, imports map[string]string, types compositionTypeIndex) bool {
-	_ = types
-	return isTypeExpression(selector.X, imports) && isToolRegistrationName(selector.Sel.Name)
+	if !isTypeExpression(selector.X, imports) || !isToolRegistrationName(selector.Sel.Name) {
+		return false
+	}
+	receiverType := resolveNamedType(canonicalType(selector.X, imports), types)
+	if receiverType == modulePath+"/internal/tools.Registry" {
+		return true
+	}
+	contract, interfaceMethod := types.interfaceMethods[receiverType+"."+selector.Sel.Name]
+	return interfaceMethod && len(contract.parameters) == 1 && resolveNamedType(contract.parameters[0], types) == modulePath+"/internal/tools.Tool"
 }
 
 func isToolRegistrationCallableExpression(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
