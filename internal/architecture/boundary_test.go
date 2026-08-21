@@ -81,6 +81,7 @@ type compositionTypeIndex struct {
 	cleanupMethods   map[string]map[string]bool
 	functionResults  map[string][]string
 	namedTypes       map[string]string
+	functionTypes    map[string]bool
 	typeParameters   map[string][]string
 	cleanupParams    map[string]map[int]bool
 	toolParams       map[string]map[int]bool
@@ -2009,6 +2010,37 @@ func useAcrossRangeIterations(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionTracksRegistrationFunctionConversions(t *testing.T) {
+	source := `package app
+import "github.com/juex-ai/juex/internal/tools"
+type App struct { registry *tools.Registry }
+type registrationFunc func(tools.Tool) error
+func configureConvertedRegistration(application *App) {
+	registrationFunc(application.registry.Register)(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "registration_conversion.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registrationFunc,") {
+		t.Fatalf("Tool registration calls = %v, want defined function conversion", registrationCalls)
+	}
+}
+
 func TestSliceCollectionSourceArguments(t *testing.T) {
 	tests := []struct {
 		expression string
@@ -2125,6 +2157,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 		cleanupMethods:   make(map[string]map[string]bool),
 		functionResults:  make(map[string][]string),
 		namedTypes:       make(map[string]string),
+		functionTypes:    make(map[string]bool),
 		typeParameters:   make(map[string][]string),
 		cleanupParams:    make(map[string]map[int]bool),
 		toolParams:       make(map[string]map[int]bool),
@@ -2270,6 +2303,9 @@ func indexCleanupAndConstructors(file *ast.File, packagePath string, imports map
 				}
 				typeName := packagePath + "." + spec.Name.Name
 				indexTypeParameters(spec, typeName, packagePath, types)
+				if _, ok := spec.Type.(*ast.FuncType); ok {
+					types.functionTypes[typeName] = true
+				}
 				if contract, ok := spec.Type.(*ast.InterfaceType); ok {
 					if packagePath == modulePath+"/internal/app" {
 						indexInterfaceMethods(contract, typeName, imports, packagePath, types)
@@ -6176,7 +6212,10 @@ func isToolRegistrationCallableExpression(expression ast.Expr, imports map[strin
 		return isToolRegistrationCallableExpression(value.X, imports, values, types)
 	case *ast.CallExpr:
 		callee := calledFunctionKey(value.Fun, imports, values, types)
-		return types.toolCallResults[callee][0]
+		if types.toolCallResults[callee][0] {
+			return true
+		}
+		return isFunctionTypeConversion(value, imports, types) && isToolRegistrationCallableExpression(value.Args[0], imports, values, types)
 	case *ast.SelectorExpr:
 		if isReturnedToolRegistrationSelector(value, imports, values, types) {
 			return true
@@ -6185,6 +6224,22 @@ func isToolRegistrationCallableExpression(expression ast.Expr, imports map[strin
 	default:
 		return isToolRegistrationValueExpression(expression, imports, values, types)
 	}
+}
+
+func isFunctionTypeConversion(call *ast.CallExpr, imports map[string]string, types compositionTypeIndex) bool {
+	if len(call.Args) != 1 {
+		return false
+	}
+	typeName := canonicalType(call.Fun, imports)
+	visited := make(map[string]bool)
+	for typeName != "" && !visited[typeName] {
+		if types.functionTypes[typeName] {
+			return true
+		}
+		visited[typeName] = true
+		typeName = types.namedTypes[typeName]
+	}
+	return false
 }
 
 func isReturnedToolRegistrationSelector(expression *ast.SelectorExpr, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
