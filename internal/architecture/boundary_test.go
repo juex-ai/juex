@@ -240,6 +240,35 @@ func TestAppCompositionDoesNotBypassModuleCatalogOrLifecycle(t *testing.T) {
 	}
 }
 
+func TestAppCompositionTypesRejectDotImports(t *testing.T) {
+	for _, importPath := range []string{
+		modulePath + "/internal/tools",
+		modulePath + "/internal/mcp",
+	} {
+		t.Run(filepath.Base(importPath), func(t *testing.T) {
+			source := fmt.Sprintf(`package app
+import . %q
+type App struct { dependency *Registry }
+`, importPath)
+			if strings.HasSuffix(importPath, "/mcp") {
+				source = fmt.Sprintf(`package app
+import . %q
+type App struct { dependency *Manager }
+`, importPath)
+			}
+			dir := t.TempDir()
+			path := filepath.Join(dir, "dot_import.go")
+			if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := appCompositionTypes(dir)
+			if err == nil || !strings.Contains(err.Error(), "dot import") || !strings.Contains(err.Error(), importPath) {
+				t.Fatalf("appCompositionTypes() error = %v, want dot import rejection for %s", err, importPath)
+			}
+		})
+	}
+}
+
 func TestAppFeatureCleanupInspectionUsesDeclaredTypes(t *testing.T) {
 	source := `package app
 import (
@@ -4614,6 +4643,16 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 		parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 		if err != nil {
 			return err
+		}
+		for _, spec := range parsed.Imports {
+			if spec.Name == nil || spec.Name.Name != "." {
+				continue
+			}
+			importPath, unquoteErr := strconv.Unquote(spec.Path.Value)
+			if unquoteErr != nil {
+				return unquoteErr
+			}
+			return fmt.Errorf("%s: dot import %q is not allowed in scanned App sources", path, importPath)
 		}
 		imports := importPaths(parsed)
 		appSources = append(appSources, indexedAppSource{file: parsed, imports: imports})
