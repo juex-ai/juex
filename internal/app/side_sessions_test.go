@@ -1571,40 +1571,25 @@ func TestSideSessionStopHonorsToolCancellation(t *testing.T) {
 
 func TestSideSessionCreateHonorsToolCancellationDuringStartup(t *testing.T) {
 	childProvider := &scriptedSideProvider{}
-	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, childProvider)
+	parent := newSideSessionTestApp(t, childProvider)
 	startupEntered := make(chan context.Context, 1)
-	factoryDone := make(chan error, 1)
 	startupCanceled := make(chan error, 1)
 	releaseStartup := make(chan struct{})
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(releaseStartup) }) }
 	t.Cleanup(release)
-	parent.sideSessions.factory = func(opts sideSessionChildOptions) (*App, error) {
-		child, err := New(Options{
-			Config:                  opts.Config,
-			Provider:                childProvider,
-			WorkDir:                 opts.Config.WorkDir,
-			DisableMCP:              true,
-			SessionMode:             SessionModeNewSide,
-			disableSideSessionTools: true,
-			sharedGoalState:         opts.GoalState,
-			sharedNotes:             opts.Notes,
-			startupContext:          opts.Context,
-			sessionModuleFactories: []runtimemodule.SessionFactorySpec{{
-				ID:      "side-session-startup-barrier",
-				Enabled: true,
-				New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
-					return &sideSessionStartupBarrier{
-						entered:  startupEntered,
-						canceled: startupCanceled,
-						release:  releaseStartup,
-					}, nil
-				},
-			}},
-		})
-		factoryDone <- err
-		return child, err
-	}
+	parent.sideSessions.factory = parent.sideSessions.newChildApp
+	parent.sideSessions.childSessionModuleFactories = []runtimemodule.SessionFactorySpec{{
+		ID:      "side-session-startup-barrier",
+		Enabled: true,
+		New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+			return &sideSessionStartupBarrier{
+				entered:  startupEntered,
+				canceled: startupCanceled,
+				release:  releaseStartup,
+			}, nil
+		},
+	}}
 
 	ctx := newControlledDeadlineContext()
 	createDone := make(chan error, 1)
@@ -1646,19 +1631,21 @@ func TestSideSessionCreateHonorsToolCancellationDuringStartup(t *testing.T) {
 	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("create waited for canceled child startup cleanup")
 	}
+	cleanupDone := make(chan struct{})
+	go func() {
+		parent.sideSessions.deferred.Wait()
+		close(cleanupDone)
+	}()
 	select {
-	case err := <-factoryDone:
-		t.Fatalf("child factory finished before startup cleanup was released: %v", err)
+	case <-cleanupDone:
+		t.Fatal("production child factory finished before startup cleanup was released")
 	default:
 	}
 	release()
 	select {
-	case err := <-factoryDone:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("child factory error = %v, want context deadline exceeded", err)
-		}
+	case <-cleanupDone:
 	case <-time.After(sideSessionTestTimeout):
-		t.Fatal("child factory did not finish after startup cleanup was released")
+		t.Fatal("production child factory did not finish after startup cleanup was released")
 	}
 	parent.sideSessions.mu.Lock()
 	active := len(parent.sideSessions.sessions)
