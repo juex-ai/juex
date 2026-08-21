@@ -338,8 +338,9 @@ var appFactory = func(manager *mcp.Manager, registry *tools.Registry) *App {
 func (application *App) bind(manager *mcp.Manager, registry *tools.Registry) {
 	target := application
 	target.resource = manager
-	var registryTarget = target
-	registryTarget.registry = registry
+	func(registryTarget *App) {
+		registryTarget.registry = registry
+	}(application)
 }
 func newApp(manager *mcp.Manager, registry *tools.Registry) *App {
 	return &AppAlias{literalResource: manager, literalRegistry: registry}
@@ -10112,7 +10113,7 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 						}
 						if literal != nil {
 							seedAppFieldLiteralParameters(literal, source.imports, values, resources, *types)
-							seedAppFieldLiteralArguments(statement, literal, source.imports, values, resources, *types)
+							seedAppFieldLiteralArguments(statement, literal, source.imports, values, resources, receivers, *types)
 							if !activeLiterals[literal] {
 								activeLiterals[literal] = true
 								previousFunctionKey := activeFunctionKey
@@ -10192,13 +10193,20 @@ func seedAppFieldLiteralParameters(literal *ast.FuncLit, imports map[string]stri
 	}
 }
 
-func seedAppFieldLiteralArguments(call *ast.CallExpr, literal *ast.FuncLit, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types compositionTypeIndex) {
+func seedAppFieldLiteralArguments(call *ast.CallExpr, literal *ast.FuncLit, imports map[string]string, values map[string]string, resources map[string]map[string]bool, receivers map[string]bool, types compositionTypeIndex) {
 	variadicIndex, variadic := variadicParameterIndex(literal.Type.Params)
 	parameterIndex := 0
 	for _, field := range literal.Type.Params.List {
 		for _, name := range field.Names {
 			key := bindingKey(name)
 			arguments := callArgumentsForParameterAt(call, parameterIndex, variadicIndex, variadic, imports)
+			if !variadic || parameterIndex != variadicIndex {
+				for _, argument := range arguments {
+					if isAppReceiverAliasExpression(argument, receivers) {
+						receivers[key] = true
+					}
+				}
+			}
 			if variadic && parameterIndex == variadicIndex && call.Ellipsis == token.NoPos {
 				elementValues := make(map[string]string)
 				for _, argument := range arguments {
@@ -10227,6 +10235,14 @@ func seedAppFieldLiteralArguments(call *ast.CallExpr, literal *ast.FuncLit, impo
 			parameterIndex++
 		}
 	}
+}
+
+func isAppReceiverAliasExpression(expression ast.Expr, receivers map[string]bool) bool {
+	if assignmentFieldPrefix(expression) != "" {
+		return false
+	}
+	root, _ := assignmentBinding(expression)
+	return root != nil && receivers[bindingKey(root)]
 }
 
 func indexAppCompositeLiteralFields(literal *ast.CompositeLit, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types *compositionTypeIndex) {
