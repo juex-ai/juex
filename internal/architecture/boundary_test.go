@@ -324,6 +324,8 @@ type App struct {
 	closureRegistry registrar
 	iifeResource closer
 	iifeRegistry registrar
+	variadicResource closer
+	variadicRegistry registrar
 }
 type AppAlias = App
 var appFactory = func(manager *mcp.Manager, registry *tools.Registry) *App {
@@ -341,6 +343,16 @@ func newIIFEApp(manager *mcp.Manager, registry *tools.Registry) *App {
 		return &AppAlias{iifeResource: resource, iifeRegistry: registrar}
 	}(manager, registry)
 }
+func newVariadicResourceApp(manager *mcp.Manager) *App {
+	return func(resources ...closer) *App {
+		return &AppAlias{variadicResource: resources[0]}
+	}(manager)
+}
+func newVariadicRegistryApp(registry *tools.Registry) *App {
+	return func(registries ...registrar) *App {
+		return &AppAlias{variadicRegistry: registries[0]}
+	}(registry)
+}
 func (application *App) bypass() {
 	_ = application.resource.Close()
 	application.registry.Register(nil)
@@ -350,6 +362,8 @@ func (application *App) bypass() {
 	application.closureRegistry.Register(nil)
 	_ = application.iifeResource.Close()
 	application.iifeRegistry.Register(nil)
+	_ = application.variadicResource.Close()
+	application.variadicRegistry.Register(nil)
 }
 `
 	dir := t.TempDir()
@@ -369,14 +383,14 @@ func (application *App) bypass() {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if len(cleanupCalls) != 4 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" || cleanupCalls[2] != "application.closureResource.Close" || cleanupCalls[3] != "application.iifeResource.Close" {
+	if len(cleanupCalls) != 5 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" || cleanupCalls[2] != "application.closureResource.Close" || cleanupCalls[3] != "application.iifeResource.Close" || cleanupCalls[4] != "application.variadicResource.Close" {
 		t.Fatalf("cleanup calls = %v, want receiver field cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if len(registrationCalls) != 4 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" || registrationCalls[2] != "application.closureRegistry.Register" || registrationCalls[3] != "application.iifeRegistry.Register" {
+	if len(registrationCalls) != 5 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" || registrationCalls[2] != "application.closureRegistry.Register" || registrationCalls[3] != "application.iifeRegistry.Register" || registrationCalls[4] != "application.variadicRegistry.Register" {
 		t.Fatalf("Tool registration calls = %v, want receiver field registration", registrationCalls)
 	}
 }
@@ -10102,7 +10116,23 @@ func seedAppFieldLiteralArguments(call *ast.CallExpr, literal *ast.FuncLit, impo
 	for _, field := range literal.Type.Params.List {
 		for _, name := range field.Names {
 			key := bindingKey(name)
-			for _, argument := range callArgumentsForParameterAt(call, parameterIndex, variadicIndex, variadic, imports) {
+			arguments := callArgumentsForParameterAt(call, parameterIndex, variadicIndex, variadic, imports)
+			if variadic && parameterIndex == variadicIndex && call.Ellipsis == token.NoPos {
+				elementValues := make(map[string]string)
+				for _, argument := range arguments {
+					typeName := assignedToolExpressionType([]ast.Expr{argument}, 0, imports, values, types)
+					setMayValueType(elementValues, "element", typeName, types)
+					if paths := cleanupPathsForExpression(argument, imports, values, resources, types); paths != nil {
+						resources[key] = mergeCleanupPaths(resources[key], paths)
+					}
+				}
+				if elementType := elementValues["element"]; elementType != "" {
+					setMayValueType(values, key, sliceTypePrefix+elementType, types)
+				}
+				parameterIndex++
+				continue
+			}
+			for _, argument := range arguments {
 				typeName := assignedToolExpressionType([]ast.Expr{argument}, 0, imports, values, types)
 				setMayValueType(values, key, typeName, types)
 				if paths := cleanupPathsForExpression(argument, imports, values, resources, types); paths != nil {
