@@ -14,6 +14,7 @@ Start with the documents that match the task instead of loading everything:
 | `DOMAIN.md` | You touch product language, Agent/Session/Turn lifecycles, or domain invariants. |
 | `PHILOSOPHY.md` | You touch product direction, scope, or trade-offs. |
 | `ARCHITECTURE.md` | You touch module ownership, interfaces, dependencies, data flow, storage, CLI, or API routes. |
+| `docs/adr/` | You need the rationale, rejected alternatives, or consequences behind a durable architecture decision. |
 | `DESIGN.md` | You touch the web UI, layout, styling, interaction, or visible copy. |
 | `frontend/README.md` | You work inside `frontend/`. |
 | Module docs | You work inside a module with its own README or design note. |
