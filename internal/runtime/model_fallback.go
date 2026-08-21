@@ -89,7 +89,7 @@ func (e *Engine) prepareCandidateRequestLocked(ctx context.Context, turnID strin
 		return base, err
 	}
 	if allowPreflightCompaction && policy.Enabled && request.estimatedInputTokens >= policy.TriggerTokens {
-		if _, err := e.compactLockedForContextWindow(ctx, turnID, prepared.systemPrompt, prepared.tools, "model_fallback_preflight", true, "", contextWindow, 0); err != nil {
+		if _, err := e.compactLockedForContextWindowWithHealthReservation(ctx, turnID, prepared.systemPrompt, prepared.tools, "model_fallback_preflight", true, "", contextWindow, 0, candidate.Ref); err != nil {
 			return base, err
 		}
 		base.policyContext = e.pendingPolicyRuntimeContextSnapshot()

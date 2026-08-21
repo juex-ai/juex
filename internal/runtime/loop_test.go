@@ -3322,6 +3322,345 @@ func TestCompactFallsBackToMainProviderWhenSummaryProviderFails(t *testing.T) {
 	}
 }
 
+func TestCompactFallbackEventFailureReleasesSelectedHalfOpenProbe(t *testing.T) {
+	now := time.Unix(40_000, 0)
+	health := llm.NewModelHealth(llm.ModelHealthOptions{Now: func() time.Time { return now }})
+	backupOnly := []string{"backup:model"}
+	backupFailure, ok := health.Acquire(backupOnly, nil)
+	if !ok {
+		t.Fatal("acquire backup health ticket")
+	}
+	health.Complete(backupFailure.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	now = now.Add(30 * time.Second)
+
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &namedCompactionProvider{name: "backup:model", text: "backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = health
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("fallback event sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: "context.compact.summary_model_fallback", err: want})
+
+	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); !errors.Is(err, want) {
+		t.Fatalf("Compact() error = %v, want %v", err, want)
+	}
+	if primary.calls != 1 || backup.calls != 0 {
+		t.Fatalf("provider calls primary/backup = %d/%d, want 1/0", primary.calls, backup.calls)
+	}
+	retry, ok := health.Acquire(backupOnly, nil)
+	if !ok || retry.Ticket.Ref != "backup:model" || !retry.Ticket.Probe {
+		t.Fatalf("backup probe after journal failure = %+v, %v", retry, ok)
+	}
+	health.Complete(retry.Ticket, llm.ModelHealthNeutral, "")
+}
+
+func TestCompactFallsBackThroughConfiguredModelChainWithoutModelChangeNotice(t *testing.T) {
+	summary := &namedCompactionProvider{name: "summary:model", err: errors.New("status 503: summary unavailable")}
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 401: token expired")}
+	backup := &namedCompactionProvider{name: "backup:model", text: "backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.SummaryProvider = summary
+	eng.SummaryProvenance = provenance.SafeProvider{ID: "summary", Model: "summary:model"}
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.NotifyModelChanges = true
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.SummaryModel = "summary:model"
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	var epochs []provenance.RequestEpoch
+	var fallbacks []ContextCompactSummaryFallbackPayload
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+	bus.Subscribe("context.compact.summary_model_fallback", func(event events.Event) {
+		fallbacks = append(fallbacks, event.Payload.(ContextCompactSummaryFallbackPayload))
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.calls != 1 || primary.calls != 1 || backup.calls != 1 {
+		t.Fatalf("summary/primary/backup calls = %d/%d/%d, want 1/1/1", summary.calls, primary.calls, backup.calls)
+	}
+	if result.SummaryModel != "backup:model" {
+		t.Fatalf("summary model = %q, want backup:model", result.SummaryModel)
+	}
+	if len(epochs) != 3 {
+		t.Fatalf("epochs = %+v, want one per provider attempt", epochs)
+	}
+	for i, wantModel := range []string{"summary:model", "primary:model", "backup:model"} {
+		if epochs[i].Attempt != i+1 || epochs[i].Purpose != "compaction" || epochs[i].Provider.Model != wantModel {
+			t.Fatalf("epoch[%d] = %+v, want attempt %d model %s", i, epochs[i], i+1, wantModel)
+		}
+	}
+	if len(fallbacks) != 2 || fallbacks[0].ConfiguredModel != "summary:model" || fallbacks[0].FallbackModel != "primary:model" || fallbacks[1].ConfiguredModel != "primary:model" || fallbacks[1].FallbackModel != "backup:model" {
+		t.Fatalf("fallbacks = %+v", fallbacks)
+	}
+	for _, message := range eng.Session.History {
+		if message.Kind == llm.MessageKindModelChange {
+			t.Fatalf("compaction persisted model-change notice: %+v", message)
+		}
+	}
+}
+
+func TestCompactUsesConfiguredFallbackModelsWithoutDedicatedSummaryModel(t *testing.T) {
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &namedCompactionProvider{name: "backup:model", text: "backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	var fallback ContextCompactSummaryFallbackPayload
+	bus.Subscribe("context.compact.summary_model_fallback", func(event events.Event) {
+		fallback = event.Payload.(ContextCompactSummaryFallbackPayload)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primary.calls != 1 || backup.calls != 1 || result.SummaryModel != "backup:model" {
+		t.Fatalf("primary/backup/result = %d/%d/%+v", primary.calls, backup.calls, result)
+	}
+	if fallback.ConfiguredModel != "primary:model" || fallback.FallbackModel != "backup:model" {
+		t.Fatalf("fallback = %+v", fallback)
+	}
+}
+
+func TestCompactRefitsSummaryRequestForFallbackContextWindow(t *testing.T) {
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &limitedCompactionProvider{name: "backup:model", maxInputTokens: 7500}
+	eng, bus := newEngine(t, primary, false)
+	eng.ContextWindow = 256000
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 256000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 10000},
+	}
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	for i := 0; i < 100; i++ {
+		message := llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%03d %s", i, strings.Repeat("x", 1000)))
+		if err := eng.Session.Append(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var epochs []provenance.RequestEpoch
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SummaryModel != "backup:model" || backup.inputTokens > backup.maxInputTokens {
+		t.Fatalf("result/input tokens = %+v/%d, want backup summary within %d", result, backup.inputTokens, backup.maxInputTokens)
+	}
+	if len(epochs) != 2 || epochs[1].Provider.Model != "backup:model" || epochs[1].ContextWindow != 10000 {
+		t.Fatalf("epochs = %+v, want fallback context window 10000", epochs)
+	}
+}
+
+func TestCompactClampsSummaryOutputForFallbackContextWindow(t *testing.T) {
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &scriptedCompactionProvider{
+		name: "backup:model",
+		attempts: []scriptedCompactionAttempt{{response: llm.Response{
+			Message:    llm.TextMessage(llm.RoleAssistant, "bounded fallback summary"),
+			StopReason: llm.StopEndTurn,
+		}}},
+	}
+	eng, bus := newEngine(t, primary, false)
+	eng.ContextWindow = 256000
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 256000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 2000},
+	}
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	eng.Compaction.SummaryMaxTokens = 2048
+	for i := 0; i < 20; i++ {
+		if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", 500)))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var epochs []provenance.RequestEpoch
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SummaryModel != "backup:model" || len(backup.options) != 1 || len(backup.histories) != 1 {
+		t.Fatalf("result/options/histories = %+v/%+v/%d", result, backup.options, len(backup.histories))
+	}
+	policy := effectiveCompactionPolicy(eng.Compaction, 2000)
+	inputTokens := estimateContextTokens(backup.systems[0], nil, backup.histories[0])
+	if got := backup.options[0].MaxOutputTokens; got <= 0 || got >= eng.Compaction.SummaryMaxTokens || inputTokens+got > policy.TriggerTokens {
+		t.Fatalf("fallback request/output = %d/%d tokens, want positive clamped total <= trigger %d", inputTokens, got, policy.TriggerTokens)
+	}
+	if len(epochs) != 2 || epochs[1].Provider.Model != "backup:model" || epochs[1].ContextWindow != 2000 || epochs[1].MaxOutputTokens != backup.options[0].MaxOutputTokens {
+		t.Fatalf("epochs = %+v, want clamped fallback provenance", epochs)
+	}
+}
+
+func TestCompactSkipsModelAlreadyInSharedHealthCooldown(t *testing.T) {
+	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	primaryFailure, ok := health.Acquire([]string{"primary:model"}, nil)
+	if !ok {
+		t.Fatal("acquire primary health ticket")
+	}
+	health.Complete(primaryFailure.Ticket, llm.ModelHealthEligibleFailure, "transient")
+
+	primary := &namedCompactionProvider{name: "primary:model", text: "unexpected primary summary"}
+	backup := &namedCompactionProvider{name: "backup:model", text: "backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = health
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var epochs []provenance.RequestEpoch
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primary.calls != 0 || backup.calls != 1 || result.SummaryModel != "backup:model" {
+		t.Fatalf("primary/backup/result = %d/%d/%+v, want cooldown skip to backup", primary.calls, backup.calls, result)
+	}
+	if len(epochs) != 1 || epochs[0].Provider.Model != "backup:model" {
+		t.Fatalf("epochs = %+v, want only attempted backup", epochs)
+	}
+}
+
+func TestCompactReportsHealthSkipsWhenNoCandidateCanBeAcquired(t *testing.T) {
+	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	for _, ref := range []string{"primary:model", "backup:model"} {
+		selection, ok := health.Acquire([]string{ref}, nil)
+		if !ok {
+			t.Fatalf("acquire %s health ticket", ref)
+		}
+		health.Complete(selection.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	}
+
+	primary := &namedCompactionProvider{name: "primary:model", text: "unexpected primary summary"}
+	backup := &namedCompactionProvider{name: "backup:model", text: "unexpected backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = health
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var fallbacks []LLMFallbackPayload
+	bus.Subscribe("llm.fallback", func(event events.Event) {
+		fallbacks = append(fallbacks, event.Payload.(LLMFallbackPayload))
+	})
+
+	_, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err == nil || !strings.Contains(err.Error(), "primary:model: unavailable") || !strings.Contains(err.Error(), "backup:model: unavailable") {
+		t.Fatalf("Compact error = %v, want exhausted cooldown candidates", err)
+	}
+	if primary.calls != 0 || backup.calls != 0 {
+		t.Fatalf("primary/backup calls = %d/%d, want no provider calls", primary.calls, backup.calls)
+	}
+	want := []LLMFallbackPayload{
+		{From: "primary:model", Reason: "transient"},
+		{From: "backup:model", Reason: "transient"},
+	}
+	if len(fallbacks) != len(want) {
+		t.Fatalf("fallbacks = %+v, want %+v", fallbacks, want)
+	}
+	for index := range want {
+		if fallbacks[index].From != want[index].From || fallbacks[index].To != "" || fallbacks[index].Reason != want[index].Reason || fallbacks[index].CooldownMS <= 0 {
+			t.Fatalf("fallback[%d] = %+v, want terminal health skip for %s", index, fallbacks[index], want[index].From)
+		}
+	}
+}
+
+func TestCompactReportsRemainingHealthSkipsAfterAttemptFailure(t *testing.T) {
+	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	backupSelection, ok := health.Acquire([]string{"backup:model"}, nil)
+	if !ok {
+		t.Fatal("acquire backup health ticket")
+	}
+	health.Complete(backupSelection.Ticket, llm.ModelHealthEligibleFailure, "transient")
+
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &namedCompactionProvider{name: "backup:model", text: "unexpected backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = health
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var fallbacks []LLMFallbackPayload
+	bus.Subscribe("llm.fallback", func(event events.Event) {
+		fallbacks = append(fallbacks, event.Payload.(LLMFallbackPayload))
+	})
+
+	_, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err == nil || !strings.Contains(err.Error(), "primary:model: status 503") || !strings.Contains(err.Error(), "backup:model: unavailable") {
+		t.Fatalf("Compact error = %v, want attempt failure plus cooldown skip", err)
+	}
+	if primary.calls != 1 || backup.calls != 0 {
+		t.Fatalf("primary/backup calls = %d/%d, want 1/0", primary.calls, backup.calls)
+	}
+	if len(fallbacks) != 1 || fallbacks[0].From != "backup:model" || fallbacks[0].To != "" || fallbacks[0].Reason != "transient" || fallbacks[0].CooldownMS <= 0 {
+		t.Fatalf("fallbacks = %+v, want terminal backup health skip", fallbacks)
+	}
+}
+
 func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	provider := &scriptedCompactionProvider{
 		name: "thinking:model",
@@ -3371,6 +3710,62 @@ func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	usage := eng.Session.TokenUsageSnapshot()
 	if usage != (llm.Usage{InputTokens: 21, OutputTokens: 5}) {
 		t.Fatalf("token usage = %+v, want aggregate retry usage", usage)
+	}
+}
+
+func TestCompactRetriesFirstIncompleteFallbackWithLargerBudget(t *testing.T) {
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &scriptedCompactionProvider{
+		name: "backup:model",
+		attempts: []scriptedCompactionAttempt{
+			{response: llm.Response{
+				Message:    llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockReasoning, Text: "spent the first fallback budget"}}},
+				StopReason: llm.StopMaxTokens,
+				Usage:      llm.Usage{InputTokens: 10, OutputTokens: 2},
+			}},
+			{response: llm.Response{
+				Message:    llm.TextMessage(llm.RoleAssistant, "recovered fallback summary"),
+				StopReason: llm.StopEndTurn,
+				Usage:      llm.Usage{InputTokens: 11, OutputTokens: 3},
+			}},
+		},
+	}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 5000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 5000},
+	}
+	configureCompactionRetryTest(t, eng, 30, 2000)
+	eng.ContextWindow = 5000
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 1000
+	var retry ContextCompactSummaryRetryPayload
+	var epochs []provenance.RequestEpoch
+	bus.Subscribe("context.compact.summary_retry", func(event events.Event) {
+		retry = event.Payload.(ContextCompactSummaryRetryPayload)
+	})
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SummaryModel != "backup:model" || primary.calls != 1 || backup.calls != 2 {
+		t.Fatalf("result/primary/backup = %+v/%d/%d, want recovered backup after retry", result, primary.calls, backup.calls)
+	}
+	if len(backup.options) != 2 || backup.options[0].MaxOutputTokens != 1000 || backup.options[1].MaxOutputTokens != 2000 {
+		t.Fatalf("fallback max output tokens = %+v, want [1000 2000]", compactionOptionBudgets(backup.options))
+	}
+	if len(epochs) != 3 || retry.EpochID != epochs[1].EpochID || retry.RequestDigest != epochs[1].RequestDigest {
+		t.Fatalf("epochs/retry = %+v/%+v, want retry linked to first fallback attempt", epochs, retry)
+	}
+	if retry.Attempt != 2 || retry.Reason != "empty_summary" || !retry.ReasoningOnly {
+		t.Fatalf("retry payload = %+v", retry)
+	}
+	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 21, OutputTokens: 5}) {
+		t.Fatalf("token usage = %+v, want aggregate fallback retry usage", usage)
 	}
 }
 
@@ -3614,16 +4009,21 @@ func TestCompactCapsSummaryRetryToBoundedRequest(t *testing.T) {
 	if provider.calls != 2 || len(provider.options) != 2 || len(provider.systems) != 2 || len(provider.histories) != 2 {
 		t.Fatalf("calls/options/systems/histories = %d/%d/%d/%d", provider.calls, len(provider.options), len(provider.systems), len(provider.histories))
 	}
+	policy := effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow)
+	initialBudget := provider.options[0].MaxOutputTokens
+	initialInputTokens := estimateContextTokens(provider.systems[0], nil, provider.histories[0])
+	if initialBudget >= eng.Compaction.SummaryMaxTokens || initialInputTokens+initialBudget > policy.TriggerTokens {
+		t.Fatalf("initial input + output = %d + %d, want clamped below configured %d and total <= trigger %d", initialInputTokens, initialBudget, eng.Compaction.SummaryMaxTokens, policy.TriggerTokens)
+	}
 	retryBudget := provider.options[1].MaxOutputTokens
 	if retryBudget >= 1200 {
 		t.Fatalf("retry budget = %d, want less than uncapped double 1200", retryBudget)
 	}
-	policy := effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow)
 	retryInputTokens := estimateContextTokens(provider.systems[1], nil, provider.histories[1])
 	if retryInputTokens+retryBudget > policy.TriggerTokens {
 		t.Fatalf("retry input + output = %d + %d, want <= trigger %d", retryInputTokens, retryBudget, policy.TriggerTokens)
 	}
-	if retry.PreviousMaxOutputTokens != 600 || retry.MaxOutputTokens != retryBudget {
+	if retry.PreviousMaxOutputTokens != initialBudget || retry.MaxOutputTokens != retryBudget {
 		t.Fatalf("retry payload = %+v, want bounded budget %d", retry, retryBudget)
 	}
 }
@@ -3992,6 +4392,26 @@ type namedCompactionProvider struct {
 	text  string
 	err   error
 	calls int
+}
+
+type limitedCompactionProvider struct {
+	name           string
+	maxInputTokens int
+	inputTokens    int
+}
+
+func (p *limitedCompactionProvider) Name() string { return p.name }
+
+func (p *limitedCompactionProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, llm.CompleteOptions{})
+}
+
+func (p *limitedCompactionProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (llm.Response, error) {
+	p.inputTokens = estimateContextTokens(sys, nil, history)
+	if p.inputTokens > p.maxInputTokens {
+		return llm.Response{}, fmt.Errorf("context_length_exceeded: compaction request has %d tokens", p.inputTokens)
+	}
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "bounded fallback summary"), StopReason: llm.StopEndTurn}, nil
 }
 
 type scriptedCompactionAttempt struct {

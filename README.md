@@ -736,7 +736,9 @@ instead of reconstructing it from transcript history, while unfinished Notes
 items constrain `Next Steps`. Set `compaction.instructions` for persistent
 summary focus. Instructions from configuration, a manual `/compact <focus>` or
 `juex sessions compact --instructions`, and successful `PreCompact` hook stdout
-are applied in that order.
+are applied in that order. If summary generation fails, Juex retries through
+the ordered primary and `fallback_models` chain without adding a model-change
+message to the Agent conversation.
 
 Each persisted session also has a `scratchpad/` directory for long drafts,
 intermediate files, and working material that exceeds the Notes budget. The

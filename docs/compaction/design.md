@@ -26,6 +26,10 @@ Implemented:
   breakpoints on stable prompt sections. Provider-reported cached input tokens
   are recorded in usage/context events.
 - Automatic compaction has a consecutive-failure circuit breaker.
+- Summary generation traverses the optional dedicated summary model, effective
+  primary, and ordered fallback models. It deduplicates refs, honors shared
+  model-health cooldown and half-open reservations, and refits each request to
+  the selected candidate's context window.
 
 Still future work:
 
@@ -361,10 +365,18 @@ Currently emitted events:
   - `tail_start_message_id`, `context_window`, `reserve_tokens`,
     `keep_recent_tokens`
 - `context.compact.summary_retry`
-  - empty-summary reason, stop reason, reasoning-only classification, and the
-    previous and bounded retry output-token budgets
+  - the first incomplete candidate anywhere in the summary chain receives the
+    one bounded semantic retry; the event records empty-summary reason, stop
+    reason, reasoning-only classification, previous and retry output-token
+    budgets, and the failed attempt's Request Epoch link
 - `context.compact.summary_model_fallback`
-  - configured summary model, fallback model, and the summary-provider error
+  - one event per attempted-candidate transition, recording the failed model,
+    next selected model (or empty when exhausted), candidate error, and failed
+    attempt's Request Epoch link
+- `llm.fallback`
+  - shared-health cooldown and `probe_in_flight` skips encountered while
+    selecting a compaction summary candidate; these diagnostics do not create a
+    conversation `model_change` message
 - `context.compact.errored` and `context.compact.skipped`
   - compact errors and automatic failure-circuit-breaker state
 - `llm.responded`

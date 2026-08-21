@@ -121,6 +121,10 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string,
 }
 
 func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string, contextWindow int, operationGeneration uint64) (CompactionResult, error) {
+	return e.compactLockedForContextWindowWithHealthReservation(ctx, turnID, systemPrompt, tools, reason, auto, instructions, contextWindow, operationGeneration, "")
+}
+
+func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string, contextWindow int, operationGeneration uint64, reservedModelRef string) (CompactionResult, error) {
 	policy := effectiveCompactionPolicy(e.Compaction, contextWindow)
 	if !policy.Enabled {
 		return CompactionResult{}, nil
@@ -190,7 +194,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	}
 
 	previousModelSummary := compactionModelSummary(selection.PreviousSummary)
-	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, previousModelSummary, summaryInput, summaryState, policy, instructions)
+	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, previousModelSummary, summaryInput, summaryState, policy, instructions, contextWindow, reservedModelRef)
 	if err != nil {
 		sess.RecordResponseUsage(generation.Usage, nil)
 		compactErr := newCompactionError(ctx, err)
@@ -370,12 +374,46 @@ func (e *Engine) compactionToolsLocked() []llm.ToolSpec {
 	return e.Tools.Specs()
 }
 
-func (e *Engine) compactionSummaryProviderLocked() llm.Provider {
-	if e != nil && e.SummaryProvider != nil {
-		return e.SummaryProvider
+func (e *Engine) compactionSummaryCandidatesLocked(policy compactionPolicy) []ModelCandidate {
+	if e == nil {
+		return nil
 	}
-	if e != nil {
-		return e.Provider
+	candidates := make([]ModelCandidate, 0, len(e.ModelCandidates)+1)
+	if e.SummaryProvider != nil {
+		ref := strings.TrimSpace(policy.SummaryModel)
+		if ref == "" {
+			ref = strings.TrimSpace(e.SummaryProvenance.Model)
+		}
+		if ref == "" {
+			ref = e.SummaryProvider.Name()
+		}
+		candidates = append(candidates, ModelCandidate{
+			Ref:        ref,
+			Provider:   e.SummaryProvider,
+			Provenance: e.SummaryProvenance,
+		})
 	}
-	return nil
+	seen := make(map[string]struct{}, len(candidates)+len(e.ModelCandidates))
+	for _, candidate := range candidates {
+		seen[compactionSummaryCandidateRef(candidate)] = struct{}{}
+	}
+	for _, candidate := range e.effectiveModelCandidatesLocked() {
+		ref := compactionSummaryCandidateRef(candidate)
+		if _, duplicate := seen[ref]; duplicate {
+			continue
+		}
+		seen[ref] = struct{}{}
+		candidates = append(candidates, candidate)
+	}
+	return candidates
+}
+
+func compactionSummaryCandidateRef(candidate ModelCandidate) string {
+	if ref := strings.TrimSpace(candidate.Ref); ref != "" {
+		return ref
+	}
+	if candidate.Provider != nil {
+		return candidate.Provider.Name()
+	}
+	return ""
 }
