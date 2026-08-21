@@ -57,6 +57,14 @@ type compositionTypeIndex struct {
 	fields          map[string]map[string]string
 	cleanupMethods  map[string]map[string]bool
 	functionResults map[string][]string
+	cleanupParams   map[string]map[int]bool
+	appFunctions    []indexedAppFunction
+}
+
+type indexedAppFunction struct {
+	key     string
+	decl    *ast.FuncDecl
+	imports map[string]string
 }
 
 // These are the business-agnostic technical primitives identified as
@@ -260,6 +268,39 @@ func closeFeature() {
 	}
 }
 
+func TestAppFeatureCleanupInspectionTracksLocalHelpers(t *testing.T) {
+	source := `package app
+import "github.com/juex-ai/juex/internal/mcp"
+type App struct { manager *mcp.Manager }
+type closer interface { Close() error }
+func closeOwned(resource closer) { _ = resource.Close() }
+func closeTransitively(resource closer) { closeOwned(resource) }
+func (application *App) Close() error {
+	closeTransitively(application.manager)
+	return nil
+}`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "helper.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		calls = append(calls, chain)
+	})
+	if len(calls) != 1 || calls[0] != "closeTransitively" {
+		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
+	}
+}
+
 func TestImportBoundaryClassifiesPromptContextAsConcreteFeature(t *testing.T) {
 	if !isConcreteFeatureImport(modulePath + "/internal/modules/promptcontext") {
 		t.Fatal("prompt context Module package is not classified as a concrete Feature")
@@ -395,6 +436,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 		fields:          make(map[string]map[string]string),
 		cleanupMethods:  make(map[string]map[string]bool),
 		functionResults: make(map[string][]string),
+		cleanupParams:   make(map[string]map[int]bool),
 	}
 	for typeName, methods := range featureResourceCleanupMethods {
 		types.cleanupMethods[typeName] = methods
@@ -452,6 +494,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 	if err := indexConcreteFeatureSources(repositoryRootPath(), &types); err != nil {
 		return compositionTypeIndex{}, err
 	}
+	indexLocalCleanupParameters(&types)
 	return types, nil
 }
 
@@ -512,6 +555,13 @@ func indexCleanupAndConstructors(file *ast.File, packagePath string, imports map
 		if !ok {
 			continue
 		}
+		if packagePath == modulePath+"/internal/app" {
+			types.appFunctions = append(types.appFunctions, indexedAppFunction{
+				key:     declaredFunctionKey(function, imports, packagePath),
+				decl:    function,
+				imports: imports,
+			})
+		}
 		if function.Recv == nil {
 			if results := resultTypes(function.Type.Results, imports, packagePath); len(results) != 0 {
 				types.functionResults[packagePath+"."+function.Name.Name] = results
@@ -535,6 +585,122 @@ func indexCleanupAndConstructors(file *ast.File, packagePath string, imports map
 			types.cleanupMethods[receiverType] = make(map[string]bool)
 		}
 		types.cleanupMethods[receiverType][function.Name.Name] = true
+	}
+}
+
+func declaredFunctionKey(function *ast.FuncDecl, imports map[string]string, packagePath string) string {
+	if function.Recv == nil || len(function.Recv.List) == 0 {
+		return packagePath + "." + function.Name.Name
+	}
+	return canonicalTypeInPackage(function.Recv.List[0].Type, imports, packagePath) + "." + function.Name.Name
+}
+
+func indexLocalCleanupParameters(types *compositionTypeIndex) {
+	changed := true
+	for changed {
+		changed = false
+		for _, function := range types.appFunctions {
+			inferred := inferCleanupParameters(function, *types)
+			if types.cleanupParams[function.key] == nil {
+				types.cleanupParams[function.key] = make(map[int]bool)
+			}
+			for index := range inferred {
+				if !types.cleanupParams[function.key][index] {
+					types.cleanupParams[function.key][index] = true
+					changed = true
+				}
+			}
+		}
+	}
+}
+
+func inferCleanupParameters(function indexedAppFunction, types compositionTypeIndex) map[int]bool {
+	cleaned := make(map[int]bool)
+	origins := parameterOrigins(function.decl.Type.Params)
+	values := namedValueTypes(function.decl.Recv, function.imports)
+	for name, typeName := range namedValueTypes(function.decl.Type.Params, function.imports) {
+		values[name] = typeName
+	}
+	ast.Inspect(function.decl.Body, func(node ast.Node) bool {
+		switch value := node.(type) {
+		case *ast.AssignStmt:
+			for index, left := range value.Lhs {
+				name, ok := left.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				if index < len(value.Rhs) {
+					origins[name.Name] = originsForExpression(value.Rhs[index], origins)
+				}
+				if typeName := assignedExpressionType(value.Rhs, index, function.imports, values, types); typeName != "" {
+					values[name.Name] = typeName
+				}
+			}
+		case *ast.DeclStmt:
+			general, ok := value.Decl.(*ast.GenDecl)
+			if !ok || general.Tok != token.VAR {
+				break
+			}
+			for _, raw := range general.Specs {
+				spec := raw.(*ast.ValueSpec)
+				for index, name := range spec.Names {
+					if index < len(spec.Values) {
+						origins[name.Name] = originsForExpression(spec.Values[index], origins)
+					}
+				}
+			}
+		case *ast.CallExpr:
+			if selector, ok := value.Fun.(*ast.SelectorExpr); ok && isFeatureCleanupMethodName(selector.Sel.Name) {
+				mergeOrigins(cleaned, originsForExpression(selector.X, origins))
+			}
+			callee := calledFunctionKey(value.Fun, function.imports, values, types)
+			for index := range types.cleanupParams[callee] {
+				if index < len(value.Args) {
+					mergeOrigins(cleaned, originsForExpression(value.Args[index], origins))
+				}
+			}
+		}
+		return true
+	})
+	return cleaned
+}
+
+func parameterOrigins(fields *ast.FieldList) map[string]map[int]bool {
+	origins := make(map[string]map[int]bool)
+	if fields == nil {
+		return origins
+	}
+	index := 0
+	for _, field := range fields.List {
+		for _, name := range field.Names {
+			origins[name.Name] = map[int]bool{index: true}
+			index++
+		}
+		if len(field.Names) == 0 {
+			index++
+		}
+	}
+	return origins
+}
+
+func originsForExpression(expression ast.Expr, origins map[string]map[int]bool) map[int]bool {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		return origins[value.Name]
+	case *ast.ParenExpr:
+		return originsForExpression(value.X, origins)
+	case *ast.SelectorExpr:
+		return originsForExpression(value.X, origins)
+	case *ast.UnaryExpr:
+		return originsForExpression(value.X, origins)
+	default:
+		return nil
+	}
+}
+
+func mergeOrigins(destination, source map[int]bool) {
+	for index := range source {
+		destination[index] = true
 	}
 }
 
@@ -626,6 +792,13 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					}
 				}
 			case *ast.CallExpr:
+				callee := calledFunctionKey(value.Fun, imports, values, types)
+				for index := range types.cleanupParams[callee] {
+					if index < len(value.Args) && cleanupPathsForExpression(value.Args[index], imports, values, resources, types) != nil {
+						report(value, selectorChain(value.Fun))
+						break
+					}
+				}
 				selector, ok := value.Fun.(*ast.SelectorExpr)
 				if !ok {
 					break
