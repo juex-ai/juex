@@ -42,11 +42,11 @@ func TestActiveContext_AssemblesExplicitRetainedMessages(t *testing.T) {
 }
 
 func TestActiveContext_SkipsHookEventMessages(t *testing.T) {
-	hookTrace := testMsg("hook-1", llm.RoleSystem, "hook check allow UserPromptSubmit in 1ms")
-	hookTrace.Kind = llm.MessageKindHookEvent
+	policyTrace := testMsg("hook-1", llm.RoleSystem, "hook check allow UserPromptSubmit in 1ms")
+	policyTrace.Kind = llm.MessageKindPolicyEvent
 	h := []llm.Message{
 		testMsg("user-1", llm.RoleUser, "start"),
-		hookTrace,
+		policyTrace,
 		testMsg("assistant-1", llm.RoleAssistant, "ok"),
 	}
 

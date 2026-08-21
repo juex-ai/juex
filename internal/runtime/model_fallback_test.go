@@ -502,10 +502,10 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 		t.Fatal("backup received unbounded pre-compaction history")
 	}
 	if got := messagesText(backup.histories[0]); !strings.Contains(got, "Use the refreshed fallback context now.") {
-		t.Fatalf("backup history missing post-compact hook context:\n%s", got)
+		t.Fatalf("backup history missing post-compact policy context:\n%s", got)
 	}
-	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
-		t.Fatalf("post-compact hook context leaked after fallback request: %+v", remaining)
+	if remaining := eng.pendingPolicyRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("post-compact policy context leaked after fallback request: %+v", remaining)
 	}
 }
 
@@ -588,7 +588,7 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 		{Ref: "backup:model", Provider: backup, ContextWindow: 64000, MaxOutputTokens: 2048},
 	}
 	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{Hook: hooks.CommandHook{Name: "fallback"}, Stdout: "one-shot fallback context"}}); err != nil {
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{Hook: hooks.CommandHook{Name: "fallback"}, Stdout: "one-shot fallback context"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "earlier")); err != nil {
@@ -632,10 +632,10 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 		t.Fatalf("errored events = %+v, failed epoch = %+v", erroredEvents, epochs[0])
 	}
 	if got := messagesText(primary.histories[0]); !strings.Contains(got, "one-shot fallback context") {
-		t.Fatalf("primary request missing hook context:\n%s", got)
+		t.Fatalf("primary request missing policy context:\n%s", got)
 	}
 	if got := messagesText(backup.histories[0]); strings.Contains(got, "one-shot fallback context") {
-		t.Fatalf("backup request repeated checkpointed hook context:\n%s", got)
+		t.Fatalf("backup request repeated checkpointed policy context:\n%s", got)
 	}
 	if len(backup.opts) != 1 || backup.opts[0].MaxOutputTokens != 2048 {
 		t.Fatalf("backup options = %+v", backup.opts)

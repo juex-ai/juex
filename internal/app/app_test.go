@@ -1306,7 +1306,10 @@ func TestApp_NewAndReplacementRunSessionStartHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(data)
-	if !strings.Contains(body, `"type":"hook.completed"`) || !strings.Contains(body, `"event_name":"SessionStart"`) {
+	if !strings.Contains(body, `"type":"policy.completed"`) ||
+		!strings.Contains(body, `"module_id":"hooks"`) ||
+		!strings.Contains(body, `"policy_point":"session_start"`) ||
+		!strings.Contains(body, `"name":"SessionStart/startup"`) {
 		t.Fatalf("events missing SessionStart hook:\n%s", body)
 	}
 
@@ -1321,7 +1324,10 @@ func TestApp_NewAndReplacementRunSessionStartHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	body = string(data)
-	if !strings.Contains(body, `"type":"hook.completed"`) || !strings.Contains(body, `"event_name":"SessionStart"`) {
+	if !strings.Contains(body, `"type":"policy.completed"`) ||
+		!strings.Contains(body, `"module_id":"hooks"`) ||
+		!strings.Contains(body, `"policy_point":"session_start"`) ||
+		!strings.Contains(body, `"name":"SessionStart/startup"`) {
 		t.Fatalf("replacement events missing SessionStart hook:\n%s", body)
 	}
 	oldDebug, err := os.ReadFile(filepath.Join(oldSessionDir, "logs", "debug.log"))
@@ -1332,10 +1338,10 @@ func TestApp_NewAndReplacementRunSessionStartHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(string(oldDebug), "event=hook.completed"); got != 1 {
+	if got := strings.Count(string(oldDebug), "event=policy.completed"); got != 1 {
 		t.Fatalf("old session completed hook logs = %d, want only its initial SessionStart", got)
 	}
-	if got := strings.Count(string(newDebug), "event=hook.completed"); got != 1 {
+	if got := strings.Count(string(newDebug), "event=policy.completed"); got != 1 {
 		t.Fatalf("replacement session completed hook logs = %d, want its SessionStart", got)
 	}
 }
@@ -1368,7 +1374,9 @@ commands:
 		t.Fatal(err)
 	}
 	body := string(data)
-	if !strings.Contains(body, `"name":"ext-startup"`) || !strings.Contains(body, `"source":"ext:demo"`) {
+	if !strings.Contains(body, `"module_id":"hooks"`) ||
+		!strings.Contains(body, `"name":"SessionStart/ext-startup"`) ||
+		!strings.Contains(body, `"source":"ext:demo"`) {
 		t.Fatalf("events missing extension SessionStart hook source:\n%s", body)
 	}
 }

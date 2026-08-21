@@ -2269,7 +2269,7 @@ func TestPostTurnKindWhitelist(t *testing.T) {
 		"model_change",
 		"observation",
 		"mcp_event",
-		"hook_event",
+		"policy_event",
 		"unknown",
 	} {
 		t.Run(kind, func(t *testing.T) {

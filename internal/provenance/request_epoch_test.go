@@ -27,10 +27,10 @@ func TestBuildRequestEpochDigestTracksEffectiveEnvelope(t *testing.T) {
 		History: []llm.Message{
 			message("compact-1", llm.MessageKindCompact, "summary"),
 			message("user-1", llm.MessageKindDirect, "hello"),
-			message("hook-1", llm.MessageKindRuntimeContext, "extra"),
+			message("policy-1", llm.MessageKindRuntimeContext, "extra"),
 		},
-		Compaction:            CompactionSelection{MarkerMessageID: "compact-1", TailStartMessageID: "user-1"},
-		HookContextMessageIDs: []string{"hook-1"},
+		Compaction:              CompactionSelection{MarkerMessageID: "compact-1", TailStartMessageID: "user-1"},
+		PolicyContextMessageIDs: []string{"policy-1"},
 	}
 
 	first, err := BuildRequestEpoch(base)
@@ -47,7 +47,7 @@ func TestBuildRequestEpochDigestTracksEffectiveEnvelope(t *testing.T) {
 	if err := VerifyRequestEpoch(first); err != nil {
 		t.Fatalf("VerifyRequestEpoch() error = %v", err)
 	}
-	if got := first.HistoryMessageIDs; strings.Join(got, ",") != "compact-1,user-1,hook-1" {
+	if got := first.HistoryMessageIDs; strings.Join(got, ",") != "compact-1,user-1,policy-1" {
 		t.Fatalf("history ids = %v", got)
 	}
 
@@ -66,8 +66,8 @@ func TestBuildRequestEpochDigestTracksEffectiveEnvelope(t *testing.T) {
 		"selection": func(in *RequestInput) {
 			in.History = append([]llm.Message(nil), in.History[1:]...)
 		},
-		"compaction": func(in *RequestInput) { in.Compaction.TailStartMessageID = "hook-1" },
-		"hook":       func(in *RequestInput) { in.HookContextMessageIDs = nil },
+		"compaction": func(in *RequestInput) { in.Compaction.TailStartMessageID = "policy-1" },
+		"policy":     func(in *RequestInput) { in.PolicyContextMessageIDs = nil },
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {
@@ -357,13 +357,13 @@ func TestBuildRequestEpochRejectsMismatchedSystemPromptParts(t *testing.T) {
 	}
 }
 
-func TestTrackerRecoversQueuedMinusCheckpointedHookContextAndDeduplicatesSnapshots(t *testing.T) {
-	queued := HookContextQueuedPayload{Messages: []llm.Message{message("hook-1", llm.MessageKindRuntimeContext, "extra")}}
+func TestTrackerRecoversQueuedMinusCheckpointedPolicyContextAndDeduplicatesSnapshots(t *testing.T) {
+	queued := PolicyContextQueuedPayload{Messages: []llm.Message{message("policy-1", llm.MessageKindRuntimeContext, "extra")}}
 	epoch, err := BuildRequestEpoch(RequestInput{
-		Provider:              SafeProvider{ID: "test", Model: "model"},
-		SystemPrompt:          "system",
-		History:               []llm.Message{message("user-1", llm.MessageKindDirect, "hello"), queued.Messages[0]},
-		HookContextMessageIDs: []string{"hook-1"},
+		Provider:                SafeProvider{ID: "test", Model: "model"},
+		SystemPrompt:            "system",
+		History:                 []llm.Message{message("user-1", llm.MessageKindDirect, "hello"), queued.Messages[0]},
+		PolicyContextMessageIDs: []string{"policy-1"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -371,22 +371,22 @@ func TestTrackerRecoversQueuedMinusCheckpointedHookContextAndDeduplicatesSnapsho
 	epoch.EpochID = "epoch-1"
 
 	tracker, err := Recover([]events.Event{
-		{Type: HookContextQueuedType, Payload: queued},
+		{Type: PolicyContextQueuedType, Payload: queued},
 		{Type: RequestEpochType, Payload: RequestEpochPayload{Epoch: epoch}},
-		{Type: HookContextQueuedType, Payload: HookContextQueuedPayload{Messages: []llm.Message{message("hook-2", llm.MessageKindRuntimeContext, "later")}}},
+		{Type: PolicyContextQueuedType, Payload: PolicyContextQueuedPayload{Messages: []llm.Message{message("policy-2", llm.MessageKindRuntimeContext, "later")}}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending := tracker.PendingHookContext()
-	if len(pending) != 1 || pending[0].ID != "hook-2" {
-		t.Fatalf("pending hook context = %+v", pending)
+	pending := tracker.PendingPolicyContext()
+	if len(pending) != 1 || pending[0].ID != "policy-2" {
+		t.Fatalf("pending policy context = %+v", pending)
 	}
-	if len(tracker.queued) != 1 || tracker.queued[0].ID != "hook-2" {
-		t.Fatalf("retained hook context bodies = %+v", tracker.queued)
+	if len(tracker.queued) != 1 || tracker.queued[0].ID != "policy-2" {
+		t.Fatalf("retained policy context bodies = %+v", tracker.queued)
 	}
-	if err := tracker.ReplayEvent(events.Event{Type: HookContextQueuedType, Payload: queued}); err == nil || !strings.Contains(err.Error(), "duplicate") {
-		t.Fatalf("ReplayEvent() consumed duplicate hook error = %v", err)
+	if err := tracker.ReplayEvent(events.Event{Type: PolicyContextQueuedType, Payload: queued}); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("ReplayEvent() consumed duplicate policy error = %v", err)
 	}
 
 	repeated := epoch
@@ -434,7 +434,7 @@ func TestBuildRequestEpochCanonicalizesSchemaMapOrder(t *testing.T) {
 	}
 }
 
-func TestRecoverRejectsBrokenSnapshotReferencesAndDuplicateHookIDs(t *testing.T) {
+func TestRecoverRejectsBrokenSnapshotReferencesAndDuplicatePolicyIDs(t *testing.T) {
 	base, err := BuildRequestEpoch(RequestInput{
 		Provider: SafeProvider{ID: "test", Model: "model"},
 		History:  []llm.Message{message("user-1", llm.MessageKindDirect, "hello")},
@@ -449,12 +449,12 @@ func TestRecoverRejectsBrokenSnapshotReferencesAndDuplicateHookIDs(t *testing.T)
 		t.Fatalf("Recover() missing snapshot error = %v", err)
 	}
 
-	queued := HookContextQueuedPayload{Messages: []llm.Message{message("hook-1", llm.MessageKindRuntimeContext, "extra")}}
+	queued := PolicyContextQueuedPayload{Messages: []llm.Message{message("policy-1", llm.MessageKindRuntimeContext, "extra")}}
 	if _, err := Recover([]events.Event{
-		{Type: HookContextQueuedType, Payload: queued},
-		{Type: HookContextQueuedType, Payload: queued},
+		{Type: PolicyContextQueuedType, Payload: queued},
+		{Type: PolicyContextQueuedType, Payload: queued},
 	}); err == nil || !strings.Contains(err.Error(), "duplicate") {
-		t.Fatalf("Recover() duplicate hook error = %v", err)
+		t.Fatalf("Recover() duplicate policy error = %v", err)
 	}
 }
 

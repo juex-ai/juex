@@ -103,7 +103,7 @@ const messageGroupRendererRegistry: Record<
   mcp_event: MCPEventGroup,
   observation: ObservationEventGroup,
   side_session: SideSessionEventGroup,
-  hook_event: HookEventGroup,
+  policy_event: PolicyEventGroup,
   model_fallback: ModelFallbackGroup,
   system_notice: SystemNoticeGroup,
   compact: CompactGroup,
@@ -677,7 +677,7 @@ function ExternalEventGroup({
   );
 }
 
-function HookEventGroup({ group }: MessageGroupRendererProps) {
+function PolicyEventGroup({ group }: MessageGroupRendererProps) {
   const text = groupText(group);
   if (!text && !group.pending) return null;
   return (

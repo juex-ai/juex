@@ -104,15 +104,15 @@ func TestReplaceSessionRuntimeRejectsBusyRuntimeAtomically(t *testing.T) {
 	}
 }
 
-func TestReplaceSessionRuntimeRecoversUnconsumedHookContext(t *testing.T) {
+func TestReplaceSessionRuntimeRecoversUnconsumedPolicyContext(t *testing.T) {
 	root := t.TempDir()
 	sess := newSessionRuntimeTestSession(t, root)
 	first := provenanceRuntimeContextMessage("hook-1", "consumed")
 	second := provenanceRuntimeContextMessage("hook-2", "pending")
 	for _, event := range []events.Event{
-		{Type: provenance.HookContextQueuedType, SchemaVersion: 1, ReplayPolicy: events.ReplayRequired, Payload: provenance.HookContextQueuedPayload{Messages: []llm.Message{first}}},
+		{Type: provenance.PolicyContextQueuedType, SchemaVersion: 1, ReplayPolicy: events.ReplayRequired, Payload: provenance.PolicyContextQueuedPayload{Messages: []llm.Message{first}}},
 		{Type: provenance.RequestEpochType, SchemaVersion: 1, ReplayPolicy: events.ReplayRequired, Payload: provenance.RequestEpochPayload{Epoch: validRecoveryEpoch(t, first.ID)}},
-		{Type: provenance.HookContextQueuedType, SchemaVersion: 1, ReplayPolicy: events.ReplayRequired, Payload: provenance.HookContextQueuedPayload{Messages: []llm.Message{second}}},
+		{Type: provenance.PolicyContextQueuedType, SchemaVersion: 1, ReplayPolicy: events.ReplayRequired, Payload: provenance.PolicyContextQueuedPayload{Messages: []llm.Message{second}}},
 	} {
 		if err := sess.AppendEvent(events.Normalize(event)); err != nil {
 			t.Fatal(err)
@@ -122,9 +122,9 @@ func TestReplaceSessionRuntimeRecoversUnconsumedHookContext(t *testing.T) {
 	if err := engine.ReplaceSessionRuntime(sess); err != nil {
 		t.Fatal(err)
 	}
-	pending := engine.pendingHookRuntimeContextSnapshot()
+	pending := engine.pendingPolicyRuntimeContextSnapshot()
 	if len(pending) != 1 || pending[0].ID != second.ID {
-		t.Fatalf("recovered hook context = %+v", pending)
+		t.Fatalf("recovered policy context = %+v", pending)
 	}
 }
 
@@ -135,18 +135,18 @@ func TestRestoreSessionRuntimeCheckpointDoesNotReplayJournal(t *testing.T) {
 	firstPending := provenanceRuntimeContextMessage("hook-first", "first pending")
 	secondPending := provenanceRuntimeContextMessage("hook-second", "second pending")
 	if err := first.AppendEvent(events.Normalize(events.Event{
-		Type:          provenance.HookContextQueuedType,
+		Type:          provenance.PolicyContextQueuedType,
 		SchemaVersion: 1,
 		ReplayPolicy:  events.ReplayRequired,
-		Payload:       provenance.HookContextQueuedPayload{Messages: []llm.Message{firstPending}},
+		Payload:       provenance.PolicyContextQueuedPayload{Messages: []llm.Message{firstPending}},
 	})); err != nil {
 		t.Fatal(err)
 	}
 	if err := second.AppendEvent(events.Normalize(events.Event{
-		Type:          provenance.HookContextQueuedType,
+		Type:          provenance.PolicyContextQueuedType,
 		SchemaVersion: 1,
 		ReplayPolicy:  events.ReplayRequired,
-		Payload:       provenance.HookContextQueuedPayload{Messages: []llm.Message{secondPending}},
+		Payload:       provenance.PolicyContextQueuedPayload{Messages: []llm.Message{secondPending}},
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -178,9 +178,9 @@ func TestRestoreSessionRuntimeCheckpointDoesNotReplayJournal(t *testing.T) {
 	if got := engine.SessionRuntimeSnapshot().Session.ID; got != first.ID {
 		t.Fatalf("restored Session = %q, want %q", got, first.ID)
 	}
-	pending := engine.pendingHookRuntimeContextSnapshot()
+	pending := engine.pendingPolicyRuntimeContextSnapshot()
 	if len(pending) != 1 || pending[0].ID != firstPending.ID {
-		t.Fatalf("restored pending hook context = %+v, want %q", pending, firstPending.ID)
+		t.Fatalf("restored pending policy context = %+v, want %q", pending, firstPending.ID)
 	}
 }
 
@@ -203,10 +203,10 @@ func TestRecoverSessionProvenanceDoesNotMaterializeUnrelatedEvents(t *testing.T)
 		}
 	}
 	if err := sess.AppendEvent(events.Normalize(events.Event{
-		Type:          provenance.HookContextQueuedType,
+		Type:          provenance.PolicyContextQueuedType,
 		ReplayPolicy:  events.ReplayRequired,
 		SchemaVersion: 1,
-		Payload:       provenance.HookContextQueuedPayload{Messages: []llm.Message{queued}},
+		Payload:       provenance.PolicyContextQueuedPayload{Messages: []llm.Message{queued}},
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -215,9 +215,9 @@ func TestRecoverSessionProvenanceDoesNotMaterializeUnrelatedEvents(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending := tracker.PendingHookContext()
+	pending := tracker.PendingPolicyContext()
 	if len(pending) != 1 || pending[0].ID != queued.ID {
-		t.Fatalf("recovered hook context = %+v, want %q", pending, queued.ID)
+		t.Fatalf("recovered policy context = %+v, want %q", pending, queued.ID)
 	}
 }
 
@@ -244,15 +244,15 @@ func provenanceRuntimeContextMessage(id, text string) llm.Message {
 	return message
 }
 
-func validRecoveryEpoch(t *testing.T, hookID string) provenance.RequestEpoch {
+func validRecoveryEpoch(t *testing.T, policyID string) provenance.RequestEpoch {
 	t.Helper()
 	epoch, err := provenance.BuildRequestEpoch(provenance.RequestInput{
 		Provider: provenance.SafeProvider{ID: "test", Model: "model"},
 		History: []llm.Message{
 			provenanceRuntimeContextMessage("user-1", "hello"),
-			provenanceRuntimeContextMessage(hookID, "consumed"),
+			provenanceRuntimeContextMessage(policyID, "consumed"),
 		},
-		HookContextMessageIDs: []string{hookID},
+		PolicyContextMessageIDs: []string{policyID},
 	})
 	if err != nil {
 		t.Fatal(err)

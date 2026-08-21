@@ -2305,7 +2305,7 @@ runtime:
   external_event_ttl: 48h
   tool_timeout: 2m
   max_output_tokens: 8192
-  show_builtin_hook_traces: true
+  show_builtin_policy_traces: true
   notify_model_changes: true
 `
 	writeTextFile(t, configPath, body)
@@ -2321,8 +2321,8 @@ runtime:
 	if limits.MaxOutputTokens != 8192 {
 		t.Fatalf("runtime max output tokens = %d, want 8192", limits.MaxOutputTokens)
 	}
-	if !limits.ShowBuiltinHookTraces {
-		t.Fatalf("builtin hook traces should be enabled: %+v", limits)
+	if !limits.ShowBuiltinPolicyTraces {
+		t.Fatalf("builtin policy traces should be enabled: %+v", limits)
 	}
 	if !limits.NotifyModelChanges {
 		t.Fatalf("model change notifications should be enabled: %+v", limits)

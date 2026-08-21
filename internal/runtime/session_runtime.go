@@ -38,10 +38,10 @@ type SessionRuntimeReplacement struct {
 // SessionRuntimeCheckpoint captures an already-published runtime bundle and
 // its in-memory provenance state for rollback by the lifecycle owner.
 type SessionRuntimeCheckpoint struct {
-	owner                     *Engine
-	state                     sessionRuntimeState
-	provenanceTracker         *provenance.Tracker
-	pendingHookRuntimeContext []llm.Message
+	owner                       *Engine
+	state                       sessionRuntimeState
+	provenanceTracker           *provenance.Tracker
+	pendingPolicyRuntimeContext []llm.Message
 }
 
 func (c SessionRuntimeCheckpoint) Snapshot() SessionRuntimeSnapshot {
@@ -85,11 +85,11 @@ func (e *Engine) ReplaceSessionRuntimeBundle(sess *session.Session, replacement 
 	current := e.sessionRuntimeStateLocked()
 	next := buildSessionRuntimeState(current, sess, replacement)
 	e.publishSessionRuntimeLocked(next)
-	pendingHookContext := tracker.PendingHookContext()
-	e.hookRuntimeContextMu.Lock()
+	pendingPolicyContext := tracker.PendingPolicyContext()
+	e.policyRuntimeContextMu.Lock()
 	e.provenanceTracker = tracker
-	e.pendingHookRuntimeContext = pendingHookContext
-	e.hookRuntimeContextMu.Unlock()
+	e.pendingPolicyRuntimeContext = pendingPolicyContext
+	e.policyRuntimeContextMu.Unlock()
 	return nil
 }
 
@@ -131,14 +131,14 @@ func (e *Engine) CaptureSessionRuntimeCheckpoint() SessionRuntimeCheckpoint {
 	e.mu.Lock()
 	e.sessionRuntimeMu.RLock()
 	e.pendingMu.Lock()
-	e.hookRuntimeContextMu.Lock()
+	e.policyRuntimeContextMu.Lock()
 	checkpoint := SessionRuntimeCheckpoint{
-		owner:                     e,
-		state:                     e.sessionRuntimeStateLocked(),
-		provenanceTracker:         e.provenanceTracker,
-		pendingHookRuntimeContext: append([]llm.Message(nil), e.pendingHookRuntimeContext...),
+		owner:                       e,
+		state:                       e.sessionRuntimeStateLocked(),
+		provenanceTracker:           e.provenanceTracker,
+		pendingPolicyRuntimeContext: append([]llm.Message(nil), e.pendingPolicyRuntimeContext...),
 	}
-	e.hookRuntimeContextMu.Unlock()
+	e.policyRuntimeContextMu.Unlock()
 	e.pendingMu.Unlock()
 	e.sessionRuntimeMu.RUnlock()
 	e.mu.Unlock()
@@ -162,10 +162,10 @@ func (e *Engine) RestoreSessionRuntimeCheckpoint(checkpoint SessionRuntimeCheckp
 		return ErrSessionRuntimeBusy
 	}
 	e.publishSessionRuntimeLocked(checkpoint.state)
-	e.hookRuntimeContextMu.Lock()
+	e.policyRuntimeContextMu.Lock()
 	e.provenanceTracker = checkpoint.provenanceTracker
-	e.pendingHookRuntimeContext = append([]llm.Message(nil), checkpoint.pendingHookRuntimeContext...)
-	e.hookRuntimeContextMu.Unlock()
+	e.pendingPolicyRuntimeContext = append([]llm.Message(nil), checkpoint.pendingPolicyRuntimeContext...)
+	e.policyRuntimeContextMu.Unlock()
 	return nil
 }
 
@@ -294,7 +294,7 @@ func (e *Engine) setNotesStore(store *NotesStore) {
 }
 
 // ShareSessionState replaces the Goal and Notes stores without changing the
-// Session, transcript, scratchpad, pending-input queue, or hook identity. It is
+// Session, transcript, scratchpad, pending-input queue, or policy identity. It is
 // used by a Primary Session to make its model-owned state authoritative for a
 // managed Side Session.
 func (e *Engine) ShareSessionState(goal *GoalStateStore, notes *NotesStore) {

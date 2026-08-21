@@ -155,7 +155,7 @@ func TestAdmitTurnRejectsUnsupportedKindsAndSystemNoticeAttachments(t *testing.T
 		llm.MessageKindModelChange,
 		llm.MessageKindObservation,
 		llm.MessageKindMCPEvent,
-		llm.MessageKindHookEvent,
+		llm.MessageKindPolicyEvent,
 		"unknown",
 	} {
 		t.Run(kind, func(t *testing.T) {

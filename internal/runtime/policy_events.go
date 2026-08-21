@@ -8,23 +8,23 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 )
 
-func (e *Engine) emitHookCompleted(turnID string, payload HookCompletedPayload) {
+func (e *Engine) emitPolicyCompleted(turnID string, payload PolicyCompletedPayload) {
 	if e == nil {
 		return
 	}
-	_ = e.emit(events.Event{Type: "hook.completed", TurnID: turnID, Payload: payload})
-	e.appendHookTraceMessage(turnID, hookCompletedTraceText(payload, e.ShowBuiltinHookTraces))
+	_ = e.emit(events.Event{Type: "policy.completed", TurnID: turnID, Payload: payload})
+	e.appendPolicyTraceMessage(turnID, policyCompletedTraceText(payload, e.ShowBuiltinPolicyTraces))
 }
 
-func (e *Engine) emitHookErrored(turnID string, payload HookErroredPayload) {
+func (e *Engine) emitPolicyErrored(turnID string, payload PolicyErroredPayload) {
 	if e == nil {
 		return
 	}
-	_ = e.emit(events.Event{Type: "hook.errored", TurnID: turnID, Payload: payload})
-	e.appendHookTraceMessage(turnID, hookErroredTraceText(payload, e.ShowBuiltinHookTraces))
+	_ = e.emit(events.Event{Type: "policy.errored", TurnID: turnID, Payload: payload})
+	e.appendPolicyTraceMessage(turnID, policyErroredTraceText(payload, e.ShowBuiltinPolicyTraces))
 }
 
-func (e *Engine) appendHookTraceMessage(turnID, text string) {
+func (e *Engine) appendPolicyTraceMessage(turnID, text string) {
 	if e == nil || strings.TrimSpace(text) == "" {
 		return
 	}
@@ -33,25 +33,25 @@ func (e *Engine) appendHookTraceMessage(turnID, text string) {
 		return
 	}
 	msg := llm.TextMessage(llm.RoleSystem, text)
-	msg.Kind = llm.MessageKindHookEvent
+	msg.Kind = llm.MessageKindPolicyEvent
 	persisted, err := sess.AppendAssigned(msg)
 	if err != nil {
 		return
 	}
-	_ = e.emit(events.Event{Type: "hook.trace", TurnID: turnID, Payload: HookTracePayload{
+	_ = e.emit(events.Event{Type: "policy.trace", TurnID: turnID, Payload: PolicyTracePayload{
 		Text:      text,
 		MessageID: persisted.ID,
 	}})
 }
 
-func hookCompletedTraceText(payload HookCompletedPayload, includeBuiltin bool) string {
+func policyCompletedTraceText(payload PolicyCompletedPayload, includeBuiltin bool) string {
 	if payload.Source == "builtin" && !includeBuiltin {
 		return ""
 	}
 	status := "completed"
 	if payload.Source == "builtin" {
 		if payload.ExitCode == 2 {
-			status = "blocked stop"
+			status = "blocked"
 		} else {
 			status = "allow"
 		}
@@ -59,51 +59,56 @@ func hookCompletedTraceText(payload HookCompletedPayload, includeBuiltin bool) s
 		status = fmt.Sprintf("exit %d", payload.ExitCode)
 	}
 	return fmt.Sprintf(
-		"hook %s %s %s in %dms",
-		hookTraceName(payload.Name),
+		"policy %s %s %s in %dms",
+		policyTraceName(string(payload.ModuleID), payload.Name),
 		status,
-		hookTraceTarget(payload.EventName, payload.ToolName),
+		policyTraceTarget(string(payload.PolicyPoint), payload.ToolName),
 		payload.DurationMS,
 	)
 }
 
-func hookErroredTraceText(payload HookErroredPayload, includeBuiltin bool) string {
+func policyErroredTraceText(payload PolicyErroredPayload, includeBuiltin bool) string {
 	if payload.Source == "builtin" && !includeBuiltin {
 		return ""
 	}
 	return fmt.Sprintf(
-		"hook %s failed %s in %dms: %s",
-		hookTraceName(payload.Name),
-		hookTraceTarget(payload.EventName, payload.ToolName),
+		"policy %s failed %s in %dms: %s",
+		policyTraceName(string(payload.ModuleID), payload.Name),
+		policyTraceTarget(string(payload.PolicyPoint), payload.ToolName),
 		payload.DurationMS,
 		payload.Error,
 	)
 }
 
-func hookTraceName(name string) string {
-	if strings.TrimSpace(name) == "" {
-		return "unnamed"
+func policyTraceName(moduleID, name string) string {
+	owner := strings.TrimSpace(moduleID)
+	displayName := strings.TrimSpace(name)
+	if owner == "" {
+		owner = "unknown"
 	}
-	return name
+	if displayName == "" {
+		return owner
+	}
+	return owner + "/" + displayName
 }
 
-func hookTraceTarget(eventName, toolName string) string {
-	eventName = strings.TrimSpace(eventName)
+func policyTraceTarget(point, toolName string) string {
+	policyPoint := strings.TrimSpace(point)
 	toolName = strings.TrimSpace(toolName)
-	if eventName == "" {
-		eventName = "event"
+	if policyPoint == "" {
+		policyPoint = "checkpoint"
 	}
 	if toolName == "" {
-		return eventName
+		return policyPoint
 	}
-	return eventName + "/" + toolName
+	return policyPoint + "/" + toolName
 }
 
-func (e *Engine) pendingHookRuntimeContextSnapshot() []llm.Message {
+func (e *Engine) pendingPolicyRuntimeContextSnapshot() []llm.Message {
 	if e == nil {
 		return nil
 	}
-	e.hookRuntimeContextMu.Lock()
-	defer e.hookRuntimeContextMu.Unlock()
-	return append([]llm.Message(nil), e.pendingHookRuntimeContext...)
+	e.policyRuntimeContextMu.Lock()
+	defer e.policyRuntimeContextMu.Unlock()
+	return append([]llm.Message(nil), e.pendingPolicyRuntimeContext...)
 }

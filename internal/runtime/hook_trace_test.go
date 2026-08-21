@@ -8,11 +8,13 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
-func TestHookTraceMessageIsUIOnly(t *testing.T) {
+func TestPolicyTraceMessageIsUIOnly(t *testing.T) {
 	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
 		Name:    "fake",
+		Source:  "ext:demo",
 		Events:  []hooks.EventName{hooks.EventUserPromptSubmit},
 		Command: runtimeHookCommand("ok"),
 	}}})
@@ -22,9 +24,9 @@ func TestHookTraceMessageIsUIOnly(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn}}}
 	eng, bus := newEngine(t, prov, false)
 	installHookRunner(t, eng, runner)
-	var traceEvent HookTracePayload
-	bus.Subscribe("hook.trace", func(e events.Event) {
-		payload, _ := e.Payload.(HookTracePayload)
+	var traceEvent PolicyTracePayload
+	bus.Subscribe("policy.trace", func(e events.Event) {
+		payload, _ := e.Payload.(PolicyTracePayload)
 		traceEvent = payload
 	})
 
@@ -34,86 +36,88 @@ func TestHookTraceMessageIsUIOnly(t *testing.T) {
 	var trace *llm.Message
 	for i := range eng.Session.History {
 		message := &eng.Session.History[i]
-		if message.Kind == llm.MessageKindHookEvent {
+		if message.Kind == llm.MessageKindPolicyEvent {
 			trace = message
 			break
 		}
 	}
 	if trace == nil {
-		t.Fatalf("missing hook trace message in history: %+v", eng.Session.History)
+		t.Fatalf("missing policy trace message in history: %+v", eng.Session.History)
 	}
-	if trace.Role != llm.RoleSystem || !strings.Contains(trace.FirstText(), "hook fake completed UserPromptSubmit") {
-		t.Fatalf("hook trace message = %+v", *trace)
+	if trace.Role != llm.RoleSystem || !strings.Contains(trace.FirstText(), "policy hooks/UserPromptSubmit/fake completed turn_input") {
+		t.Fatalf("policy trace message = %+v", *trace)
 	}
-	if !strings.Contains(traceEvent.Text, "hook fake completed UserPromptSubmit") {
-		t.Fatalf("hook trace event = %+v", traceEvent)
+	if !strings.Contains(traceEvent.Text, "policy hooks/UserPromptSubmit/fake completed turn_input") {
+		t.Fatalf("policy trace event = %+v", traceEvent)
 	}
 	if traceEvent.MessageID == "" || traceEvent.MessageID != trace.ID {
-		t.Fatalf("hook trace message id = %q, history id = %q", traceEvent.MessageID, trace.ID)
+		t.Fatalf("policy trace message id = %q, history id = %q", traceEvent.MessageID, trace.ID)
 	}
 	for _, history := range prov.histories {
 		for _, message := range history {
-			if message.Kind == llm.MessageKindHookEvent {
-				t.Fatalf("hook trace leaked into provider context: %+v", history)
+			if message.Kind == llm.MessageKindPolicyEvent {
+				t.Fatalf("policy trace leaked into provider context: %+v", history)
 			}
 		}
 	}
 }
 
-func TestBuiltinHookTraceTextRequiresPolicy(t *testing.T) {
-	payload := HookCompletedPayload{
-		Name:       goalCompletionGateName,
-		Source:     "builtin",
-		EventName:  string(hooks.EventStop),
-		DurationMS: 3,
-		ExitCode:   0,
+func TestBuiltinPolicyTraceTextRequiresPolicy(t *testing.T) {
+	payload := PolicyCompletedPayload{
+		ModuleID:    GoalModuleID,
+		PolicyPoint: runtimemodule.PolicyPointFinish,
+		Name:        goalCompletionGateName,
+		Source:      "builtin",
+		DurationMS:  3,
+		ExitCode:    0,
 	}
-	if got := hookCompletedTraceText(payload, false); got != "" {
+	if got := policyCompletedTraceText(payload, false); got != "" {
 		t.Fatalf("builtin trace without policy = %q", got)
 	}
-	got := hookCompletedTraceText(payload, true)
-	if !strings.Contains(got, "hook goal-completion-gate allow Stop in 3ms") {
+	got := policyCompletedTraceText(payload, true)
+	if !strings.Contains(got, "policy goal/goal-completion-gate allow finish in 3ms") {
 		t.Fatalf("builtin trace with policy = %q", got)
 	}
 }
 
-func TestBuiltinHookTraceMessageRequiresPolicy(t *testing.T) {
-	payload := HookCompletedPayload{
-		Name:       goalCompletionGateName,
-		Source:     "builtin",
-		EventName:  string(hooks.EventStop),
-		DurationMS: 3,
-		ExitCode:   0,
+func TestBuiltinPolicyTraceMessageRequiresPolicy(t *testing.T) {
+	payload := PolicyCompletedPayload{
+		ModuleID:    GoalModuleID,
+		PolicyPoint: runtimemodule.PolicyPointFinish,
+		Name:        goalCompletionGateName,
+		Source:      "builtin",
+		DurationMS:  3,
+		ExitCode:    0,
 	}
 	eng, bus := newEngine(t, &mockProvider{}, false)
-	var traces []HookTracePayload
-	bus.Subscribe("hook.trace", func(e events.Event) {
-		payload, _ := e.Payload.(HookTracePayload)
+	var traces []PolicyTracePayload
+	bus.Subscribe("policy.trace", func(e events.Event) {
+		payload, _ := e.Payload.(PolicyTracePayload)
 		traces = append(traces, payload)
 	})
 
-	eng.emitHookCompleted("turn-1", payload)
+	eng.emitPolicyCompleted("turn-1", payload)
 	if len(traces) != 0 {
 		t.Fatalf("builtin trace should be hidden by default: %+v", traces)
 	}
 	for _, message := range eng.Session.History {
-		if message.Kind == llm.MessageKindHookEvent {
+		if message.Kind == llm.MessageKindPolicyEvent {
 			t.Fatalf("builtin trace leaked without policy: %+v", message)
 		}
 	}
 
-	eng.ShowBuiltinHookTraces = true
-	eng.emitHookCompleted("turn-2", payload)
-	if len(traces) != 1 || !strings.Contains(traces[0].Text, "hook goal-completion-gate allow Stop in 3ms") {
+	eng.ShowBuiltinPolicyTraces = true
+	eng.emitPolicyCompleted("turn-2", payload)
+	if len(traces) != 1 || !strings.Contains(traces[0].Text, "policy goal/goal-completion-gate allow finish in 3ms") {
 		t.Fatalf("builtin trace event with policy = %+v", traces)
 	}
-	var hookEvents int
+	var policyEvents int
 	for _, message := range eng.Session.History {
-		if message.Kind == llm.MessageKindHookEvent {
-			hookEvents++
+		if message.Kind == llm.MessageKindPolicyEvent {
+			policyEvents++
 		}
 	}
-	if hookEvents != 1 {
-		t.Fatalf("hook event messages = %d, history = %+v", hookEvents, eng.Session.History)
+	if policyEvents != 1 {
+		t.Fatalf("policy event messages = %d, history = %+v", policyEvents, eng.Session.History)
 	}
 }

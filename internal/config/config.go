@@ -46,7 +46,7 @@ type Config struct {
 	PendingInputTTL           time.Duration
 	ExternalEventTTL          time.Duration
 	ToolTimeout               time.Duration
-	ShowBuiltinHookTraces     bool
+	ShowBuiltinPolicyTraces   bool
 	NotifyModelChanges        bool
 	Hooks                     hooks.Config
 	Shell                     ShellProfile
@@ -242,18 +242,18 @@ type toolOutputConfig struct {
 }
 
 type runtimeConfig struct {
-	PendingInputTTL          time.Duration
-	PendingInputTTLSet       bool
-	ExternalEventTTL         time.Duration
-	ExternalEventTTLSet      bool
-	ToolTimeout              time.Duration
-	ToolTimeoutSet           bool
-	MaxOutputTokens          int
-	MaxOutputTokensSet       bool
-	ShowBuiltinHookTraces    bool
-	ShowBuiltinHookTracesSet bool
-	NotifyModelChanges       bool
-	NotifyModelChangesSet    bool
+	PendingInputTTL            time.Duration
+	PendingInputTTLSet         bool
+	ExternalEventTTL           time.Duration
+	ExternalEventTTLSet        bool
+	ToolTimeout                time.Duration
+	ToolTimeoutSet             bool
+	MaxOutputTokens            int
+	MaxOutputTokensSet         bool
+	ShowBuiltinPolicyTraces    bool
+	ShowBuiltinPolicyTracesSet bool
+	NotifyModelChanges         bool
+	NotifyModelChangesSet      bool
 }
 
 type sandboxConfig struct {
@@ -333,13 +333,13 @@ func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
 			}
 			c.MaxOutputTokens = n
 			c.MaxOutputTokensSet = true
-		case "show_builtin_hook_traces":
+		case "show_builtin_policy_traces":
 			enabled, err := ParseBoolValue(value.Value)
 			if err != nil {
 				return fmt.Errorf("runtime.%s: %w", key, err)
 			}
-			c.ShowBuiltinHookTraces = enabled
-			c.ShowBuiltinHookTracesSet = true
+			c.ShowBuiltinPolicyTraces = enabled
+			c.ShowBuiltinPolicyTracesSet = true
 		case "notify_model_changes":
 			enabled, err := ParseBoolValue(value.Value)
 			if err != nil {
@@ -1444,8 +1444,8 @@ func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
 	if c.MaxOutputTokensSet {
 		cfg.MaxOutputTokens = c.MaxOutputTokens
 	}
-	if c.ShowBuiltinHookTracesSet {
-		cfg.ShowBuiltinHookTraces = c.ShowBuiltinHookTraces
+	if c.ShowBuiltinPolicyTracesSet {
+		cfg.ShowBuiltinPolicyTraces = c.ShowBuiltinPolicyTraces
 	}
 	if c.NotifyModelChangesSet {
 		cfg.NotifyModelChanges = c.NotifyModelChanges

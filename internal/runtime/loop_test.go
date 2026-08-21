@@ -333,7 +333,7 @@ func TestAppendHookAdditionalContextDoesNotMutateInputBlocks(t *testing.T) {
 	blocks[0] = llm.Block{Type: llm.BlockText, Text: "original"}
 	msg := llm.Message{Role: llm.RoleUser, Blocks: blocks}
 
-	out := appendHookAdditionalContext(msg, []hooks.Result{{
+	out := appendPolicyAdditionalContext(msg, []hooks.Result{{
 		Hook:   hooks.CommandHook{Name: "context"},
 		Stdout: "extra",
 	}})
@@ -364,7 +364,7 @@ func TestRunSessionStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(eng.Session.History) != 0 {
-		t.Fatalf("session hook context persisted in history: %+v", eng.Session.History)
+		t.Fatalf("session policy context persisted in history: %+v", eng.Session.History)
 	}
 	if _, err := eng.Turn(context.Background(), "first turn"); err != nil {
 		t.Fatal(err)
@@ -373,10 +373,10 @@ func TestRunSessionStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := messagesText(prov.histories[0]); !strings.Contains(got, "load project policy") {
-		t.Fatalf("first provider request missing session hook context:\n%s", got)
+		t.Fatalf("first provider request missing session policy context:\n%s", got)
 	}
 	if got := messagesText(prov.histories[1]); strings.Contains(got, "load project policy") {
-		t.Fatalf("session hook context repeated in second provider request:\n%s", got)
+		t.Fatalf("session policy context repeated in second provider request:\n%s", got)
 	}
 	for _, msg := range eng.Session.History {
 		if msg.Kind == llm.MessageKindRuntimeContext {
@@ -813,7 +813,7 @@ func TestTurn_DurableRequestEpochFailurePreventsProviderCallAndHookConsumption(t
 		Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn,
 	}}}
 	eng, bus := newEngine(t, prov, false)
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
 		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
 	}}); err != nil {
 		t.Fatal(err)
@@ -826,8 +826,8 @@ func TestTurn_DurableRequestEpochFailurePreventsProviderCallAndHookConsumption(t
 	if prov.called != 0 {
 		t.Fatalf("provider calls = %d, want 0", prov.called)
 	}
-	if pending := eng.pendingHookRuntimeContextSnapshot(); len(pending) != 1 || pending[0].ID == "" {
-		t.Fatalf("pending hook context = %+v", pending)
+	if pending := eng.pendingPolicyRuntimeContextSnapshot(); len(pending) != 1 || pending[0].ID == "" {
+		t.Fatalf("pending policy context = %+v", pending)
 	}
 	journal, err := session.ReadEvents(eng.Session.Dir)
 	if err != nil {
@@ -837,12 +837,12 @@ func TestTurn_DurableRequestEpochFailurePreventsProviderCallAndHookConsumption(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pending := recovered.PendingHookContext(); len(pending) != 1 {
-		t.Fatalf("recovered hook context before epoch checkpoint = %+v", pending)
+	if pending := recovered.PendingPolicyContext(); len(pending) != 1 {
+		t.Fatalf("recovered policy context before epoch checkpoint = %+v", pending)
 	}
 }
 
-func TestTurn_RequestEpochCheckpointConsumesHookContextAndLinksResponse(t *testing.T) {
+func TestTurn_RequestEpochCheckpointConsumesPolicyContextAndLinksResponse(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
 	}}}
@@ -852,7 +852,7 @@ func TestTurn_RequestEpochCheckpointConsumesHookContextAndLinksResponse(t *testi
 		t.Fatal(err)
 	}
 	installSessionStateModules(t, eng)
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
 		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
 	}}); err != nil {
 		t.Fatal(err)
@@ -903,14 +903,14 @@ func TestTurn_RequestEpochCheckpointConsumesHookContextAndLinksResponse(t *testi
 	if responded.EpochID != epoch.Epoch.EpochID || responded.RequestDigest != epoch.Epoch.RequestDigest {
 		t.Fatalf("responded = %+v, epoch = %+v", responded, epoch.Epoch)
 	}
-	if pending := eng.pendingHookRuntimeContextSnapshot(); len(pending) != 0 {
-		t.Fatalf("hook context after checkpoint = %+v", pending)
+	if pending := eng.pendingPolicyRuntimeContextSnapshot(); len(pending) != 0 {
+		t.Fatalf("policy context after checkpoint = %+v", pending)
 	}
 }
 
-func TestTurn_FailedProviderDoesNotReplayCheckpointedHookContext(t *testing.T) {
+func TestTurn_FailedProviderDoesNotReplayCheckpointedPolicyContext(t *testing.T) {
 	eng, _ := newEngine(t, errorProvider{}, false)
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
 		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
 	}}); err != nil {
 		t.Fatal(err)
@@ -918,15 +918,15 @@ func TestTurn_FailedProviderDoesNotReplayCheckpointedHookContext(t *testing.T) {
 	if _, err := eng.Turn(context.Background(), "hello"); err == nil {
 		t.Fatal("Turn() error = nil")
 	}
-	if pending := eng.pendingHookRuntimeContextSnapshot(); len(pending) != 0 {
-		t.Fatalf("hook context after provider attempt = %+v", pending)
+	if pending := eng.pendingPolicyRuntimeContextSnapshot(); len(pending) != 0 {
+		t.Fatalf("policy context after provider attempt = %+v", pending)
 	}
 }
 
 func TestTurn_DispatchCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn}}}
 	eng, bus := newEngine(t, prov, false)
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context"}}); err != nil {
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context"}}); err != nil {
 		t.Fatal(err)
 	}
 	want := errors.New("dispatch sync failed")
@@ -937,13 +937,13 @@ func TestTurn_DispatchCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing
 	if prov.called != 0 {
 		t.Fatalf("provider calls = %d, want 0", prov.called)
 	}
-	assertRecoveredHookContextCount(t, eng.Session, 0)
+	assertRecoveredPolicyContextCount(t, eng.Session, 0)
 }
 
 func TestTurn_ResponseCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "returned"), StopReason: llm.StopEndTurn}}}
 	eng, bus := newEngine(t, prov, false)
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context"}}); err != nil {
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context"}}); err != nil {
 		t.Fatal(err)
 	}
 	want := errors.New("response sync failed")
@@ -954,10 +954,10 @@ func TestTurn_ResponseCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing
 	if prov.called != 1 {
 		t.Fatalf("provider calls = %d, want 1", prov.called)
 	}
-	assertRecoveredHookContextCount(t, eng.Session, 0)
+	assertRecoveredPolicyContextCount(t, eng.Session, 0)
 }
 
-func assertRecoveredHookContextCount(t *testing.T, sess *session.Session, want int) {
+func assertRecoveredPolicyContextCount(t *testing.T, sess *session.Session, want int) {
 	t.Helper()
 	journal, err := session.ReadEvents(sess.Dir)
 	if err != nil {
@@ -967,8 +967,8 @@ func assertRecoveredHookContextCount(t *testing.T, sess *session.Session, want i
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pending := recovered.PendingHookContext(); len(pending) != want {
-		t.Fatalf("recovered hook context = %+v, want %d", pending, want)
+	if pending := recovered.PendingPolicyContext(); len(pending) != want {
+		t.Fatalf("recovered policy context = %+v, want %d", pending, want)
 	}
 }
 
@@ -1350,7 +1350,7 @@ func TestTurn_DurableHookRequestFailurePreventsHookRun(t *testing.T) {
 	runner := &fakeHookRunner{}
 	installHookRunner(t, eng, runner)
 	want := errors.New("journal sync failed")
-	bus.SetCommitter(selectiveFailCommitter{eventType: "hook.requested", err: want})
+	bus.SetCommitter(selectiveFailCommitter{eventType: "policy.requested", err: want})
 	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, want) {
 		t.Fatalf("Turn() error = %v, want %v", err, want)
 	}
@@ -2508,7 +2508,7 @@ func TestTurn_SecondOverflowDoesNotRetryForPendingInput(t *testing.T) {
 	}
 }
 
-func TestTurn_CompactRetryFailureConsumesHookContext(t *testing.T) {
+func TestTurn_CompactRetryFailureConsumesPolicyContext(t *testing.T) {
 	prov := &scriptedCompactionProvider{
 		name: "compact-failure",
 		attempts: []scriptedCompactionAttempt{
@@ -2520,7 +2520,7 @@ func TestTurn_CompactRetryFailureConsumesHookContext(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 10000
 	eng.Compaction = DefaultCompactionPolicy()
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
 		Hook:   hooks.CommandHook{Name: "one-shot"},
 		Stdout: "one-shot compact context",
 	}}); err != nil {
@@ -2540,13 +2540,13 @@ func TestTurn_CompactRetryFailureConsumesHookContext(t *testing.T) {
 		t.Fatalf("provider calls = %d, want failed turn + compact + next turn", prov.calls)
 	}
 	if got := messagesText(prov.histories[0]); !strings.Contains(got, "one-shot compact context") {
-		t.Fatalf("failed provider request missing hook context:\n%s", got)
+		t.Fatalf("failed provider request missing policy context:\n%s", got)
 	}
 	if got := messagesText(prov.histories[2]); strings.Contains(got, "one-shot compact context") {
-		t.Fatalf("next provider request repeated stale hook context:\n%s", got)
+		t.Fatalf("next provider request repeated stale policy context:\n%s", got)
 	}
-	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
-		t.Fatalf("hook context remaining after compact retry failure = %+v", remaining)
+	if remaining := eng.pendingPolicyRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("policy context remaining after compact retry failure = %+v", remaining)
 	}
 }
 
@@ -3093,10 +3093,10 @@ func TestCompactExitTwoEmitsHookErrorWithoutVeto(t *testing.T) {
 		t.Fatal(err)
 	}
 	installHookRunner(t, eng, runner)
-	var hookError HookErroredPayload
-	bus.Subscribe("hook.errored", func(event events.Event) {
-		payload, _ := event.Payload.(HookErroredPayload)
-		if payload.Name == "compact-guard" {
+	var hookError PolicyErroredPayload
+	bus.Subscribe("policy.errored", func(event events.Event) {
+		payload, _ := event.Payload.(PolicyErroredPayload)
+		if payload.Name == "PreCompact/compact-guard" {
 			hookError = payload
 		}
 	})
@@ -3853,7 +3853,7 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 			if !sawCompleted {
 				t.Fatalf("events = %+v, want completed after committed compaction", eventTypes)
 			}
-			queued := eng.pendingHookRuntimeContextSnapshot()
+			queued := eng.pendingPolicyRuntimeContextSnapshot()
 			if tc.wantQueuedContext == "" {
 				if len(queued) != 0 {
 					t.Fatalf("queued context = %+v, want none", queued)
@@ -3865,7 +3865,7 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 	}
 }
 
-func TestCompactPreservesCommittedResultWhenPostHookContextCannotBeQueued(t *testing.T) {
+func TestCompactPreservesCommittedResultWhenPostPolicyContextCannotBeQueued(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn},
 	}}
@@ -3879,7 +3879,7 @@ func TestCompactPreservesCommittedResultWhenPostHookContextCannotBeQueued(t *tes
 	eng.Compaction.KeepRecentTokens = 1
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact:  {{}},
-		hooks.EventPostCompact: {{Stdout: strings.Repeat("x", provenance.MaxHookContextBatchBytes)}},
+		hooks.EventPostCompact: {{Stdout: strings.Repeat("x", provenance.MaxPolicyContextBatchBytes)}},
 	}})
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
@@ -3889,8 +3889,8 @@ func TestCompactPreservesCommittedResultWhenPostHookContextCannotBeQueued(t *tes
 	}
 
 	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
-	if err == nil || !strings.Contains(err.Error(), "queued hook context exceeds") {
-		t.Fatalf("error = %v, want hook context queue size failure", err)
+	if err == nil || !strings.Contains(err.Error(), "queued policy context exceeds") {
+		t.Fatalf("error = %v, want policy context queue size failure", err)
 	}
 	if result.MessageID == "" {
 		t.Fatalf("result = %+v, want committed compaction result", result)
@@ -4312,11 +4312,11 @@ func TestTurn_UserPromptSubmitHookInjectsContext(t *testing.T) {
 		t.Fatalf("out = %q", out)
 	}
 	if got := messagesText(prov.histories[0]); !strings.Contains(got, "ticket: ABC-123") {
-		t.Fatalf("provider history missing hook context:\n%s", got)
+		t.Fatalf("provider history missing policy context:\n%s", got)
 	}
 	first := eng.Session.History[0]
 	if len(first.Blocks) != 2 || !strings.Contains(first.Blocks[1].Text, "ticket: ABC-123") {
-		t.Fatalf("session user message missing hook context: %+v", first)
+		t.Fatalf("session user message missing policy context: %+v", first)
 	}
 }
 
@@ -4691,13 +4691,13 @@ func TestTurn_StopHookStdoutQueuesRuntimeContextForNextProviderRequest(t *testin
 		t.Fatal(err)
 	}
 	if got := messagesText(prov.histories[0]); strings.Contains(got, "verify the release branch") {
-		t.Fatalf("stop hook context appeared before the hook ran:\n%s", got)
+		t.Fatalf("stop policy context appeared before the hook ran:\n%s", got)
 	}
 	if got := messagesText(prov.histories[1]); !strings.Contains(got, "verify the release branch") {
-		t.Fatalf("next provider request missing stop hook context:\n%s", got)
+		t.Fatalf("next provider request missing stop policy context:\n%s", got)
 	}
 	if got := messagesText(prov.histories[2]); strings.Contains(got, "verify the release branch") {
-		t.Fatalf("stop hook context repeated in later provider request:\n%s", got)
+		t.Fatalf("stop policy context repeated in later provider request:\n%s", got)
 	}
 	for _, msg := range eng.Session.History {
 		if msg.Kind == llm.MessageKindRuntimeContext {
@@ -5064,7 +5064,7 @@ func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
 		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}
 	eng, bus := newEngine(t, prov, false)
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
 		Hook:   hooks.CommandHook{Name: "provider-retry"},
 		Stdout: "preserve retry context",
 	}}); err != nil {
@@ -5107,10 +5107,10 @@ func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
 		t.Fatalf("continued provider history missing pending input:\n%s", continuedHistory)
 	}
 	if strings.Contains(continuedHistory, "preserve retry context") {
-		t.Fatalf("continued provider history repeated checkpointed hook context:\n%s", continuedHistory)
+		t.Fatalf("continued provider history repeated checkpointed policy context:\n%s", continuedHistory)
 	}
-	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
-		t.Fatalf("hook context remaining after successful provider request = %+v", remaining)
+	if remaining := eng.pendingPolicyRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("policy context remaining after successful provider request = %+v", remaining)
 	}
 	if len(retries) != 1 || retries[0].RetryReason != "pending_input_after_provider_error" || !retries[0].WillRetry {
 		t.Fatalf("retry diagnostics = %+v", retries)
@@ -5127,7 +5127,7 @@ func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
 	}
 }
 
-func TestTurn_TerminalProviderFailureConsumesHookContext(t *testing.T) {
+func TestTurn_TerminalProviderFailureConsumesPolicyContext(t *testing.T) {
 	release := make(chan struct{})
 	close(release)
 	prov := &queuedFailureProvider{
@@ -5137,7 +5137,7 @@ func TestTurn_TerminalProviderFailureConsumesHookContext(t *testing.T) {
 		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "recovered later"), StopReason: llm.StopEndTurn},
 	}
 	eng, _ := newEngine(t, prov, false)
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
 		Hook:   hooks.CommandHook{Name: "one-shot"},
 		Stdout: "one-shot provider context",
 	}}); err != nil {
@@ -5154,13 +5154,13 @@ func TestTurn_TerminalProviderFailureConsumesHookContext(t *testing.T) {
 		t.Fatalf("provider histories = %d, want 2", len(prov.histories))
 	}
 	if got := messagesText(prov.histories[0]); !strings.Contains(got, "one-shot provider context") {
-		t.Fatalf("failed provider request missing hook context:\n%s", got)
+		t.Fatalf("failed provider request missing policy context:\n%s", got)
 	}
 	if got := messagesText(prov.histories[1]); strings.Contains(got, "one-shot provider context") {
-		t.Fatalf("next provider request repeated stale hook context:\n%s", got)
+		t.Fatalf("next provider request repeated stale policy context:\n%s", got)
 	}
-	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
-		t.Fatalf("hook context remaining after terminal provider failure = %+v", remaining)
+	if remaining := eng.pendingPolicyRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("policy context remaining after terminal provider failure = %+v", remaining)
 	}
 }
 
@@ -8006,8 +8006,8 @@ func TestTurn_FinishPolicyAllowsCleanFinishWithoutFailureGate(t *testing.T) {
 	eng, bus := newEngine(t, prov, false)
 
 	var failureGateHooks int32
-	bus.Subscribe("hook.completed", func(e events.Event) {
-		payload, _ := e.Payload.(HookCompletedPayload)
+	bus.Subscribe("policy.completed", func(e events.Event) {
+		payload, _ := e.Payload.(PolicyCompletedPayload)
 		if payload.Name == "unresolved-failure-gate" {
 			atomic.AddInt32(&failureGateHooks, 1)
 		}
@@ -8046,12 +8046,12 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 	bus.Subscribe("finish.attempted", func(e events.Event) {
 		order = append(order, "finish.attempted")
 	})
-	bus.Subscribe("hook.started", func(e events.Event) {
-		payload, _ := e.Payload.(HookStartedPayload)
+	bus.Subscribe("policy.started", func(e events.Event) {
+		payload, _ := e.Payload.(PolicyStartedPayload)
 		order = append(order, "start:"+payload.Name)
 	})
-	bus.Subscribe("hook.completed", func(e events.Event) {
-		payload, _ := e.Payload.(HookCompletedPayload)
+	bus.Subscribe("policy.completed", func(e events.Event) {
+		payload, _ := e.Payload.(PolicyCompletedPayload)
 		order = append(order, "done:"+payload.Name)
 	})
 
@@ -8066,8 +8066,8 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 		"finish.attempted",
 		"start:goal-completion-gate",
 		"done:goal-completion-gate",
-		"start:stop-ok",
-		"done:stop-ok",
+		"start:Stop/stop-ok",
+		"done:Stop/stop-ok",
 	}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("finish policy order = %#v, want %#v", order, want)
@@ -8135,14 +8135,14 @@ func TestTurn_FailureLedgerRecordsUnresolvedBlockingToolFailureWithoutContinuati
 		atomic.AddInt32(&continued, 1)
 	})
 	var failureGateHooks int32
-	bus.Subscribe("hook.started", func(e events.Event) {
-		payload, _ := e.Payload.(HookStartedPayload)
+	bus.Subscribe("policy.started", func(e events.Event) {
+		payload, _ := e.Payload.(PolicyStartedPayload)
 		if payload.Name == "unresolved-failure-gate" {
 			atomic.AddInt32(&failureGateHooks, 1)
 		}
 	})
-	bus.Subscribe("hook.completed", func(e events.Event) {
-		payload, _ := e.Payload.(HookCompletedPayload)
+	bus.Subscribe("policy.completed", func(e events.Event) {
+		payload, _ := e.Payload.(PolicyCompletedPayload)
 		if payload.Name == "unresolved-failure-gate" {
 			atomic.AddInt32(&failureGateHooks, 1)
 		}
@@ -8165,7 +8165,7 @@ func TestTurn_FailureLedgerRecordsUnresolvedBlockingToolFailureWithoutContinuati
 		t.Fatalf("failure ledger should not continue finish")
 	}
 	if atomic.LoadInt32(&failureGateHooks) != 0 {
-		t.Fatalf("unresolved-failure-gate should not emit hook events")
+		t.Fatalf("unresolved-failure-gate should not emit policy facts")
 	}
 }
 
@@ -8281,10 +8281,10 @@ func TestTurn_StopHookOtherExitDoesNotBlockAndEmitsHookErrored(t *testing.T) {
 	}
 	installHookRunner(t, eng, runner)
 
-	var errored HookErroredPayload
-	bus.Subscribe("hook.errored", func(e events.Event) {
-		payload, _ := e.Payload.(HookErroredPayload)
-		if payload.Name == "stop-fails" {
+	var errored PolicyErroredPayload
+	bus.Subscribe("policy.errored", func(e events.Event) {
+		payload, _ := e.Payload.(PolicyErroredPayload)
+		if payload.Name == "Stop/stop-fails" {
 			errored = payload
 		}
 	})
@@ -8299,7 +8299,7 @@ func TestTurn_StopHookOtherExitDoesNotBlockAndEmitsHookErrored(t *testing.T) {
 	if prov.called != 1 {
 		t.Fatalf("provider calls = %d, want no retry loop", prov.called)
 	}
-	if errored.EventName != string(hooks.EventStop) || errored.ExitCode != 1 || !strings.Contains(errored.Error, "stop hook failed") {
+	if errored.ModuleID != hooks.ModuleID || errored.PolicyPoint != runtimemodule.PolicyPointFinish || errored.ExitCode != 1 || !strings.Contains(errored.Error, "stop hook failed") {
 		t.Fatalf("hook errored payload = %+v", errored)
 	}
 }

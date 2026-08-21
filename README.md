@@ -773,8 +773,10 @@ and nonzero-exit failures are observable and non-blocking by default; set
 `required: true` on a command to propagate those failures into the owning
 runtime action. Parent cancellation always propagates. JSON-looking stdout is
 treated as text.
-Set `runtime.show_builtin_hook_traces: true` to mirror built-in hook/gate
-completions and failures into the conversation as UI-only hook trace rows.
+Set `runtime.show_builtin_policy_traces: true` to mirror built-in hook/gate
+completions and failures into the conversation as UI-only policy trace rows.
+Framework lifecycle facts use `policy.*`; the Hooks Module supplies Hook event
+and command names plus its original resource source, including `ext:<name>`.
 
 `juex bundle --session <id> --out <file.tar.gz>` creates a local archive for
 debugging one session. The archive includes a manifest, runtime snapshot,

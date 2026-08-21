@@ -41,22 +41,22 @@ func (e *Engine) ActiveContextWithError(ctx context.Context, incoming ...llm.Mes
 	if err != nil {
 		return ActiveContextSnapshot{}, err
 	}
-	contextMessages = append(contextMessages, e.pendingHookRuntimeContextSnapshot()...)
+	contextMessages = append(contextMessages, e.pendingPolicyRuntimeContextSnapshot()...)
 	snap = appendRuntimeContextMessages(snap, contextMessages...)
 	snap.EstimatedTokens = e.estimateMessageTokens(snap.Messages)
 	return snap, nil
 }
 
 func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnapshot {
-	return e.activeContextLockedWithHookContext(e.pendingHookRuntimeContextSnapshot(), incoming...)
+	return e.activeContextLockedWithPolicyContext(e.pendingPolicyRuntimeContextSnapshot(), incoming...)
 }
 
-func (e *Engine) activeContextLockedWithHookContext(hookContext []llm.Message, incoming ...llm.Message) ActiveContextSnapshot {
-	snapshot, _ := e.activeContextLockedWithHookContextError(context.Background(), hookContext, incoming...)
+func (e *Engine) activeContextLockedWithPolicyContext(policyContext []llm.Message, incoming ...llm.Message) ActiveContextSnapshot {
+	snapshot, _ := e.activeContextLockedWithPolicyContextError(context.Background(), policyContext, incoming...)
 	return snapshot
 }
 
-func (e *Engine) activeContextLockedWithHookContextError(ctx context.Context, hookContext []llm.Message, incoming ...llm.Message) (ActiveContextSnapshot, error) {
+func (e *Engine) activeContextLockedWithPolicyContextError(ctx context.Context, policyContext []llm.Message, incoming ...llm.Message) (ActiveContextSnapshot, error) {
 	if e == nil {
 		return ActiveContextSnapshot{}, nil
 	}
@@ -69,7 +69,7 @@ func (e *Engine) activeContextLockedWithHookContextError(ctx context.Context, ho
 	if err != nil {
 		return ActiveContextSnapshot{}, err
 	}
-	contextMessages = append(contextMessages, hookContext...)
+	contextMessages = append(contextMessages, policyContext...)
 	snap = appendRuntimeContextMessages(snap, contextMessages...)
 	snap.EstimatedTokens = e.estimateMessageTokens(snap.Messages)
 	return snap, nil

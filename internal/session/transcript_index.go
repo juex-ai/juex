@@ -301,7 +301,7 @@ func (idx transcriptIndex) coherentPageStart(start, floor, end int) int {
 	required := make(map[string]struct{})
 	for i := start; i < end; i++ {
 		entry := idx.entries[i]
-		if entry.Kind == llm.MessageKindHookEvent {
+		if entry.Kind == llm.MessageKindPolicyEvent {
 			continue
 		}
 		if entry.Kind != llm.MessageKindToolResult {
@@ -316,7 +316,7 @@ func (idx transcriptIndex) coherentPageStart(start, floor, end int) int {
 	}
 	for i := start - 1; i >= floor; i-- {
 		entry := idx.entries[i]
-		if entry.Kind == llm.MessageKindHookEvent {
+		if entry.Kind == llm.MessageKindPolicyEvent {
 			continue
 		}
 		if entry.Kind == llm.MessageKindToolResult {

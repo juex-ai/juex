@@ -92,8 +92,8 @@ func (e *Engine) prepareCandidateRequestLocked(ctx context.Context, turnID strin
 		if _, err := e.compactLockedForContextWindow(ctx, turnID, prepared.systemPrompt, prepared.tools, "model_fallback_preflight", true, "", contextWindow, 0); err != nil {
 			return base, err
 		}
-		base.hookContext = e.pendingHookRuntimeContextSnapshot()
-		active, contextErr := e.activeContextLockedWithHookContextError(ctx, base.hookContext)
+		base.policyContext = e.pendingPolicyRuntimeContextSnapshot()
+		active, contextErr := e.activeContextLockedWithPolicyContextError(ctx, base.policyContext)
 		if contextErr != nil {
 			return base, fmt.Errorf("runtime: build provider context: %w", contextErr)
 		}

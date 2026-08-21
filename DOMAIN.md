@@ -58,7 +58,8 @@ domain boundary.
 | --- | --- |
 | Provider | A model service adapter that exchanges Juex's canonical messages, Tool definitions, usage, and stop reasons with an external model service. |
 | Provider Profile | The resolved Provider identity, model, Protocol, endpoint and credential inputs, compatibility options, and Capability Set used for a request. |
-| Request Epoch | A durable, secret-safe identity for one effective Provider request envelope. It records safe Provider settings including hashed endpoint, header, query, and cache-policy identities, section-deduplicated system snapshots, bounded tool and derived runtime-context snapshots, ordered message IDs and content digests, compaction selection, and one-shot hook context without duplicating the transcript or wire request. |
+| Request Epoch | A durable, secret-safe identity for one effective Provider request envelope. It records safe Provider settings including hashed endpoint, header, query, and cache-policy identities, section-deduplicated system snapshots, bounded tool and derived runtime-context snapshots, ordered message IDs and content digests, compaction selection, and one-shot policy context without duplicating the transcript or wire request. |
+| Policy | A typed Module-owned rule evaluated at a Framework checkpoint. Framework assigns the owning Module identity and canonical Policy Point, orders Policies, and emits neutral lifecycle facts; a lifecycle Hook is one command-backed Policy source rather than the meaning of every Policy. |
 | Protocol | A Provider wire contract, such as Anthropic Messages, OpenAI Responses, OpenAI Codex Responses, or OpenAI-compatible Chat. |
 | Capability Set | Explicit gates describing which optional behaviors a Provider Profile supports, including tools, vision, streaming, reasoning controls/replay, and output-token control. |
 | Tool | A named, schema-described operation available to the model. Builtin, skill, Observable, model-state, and MCP tools share one runtime catalog and result contract. |
@@ -312,12 +313,12 @@ domain boundary.
 11. **Capabilities are explicit.** Optional Provider behavior is enabled by the
    resolved Capability Set, not guessed from a model name at the call site.
 12. **Events gate facts and effects.** A required request Event commits before
-    its Provider, Hook, or Tool side effect. Tool declaration and start facts
+    its Provider, Policy, or Tool side effect. Tool declaration and start facts
     use stable Turn and Provider-iteration identity. A terminal Tool Event
     commits the exact Provider-visible outcome before transcript continuation;
     started-without-outcome remains explicitly uncertain after restart.
     `provider.request_epoch` is the durable checkpoint that consumes included
-    one-shot hook context; `llm.requested` then declares dispatch.
+    one-shot policy context; `llm.requested` then declares dispatch.
     `llm.responded` or `llm.errored` terminates a Turn epoch, while a
     compaction-summary outcome terminates a compaction epoch. Transport retries
     retain the same epoch. A Provider response discarded after cancellation

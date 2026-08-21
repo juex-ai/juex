@@ -452,7 +452,7 @@ type Message struct {
     ID         string
     Role       Role
     Blocks     []Block
-    Kind       string // direct | continuation | tool_result | mcp_event | observation | model_change | system_notice | compact | runtime_context | hook_event
+    Kind       string // direct | continuation | tool_result | mcp_event | observation | model_change | system_notice | compact | runtime_context | policy_event
     Model      string
     Compaction *CompactionMetadata
 }
@@ -894,9 +894,9 @@ from visible text and replaced with a deterministic placeholder carrying the
 full logical window's byte count, SHA-256, and first-bytes hex metadata. Normal
 UTF-8 logs, ANSI-colored output, and localized text remain unchanged, and
 head/tail and live fragment boundaries do not split UTF-8 runes.
-After pre/post Tool hook context is appended, the runtime preserves the
+After pre/post Tool Policy context is appended, the runtime preserves the
 already-bounded Shell base and applies a separate 128 KiB head/tail and
-binary-hygiene bound to the appended hook/error suffix. Finalized provider and
+binary-hygiene bound to the appended policy/error suffix. Finalized provider and
 terminal event content therefore stays bounded without replacing the original
 Shell stream's exact omitted-byte marker.
 
@@ -955,10 +955,11 @@ use, but their envelope must explicitly declare a positive schema version and
 required-or-ignorable replay policy.
 
 Standard cataloged families include `turn.started/completed/errored`,
-`provider.request_epoch`, `provider.hook_context.queued`,
+`provider.request_epoch`, `provider.policy_context.queued`,
 `llm.requested/output_delta/responded/errored`,
 `tool.requested/running/output_delta/completed/errored/outcome_unknown`,
-`transcript.repaired`, `pending_input.*`, `context.compact.*`, and
+`policy.requested/started/completed/errored/trace`, `transcript.repaired`,
+`pending_input.*`, `context.compact.*`, and
 `context.projection.applied`.
 Payload structs and producer constructors may remain next to the domain module
 that emits them; only the Catalog assigns their stable wire interpretation.
@@ -967,7 +968,7 @@ Events. BrowserEvent is a separate transport projection DTO: the Catalog
 selects browser-visible stable facts and supplies their normalized payload,
 while Web owns status attachment and SSE framing.
 
-`provider.hook_context.queued` durably records an ordered, bounded batch before
+`provider.policy_context.queued` durably records an ordered, bounded batch before
 it enters provider-visible memory. Policy-produced queued context is bounded
 across all contributing Modules against the final serialized payload, which
 must not exceed 1 MiB. `provider.request_epoch` records the final
@@ -979,8 +980,8 @@ composition, so stable guidance is reused by digest while a changing Operating
 Context contributes only its small section body. Provider-visible context
 synthesized outside the transcript, including Goal, Notes, model-change notices,
 and synthesized compaction input, carries a bounded full-message snapshot;
-one-shot hook context instead resolves through its queued Event. Committing the
-epoch consumes its included one-shot hook-context IDs and releases their in-memory
+one-shot policy context instead resolves through its queued Event. Committing
+the epoch consumes its included one-shot policy-context IDs and releases their in-memory
 bodies while retaining compact duplicate-validation IDs. Session attachment
 streams the journal through the provenance reducer, which ignores unrelated Events
 and derives queued batches minus committed epoch consumption without materializing
@@ -1927,7 +1928,7 @@ can request older windows with `before=<message_id>` and can lower or raise the
 window with `limit`, capped by the server. The limit is a target: when its
 boundary would begin inside a contiguous Tool Result sequence, the Session read
 model minimally extends the page backward to include the matching assistant
-Tool Call, crossing only intervening UI-only Hook Event traces. Pagination
+Tool Call, crossing only intervening UI-only Policy Event traces. Pagination
 metadata reflects that expanded start, so clients can
 prepend older pages without duplicating the added tool context. Truly orphaned
 results remain output-only transcript facts rather than being attached to an
@@ -2301,7 +2302,7 @@ runtime:
   external_event_ttl: 24h
   tool_timeout: 60s
   max_output_tokens: 8192
-  show_builtin_hook_traces: false
+  show_builtin_policy_traces: false
   notify_model_changes: false
 compaction:
   enabled: true
@@ -2355,7 +2356,7 @@ tool_output:
 | `providers[].models[].compat.reasoning_replay_fields` | optional model-level compatibility overrides |
 | `providers[].models[].compat.codex_transport` | optional model-level override for `providers[].compat.codex_transport` |
 | `hooks.trusted` | required for project-local or explicit config command hooks; default-home and instance-home hooks are trusted by location |
-| `hooks.commands[].name` | stable hook name used in `hook.*` events |
+| `hooks.commands[].name` | stable Hook name combined with its Hook event name in the generic `policy.*` lifecycle fact `name` |
 | `hooks.commands[].events` | lifecycle events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop` |
 | `hooks.commands[].tools` | optional tool-name filter for tool hook events |
 | `hooks.commands[].command` | command argv executed with hook input JSON on stdin |
@@ -2365,7 +2366,7 @@ tool_output:
 | `runtime.external_event_ttl` | duration for queued MCP/external event messages while a turn is running; defaults to 24h |
 | `runtime.tool_timeout` | default hard timeout for generic non-shell tool execution; defaults to 60s, is capped at 300s, and is not exposed in model-visible tool schemas |
 | `runtime.max_output_tokens` | optional normal-turn provider output cap; omit it to use the provider default |
-| `runtime.show_builtin_hook_traces` | mirrors built-in runtime hook/gate completions and failures into conversation-visible UI-only hook traces; defaults to false |
+| `runtime.show_builtin_policy_traces` | mirrors built-in runtime Policy/gate completions and failures into conversation-visible UI-only policy traces; defaults to false |
 | `runtime.notify_model_changes` | adds provider-visible and durable `model_change` reminders for successful fallback and recovery transitions; defaults to false and does not change model selection or runtime events |
 | `compaction.enabled` | enables automatic and manual context compaction |
 | `compaction.instructions` | persistent summary focus applied before per-request instructions and successful `PreCompact` hook stdout |
@@ -2479,17 +2480,22 @@ is used as the text only when stdout is empty; otherwise stderr is diagnostic.
 JSON-looking stdout is still plain text. Hook requests may include the current
 goal as read-only context, but hook output cannot mutate Goal or Notes.
 
-The runtime emits `hook.started`, `hook.completed`, `hook.errored`, and
-conversation-visible `hook.trace` events; the existing session bus persists
-those events to `events.jsonl`. Command hooks always produce UI-only hook trace
-rows. Built-in runtime hook/gate completions and failures only produce those
-rows when `runtime.show_builtin_hook_traces` is true.
+The Framework emits `policy.requested`, `policy.started`, `policy.completed`,
+`policy.errored`, and conversation-visible `policy.trace` Events; the existing
+Session bus persists those Events to `events.jsonl`. Lifecycle payloads carry
+the Framework-assigned `module_id` and canonical `policy_point`, plus generic
+`name`, `source`, and optional `tool_name` metadata. They never translate a
+Policy Point into a Hook-specific `event_name`. The Hooks Module combines its
+own Hook event and command names for display while retaining the configured
+source, including `ext:<name>` provenance. Command Hooks always produce UI-only
+policy trace rows. Built-in runtime Policy/gate completions and failures only produce those
+rows when `runtime.show_builtin_policy_traces` is true.
 `SessionStart` exit `2` rejects startup. `UserPromptSubmit` stdout can extend
 the user message, while exit `2` rejects the turn. `PreToolUse` exit `2`
 produces an error tool result so the model can recover. `PostToolUse` exit `2`
 adds corrective context without changing whether the completed tool itself
 failed. `PreCompact` stdout extends the summary instructions; compact hooks
-cannot veto compaction, so exit `2` is reported as `hook.errored`.
+cannot veto compaction, so exit `2` is reported as `policy.errored`.
 `SessionStart`, `PostCompact`, and `Stop` exit `0` stdout is queued in memory as
 runtime context for exactly the next model request; it is never persisted as a
 transcript message. `PostCompact` therefore cannot affect the summary request

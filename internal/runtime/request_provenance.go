@@ -21,23 +21,23 @@ func (e *Engine) checkpointProviderRequestLocked(
 	cachePolicy llm.CachePolicy,
 	attempt int,
 ) (provenance.RequestEpoch, error) {
-	hookIDs := make([]string, 0, len(request.hookContext))
-	for _, message := range request.hookContext {
-		hookIDs = append(hookIDs, message.ID)
+	policyIDs := make([]string, 0, len(request.policyContext))
+	for _, message := range request.policyContext {
+		policyIDs = append(policyIDs, message.ID)
 	}
 	return e.checkpointProviderRequestEpochLocked(turnID, request.iter, attempt, provenance.RequestInput{
-		Purpose:               "turn",
-		Provider:              candidateProvenance(candidate),
-		ContextWindow:         candidateContextWindow(candidate, e.ContextWindow),
-		MaxOutputTokens:       candidateMaxOutputTokens(candidate, e.MaxOutputTokens),
-		CachePolicy:           provenance.SafeCachePolicyFrom(cachePolicy),
-		SystemPrompt:          prepared.systemPrompt,
-		SystemPromptParts:     promptSectionTexts(prepared.promptSections),
-		SystemPromptJoiner:    prompt.SectionSeparator,
-		Tools:                 prepared.tools,
-		History:               request.history,
-		Compaction:            requestCompactionSelection(request.history),
-		HookContextMessageIDs: hookIDs,
+		Purpose:                 "turn",
+		Provider:                candidateProvenance(candidate),
+		ContextWindow:           candidateContextWindow(candidate, e.ContextWindow),
+		MaxOutputTokens:         candidateMaxOutputTokens(candidate, e.MaxOutputTokens),
+		CachePolicy:             provenance.SafeCachePolicyFrom(cachePolicy),
+		SystemPrompt:            prepared.systemPrompt,
+		SystemPromptParts:       promptSectionTexts(prepared.promptSections),
+		SystemPromptJoiner:      prompt.SectionSeparator,
+		Tools:                   prepared.tools,
+		History:                 request.history,
+		Compaction:              requestCompactionSelection(request.history),
+		PolicyContextMessageIDs: policyIDs,
 	})
 }
 
@@ -79,7 +79,7 @@ func (e *Engine) checkpointProviderRequestEpochLocked(
 		return provenance.RequestEpoch{}, fmt.Errorf("commit provider request epoch: %w", err)
 	}
 	tracker.CommitEpoch(epoch)
-	e.syncPendingHookContextFromTracker(tracker)
+	e.syncPendingPolicyContextFromTracker(tracker)
 	return epoch, nil
 }
 
@@ -157,17 +157,17 @@ func stableProvenanceMessageID(prefix string, index int, message llm.Message) st
 }
 
 func (e *Engine) requestProvenanceTracker() *provenance.Tracker {
-	e.hookRuntimeContextMu.Lock()
-	defer e.hookRuntimeContextMu.Unlock()
+	e.policyRuntimeContextMu.Lock()
+	defer e.policyRuntimeContextMu.Unlock()
 	if e.provenanceTracker == nil {
 		e.provenanceTracker = provenance.NewTracker()
 	}
 	return e.provenanceTracker
 }
 
-func (e *Engine) syncPendingHookContextFromTracker(tracker *provenance.Tracker) {
-	pending := tracker.PendingHookContext()
-	e.hookRuntimeContextMu.Lock()
-	e.pendingHookRuntimeContext = pending
-	e.hookRuntimeContextMu.Unlock()
+func (e *Engine) syncPendingPolicyContextFromTracker(tracker *provenance.Tracker) {
+	pending := tracker.PendingPolicyContext()
+	e.policyRuntimeContextMu.Lock()
+	e.pendingPolicyRuntimeContext = pending
+	e.policyRuntimeContextMu.Unlock()
 }
