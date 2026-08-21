@@ -17,6 +17,7 @@ from typing import Any, Iterable, Protocol
 
 SCHEMA_VERSION = 1
 REPORT_KIND = "development-validation"
+CANDIDATE_RECORD_NAME = "candidate-record.json"
 
 
 class StepLike(Protocol):
@@ -210,6 +211,34 @@ def write_record(report_dir: pathlib.Path, record: dict[str, Any]) -> None:
     record_md.write_text(render_markdown(record), encoding="utf-8")
 
 
+def preserve_candidate_record(report_dir: pathlib.Path) -> pathlib.Path | None:
+    record_json = report_dir / "record.json"
+    if not record_json.is_file():
+        return None
+    try:
+        record = json.loads(record_json.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot preserve candidate record: {record_json}") from exc
+    if record.get("tier") != "candidate":
+        return None
+    candidate_json = report_dir / CANDIDATE_RECORD_NAME
+    candidate_md = report_dir / "candidate-record.md"
+    _preserve_file(record_json, candidate_json)
+    record_md = report_dir / "record.md"
+    if record_md.is_file():
+        _preserve_file(record_md, candidate_md)
+    return candidate_json
+
+
+def _preserve_file(source: pathlib.Path, destination: pathlib.Path) -> None:
+    if destination.exists():
+        if destination.read_bytes() != source.read_bytes():
+            raise ValueError(f"preserved candidate record already differs: {destination}")
+        source.unlink()
+        return
+    source.replace(destination)
+
+
 def render_markdown(record: dict[str, Any]) -> str:
     lines = [
         "# Commit Verification Record",
@@ -278,8 +307,12 @@ def find_reusable_candidate(
 ) -> ReuseDecision:
     steps = list(candidate_steps)
     labels = [step.label for step in steps]
+    report_kind_root = report_root / REPORT_KIND
     records = sorted(
-        (report_root / REPORT_KIND).glob("*/*/record.json"),
+        [
+            *report_kind_root.glob("*/*/record.json"),
+            *report_kind_root.glob(f"*/*/{CANDIDATE_RECORD_NAME}"),
+        ],
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )

@@ -1398,6 +1398,13 @@ func TestEvalCommitVerificationRecordSchemaAndReuseInvalidation(t *testing.T) {
 		"    assert not changed_environment.reusable and any(item['reason'] == 'environment_fingerprint mismatch' for item in changed_environment.invalidated), changed_environment",
 		"    changed_artifact = verification.find_reusable_candidate(reports, snapshot, plan, environment, steps, {'dist/juex': {'sha256': 'sha256:changed', 'size': 1}})",
 		"    assert not changed_artifact.reusable and any(item['reason'] == 'build artifact mismatch' for item in changed_artifact.invalidated), changed_artifact",
+		"    preserved = verification.preserve_candidate_record(report_dir)",
+		"    assert preserved == report_dir / 'candidate-record.json' and preserved.is_file(), preserved",
+		"    assert (report_dir / 'candidate-record.md').is_file() and not (report_dir / 'record.json').exists()",
+		"    final_record = dict(record, tier='final', status='fail')",
+		"    verification.write_record(report_dir, final_record)",
+		"    retry = verification.find_reusable_candidate(reports, snapshot, plan, environment, steps)",
+		"    assert retry.source == preserved and set(retry.reusable) == {'go-test-all', 'make-build'}, retry",
 		"    final_steps = [*steps, cli.VerificationStep('live-integration', ['make', 'integration']), cli.VerificationStep('provider-model-smoke', ['provider-smoke'])]",
 		"    assert [step.label for step in final_steps if step.label not in matched.reusable] == ['live-integration', 'provider-model-smoke']",
 	}, "\n")

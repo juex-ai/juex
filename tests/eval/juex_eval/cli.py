@@ -250,6 +250,10 @@ def run_verify(args: argparse.Namespace) -> int:
             candidate_steps,
             verification.artifact_fingerprints(REPO_ROOT),
         )
+        if decision.source == report_dir / "record.json":
+            preserved = verification.preserve_candidate_record(report_dir)
+            if preserved is not None:
+                decision = verification.ReuseDecision(preserved, decision.reusable, decision.invalidated)
     report_dir.mkdir(parents=True, exist_ok=True)
     command_logs = report_dir / "command-logs"
     command_logs.mkdir(parents=True, exist_ok=True)

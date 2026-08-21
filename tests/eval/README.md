@@ -151,7 +151,10 @@ environment fingerprints, candidate binary fingerprint, redacted provider
 selection identity, and every reused, executed, invalidated, or
 fail-fast-not-run step. A missing or changed candidate binary invalidates reuse
 so final can rebuild the artifact required by live smoke. Directories are
-created on demand.
+created on demand. If candidate and final explicitly share one run ID, final
+preserves the reusable source as `candidate-record.json` and
+`candidate-record.md` beside its own `record.json` and `record.md`, so a failed
+live-gate retry does not rerun the deterministic plan.
 Report kinds are:
 
 - `provider-model-smoke`
