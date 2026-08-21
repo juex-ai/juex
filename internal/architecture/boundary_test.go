@@ -321,12 +321,13 @@ type App struct {
 	literalResource closer
 	literalRegistry registrar
 }
+type AppAlias = App
 func (application *App) bind(manager *mcp.Manager, registry *tools.Registry) {
 	application.resource = manager
 	application.registry = registry
 }
 func newApp(manager *mcp.Manager, registry *tools.Registry) *App {
-	return &App{literalResource: manager, literalRegistry: registry}
+	return &AppAlias{literalResource: manager, literalRegistry: registry}
 }
 func (application *App) bypass() {
 	_ = application.resource.Close()
@@ -10072,7 +10073,7 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 }
 
 func indexAppCompositeLiteralFields(literal *ast.CompositeLit, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types *compositionTypeIndex) {
-	typeName := canonicalType(literal.Type, imports)
+	typeName := resolveNamedType(canonicalType(literal.Type, imports), *types)
 	if typeName != modulePath+"/internal/app.App" {
 		return
 	}
