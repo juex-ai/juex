@@ -3355,6 +3355,32 @@ func evaluatedLogicalOperands(application *App) {
 	_ = resource.Close()
 	registry.Register(nil)
 }
+func correlatedLogicalBranches(application *App, condition bool) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	if condition && func() bool {
+		resource = application.manager
+		registry = application.registry
+		return true
+	}() {
+	} else {
+		_ = resource.Close()
+		registry.Register(nil)
+	}
+}
+func correlatedLogicalLoop(application *App, condition bool) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	for condition && func() bool {
+		resource = application.manager
+		registry = application.registry
+		return true
+	}() {
+		return
+	}
+	_ = resource.Close()
+	registry.Register(nil)
+}
 func cleanupAfterSkippedLogical(current, next closer) {
 	if true || assignCleanup(&current, next) {}
 	_ = current.Close()
@@ -3406,6 +3432,64 @@ func useLogicalHelpers(application *App) {
 	}
 	if registration := "," + strings.Join(registrationCalls, ",") + ","; registryCalls != 1 || strings.Contains(registration, ",registerAfterSkippedLogical,") {
 		t.Fatalf("Tool registration calls = %v, want only evaluated logical operand registration", registrationCalls)
+	}
+}
+
+func TestAppCompositionInspectionDistinguishesShadowedPanic(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func useAfterShadowedPanic(application *App, owned bool) {
+	panic := func(any) {}
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	if owned {
+		resource = application.manager
+		registry = application.registry
+		panic(nil)
+	}
+	_ = resource.Close()
+	registry.Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "shadowed_panic.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 1 || cleanupCalls[0] != "resource.Close" {
+		t.Fatalf("cleanup calls = %v, want shadowed panic fallthrough cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 1 || registrationCalls[0] != "registry.Register" {
+		t.Fatalf("Tool registration calls = %v, want shadowed panic fallthrough registration", registrationCalls)
 	}
 }
 
@@ -5306,7 +5390,7 @@ func statementFallsThrough(statement ast.Stmt) bool {
 			return true
 		}
 		identifier, builtin := call.Fun.(*ast.Ident)
-		return !builtin || identifier.Name != "panic"
+		return !builtin || identifier.Name != "panic" || identifier.Obj != nil && identifier.Obj.Decl != nil
 	case *ast.BlockStmt:
 		return blockFallsThrough(value)
 	case *ast.IfStmt:
@@ -5334,17 +5418,14 @@ func inspectCompositionIf(statement *ast.IfStmt, visit func(ast.Node) bool, snap
 	if statement.Init != nil {
 		ast.Inspect(statement.Init, visit)
 	}
-	if statement.Cond != nil {
-		ast.Inspect(statement.Cond, visit)
-	}
-	base := snapshot()
+	trueState, falseState := inspectCompositionCondition(statement.Cond, visit, snapshot, restore, merge)
 	var exits []compositionFlowState
-	restore(base)
+	restore(trueState)
 	ast.Inspect(statement.Body, visit)
 	if blockFallsThrough(statement.Body) {
 		exits = append(exits, snapshot())
 	}
-	restore(base)
+	restore(falseState)
 	if statement.Else == nil {
 		exits = append(exits, snapshot())
 	} else {
@@ -5357,18 +5438,31 @@ func inspectCompositionIf(statement *ast.IfStmt, visit func(ast.Node) bool, snap
 }
 
 func inspectCompositionLogicalExpression(expression *ast.BinaryExpr, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) {
-	ast.Inspect(expression.X, visit)
-	leftState := snapshot()
-	if value, constant := constantBooleanExpression(expression.X); constant {
-		if (expression.Op == token.LAND && !value) || (expression.Op == token.LOR && value) {
-			return
+	trueState, falseState := inspectCompositionCondition(expression, visit, snapshot, restore, merge)
+	restore(merge([]compositionFlowState{trueState, falseState}))
+}
+
+func inspectCompositionCondition(expression ast.Expr, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) (compositionFlowState, compositionFlowState) {
+	if logical, ok := expression.(*ast.BinaryExpr); ok && (logical.Op == token.LAND || logical.Op == token.LOR) {
+		leftTrue, leftFalse := inspectCompositionCondition(logical.X, visit, snapshot, restore, merge)
+		if logical.Op == token.LAND {
+			restore(leftTrue)
+			rightTrue, rightFalse := inspectCompositionCondition(logical.Y, visit, snapshot, restore, merge)
+			return rightTrue, merge([]compositionFlowState{leftFalse, rightFalse})
 		}
-		ast.Inspect(expression.Y, visit)
-		return
+		restore(leftFalse)
+		rightTrue, rightFalse := inspectCompositionCondition(logical.Y, visit, snapshot, restore, merge)
+		return merge([]compositionFlowState{leftTrue, rightTrue}), rightFalse
 	}
-	ast.Inspect(expression.Y, visit)
-	rightState := snapshot()
-	restore(merge([]compositionFlowState{leftState, rightState}))
+	ast.Inspect(expression, visit)
+	state := snapshot()
+	if value, constant := constantBooleanExpression(expression); constant {
+		if value {
+			return state, merge(nil)
+		}
+		return merge(nil), state
+	}
+	return state, state
 }
 
 func constantBooleanExpression(expression ast.Expr) (bool, bool) {
@@ -5404,6 +5498,13 @@ func constantBooleanExpression(expression ast.Expr) (bool, bool) {
 			}
 			if leftConstant && !left {
 				return right, rightConstant
+			}
+		}
+	case *ast.CallExpr:
+		literal := functionLiteralExpression(value.Fun)
+		if literal != nil && len(literal.Body.List) != 0 {
+			if result, ok := literal.Body.List[len(literal.Body.List)-1].(*ast.ReturnStmt); ok && len(result.Results) == 1 {
+				return constantBooleanExpression(result.Results[0])
 			}
 		}
 	}
@@ -5748,19 +5849,28 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 			if value.Init != nil {
 				ast.Inspect(value.Init, visit)
 			}
-			var zeroIterationState *compositionFlowState
+			breakTarget := router.pushBreakTarget()
 			if value.Cond != nil {
-				ast.Inspect(value.Cond, visit)
-				state := snapshot()
-				zeroIterationState = &state
+				trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+				breakTarget.states = append(breakTarget.states, falseState)
+				restore(trueState)
 			}
-			inspectCompositionLoopBody(value.Body, visit, router, zeroIterationState)
+			continueTarget := router.pushContinueTarget(breakTarget.label)
+			ast.Inspect(value.Body, visit)
+			router.excludeTargetBindings(continueTarget, blockDeclaredCompositionBindings(value.Body))
+			router.mergeTargetStates(continueTarget)
 			if value.Post != nil {
 				ast.Inspect(value.Post, visit)
 			}
 			if value.Cond != nil {
-				ast.Inspect(value.Cond, visit)
+				trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+				breakTarget.states = append(breakTarget.states, falseState)
+				restore(trueState)
 			}
+			router.terminate()
+			router.popContinueTarget(continueTarget)
+			router.popBreakTarget(breakTarget)
+			router.mergeTargetStates(breakTarget)
 			return false
 		case *ast.AssignStmt:
 			for index, left := range value.Lhs {
@@ -6000,19 +6110,28 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 			if value.Init != nil {
 				ast.Inspect(value.Init, visit)
 			}
-			var zeroIterationState *compositionFlowState
+			breakTarget := router.pushBreakTarget()
 			if value.Cond != nil {
-				ast.Inspect(value.Cond, visit)
-				state := snapshot()
-				zeroIterationState = &state
+				trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+				breakTarget.states = append(breakTarget.states, falseState)
+				restore(trueState)
 			}
-			inspectCompositionLoopBody(value.Body, visit, router, zeroIterationState)
+			continueTarget := router.pushContinueTarget(breakTarget.label)
+			ast.Inspect(value.Body, visit)
+			router.excludeTargetBindings(continueTarget, blockDeclaredCompositionBindings(value.Body))
+			router.mergeTargetStates(continueTarget)
 			if value.Post != nil {
 				ast.Inspect(value.Post, visit)
 			}
 			if value.Cond != nil {
-				ast.Inspect(value.Cond, visit)
+				trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+				breakTarget.states = append(breakTarget.states, falseState)
+				restore(trueState)
 			}
+			router.terminate()
+			router.popContinueTarget(continueTarget)
+			router.popBreakTarget(breakTarget)
+			router.mergeTargetStates(breakTarget)
 			return false
 		case *ast.AssignStmt:
 			for index, left := range value.Lhs {
@@ -6863,9 +6982,9 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				}
 				var zeroIterationState *compositionFlowState
 				if value.Cond != nil {
-					ast.Inspect(value.Cond, visit)
-					state := snapshot()
-					zeroIterationState = &state
+					trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+					zeroIterationState = &falseState
+					restore(trueState)
 				}
 				breakTarget := router.pushBreakTarget()
 				if zeroIterationState != nil {
@@ -6884,15 +7003,15 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 						ast.Inspect(value.Post, visit)
 					}
 					if value.Cond != nil {
-						ast.Inspect(value.Cond, visit)
+						trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+						breakTarget.states = append(breakTarget.states, falseState)
+						restore(trueState)
 					}
 					if equalStringMap(values, beforeValues) && equalCleanupResourceMap(resources, beforeResources) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
 						break
 					}
 				}
-				if value.Cond == nil {
-					router.terminate()
-				}
+				router.terminate()
 				router.popContinueTarget(continueTarget)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
@@ -7354,9 +7473,9 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				}
 				var zeroIterationState *compositionFlowState
 				if value.Cond != nil {
-					ast.Inspect(value.Cond, visit)
-					state := snapshot()
-					zeroIterationState = &state
+					trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+					zeroIterationState = &falseState
+					restore(trueState)
 				}
 				breakTarget := router.pushBreakTarget()
 				if zeroIterationState != nil {
@@ -7374,15 +7493,15 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 						ast.Inspect(value.Post, visit)
 					}
 					if value.Cond != nil {
-						ast.Inspect(value.Cond, visit)
+						trueState, falseState := inspectCompositionCondition(value.Cond, visit, snapshot, restore, merge)
+						breakTarget.states = append(breakTarget.states, falseState)
+						restore(trueState)
 					}
 					if equalStringMap(values, beforeValues) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
 						break
 					}
 				}
-				if value.Cond == nil {
-					router.terminate()
-				}
+				router.terminate()
 				router.popContinueTarget(continueTarget)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
