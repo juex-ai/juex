@@ -95,6 +95,7 @@ var foundationDirs = []string{
 	"internal/frontmatter",
 	"internal/homestore",
 	"internal/llm",
+	"internal/netbootstrap",
 	"internal/provenance",
 	"internal/processmetrics",
 	"internal/sandbox",
@@ -331,6 +332,8 @@ func closeMany(clients []*mcp.Client, indexed map[*mcp.Client]struct{}, byName m
 	_ = clients[0].Close()
 	_ = byName["primary"].Close()
 	_ = named[0].Close()
+	clients = append(clients, nil)
+	_ = clients[0].Close()
 	for _, client := range clients { _ = client.Close() }
 	for client := range indexed { _ = client.Close() }
 }`
@@ -351,8 +354,8 @@ func closeMany(clients []*mcp.Client, indexed map[*mcp.Client]struct{}, byName m
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"Close", "Close", "Close", "client.Close", "client.Close"}
-	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] {
+	want := []string{"Close", "Close", "Close", "Close", "client.Close", "client.Close"}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] {
 		t.Fatalf("cleanup calls = %v, want %v", calls, want)
 	}
 }
@@ -405,6 +408,8 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	localRegistry().Register(nil)
 	registries := []*tools.Registry{registry}
 	registries[0].Register(nil)
+	registries = append(registries, registry)
+	registries[0].Register(nil)
 	named := registryList{registry}
 	named[0].Register(nil)
 	registerTransitively(registry)
@@ -427,8 +432,8 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"registry.Register", "register", "tools.RegisterBuiltins", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "Register", "Register", "registerTransitively", "runRegistration"}
-	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] || calls[6] != want[6] || calls[7] != want[7] || calls[8] != want[8] || calls[9] != want[9] {
+	want := []string{"registry.Register", "register", "tools.RegisterBuiltins", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] || calls[6] != want[6] || calls[7] != want[7] || calls[8] != want[8] || calls[9] != want[9] || calls[10] != want[10] {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
 }
@@ -1323,6 +1328,9 @@ func expressionResultTypes(expression ast.Expr, imports map[string]string, value
 	}
 	if results := types.functionResults[calledFunctionKey(call.Fun, imports, values, types)]; len(results) != 0 {
 		return results
+	}
+	if identifier, ok := call.Fun.(*ast.Ident); ok && identifier.Name == "append" && len(call.Args) != 0 {
+		return []string{expressionType(call.Args[0], imports, values, types)}
 	}
 	if identifier, ok := call.Fun.(*ast.Ident); ok && identifier.Name == "new" && len(call.Args) == 1 {
 		return []string{canonicalType(call.Args[0], imports)}
