@@ -669,6 +669,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	registerExpression := (*tools.Registry).Register
 	registerExpression(registry, nil)
 	registry.Register(nil)
+	(registry.Register)(nil)
 	register := registry.Register
 	register(nil)
 	converted := registrar(registry)
@@ -709,7 +710,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "registry.Register", "registries.Register", "registry.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "registry.Register", "registries.Register", "registry.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -2600,7 +2601,15 @@ func compositionFieldType(typeName, fieldName string, types compositionTypeIndex
 }
 
 func isToolRegistrationCall(call *ast.CallExpr, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
-	switch function := call.Fun.(type) {
+	target := call.Fun
+	for {
+		parenthesized, ok := target.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		target = parenthesized.X
+	}
+	switch function := target.(type) {
 	case *ast.Ident:
 		return values[bindingKey(function)] == toolRegistrationCallableType || imports["."] == modulePath+"/internal/tools" && isToolRegistrationName(function.Name)
 	case *ast.SelectorExpr:
@@ -2723,6 +2732,8 @@ func isToolRegistrationCallableExpression(expression ast.Expr, imports map[strin
 
 func selectorChain(expression ast.Expr) string {
 	switch value := expression.(type) {
+	case *ast.ParenExpr:
+		return selectorChain(value.X)
 	case *ast.IndexExpr:
 		return selectorChain(value.X)
 	case *ast.IndexListExpr:
