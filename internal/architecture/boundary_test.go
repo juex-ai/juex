@@ -82,6 +82,7 @@ type compositionTypeIndex struct {
 	functionResults  map[string][]string
 	namedTypes       map[string]string
 	functionTypes    map[string]bool
+	referenceTypes   map[string]bool
 	typeParameters   map[string][]string
 	cleanupParams    map[string]map[int]bool
 	toolParams       map[string]map[int]bool
@@ -2041,6 +2042,161 @@ func configureConvertedRegistration(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionTracksSlicesValues(t *testing.T) {
+	source := `package app
+import (
+	"slices"
+
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+func useSliceValues(application *App) {
+	for resource := range slices.Values([]closer{application.manager}) { _ = resource.Close() }
+	for registry := range slices.Values([]registrar{application.registry}) { registry.Register(nil) }
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "slices_values.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resource.Close,") {
+		t.Fatalf("cleanup calls = %v, want slices.Values cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registry.Register,") {
+		t.Fatalf("Tool registration calls = %v, want slices.Values registration", registrationCalls)
+	}
+}
+
+func TestAppCompositionInspectionTracksIIFEReturnedAliases(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+func useIIFEAliases(application *App) {
+	resources := make([]closer, 1)
+	resourceAlias := func(values []closer) []closer { return values }(resources)
+	resourceAlias[0] = application.manager
+	_ = resources[0].Close()
+	registries := make([]registrar, 1)
+	registryAlias := func(values []registrar) []registrar { return values }(registries)
+	registryAlias[0] = application.registry
+	registries[0].Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "iife_aliases.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resources.Close,") {
+		t.Fatalf("cleanup calls = %v, want IIFE-returned slice alias cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registries.Register,") {
+		t.Fatalf("Tool registration calls = %v, want IIFE-returned slice alias registration", registrationCalls)
+	}
+}
+
+func TestAppCompositionInspectionTracksDefinedPointers(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type holder struct {
+	resource closer
+	registry registrar
+}
+type holderPtr *holder
+func useDefinedPointer(application *App) {
+	owned := holderPtr(&holder{})
+	original := owned
+	owned.resource = application.manager
+	owned.registry = application.registry
+	_ = original.resource.Close()
+	original.registry.Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "defined_pointer.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",original.resource.Close,") {
+		t.Fatalf("cleanup calls = %v, want defined pointer alias cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",original.registry.Register,") {
+		t.Fatalf("Tool registration calls = %v, want defined pointer alias registration", registrationCalls)
+	}
+}
+
 func TestSliceCollectionSourceArguments(t *testing.T) {
 	tests := []struct {
 		expression string
@@ -2158,6 +2314,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 		functionResults:  make(map[string][]string),
 		namedTypes:       make(map[string]string),
 		functionTypes:    make(map[string]bool),
+		referenceTypes:   make(map[string]bool),
 		typeParameters:   make(map[string][]string),
 		cleanupParams:    make(map[string]map[int]bool),
 		toolParams:       make(map[string]map[int]bool),
@@ -2305,6 +2462,9 @@ func indexCleanupAndConstructors(file *ast.File, packagePath string, imports map
 				indexTypeParameters(spec, typeName, packagePath, types)
 				if _, ok := spec.Type.(*ast.FuncType); ok {
 					types.functionTypes[typeName] = true
+				}
+				if isReferenceTypeExpression(spec.Type) {
+					types.referenceTypes[typeName] = true
 				}
 				if contract, ok := spec.Type.(*ast.InterfaceType); ok {
 					if packagePath == modulePath+"/internal/app" {
@@ -3650,7 +3810,7 @@ func namedReferenceValues(fields *ast.FieldList, imports map[string]string, type
 	}
 	for _, field := range fields.List {
 		typeName := resolveNamedType(canonicalType(field.Type, imports), types)
-		if !isReferenceTypeExpression(field.Type) && !isReferenceTypeName(typeName) {
+		if !isReferenceTypeExpression(field.Type) && !isReferenceTypeName(typeName, types) {
 			continue
 		}
 		for _, name := range field.Names {
@@ -3660,8 +3820,16 @@ func namedReferenceValues(fields *ast.FieldList, imports map[string]string, type
 	return references
 }
 
-func isReferenceTypeName(typeName string) bool {
-	return strings.HasPrefix(typeName, sliceTypePrefix) || strings.HasPrefix(typeName, mapTypePrefix) || strings.HasPrefix(typeName, channelTypePrefix)
+func isReferenceTypeName(typeName string, types compositionTypeIndex) bool {
+	visited := make(map[string]bool)
+	for typeName != "" && !visited[typeName] {
+		if strings.HasPrefix(typeName, sliceTypePrefix) || strings.HasPrefix(typeName, mapTypePrefix) || strings.HasPrefix(typeName, channelTypePrefix) || types.referenceTypes[typeName] {
+			return true
+		}
+		visited[typeName] = true
+		typeName = types.namedTypes[typeName]
+	}
+	return false
 }
 
 func originsForExpression(expression ast.Expr, origins map[string]map[int]bool) map[int]bool {
@@ -4807,7 +4975,7 @@ func trackReferenceAssignment(references map[string]bool, aliases map[string]map
 	expression := assignedExpression(expressions, index)
 	declaredTypeName := resolveNamedType(canonicalType(declaredType, imports), types)
 	referenceExpression := isReferenceExpression(expression, references, imports, values, types)
-	if !referenceExpression && !isReferenceTypeExpression(declaredType) && !isReferenceTypeName(declaredTypeName) {
+	if !referenceExpression && !isReferenceTypeExpression(declaredType) && !isReferenceTypeName(declaredTypeName, types) {
 		return
 	}
 	references[key] = true
@@ -4837,7 +5005,12 @@ func returnedReferenceSourceKeys(expressions []ast.Expr, resultIndex int, import
 		}
 	}
 	callee := calledFunctionKey(call.Fun, imports, values, types)
-	for parameterIndex, prefixes := range resultParameterPathSummary(callee, resultIndex, types) {
+	paths := resultParameterPathSummary(callee, resultIndex, types)
+	if literal := functionLiteralExpression(call.Fun); literal != nil {
+		_, _, _, _, _, literalPaths, _ := inferLocalResultFlows(indexedAppFunction{literal: literal, imports: imports}, types)
+		paths = literalPaths[resultIndex]
+	}
+	for parameterIndex, prefixes := range paths {
 		for _, argument := range callArgumentsForParameter(call, callee, parameterIndex, imports, types) {
 			root := referenceSourceKey(argument)
 			if root == "" {
@@ -4914,10 +5087,10 @@ func isReferenceExpression(expression ast.Expr, references map[string]bool, impo
 	case *ast.UnaryExpr:
 		return value.Op == token.AND || isReferenceExpression(value.X, references, imports, values, types)
 	case *ast.SelectorExpr, *ast.IndexExpr:
-		return isReferenceTypeName(resolveNamedType(expressionType(expression, imports, values, types), types))
+		return isReferenceTypeName(resolveNamedType(expressionType(expression, imports, values, types), types), types)
 	case *ast.CompositeLit:
 		typeName := resolveNamedType(canonicalType(value.Type, imports), types)
-		return isReferenceTypeExpression(value.Type) || isReferenceTypeName(typeName)
+		return isReferenceTypeExpression(value.Type) || isReferenceTypeName(typeName, types)
 	case *ast.CallExpr:
 		if identifier, ok := value.Fun.(*ast.Ident); ok && (identifier.Name == "make" || identifier.Name == "new") {
 			return true
@@ -4925,7 +5098,14 @@ func isReferenceExpression(expression ast.Expr, references map[string]bool, impo
 		if len(referenceAliasingCallArguments(value, imports)) != 0 {
 			return true
 		}
-		return isReferenceTypeName(resolveNamedType(expressionType(value, imports, values, types), types))
+		if isReferenceTypeName(canonicalType(value.Fun, imports), types) {
+			return true
+		}
+		if literal := functionLiteralExpression(value.Fun); literal != nil {
+			results := resultTypes(literal.Type.Results, imports, modulePath+"/internal/app")
+			return len(results) != 0 && isReferenceTypeName(resolveNamedType(results[0], types), types)
+		}
+		return isReferenceTypeName(resolveNamedType(expressionType(value, imports, values, types), types), types)
 	default:
 		return false
 	}
@@ -5233,6 +5413,8 @@ func iteratorRangeCleanupPaths(expression ast.Expr, paths map[string]bool, impor
 		return cleanupMapValuePaths(paths), nil, true
 	case "maps.All":
 		return cleanupMapKeyPaths(paths), cleanupMapValuePaths(paths), true
+	case "slices.Values":
+		return paths, nil, true
 	case "slices.All", "slices.Backward":
 		return nil, paths, true
 	default:
@@ -5285,6 +5467,11 @@ func iteratorRangeToolTypes(expression ast.Expr, imports map[string]string, valu
 			valueType = registryType
 		}
 		return keyType, valueType, true
+	case "slices.Values":
+		if valueCollection {
+			return registryType, "", true
+		}
+		return "", "", true
 	case "slices.All", "slices.Backward":
 		if valueCollection {
 			return "", registryType, true
@@ -5771,6 +5958,9 @@ func expressionResultTypes(expression ast.Expr, imports map[string]string, value
 			return []string{typeName}
 		}
 		return nil
+	}
+	if literal := functionLiteralExpression(call.Fun); literal != nil {
+		return resultTypes(literal.Type.Results, imports, modulePath+"/internal/app")
 	}
 	if results := types.functionResults[calledFunctionKey(call.Fun, imports, values, types)]; len(results) != 0 {
 		return results
