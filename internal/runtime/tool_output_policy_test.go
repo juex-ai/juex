@@ -45,3 +45,19 @@ func TestEffectiveToolOutputPolicyClampsSinglePreviewOverrideBeforeDerivingRemai
 		})
 	}
 }
+
+func TestEffectiveToolOutputPolicyDoesNotIncreaseConfiguredPreviewCeilings(t *testing.T) {
+	p := effectiveToolOutputPolicy(ToolOutputPolicy{
+		InlineMaxBytes:   100,
+		PreviewHeadBytes: 1,
+		PreviewTailBytes: 100,
+	}, 30_000)
+	want := ToolOutputPolicy{
+		InlineMaxBytes:   100,
+		PreviewHeadBytes: 1,
+		PreviewTailBytes: 99,
+	}
+	if p != want {
+		t.Fatalf("policy = %+v, want %+v", p, want)
+	}
+}

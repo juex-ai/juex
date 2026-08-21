@@ -35,10 +35,14 @@ func effectiveToolOutputPolicy(policy ToolOutputPolicy, contextWindow int) ToolO
 			policy.PreviewTailBytes = previewLimit
 		}
 		policy.PreviewHeadBytes = previewLimit - policy.PreviewTailBytes
-	}
-	if total := policy.PreviewHeadBytes + policy.PreviewTailBytes; total > previewLimit {
-		policy.PreviewHeadBytes = previewLimit / 2
-		policy.PreviewTailBytes = previewLimit - policy.PreviewHeadBytes
+	case headConfigured && tailConfigured:
+		if policy.PreviewHeadBytes > previewLimit {
+			policy.PreviewHeadBytes = previewLimit
+		}
+		remaining := previewLimit - policy.PreviewHeadBytes
+		if policy.PreviewTailBytes > remaining {
+			policy.PreviewTailBytes = remaining
+		}
 	}
 	return policy
 }
