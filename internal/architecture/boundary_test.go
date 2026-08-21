@@ -2658,6 +2658,60 @@ func useDeferredCaptures(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionPreservesDeferTimeReceiverState(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func preserveDeferredReceivers(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	defer resource.Close()
+	defer registry.Register(nil)
+	resource = application.manager
+	registry = application.registry
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "deferred_receivers.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 0 {
+		t.Fatalf("cleanup calls = %v, want defer-time receiver preserved", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 0 {
+		t.Fatalf("Tool registration calls = %v, want defer-time receiver preserved", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionTracksReferenceRangeValues(t *testing.T) {
 	source := `package app
 import (
@@ -4152,6 +4206,84 @@ func invokesCapturedToolRegistration(callee string, scope ast.Node, values map[s
 	return inferToolRegistrationParameters(function, types)[capturedInvocationParameterIndex]
 }
 
+type deferredCompositionCall struct {
+	call            *ast.CallExpr
+	callee          string
+	argumentCallees map[ast.Expr]string
+}
+
+func snapshotDeferredCompositionCall(call *ast.CallExpr, imports map[string]string, values map[string]string, types compositionTypeIndex) deferredCompositionCall {
+	deferred := deferredCompositionCall{
+		call:            call,
+		callee:          calledFunctionKey(call.Fun, imports, values, types),
+		argumentCallees: make(map[ast.Expr]string),
+	}
+	for _, argument := range call.Args {
+		deferred.argumentCallees[argument] = calledFunctionKey(argument, imports, values, types)
+	}
+	return deferred
+}
+
+func literalInvokesCapturedCleanup(literal *ast.FuncLit, scope ast.Node, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types compositionTypeIndex) bool {
+	function := indexedAppFunction{literal: literal, imports: imports}
+	function.seedOrigins, function.seedValues = capturedInvocationState(literal, scope, cleanupCaptureBindings(resources), values)
+	return inferCleanupParameters(function, types)[capturedInvocationParameterIndex]
+}
+
+func literalInvokesCapturedToolRegistration(literal *ast.FuncLit, scope ast.Node, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
+	function := indexedAppFunction{literal: literal, imports: imports}
+	function.seedOrigins, function.seedValues = capturedInvocationState(literal, scope, toolCaptureBindings(values, types), values)
+	return inferToolRegistrationParameters(function, types)[capturedInvocationParameterIndex]
+}
+
+func deferredInvokesCapturedCleanup(deferred deferredCompositionCall, scope ast.Node, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types compositionTypeIndex) bool {
+	if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
+		return literalInvokesCapturedCleanup(literal, scope, imports, values, resources, types)
+	}
+	if invokesCapturedCleanup(deferred.callee, scope, values, resources, types) {
+		return true
+	}
+	variadicIndex, variadic := types.variadicParams[deferred.callee]
+	for parameterIndex := range types.cleanupParams[deferred.callee] {
+		for _, argument := range callArgumentsForParameterAt(deferred.call, parameterIndex, variadicIndex, variadic, imports) {
+			if literal := functionLiteralExpression(argument); literal != nil {
+				if literalInvokesCapturedCleanup(literal, scope, imports, values, resources, types) {
+					return true
+				}
+				continue
+			}
+			if invokesCapturedCleanup(deferred.argumentCallees[argument], scope, values, resources, types) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func deferredInvokesCapturedToolRegistration(deferred deferredCompositionCall, scope ast.Node, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
+	if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
+		return literalInvokesCapturedToolRegistration(literal, scope, imports, values, types)
+	}
+	if invokesCapturedToolRegistration(deferred.callee, scope, values, types) {
+		return true
+	}
+	variadicIndex, variadic := types.variadicParams[deferred.callee]
+	for parameterIndex := range types.toolParams[deferred.callee] {
+		for _, argument := range callArgumentsForParameterAt(deferred.call, parameterIndex, variadicIndex, variadic, imports) {
+			if literal := functionLiteralExpression(argument); literal != nil {
+				if literalInvokesCapturedToolRegistration(literal, scope, imports, values, types) {
+					return true
+				}
+				continue
+			}
+			if invokesCapturedToolRegistration(deferred.argumentCallees[argument], scope, values, types) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func inferCleanupParameters(function indexedAppFunction, types compositionTypeIndex) map[int]bool {
 	cleaned := make(map[int]bool)
 	origins, values := inferenceState(function)
@@ -4979,7 +5111,8 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 		aliases := make(map[string]map[string]bool)
 		reportedCalls := make(map[*ast.CallExpr]bool)
 		deferredSeen := make(map[*ast.CallExpr]bool)
-		var deferredCalls []*ast.CallExpr
+		var deferredCalls []deferredCompositionCall
+		deferEvaluation := false
 		reportCleanup := func(call *ast.CallExpr, chain string) {
 			if !reportedCalls[call] && !isReceiverOwnedFeatureCleanup(function, call, imports, values, types) {
 				reportedCalls[call] = true
@@ -4992,7 +5125,16 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			case *ast.DeferStmt:
 				if !deferredSeen[value.Call] {
 					deferredSeen[value.Call] = true
-					deferredCalls = append(deferredCalls, value.Call)
+					deferredCalls = append(deferredCalls, snapshotDeferredCompositionCall(value.Call, imports, values, types))
+				}
+				previousDeferEvaluation := deferEvaluation
+				deferEvaluation = true
+				ast.Inspect(value.Call, visit)
+				deferEvaluation = previousDeferEvaluation
+				return false
+			case *ast.FuncLit:
+				if deferEvaluation {
+					return false
 				}
 			case *ast.ForStmt:
 				if value.Init != nil {
@@ -5153,7 +5295,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					}
 				}
 				callee := calledFunctionKey(value.Fun, imports, values, types)
-				if invokesCapturedCleanup(callee, function.Body, values, resources, types) {
+				if !deferEvaluation && invokesCapturedCleanup(callee, function.Body, values, resources, types) {
 					reportCleanup(value, selectorChain(value.Fun))
 				}
 				for destinationIndex, sources := range types.parameterWrites[callee] {
@@ -5184,7 +5326,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				for index := range cleanupParams {
 					for _, argument := range callArgumentsForParameterAt(value, index, variadicIndex, variadic, imports) {
 						argumentCallee := calledFunctionKey(argument, imports, values, types)
-						if cleanupPathsForExpression(argument, imports, values, resources, types) != nil || invokesCapturedCleanup(argumentCallee, function.Body, values, resources, types) {
+						if cleanupPathsForExpression(argument, imports, values, resources, types) != nil || !deferEvaluation && invokesCapturedCleanup(argumentCallee, function.Body, values, resources, types) {
 							reportCleanup(value, selectorChain(value.Fun))
 							reported = true
 							break
@@ -5231,7 +5373,14 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			}
 		}
 		for index := len(deferredCalls) - 1; index >= 0; index-- {
-			ast.Inspect(deferredCalls[index], visit)
+			deferred := deferredCalls[index]
+			if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
+				ast.Inspect(literal.Body, visit)
+				continue
+			}
+			if deferredInvokesCapturedCleanup(deferred, function.Body, imports, values, resources, types) {
+				reportCleanup(deferred.call, selectorChain(deferred.call.Fun))
+			}
 		}
 	}
 }
@@ -5289,7 +5438,8 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 		aliases := make(map[string]map[string]bool)
 		reportedCalls := make(map[*ast.CallExpr]bool)
 		deferredSeen := make(map[*ast.CallExpr]bool)
-		var deferredCalls []*ast.CallExpr
+		var deferredCalls []deferredCompositionCall
+		deferEvaluation := false
 		reportTool := func(call *ast.CallExpr, chain string) {
 			if !reportedCalls[call] {
 				reportedCalls[call] = true
@@ -5302,7 +5452,16 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			case *ast.DeferStmt:
 				if !deferredSeen[value.Call] {
 					deferredSeen[value.Call] = true
-					deferredCalls = append(deferredCalls, value.Call)
+					deferredCalls = append(deferredCalls, snapshotDeferredCompositionCall(value.Call, imports, values, types))
+				}
+				previousDeferEvaluation := deferEvaluation
+				deferEvaluation = true
+				ast.Inspect(value.Call, visit)
+				deferEvaluation = previousDeferEvaluation
+				return false
+			case *ast.FuncLit:
+				if deferEvaluation {
+					return false
 				}
 			case *ast.ForStmt:
 				if value.Init != nil {
@@ -5439,7 +5598,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					}
 				}
 				callee := calledFunctionKey(value.Fun, imports, values, types)
-				if invokesCapturedToolRegistration(callee, function.Body, values, types) {
+				if !deferEvaluation && invokesCapturedToolRegistration(callee, function.Body, values, types) {
 					reportTool(value, selectorChain(value.Fun))
 				}
 				for destinationIndex, sources := range types.parameterWrites[callee] {
@@ -5480,7 +5639,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				for index := range toolParams {
 					for _, argument := range callArgumentsForParameterAt(value, index, variadicIndex, variadic, imports) {
 						argumentCallee := calledFunctionKey(argument, imports, values, types)
-						if isToolRegistryExpression(argument, imports, values, types) || isToolRegistryCollectionExpression(argument, imports, values, types) || isToolRegistrationValueExpression(argument, imports, values, types) || invokesCapturedToolRegistration(argumentCallee, function.Body, values, types) {
+						if isToolRegistryExpression(argument, imports, values, types) || isToolRegistryCollectionExpression(argument, imports, values, types) || isToolRegistrationValueExpression(argument, imports, values, types) || !deferEvaluation && invokesCapturedToolRegistration(argumentCallee, function.Body, values, types) {
 							reportTool(value, selectorChain(value.Fun))
 							reported = true
 							break
@@ -5507,7 +5666,14 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			}
 		}
 		for index := len(deferredCalls) - 1; index >= 0; index-- {
-			ast.Inspect(deferredCalls[index], visit)
+			deferred := deferredCalls[index]
+			if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
+				ast.Inspect(literal.Body, visit)
+				continue
+			}
+			if deferredInvokesCapturedToolRegistration(deferred, function.Body, imports, values, types) {
+				reportTool(deferred.call, selectorChain(deferred.call.Fun))
+			}
 		}
 	}
 }
