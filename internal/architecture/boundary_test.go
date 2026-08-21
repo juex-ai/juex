@@ -2604,6 +2604,60 @@ func usePackageCaptures(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionUsesFunctionExitStateForDefers(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func useDeferredCaptures(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	defer func() { _ = resource.Close() }()
+	defer func() { registry.Register(nil) }()
+	resource = application.manager
+	registry = application.registry
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "deferred_captures.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resource.Close,") {
+		t.Fatalf("cleanup calls = %v, want deferred cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registry.Register,") {
+		t.Fatalf("Tool registration calls = %v, want deferred registration", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionTracksReferenceRangeValues(t *testing.T) {
 	source := `package app
 import (
@@ -4924,6 +4978,8 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 		}
 		aliases := make(map[string]map[string]bool)
 		reportedCalls := make(map[*ast.CallExpr]bool)
+		deferredSeen := make(map[*ast.CallExpr]bool)
+		var deferredCalls []*ast.CallExpr
 		reportCleanup := func(call *ast.CallExpr, chain string) {
 			if !reportedCalls[call] && !isReceiverOwnedFeatureCleanup(function, call, imports, values, types) {
 				reportedCalls[call] = true
@@ -4933,6 +4989,11 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 		var visit func(ast.Node) bool
 		visit = func(node ast.Node) bool {
 			switch value := node.(type) {
+			case *ast.DeferStmt:
+				if !deferredSeen[value.Call] {
+					deferredSeen[value.Call] = true
+					deferredCalls = append(deferredCalls, value.Call)
+				}
 			case *ast.ForStmt:
 				if value.Init != nil {
 					ast.Inspect(value.Init, visit)
@@ -5169,6 +5230,9 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				break
 			}
 		}
+		for index := len(deferredCalls) - 1; index >= 0; index-- {
+			ast.Inspect(deferredCalls[index], visit)
+		}
 	}
 }
 
@@ -5224,6 +5288,8 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 		}
 		aliases := make(map[string]map[string]bool)
 		reportedCalls := make(map[*ast.CallExpr]bool)
+		deferredSeen := make(map[*ast.CallExpr]bool)
+		var deferredCalls []*ast.CallExpr
 		reportTool := func(call *ast.CallExpr, chain string) {
 			if !reportedCalls[call] {
 				reportedCalls[call] = true
@@ -5233,6 +5299,11 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 		var visit func(ast.Node) bool
 		visit = func(node ast.Node) bool {
 			switch value := node.(type) {
+			case *ast.DeferStmt:
+				if !deferredSeen[value.Call] {
+					deferredSeen[value.Call] = true
+					deferredCalls = append(deferredCalls, value.Call)
+				}
 			case *ast.ForStmt:
 				if value.Init != nil {
 					ast.Inspect(value.Init, visit)
@@ -5434,6 +5505,9 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			if !backwardGoto || equalStringMap(values, beforeValues) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
 				break
 			}
+		}
+		for index := len(deferredCalls) - 1; index >= 0; index-- {
+			ast.Inspect(deferredCalls[index], visit)
 		}
 	}
 }
