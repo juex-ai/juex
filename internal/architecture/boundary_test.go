@@ -22,6 +22,12 @@ var concreteFeatureImports = []string{
 	modulePath + "/internal/skills",
 }
 
+// Framework package roots are explicit for the same reason as Foundation
+// directories: adding a new Framework root must be an architectural decision.
+var frameworkImports = []string{
+	modulePath + "/internal/runtime",
+}
+
 // These are the business-agnostic technical primitives identified as
 // Foundation by ARCHITECTURE.md. Keep the list explicit so moving a package
 // across the boundary requires an architectural review, not a glob change.
@@ -45,29 +51,36 @@ var foundationDirs = []string{
 	"internal/tools",
 }
 
-func TestFoundationAndFrameworkDoNotImportConcreteFeatures(t *testing.T) {
+func TestFoundationDoesNotImportFrameworkOrConcreteFeatures(t *testing.T) {
 	root := repositoryRoot(t)
-	for _, dir := range append([]string{"internal/runtime"}, foundationDirs...) {
-		layer := "Foundation"
-		if dir == "internal/runtime" {
-			layer = "Framework"
-		}
-		checkImports(t, root, dir, layer)
+	for _, dir := range foundationDirs {
+		checkImports(t, root, dir, "Foundation", isFrameworkOrConcreteFeatureImport)
 	}
+}
+
+func TestFrameworkDoesNotImportConcreteFeatures(t *testing.T) {
+	checkImports(t, repositoryRoot(t), "internal/runtime", "Framework", isConcreteFeatureImport)
 }
 
 func TestAppCompositionDoesNotBypassModuleCatalogOrLifecycle(t *testing.T) {
 	root := repositoryRoot(t)
-	for _, relative := range []string{
-		"internal/app/app.go",
-		"internal/app/runtime_modules.go",
-		"internal/app/session_runtime.go",
-	} {
-		path := filepath.Join(root, filepath.FromSlash(relative))
+	appDir := filepath.Join(root, "internal", "app")
+	err := filepath.WalkDir(appDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
 		files := token.NewFileSet()
 		parsed, err := parser.ParseFile(files, path, nil, 0)
 		if err != nil {
-			t.Fatalf("parse %s: %v", relative, err)
+			return err
 		}
 		ast.Inspect(parsed, func(node ast.Node) bool {
 			call, ok := node.(*ast.CallExpr)
@@ -91,10 +104,14 @@ func TestAppCompositionDoesNotBypassModuleCatalogOrLifecycle(t *testing.T) {
 			}
 			return true
 		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan internal/app: %v", err)
 	}
 }
 
-func checkImports(t *testing.T, root, relativeDir, layer string) {
+func checkImports(t *testing.T, root, relativeDir, layer string, forbidden func(string) bool) {
 	t.Helper()
 	dir := filepath.Join(root, filepath.FromSlash(relativeDir))
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -114,14 +131,14 @@ func checkImports(t *testing.T, root, relativeDir, layer string) {
 			if err != nil {
 				return err
 			}
-			if !isConcreteFeatureImport(importPath) {
+			if !forbidden(importPath) {
 				continue
 			}
 			file, err := filepath.Rel(root, path)
 			if err != nil {
 				file = path
 			}
-			t.Errorf("%s package %s imports concrete Feature %s", layer, filepath.ToSlash(file), importPath)
+			t.Errorf("%s package %s imports forbidden higher-layer package %s", layer, filepath.ToSlash(file), importPath)
 		}
 		return nil
 	})
@@ -131,7 +148,15 @@ func checkImports(t *testing.T, root, relativeDir, layer string) {
 }
 
 func isConcreteFeatureImport(importPath string) bool {
-	for _, forbidden := range concreteFeatureImports {
+	return matchesImportRoot(importPath, concreteFeatureImports)
+}
+
+func isFrameworkOrConcreteFeatureImport(importPath string) bool {
+	return matchesImportRoot(importPath, frameworkImports) || isConcreteFeatureImport(importPath)
+}
+
+func matchesImportRoot(importPath string, roots []string) bool {
+	for _, forbidden := range roots {
 		if strings.HasSuffix(forbidden, "/") {
 			if strings.HasPrefix(importPath, forbidden) {
 				return true
