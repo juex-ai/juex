@@ -3373,6 +3373,7 @@ again:
 	for range [1]int{} {
 		goto after
 	}
+	return
 after:
 	if again {
 		again = false
@@ -6145,10 +6146,67 @@ func compositionDeferMayReachBackwardGoto(body *ast.BlockStmt, target *ast.Defer
 			statements = statementsAfterCompositionNode(container.Body, current)
 		}
 		if statements != nil {
-			if compositionStatementsGotoBefore(statements, target.Pos(), labels, packageConstants) {
+			if compositionStatementsGotoBefore(statements, target.Pos(), labels, packageConstants) || compositionForwardGotoMayReachBeforePosition(statements, body, target.Pos(), parents, labels, packageConstants, make(map[string]bool)) {
 				return true
 			}
 			if !compositionStatementsFallThrough(statements, packageConstants) || parent == body {
+				return false
+			}
+		}
+		current = parent
+	}
+	return false
+}
+
+func compositionForwardGotoMayReachBeforePosition(statements []ast.Stmt, body *ast.BlockStmt, position token.Pos, parents map[ast.Node]ast.Node, labels map[string]*ast.LabeledStmt, packageConstants map[string]constant.Value, visited map[string]bool) bool {
+	targets := make(map[string]*ast.LabeledStmt)
+	compositionStatementsContainReachableBranch(statements, func(branch *ast.BranchStmt) bool {
+		if branch.Tok != token.GOTO || branch.Label == nil {
+			return false
+		}
+		target := labels[branch.Label.Name]
+		if target != nil && target.Pos() > branch.Pos() && target.Pos() >= body.Pos() && target.End() <= body.End() {
+			targets[branch.Label.Name] = target
+		}
+		return false
+	}, packageConstants)
+	for name, target := range targets {
+		if visited[name] {
+			continue
+		}
+		visited[name] = true
+		if compositionLabelMayReachBeforePosition(target, body, position, parents, labels, packageConstants, visited) {
+			return true
+		}
+	}
+	return false
+}
+
+func compositionLabelMayReachBeforePosition(target *ast.LabeledStmt, body *ast.BlockStmt, position token.Pos, parents map[ast.Node]ast.Node, labels map[string]*ast.LabeledStmt, packageConstants map[string]constant.Value, visited map[string]bool) bool {
+	statements := []ast.Stmt{target}
+	if compositionStatementsGotoBefore(statements, position, labels, packageConstants) || compositionForwardGotoMayReachBeforePosition(statements, body, position, parents, labels, packageConstants, visited) {
+		return true
+	}
+	if !compositionStatementsFallThrough(statements, packageConstants) {
+		return false
+	}
+	current := ast.Node(target)
+	for current != nil {
+		parent := parents[current]
+		var following []ast.Stmt
+		switch container := parent.(type) {
+		case *ast.BlockStmt:
+			following = statementsAfterCompositionNode(container.List, current)
+		case *ast.CaseClause:
+			following = statementsAfterCompositionNode(container.Body, current)
+		case *ast.CommClause:
+			following = statementsAfterCompositionNode(container.Body, current)
+		}
+		if following != nil {
+			if compositionStatementsGotoBefore(following, position, labels, packageConstants) || compositionForwardGotoMayReachBeforePosition(following, body, position, parents, labels, packageConstants, visited) {
+				return true
+			}
+			if !compositionStatementsFallThrough(following, packageConstants) || parent == body {
 				return false
 			}
 		}
@@ -6212,10 +6270,70 @@ func compositionDeferMayReachLoopBackEdge(loop ast.Node, loopBody *ast.BlockStmt
 			statements = statementsAfterCompositionNode(container.Body, current)
 		}
 		if statements != nil {
-			if compositionStatementsContinueLoop(statements, loop, parents, packageConstants) || compositionStatementsGotoBefore(statements, target.Pos(), labels, packageConstants) {
+			if compositionStatementsContinueLoop(statements, loop, parents, packageConstants) || compositionStatementsGotoBefore(statements, target.Pos(), labels, packageConstants) || compositionForwardGotoMayReachLoopBackEdge(statements, loop, loopBody, target.Pos(), parents, labels, packageConstants, make(map[string]bool)) {
 				return true
 			}
 			if !compositionStatementsFallThrough(statements, packageConstants) {
+				return false
+			}
+			if parent == loopBody {
+				return true
+			}
+		}
+		current = parent
+	}
+	return false
+}
+
+func compositionForwardGotoMayReachLoopBackEdge(statements []ast.Stmt, loop ast.Node, loopBody *ast.BlockStmt, position token.Pos, parents map[ast.Node]ast.Node, labels map[string]*ast.LabeledStmt, packageConstants map[string]constant.Value, visited map[string]bool) bool {
+	targets := make(map[string]*ast.LabeledStmt)
+	compositionStatementsContainReachableBranch(statements, func(branch *ast.BranchStmt) bool {
+		if branch.Tok != token.GOTO || branch.Label == nil {
+			return false
+		}
+		target := labels[branch.Label.Name]
+		if target != nil && target.Pos() > branch.Pos() && target.Pos() >= loopBody.Pos() && target.End() <= loopBody.End() {
+			targets[branch.Label.Name] = target
+		}
+		return false
+	}, packageConstants)
+	for name, target := range targets {
+		if visited[name] {
+			continue
+		}
+		visited[name] = true
+		if compositionLabelMayReachLoopBackEdge(target, loop, loopBody, position, parents, labels, packageConstants, visited) {
+			return true
+		}
+	}
+	return false
+}
+
+func compositionLabelMayReachLoopBackEdge(target *ast.LabeledStmt, loop ast.Node, loopBody *ast.BlockStmt, position token.Pos, parents map[ast.Node]ast.Node, labels map[string]*ast.LabeledStmt, packageConstants map[string]constant.Value, visited map[string]bool) bool {
+	statements := []ast.Stmt{target}
+	if compositionStatementsContinueLoop(statements, loop, parents, packageConstants) || compositionStatementsGotoBefore(statements, position, labels, packageConstants) || compositionForwardGotoMayReachLoopBackEdge(statements, loop, loopBody, position, parents, labels, packageConstants, visited) {
+		return true
+	}
+	if !compositionStatementsFallThrough(statements, packageConstants) {
+		return false
+	}
+	current := ast.Node(target)
+	for current != nil {
+		parent := parents[current]
+		var following []ast.Stmt
+		switch container := parent.(type) {
+		case *ast.BlockStmt:
+			following = statementsAfterCompositionNode(container.List, current)
+		case *ast.CaseClause:
+			following = statementsAfterCompositionNode(container.Body, current)
+		case *ast.CommClause:
+			following = statementsAfterCompositionNode(container.Body, current)
+		}
+		if following != nil {
+			if compositionStatementsContinueLoop(following, loop, parents, packageConstants) || compositionStatementsGotoBefore(following, position, labels, packageConstants) || compositionForwardGotoMayReachLoopBackEdge(following, loop, loopBody, position, parents, labels, packageConstants, visited) {
+				return true
+			}
+			if !compositionStatementsFallThrough(following, packageConstants) {
 				return false
 			}
 			if parent == loopBody {
@@ -6385,7 +6503,7 @@ func compositionForMayFallThroughToLabel(statement *ast.ForStmt, packageConstant
 }
 
 func compositionRangeMayFallThroughToLabel(statement *ast.RangeStmt, packageConstants map[string]constant.Value, exitLabel string) bool {
-	if compositionRangeMayBeEmpty(statement.X) || compositionBodyBreaksToExit(statement, statement.Body.List, packageConstants, exitLabel) || compositionBodyGoesAfterStatement(statement, statement.Body.List, packageConstants) || compositionStatementsFallThrough(statement.Body.List, packageConstants) {
+	if compositionRangeMayBeEmpty(statement.X) || compositionBodyBreaksToExit(statement, statement.Body.List, packageConstants, exitLabel) || compositionStatementsFallThrough(statement.Body.List, packageConstants) {
 		return true
 	}
 	parents := compositionParentNodes(statement)
@@ -6397,16 +6515,6 @@ func compositionRangeMayFallThroughToLabel(statement *ast.RangeStmt, packageCons
 			return exitLabel != "" && branch.Label.Name == exitLabel
 		}
 		return compositionContinueTargetsLoop(branch, statement, parents)
-	}, packageConstants)
-}
-
-func compositionBodyGoesAfterStatement(statement ast.Node, body []ast.Stmt, packageConstants map[string]constant.Value) bool {
-	return compositionStatementsContainReachableBranch(body, func(branch *ast.BranchStmt) bool {
-		if branch.Tok != token.GOTO || branch.Label == nil || branch.Label.Obj == nil {
-			return false
-		}
-		target, ok := branch.Label.Obj.Decl.(*ast.LabeledStmt)
-		return ok && target.Pos() > statement.End()
 	}, packageConstants)
 }
 
