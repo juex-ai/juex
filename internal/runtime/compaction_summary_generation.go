@@ -182,6 +182,41 @@ func (e *Engine) generateCompactionSummaryLocked(
 				health.Complete(ticket, llm.ModelHealthSuccess, "")
 				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
 			}
+			if !useRetryBudget {
+				retryReason := compactionSummaryRetryReason(resp)
+				retryMaxOutputTokens := e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
+				if emitErr := e.emit(events.Event{Type: "context.compact.summary_retry", TurnID: turnID, Payload: ContextCompactSummaryRetryPayload{
+					Attempt:                 2,
+					Reason:                  retryReason,
+					StopReason:              resp.StopReason,
+					ReasoningOnly:           compactionResponseReasoningOnly(resp.Message),
+					PreviousMaxOutputTokens: maxOutputTokens,
+					MaxOutputTokens:         retryMaxOutputTokens,
+					EpochID:                 epoch.EpochID,
+					RequestDigest:           epoch.RequestDigest,
+				}}); emitErr != nil {
+					health.Complete(ticket, llm.ModelHealthNeutral, "")
+					return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, fmt.Errorf("commit compaction summary retry: %w", emitErr)
+				}
+				retryPolicy := candidatePolicy
+				retryPolicy.SummaryMaxTokens = retryMaxOutputTokens
+				useRetryBudget = true
+				summarySystem, summaryHistory = buildCompactionSummaryRequest(baseSystem, previous, input, state, retryPolicy, instructions)
+				maxOutputTokens = retryMaxOutputTokens
+				attempt++
+				resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+				usage.Add(resp.Usage)
+				if isCompactionSummaryJournalError(err) {
+					health.Complete(ticket, llm.ModelHealthNeutral, "")
+					return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
+				}
+				if err == nil {
+					if summary, ok := completeCompactionSummaryText(resp); ok {
+						health.Complete(ticket, llm.ModelHealthSuccess, "")
+						return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
+					}
+				}
+			}
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			health.Complete(ticket, llm.ModelHealthNeutral, "")

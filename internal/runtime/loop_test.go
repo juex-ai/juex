@@ -3581,6 +3581,62 @@ func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	}
 }
 
+func TestCompactRetriesFirstIncompleteFallbackWithLargerBudget(t *testing.T) {
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &scriptedCompactionProvider{
+		name: "backup:model",
+		attempts: []scriptedCompactionAttempt{
+			{response: llm.Response{
+				Message:    llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockReasoning, Text: "spent the first fallback budget"}}},
+				StopReason: llm.StopMaxTokens,
+				Usage:      llm.Usage{InputTokens: 10, OutputTokens: 2},
+			}},
+			{response: llm.Response{
+				Message:    llm.TextMessage(llm.RoleAssistant, "recovered fallback summary"),
+				StopReason: llm.StopEndTurn,
+				Usage:      llm.Usage{InputTokens: 11, OutputTokens: 3},
+			}},
+		},
+	}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 5000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 5000},
+	}
+	configureCompactionRetryTest(t, eng, 30, 2000)
+	eng.ContextWindow = 5000
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 1000
+	var retry ContextCompactSummaryRetryPayload
+	var epochs []provenance.RequestEpoch
+	bus.Subscribe("context.compact.summary_retry", func(event events.Event) {
+		retry = event.Payload.(ContextCompactSummaryRetryPayload)
+	})
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SummaryModel != "backup:model" || primary.calls != 1 || backup.calls != 2 {
+		t.Fatalf("result/primary/backup = %+v/%d/%d, want recovered backup after retry", result, primary.calls, backup.calls)
+	}
+	if len(backup.options) != 2 || backup.options[0].MaxOutputTokens != 1000 || backup.options[1].MaxOutputTokens != 2000 {
+		t.Fatalf("fallback max output tokens = %+v, want [1000 2000]", compactionOptionBudgets(backup.options))
+	}
+	if len(epochs) != 3 || retry.EpochID != epochs[1].EpochID || retry.RequestDigest != epochs[1].RequestDigest {
+		t.Fatalf("epochs/retry = %+v/%+v, want retry linked to first fallback attempt", epochs, retry)
+	}
+	if retry.Attempt != 2 || retry.Reason != "empty_summary" || !retry.ReasoningOnly {
+		t.Fatalf("retry payload = %+v", retry)
+	}
+	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 21, OutputTokens: 5}) {
+		t.Fatalf("token usage = %+v, want aggregate fallback retry usage", usage)
+	}
+}
+
 func TestCompactCheckpointsEachSummaryAttemptAndLinksOutcomes(t *testing.T) {
 	provider := &scriptedCompactionProvider{
 		name: "thinking:model",
