@@ -190,7 +190,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	}
 
 	previousModelSummary := compactionModelSummary(selection.PreviousSummary)
-	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, previousModelSummary, summaryInput, summaryState, policy, instructions)
+	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, previousModelSummary, summaryInput, summaryState, policy, instructions, contextWindow)
 	if err != nil {
 		sess.RecordResponseUsage(generation.Usage, nil)
 		compactErr := newCompactionError(ctx, err)

@@ -3416,6 +3416,41 @@ func TestCompactUsesConfiguredFallbackModelsWithoutDedicatedSummaryModel(t *test
 	}
 }
 
+func TestCompactRefitsSummaryRequestForFallbackContextWindow(t *testing.T) {
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &limitedCompactionProvider{name: "backup:model", maxInputTokens: 7500}
+	eng, bus := newEngine(t, primary, false)
+	eng.ContextWindow = 256000
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 256000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 10000},
+	}
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	for i := 0; i < 100; i++ {
+		message := llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%03d %s", i, strings.Repeat("x", 1000)))
+		if err := eng.Session.Append(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var epochs []provenance.RequestEpoch
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SummaryModel != "backup:model" || backup.inputTokens > backup.maxInputTokens {
+		t.Fatalf("result/input tokens = %+v/%d, want backup summary within %d", result, backup.inputTokens, backup.maxInputTokens)
+	}
+	if len(epochs) != 2 || epochs[1].Provider.Model != "backup:model" || epochs[1].ContextWindow != 10000 {
+		t.Fatalf("epochs = %+v, want fallback context window 10000", epochs)
+	}
+}
+
 func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	provider := &scriptedCompactionProvider{
 		name: "thinking:model",
@@ -4086,6 +4121,26 @@ type namedCompactionProvider struct {
 	text  string
 	err   error
 	calls int
+}
+
+type limitedCompactionProvider struct {
+	name           string
+	maxInputTokens int
+	inputTokens    int
+}
+
+func (p *limitedCompactionProvider) Name() string { return p.name }
+
+func (p *limitedCompactionProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, llm.CompleteOptions{})
+}
+
+func (p *limitedCompactionProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (llm.Response, error) {
+	p.inputTokens = estimateContextTokens(sys, nil, history)
+	if p.inputTokens > p.maxInputTokens {
+		return llm.Response{}, fmt.Errorf("context_length_exceeded: compaction request has %d tokens", p.inputTokens)
+	}
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "bounded fallback summary"), StopReason: llm.StopEndTurn}, nil
 }
 
 type scriptedCompactionAttempt struct {
