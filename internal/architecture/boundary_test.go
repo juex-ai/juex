@@ -2992,6 +2992,19 @@ func continueBeforeUse(application *App, choices []bool) {
 		registry.Register(nil)
 	}
 }
+func breakBeforeUse(application *App, choices []bool) {
+	for _, owned := range choices {
+		var resource closer = &unrelatedCloser{}
+		var registry registrar = &unrelatedRegistrar{}
+		if owned {
+			resource = application.manager
+			registry = application.registry
+			break
+		}
+		_ = resource.Close()
+		registry.Register(nil)
+	}
+}
 func useMergedSwitchState(application *App, choice int) {
 	var resource closer = &unrelatedCloser{}
 	var registry registrar = &unrelatedRegistrar{}
@@ -4596,18 +4609,22 @@ func statementFallsThrough(statement ast.Stmt) bool {
 	case *ast.IfStmt:
 		return value.Else == nil || blockFallsThrough(value.Body) || statementFallsThrough(value.Else)
 	case *ast.BranchStmt:
-		return value.Tok != token.CONTINUE
+		return value.Tok != token.CONTINUE && value.Tok != token.BREAK
 	default:
 		return true
 	}
 }
 
 func clauseEndsWithFallthrough(clause *ast.CaseClause) bool {
-	if len(clause.Body) == 0 {
+	return statementsEndWithBranch(clause.Body, token.FALLTHROUGH)
+}
+
+func statementsEndWithBranch(statements []ast.Stmt, branchToken token.Token) bool {
+	if len(statements) == 0 {
 		return false
 	}
-	branch, ok := clause.Body[len(clause.Body)-1].(*ast.BranchStmt)
-	return ok && branch.Tok == token.FALLTHROUGH
+	branch, ok := statements[len(statements)-1].(*ast.BranchStmt)
+	return ok && branch.Tok == branchToken
 }
 
 func inspectCompositionIf(statement *ast.IfStmt, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) {
@@ -4668,6 +4685,10 @@ func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, 
 			continue
 		}
 		fallthroughState = nil
+		if statementsEndWithBranch(clause.Body, token.BREAK) {
+			exits = append(exits, state)
+			continue
+		}
 		if statementsFallThrough(clause.Body) {
 			exits = append(exits, state)
 		}
@@ -4703,6 +4724,10 @@ func inspectCompositionCommClauses(body *ast.BlockStmt, visit func(ast.Node) boo
 		}
 		for _, statement := range clause.Body {
 			ast.Inspect(statement, visit)
+		}
+		if statementsEndWithBranch(clause.Body, token.BREAK) {
+			exits = append(exits, snapshot())
+			continue
 		}
 		if statementsFallThrough(clause.Body) {
 			exits = append(exits, snapshot())
