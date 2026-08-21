@@ -13,6 +13,58 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestCIWorkflowSerializesWindowsRacePackages(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs struct {
+			Test struct {
+				Steps []struct {
+					Name string `yaml:"name"`
+					If   string `yaml:"if"`
+					Run  string `yaml:"run"`
+				} `yaml:"steps"`
+			} `yaml:"test"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatalf("parse CI workflow: %v", err)
+	}
+
+	want := map[string]struct {
+		condition string
+		command   string
+	}{
+		"Run Go race tests": {
+			condition: "matrix.os != 'windows-latest'",
+			command:   "go test ./... -race -count=1",
+		},
+		"Run Go race tests serially on Windows": {
+			condition: "matrix.os == 'windows-latest'",
+			command:   "go test ./... -race -count=1 -p=1",
+		},
+	}
+	for _, step := range workflow.Jobs.Test.Steps {
+		expectation, ok := want[step.Name]
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(step.If) != expectation.condition || strings.TrimSpace(step.Run) != expectation.command {
+			t.Errorf("CI step %q = if %q run %q, want if %q run %q", step.Name, step.If, step.Run, expectation.condition, expectation.command)
+		}
+		delete(want, step.Name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing CI race steps: %#v", want)
+	}
+}
+
 func TestWriteModelConfigSelectsTopLevelAndExplicitRef(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
