@@ -396,14 +396,6 @@ func runtimeToolsStatusFromActiveCatalogs(defaultTimeoutSeconds int, entries []r
 	return runtimeToolsStatusFromEntries(defaultTimeoutSeconds, filtered)
 }
 
-func runtimeToolsStatusFromCatalogs(defaultTimeoutSeconds int, catalogs ...runtimemodule.ToolCatalog) (RuntimeToolsStatus, error) {
-	var entries []runtimemodule.ToolEntry
-	for _, catalog := range catalogs {
-		entries = append(entries, catalog.Entries()...)
-	}
-	return runtimeToolsStatusFromEntries(defaultTimeoutSeconds, entries)
-}
-
 func runtimeToolsStatusFromEntries(defaultTimeoutSeconds int, entries []runtimemodule.ToolEntry) (RuntimeToolsStatus, error) {
 	definitions := make([]tools.ToolDefinition, 0, len(entries))
 	owners := make(map[string]string, len(entries))

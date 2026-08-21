@@ -35,7 +35,11 @@ func TestInjectedMCPManagerIsNotClosedByModule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close injected MCP manager: %v", err)
+		}
+	})
 	mod := NewModule(manager)
 	if err := mod.StartRuntime(context.Background(), runtimemodule.RuntimeContext{}); err != nil {
 		t.Fatal(err)
