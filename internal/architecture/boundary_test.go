@@ -482,6 +482,18 @@ func cleanupFromLiteralCallbackIndex(application *App) {
 	callbacks[0] = func(resource closer) { _ = resource.Close() }
 	callbacks[0](application.manager)
 }
+func cleanupFromKeyedCompositeCallback(application *App) {
+	callbacks := cleanupConsumers{cleanup: func(resource closer) { _ = resource.Close() }}
+	callbacks.cleanup(application.manager)
+}
+func cleanupFromPositionalCompositeCallback(application *App) {
+	callbacks := cleanupConsumers{func(resource closer) { _ = resource.Close() }}
+	callbacks.cleanup(application.manager)
+}
+func cleanupFromIndexedCompositeCallback(application *App) {
+	callbacks := []cleanupConsumer{func(resource closer) { _ = resource.Close() }}
+	callbacks[0](application.manager)
+}
 func cleanupFromGenericCollection(application *App) {
 	resources := genericResources[*mcp.Manager]{application.manager}
 	_ = resources[0].Close()
@@ -586,7 +598,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"packageManager.Close", "Run", "cleanupRunner.Run", "identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resources.Close", "resources.Close", "resource.Close", "resources.Close", "owned.resource.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
+	want := []string{"packageManager.Close", "Run", "cleanupRunner.Run", "identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resources.Close", "resources.Close", "resource.Close", "resources.Close", "owned.resource.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -736,6 +748,18 @@ func registerFromLiteralCallbackField(application *App) {
 func registerFromLiteralCallbackIndex(application *App) {
 	callbacks := []registrationConsumer{nil}
 	callbacks[0] = func(registry registrar) { _ = registry.Register(nil) }
+	callbacks[0](application.registry)
+}
+func registerFromKeyedCompositeCallback(application *App) {
+	callbacks := registrationConsumers{register: func(registry registrar) { _ = registry.Register(nil) }}
+	callbacks.register(application.registry)
+}
+func registerFromPositionalCompositeCallback(application *App) {
+	callbacks := registrationConsumers{func(registry registrar) { _ = registry.Register(nil) }}
+	callbacks.register(application.registry)
+}
+func registerFromIndexedCompositeCallback(application *App) {
+	callbacks := []registrationConsumer{func(registry registrar) { _ = registry.Register(nil) }}
 	callbacks[0](application.registry)
 }
 func registerFromAssertion(application *App) {
@@ -921,7 +945,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"packageRegistry.Register", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"packageRegistry.Register", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "callbacks.register", "callbacks.register", "callbacks", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -1291,10 +1315,12 @@ func indexLocalFunctionLiterals(parent indexedAppFunction, types *compositionTyp
 					continue
 				}
 				literal := assignedFunctionLiteral(value.Rhs, index)
-				if literal == nil {
-					continue
+				if literal != nil {
+					indexLocalFunctionLiteral(parent, left, literal, types)
 				}
-				indexLocalFunctionLiteral(parent, left, literal, types)
+				for _, embedded := range assignedCompositeFunctionLiterals(value.Rhs, index, parent.imports, *types) {
+					indexLocalFunctionLiteral(parent, embedded.literal, embedded.literal, types)
+				}
 			}
 		case *ast.DeclStmt:
 			general, ok := value.Decl.(*ast.GenDecl)
@@ -1307,6 +1333,9 @@ func indexLocalFunctionLiterals(parent indexedAppFunction, types *compositionTyp
 					literal := assignedFunctionLiteral(spec.Values, index)
 					if literal != nil {
 						indexLocalFunctionLiteral(parent, name, literal, types)
+					}
+					for _, embedded := range assignedCompositeFunctionLiterals(spec.Values, index, parent.imports, *types) {
+						indexLocalFunctionLiteral(parent, embedded.literal, embedded.literal, types)
 					}
 				}
 			}
@@ -1365,6 +1394,60 @@ func assignedFunctionLiteral(expressions []ast.Expr, index int) *ast.FuncLit {
 		expression = expressions[index]
 	}
 	return functionLiteralExpression(expression)
+}
+
+type compositeFunctionLiteral struct {
+	suffix  string
+	literal *ast.FuncLit
+}
+
+func assignedCompositeFunctionLiterals(expressions []ast.Expr, index int, imports map[string]string, types compositionTypeIndex) []compositeFunctionLiteral {
+	expression := assignedExpression(expressions, index)
+	return compositeFunctionLiterals(expression, "", imports, types)
+}
+
+func compositeFunctionLiterals(expression ast.Expr, prefix string, imports map[string]string, types compositionTypeIndex) []compositeFunctionLiteral {
+	for {
+		parenthesized, ok := expression.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expression = parenthesized.X
+	}
+	literal, ok := expression.(*ast.CompositeLit)
+	if !ok {
+		return nil
+	}
+	typeName := canonicalType(literal.Type, imports)
+	fieldOrder, structured := compositeFieldOrder(literal.Type, typeName, imports, types)
+	var result []compositeFunctionLiteral
+	for index, element := range literal.Elts {
+		suffix := "[]"
+		if pair, ok := element.(*ast.KeyValueExpr); ok {
+			if field, ok := pair.Key.(*ast.Ident); structured && ok {
+				suffix = "." + field.Name
+			}
+			element = pair.Value
+		} else if structured && index < len(fieldOrder) && !strings.HasPrefix(fieldOrder[index], embeddedPrefix) {
+			suffix = "." + fieldOrder[index]
+		}
+		if callback := functionLiteralExpression(element); callback != nil {
+			result = append(result, compositeFunctionLiteral{suffix: prefix + suffix, literal: callback})
+			continue
+		}
+		result = append(result, compositeFunctionLiterals(element, prefix+suffix, imports, types)...)
+	}
+	return result
+}
+
+func trackCompositeFunctionTypes(values map[string]string, parent string, target ast.Expr, expressions []ast.Expr, index int, imports map[string]string, types compositionTypeIndex) {
+	root := assignmentValueKey(target)
+	if root == "" {
+		return
+	}
+	for _, embedded := range assignedCompositeFunctionLiterals(expressions, index, imports, types) {
+		setMayValueType(values, root+embedded.suffix, localFunctionTypePrefix+localFunctionKey(parent, embedded.literal), types)
+	}
 }
 
 func functionLiteralExpression(expression ast.Expr) *ast.FuncLit {
@@ -1681,6 +1764,7 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 				for alias := range referenceAliasKeys(aliases, key) {
 					mergeBindingOrigins(origins, alias, assignedOrigins)
 				}
+				trackCompositeFunctionTypes(values, function.key, left, value.Rhs, index, function.imports, concreteTypes)
 				if localType := localFunctionType(function.key, left, value.Rhs, index); localType != "" {
 					setMayValueType(values, assignmentValueKey(left), localType, concreteTypes)
 				} else if !indexed {
@@ -1714,6 +1798,7 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 					if paths != nil {
 						resources[key] = paths
 					}
+					trackCompositeFunctionTypes(values, function.key, name, spec.Values, index, function.imports, concreteTypes)
 					if localType := localFunctionType(function.key, name, spec.Values, index); localType != "" {
 						typeName = localType
 					}
@@ -1840,6 +1925,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				for alias := range referenceAliasKeys(aliases, key) {
 					mergeBindingOrigins(origins, alias, assignedOrigins)
 				}
+				trackCompositeFunctionTypes(values, function.key, left, value.Rhs, index, function.imports, types)
 				if localType := localFunctionType(function.key, left, value.Rhs, index); localType != "" {
 					setMayValueType(values, assignmentValueKey(left), localType, types)
 				} else if !indexed {
@@ -1862,6 +1948,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 						mergeBindingOrigins(origins, alias, assignedOrigins)
 					}
 					typeName := assignedExpressionType(spec.Values, index, function.imports, values, types)
+					trackCompositeFunctionTypes(values, function.key, name, spec.Values, index, function.imports, types)
 					if localType := localFunctionType(function.key, name, spec.Values, index); localType != "" {
 						typeName = localType
 					}
@@ -1942,6 +2029,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				for alias := range referenceAliasKeys(aliases, key) {
 					mergeBindingOrigins(origins, alias, assignedOrigins)
 				}
+				trackCompositeFunctionTypes(values, function.key, left, value.Rhs, index, function.imports, types)
 				if localType := localFunctionType(function.key, left, value.Rhs, index); localType != "" {
 					setMayValueType(values, assignmentValueKey(left), localType, types)
 				} else if !indexed {
@@ -1964,6 +2052,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 						mergeBindingOrigins(origins, alias, assignedOrigins)
 					}
 					typeName := assignedExpressionType(spec.Values, index, function.imports, values, types)
+					trackCompositeFunctionTypes(values, function.key, name, spec.Values, index, function.imports, types)
 					if localType := localFunctionType(function.key, name, spec.Values, index); localType != "" {
 						typeName = localType
 					}
@@ -2439,6 +2528,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 						paths = prefixCleanupPaths(assignmentFieldPrefix(left), paths)
 						mergeAliasedCleanupPaths(resources, aliases, key, paths)
 					}
+					trackCompositeFunctionTypes(values, functionKey, left, value.Rhs, index, imports, types)
 					if localType := localFunctionType(functionKey, left, value.Rhs, index); localType != "" {
 						setMayValueType(values, assignmentValueKey(left), localType, types)
 					} else if !indexed {
@@ -2467,6 +2557,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 						if len(spec.Values) != 0 {
 							typeName = assignedExpressionType(spec.Values, index, imports, values, types)
 						}
+						trackCompositeFunctionTypes(values, functionKey, name, spec.Values, index, imports, types)
 						if localType := localFunctionType(functionKey, name, spec.Values, index); localType != "" {
 							typeName = localType
 						}
@@ -2618,6 +2709,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 						continue
 					}
 					key := bindingKey(name)
+					trackCompositeFunctionTypes(values, functionKey, left, value.Rhs, index, imports, types)
 					if localType := localFunctionType(functionKey, left, value.Rhs, index); localType != "" {
 						setMayValueType(values, assignmentValueKey(left), localType, types)
 						continue
@@ -2641,6 +2733,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 						if len(spec.Values) != 0 {
 							typeName = assignedToolExpressionType(spec.Values, index, imports, values, types)
 						}
+						trackCompositeFunctionTypes(values, functionKey, name, spec.Values, index, imports, types)
 						if localType := localFunctionType(functionKey, name, spec.Values, index); localType != "" {
 							typeName = localType
 						}
