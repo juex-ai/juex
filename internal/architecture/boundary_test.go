@@ -703,6 +703,13 @@ func cleanupFromCollectionCallback(application *App) {
 		return true
 	})
 }
+func cleanupFromNamedCollectionCallback(application *App) {
+	cleanup := func(resource closer) bool {
+		_ = resource.Close()
+		return true
+	}
+	slices.DeleteFunc([]closer{application.manager}, cleanup)
+}
 func deleteClosers(resources []closer) {
 	slices.DeleteFunc(resources, func(resource closer) bool {
 		_ = resource.Close()
@@ -753,7 +760,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"packageManager.Close", "packageCleanup", "Run", "cleanupRunner.Run", "identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "closeOwned", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "Close", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "wrapCleanup.cleanup", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resources.Close", "resources.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "resources.Close", "slices.DeleteFunc", "deleteClosers", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
+	want := []string{"packageManager.Close", "packageCleanup", "Run", "cleanupRunner.Run", "identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "closeOwned", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "Close", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "wrapCleanup.cleanup", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resources.Close", "resources.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "resources.Close", "slices.DeleteFunc", "slices.DeleteFunc", "deleteClosers", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -1159,6 +1166,13 @@ func registerFromCollectionCallback(application *App) {
 		return true
 	})
 }
+func registerFromNamedCollectionCallback(application *App) {
+	registration := func(registry registrar) bool {
+		registry.Register(nil)
+		return true
+	}
+	slices.DeleteFunc([]registrar{application.registry}, registration)
+}
 func deleteRegistrars(registries []registrar) {
 	slices.DeleteFunc(registries, func(registry registrar) bool {
 		registry.Register(nil)
@@ -1233,7 +1247,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"packageRegistry.Register", "packageRegistration", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "registerOwned", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "callbacks.register", "callbacks.register", "callbacks", "wrapRegistration.register", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "registries.Register", "slices.DeleteFunc", "deleteRegistrars", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"packageRegistry.Register", "packageRegistration", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "registerOwned", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "callbacks.register", "callbacks.register", "callbacks", "wrapRegistration.register", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "registries.Register", "slices.DeleteFunc", "slices.DeleteFunc", "deleteRegistrars", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -2786,9 +2800,9 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				values[key] = valueType
 			}
 		case *ast.CallExpr:
-			if hasCleanupCallbackLiteral(value, function.imports, types) {
-				for _, argument := range value.Args {
-					if functionLiteralExpression(argument) == nil {
+			if callbacks := cleanupCallbackArgumentIndexes(value, function.imports, values, types); len(callbacks) != 0 {
+				for index, argument := range value.Args {
+					if !callbacks[index] {
 						mergeOrigins(cleaned, originsForExpression(argument, origins))
 					}
 				}
@@ -2918,9 +2932,9 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				values[key] = valueType
 			}
 		case *ast.CallExpr:
-			if hasToolCallbackLiteral(value, function.imports, types) {
-				for _, argument := range value.Args {
-					if functionLiteralExpression(argument) == nil {
+			if callbacks := toolCallbackArgumentIndexes(value, function.imports, values, types); len(callbacks) != 0 {
+				for index, argument := range value.Args {
+					if !callbacks[index] {
 						mergeOrigins(registered, originsForExpression(argument, origins))
 					}
 				}
@@ -3080,24 +3094,34 @@ func callbackArgumentOrigins(call *ast.CallExpr, origins map[string]map[int]bool
 	return result
 }
 
-func hasCleanupCallbackLiteral(call *ast.CallExpr, imports map[string]string, types compositionTypeIndex) bool {
-	for _, argument := range call.Args {
+func cleanupCallbackArgumentIndexes(call *ast.CallExpr, imports map[string]string, values map[string]string, types compositionTypeIndex) map[int]bool {
+	callbacks := make(map[int]bool)
+	for index, argument := range call.Args {
 		literal := functionLiteralExpression(argument)
 		if literal != nil && len(inferCleanupParameters(indexedAppFunction{literal: literal, imports: imports}, types)) != 0 {
-			return true
+			callbacks[index] = true
+			continue
+		}
+		if key := calledFunctionKey(argument, imports, values, types); len(types.cleanupParams[key]) != 0 {
+			callbacks[index] = true
 		}
 	}
-	return false
+	return callbacks
 }
 
-func hasToolCallbackLiteral(call *ast.CallExpr, imports map[string]string, types compositionTypeIndex) bool {
-	for _, argument := range call.Args {
+func toolCallbackArgumentIndexes(call *ast.CallExpr, imports map[string]string, values map[string]string, types compositionTypeIndex) map[int]bool {
+	callbacks := make(map[int]bool)
+	for index, argument := range call.Args {
 		literal := functionLiteralExpression(argument)
 		if literal != nil && len(inferToolRegistrationParameters(indexedAppFunction{literal: literal, imports: imports}, types)) != 0 {
-			return true
+			callbacks[index] = true
+			continue
+		}
+		if key := calledFunctionKey(argument, imports, values, types); len(types.toolParams[key]) != 0 {
+			callbacks[index] = true
 		}
 	}
-	return false
+	return callbacks
 }
 
 func callArgumentsForParameter(call *ast.CallExpr, callee string, parameterIndex int, imports map[string]string, types compositionTypeIndex) []ast.Expr {
@@ -3495,10 +3519,10 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 						mergeAliasedCleanupPaths(resources, aliases, key, paths)
 					}
 				}
-				if hasCleanupCallbackLiteral(value, imports, types) {
+				if callbacks := cleanupCallbackArgumentIndexes(value, imports, values, types); len(callbacks) != 0 {
 					callbackReported := false
-					for _, argument := range value.Args {
-						if functionLiteralExpression(argument) == nil && cleanupPathsForExpression(argument, imports, values, resources, types) != nil {
+					for index, argument := range value.Args {
+						if !callbacks[index] && cleanupPathsForExpression(argument, imports, values, resources, types) != nil {
 							report(value, selectorChain(value.Fun))
 							callbackReported = true
 							break
@@ -3689,10 +3713,10 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 						}
 					}
 				}
-				if hasToolCallbackLiteral(value, imports, types) {
+				if callbacks := toolCallbackArgumentIndexes(value, imports, values, types); len(callbacks) != 0 {
 					callbackReported := false
-					for _, argument := range value.Args {
-						if functionLiteralExpression(argument) == nil && (isToolRegistryExpression(argument, imports, values, types) || isToolRegistryCollectionExpression(argument, imports, values, types) || isToolRegistryMapKeyCollectionExpression(argument, imports, values, types)) {
+					for index, argument := range value.Args {
+						if !callbacks[index] && (isToolRegistryExpression(argument, imports, values, types) || isToolRegistryCollectionExpression(argument, imports, values, types) || isToolRegistryMapKeyCollectionExpression(argument, imports, values, types)) {
 							report(value, selectorChain(value.Fun))
 							callbackReported = true
 							break
