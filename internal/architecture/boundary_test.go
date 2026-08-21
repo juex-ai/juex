@@ -2712,6 +2712,114 @@ func preserveDeferredReceivers(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionUsesLaterStateForGoroutineCaptures(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func useGoroutineCaptures(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	go func() { _ = resource.Close() }()
+	go func() { registry.Register(nil) }()
+	resource = application.manager
+	registry = application.registry
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "goroutine_captures.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resource.Close,") {
+		t.Fatalf("cleanup calls = %v, want goroutine cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registry.Register,") {
+		t.Fatalf("Tool registration calls = %v, want goroutine registration", registrationCalls)
+	}
+}
+
+func TestAppCompositionInspectionPreservesGoroutineLaunchReceiverState(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func preserveGoroutineReceivers(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	go resource.Close()
+	go registry.Register(nil)
+	resource = application.manager
+	registry = application.registry
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "goroutine_receivers.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 0 {
+		t.Fatalf("cleanup calls = %v, want goroutine launch receiver preserved", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 0 {
+		t.Fatalf("Tool registration calls = %v, want goroutine launch receiver preserved", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionTracksReferenceRangeValues(t *testing.T) {
 	source := `package app
 import (
@@ -4206,22 +4314,22 @@ func invokesCapturedToolRegistration(callee string, scope ast.Node, values map[s
 	return inferToolRegistrationParameters(function, types)[capturedInvocationParameterIndex]
 }
 
-type deferredCompositionCall struct {
+type delayedCompositionCall struct {
 	call            *ast.CallExpr
 	callee          string
 	argumentCallees map[ast.Expr]string
 }
 
-func snapshotDeferredCompositionCall(call *ast.CallExpr, imports map[string]string, values map[string]string, types compositionTypeIndex) deferredCompositionCall {
-	deferred := deferredCompositionCall{
+func snapshotDelayedCompositionCall(call *ast.CallExpr, imports map[string]string, values map[string]string, types compositionTypeIndex) delayedCompositionCall {
+	delayed := delayedCompositionCall{
 		call:            call,
 		callee:          calledFunctionKey(call.Fun, imports, values, types),
 		argumentCallees: make(map[ast.Expr]string),
 	}
 	for _, argument := range call.Args {
-		deferred.argumentCallees[argument] = calledFunctionKey(argument, imports, values, types)
+		delayed.argumentCallees[argument] = calledFunctionKey(argument, imports, values, types)
 	}
-	return deferred
+	return delayed
 }
 
 func literalInvokesCapturedCleanup(literal *ast.FuncLit, scope ast.Node, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types compositionTypeIndex) bool {
@@ -4236,23 +4344,23 @@ func literalInvokesCapturedToolRegistration(literal *ast.FuncLit, scope ast.Node
 	return inferToolRegistrationParameters(function, types)[capturedInvocationParameterIndex]
 }
 
-func deferredInvokesCapturedCleanup(deferred deferredCompositionCall, scope ast.Node, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types compositionTypeIndex) bool {
-	if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
+func delayedInvokesCapturedCleanup(delayed delayedCompositionCall, scope ast.Node, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types compositionTypeIndex) bool {
+	if literal := functionLiteralExpression(delayed.call.Fun); literal != nil {
 		return literalInvokesCapturedCleanup(literal, scope, imports, values, resources, types)
 	}
-	if invokesCapturedCleanup(deferred.callee, scope, values, resources, types) {
+	if invokesCapturedCleanup(delayed.callee, scope, values, resources, types) {
 		return true
 	}
-	variadicIndex, variadic := types.variadicParams[deferred.callee]
-	for parameterIndex := range types.cleanupParams[deferred.callee] {
-		for _, argument := range callArgumentsForParameterAt(deferred.call, parameterIndex, variadicIndex, variadic, imports) {
+	variadicIndex, variadic := types.variadicParams[delayed.callee]
+	for parameterIndex := range types.cleanupParams[delayed.callee] {
+		for _, argument := range callArgumentsForParameterAt(delayed.call, parameterIndex, variadicIndex, variadic, imports) {
 			if literal := functionLiteralExpression(argument); literal != nil {
 				if literalInvokesCapturedCleanup(literal, scope, imports, values, resources, types) {
 					return true
 				}
 				continue
 			}
-			if invokesCapturedCleanup(deferred.argumentCallees[argument], scope, values, resources, types) {
+			if invokesCapturedCleanup(delayed.argumentCallees[argument], scope, values, resources, types) {
 				return true
 			}
 		}
@@ -4260,23 +4368,23 @@ func deferredInvokesCapturedCleanup(deferred deferredCompositionCall, scope ast.
 	return false
 }
 
-func deferredInvokesCapturedToolRegistration(deferred deferredCompositionCall, scope ast.Node, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
-	if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
+func delayedInvokesCapturedToolRegistration(delayed delayedCompositionCall, scope ast.Node, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
+	if literal := functionLiteralExpression(delayed.call.Fun); literal != nil {
 		return literalInvokesCapturedToolRegistration(literal, scope, imports, values, types)
 	}
-	if invokesCapturedToolRegistration(deferred.callee, scope, values, types) {
+	if invokesCapturedToolRegistration(delayed.callee, scope, values, types) {
 		return true
 	}
-	variadicIndex, variadic := types.variadicParams[deferred.callee]
-	for parameterIndex := range types.toolParams[deferred.callee] {
-		for _, argument := range callArgumentsForParameterAt(deferred.call, parameterIndex, variadicIndex, variadic, imports) {
+	variadicIndex, variadic := types.variadicParams[delayed.callee]
+	for parameterIndex := range types.toolParams[delayed.callee] {
+		for _, argument := range callArgumentsForParameterAt(delayed.call, parameterIndex, variadicIndex, variadic, imports) {
 			if literal := functionLiteralExpression(argument); literal != nil {
 				if literalInvokesCapturedToolRegistration(literal, scope, imports, values, types) {
 					return true
 				}
 				continue
 			}
-			if invokesCapturedToolRegistration(deferred.argumentCallees[argument], scope, values, types) {
+			if invokesCapturedToolRegistration(delayed.argumentCallees[argument], scope, values, types) {
 				return true
 			}
 		}
@@ -5111,8 +5219,10 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 		aliases := make(map[string]map[string]bool)
 		reportedCalls := make(map[*ast.CallExpr]bool)
 		deferredSeen := make(map[*ast.CallExpr]bool)
-		var deferredCalls []deferredCompositionCall
-		deferEvaluation := false
+		var deferredCalls []delayedCompositionCall
+		goroutineSeen := make(map[*ast.CallExpr]bool)
+		var goroutineCalls []delayedCompositionCall
+		delayedEvaluation := false
 		reportCleanup := func(call *ast.CallExpr, chain string) {
 			if !reportedCalls[call] && !isReceiverOwnedFeatureCleanup(function, call, imports, values, types) {
 				reportedCalls[call] = true
@@ -5125,15 +5235,25 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			case *ast.DeferStmt:
 				if !deferredSeen[value.Call] {
 					deferredSeen[value.Call] = true
-					deferredCalls = append(deferredCalls, snapshotDeferredCompositionCall(value.Call, imports, values, types))
+					deferredCalls = append(deferredCalls, snapshotDelayedCompositionCall(value.Call, imports, values, types))
 				}
-				previousDeferEvaluation := deferEvaluation
-				deferEvaluation = true
+				previousDelayedEvaluation := delayedEvaluation
+				delayedEvaluation = true
 				ast.Inspect(value.Call, visit)
-				deferEvaluation = previousDeferEvaluation
+				delayedEvaluation = previousDelayedEvaluation
+				return false
+			case *ast.GoStmt:
+				if !goroutineSeen[value.Call] {
+					goroutineSeen[value.Call] = true
+					goroutineCalls = append(goroutineCalls, snapshotDelayedCompositionCall(value.Call, imports, values, types))
+				}
+				previousDelayedEvaluation := delayedEvaluation
+				delayedEvaluation = true
+				ast.Inspect(value.Call, visit)
+				delayedEvaluation = previousDelayedEvaluation
 				return false
 			case *ast.FuncLit:
-				if deferEvaluation {
+				if delayedEvaluation {
 					return false
 				}
 			case *ast.ForStmt:
@@ -5295,7 +5415,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					}
 				}
 				callee := calledFunctionKey(value.Fun, imports, values, types)
-				if !deferEvaluation && invokesCapturedCleanup(callee, function.Body, values, resources, types) {
+				if !delayedEvaluation && invokesCapturedCleanup(callee, function.Body, values, resources, types) {
 					reportCleanup(value, selectorChain(value.Fun))
 				}
 				for destinationIndex, sources := range types.parameterWrites[callee] {
@@ -5326,7 +5446,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				for index := range cleanupParams {
 					for _, argument := range callArgumentsForParameterAt(value, index, variadicIndex, variadic, imports) {
 						argumentCallee := calledFunctionKey(argument, imports, values, types)
-						if cleanupPathsForExpression(argument, imports, values, resources, types) != nil || !deferEvaluation && invokesCapturedCleanup(argumentCallee, function.Body, values, resources, types) {
+						if cleanupPathsForExpression(argument, imports, values, resources, types) != nil || !delayedEvaluation && invokesCapturedCleanup(argumentCallee, function.Body, values, resources, types) {
 							reportCleanup(value, selectorChain(value.Fun))
 							reported = true
 							break
@@ -5378,8 +5498,17 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				ast.Inspect(literal.Body, visit)
 				continue
 			}
-			if deferredInvokesCapturedCleanup(deferred, function.Body, imports, values, resources, types) {
+			if delayedInvokesCapturedCleanup(deferred, function.Body, imports, values, resources, types) {
 				reportCleanup(deferred.call, selectorChain(deferred.call.Fun))
+			}
+		}
+		for _, goroutine := range goroutineCalls {
+			if literal := functionLiteralExpression(goroutine.call.Fun); literal != nil {
+				ast.Inspect(literal.Body, visit)
+				continue
+			}
+			if delayedInvokesCapturedCleanup(goroutine, function.Body, imports, values, resources, types) {
+				reportCleanup(goroutine.call, selectorChain(goroutine.call.Fun))
 			}
 		}
 	}
@@ -5438,8 +5567,10 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 		aliases := make(map[string]map[string]bool)
 		reportedCalls := make(map[*ast.CallExpr]bool)
 		deferredSeen := make(map[*ast.CallExpr]bool)
-		var deferredCalls []deferredCompositionCall
-		deferEvaluation := false
+		var deferredCalls []delayedCompositionCall
+		goroutineSeen := make(map[*ast.CallExpr]bool)
+		var goroutineCalls []delayedCompositionCall
+		delayedEvaluation := false
 		reportTool := func(call *ast.CallExpr, chain string) {
 			if !reportedCalls[call] {
 				reportedCalls[call] = true
@@ -5452,15 +5583,25 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			case *ast.DeferStmt:
 				if !deferredSeen[value.Call] {
 					deferredSeen[value.Call] = true
-					deferredCalls = append(deferredCalls, snapshotDeferredCompositionCall(value.Call, imports, values, types))
+					deferredCalls = append(deferredCalls, snapshotDelayedCompositionCall(value.Call, imports, values, types))
 				}
-				previousDeferEvaluation := deferEvaluation
-				deferEvaluation = true
+				previousDelayedEvaluation := delayedEvaluation
+				delayedEvaluation = true
 				ast.Inspect(value.Call, visit)
-				deferEvaluation = previousDeferEvaluation
+				delayedEvaluation = previousDelayedEvaluation
+				return false
+			case *ast.GoStmt:
+				if !goroutineSeen[value.Call] {
+					goroutineSeen[value.Call] = true
+					goroutineCalls = append(goroutineCalls, snapshotDelayedCompositionCall(value.Call, imports, values, types))
+				}
+				previousDelayedEvaluation := delayedEvaluation
+				delayedEvaluation = true
+				ast.Inspect(value.Call, visit)
+				delayedEvaluation = previousDelayedEvaluation
 				return false
 			case *ast.FuncLit:
-				if deferEvaluation {
+				if delayedEvaluation {
 					return false
 				}
 			case *ast.ForStmt:
@@ -5598,7 +5739,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					}
 				}
 				callee := calledFunctionKey(value.Fun, imports, values, types)
-				if !deferEvaluation && invokesCapturedToolRegistration(callee, function.Body, values, types) {
+				if !delayedEvaluation && invokesCapturedToolRegistration(callee, function.Body, values, types) {
 					reportTool(value, selectorChain(value.Fun))
 				}
 				for destinationIndex, sources := range types.parameterWrites[callee] {
@@ -5639,7 +5780,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				for index := range toolParams {
 					for _, argument := range callArgumentsForParameterAt(value, index, variadicIndex, variadic, imports) {
 						argumentCallee := calledFunctionKey(argument, imports, values, types)
-						if isToolRegistryExpression(argument, imports, values, types) || isToolRegistryCollectionExpression(argument, imports, values, types) || isToolRegistrationValueExpression(argument, imports, values, types) || !deferEvaluation && invokesCapturedToolRegistration(argumentCallee, function.Body, values, types) {
+						if isToolRegistryExpression(argument, imports, values, types) || isToolRegistryCollectionExpression(argument, imports, values, types) || isToolRegistrationValueExpression(argument, imports, values, types) || !delayedEvaluation && invokesCapturedToolRegistration(argumentCallee, function.Body, values, types) {
 							reportTool(value, selectorChain(value.Fun))
 							reported = true
 							break
@@ -5671,8 +5812,17 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				ast.Inspect(literal.Body, visit)
 				continue
 			}
-			if deferredInvokesCapturedToolRegistration(deferred, function.Body, imports, values, types) {
+			if delayedInvokesCapturedToolRegistration(deferred, function.Body, imports, values, types) {
 				reportTool(deferred.call, selectorChain(deferred.call.Fun))
+			}
+		}
+		for _, goroutine := range goroutineCalls {
+			if literal := functionLiteralExpression(goroutine.call.Fun); literal != nil {
+				ast.Inspect(literal.Body, visit)
+				continue
+			}
+			if delayedInvokesCapturedToolRegistration(goroutine, function.Body, imports, values, types) {
+				reportTool(goroutine.call, selectorChain(goroutine.call.Fun))
 			}
 		}
 	}
