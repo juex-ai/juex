@@ -1371,6 +1371,8 @@ type embeddedCleanupDispatcher interface { cleanupDispatcher }
 type embeddedRegistrationDispatcher interface { registrationDispatcher }
 type cleanupDispatchImpl struct{}
 type registrationDispatchImpl struct{}
+type cleanupWrapper struct{ cleanupDispatchImpl }
+type registrationWrapper struct{ registrationDispatchImpl }
 func (cleanupDispatchImpl) Run(resource closer) { _ = resource.Close() }
 func (registrationDispatchImpl) Run(registry registrar) { _ = registry.Register(nil) }
 func dispatchCleanup(dispatcher cleanupDispatcher, resource closer) { dispatcher.Run(resource) }
@@ -1382,10 +1384,16 @@ func configure(application *App) {
 	dispatchRegistration(registrationDispatchImpl{}, application.registry)
 	dispatchEmbeddedCleanup(cleanupDispatchImpl{}, application.manager)
 	dispatchEmbeddedRegistration(registrationDispatchImpl{}, application.registry)
+	cleanupWrapper{}.Run(application.manager)
+	registrationWrapper{}.Run(application.registry)
 	cleanup := cleanupDispatchImpl{}.Run
 	cleanup(application.manager)
 	registration := registrationDispatchImpl{}.Run
 	registration(application.registry)
+	promotedCleanup := cleanupWrapper{}.Run
+	promotedCleanup(application.manager)
+	promotedRegistration := registrationWrapper{}.Run
+	promotedRegistration(application.registry)
 }
 `
 	dir := t.TempDir()
@@ -1405,15 +1413,15 @@ func configure(application *App) {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",dispatchCleanup,") || !strings.Contains(cleanup, ",dispatchEmbeddedCleanup,") || !strings.Contains(cleanup, ",cleanup,") {
-		t.Fatalf("cleanup calls = %v, want direct/embedded interface dispatch and helper method value", cleanupCalls)
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",dispatchCleanup,") || !strings.Contains(cleanup, ",dispatchEmbeddedCleanup,") || !strings.Contains(cleanup, ",Run,") || !strings.Contains(cleanup, ",cleanup,") || !strings.Contains(cleanup, ",promotedCleanup,") {
+		t.Fatalf("cleanup calls = %v, want interface/concrete promotion and helper method values", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",dispatchRegistration,") || !strings.Contains(registration, ",dispatchEmbeddedRegistration,") || !strings.Contains(registration, ",registration,") {
-		t.Fatalf("Tool registration calls = %v, want direct/embedded interface dispatch and helper method value", registrationCalls)
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",dispatchRegistration,") || !strings.Contains(registration, ",dispatchEmbeddedRegistration,") || !strings.Contains(registration, ",Run,") || !strings.Contains(registration, ",registration,") || !strings.Contains(registration, ",promotedRegistration,") {
+		t.Fatalf("Tool registration calls = %v, want interface/concrete promotion and helper method values", registrationCalls)
 	}
 }
 
@@ -1574,6 +1582,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 		return compositionTypeIndex{}, err
 	}
 	indexEmbeddedInterfaceMethods(&types)
+	indexPromotedConcreteMethods(&types)
 	indexInterfaceMethodImplementations(&types)
 	indexLocalFlows(&types)
 	types.packageValues, types.packageResources = packageBindingStateForSources(appSources, types)
@@ -1800,6 +1809,54 @@ func indexEmbeddedInterfaceMethods(types *compositionTypeIndex) {
 			return
 		}
 	}
+}
+
+func indexPromotedConcreteMethods(types *compositionTypeIndex) {
+	for {
+		changed := false
+		for outerType, fields := range types.fields {
+			for field, embeddedType := range fields {
+				if !strings.HasPrefix(field, embeddedPrefix) {
+					continue
+				}
+				prefix := embeddedType + "."
+				for sourceKey, shape := range types.concreteMethods {
+					if !strings.HasPrefix(sourceKey, prefix) {
+						continue
+					}
+					if promoteConcreteMethod(types, outerType, strings.TrimPrefix(sourceKey, prefix), sourceKey, shape) {
+						changed = true
+					}
+				}
+				for sourceKey, shape := range types.interfaceMethods {
+					if !strings.HasPrefix(sourceKey, prefix) {
+						continue
+					}
+					if promoteConcreteMethod(types, outerType, strings.TrimPrefix(sourceKey, prefix), sourceKey, shape) {
+						changed = true
+					}
+				}
+			}
+		}
+		if !changed {
+			return
+		}
+	}
+}
+
+func promoteConcreteMethod(types *compositionTypeIndex, outerType, methodName, sourceKey string, shape methodShape) bool {
+	key := outerType + "." + methodName
+	if _, exists := types.concreteMethods[key]; exists {
+		return false
+	}
+	types.concreteMethods[key] = shape
+	types.appFunctionKeys[key] = true
+	types.functionResults[key] = append([]string(nil), shape.results...)
+	if shape.variadic {
+		types.variadicParams[key] = len(shape.parameters) - 1
+	}
+	types.methodImpls[key] = append(types.methodImpls[key], sourceKey)
+	return true
 }
 
 func indexInterfaceMethodImplementations(types *compositionTypeIndex) {
