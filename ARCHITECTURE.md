@@ -2577,7 +2577,11 @@ the effective top-level `models` chain, in order and deduplicated by ref.
 Selection shares the runtime model-health state, so a
 candidate in cooldown or reserved for another half-open probe is skipped. Each
 actual attempt refits the bounded summary request to that candidate's context
-window and checkpoints a fresh Request Epoch. Generic provider failures advance
+window and checkpoints a fresh Request Epoch. Request fitting lowers the
+existing block serialization cap and removes the oldest complete assistant Tool
+Call plus matching user-role Tool Result batches atomically until the estimate
+fits. It preserves every user-authored message and never changes the durable
+transcript or compact selection metadata. Generic provider failures advance
 directly through the chain. The first candidate anywhere in the chain that
 returns no text or a max-token-truncated summary receives one semantic retry
 with up to twice its summary output budget; the retry budget remains capped so
