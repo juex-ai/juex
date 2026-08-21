@@ -288,28 +288,28 @@ func (c Config) ExtensionPolicy() ExtensionPolicy {
 
 // RuntimeLimits contains runtime policy values after config resolution.
 type RuntimeLimits struct {
-	ContextWindow         int
-	MaxOutputTokens       int
-	Compaction            CompactionConfig
-	ToolOutput            ToolOutputConfig
-	PendingInputTTL       time.Duration
-	ExternalEventTTL      time.Duration
-	ToolTimeout           time.Duration
-	ShowBuiltinHookTraces bool
-	NotifyModelChanges    bool
+	ContextWindow           int
+	MaxOutputTokens         int
+	Compaction              CompactionConfig
+	ToolOutput              ToolOutputConfig
+	PendingInputTTL         time.Duration
+	ExternalEventTTL        time.Duration
+	ToolTimeout             time.Duration
+	ShowBuiltinPolicyTraces bool
+	NotifyModelChanges      bool
 }
 
 func (c Config) RuntimeLimits() RuntimeLimits {
 	return RuntimeLimits{
-		ContextWindow:         c.ContextWindow,
-		MaxOutputTokens:       c.MaxOutputTokens,
-		Compaction:            c.Compaction,
-		ToolOutput:            c.ToolOutput,
-		PendingInputTTL:       c.PendingInputTTL,
-		ExternalEventTTL:      c.ExternalEventTTL,
-		ToolTimeout:           c.ToolTimeout,
-		ShowBuiltinHookTraces: c.ShowBuiltinHookTraces,
-		NotifyModelChanges:    c.NotifyModelChanges,
+		ContextWindow:           c.ContextWindow,
+		MaxOutputTokens:         c.MaxOutputTokens,
+		Compaction:              c.Compaction,
+		ToolOutput:              c.ToolOutput,
+		PendingInputTTL:         c.PendingInputTTL,
+		ExternalEventTTL:        c.ExternalEventTTL,
+		ToolTimeout:             c.ToolTimeout,
+		ShowBuiltinPolicyTraces: c.ShowBuiltinPolicyTraces,
+		NotifyModelChanges:      c.NotifyModelChanges,
 	}
 }
 

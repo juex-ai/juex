@@ -13,7 +13,7 @@ import (
 )
 
 // Finalized Shell content contains an approximately 1 MiB bounded base plus a
-// 128 KiB bounded hook/error suffix. encoding/json expands HTML-sensitive
+// 128 KiB bounded policy/error suffix. encoding/json expands HTML-sensitive
 // runes such as '<' to six-byte escapes, so the reader needs bounded headroom.
 const maxEventLineBytes = 8 * 1024 * 1024
 

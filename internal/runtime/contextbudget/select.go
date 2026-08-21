@@ -116,7 +116,7 @@ func compactionRelevantMessages(messages []llm.Message) []llm.Message {
 			continue
 		}
 		switch msg.Kind {
-		case llm.MessageKindHookEvent, llm.MessageKindRuntimeContext, llm.MessageKindModelChange, llm.MessageKindSystemNotice, llm.MessageKindCompact:
+		case llm.MessageKindPolicyEvent, llm.MessageKindRuntimeContext, llm.MessageKindModelChange, llm.MessageKindSystemNotice, llm.MessageKindCompact:
 			continue
 		default:
 			out = append(out, msg)

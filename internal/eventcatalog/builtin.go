@@ -9,6 +9,7 @@ import (
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/provenance"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
@@ -48,7 +49,7 @@ func builtinDefinitions() []Definition {
 		requiredValidated("llm.responded", 3, func() any { return &juexruntime.LLMRespondedPayload{} }, true, validateLLMRespondedPayload),
 		requiredValidated("llm.errored", 1, func() any { return &juexruntime.LLMErroredPayload{} }, true, validateLLMErroredPayload),
 		requiredValidated(provenance.RequestEpochType, 1, func() any { return &provenance.RequestEpochPayload{} }, true, validateRequestEpochPayload),
-		requiredValidated(provenance.HookContextQueuedType, 1, func() any { return &provenance.HookContextQueuedPayload{} }, false, validateHookContextQueuedPayload),
+		requiredValidated(provenance.PolicyContextQueuedType, 1, func() any { return &provenance.PolicyContextQueuedPayload{} }, false, validatePolicyContextQueuedPayload),
 		transient("llm.output_delta", func() any { return &juexruntime.LLMOutputDeltaPayload{} }),
 		requiredValidated("llm.retry", 3, func() any { return &juexruntime.LLMRetryPayload{} }, true, validateLLMRetryPayload),
 		required("llm.fallback", func() any { return &juexruntime.LLMFallbackPayload{} }, true),
@@ -59,11 +60,11 @@ func builtinDefinitions() []Definition {
 		transientVersioned(toolevents.OutputDeltaType, 2, func() any { return &toolevents.OutputDeltaPayload{} }),
 		requiredToolEvent(toolevents.ErroredType, func() any { return &toolevents.ErroredPayload{} }, validateErroredPayload),
 		requiredValidated(toolevents.OutcomeUnknownType, 1, func() any { return &toolevents.OutcomeUnknownPayload{} }, true, validateOutcomeUnknownPayload),
-		ignorable("hook.requested", func() any { return &juexruntime.HookStartedPayload{} }, false),
-		ignorable("hook.started", func() any { return &juexruntime.HookStartedPayload{} }, true),
-		ignorable("hook.completed", func() any { return &juexruntime.HookCompletedPayload{} }, true),
-		ignorable("hook.errored", func() any { return &juexruntime.HookErroredPayload{} }, true),
-		ignorable("hook.trace", func() any { return &juexruntime.HookTracePayload{} }, true),
+		ignorableValidated("policy.requested", func() any { return &juexruntime.PolicyStartedPayload{} }, false, validatePolicyStartedPayload),
+		ignorableValidated("policy.started", func() any { return &juexruntime.PolicyStartedPayload{} }, true, validatePolicyStartedPayload),
+		ignorableValidated("policy.completed", func() any { return &juexruntime.PolicyCompletedPayload{} }, true, validatePolicyCompletedPayload),
+		ignorableValidated("policy.errored", func() any { return &juexruntime.PolicyErroredPayload{} }, true, validatePolicyErroredPayload),
+		ignorable("policy.trace", func() any { return &juexruntime.PolicyTracePayload{} }, true),
 		required("pending_input.queued", func() any { return &juexruntime.PendingInputQueuedPayload{} }, true),
 		required(juexruntime.PendingInputDrainingType, func() any { return &juexruntime.PendingInputDrainingPayload{} }, true),
 		required(juexruntime.PendingInputPromotedType, func() any { return &juexruntime.PendingInputPromotedPayload{} }, true),
@@ -276,12 +277,46 @@ func validateRequestEpochPayload(payload any) error {
 	return provenance.ValidateRequestEpoch(value)
 }
 
-func validateHookContextQueuedPayload(payload any) error {
-	value, ok := payload.(provenance.HookContextQueuedPayload)
+func validatePolicyContextQueuedPayload(payload any) error {
+	value, ok := payload.(provenance.PolicyContextQueuedPayload)
 	if !ok {
-		return fmt.Errorf("unexpected hook context queued payload %T", payload)
+		return fmt.Errorf("unexpected policy context queued payload %T", payload)
 	}
-	return provenance.ValidateHookContextQueued(value)
+	return provenance.ValidatePolicyContextQueued(value)
+}
+
+func validatePolicyStartedPayload(payload any) error {
+	value, ok := payload.(juexruntime.PolicyStartedPayload)
+	if !ok {
+		return fmt.Errorf("unexpected policy started payload %T", payload)
+	}
+	return validatePolicyIdentity(value.ModuleID, value.PolicyPoint)
+}
+
+func validatePolicyCompletedPayload(payload any) error {
+	value, ok := payload.(juexruntime.PolicyCompletedPayload)
+	if !ok {
+		return fmt.Errorf("unexpected policy completed payload %T", payload)
+	}
+	return validatePolicyIdentity(value.ModuleID, value.PolicyPoint)
+}
+
+func validatePolicyErroredPayload(payload any) error {
+	value, ok := payload.(juexruntime.PolicyErroredPayload)
+	if !ok {
+		return fmt.Errorf("unexpected policy errored payload %T", payload)
+	}
+	if value.Error == "" {
+		return fmt.Errorf("policy errored payload requires error")
+	}
+	return validatePolicyIdentity(value.ModuleID, value.PolicyPoint)
+}
+
+func validatePolicyIdentity(moduleID runtimemodule.ID, point runtimemodule.PolicyPoint) error {
+	if moduleID == "" || point == "" {
+		return fmt.Errorf("policy lifecycle payload requires module_id and policy_point")
+	}
+	return nil
 }
 
 func validateRunningPayload(payload any) error {

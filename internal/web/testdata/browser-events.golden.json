@@ -582,17 +582,17 @@
     }
   },
   {
-    "id": "evt-hook-trace",
-    "type": "hook.trace",
+    "id": "evt-policy-trace",
+    "type": "policy.trace",
     "schema_version": 1,
     "ts": "2026-06-15T00:00:05Z",
     "turn_id": "turn-1",
     "payload": {
-      "text": "hook extract-state allow UserPromptSubmit in 12ms",
-      "message_id": "msg-hook-1"
+      "text": "policy hooks/UserPromptSubmit/extract-state completed turn_input in 12ms",
+      "message_id": "msg-policy-1"
     },
     "status": {
-      "cursor": "evt-hook-trace",
+      "cursor": "evt-policy-trace",
       "updated_at": "2026-06-15T00:00:05Z",
       "session": {
         "id": "session-1",

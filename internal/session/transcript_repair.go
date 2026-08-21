@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	toolNotStartedContent     = "TOOL_NOT_STARTED: JueX recovered this tool call before execution started. No tool or pre-tool hook was invoked; issue a new tool call if it is still needed."
+	toolNotStartedContent     = "TOOL_NOT_STARTED: JueX recovered this tool call before execution started. No tool or pre-tool policy was invoked; issue a new tool call if it is still needed."
 	toolOutcomeUnknownContent = "TOOL_OUTCOME_UNKNOWN: JueX recorded that this tool call started, but no durable outcome was recorded. It may already have produced external side effects. Do not retry it until the external state has been checked."
 )
 

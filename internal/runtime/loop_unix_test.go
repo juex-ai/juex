@@ -160,7 +160,7 @@ func TestTurn_BuiltinShellCompletedEventUsesFinalizedHookContent(t *testing.T) {
 		}
 	})
 
-	if _, err := eng.Turn(context.Background(), "run shell with hook context"); err != nil {
+	if _, err := eng.Turn(context.Background(), "run shell with policy context"); err != nil {
 		t.Fatal(err)
 	}
 	conversation := eng.Session.History[2].Blocks[0].Content
@@ -248,7 +248,7 @@ func TestTurn_BuiltinShellFinalContentBoundsMultipleEscapedHooksAndReplays(t *te
 		t.Fatal(err)
 	}
 	conversation := eng.Session.History[2].Blocks[0].Content
-	if len(conversation) > (1<<20)+maxShellHookContent+1024 {
+	if len(conversation) > (1<<20)+maxShellPolicyContent+1024 {
 		t.Fatalf("finalized shell content bytes = %d, want hard bound", len(conversation))
 	}
 	if !strings.Contains(conversation, "[output truncated:") || !strings.HasSuffix(conversation, "<") {

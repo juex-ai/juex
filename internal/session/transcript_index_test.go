@@ -61,12 +61,12 @@ func TestTranscriptMessagePageKeepsToolExchangeCoherent(t *testing.T) {
 			wantMore:   true,
 		},
 		{
-			name: "hook traces between call and result",
+			name: "policy traces between call and result",
 			messages: []llm.Message{
 				messageWithID(compactTestMessage("summary"), "m1"),
 				toolUseMessage("m2", "call-1", "read"),
-				hookTraceMessage("m3", "pre hook completed"),
-				hookTraceMessage("m4", "post hook completed"),
+				policyTraceMessage("m3", "pre hook completed"),
+				policyTraceMessage("m4", "post hook completed"),
 				toolResultMessage("m5", "call-1", "done"),
 				messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m6"),
 			},
@@ -76,11 +76,11 @@ func TestTranscriptMessagePageKeepsToolExchangeCoherent(t *testing.T) {
 			wantMore:   true,
 		},
 		{
-			name: "page boundary on hook trace",
+			name: "page boundary on policy trace",
 			messages: []llm.Message{
 				messageWithID(compactTestMessage("summary"), "m1"),
 				toolUseMessage("m2", "call-1", "read"),
-				hookTraceMessage("m3", "pre hook completed"),
+				policyTraceMessage("m3", "pre hook completed"),
 				toolResultMessage("m4", "call-1", "done"),
 				messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m5"),
 			},
@@ -107,7 +107,7 @@ func TestTranscriptMessagePageKeepsToolExchangeCoherent(t *testing.T) {
 			name: "before page ends before hook result",
 			messages: []llm.Message{
 				toolUseMessage("m1", "call-1", "read"),
-				hookTraceMessage("m2", "pre hook completed"),
+				policyTraceMessage("m2", "pre hook completed"),
 				toolResultMessage("m3", "call-1", "done"),
 				messageWithID(llm.TextMessage(llm.RoleAssistant, "latest"), "m4"),
 			},
@@ -276,8 +276,8 @@ func multiToolResultMessage(id string, toolUseIDs ...string) llm.Message {
 	return msg
 }
 
-func hookTraceMessage(id, text string) llm.Message {
+func policyTraceMessage(id, text string) llm.Message {
 	msg := messageWithID(llm.TextMessage(llm.RoleSystem, text), id)
-	msg.Kind = llm.MessageKindHookEvent
+	msg.Kind = llm.MessageKindPolicyEvent
 	return msg
 }

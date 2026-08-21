@@ -39,7 +39,7 @@ func TestWriteSSEFrame_FormatsExpectedFields(t *testing.T) {
 
 func TestWriteSSEFrame_DataIsOneLine(t *testing.T) {
 	var buf bytes.Buffer
-	if err := writeBrowserSSEFrame(&buf, mustBrowserEvent(t, events.Event{ID: "x1", Type: "hook.trace", Payload: map[string]any{"text": "line1\nline2"}})); err != nil {
+	if err := writeBrowserSSEFrame(&buf, mustBrowserEvent(t, events.Event{ID: "x1", Type: "policy.trace", Payload: map[string]any{"text": "line1\nline2"}})); err != nil {
 		t.Fatal(err)
 	}
 	body := buf.String()

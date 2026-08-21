@@ -60,7 +60,7 @@ func (e *Engine) RunSessionStartHooks(ctx context.Context) error {
 	return e.RunSessionStartPolicies(ctx)
 }
 
-func (e *Engine) queueHookRuntimeContext(results []hooks.Result) error {
+func (e *Engine) queuePolicyRuntimeContextFromHookResults(results []hooks.Result) error {
 	contexts := make([]runtimemodule.PolicyContext, 0, len(results))
 	for _, result := range results {
 		if result.ExitCode != 0 || result.Stdout == "" {
@@ -78,7 +78,7 @@ func (e *Engine) queueHookRuntimeContext(results []hooks.Result) error {
 	return e.queuePolicyRuntimeContext(contexts)
 }
 
-func appendHookAdditionalContext(msg llm.Message, results []hooks.Result) llm.Message {
+func appendPolicyAdditionalContext(msg llm.Message, results []hooks.Result) llm.Message {
 	msg.Blocks = append([]llm.Block(nil), msg.Blocks...)
 	for _, result := range results {
 		if result.ExitCode != 0 || result.Stdout == "" {

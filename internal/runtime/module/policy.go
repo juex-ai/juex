@@ -691,14 +691,14 @@ func validateDurablePolicyContext(contexts []PolicyContext) error {
 			continue
 		}
 		message := llm.TextMessage(llm.RoleUser, item.Label+text)
-		message.ID = fmt.Sprintf("hook-context-%024x", len(messages))
+		message.ID = fmt.Sprintf("policy-context-%024x", len(messages))
 		message.Kind = llm.MessageKindRuntimeContext
 		messages = append(messages, message)
 	}
 	if len(messages) == 0 {
 		return nil
 	}
-	if err := provenance.ValidateHookContextQueued(provenance.HookContextQueuedPayload{Messages: messages}); err != nil {
+	if err := provenance.ValidatePolicyContextQueued(provenance.PolicyContextQueuedPayload{Messages: messages}); err != nil {
 		return &policyContextValidationError{err: fmt.Errorf("policy context durable batch: %w", err)}
 	}
 	return nil

@@ -72,7 +72,7 @@ func (e *Engine) maybeCompact(ctx context.Context, turnID, systemPrompt string, 
 		return nil
 	}
 
-	active, err := e.activeContextLockedWithHookContextError(ctx, e.pendingHookRuntimeContextSnapshot(), incoming)
+	active, err := e.activeContextLockedWithPolicyContextError(ctx, e.pendingPolicyRuntimeContextSnapshot(), incoming)
 	if err != nil {
 		return fmt.Errorf("runtime: build compaction context: %w", err)
 	}
@@ -171,7 +171,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
 	}
-	active, err := e.activeContextLockedWithHookContextError(ctx, e.pendingHookRuntimeContextSnapshot())
+	active, err := e.activeContextLockedWithPolicyContextError(ctx, e.pendingPolicyRuntimeContextSnapshot())
 	if err != nil {
 		compactErr := newCompactionError(ctx, fmt.Errorf("runtime: build compaction context: %w", err))
 		return CompactionResult{}, e.reportCompactionError(turnID, reason, auto, compactErr)

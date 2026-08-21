@@ -372,7 +372,7 @@ test("replay skips transcript content already present in the initial session pag
       {
         id: "msg-hook",
         role: "system",
-        kind: "hook_event",
+        kind: "policy_event",
         blocks: [{ type: "text", text: "hook completed" }],
       },
       {
@@ -468,7 +468,7 @@ test("replay skips transcript content already present in the initial session pag
   }).state;
   state = projectLiveBrowserEvent(state, {
     id: "evt-hook-trace",
-    type: "hook.trace",
+    type: "policy.trace",
     ts: "2026-07-23T11:00:04Z",
     turn_id: "turn-1",
     payload: {
@@ -554,7 +554,7 @@ test("reconnect replay skips transcript content already projected live", () => {
     },
     {
       id: "evt-hook-trace",
-      type: "hook.trace",
+      type: "policy.trace",
       ts: "2026-07-23T14:00:04Z",
       turn_id: "turn-1",
       payload: {

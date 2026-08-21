@@ -1748,7 +1748,7 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventsBody := string(eventsData)
-	for _, want := range []string{`"type":"hook.completed"`, `"type":"tool.errored"`} {
+	for _, want := range []string{`"type":"policy.completed"`, `"type":"tool.errored"`} {
 		if !strings.Contains(eventsBody, want) {
 			t.Fatalf("events missing %s:\n%s", want, eventsBody)
 		}

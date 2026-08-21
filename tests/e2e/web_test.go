@@ -101,7 +101,7 @@ func TestWeb_TranscriptPageKeepsToolPairAtBoundary(t *testing.T) {
 	messages := []llm.Message{
 		{ID: "m1", Role: llm.RoleUser, Kind: llm.MessageKindCompact, Blocks: []llm.Block{{Type: llm.BlockText, Text: "summary"}}},
 		{ID: "m2", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "read", Input: map[string]any{"path": "a.txt"}}}},
-		{ID: "m3", Role: llm.RoleSystem, Kind: llm.MessageKindHookEvent, Blocks: []llm.Block{{Type: llm.BlockText, Text: "hook read completed PreToolUse"}}},
+		{ID: "m3", Role: llm.RoleSystem, Kind: llm.MessageKindPolicyEvent, Blocks: []llm.Block{{Type: llm.BlockText, Text: "hook read completed PreToolUse"}}},
 		{ID: "m4", Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "call-1", ToolName: "read", Content: "done"}}},
 		{ID: "m5", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockText, Text: "latest"}}},
 	}
@@ -138,7 +138,7 @@ func TestWeb_TranscriptPageKeepsToolPairAtBoundary(t *testing.T) {
 	if len(got.Messages) != 4 ||
 		got.Messages[0].ID != "m2" ||
 		got.Messages[0].Blocks[0].ToolUseID != "call-1" ||
-		got.Messages[1].Kind != llm.MessageKindHookEvent ||
+		got.Messages[1].Kind != llm.MessageKindPolicyEvent ||
 		got.Messages[2].Blocks[0].ToolUseID != "call-1" ||
 		got.OldestID != "m2" ||
 		!got.HasMoreBefore {
