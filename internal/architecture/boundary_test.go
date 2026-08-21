@@ -320,8 +320,13 @@ type App struct {
 	registry registrar
 	literalResource closer
 	literalRegistry registrar
+	closureResource closer
+	closureRegistry registrar
 }
 type AppAlias = App
+var appFactory = func(manager *mcp.Manager, registry *tools.Registry) *App {
+	return &AppAlias{closureResource: manager, closureRegistry: registry}
+}
 func (application *App) bind(manager *mcp.Manager, registry *tools.Registry) {
 	application.resource = manager
 	application.registry = registry
@@ -334,6 +339,8 @@ func (application *App) bypass() {
 	application.registry.Register(nil)
 	_ = application.literalResource.Close()
 	application.literalRegistry.Register(nil)
+	_ = application.closureResource.Close()
+	application.closureRegistry.Register(nil)
 }
 `
 	dir := t.TempDir()
@@ -353,14 +360,14 @@ func (application *App) bypass() {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if len(cleanupCalls) != 2 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" {
+	if len(cleanupCalls) != 3 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" || cleanupCalls[2] != "application.closureResource.Close" {
 		t.Fatalf("cleanup calls = %v, want receiver field cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if len(registrationCalls) != 2 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" {
+	if len(registrationCalls) != 3 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" || registrationCalls[2] != "application.closureRegistry.Register" {
 		t.Fatalf("Tool registration calls = %v, want receiver field registration", registrationCalls)
 	}
 }
@@ -10031,10 +10038,14 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 				}
 				seedAppReceiverFieldState(values, resources, receivers, *types)
 				ast.Inspect(function.Body, func(node ast.Node) bool {
-					if _, nested := node.(*ast.FuncLit); nested {
-						return false
-					}
 					switch statement := node.(type) {
+					case *ast.FuncLit:
+						for name, typeName := range namedValueTypes(statement.Type.Params, source.imports) {
+							values[name] = typeName
+						}
+						for name, paths := range namedCleanupValues(statement.Type.Params, source.imports, *types) {
+							resources[name] = paths
+						}
 					case *ast.AssignStmt:
 						for index, left := range statement.Lhs {
 							indexAppReceiverFieldAssignment(left, statement.Rhs, index, receivers, source.imports, values, resources, types)
