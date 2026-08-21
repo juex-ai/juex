@@ -350,6 +350,7 @@ func TestAppFeatureCleanupInspectionTracksLocalHelpers(t *testing.T) {
 	source := `package app
 import (
 	"maps"
+	"slices"
 	"github.com/juex-ai/juex/internal/mcp"
 )
 type App struct {
@@ -588,6 +589,12 @@ func cleanupFromIteratorPairRange(application *App) {
 		break
 	}
 }
+func cleanupFromBackwardIterator(application *App) {
+	for _, resource := range slices.Backward([]closer{application.manager}) {
+		_ = resource.Close()
+		break
+	}
+}
 func cleanupFromSliceAssignment(application *App) {
 	resources := make([]closer, 1)
 	resources[:][0] = application.manager
@@ -640,7 +647,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"packageManager.Close", "packageCleanup", "Run", "cleanupRunner.Run", "identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "closeOwned", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "wrapCleanup.cleanup", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resources.Close", "resources.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "owned.resource.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
+	want := []string{"packageManager.Close", "packageCleanup", "Run", "cleanupRunner.Run", "identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "closeOwned", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "wrapCleanup.cleanup", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resources.Close", "resources.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "owned.resource.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -722,6 +729,7 @@ func TestAppToolRegistrationInspectionUsesRegistryTypes(t *testing.T) {
 	source := `package app
 import (
 	"maps"
+	"slices"
 	"github.com/juex-ai/juex/internal/tools"
 )
 type App struct{
@@ -951,6 +959,12 @@ func registerFromIteratorPairRange(application *App) {
 		break
 	}
 }
+func registerFromBackwardIterator(application *App) {
+	for _, registry := range slices.Backward([]registrar{application.registry}) {
+		registry.Register(nil)
+		break
+	}
+}
 func registerFromSliceAssignment(application *App) {
 	registries := make([]registrar, 1)
 	registries[:][0] = application.registry
@@ -1027,7 +1041,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"packageRegistry.Register", "packageRegistration", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "registerOwned", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "callbacks.register", "callbacks.register", "callbacks", "wrapRegistration.register", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"packageRegistry.Register", "packageRegistration", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "registerOwned", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "callbacks.register", "callbacks.register", "callbacks", "wrapRegistration.register", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -3453,6 +3467,11 @@ func valueIteratorArity(expression ast.Expr, imports map[string]string) int {
 		return 1
 	case "All":
 		return 2
+	case "Backward":
+		if imports[qualifier.Name] == "slices" {
+			return 2
+		}
+		return 0
 	default:
 		return 0
 	}
