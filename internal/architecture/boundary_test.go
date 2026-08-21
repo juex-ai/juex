@@ -3012,6 +3012,20 @@ func mutuallyExclusiveSwitchCases(application *App, choice int) {
 		registry.Register(nil)
 	}
 }
+func laterSwitchCaseExpressionDoesNotReachEarlierBody(application *App, choice int) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	switch choice {
+	case 0:
+		_ = resource.Close()
+		registry.Register(nil)
+	case func() int {
+		resource = application.manager
+		registry = application.registry
+		return 1
+	}():
+	}
+}
 func mutuallyExclusiveTypeSwitchCases(application *App, value any) {
 	var resource closer = &unrelatedCloser{}
 	var registry registrar = &unrelatedRegistrar{}
@@ -4990,26 +5004,41 @@ func inspectCompositionIf(statement *ast.IfStmt, visit func(ast.Node) bool, snap
 }
 
 func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, allowFallthrough bool, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) {
-	if inspectCaseExpressions {
-		for _, raw := range body.List {
-			clause := raw.(*ast.CaseClause)
-			for _, expression := range clause.List {
-				ast.Inspect(expression, visit)
-			}
-		}
-	}
 	base := snapshot()
-	var exits []compositionFlowState
-	var fallthroughState *compositionFlowState
-	hasDefault := false
+	selectedEntries := make(map[*ast.CaseClause]compositionFlowState)
+	remaining := base
+	var defaultClause *ast.CaseClause
 	for _, raw := range body.List {
 		clause := raw.(*ast.CaseClause)
 		if len(clause.List) == 0 {
-			hasDefault = true
+			defaultClause = clause
+			continue
 		}
-		entry := base
+		if !inspectCaseExpressions {
+			selectedEntries[clause] = base
+			continue
+		}
+		restore(remaining)
+		var matched []compositionFlowState
+		for _, expression := range clause.List {
+			ast.Inspect(expression, visit)
+			matched = append(matched, snapshot())
+		}
+		remaining = snapshot()
+		selectedEntries[clause] = merge(matched)
+	}
+	if defaultClause != nil {
+		// A default is selected only after every non-default case expression misses,
+		// even when the default appears earlier in source order.
+		selectedEntries[defaultClause] = remaining
+	}
+	var exits []compositionFlowState
+	var fallthroughState *compositionFlowState
+	for _, raw := range body.List {
+		clause := raw.(*ast.CaseClause)
+		entry := selectedEntries[clause]
 		if fallthroughState != nil {
-			entry = merge([]compositionFlowState{base, *fallthroughState})
+			entry = merge([]compositionFlowState{entry, *fallthroughState})
 		}
 		restore(entry)
 		for _, statement := range clause.Body {
@@ -5025,8 +5054,8 @@ func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, 
 			exits = append(exits, state)
 		}
 	}
-	if !hasDefault {
-		exits = append(exits, base)
+	if defaultClause == nil {
+		exits = append(exits, remaining)
 	}
 	restore(merge(exits))
 }
