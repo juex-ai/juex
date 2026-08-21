@@ -304,10 +304,16 @@ func closeOwned(resource closer) { _ = resource.Close() }
 func closeTransitively(resource closer) { closeOwned(resource) }
 func runCleanup(cleanup cleanupFunc) { _ = cleanup() }
 func owned(application *App) closer { return application.manager }
+func namedOwned(application *App) (resource closer) {
+	resource = application.manager
+	return
+}
 func (application *App) Close() error {
 	closeTransitively(application.manager)
 	runCleanup(application.manager.Close)
 	_ = owned(application).Close()
+	_ = namedOwned(application).Close()
+	_ = (*mcp.Manager).Close(application.manager)
 	return nil
 }`
 	dir := t.TempDir()
@@ -327,7 +333,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	if len(calls) != 3 || calls[0] != "closeTransitively" || calls[1] != "runCleanup" || calls[2] != "owned.Close" {
+	if len(calls) != 5 || calls[0] != "closeTransitively" || calls[1] != "runCleanup" || calls[2] != "owned.Close" || calls[3] != "namedOwned.Close" || calls[4] != "Close" {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
 }
@@ -403,6 +409,10 @@ type registrar interface{ Register(tools.Tool) error }
 type registryList []*tools.Registry
 func localRegistry() *tools.Registry { return nil }
 func localRegistrar(application *App) registrar { return application.registry }
+func namedLocalRegistrar(application *App) (result registrar) {
+	result = application.registry
+	return
+}
 func registerOwned(registry registrar) { _ = registry.Register(nil) }
 func registerTransitively(registry registrar) { registerOwned(registry) }
 func runRegistration(register func(tools.Tool) error) { _ = register(nil) }
@@ -421,6 +431,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	application.registry.Register(nil)
 	localRegistry().Register(nil)
 	localRegistrar(application).Register(nil)
+	namedLocalRegistrar(application).Register(nil)
 	registries := []*tools.Registry{registry}
 	registries[0].Register(nil)
 	registries = append(registries, registry)
@@ -447,8 +458,14 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
-	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] || calls[6] != want[6] || calls[7] != want[7] || calls[8] != want[8] || calls[9] != want[9] || calls[10] != want[10] || calls[11] != want[11] || calls[12] != want[12] || calls[13] != want[13] {
+	want := []string{"registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
+	if len(calls) != len(want) {
+		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
+	}
+	for index := range want {
+		if calls[index] == want[index] {
+			continue
+		}
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
 }
@@ -771,9 +788,28 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 	for name, typeName := range namedValueTypes(function.decl.Type.Params, function.imports) {
 		values[name] = typeName
 	}
+	for name, typeName := range namedValueTypes(function.decl.Type.Results, function.imports) {
+		values[name] = typeName
+	}
 	resources := namedCleanupValues(function.decl.Recv, function.imports, types)
 	for name, paths := range namedCleanupValues(function.decl.Type.Params, function.imports, types) {
 		resources[name] = paths
+	}
+	for name, paths := range namedCleanupValues(function.decl.Type.Results, function.imports, types) {
+		resources[name] = paths
+	}
+	recordResult := func(index int, expression ast.Expr) {
+		if paths := cleanupPathsForExpression(expression, function.imports, values, resources, types); paths != nil {
+			if cleanupResults[index] == nil {
+				cleanupResults[index] = make(map[string]bool)
+			}
+			for path := range paths {
+				cleanupResults[index][path] = true
+			}
+		}
+		if isToolRegistryExpression(expression, function.imports, values, types) {
+			toolResults[index] = true
+		}
 	}
 	ast.Inspect(function.decl.Body, func(node ast.Node) bool {
 		switch value := node.(type) {
@@ -830,18 +866,16 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 				resources[name.Name] = cleanupPathsForType(valueType, types, nil)
 			}
 		case *ast.ReturnStmt:
+			if len(value.Results) == 0 {
+				for index, name := range namedResultNames(function.decl.Type.Results) {
+					if name != "" {
+						recordResult(index, ast.NewIdent(name))
+					}
+				}
+				break
+			}
 			for index, expression := range value.Results {
-				if paths := cleanupPathsForExpression(expression, function.imports, values, resources, types); paths != nil {
-					if cleanupResults[index] == nil {
-						cleanupResults[index] = make(map[string]bool)
-					}
-					for path := range paths {
-						cleanupResults[index][path] = true
-					}
-				}
-				if isToolRegistryExpression(expression, function.imports, values, types) {
-					toolResults[index] = true
-				}
+				recordResult(index, expression)
 			}
 		}
 		return true
@@ -898,7 +932,11 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 		case *ast.CallExpr:
 			mergeOrigins(cleaned, callableOrigins(value.Fun, origins))
 			if selector, ok := value.Fun.(*ast.SelectorExpr); ok && isFeatureCleanupMethodName(selector.Sel.Name) {
-				mergeOrigins(cleaned, originsForExpression(selector.X, origins))
+				if isFeatureCleanupMethodExpression(selector, function.imports, types) && len(value.Args) != 0 {
+					mergeOrigins(cleaned, originsForExpression(value.Args[0], origins))
+				} else {
+					mergeOrigins(cleaned, originsForExpression(selector.X, origins))
+				}
 			}
 			callee := calledFunctionKey(value.Fun, function.imports, values, types)
 			for index := range types.cleanupParams[callee] {
@@ -1155,6 +1193,12 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				if !ok {
 					break
 				}
+				if isFeatureCleanupMethodExpression(selector, imports, types) && len(value.Args) != 0 {
+					if cleanupPathsForExpression(value.Args[0], imports, values, resources, types) != nil {
+						report(value, selectorChain(selector))
+					}
+					break
+				}
 				paths := cleanupPathsForExpression(selector.X, imports, values, resources, types)
 				if paths[selector.Sel.Name] {
 					report(value, selectorChain(selector))
@@ -1306,6 +1350,23 @@ func namedValueTypes(fields *ast.FieldList, imports map[string]string) map[strin
 	return values
 }
 
+func namedResultNames(fields *ast.FieldList) []string {
+	if fields == nil {
+		return nil
+	}
+	var names []string
+	for _, field := range fields.List {
+		if len(field.Names) == 0 {
+			names = append(names, "")
+			continue
+		}
+		for _, name := range field.Names {
+			names = append(names, name.Name)
+		}
+	}
+	return names
+}
+
 func namedCleanupValues(fields *ast.FieldList, imports map[string]string, types compositionTypeIndex) map[string]map[string]bool {
 	resources := make(map[string]map[string]bool)
 	if fields == nil {
@@ -1405,6 +1466,9 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 	case *ast.ParenExpr:
 		return cleanupPathsForExpression(value.X, imports, values, resources, types)
 	case *ast.SelectorExpr:
+		if isFeatureCleanupMethodExpression(value, imports, types) {
+			return map[string]bool{callableCleanupPath: true}
+		}
 		paths := cleanupPathsForExpression(value.X, imports, values, resources, types)
 		prefix := value.Sel.Name + "."
 		trimmed := make(map[string]bool)
@@ -1443,6 +1507,11 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 		return cleanupPathsForType(canonicalType(value.Type, imports), types, nil)
 	}
 	return nil
+}
+
+func isFeatureCleanupMethodExpression(selector *ast.SelectorExpr, imports map[string]string, types compositionTypeIndex) bool {
+	typeName := canonicalType(selector.X, imports)
+	return typeName != "" && featureCleanupMethods(typeName, types)[selector.Sel.Name]
 }
 
 func assignedCleanupPaths(expressions []ast.Expr, index int, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types compositionTypeIndex) map[string]bool {
