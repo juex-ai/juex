@@ -690,6 +690,12 @@ func cleanupFromMapsCopyAlias(application *App) {
 	maps.Copy(alias, map[string]closer{"mcp": application.manager})
 	_ = resources["mcp"].Close()
 }
+func cleanupFromMapsInsertAlias(application *App) {
+	resources := map[string]closer{}
+	alias := resources
+	maps.Insert(alias, maps.All(map[string]closer{"mcp": application.manager}))
+	_ = resources["mcp"].Close()
+}
 func cleanupAfterShadow(application *App, unrelated closer) {
 	manager := application.manager
 	{
@@ -731,7 +737,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"packageManager.Close", "packageCleanup", "Run", "cleanupRunner.Run", "identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "closeOwned", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "Close", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "wrapCleanup.cleanup", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resources.Close", "resources.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
+	want := []string{"packageManager.Close", "packageCleanup", "Run", "cleanupRunner.Run", "identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "closeOwned", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "Close", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "wrapCleanup.cleanup", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resources.Close", "resources.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -1125,6 +1131,12 @@ func registerFromMapsCopyAlias(application *App) {
 	maps.Copy(alias, map[string]registrar{"tools": application.registry})
 	registries["tools"].Register(nil)
 }
+func registerFromMapsInsertAlias(application *App) {
+	registries := map[string]registrar{}
+	alias := registries
+	maps.Insert(alias, maps.All(map[string]registrar{"tools": application.registry}))
+	registries["tools"].Register(nil)
+}
 func registerAfterShadow(application *App, unrelated *router) {
 	registry := application.registry
 	{
@@ -1190,7 +1202,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"packageRegistry.Register", "packageRegistration", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "registerOwned", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "callbacks.register", "callbacks.register", "callbacks", "wrapRegistration.register", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"packageRegistry.Register", "packageRegistration", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "registerOwned", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "callbacks.register", "callbacks.register", "callbacks", "wrapRegistration.register", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -2486,7 +2498,7 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 				}
 			}
 		case *ast.CallExpr:
-			if isMapsCopy(value, function.imports) {
+			if isCollectionWrite(value, function.imports) {
 				destination := value.Args[0]
 				source := value.Args[1]
 				recordParameterWrite(originsForExpression(destination, origins), originsForExpression(source, origins), assignmentFieldPrefix(destination))
@@ -3312,7 +3324,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					mergeAliasedCleanupPaths(resources, aliases, key, paths)
 				}
 			case *ast.CallExpr:
-				if isBuiltinCopy(value) || isMapsCopy(value, imports) {
+				if isCollectionWrite(value, imports) {
 					if destination, _ := assignmentBinding(value.Args[0]); destination != nil {
 						paths := cleanupPathsForExpression(value.Args[1], imports, values, resources, types)
 						key := bindingKey(destination)
@@ -3490,7 +3502,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					}
 				}
 			case *ast.CallExpr:
-				if isBuiltinCopy(value) || isMapsCopy(value, imports) {
+				if isCollectionWrite(value, imports) {
 					if destination, _ := assignmentBinding(value.Args[0]); destination != nil {
 						writeType := toolRegistryCollectionTypeForExpression(value.Args[1], imports, values, types)
 						if writeType != "" {
@@ -4021,6 +4033,35 @@ func isMapsCopy(call *ast.CallExpr, imports map[string]string) bool {
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || selector.Sel.Name != "Copy" {
+		return false
+	}
+	qualifier, ok := selector.X.(*ast.Ident)
+	return ok && imports[qualifier.Name] == "maps"
+}
+
+func isMapsInsert(call *ast.CallExpr, imports map[string]string) bool {
+	if len(call.Args) != 2 {
+		return false
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "Insert" {
+		return false
+	}
+	qualifier, ok := selector.X.(*ast.Ident)
+	return ok && imports[qualifier.Name] == "maps"
+}
+
+func isCollectionWrite(call *ast.CallExpr, imports map[string]string) bool {
+	return isBuiltinCopy(call) || isMapsCopy(call, imports) || isMapsInsert(call, imports)
+}
+
+func isMapsAllIterator(expression ast.Expr, imports map[string]string) bool {
+	call, ok := expression.(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return false
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "All" {
 		return false
 	}
 	qualifier, ok := selector.X.(*ast.Ident)
@@ -4963,6 +5004,9 @@ func isToolRegistryMapKeyCollectionExpression(expression ast.Expr, imports map[s
 	typeName := expressionType(expression, imports, values, types)
 	if typeName == toolRegistryMapKeyCollectionType || typeName == toolRegistryMapKeyValueCollectionType {
 		return true
+	}
+	if isMapsAllIterator(expression, imports) {
+		return isToolRegistryMapKeyCollectionExpression(expression.(*ast.CallExpr).Args[0], imports, values, types)
 	}
 	if parenthesized, ok := expression.(*ast.ParenExpr); ok {
 		return isToolRegistryMapKeyCollectionExpression(parenthesized.X, imports, values, types)
