@@ -2111,6 +2111,8 @@ type unrelatedCloser struct{}
 func (*unrelatedCloser) Close() error { return nil }
 type unrelatedRegistrar struct{}
 func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+type oneCloser [1]closer
+type oneRegistrar [1]registrar
 func replaceDuringKnownNonemptyRange(application *App) {
 	var resource closer = application.manager
 	var registry registrar = application.registry
@@ -2124,6 +2126,16 @@ func replaceDuringNamedNonemptyRange(application *App) {
 	var registry registrar = application.registry
 	resources := [1]closer{&unrelatedCloser{}}
 	registries := [1]registrar{&unrelatedRegistrar{}}
+	for _, resource = range resources {}
+	for _, registry = range registries {}
+	_ = resource.Close()
+	registry.Register(nil)
+}
+func replaceDuringNamedTypeRange(application *App) {
+	var resource closer = application.manager
+	var registry registrar = application.registry
+	resources := oneCloser{&unrelatedCloser{}}
+	registries := oneRegistrar{&unrelatedRegistrar{}}
 	for _, resource = range resources {}
 	for _, registry = range registries {}
 	_ = resource.Close()
@@ -3032,6 +3044,39 @@ outer:
 		break
 	}
 }
+func localBackwardGotoDoesNotRepeatDeferredUse(application *App, again bool) {
+	var localResource closer = &unrelatedCloser{}
+	var localRegistry registrar = &unrelatedRegistrar{}
+	for {
+		defer func() {
+			_ = localResource.Close()
+			localRegistry.Register(nil)
+			localResource = application.manager
+			localRegistry = application.registry
+		}()
+	again:
+		if again {
+			again = false
+			goto again
+		}
+		break
+	}
+}
+func gotoBeforeDeferRepeatsDeferredUse(application *App, again bool) {
+	var gotoResource closer = &unrelatedCloser{}
+	var gotoRegistry registrar = &unrelatedRegistrar{}
+again:
+	defer func() {
+		_ = gotoResource.Close()
+		gotoRegistry.Register(nil)
+		gotoResource = application.manager
+		gotoRegistry = application.registry
+	}()
+	if again {
+		again = false
+		goto again
+	}
+}
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "deferred_closure_state.go")
@@ -3050,14 +3095,16 @@ outer:
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if len(cleanupCalls) != 3 || cleanupCalls[0] != "resource.Close" || cleanupCalls[1] != "resource.Close" || cleanupCalls[2] != "resource.Close" {
+	cleanup := "," + strings.Join(cleanupCalls, ",") + ","
+	if len(cleanupCalls) != 4 || strings.Contains(cleanup, ",localResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") {
 		t.Fatalf("cleanup calls = %v, want older and repeated deferred cleanup after assignment", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if len(registrationCalls) != 3 || registrationCalls[0] != "registry.Register" || registrationCalls[1] != "registry.Register" || registrationCalls[2] != "registry.Register" {
+	registration := "," + strings.Join(registrationCalls, ",") + ","
+	if len(registrationCalls) != 4 || strings.Contains(registration, ",localRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") {
 		t.Fatalf("Tool registration calls = %v, want older and repeated deferred registration after assignment", registrationCalls)
 	}
 }
@@ -3943,6 +3990,54 @@ func foldedTaggedCaseExpressionAlwaysMatches(application *App) {
 	})
 	if len(registrationCalls) != 0 {
 		t.Fatalf("Tool registration calls = %v, want later constant-boolean case unreachable", registrationCalls)
+	}
+}
+
+func TestAppCompositionInspectionRespectsShadowedSwitchBooleans(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+const true = false
+func useShadowedBooleanSwitch(application *App) {
+	switch true {
+	case false:
+		_ = application.manager.Close()
+		application.registry.Register(nil)
+	}
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "shadowed_switch_boolean.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 1 || cleanupCalls[0] != "application.manager.Close" {
+		t.Fatalf("cleanup calls = %v, want reachable shadowed-boolean cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 1 || registrationCalls[0] != "application.registry.Register" {
+		t.Fatalf("Tool registration calls = %v, want reachable shadowed-boolean registration", registrationCalls)
 	}
 }
 
@@ -5511,6 +5606,16 @@ type delayedCompositionCall struct {
 func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]bool {
 	repeated := make(map[*ast.CallExpr]bool)
 	parents := compositionParentNodes(body)
+	labels := compositionLabelStatements(body)
+	ast.Inspect(body, func(node ast.Node) bool {
+		if _, nested := node.(*ast.FuncLit); nested {
+			return false
+		}
+		if statement, ok := node.(*ast.DeferStmt); ok && compositionDeferMayReachBackwardGoto(body, statement, parents, labels) {
+			repeated[statement.Call] = true
+		}
+		return true
+	})
 	ast.Inspect(body, func(node ast.Node) bool {
 		if _, nested := node.(*ast.FuncLit); nested {
 			return false
@@ -5529,7 +5634,7 @@ func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]boo
 			if _, nested := loopNode.(*ast.FuncLit); nested {
 				return false
 			}
-			if statement, ok := loopNode.(*ast.DeferStmt); ok && compositionDeferMayReachLoopBackEdge(node, loopBody, statement, parents) {
+			if statement, ok := loopNode.(*ast.DeferStmt); ok && compositionDeferMayReachLoopBackEdge(node, loopBody, statement, parents, labels) {
 				repeated[statement.Call] = true
 			}
 			return true
@@ -5537,6 +5642,53 @@ func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]boo
 		return true
 	})
 	return repeated
+}
+
+func compositionDeferMayReachBackwardGoto(body *ast.BlockStmt, target *ast.DeferStmt, parents map[ast.Node]ast.Node, labels map[string]*ast.LabeledStmt) bool {
+	current := ast.Node(target)
+	for current != nil {
+		parent := parents[current]
+		var statements []ast.Stmt
+		switch container := parent.(type) {
+		case *ast.BlockStmt:
+			if grandparent := parents[container]; grandparent != nil {
+				switch grandparent.(type) {
+				case *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+					current = parent
+					continue
+				}
+			}
+			statements = statementsAfterCompositionNode(container.List, current)
+		case *ast.CaseClause:
+			statements = statementsAfterCompositionNode(container.Body, current)
+		case *ast.CommClause:
+			statements = statementsAfterCompositionNode(container.Body, current)
+		}
+		if statements != nil {
+			if compositionStatementsGotoBefore(statements, target.Pos(), labels) {
+				return true
+			}
+			if !statementsFallThrough(statements) || parent == body {
+				return false
+			}
+		}
+		current = parent
+	}
+	return false
+}
+
+func compositionLabelStatements(root ast.Node) map[string]*ast.LabeledStmt {
+	labels := make(map[string]*ast.LabeledStmt)
+	ast.Inspect(root, func(node ast.Node) bool {
+		if _, nested := node.(*ast.FuncLit); nested {
+			return false
+		}
+		if statement, ok := node.(*ast.LabeledStmt); ok {
+			labels[statement.Label.Name] = statement
+		}
+		return true
+	})
+	return labels
 }
 
 func compositionParentNodes(root ast.Node) map[ast.Node]ast.Node {
@@ -5559,7 +5711,7 @@ func compositionParentNodes(root ast.Node) map[ast.Node]ast.Node {
 	return parents
 }
 
-func compositionDeferMayReachLoopBackEdge(loop ast.Node, loopBody *ast.BlockStmt, target *ast.DeferStmt, parents map[ast.Node]ast.Node) bool {
+func compositionDeferMayReachLoopBackEdge(loop ast.Node, loopBody *ast.BlockStmt, target *ast.DeferStmt, parents map[ast.Node]ast.Node, labels map[string]*ast.LabeledStmt) bool {
 	current := ast.Node(target)
 	for current != nil {
 		parent := parents[current]
@@ -5580,7 +5732,7 @@ func compositionDeferMayReachLoopBackEdge(loop ast.Node, loopBody *ast.BlockStmt
 			statements = statementsAfterCompositionNode(container.Body, current)
 		}
 		if statements != nil {
-			if compositionStatementsContinueLoop(statements, loop, parents) || hasBackwardGoto(&ast.BlockStmt{List: statements}) {
+			if compositionStatementsContinueLoop(statements, loop, parents) || compositionStatementsGotoBefore(statements, target.Pos(), labels) {
 				return true
 			}
 			if !statementsFallThrough(statements) {
@@ -5591,6 +5743,31 @@ func compositionDeferMayReachLoopBackEdge(loop ast.Node, loopBody *ast.BlockStmt
 			}
 		}
 		current = parent
+	}
+	return false
+}
+
+func compositionStatementsGotoBefore(statements []ast.Stmt, position token.Pos, labels map[string]*ast.LabeledStmt) bool {
+	found := false
+	for _, statement := range statements {
+		ast.Inspect(statement, func(node ast.Node) bool {
+			if _, nested := node.(*ast.FuncLit); nested {
+				return false
+			}
+			branch, ok := node.(*ast.BranchStmt)
+			if !ok || branch.Tok != token.GOTO || branch.Label == nil {
+				return !found
+			}
+			target := labels[branch.Label.Name]
+			if target != nil && target.Pos() <= position {
+				found = true
+				return false
+			}
+			return !found
+		})
+		if found {
+			return true
+		}
 	}
 	return false
 }
@@ -6198,11 +6375,13 @@ func compositionConstantExpressionWithSeen(expression ast.Expr, seen map[string]
 	case *ast.ParenExpr:
 		return compositionConstantExpressionWithSeen(value.X, seen)
 	case *ast.Ident:
-		switch value.Name {
-		case "true":
-			return constant.MakeBool(true), true
-		case "false":
-			return constant.MakeBool(false), true
+		if value.Obj == nil {
+			switch value.Name {
+			case "true":
+				return constant.MakeBool(true), true
+			case "false":
+				return constant.MakeBool(false), true
+			}
 		}
 		key := stableBindingKey(value)
 		if value.Obj == nil || value.Obj.Kind != ast.Con || seen[key] {
@@ -6398,25 +6577,14 @@ func compositionRangeMayBeEmptyWithSeen(expression ast.Expr, seen map[string]boo
 				if assigned := assignedExpression(declaration.Values, index); assigned != nil {
 					return compositionRangeMayBeEmptyWithSeen(assigned, seen)
 				}
-				if array, ok := declaration.Type.(*ast.ArrayType); ok {
-					return compositionArrayTypeMayBeEmpty(array)
+				if mayBeEmpty, known := compositionRangeTypeMayBeEmpty(declaration.Type, -1, seen); known {
+					return mayBeEmpty
 				}
 			}
 		}
 	case *ast.CompositeLit:
-		switch collection := value.Type.(type) {
-		case *ast.ArrayType:
-			if collection.Len == nil {
-				return len(value.Elts) == 0
-			}
-			if _, inferred := collection.Len.(*ast.Ellipsis); inferred {
-				return len(value.Elts) == 0
-			}
-			if length, ok := positiveIntegerConstant(collection.Len); ok {
-				return !length
-			}
-		case *ast.MapType:
-			return len(value.Elts) == 0
+		if mayBeEmpty, known := compositionRangeTypeMayBeEmpty(value.Type, len(value.Elts), seen); known {
+			return mayBeEmpty
 		}
 	case *ast.BasicLit:
 		switch value.Kind {
@@ -6431,21 +6599,53 @@ func compositionRangeMayBeEmptyWithSeen(expression ast.Expr, seen map[string]boo
 	return true
 }
 
-func compositionArrayTypeMayBeEmpty(array *ast.ArrayType) bool {
-	if array == nil || array.Len == nil {
-		return true
+func compositionRangeTypeMayBeEmpty(expression ast.Expr, literalElements int, seen map[string]bool) (bool, bool) {
+	switch value := expression.(type) {
+	case *ast.ParenExpr:
+		return compositionRangeTypeMayBeEmpty(value.X, literalElements, seen)
+	case *ast.Ident:
+		key := stableBindingKey(value)
+		if value.Obj == nil || seen[key] {
+			return true, false
+		}
+		seen[key] = true
+		defer delete(seen, key)
+		spec, ok := value.Obj.Decl.(*ast.TypeSpec)
+		if !ok {
+			return true, false
+		}
+		return compositionRangeTypeMayBeEmpty(spec.Type, literalElements, seen)
+	case *ast.ArrayType:
+		if value.Len == nil {
+			if literalElements >= 0 {
+				return literalElements == 0, true
+			}
+			return true, true
+		}
+		if _, inferred := value.Len.(*ast.Ellipsis); inferred {
+			if literalElements >= 0 {
+				return literalElements == 0, true
+			}
+			return true, true
+		}
+		positive, known := positiveIntegerConstant(value.Len)
+		return !known || !positive, true
+	case *ast.MapType:
+		if literalElements >= 0 {
+			return literalElements == 0, true
+		}
+		return true, true
 	}
-	positive, known := positiveIntegerConstant(array.Len)
-	return !known || !positive
+	return true, false
 }
 
 func positiveIntegerConstant(expression ast.Expr) (bool, bool) {
-	literal, ok := expression.(*ast.BasicLit)
-	if !ok || literal.Kind != token.INT {
+	value, ok := compositionConstantExpression(expression)
+	if !ok || value.Kind() != constant.Int {
 		return false, false
 	}
-	value, err := strconv.ParseUint(strings.ReplaceAll(literal.Value, "_", ""), 0, 64)
-	return value > 0, err == nil
+	integer, exact := constant.Uint64Val(value)
+	return integer > 0, exact
 }
 
 func inspectCompositionFunctionBody(body *ast.BlockStmt, visit func(ast.Node) bool, router *compositionFlowRouter) {
