@@ -41,6 +41,7 @@ import (
 	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
@@ -1170,7 +1171,7 @@ func e2ePromptBuilder(
 	}
 	t.Cleanup(func() { _ = sessionSet.CloseSession(context.Background()) })
 
-	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		return runtimemodule.CollectContext(context.Background(), runtimemodule.ContextRequest{
 			Purpose: runtimemodule.ContextPurposeProviderIteration,
 			Runtime: runtimeContext,
@@ -1832,7 +1833,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-success", ToolName: runtime.GoalToolUpdate, Input: map[string]any{
-						"status":        string(runtime.GoalStatusSuccess),
+						"status":        string(workmem.GoalStatusSuccess),
 						"status_reason": "continuation gate fired and final answer was verified",
 					}},
 				}},
@@ -1927,7 +1928,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-wait", ToolName: runtime.GoalToolUpdate, Input: map[string]any{
-						"status":        string(runtime.GoalStatusWaitForUser),
+						"status":        string(workmem.GoalStatusWaitForUser),
 						"status_reason": "waiting for deployment approval",
 					}},
 				}},
@@ -1940,7 +1941,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-success-after-input", ToolName: runtime.GoalToolUpdate, Input: map[string]any{
-						"status":        string(runtime.GoalStatusSuccess),
+						"status":        string(workmem.GoalStatusSuccess),
 						"status_reason": "user approved the healthy deployment",
 					}},
 				}},

@@ -6,13 +6,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 )
 
 func TestGoalStateStoreCreatesAndUpdatesModelOwnedGoal(t *testing.T) {
 	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
-	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{Now: func() time.Time { return now }})
+	store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{Now: func() time.Time { return now }})
 
-	state, err := store.CreateWithContract(GoalStateCreate{
+	state, err := store.CreateWithContract(workmem.GoalStateCreate{
 		Description:  "ship feature with api_key=secret",
 		Acceptance:   "tests pass; dist/report.json exists and is valid JSON",
 		StatusReason: "waiting for validation",
@@ -20,7 +22,7 @@ func TestGoalStateStoreCreatesAndUpdatesModelOwnedGoal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusInProgress || state.Description == "" || !strings.Contains(state.Acceptance, "dist/report.json") {
+	if state.Status != workmem.GoalStatusInProgress || state.Description == "" || !strings.Contains(state.Acceptance, "dist/report.json") {
 		t.Fatalf("created state = %+v", state)
 	}
 	if strings.Contains(state.Description, "secret") {
@@ -29,15 +31,15 @@ func TestGoalStateStoreCreatesAndUpdatesModelOwnedGoal(t *testing.T) {
 
 	reason := "all validation passed"
 	acceptance := "go test ./internal/runtime passes"
-	state, err = store.Update(GoalStateUpdate{
+	state, err = store.Update(workmem.GoalStateUpdate{
 		Acceptance:   &acceptance,
-		Status:       GoalStatusSuccess,
+		Status:       workmem.GoalStatusSuccess,
 		StatusReason: &reason,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusSuccess || state.StatusReason != reason || state.Acceptance != acceptance {
+	if state.Status != workmem.GoalStatusSuccess || state.StatusReason != reason || state.Acceptance != acceptance {
 		t.Fatalf("updated state = %+v", state)
 	}
 
@@ -59,10 +61,10 @@ func TestGoalStateStoreCreatesAndUpdatesModelOwnedGoal(t *testing.T) {
 }
 
 func TestGoalStateStorePreservesAndRedactsLongAcceptance(t *testing.T) {
-	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
+	store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
 	acceptance := strings.Repeat("required-check ", 100) + "api_key=secret final-check-must-survive"
 
-	state, err := store.CreateWithContract(GoalStateCreate{
+	state, err := store.CreateWithContract(workmem.GoalStateCreate{
 		Description: "ship the complete contract",
 		Acceptance:  acceptance,
 	})
@@ -82,7 +84,7 @@ func TestGoalStateStorePreservesAndRedactsLongAcceptance(t *testing.T) {
 }
 
 func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
-	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
+	store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
 	decision, err := store.CompletionGateDecision()
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +93,7 @@ func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 		t.Fatalf("no goal should not block: %+v", decision)
 	}
 
-	if _, err := store.CreateWithContract(GoalStateCreate{
+	if _, err := store.CreateWithContract(workmem.GoalStateCreate{
 		Description: "finish task",
 		Acceptance:  "artifact.txt exists and go test ./... passes",
 	}); err != nil {
@@ -124,14 +126,14 @@ func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 	}
 
 	waitReason := "waiting for the user to approve the release"
-	if _, err := store.Update(GoalStateUpdate{Status: GoalStatusWaitForUser, StatusReason: &waitReason}); err != nil {
+	if _, err := store.Update(workmem.GoalStateUpdate{Status: workmem.GoalStatusWaitForUser, StatusReason: &waitReason}); err != nil {
 		t.Fatal(err)
 	}
 	decision, err = store.CompletionGateDecision()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.BlockStop || decision.Status != GoalStatusWaitForUser {
+	if decision.BlockStop || decision.Status != workmem.GoalStatusWaitForUser {
 		t.Fatalf("wait-for-user should allow finish: %+v", decision)
 	}
 	recorded, err = store.RecordContinuation(decision)
@@ -149,7 +151,7 @@ func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 		t.Fatalf("wait-for-user changed continuation_count = %d", state.ContinuationCount)
 	}
 
-	if _, err := store.Update(GoalStateUpdate{Status: GoalStatusFailure}); err != nil {
+	if _, err := store.Update(workmem.GoalStateUpdate{Status: workmem.GoalStatusFailure}); err != nil {
 		t.Fatal(err)
 	}
 	decision, err = store.CompletionGateDecision()
@@ -162,7 +164,7 @@ func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 }
 
 func TestGoalStateStoreRejectsStaleContinuationAfterTerminalUpdate(t *testing.T) {
-	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
+	store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
 	if _, err := store.Create("finish delegated work", "all worker results arrive"); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +175,7 @@ func TestGoalStateStoreRejectsStaleContinuationAfterTerminalUpdate(t *testing.T)
 	if !decision.BlockStop {
 		t.Fatalf("in-progress decision = %+v", decision)
 	}
-	if _, err := store.Update(GoalStateUpdate{Status: GoalStatusSuccess}); err != nil {
+	if _, err := store.Update(workmem.GoalStateUpdate{Status: workmem.GoalStatusSuccess}); err != nil {
 		t.Fatal(err)
 	}
 	recorded, err := store.RecordContinuation(decision)
@@ -187,16 +189,16 @@ func TestGoalStateStoreRejectsStaleContinuationAfterTerminalUpdate(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusSuccess || state.ContinuationCount != 0 {
+	if state.Status != workmem.GoalStatusSuccess || state.ContinuationCount != 0 {
 		t.Fatalf("goal state = %+v", state)
 	}
 }
 
 func TestGoalStateProviderContextRendersCompactContract(t *testing.T) {
-	state := GoalState{
+	state := workmem.GoalState{
 		Description:  "complete\ndocs",
 		Acceptance:   "docs/guide.md is reviewed\nby tester, published, and passes link checks",
-		Status:       GoalStatusInProgress,
+		Status:       workmem.GoalStatusInProgress,
 		StatusReason: "docs still need review",
 	}
 	rendered, ok := state.RenderProviderContext()
@@ -221,10 +223,10 @@ func TestGoalStateProviderContextRendersCompactContract(t *testing.T) {
 }
 
 func TestGoalStateProviderContextOmitsEmptyStatusReason(t *testing.T) {
-	state := GoalState{
+	state := workmem.GoalState{
 		Description: "complete task",
 		Acceptance:  "tests pass",
-		Status:      GoalStatusInProgress,
+		Status:      workmem.GoalStatusInProgress,
 	}
 	rendered, ok := state.RenderProviderContext()
 	if !ok {
@@ -239,7 +241,7 @@ func TestGoalStateProviderContextOmitsEmptyStatusReason(t *testing.T) {
 }
 
 func TestGoalStateStatusReasonAloneDoesNotCreateGoal(t *testing.T) {
-	state := GoalState{StatusReason: "explanatory text without a goal"}
+	state := workmem.GoalState{StatusReason: "explanatory text without a goal"}
 	if snapshot := state.StatusSnapshot(); snapshot != nil {
 		t.Fatalf("status_reason alone should not create a goal: %+v", snapshot)
 	}

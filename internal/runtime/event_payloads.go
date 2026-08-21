@@ -7,6 +7,7 @@ import (
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
@@ -235,12 +236,12 @@ type ToolFailureStalePayload struct {
 }
 
 type GoalUpdatedPayload struct {
-	Description       string     `json:"description,omitempty"`
-	Acceptance        string     `json:"acceptance,omitempty"`
-	ContinuationCount int        `json:"continuation_count,omitempty"`
-	Status            GoalStatus `json:"status,omitempty"`
-	StatusReason      string     `json:"status_reason,omitempty"`
-	UpdatedAt         time.Time  `json:"updated_at,omitempty"`
+	Description       string             `json:"description,omitempty"`
+	Acceptance        string             `json:"acceptance,omitempty"`
+	ContinuationCount int                `json:"continuation_count,omitempty"`
+	Status            workmem.GoalStatus `json:"status,omitempty"`
+	StatusReason      string             `json:"status_reason,omitempty"`
+	UpdatedAt         time.Time          `json:"updated_at,omitempty"`
 }
 
 type NotesUpdatedPayload struct {
@@ -254,10 +255,10 @@ type NotesErroredPayload struct {
 }
 
 type GoalContinuedPayload struct {
-	Status                GoalStatus `json:"status"`
-	Reason                string     `json:"reason,omitempty"`
-	ContinuationCount     int        `json:"continuation_count"`
-	ContinuationPromptLen int        `json:"continuation_prompt_len"`
+	Status                workmem.GoalStatus `json:"status"`
+	Reason                string             `json:"reason,omitempty"`
+	ContinuationCount     int                `json:"continuation_count"`
+	ContinuationPromptLen int                `json:"continuation_prompt_len"`
 }
 
 type PendingInputQueuedPayload struct {

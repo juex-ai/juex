@@ -6,16 +6,17 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 )
 
-func (m *NotesModule) NotesStore() *NotesStore {
+func (m *NotesModule) NotesStore() *workmem.NotesStore {
 	if m == nil {
 		return nil
 	}
 	return m.store
 }
 
-func (m *NotesModule) NotesStatusSnapshot() (*NotesSnapshot, error) {
+func (m *NotesModule) NotesStatusSnapshot() (*workmem.NotesSnapshot, error) {
 	store := m.NotesStore()
 	if store == nil {
 		return nil, nil
@@ -37,7 +38,7 @@ func (m *NotesModule) NotesCompactionState() (string, error) {
 	return snapshot.Content, nil
 }
 
-func (m *NotesModule) notesContextFromStore(store *NotesStore) (string, bool) {
+func (m *NotesModule) notesContextFromStore(store *workmem.NotesStore) (string, bool) {
 	if m == nil || store == nil {
 		return "", false
 	}
@@ -49,7 +50,7 @@ func (m *NotesModule) notesContextFromStore(store *NotesStore) (string, bool) {
 	return snapshot.RenderProviderContext()
 }
 
-func (m *NotesModule) notesUnavailableContext(store *NotesStore, err error) string {
+func (m *NotesModule) notesUnavailableContext(store *workmem.NotesStore, err error) string {
 	errorText := err.Error()
 	m.recordNotesContextError(store, err)
 
@@ -57,11 +58,11 @@ func (m *NotesModule) notesUnavailableContext(store *NotesStore, err error) stri
 	return fmt.Sprintf("Working notes unavailable (%s); fix %s or rewrite with update_notes", reason, notesProviderPath(store))
 }
 
-func (m *NotesModule) recordNotesContextError(store *NotesStore, err error) {
+func (m *NotesModule) recordNotesContextError(store *workmem.NotesStore, err error) {
 	if m == nil || store == nil || err == nil {
 		return
 	}
-	notesPath := filepath.Join(store.SessionDir, NotesFileName)
+	notesPath := filepath.Join(store.SessionDir, workmem.NotesFileName)
 	errorText := err.Error()
 	errorKey := notesPath + "\x00" + errorText
 	m.notesContextErrorMu.Lock()
@@ -76,9 +77,9 @@ func (m *NotesModule) recordNotesContextError(store *NotesStore, err error) {
 	}
 }
 
-func notesProviderPath(store *NotesStore) string {
+func notesProviderPath(store *workmem.NotesStore) string {
 	sessionID := filepath.Base(filepath.Clean(store.SessionDir))
-	return filepath.ToSlash(filepath.Join(".juex", "sessions", sessionID, NotesFileName))
+	return filepath.ToSlash(filepath.Join(".juex", "sessions", sessionID, workmem.NotesFileName))
 }
 
 func (m *NotesModule) clearNotesContextError() {
@@ -90,7 +91,7 @@ func (m *NotesModule) clearNotesContextError() {
 	m.notesContextErrorMu.Unlock()
 }
 
-func (m *NotesModule) emitNotesUpdated(turnID string, snapshot NotesSnapshot) {
+func (m *NotesModule) emitNotesUpdated(turnID string, snapshot workmem.NotesSnapshot) {
 	if m == nil {
 		return
 	}

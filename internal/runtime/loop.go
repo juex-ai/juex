@@ -64,10 +64,10 @@ type Engine struct {
 	RuntimeModules    *runtimemodule.Set
 	RuntimeContext    runtimemodule.RuntimeContext
 	Bus               *events.Bus
-	// Session, Prompt, and PendingInputQueue
-	// are constructor/test compatibility fields. Concurrent production code
-	// must use the synchronized session-runtime methods instead of reading or
-	// replacing these fields directly.
+	// Session, Prompt, and PendingInputQueue seed the first session runtime
+	// bundle during bootstrap. Concurrent production code must use the
+	// synchronized session-runtime methods after publication instead of reading
+	// or replacing these fields directly.
 	Session *session.Session
 	Prompt  *prompt.Builder
 	// WorkDir is the workspace root. Runtime state may live outside it, so

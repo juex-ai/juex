@@ -1,30 +1,33 @@
 package runtime
 
-import runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+import (
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
+)
 
 type GoalStateStoreProvider interface {
-	GoalStateStore() *GoalStateStore
+	GoalStateStore() *workmem.GoalStateStore
 }
 
 type NotesStoreProvider interface {
-	NotesStore() *NotesStore
+	NotesStore() *workmem.NotesStore
 }
 
 type GoalStatusProvider interface {
-	GoalStatusSnapshot() (*GoalStatusSnapshot, error)
+	GoalStatusSnapshot() (*workmem.GoalStatusSnapshot, error)
 }
 
 type NotesStatusProvider interface {
-	NotesStatusSnapshot() (*NotesSnapshot, error)
+	NotesStatusSnapshot() (*workmem.NotesSnapshot, error)
 }
 
 type HookGoalStateProvider interface {
 	HookGoalState() []byte
 }
 
-func SessionStateStoresFromModules(set *runtimemodule.Set) (*GoalStateStore, *NotesStore) {
-	var goal *GoalStateStore
-	var notes *NotesStore
+func SessionStateStoresFromModules(set *runtimemodule.Set) (*workmem.GoalStateStore, *workmem.NotesStore) {
+	var goal *workmem.GoalStateStore
+	var notes *workmem.NotesStore
 	if set == nil {
 		return nil, nil
 	}
@@ -43,9 +46,9 @@ func SessionStateStoresFromModules(set *runtimemodule.Set) (*GoalStateStore, *No
 	return goal, notes
 }
 
-func SessionStateStatusFromModules(set *runtimemodule.Set) (*GoalStatusSnapshot, *NotesSnapshot) {
-	var goal *GoalStatusSnapshot
-	var notes *NotesSnapshot
+func SessionStateStatusFromModules(set *runtimemodule.Set) (*workmem.GoalStatusSnapshot, *workmem.NotesSnapshot) {
+	var goal *workmem.GoalStatusSnapshot
+	var notes *workmem.NotesSnapshot
 	if set == nil {
 		return nil, nil
 	}
@@ -76,7 +79,7 @@ func HookGoalStateFromModules(set *runtimemodule.Set) []byte {
 	return nil
 }
 
-func (e *Engine) GoalStatusSnapshot() (*GoalStatusSnapshot, error) {
+func (e *Engine) GoalStatusSnapshot() (*workmem.GoalStatusSnapshot, error) {
 	if e == nil {
 		return nil, nil
 	}
@@ -92,7 +95,7 @@ func (e *Engine) GoalStatusSnapshot() (*GoalStatusSnapshot, error) {
 	return nil, nil
 }
 
-func (e *Engine) NotesStatusSnapshot() (*NotesSnapshot, error) {
+func (e *Engine) NotesStatusSnapshot() (*workmem.NotesSnapshot, error) {
 	if e == nil {
 		return nil, nil
 	}

@@ -27,7 +27,7 @@ import (
 const SectionSeparator = "\n\n---\n\n"
 
 type Builder struct {
-	ModulePromptContext func() ([]runtimemodule.PromptSection, error)
+	ModulePromptContext func() ([]runtimemodule.ContextSection, error)
 }
 
 type ShellProfile struct {
@@ -52,7 +52,7 @@ func ShellProfileFromConfig(p config.ShellProfile) ShellProfile {
 	}
 }
 
-type Section = runtimemodule.PromptSection
+type Section = runtimemodule.ContextSection
 
 // Build is the compatibility helper for callers that cannot return an error.
 // Runtime request paths use BuildWithError so Module failures stay visible.

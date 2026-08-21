@@ -11,6 +11,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -99,7 +100,7 @@ func appendPolicyAdditionalContext(msg llm.Message, results []hooks.Result) llm.
 
 func newTestPromptBuilder(workDir string, now func() time.Time) *prompt.Builder {
 	provider := &prompt.SessionContextModule{WorkDir: workDir, Now: now}
-	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		return provider.Context(context.Background(), runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration})
 	}}
 }
@@ -119,11 +120,11 @@ func installModuleTools(t *testing.T, registry *tools.Registry, providers ...run
 	}
 }
 
-func installSessionStateModules(t *testing.T, engine *Engine) (*GoalStateStore, *NotesStore) {
+func installSessionStateModules(t *testing.T, engine *Engine) (*workmem.GoalStateStore, *workmem.NotesStore) {
 	return installSessionStateModulesWithGoalOptions(t, engine, GoalModuleOptions{EnableContinuation: true})
 }
 
-func installSessionStateModulesWithGoalOptions(t *testing.T, engine *Engine, goalOptions GoalModuleOptions) (*GoalStateStore, *NotesStore) {
+func installSessionStateModulesWithGoalOptions(t *testing.T, engine *Engine, goalOptions GoalModuleOptions) (*workmem.GoalStateStore, *workmem.NotesStore) {
 	t.Helper()
 	return installSessionStateModulesWithStoresAndGoalOptions(t, engine, nil, nil, goalOptions)
 }
@@ -131,9 +132,9 @@ func installSessionStateModulesWithGoalOptions(t *testing.T, engine *Engine, goa
 func installSessionStateModulesWithStores(
 	t *testing.T,
 	engine *Engine,
-	goalState *GoalStateStore,
-	notes *NotesStore,
-) (*GoalStateStore, *NotesStore) {
+	goalState *workmem.GoalStateStore,
+	notes *workmem.NotesStore,
+) (*workmem.GoalStateStore, *workmem.NotesStore) {
 	t.Helper()
 	return installSessionStateModulesWithStoresAndGoalOptions(t, engine, goalState, notes, GoalModuleOptions{EnableContinuation: true})
 }
@@ -141,19 +142,19 @@ func installSessionStateModulesWithStores(
 func installSessionStateModulesWithStoresAndGoalOptions(
 	t *testing.T,
 	engine *Engine,
-	goalState *GoalStateStore,
-	notes *NotesStore,
+	goalState *workmem.GoalStateStore,
+	notes *workmem.NotesStore,
 	goalOptions GoalModuleOptions,
-) (*GoalStateStore, *NotesStore) {
+) (*workmem.GoalStateStore, *workmem.NotesStore) {
 	t.Helper()
 	if engine == nil || engine.Session == nil {
 		t.Fatal("session state modules require an attached session")
 	}
 	if goalState == nil {
-		goalState = NewGoalStateStore(engine.Session.Dir, GoalStateOptions{})
+		goalState = workmem.NewGoalStateStore(engine.Session.Dir, workmem.GoalStateOptions{})
 	}
 	if notes == nil {
-		notes = NewNotesStore(engine.Session.Dir)
+		notes = workmem.NewNotesStore(engine.Session.Dir)
 	}
 	eventSink := func(event events.Event) error {
 		if engine.Bus == nil {

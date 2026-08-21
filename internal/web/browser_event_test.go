@@ -15,6 +15,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/statusapi"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
@@ -714,7 +715,7 @@ func browserEventFixtureEvents() []events.Event {
 				Description:       "ship the fix",
 				Acceptance:        "tests pass",
 				ContinuationCount: 2,
-				Status:            juexruntime.GoalStatusInProgress,
+				Status:            workmem.GoalStatusInProgress,
 				UpdatedAt:         ts.Add(7200 * time.Millisecond),
 			},
 		},

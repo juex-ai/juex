@@ -4,9 +4,10 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 )
 
-func appSessionStateStores(t testing.TB, app *App) (*runtime.GoalStateStore, *runtime.NotesStore) {
+func appSessionStateStores(t testing.TB, app *App) (*workmem.GoalStateStore, *workmem.NotesStore) {
 	t.Helper()
 	if app == nil || app.Engine == nil {
 		t.Fatal("session state stores require an initialized app")
@@ -18,7 +19,7 @@ func appSessionStateStores(t testing.TB, app *App) (*runtime.GoalStateStore, *ru
 	return goalState, notes
 }
 
-func appGoalStateStore(t testing.TB, app *App) *runtime.GoalStateStore {
+func appGoalStateStore(t testing.TB, app *App) *workmem.GoalStateStore {
 	t.Helper()
 	goalState, _ := appSessionStateStores(t, app)
 	return goalState

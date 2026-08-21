@@ -256,7 +256,7 @@ func TestCompactWithInstructionsWithoutEligibleContextLeavesRuntimeIdle(t *testi
 
 func TestCompactWithInstructionsPromptFailureTerminatesAdmittedTurn(t *testing.T) {
 	a, provider := newStubApp(t)
-	a.Engine.Prompt.ModulePromptContext = func() ([]runtimemodule.PromptSection, error) {
+	a.Engine.Prompt.ModulePromptContext = func() ([]runtimemodule.ContextSection, error) {
 		return nil, errors.New("memory unavailable")
 	}
 

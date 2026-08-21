@@ -219,7 +219,7 @@ func TestRecoverSessionProvenanceDoesNotMaterializeUnrelatedEvents(t *testing.T)
 
 func sessionRuntimeTestPrompt(engine *Engine, workDir string) *prompt.Builder {
 	provider := &prompt.SessionContextModule{WorkDir: workDir}
-	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		snapshot := engine.SessionRuntimeSnapshot()
 		request := runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration}
 		if snapshot.Session != nil {

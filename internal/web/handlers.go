@@ -20,6 +20,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/statusapi"
 	"github.com/juex-ai/juex/internal/usermedia"
@@ -191,8 +192,8 @@ type sessionShowResponse struct {
 	EventCursor     string                      `json:"event_cursor"`
 	HasMoreBefore   bool                        `json:"has_more_before"`
 	OldestMessageID string                      `json:"oldest_message_id,omitempty"`
-	Goal            *runtime.GoalStatusSnapshot `json:"goal,omitempty"`
-	Notes           *runtime.NotesSnapshot      `json:"notes,omitempty"`
+	Goal            *workmem.GoalStatusSnapshot `json:"goal,omitempty"`
+	Notes           *workmem.NotesSnapshot      `json:"notes,omitempty"`
 }
 
 const (
@@ -237,8 +238,8 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 			info   session.Info
 			page   session.MessagePage
 			cursor string
-			goal   *runtime.GoalStatusSnapshot
-			notes  *runtime.NotesSnapshot
+			goal   *workmem.GoalStatusSnapshot
+			notes  *workmem.NotesSnapshot
 		)
 		// Capture the resume cursor before the transcript page, so a concurrent
 		// commit may replay but can never be skipped. Both cursor sources run
@@ -350,12 +351,12 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 	})
 }
 
-func (s *Server) sessionStateStatus(dir string, as *activeSession) (*runtime.GoalStatusSnapshot, *runtime.NotesSnapshot) {
+func (s *Server) sessionStateStatus(dir string, as *activeSession) (*workmem.GoalStatusSnapshot, *workmem.NotesSnapshot) {
 	if as != nil && as.app != nil && as.app.Engine != nil {
 		return as.app.SessionStateStatus()
 	}
-	goal, _ := runtime.NewGoalStateStore(dir, runtime.GoalStateOptions{}).StatusSnapshot()
-	notes, _ := runtime.NewNotesStore(dir).StatusSnapshot()
+	goal, _ := workmem.NewGoalStateStore(dir, workmem.GoalStateOptions{}).StatusSnapshot()
+	notes, _ := workmem.NewNotesStore(dir).StatusSnapshot()
 	return goal, notes
 }
 
