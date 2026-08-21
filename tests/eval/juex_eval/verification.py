@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pathlib
 import platform
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -120,7 +122,12 @@ def plan_fingerprint(steps: Iterable[StepLike]) -> str:
     return stable_fingerprint(projection)
 
 
-def environment_fingerprint(*, web: bool) -> str:
+def environment_fingerprint(
+    *,
+    web: bool,
+    repo_root: pathlib.Path | None = None,
+    test_environment: dict[str, str] | None = None,
+) -> str:
     projection = {
         "platform": sys.platform,
         "platform_release": platform.release(),
@@ -129,6 +136,12 @@ def environment_fingerprint(*, web: bool) -> str:
         "go_version": _version_output(["go", "version"]),
         "go_environment": _version_output(["go", "env", *GO_ENV_FINGERPRINT_KEYS]),
         "make": _version_output(["make", "--version"], first_line=True),
+        "build_git_description": (
+            _version_output(["git", "describe", "--tags", "--always", "--dirty"], cwd=repo_root)
+            if repo_root is not None
+            else "unavailable:not-requested"
+        ),
+        "ripgrep": executable_fingerprint("rg", test_environment),
     }
     if web:
         projection["node"] = _version_output(["node", "--version"])
@@ -153,9 +166,33 @@ def artifact_fingerprints(repo_root: pathlib.Path) -> dict[str, dict[str, Any]]:
     }
 
 
-def _version_output(command: list[str], *, first_line: bool = False) -> str:
+def executable_fingerprint(name: str, environment: dict[str, str] | None = None) -> dict[str, Any]:
+    path = shutil.which(name, path=(environment or os.environ).get("PATH"))
+    if not path:
+        return {"status": "unavailable"}
+    resolved = pathlib.Path(path).resolve()
     try:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True)
+        digest = hashlib.sha256()
+        with resolved.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return {
+            "path": str(resolved),
+            "sha256": "sha256:" + digest.hexdigest(),
+            "size": resolved.stat().st_size,
+        }
+    except OSError as exc:
+        return {"path": str(resolved), "status": f"unreadable:{exc.__class__.__name__}"}
+
+
+def _version_output(
+    command: list[str],
+    *,
+    first_line: bool = False,
+    cwd: pathlib.Path | None = None,
+) -> str:
+    try:
+        completed = subprocess.run(command, cwd=cwd, check=False, capture_output=True, text=True)
     except OSError as exc:
         return f"unavailable:{exc.__class__.__name__}"
     output = (completed.stdout or completed.stderr).strip()
@@ -254,11 +291,6 @@ def preserve_candidate_record(report_dir: pathlib.Path) -> pathlib.Path | None:
 
 
 def _preserve_file(source: pathlib.Path, destination: pathlib.Path) -> None:
-    if destination.exists():
-        if destination.read_bytes() != source.read_bytes():
-            raise ValueError(f"preserved candidate record already differs: {destination}")
-        source.unlink()
-        return
     source.replace(destination)
 
 

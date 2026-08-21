@@ -810,8 +810,9 @@ pre-run `HEAD` SHA and require that snapshot to be clean before and after their
 steps. Reports live under
 `.tmp/reports/development-validation/<full-head-sha>/<run-id>/`. Final reuses a
 passing candidate's deterministic/build prefix only when the record schema,
-SHA, plan, and stable environment fingerprints all match; live gates always
-run. `RACE=1`
+SHA, plan, and stable environment fingerprints all match; the stable inputs
+include effective Go settings, the build's Git description, and the resolved
+ripgrep binary. Live gates always run. `RACE=1`
 replaces the ordinary deterministic suite, `WEB=1` adds the frontend gate
 without rebuilding it during the binary build, and `COMPACTION=1` adds the
 live compaction evaluator to final verification. Final verification otherwise

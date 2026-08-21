@@ -154,12 +154,14 @@ selection identity, and every reused, executed, invalidated, or
 fail-fast-not-run step. A missing or changed candidate binary invalidates reuse
 so final can rebuild the artifact required by live smoke. The environment
 fingerprint includes effective Go build flags, workspaces, experiments,
-toolchain, architecture, and CGO/compiler settings, preventing reuse across
-different inherited Go semantics. Directories are created on demand. If
+toolchain, architecture, CGO/compiler settings, the build's `git describe`
+value, and the resolved ripgrep executable fingerprint, preventing reuse across
+different effective build or test inputs. Directories are created on demand. If
 candidate and final explicitly share one run ID, final
 preserves the reusable source as `candidate-record.json` and
 `candidate-record.md` beside its own `record.json` and `record.md`, so a failed
-live-gate retry does not rerun the deterministic plan.
+live-gate retry does not rerun the deterministic plan. A refreshed candidate
+for that run ID atomically replaces the older preserved candidate snapshot.
 Report kinds are:
 
 - `provider-model-smoke`

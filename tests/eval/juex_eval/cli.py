@@ -234,7 +234,14 @@ def run_verify(args: argparse.Namespace) -> int:
         args.config = str(selection.resolved_path(args.config))
     candidate_steps = candidate_verification_steps(race=args.race, web=args.web)
     candidate_plan_fingerprint = verification.plan_fingerprint(candidate_steps)
-    environment_fingerprint = verification.environment_fingerprint(web=args.web)
+    candidate_test_env = (
+        isolated_test_environment() if any(step.test_environment for step in candidate_steps) else None
+    )
+    environment_fingerprint = verification.environment_fingerprint(
+        web=args.web,
+        repo_root=REPO_ROOT,
+        test_environment=candidate_test_env,
+    )
     report_root = pathlib.Path(args.report_dir) if args.report_dir else helper.REPORT_ROOT
     report_dir = verification.default_report_dir(report_root, snapshot, args.run_id)
     args.verification_report_dir = str(report_dir)
@@ -260,7 +267,7 @@ def run_verify(args: argparse.Namespace) -> int:
     rows = [verification.planned_step_record(step) for step in steps]
     row_by_label = {row["label"]: row for row in rows}
     steps_to_execute = [step for step in steps if step.label not in decision.reusable]
-    test_env = isolated_test_environment() if any(step.test_environment for step in steps_to_execute) else None
+    test_env = candidate_test_env if any(step.test_environment for step in steps_to_execute) else None
     executed: list[str] = []
     reused: list[str] = []
     status = 0
