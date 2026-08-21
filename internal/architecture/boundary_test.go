@@ -2497,6 +2497,8 @@ type unrelatedCloser struct{}
 func (*unrelatedCloser) Close() error { return nil }
 type unrelatedRegistrar struct{}
 func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func runCapturedCleanup(callback func()) { callback() }
+func runCapturedRegistration(callback func()) { callback() }
 func useReassignedCaptures(application *App) {
 	var resource closer = &unrelatedCloser{}
 	cleanup := func() { _ = resource.Close() }
@@ -2506,6 +2508,8 @@ func useReassignedCaptures(application *App) {
 	registry = application.registry
 	cleanup()
 	register()
+	runCapturedCleanup(cleanup)
+	runCapturedRegistration(register)
 }
 `
 	dir := t.TempDir()
@@ -2525,14 +2529,14 @@ func useReassignedCaptures(application *App) {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",cleanup,") {
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",cleanup,") || !strings.Contains(cleanup, ",runCapturedCleanup,") {
 		t.Fatalf("cleanup calls = %v, want reassigned capture cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",register,") {
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",register,") || !strings.Contains(registration, ",runCapturedRegistration,") {
 		t.Fatalf("Tool registration calls = %v, want reassigned capture registration", registrationCalls)
 	}
 }
@@ -5118,7 +5122,8 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				reported := false
 				for index := range cleanupParams {
 					for _, argument := range callArgumentsForParameterAt(value, index, variadicIndex, variadic, imports) {
-						if cleanupPathsForExpression(argument, imports, values, resources, types) != nil {
+						argumentCallee := calledFunctionKey(argument, imports, values, types)
+						if cleanupPathsForExpression(argument, imports, values, resources, types) != nil || invokesCapturedCleanup(argumentCallee, function.Body, values, resources, types) {
 							reportCleanup(value, selectorChain(value.Fun))
 							reported = true
 							break
@@ -5403,7 +5408,8 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				reported := false
 				for index := range toolParams {
 					for _, argument := range callArgumentsForParameterAt(value, index, variadicIndex, variadic, imports) {
-						if isToolRegistryExpression(argument, imports, values, types) || isToolRegistryCollectionExpression(argument, imports, values, types) || isToolRegistrationValueExpression(argument, imports, values, types) {
+						argumentCallee := calledFunctionKey(argument, imports, values, types)
+						if isToolRegistryExpression(argument, imports, values, types) || isToolRegistryCollectionExpression(argument, imports, values, types) || isToolRegistrationValueExpression(argument, imports, values, types) || invokesCapturedToolRegistration(argumentCallee, function.Body, values, types) {
 							reportTool(value, selectorChain(value.Fun))
 							reported = true
 							break
