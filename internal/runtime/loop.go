@@ -58,12 +58,15 @@ type Engine struct {
 	Provider          llm.Provider
 	SummaryProvider   llm.Provider
 	SummaryProvenance provenance.SafeProvider
-	ModelCandidates   []ModelCandidate
-	ModelHealth       *llm.ModelHealth
-	Tools             *tools.Registry
-	RuntimeModules    *runtimemodule.Set
-	RuntimeContext    runtimemodule.RuntimeContext
-	Bus               *events.Bus
+	// SummaryContextWindow is the dedicated compaction summary model's context
+	// window. Zero keeps the serving candidate window as the fallback.
+	SummaryContextWindow int
+	ModelCandidates      []ModelCandidate
+	ModelHealth          *llm.ModelHealth
+	Tools                *tools.Registry
+	RuntimeModules       *runtimemodule.Set
+	RuntimeContext       runtimemodule.RuntimeContext
+	Bus                  *events.Bus
 	// Session, Prompt, and PendingInputQueue seed the first session runtime
 	// bundle during bootstrap. Concurrent production code must use the
 	// synchronized session-runtime methods after publication instead of reading

@@ -54,13 +54,14 @@ type Options struct {
 	ModelHealth     *llm.ModelHealth
 	// SummaryProvider, when set, overrides compaction.summary_model provider
 	// construction. It is primarily useful for tests and embedded callers.
-	SummaryProvider   llm.Provider
-	SummaryProvenance provenance.SafeProvider
-	Verbose           bool
-	Debug             bool
-	LogLevel          string
-	Stderr            io.Writer
-	WorkDir           string // if set, overrides Config.WorkDir
+	SummaryProvider      llm.Provider
+	SummaryProvenance    provenance.SafeProvider
+	SummaryContextWindow int
+	Verbose              bool
+	Debug                bool
+	LogLevel             string
+	Stderr               io.Writer
+	WorkDir              string // if set, overrides Config.WorkDir
 	// MCPManager, when set, provides process-scoped MCP clients owned by
 	// the caller. App registers proxy tools into its per-session registry
 	// but does not close the manager.
@@ -292,11 +293,13 @@ func New(opts Options) (*App, error) {
 	}
 	summaryProvider := opts.SummaryProvider
 	summaryProvenance := opts.SummaryProvenance
+	summaryContextWindow := opts.SummaryContextWindow
 	if summaryProvider == nil && !providerInjected && strings.TrimSpace(runtimeLimits.Compaction.SummaryModel) != "" {
-		selection, err := cfg.ProviderSelectionForModelRef(runtimeLimits.Compaction.SummaryModel)
+		resolved, err := cfg.ResolvedModelForRef(runtimeLimits.Compaction.SummaryModel)
 		if err != nil {
 			return nil, fmt.Errorf("app: compaction.summary_model: %w", err)
 		}
+		selection := resolved.Selection
 		selection.ArtifactDir = runtimePaths.ArtifactDir
 		profile, err := selection.ProviderProfile()
 		if err != nil {
@@ -308,6 +311,7 @@ func New(opts Options) (*App, error) {
 		}
 		summaryProvider = p
 		summaryProvenance = provenance.SafeProviderFromProfile(profile)
+		summaryContextWindow = resolved.ContextWindow
 	}
 
 	bus := events.NewBus()
@@ -452,6 +456,7 @@ func New(opts Options) (*App, error) {
 		Provider:                provider,
 		SummaryProvider:         summaryProvider,
 		SummaryProvenance:       summaryProvenance,
+		SummaryContextWindow:    summaryContextWindow,
 		ModelCandidates:         modelCandidates,
 		ModelHealth:             modelHealth,
 		Tools:                   reg,

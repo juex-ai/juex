@@ -2209,6 +2209,44 @@ compaction:
 	}
 }
 
+func TestConfig_ResolvedModelForRefIncludesContextWindow(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `models: [main:gpt-large]
+providers:
+  - id: main
+    protocol: openai/chat
+    base_url: https://main.example.com
+    api_key: sk-main
+    models:
+      - id: gpt-large
+        context_window: 256000
+  - id: compact
+    protocol: openai/chat
+    base_url: https://compact.example.com
+    api_key: sk-compact
+    models:
+      - id: gpt-small
+        context_window: 30000
+compaction:
+  summary_model: compact:gpt-small
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFileForWorkDir(configPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := cfg.ResolvedModelForRef(cfg.Compaction.SummaryModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Ref != "compact:gpt-small" || resolved.ContextWindow != 30000 || resolved.Selection.Model != "gpt-small" {
+		t.Fatalf("resolved summary model = %+v", resolved)
+	}
+}
+
 func TestConfig_ProviderProfileForModelRefKeepsEnvCredentials(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()

@@ -1994,7 +1994,7 @@ func TestSideSessionDefaultChildInheritsSummaryProvider(t *testing.T) {
 			ProviderID: "openai", APIKey: "test", Model: "primary",
 			WorkDir: workDir, AgentStateDir: filepath.Join(workDir, ".juex"),
 		},
-		Provider: provider, SummaryProvider: summary, WorkDir: workDir, DisableMCP: true,
+		Provider: provider, SummaryProvider: summary, SummaryContextWindow: 30000, WorkDir: workDir, DisableMCP: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2019,6 +2019,9 @@ func TestSideSessionDefaultChildInheritsSummaryProvider(t *testing.T) {
 	})
 	if child.Engine.SummaryProvider != summary {
 		t.Fatalf("child SummaryProvider = %T %p, want parent provider %p", child.Engine.SummaryProvider, child.Engine.SummaryProvider, summary)
+	}
+	if child.Engine.SummaryContextWindow != 30000 {
+		t.Fatalf("child SummaryContextWindow = %d, want 30000", child.Engine.SummaryContextWindow)
 	}
 }
 

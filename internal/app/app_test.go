@@ -855,6 +855,45 @@ func TestApp_NewInjectedProviderDoesNotConstructSummaryProvider(t *testing.T) {
 	}
 }
 
+func TestApp_NewPreservesConfiguredSummaryModelContextWindow(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+	t.Setenv("JUEX_HOME", filepath.Join(dir, "juex-home"))
+	configPath := filepath.Join(dir, "juex.yaml")
+	mustWriteAppTestFile(t, configPath, `models: [main:gpt-large]
+providers:
+  - id: main
+    protocol: openai/chat
+    base_url: https://main.example.com
+    api_key: sk-main
+    models:
+      - id: gpt-large
+        context_window: 256000
+  - id: compact
+    protocol: openai/chat
+    base_url: https://compact.example.com
+    api_key: sk-compact
+    models:
+      - id: gpt-small
+        context_window: 30000
+compaction:
+  summary_model: compact:gpt-small
+`)
+	cfg, err := config.LoadFromFileForWorkDirForValidation(configPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AgentStateDir = filepath.Join(dir, "state")
+	a, err := New(Options{Config: cfg, WorkDir: dir, DisableMCP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if a.Engine.ContextWindow != 256000 || a.Engine.SummaryContextWindow != 30000 {
+		t.Fatalf("context windows = serving:%d summary:%d", a.Engine.ContextWindow, a.Engine.SummaryContextWindow)
+	}
+}
+
 func TestApp_HandleObservationStartsTurnWhenNoActiveTurn(t *testing.T) {
 	reply := llm.TextMessage(llm.RoleAssistant, "ack")
 	a, prov := newStubApp(t, llm.Response{Message: reply, StopReason: llm.StopEndTurn})

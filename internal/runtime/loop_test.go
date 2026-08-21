@@ -3218,6 +3218,7 @@ func TestCompactUsesSummaryProviderWhenConfigured(t *testing.T) {
 	eng, bus := newEngine(t, main, false)
 	eng.SummaryProvider = summary
 	eng.SummaryProvenance = provenance.SafeProvider{ID: "summary", Model: "summary:model", EndpointDigest: "summary-endpoint"}
+	eng.SummaryContextWindow = 30000
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
@@ -3243,6 +3244,9 @@ func TestCompactUsesSummaryProviderWhenConfigured(t *testing.T) {
 	}
 	if epoch.Provider.ID != "summary" || epoch.Provider.EndpointDigest != "summary-endpoint" {
 		t.Fatalf("summary provider provenance = %+v", epoch.Provider)
+	}
+	if epoch.ContextWindow != 30000 {
+		t.Fatalf("summary request context window = %d, want 30000", epoch.ContextWindow)
 	}
 }
 
