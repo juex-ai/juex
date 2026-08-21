@@ -28,13 +28,16 @@ const receiverParameterIndex = -1
 const packageFunctionScopeKey = modulePath + "/internal/app.$package"
 
 const (
-	sliceTypePrefix   = "$slice:"
-	arrayTypePrefix   = "$array:"
-	mapTypePrefix     = "$map:"
-	channelTypePrefix = "$channel:"
-	typeSeparator     = "\x00"
-	embeddedPrefix    = "$embedded:"
-	mapKeyPathPrefix  = "$map-key:"
+	sliceTypePrefix    = "$slice:"
+	arrayTypePrefix    = "$array:"
+	mapTypePrefix      = "$map:"
+	channelTypePrefix  = "$channel:"
+	typeSeparator      = "\x00"
+	embeddedPrefix     = "$embedded:"
+	mapKeyPathPrefix   = "$map-key:"
+	iteratorKeyPrefix  = "$iterator-key:"
+	iteratorValPrefix  = "$iterator-value:"
+	iteratorTypePrefix = "$iterator:"
 )
 
 var concreteFeatureImports = []string{
@@ -2059,6 +2062,10 @@ type registrar interface { Register(tools.Tool) error }
 func useSliceValues(application *App) {
 	for resource := range slices.Values([]closer{application.manager}) { _ = resource.Close() }
 	for registry := range slices.Values([]registrar{application.registry}) { registry.Register(nil) }
+	resources := slices.Values([]closer{application.manager})
+	for assignedResource := range resources { _ = assignedResource.Close() }
+	registries := slices.Values([]registrar{application.registry})
+	for assignedRegistry := range registries { assignedRegistry.Register(nil) }
 }
 `
 	dir := t.TempDir()
@@ -2078,14 +2085,14 @@ func useSliceValues(application *App) {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resource.Close,") {
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resource.Close,") || !strings.Contains(cleanup, ",assignedResource.Close,") {
 		t.Fatalf("cleanup calls = %v, want slices.Values cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registry.Register,") {
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registry.Register,") || !strings.Contains(registration, ",assignedRegistry.Register,") {
 		t.Fatalf("Tool registration calls = %v, want slices.Values registration", registrationCalls)
 	}
 }
@@ -4404,7 +4411,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			case *ast.CallExpr:
 				if isCollectionWrite(value, imports) {
 					if destination, _ := assignmentBinding(value.Args[0]); destination != nil {
-						paths := cleanupPathsForExpression(value.Args[1], imports, values, resources, types)
+						paths := materializeIteratorCleanupPaths(cleanupPathsForExpression(value.Args[1], imports, values, resources, types))
 						key := bindingKey(destination)
 						mergeAliasedCleanupPaths(resources, aliases, key, paths)
 					}
@@ -5407,6 +5414,62 @@ func isBuiltinAppend(call *ast.CallExpr) bool {
 	return ok && identifier.Name == "append" && len(call.Args) != 0
 }
 
+func iteratorBindingType(arity int, keyType, valueType string) string {
+	return iteratorTypePrefix + strconv.Itoa(arity) + typeSeparator + keyType + typeSeparator + valueType
+}
+
+func iteratorBindingTypes(typeName string) (int, string, string, bool) {
+	if !strings.HasPrefix(typeName, iteratorTypePrefix) {
+		return 0, "", "", false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(typeName, iteratorTypePrefix), typeSeparator, 3)
+	if len(parts) != 3 {
+		return 0, "", "", false
+	}
+	arity, err := strconv.Atoi(parts[0])
+	if err != nil || arity < 1 || arity > 2 {
+		return 0, "", "", false
+	}
+	return arity, parts[1], parts[2], true
+}
+
+func encodeIteratorCleanupPaths(keyPaths, valuePaths map[string]bool) map[string]bool {
+	encoded := prefixCleanupPaths(iteratorKeyPrefix, keyPaths)
+	return mergeCleanupPaths(encoded, prefixCleanupPaths(iteratorValPrefix, valuePaths))
+}
+
+func decodeIteratorCleanupPaths(paths map[string]bool) (map[string]bool, map[string]bool, bool) {
+	keyPaths := make(map[string]bool)
+	valuePaths := make(map[string]bool)
+	for path := range paths {
+		switch {
+		case strings.HasPrefix(path, iteratorKeyPrefix):
+			keyPaths[strings.TrimPrefix(path, iteratorKeyPrefix)] = true
+		case strings.HasPrefix(path, iteratorValPrefix):
+			valuePaths[strings.TrimPrefix(path, iteratorValPrefix)] = true
+		}
+	}
+	if len(keyPaths) == 0 && len(valuePaths) == 0 {
+		return nil, nil, false
+	}
+	if len(keyPaths) == 0 {
+		keyPaths = nil
+	}
+	if len(valuePaths) == 0 {
+		valuePaths = nil
+	}
+	return keyPaths, valuePaths, true
+}
+
+func materializeIteratorCleanupPaths(paths map[string]bool) map[string]bool {
+	keyPaths, valuePaths, iterator := decodeIteratorCleanupPaths(paths)
+	if !iterator {
+		return paths
+	}
+	materialized := prefixCleanupPaths(mapKeyPathPrefix, keyPaths)
+	return mergeCleanupPaths(materialized, valuePaths)
+}
+
 func valueIteratorArity(expression ast.Expr, imports map[string]string) int {
 	call, ok := expression.(*ast.CallExpr)
 	if !ok {
@@ -5445,6 +5508,9 @@ func valueIteratorArity(expression ast.Expr, imports map[string]string) int {
 }
 
 func iteratorRangeCleanupPaths(expression ast.Expr, paths map[string]bool, imports map[string]string) (map[string]bool, map[string]bool, bool) {
+	if keyPaths, valuePaths, encoded := decodeIteratorCleanupPaths(paths); encoded {
+		return keyPaths, valuePaths, true
+	}
 	call, ok := expression.(*ast.CallExpr)
 	if !ok {
 		return nil, nil, false
@@ -5480,6 +5546,11 @@ func iteratorRangeCleanupPaths(expression ast.Expr, paths map[string]bool, impor
 }
 
 func iteratorRangeToolTypes(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) (string, string, bool) {
+	if _, call := expression.(*ast.CallExpr); !call {
+		if _, keyType, valueType, iterator := iteratorBindingTypes(expressionType(expression, imports, values, types)); iterator {
+			return keyType, valueType, true
+		}
+	}
 	call, ok := expression.(*ast.CallExpr)
 	if !ok {
 		return "", "", false
@@ -5862,6 +5933,15 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 	case *ast.TypeAssertExpr:
 		return cleanupPathsForExpression(value.X, imports, values, resources, types)
 	case *ast.CallExpr:
+		if valueIteratorArity(value, imports) != 0 && len(value.Args) != 0 {
+			inputPaths := cleanupPathsForExpression(value.Args[0], imports, values, resources, types)
+			if keyPaths, valuePaths, iterator := iteratorRangeCleanupPaths(value, inputPaths, imports); iterator {
+				return encodeIteratorCleanupPaths(keyPaths, valuePaths)
+			}
+		}
+		if source, collected := mapsCollectSource(value, imports); collected {
+			return materializeIteratorCleanupPaths(cleanupPathsForExpression(source, imports, values, resources, types))
+		}
 		sources := sliceCollectionSourceArguments(value, imports)
 		if isBuiltinAppend(value) {
 			sources = value.Args
@@ -6019,6 +6099,9 @@ func expressionResultTypes(expression ast.Expr, imports map[string]string, value
 	if literal := functionLiteralExpression(call.Fun); literal != nil {
 		return resultTypes(literal.Type.Results, imports, modulePath+"/internal/app")
 	}
+	if arity := valueIteratorArity(call, imports); arity != 0 {
+		return []string{iteratorBindingType(arity, "", "")}
+	}
 	if results := types.functionResults[calledFunctionKey(call.Fun, imports, values, types)]; len(results) != 0 {
 		return results
 	}
@@ -6092,6 +6175,11 @@ func assignedToolExpressionType(expressions []ast.Expr, index int, imports map[s
 		expression = expressions[0]
 	case len(expressions) > 1 && index < len(expressions):
 		expression = expressions[index]
+	}
+	if expression != nil {
+		if keyType, valueType, iterator := iteratorRangeToolTypes(expression, imports, values, types); iterator {
+			return iteratorBindingType(valueIteratorArity(expression, imports), keyType, valueType)
+		}
 	}
 	if expression != nil && isToolRegistrationCallableExpression(expression, imports, values, types) {
 		return toolRegistrationCallableType
