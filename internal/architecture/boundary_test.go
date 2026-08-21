@@ -2201,6 +2201,66 @@ func replaceDuringNamedTypeRange(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionKeepsMutableRangeZeroExit(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func cleanupAfterMutableSlice(application *App) {
+	var resource closer = application.manager
+	values := []closer{&unrelatedCloser{}}
+	values = nil
+	for _, resource = range values {}
+	_ = resource.Close()
+}
+func registerAfterMutableMap(application *App) {
+	var registry registrar = application.registry
+	values := map[string]registrar{"unrelated": &unrelatedRegistrar{}}
+	values = nil
+	for _, registry = range values {}
+	registry.Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mutable_range.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 1 || cleanupCalls[0] != "resource.Close" {
+		t.Fatalf("cleanup calls = %v, want mutable slice zero-iteration cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 1 || registrationCalls[0] != "registry.Register" {
+		t.Fatalf("Tool registration calls = %v, want mutable map zero-iteration registration", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionRejectsImplicitInfiniteLoopExits(t *testing.T) {
 	source := `package app
 import (
@@ -3300,6 +3360,25 @@ func terminatingKnownNonemptyRangeDoesNotRepeatDeferredUse(application *App) {
 		}
 	}
 }
+func knownNonemptyRangeGotoRepeatsDeferredUse(application *App, again bool) {
+	var rangeGotoResource closer = &unrelatedCloser{}
+	var rangeGotoRegistry registrar = &unrelatedRegistrar{}
+again:
+	defer func() {
+		_ = rangeGotoResource.Close()
+		rangeGotoRegistry.Register(nil)
+		rangeGotoResource = application.manager
+		rangeGotoRegistry = application.registry
+	}()
+	for range [1]int{} {
+		goto after
+	}
+after:
+	if again {
+		again = false
+		goto again
+	}
+}
 func labeledSwitchBreakGotoRepeatsDeferredUse(application *App, again bool) {
 	var labeledBreakResource closer = &unrelatedCloser{}
 	var labeledBreakRegistry registrar = &unrelatedRegistrar{}
@@ -3339,7 +3418,7 @@ done:
 		cleanupCalls = append(cleanupCalls, chain)
 	})
 	cleanup := "," + strings.Join(cleanupCalls, ",") + ","
-	if len(cleanupCalls) != 8 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || strings.Contains(cleanup, ",terminalResource.Close,") || strings.Contains(cleanup, ",unknownSwitchResource.Close,") || strings.Contains(cleanup, ",typeSwitchResource.Close,") || strings.Contains(cleanup, ",selectResource.Close,") || strings.Contains(cleanup, ",innerLoopResource.Close,") || strings.Contains(cleanup, ",rangeResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") || !strings.Contains(cleanup, ",fallthroughResource.Close,") || !strings.Contains(cleanup, ",breakResource.Close,") || !strings.Contains(cleanup, ",chainBreakResource.Close,") || !strings.Contains(cleanup, ",labeledBreakResource.Close,") {
+	if len(cleanupCalls) != 9 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || strings.Contains(cleanup, ",terminalResource.Close,") || strings.Contains(cleanup, ",unknownSwitchResource.Close,") || strings.Contains(cleanup, ",typeSwitchResource.Close,") || strings.Contains(cleanup, ",selectResource.Close,") || strings.Contains(cleanup, ",innerLoopResource.Close,") || strings.Contains(cleanup, ",rangeResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") || !strings.Contains(cleanup, ",fallthroughResource.Close,") || !strings.Contains(cleanup, ",breakResource.Close,") || !strings.Contains(cleanup, ",chainBreakResource.Close,") || !strings.Contains(cleanup, ",rangeGotoResource.Close,") || !strings.Contains(cleanup, ",labeledBreakResource.Close,") {
 		t.Fatalf("cleanup calls = %v, want older and repeated deferred cleanup after assignment", cleanupCalls)
 	}
 	var registrationCalls []string
@@ -3347,7 +3426,7 @@ done:
 		registrationCalls = append(registrationCalls, chain)
 	})
 	registration := "," + strings.Join(registrationCalls, ",") + ","
-	if len(registrationCalls) != 8 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || strings.Contains(registration, ",terminalRegistry.Register,") || strings.Contains(registration, ",unknownSwitchRegistry.Register,") || strings.Contains(registration, ",typeSwitchRegistry.Register,") || strings.Contains(registration, ",selectRegistry.Register,") || strings.Contains(registration, ",innerLoopRegistry.Register,") || strings.Contains(registration, ",rangeRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") || !strings.Contains(registration, ",fallthroughRegistry.Register,") || !strings.Contains(registration, ",breakRegistry.Register,") || !strings.Contains(registration, ",chainBreakRegistry.Register,") || !strings.Contains(registration, ",labeledBreakRegistry.Register,") {
+	if len(registrationCalls) != 9 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || strings.Contains(registration, ",terminalRegistry.Register,") || strings.Contains(registration, ",unknownSwitchRegistry.Register,") || strings.Contains(registration, ",typeSwitchRegistry.Register,") || strings.Contains(registration, ",selectRegistry.Register,") || strings.Contains(registration, ",innerLoopRegistry.Register,") || strings.Contains(registration, ",rangeRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") || !strings.Contains(registration, ",fallthroughRegistry.Register,") || !strings.Contains(registration, ",breakRegistry.Register,") || !strings.Contains(registration, ",chainBreakRegistry.Register,") || !strings.Contains(registration, ",rangeGotoRegistry.Register,") || !strings.Contains(registration, ",labeledBreakRegistry.Register,") {
 		t.Fatalf("Tool registration calls = %v, want older and repeated deferred registration after assignment", registrationCalls)
 	}
 }
@@ -6306,7 +6385,7 @@ func compositionForMayFallThroughToLabel(statement *ast.ForStmt, packageConstant
 }
 
 func compositionRangeMayFallThroughToLabel(statement *ast.RangeStmt, packageConstants map[string]constant.Value, exitLabel string) bool {
-	if compositionRangeMayBeEmpty(statement.X) || compositionBodyBreaksToExit(statement, statement.Body.List, packageConstants, exitLabel) || compositionStatementsFallThrough(statement.Body.List, packageConstants) {
+	if compositionRangeMayBeEmpty(statement.X) || compositionBodyBreaksToExit(statement, statement.Body.List, packageConstants, exitLabel) || compositionBodyGoesAfterStatement(statement, statement.Body.List, packageConstants) || compositionStatementsFallThrough(statement.Body.List, packageConstants) {
 		return true
 	}
 	parents := compositionParentNodes(statement)
@@ -6318,6 +6397,16 @@ func compositionRangeMayFallThroughToLabel(statement *ast.RangeStmt, packageCons
 			return exitLabel != "" && branch.Label.Name == exitLabel
 		}
 		return compositionContinueTargetsLoop(branch, statement, parents)
+	}, packageConstants)
+}
+
+func compositionBodyGoesAfterStatement(statement ast.Node, body []ast.Stmt, packageConstants map[string]constant.Value) bool {
+	return compositionStatementsContainReachableBranch(body, func(branch *ast.BranchStmt) bool {
+		if branch.Tok != token.GOTO || branch.Label == nil || branch.Label.Obj == nil {
+			return false
+		}
+		target, ok := branch.Label.Obj.Decl.(*ast.LabeledStmt)
+		return ok && target.Pos() > statement.End()
 	}, packageConstants)
 }
 
@@ -7251,6 +7340,9 @@ func compositionRangeMayBeEmptyWithSeen(expression ast.Expr, seen map[string]boo
 					continue
 				}
 				if assigned := assignedExpression(declaration.Rhs, index); assigned != nil {
+					if value.Obj.Kind != ast.Con && !compositionRangeExpressionHasFixedLength(assigned, make(map[string]bool)) {
+						return true
+					}
 					return compositionRangeMayBeEmptyWithSeen(assigned, seen)
 				}
 			}
@@ -7259,11 +7351,16 @@ func compositionRangeMayBeEmptyWithSeen(expression ast.Expr, seen map[string]boo
 				if name.Obj != value.Obj {
 					continue
 				}
-				if assigned := assignedExpression(declaration.Values, index); assigned != nil {
-					return compositionRangeMayBeEmptyWithSeen(assigned, seen)
+				if value.Obj.Kind != ast.Con {
+					if mayBeEmpty, known := compositionRangeTypeMayBeEmpty(declaration.Type, -1, seen); known {
+						return mayBeEmpty
+					}
 				}
-				if mayBeEmpty, known := compositionRangeTypeMayBeEmpty(declaration.Type, -1, seen); known {
-					return mayBeEmpty
+				if assigned := assignedExpression(declaration.Values, index); assigned != nil {
+					if value.Obj.Kind != ast.Con && !compositionRangeExpressionHasFixedLength(assigned, make(map[string]bool)) {
+						return true
+					}
+					return compositionRangeMayBeEmptyWithSeen(assigned, seen)
 				}
 			}
 		}
@@ -7282,6 +7379,71 @@ func compositionRangeMayBeEmptyWithSeen(expression ast.Expr, seen map[string]boo
 		}
 	}
 	return true
+}
+
+func compositionRangeExpressionHasFixedLength(expression ast.Expr, seen map[string]bool) bool {
+	switch value := expression.(type) {
+	case *ast.ParenExpr:
+		return compositionRangeExpressionHasFixedLength(value.X, seen)
+	case *ast.UnaryExpr:
+		return value.Op == token.AND && compositionRangeExpressionHasFixedLength(value.X, seen)
+	case *ast.CompositeLit:
+		return compositionRangeTypeHasFixedLength(value.Type, seen)
+	case *ast.Ident:
+		key := stableBindingKey(value)
+		if value.Obj == nil || seen[key] {
+			return false
+		}
+		seen[key] = true
+		defer delete(seen, key)
+		switch declaration := value.Obj.Decl.(type) {
+		case *ast.AssignStmt:
+			for index, left := range declaration.Lhs {
+				name, ok := left.(*ast.Ident)
+				if !ok || name.Obj != value.Obj {
+					continue
+				}
+				if assigned := assignedExpression(declaration.Rhs, index); assigned != nil {
+					return compositionRangeExpressionHasFixedLength(assigned, seen)
+				}
+			}
+		case *ast.ValueSpec:
+			if compositionRangeTypeHasFixedLength(declaration.Type, seen) {
+				return true
+			}
+			for index, name := range declaration.Names {
+				if name.Obj != value.Obj {
+					continue
+				}
+				if assigned := assignedExpression(declaration.Values, index); assigned != nil {
+					return compositionRangeExpressionHasFixedLength(assigned, seen)
+				}
+			}
+		}
+	}
+	return false
+}
+
+func compositionRangeTypeHasFixedLength(expression ast.Expr, seen map[string]bool) bool {
+	switch value := expression.(type) {
+	case *ast.ParenExpr:
+		return compositionRangeTypeHasFixedLength(value.X, seen)
+	case *ast.StarExpr:
+		return compositionRangeTypeHasFixedLength(value.X, seen)
+	case *ast.ArrayType:
+		return value.Len != nil
+	case *ast.Ident:
+		key := stableBindingKey(value)
+		if value.Obj == nil || seen[key] {
+			return false
+		}
+		seen[key] = true
+		defer delete(seen, key)
+		spec, ok := value.Obj.Decl.(*ast.TypeSpec)
+		return ok && compositionRangeTypeHasFixedLength(spec.Type, seen)
+	default:
+		return false
+	}
 }
 
 func compositionRangeTypeMayBeEmpty(expression ast.Expr, literalElements int, seen map[string]bool) (bool, bool) {
