@@ -37,12 +37,13 @@ uv run --project . python -m tests.eval.juex_eval --help
 
 ## Verification Tiers
 
-`verify focused` requires one or more explicit Go package patterns. It
-provisions ripgrep, runs through `scripts/with-test-juex-home.sh`, and permits a
-dirty worktree so it can be used during implementation. An empty scope is an
-error; focused verification never falls back to `./...`.
+`verify focused` requires one or more explicit Go package patterns. It first
+prepares the shared non-overwriting `web-stub`, then provisions ripgrep, runs
+through `scripts/with-test-juex-home.sh`, and permits a dirty worktree so it can
+be used during implementation. An empty scope is an error; focused verification
+never falls back to `./...`.
 
-`verify candidate` requires a clean worktree. It runs exactly one full
+`verify candidate` requires a clean worktree before and after the gate. It runs exactly one full
 deterministic Go suite followed by one executable build. Before the Go suite it
 uses the shared non-overwriting `web-stub` target so fresh checkouts satisfy
 the Go embed contract without a frontend build. `RACE=1` replaces the
@@ -50,7 +51,7 @@ ordinary Go suite with the race suite. `WEB=1` runs `web-check`, synchronizes
 the resulting frontend assets into `internal/web/dist`, and invokes the
 Go-only `build-go` target instead of rebuilding the frontend.
 
-`verify final` also requires a clean worktree. It runs the candidate plan,
+`verify final` applies the same pre/post clean-worktree contract. It runs the candidate plan,
 then live integration and one provider-config-selected provider smoke. Set
 `COMPACTION=1` only when compaction, context projection, reasoning replay, or
 long-session behavior needs the live compaction quality gate. All tiers stop

@@ -32,9 +32,10 @@ downloaded into `.tmp/dev-ripgrep`, cached and gitignored) and prepend it to
 setting `JUEX_RG`. Provision via `PATH`, not `JUEX_RG`: `JUEX_RG` is an override
 that short-circuits every other resolver source, so exporting it for the whole
 `go test` process would also override the resolver's own unit tests that read
-the ambient environment. `make verify-focused` always provisions ripgrep and
-runs through `scripts/with-test-juex-home.sh`, so focused tests cannot register
-test Agents in the developer's Fleet.
+the ambient environment. `make verify-focused` prepares the non-overwriting web
+embed stub, provisions ripgrep, and runs through
+`scripts/with-test-juex-home.sh`, so fresh-checkout web tests compile and focused
+tests cannot register test Agents in the developer's Fleet.
 
 ## Execution Steps
 
@@ -42,13 +43,15 @@ Run commands directly from the repository root.
 
 1. **Focused tests while editing** - run `make verify-focused PKGS="..."`
    with explicit changed packages. It permits a dirty worktree and never
-   widens an empty scope to the full repository.
+   widens an empty scope to the full repository. The shared web stub keeps
+   web-dependent package selections valid in a fresh checkout.
 2. **PR candidate** - after committing the implementation, run `make
    verify-candidate`. Add `RACE=1` for concurrency, shutdown, runtime turn,
    MCP, tool, event, session, web request, or shared-state changes. Add
    `WEB=1` for frontend changes. Race replaces the ordinary suite; web-check
    feeds the Go-only binary build without a second frontend build. A
    non-overwriting lightweight web stub makes Go checks work in fresh checkouts.
+   Candidate and final gates verify that the worktree is still clean afterward.
 3. **Final candidate** - run `make verify-final` before delivery. It repeats
    the candidate plan, then runs live integration and one dynamically selected
    provider smoke. Add `COMPACTION=1` for compaction, context projection,

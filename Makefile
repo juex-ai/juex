@@ -45,8 +45,8 @@ LDFLAGS := -X github.com/juex-ai/juex/internal/version.Version=$(VERSION) \
 
 help:
 	@echo "Targets:"
-	@echo "  verify-focused PKGS=...  explicit isolated package tests; dirty worktree allowed"
-	@echo "  verify-candidate [RACE=1] [WEB=1]  deterministic clean-worktree PR gate"
+	@echo "  verify-focused PKGS=...  explicit isolated package tests with embed stub; dirty allowed"
+	@echo "  verify-candidate [RACE=1] [WEB=1]  deterministic pre/post-clean PR gate"
 	@echo "  verify-final [RACE=1] [WEB=1] [COMPACTION=1]  candidate plus live gates"
 	@echo "  test          go test ./... (isolated HOME/JUEX_HOME, auto-provisions ripgrep)"
 	@echo "  race          go test ./... -race (isolated HOME/JUEX_HOME, auto-provisions ripgrep)"

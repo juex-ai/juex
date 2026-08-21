@@ -97,11 +97,13 @@ make verify-final RACE=1 WEB=1 COMPACTION=1
 ```
 
 Focused verification accepts a dirty worktree but requires explicit packages.
-Candidate and final verification require a clean worktree; use `RACE=1` for
+Candidate and final verification require a clean worktree before and after
+their steps; use `RACE=1` for
 concurrency-sensitive changes, `WEB=1` for frontend changes, and
 `COMPACTION=1` on final when compaction, context projection, provider replay,
-or long-session behavior changes. Candidate/final prepare a lightweight embed
-stub before Go-only checks, so they also work in a fresh checkout. `make
+or long-session behavior changes. Every tier prepares a lightweight embed stub
+before Go-only checks, so focused web packages and full suites also work in a
+fresh checkout. `make
 verify-final` includes live integration
 and one provider-config-selected smoke from `~/.juex/juex.yaml`. If an
 evaluation score or smoke result regresses, retain the report and investigate

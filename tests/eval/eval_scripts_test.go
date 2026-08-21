@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -917,18 +918,22 @@ func TestEvalVerifyFocusedPlansOnlyExplicitIsolatedPackages(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &steps); err != nil {
 		t.Fatalf("decode steps: %v\n%s", err, out)
 	}
-	if len(steps) != 1 || steps[0].Label != "go-test-focused" {
-		t.Fatalf("steps = %+v, want one focused test step", steps)
+	if len(steps) != 2 || steps[0].Label != "web-stub" || steps[1].Label != "go-test-focused" {
+		t.Fatalf("steps = %+v, want web stub followed by one focused test step", steps)
+	}
+	if !reflect.DeepEqual(steps[0].Command, []string{"make", "web-stub"}) {
+		t.Fatalf("web stub command = %q", steps[0].Command)
 	}
 	want := []string{
-		"bash",
+		steps[1].Command[0],
 		filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")),
 		"go", "test", "./internal/app", "./internal/runtime", "-count=1",
 	}
-	if !reflect.DeepEqual(steps[0].Command, want) {
-		t.Fatalf("command = %q, want %q", steps[0].Command, want)
+	assertEvalBashExecutable(t, want[0])
+	if !reflect.DeepEqual(steps[1].Command, want) {
+		t.Fatalf("command = %q, want %q", steps[1].Command, want)
 	}
-	if !steps[0].TestEnvironment {
+	if !steps[1].TestEnvironment {
 		t.Fatal("focused test step must provision ripgrep and isolated test Home")
 	}
 }
@@ -956,8 +961,9 @@ func TestEvalIsolatedEnvironmentRunsShellProvisionerThroughBash(t *testing.T) {
 		"        return SimpleNamespace(returncode=0, stdout='/tmp/rg\\n')",
 		"    cli.subprocess.run = fake_run",
 		"    env = cli.isolated_test_environment()",
-		"    assert calls == [['bash', cli.ENSURE_RIPGREP]], calls",
-		"    assert env['PATH'].split(os.pathsep)[0] == '/tmp/rg', env['PATH']",
+		"    assert calls == [[cli.BASH_EXECUTABLE, cli.ENSURE_RIPGREP]], calls",
+		"    expected = str(cli.REPO_ROOT / '.tmp' / 'dev-ripgrep' / 'juex-path') if os.name == 'nt' else '/tmp/rg'",
+		"    assert env['PATH'].split(os.pathsep)[0] == expected, env['PATH']",
 		"finally:",
 		"    cli.subprocess.run = original_run",
 		"    cli.shutil.which = original_which",
@@ -983,7 +989,8 @@ func TestEvalIsolatedEnvironmentReusesRipgrepFromPath(t *testing.T) {
 		"    cli.shutil.which = lambda name: '/tmp/rg-bin/rg'",
 		"    cli.subprocess.run = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('unexpected provisioner'))",
 		"    env = cli.isolated_test_environment()",
-		"    assert env['PATH'].split(os.pathsep)[0] == '/tmp/rg-bin', env['PATH']",
+		"    expected = os.path.dirname(os.path.abspath('/tmp/rg-bin/rg'))",
+		"    assert env['PATH'].split(os.pathsep)[0] == expected, env['PATH']",
 		"finally:",
 		"    cli.subprocess.run = original_run",
 		"    cli.shutil.which = original_which",
@@ -1024,13 +1031,15 @@ func TestEvalVerifyCandidateRaceReplacesNormalSuite(t *testing.T) {
 	if got := plans["normal"][0].Command; !reflect.DeepEqual(got, []string{"make", "web-stub"}) {
 		t.Fatalf("normal web stub command = %q", got)
 	}
-	if got := plans["normal"][1].Command; !reflect.DeepEqual(got, []string{"bash", filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")), "go", "test", "./...", "-count=1"}) {
+	bashExecutable := plans["normal"][1].Command[0]
+	assertEvalBashExecutable(t, bashExecutable)
+	if got := plans["normal"][1].Command; !reflect.DeepEqual(got, []string{bashExecutable, filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")), "go", "test", "./...", "-count=1"}) {
 		t.Fatalf("normal test command = %q", got)
 	}
 	if got := []string{plans["race"][0].Label, plans["race"][1].Label, plans["race"][2].Label}; !reflect.DeepEqual(got, []string{"web-stub", "go-test-all-race", "make-build"}) {
 		t.Fatalf("race labels = %q", got)
 	}
-	if got := plans["race"][1].Command; !reflect.DeepEqual(got, []string{"bash", filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")), "go", "test", "./...", "-race", "-count=1"}) {
+	if got := plans["race"][1].Command; !reflect.DeepEqual(got, []string{bashExecutable, filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")), "go", "test", "./...", "-race", "-count=1"}) {
 		t.Fatalf("race test command = %q", got)
 	}
 	if !plans["normal"][1].TestEnvironment || !plans["race"][1].TestEnvironment {
@@ -1193,9 +1202,9 @@ func TestEvalVerificationCleanWorktreePolicy(t *testing.T) {
 		"    assert cli.run_verify(Namespace(tier='focused')) == 0",
 		"    assert calls == [], calls",
 		"    assert cli.run_verify(Namespace(tier='candidate')) == 0",
-		"    assert calls == ['clean'], calls",
-		"    assert cli.run_verify(Namespace(tier='final', config='/tmp/config')) == 0",
 		"    assert calls == ['clean', 'clean'], calls",
+		"    assert cli.run_verify(Namespace(tier='final', config='/tmp/config')) == 0",
+		"    assert calls == ['clean', 'clean', 'clean', 'clean'], calls",
 		"finally:",
 		"    cli.require_clean_worktree = original_clean",
 		"    cli.verification_steps = original_steps",
@@ -1420,9 +1429,10 @@ func TestEvalDevelopmentGoTestsUseIsolatedJuexHome(t *testing.T) {
 		t.Fatalf("decode steps: %v\n%s", err, out)
 	}
 	command := findEvalCommand(t, steps, "go-test-all")
-	if len(command) < 2 || command[0] != "bash" || command[1] != filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")) {
+	if len(command) < 2 || command[1] != filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")) {
 		t.Fatalf("go-test-all command = %q, want isolated HOME/JUEX_HOME wrapper", command)
 	}
+	assertEvalBashExecutable(t, command[0])
 	for _, step := range steps {
 		if step.Label == "go-test-e2e" {
 			t.Fatalf("development eval retained duplicate e2e step: %+v", steps)
@@ -3115,6 +3125,19 @@ func runUV(t *testing.T, root string, args ...string) string {
 		t.Fatalf("uv command failed: %v\n%s", err, out)
 	}
 	return string(out)
+}
+
+func assertEvalBashExecutable(t *testing.T, executable string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		if !strings.EqualFold(filepath.Base(executable), "bash.exe") || !strings.Contains(strings.ToLower(executable), `\git\`) {
+			t.Fatalf("Windows bash executable = %q, want Git Bash", executable)
+		}
+		return
+	}
+	if executable != "bash" {
+		t.Fatalf("bash executable = %q, want bash", executable)
+	}
 }
 
 func assertHelpContains(t *testing.T, help string, wants ...string) {

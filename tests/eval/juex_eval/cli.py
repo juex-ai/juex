@@ -18,6 +18,15 @@ from . import compaction, helper, selection
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 TEST_HOME_RUNNER = (REPO_ROOT / "scripts" / "with-test-juex-home.sh").as_posix()
 ENSURE_RIPGREP = (REPO_ROOT / "scripts" / "ensure-ripgrep.sh").as_posix()
+BASH_EXECUTABLE = "bash"
+if os.name == "nt":
+    git_executable = shutil.which("git")
+    if git_executable:
+        git_root = pathlib.Path(git_executable).resolve().parent.parent
+        for candidate in (git_root / "bin" / "bash.exe", git_root / "usr" / "bin" / "bash.exe"):
+            if candidate.is_file():
+                BASH_EXECUTABLE = str(candidate)
+                break
 
 
 @dataclass(frozen=True)
@@ -106,6 +115,7 @@ def verification_steps(args: argparse.Namespace) -> list[VerificationStep]:
         if not packages:
             raise ValueError("focused verification requires at least one package")
         return [
+            VerificationStep("web-stub", ["make", "web-stub"]),
             VerificationStep(
                 "go-test-focused",
                 bash_script_command(TEST_HOME_RUNNER, "go", "test", *packages, "-count=1"),
@@ -178,13 +188,19 @@ def execute_verification_steps(steps: list[VerificationStep], run_step: Callable
 
 
 def run_verify(args: argparse.Namespace) -> int:
-    if args.tier != "focused":
+    requires_clean_worktree = args.tier != "focused"
+    if requires_clean_worktree:
         require_clean_worktree()
     if args.tier == "final":
         args.config = str(selection.resolved_path(args.config))
     steps = verification_steps(args)
     test_env = isolated_test_environment() if any(step.test_environment for step in steps) else None
-    return execute_verification_steps(steps, lambda step: run_visible(step, test_env))
+    status = execute_verification_steps(steps, lambda step: run_visible(step, test_env))
+    if status:
+        return status
+    if requires_clean_worktree:
+        require_clean_worktree()
+    return 0
 
 
 def require_clean_worktree() -> None:
@@ -231,7 +247,7 @@ def provisioned_ripgrep_directory() -> str:
 
 
 def bash_script_command(script: str, *args: str) -> list[str]:
-    return ["bash", script, *args]
+    return [BASH_EXECUTABLE, script, *args]
 
 
 def run_visible(step: VerificationStep, test_env: dict[str, str] | None) -> int:

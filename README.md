@@ -791,13 +791,15 @@ make verify-final RACE=1 WEB=1 COMPACTION=1
 ```
 
 Focused verification requires explicit package patterns and permits a dirty
-worktree. Candidate and final verification require a clean worktree. `RACE=1`
+worktree. Candidate and final verification require a clean worktree before
+and after their steps. `RACE=1`
 replaces the ordinary deterministic suite, `WEB=1` adds the frontend gate
 without rebuilding it during the binary build, and `COMPACTION=1` adds the
 live compaction evaluator to final verification. Final verification otherwise
 runs the candidate gate, live integration, and one provider-config-selected
-provider smoke. Candidate/final also prepare a lightweight embedded-web stub
-before Go-only checks, so a fresh checkout does not need a prior frontend build.
+provider smoke. Every tier also prepares a lightweight embedded-web stub
+before Go-only checks, so focused web packages and full suites work in a fresh
+checkout without a prior frontend build.
 
 The lower-level `make test` and `make race` targets run with temporary `HOME`, `JUEX_HOME`, XDG
 config/cache, Windows application-data, global Git config, Go telemetry, and

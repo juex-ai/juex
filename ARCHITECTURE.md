@@ -2999,9 +2999,9 @@ automatic activation; the model loads a selected guide explicitly.
 
 | Target | Effect |
 |---|---|
-| `make verify-focused PKGS="..."` | require explicit Go package patterns, provision ripgrep, isolate writable user/Juex/tool state, and run only those packages; permits a dirty worktree |
-| `make verify-candidate [RACE=1] [WEB=1]` | require a clean worktree, prepare a non-overwriting embedded-web stub for fresh checkouts, run one deterministic full Go suite (race replaces normal), then build one executable; `WEB=1` runs the frontend gate before the Go-only build |
-| `make verify-final [RACE=1] [WEB=1] [COMPACTION=1]` | require a clean worktree, run the candidate plan, live integration, one provider-config-selected smoke, and optional compaction quality evaluation |
+| `make verify-focused PKGS="..."` | require explicit Go package patterns, prepare a non-overwriting embedded-web stub, provision ripgrep, isolate writable user/Juex/tool state, and run only those packages; permits a dirty worktree |
+| `make verify-candidate [RACE=1] [WEB=1]` | require a clean worktree before and after the gate, prepare a non-overwriting embedded-web stub for fresh checkouts, run one deterministic full Go suite (race replaces normal), then build one executable; `WEB=1` runs the frontend gate before the Go-only build |
+| `make verify-final [RACE=1] [WEB=1] [COMPACTION=1]` | require a clean worktree before and after the gate, run the candidate plan, live integration, one provider-config-selected smoke, and optional compaction quality evaluation |
 | `make test` | provision ripgrep on `PATH` with disposable bootstrap Go telemetry, isolate writable user/Juex/Codex/XDG/Windows-app-data/global-Git/Go-telemetry state under a temporary `HOME`, then run `go test ./... -count=1` |
 | `make race` | provision ripgrep on `PATH` with disposable bootstrap Go telemetry, isolate writable user/Juex/Codex/XDG/Windows-app-data/global-Git/Go-telemetry state under a temporary `HOME`, then run `go test ./... -race -count=1` |
 | `make ripgrep` | resolve system ripgrep or cache the verified pinned binary for local tests |
