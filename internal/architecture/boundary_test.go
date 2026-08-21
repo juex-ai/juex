@@ -2887,6 +2887,108 @@ func useMergedBranchState(application *App, owned bool) {
 	}
 }
 
+func TestAppCompositionInspectionKeepsMutuallyExclusiveFlowPaths(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func safeCleanup(current, next closer, owned bool) {
+	if owned { current = next } else { _ = current.Close() }
+}
+func safeRegistration(current, next registrar, owned bool) {
+	if owned { current = next } else { current.Register(nil) }
+}
+func useSafeHelpers(application *App, owned bool) {
+	safeCleanup(&unrelatedCloser{}, application.manager, owned)
+	safeRegistration(&unrelatedRegistrar{}, application.registry, owned)
+}
+func returnBeforeUse(application *App, owned bool) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	if owned {
+		resource = application.manager
+		registry = application.registry
+		return
+	}
+	_ = resource.Close()
+	registry.Register(nil)
+}
+func mutuallyExclusiveSwitchCases(application *App, choice int) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	switch choice {
+	case 1:
+		resource = application.manager
+		registry = application.registry
+	case 2:
+		_ = resource.Close()
+		registry.Register(nil)
+	}
+}
+func mutuallyExclusiveTypeSwitchCases(application *App, value any) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	switch value.(type) {
+	case int:
+		resource = application.manager
+		registry = application.registry
+	case string:
+		_ = resource.Close()
+		registry.Register(nil)
+	}
+}
+func useMergedSwitchState(application *App, choice int) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	switch choice {
+	case 1:
+		resource = application.manager
+		registry = application.registry
+	}
+	_ = resource.Close()
+	registry.Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mutually_exclusive_flow.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 1 || cleanupCalls[0] != "resource.Close" {
+		t.Fatalf("cleanup calls = %v, want only post-switch cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 1 || registrationCalls[0] != "registry.Register" {
+		t.Fatalf("Tool registration calls = %v, want only post-switch registration", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionTracksReferenceRangeValues(t *testing.T) {
 	source := `package app
 import (
@@ -4387,6 +4489,149 @@ type delayedCompositionCall struct {
 	argumentCallees map[ast.Expr]string
 }
 
+type compositionFlowState struct {
+	origins    map[string]map[int]bool
+	values     map[string]string
+	resources  map[string]map[string]bool
+	references map[string]bool
+	aliases    map[string]map[string]bool
+}
+
+func snapshotCompositionFlowState(origins map[string]map[int]bool, values map[string]string, resources map[string]map[string]bool, references map[string]bool, aliases map[string]map[string]bool) compositionFlowState {
+	return compositionFlowState{
+		origins:    cloneBindingOrigins(origins),
+		values:     cloneStringMap(values),
+		resources:  cloneCleanupResourceMap(resources),
+		references: cloneBoolMap(references),
+		aliases:    cloneCleanupResourceMap(aliases),
+	}
+}
+
+func mergeCompositionFlowStates(states []compositionFlowState, types compositionTypeIndex) compositionFlowState {
+	merged := compositionFlowState{
+		origins:    make(map[string]map[int]bool),
+		values:     make(map[string]string),
+		resources:  make(map[string]map[string]bool),
+		references: make(map[string]bool),
+		aliases:    make(map[string]map[string]bool),
+	}
+	for _, state := range states {
+		merged.origins = mergeBindingOriginMaps(merged.origins, state.origins)
+		merged.values = mergeCompositionValueMaps(merged.values, state.values, types)
+		merged.resources = mergeCleanupResourceMaps(merged.resources, state.resources)
+		merged.references = mergeBoolMaps(merged.references, state.references)
+		merged.aliases = mergeReferenceAliasMaps(merged.aliases, state.aliases)
+	}
+	return merged
+}
+
+func blockFallsThrough(block *ast.BlockStmt) bool {
+	return block == nil || statementsFallThrough(block.List)
+}
+
+func statementsFallThrough(statements []ast.Stmt) bool {
+	if len(statements) == 0 {
+		return true
+	}
+	return statementFallsThrough(statements[len(statements)-1])
+}
+
+func statementFallsThrough(statement ast.Stmt) bool {
+	switch value := statement.(type) {
+	case *ast.ReturnStmt:
+		return false
+	case *ast.ExprStmt:
+		call, ok := value.X.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		identifier, builtin := call.Fun.(*ast.Ident)
+		return !builtin || identifier.Name != "panic"
+	case *ast.BlockStmt:
+		return blockFallsThrough(value)
+	case *ast.IfStmt:
+		return value.Else == nil || blockFallsThrough(value.Body) || statementFallsThrough(value.Else)
+	default:
+		return true
+	}
+}
+
+func clauseEndsWithFallthrough(clause *ast.CaseClause) bool {
+	if len(clause.Body) == 0 {
+		return false
+	}
+	branch, ok := clause.Body[len(clause.Body)-1].(*ast.BranchStmt)
+	return ok && branch.Tok == token.FALLTHROUGH
+}
+
+func inspectCompositionIf(statement *ast.IfStmt, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) {
+	if statement.Init != nil {
+		ast.Inspect(statement.Init, visit)
+	}
+	if statement.Cond != nil {
+		ast.Inspect(statement.Cond, visit)
+	}
+	base := snapshot()
+	var exits []compositionFlowState
+	restore(base)
+	ast.Inspect(statement.Body, visit)
+	if blockFallsThrough(statement.Body) {
+		exits = append(exits, snapshot())
+	}
+	restore(base)
+	if statement.Else == nil {
+		exits = append(exits, snapshot())
+	} else {
+		ast.Inspect(statement.Else, visit)
+		if statementFallsThrough(statement.Else) {
+			exits = append(exits, snapshot())
+		}
+	}
+	restore(merge(exits))
+}
+
+func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, allowFallthrough bool, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) {
+	if inspectCaseExpressions {
+		for _, raw := range body.List {
+			clause := raw.(*ast.CaseClause)
+			for _, expression := range clause.List {
+				ast.Inspect(expression, visit)
+			}
+		}
+	}
+	base := snapshot()
+	var exits []compositionFlowState
+	var fallthroughState *compositionFlowState
+	hasDefault := false
+	for _, raw := range body.List {
+		clause := raw.(*ast.CaseClause)
+		if len(clause.List) == 0 {
+			hasDefault = true
+		}
+		entry := base
+		if fallthroughState != nil {
+			entry = merge([]compositionFlowState{base, *fallthroughState})
+		}
+		restore(entry)
+		for _, statement := range clause.Body {
+			ast.Inspect(statement, visit)
+		}
+		state := snapshot()
+		if allowFallthrough && clauseEndsWithFallthrough(clause) {
+			fallthroughState = &state
+			continue
+		}
+		fallthroughState = nil
+		if statementsFallThrough(clause.Body) {
+			exits = append(exits, state)
+		}
+	}
+	if !hasDefault {
+		exits = append(exits, base)
+	}
+	restore(merge(exits))
+}
+
 func snapshotDelayedCompositionCall(call *ast.CallExpr, imports map[string]string, values map[string]string, types compositionTypeIndex) delayedCompositionCall {
 	delayed := delayedCompositionCall{
 		call:            call,
@@ -4464,8 +4709,42 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 	origins, values := inferenceState(function)
 	references := functionReferenceValues(function, types)
 	aliases := make(map[string]map[string]bool)
-	visit := func(node ast.Node) bool {
+	snapshot := func() compositionFlowState {
+		return snapshotCompositionFlowState(origins, values, nil, references, aliases)
+	}
+	restore := func(state compositionFlowState) {
+		origins = cloneBindingOrigins(state.origins)
+		values = cloneStringMap(state.values)
+		references = cloneBoolMap(state.references)
+		aliases = cloneCleanupResourceMap(state.aliases)
+	}
+	merge := func(states []compositionFlowState) compositionFlowState {
+		return mergeCompositionFlowStates(states, types)
+	}
+	var visit func(ast.Node) bool
+	visit = func(node ast.Node) bool {
 		switch value := node.(type) {
+		case *ast.IfStmt:
+			inspectCompositionIf(value, visit, snapshot, restore, merge)
+			return false
+		case *ast.SwitchStmt:
+			if value.Init != nil {
+				ast.Inspect(value.Init, visit)
+			}
+			if value.Tag != nil {
+				ast.Inspect(value.Tag, visit)
+			}
+			inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge)
+			return false
+		case *ast.TypeSwitchStmt:
+			if value.Init != nil {
+				ast.Inspect(value.Init, visit)
+			}
+			if value.Assign != nil {
+				ast.Inspect(value.Assign, visit)
+			}
+			inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge)
+			return false
 		case *ast.AssignStmt:
 			for index, left := range value.Lhs {
 				trackReferenceAssignment(references, aliases, left, nil, value.Rhs, index, function.imports, values, types)
@@ -4600,8 +4879,42 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 	origins, values := inferenceState(function)
 	references := functionReferenceValues(function, types)
 	aliases := make(map[string]map[string]bool)
-	visit := func(node ast.Node) bool {
+	snapshot := func() compositionFlowState {
+		return snapshotCompositionFlowState(origins, values, nil, references, aliases)
+	}
+	restore := func(state compositionFlowState) {
+		origins = cloneBindingOrigins(state.origins)
+		values = cloneStringMap(state.values)
+		references = cloneBoolMap(state.references)
+		aliases = cloneCleanupResourceMap(state.aliases)
+	}
+	merge := func(states []compositionFlowState) compositionFlowState {
+		return mergeCompositionFlowStates(states, types)
+	}
+	var visit func(ast.Node) bool
+	visit = func(node ast.Node) bool {
 		switch value := node.(type) {
+		case *ast.IfStmt:
+			inspectCompositionIf(value, visit, snapshot, restore, merge)
+			return false
+		case *ast.SwitchStmt:
+			if value.Init != nil {
+				ast.Inspect(value.Init, visit)
+			}
+			if value.Tag != nil {
+				ast.Inspect(value.Tag, visit)
+			}
+			inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge)
+			return false
+		case *ast.TypeSwitchStmt:
+			if value.Init != nil {
+				ast.Inspect(value.Init, visit)
+			}
+			if value.Assign != nil {
+				ast.Inspect(value.Assign, visit)
+			}
+			inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge)
+			return false
 		case *ast.AssignStmt:
 			for index, left := range value.Lhs {
 				trackReferenceAssignment(references, aliases, left, nil, value.Rhs, index, function.imports, values, types)
@@ -5128,6 +5441,14 @@ func cloneBindingOrigins(source map[string]map[int]bool) map[string]map[int]bool
 	return cloned
 }
 
+func mergeBindingOriginMaps(left, right map[string]map[int]bool) map[string]map[int]bool {
+	merged := cloneBindingOrigins(left)
+	for key, origins := range right {
+		mergeBindingOrigins(merged, key, origins)
+	}
+	return merged
+}
+
 func equalBindingOrigins(left, right map[string]map[int]bool) bool {
 	if len(left) != len(right) {
 		return false
@@ -5296,6 +5617,18 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				report(call, chain)
 			}
 		}
+		snapshot := func() compositionFlowState {
+			return snapshotCompositionFlowState(nil, values, resources, references, aliases)
+		}
+		restore := func(state compositionFlowState) {
+			values = cloneStringMap(state.values)
+			resources = cloneCleanupResourceMap(state.resources)
+			references = cloneBoolMap(state.references)
+			aliases = cloneCleanupResourceMap(state.aliases)
+		}
+		merge := func(states []compositionFlowState) compositionFlowState {
+			return mergeCompositionFlowStates(states, types)
+		}
 		var visit func(ast.Node) bool
 		visit = func(node ast.Node) bool {
 			switch value := node.(type) {
@@ -5324,32 +5657,25 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					return false
 				}
 			case *ast.IfStmt:
+				inspectCompositionIf(value, visit, snapshot, restore, merge)
+				return false
+			case *ast.SwitchStmt:
 				if value.Init != nil {
 					ast.Inspect(value.Init, visit)
 				}
-				if value.Cond != nil {
-					ast.Inspect(value.Cond, visit)
+				if value.Tag != nil {
+					ast.Inspect(value.Tag, visit)
 				}
-				baseValues := cloneStringMap(values)
-				baseResources := cloneCleanupResourceMap(resources)
-				baseReferences := cloneBoolMap(references)
-				baseAliases := cloneCleanupResourceMap(aliases)
-				ast.Inspect(value.Body, visit)
-				bodyValues := values
-				bodyResources := resources
-				bodyReferences := references
-				bodyAliases := aliases
-				values = cloneStringMap(baseValues)
-				resources = cloneCleanupResourceMap(baseResources)
-				references = cloneBoolMap(baseReferences)
-				aliases = cloneCleanupResourceMap(baseAliases)
-				if value.Else != nil {
-					ast.Inspect(value.Else, visit)
+				inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge)
+				return false
+			case *ast.TypeSwitchStmt:
+				if value.Init != nil {
+					ast.Inspect(value.Init, visit)
 				}
-				values = mergeCompositionValueMaps(bodyValues, values, types)
-				resources = mergeCleanupResourceMaps(bodyResources, resources)
-				references = mergeBoolMaps(bodyReferences, references)
-				aliases = mergeReferenceAliasMaps(bodyAliases, aliases)
+				if value.Assign != nil {
+					ast.Inspect(value.Assign, visit)
+				}
+				inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge)
 				return false
 			case *ast.ForStmt:
 				if value.Init != nil {
@@ -5672,6 +5998,17 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				report(call, chain)
 			}
 		}
+		snapshot := func() compositionFlowState {
+			return snapshotCompositionFlowState(nil, values, nil, references, aliases)
+		}
+		restore := func(state compositionFlowState) {
+			values = cloneStringMap(state.values)
+			references = cloneBoolMap(state.references)
+			aliases = cloneCleanupResourceMap(state.aliases)
+		}
+		merge := func(states []compositionFlowState) compositionFlowState {
+			return mergeCompositionFlowStates(states, types)
+		}
 		var visit func(ast.Node) bool
 		visit = func(node ast.Node) bool {
 			switch value := node.(type) {
@@ -5700,28 +6037,25 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					return false
 				}
 			case *ast.IfStmt:
+				inspectCompositionIf(value, visit, snapshot, restore, merge)
+				return false
+			case *ast.SwitchStmt:
 				if value.Init != nil {
 					ast.Inspect(value.Init, visit)
 				}
-				if value.Cond != nil {
-					ast.Inspect(value.Cond, visit)
+				if value.Tag != nil {
+					ast.Inspect(value.Tag, visit)
 				}
-				baseValues := cloneStringMap(values)
-				baseReferences := cloneBoolMap(references)
-				baseAliases := cloneCleanupResourceMap(aliases)
-				ast.Inspect(value.Body, visit)
-				bodyValues := values
-				bodyReferences := references
-				bodyAliases := aliases
-				values = cloneStringMap(baseValues)
-				references = cloneBoolMap(baseReferences)
-				aliases = cloneCleanupResourceMap(baseAliases)
-				if value.Else != nil {
-					ast.Inspect(value.Else, visit)
+				inspectCompositionCaseClauses(value.Body, true, true, visit, snapshot, restore, merge)
+				return false
+			case *ast.TypeSwitchStmt:
+				if value.Init != nil {
+					ast.Inspect(value.Init, visit)
 				}
-				values = mergeCompositionValueMaps(bodyValues, values, types)
-				references = mergeBoolMaps(bodyReferences, references)
-				aliases = mergeReferenceAliasMaps(bodyAliases, aliases)
+				if value.Assign != nil {
+					ast.Inspect(value.Assign, visit)
+				}
+				inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge)
 				return false
 			case *ast.ForStmt:
 				if value.Init != nil {
