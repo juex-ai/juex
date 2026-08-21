@@ -450,7 +450,11 @@ func (e *Engine) compactionSummaryMaxOutputTokens(
 	if desired <= 0 {
 		return desired
 	}
-	if policy.TriggerTokens <= 1 {
+	requestBudget := policy.SummaryRequestTokens
+	if requestBudget <= 0 {
+		requestBudget = policy.TriggerTokens
+	}
+	if requestBudget <= 1 {
 		return 1
 	}
 
@@ -458,7 +462,7 @@ func (e *Engine) compactionSummaryMaxOutputTokens(
 	minimumInput, omitted, minChars := fitCompactionSummaryInput(minimumSystem, previous, input, state, policy, 1)
 	minimumBody := buildCompactionSummaryBody(previous, minimumInput, state, minChars, omitted)
 	minimumHistory := []llm.Message{llm.TextMessage(llm.RoleUser, minimumBody)}
-	maxOutputTokens := policy.TriggerTokens - estimateContextTokens(minimumSystem, nil, minimumHistory)
+	maxOutputTokens := requestBudget - estimateContextTokens(minimumSystem, nil, minimumHistory)
 	if maxOutputTokens < 1 {
 		maxOutputTokens = 1
 	}

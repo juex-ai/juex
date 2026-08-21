@@ -44,7 +44,7 @@ func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult
 
 func TestBuildCompactionSummaryRequest_TruncatesTextAndToolUseInput(t *testing.T) {
 	input := []llm.Message{
-		{ID: "large", Role: llm.RoleUser, Blocks: []llm.Block{
+		{ID: "large", Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockText, Text: "HEAD-" + strings.Repeat("t", 40) + "-TAIL"},
 			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "write", Input: map[string]any{"payload": strings.Repeat("x", 50)}},
 		}},
@@ -171,13 +171,13 @@ func TestBuildCompactionSummaryRequest_BoundsOversizedTranscript(t *testing.T) {
 	}
 }
 
-func TestCompactionSummaryRequestTokenLimitCapsLargeWindows(t *testing.T) {
+func TestCompactionSummaryRequestTokenLimitUsesCandidateWindowRatio(t *testing.T) {
 	policy := compactionPolicy{
-		TriggerTokens:    239616,
-		SummaryMaxTokens: 2048,
+		SummaryRequestTokens: 204800,
+		SummaryMaxTokens:     1280,
 	}
-	if got := compactionSummaryRequestTokenLimit(policy); got != 16000 {
-		t.Fatalf("limit = %d, want 16000", got)
+	if got := compactionSummaryRequestTokenLimit(policy); got != 203520 {
+		t.Fatalf("limit = %d, want 203520", got)
 	}
 }
 

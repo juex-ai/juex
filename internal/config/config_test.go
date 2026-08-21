@@ -2251,10 +2251,10 @@ func TestLoadFromFile_CompactionDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Compaction.Enabled || cfg.Compaction.ReserveTokens != 16384 || cfg.Compaction.KeepRecentTokens != 20000 || cfg.Compaction.SummaryMaxTokens != 2048 || cfg.Compaction.ToolResultMaxChars != 2000 {
+	if !cfg.Compaction.Enabled || cfg.Compaction.ReserveTokens != 0 || cfg.Compaction.KeepRecentTokens != 0 || cfg.Compaction.SummaryMaxTokens != 0 || cfg.Compaction.ToolResultMaxChars != 0 {
 		t.Fatalf("Compaction defaults = %+v", cfg.Compaction)
 	}
-	if cfg.ToolOutput.InlineMaxBytes != 32768 || cfg.ToolOutput.PreviewHeadBytes != 8192 || cfg.ToolOutput.PreviewTailBytes != 8192 {
+	if cfg.ToolOutput.InlineMaxBytes != 0 || cfg.ToolOutput.PreviewHeadBytes != 0 || cfg.ToolOutput.PreviewTailBytes != 0 {
 		t.Fatalf("ToolOutput defaults = %+v", cfg.ToolOutput)
 	}
 }

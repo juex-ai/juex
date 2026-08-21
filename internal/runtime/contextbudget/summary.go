@@ -9,10 +9,6 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 )
 
-// Keep recovery compaction well below the model context window: very large
-// summary prompts can fit on paper but still time out before streaming.
-const maxCompactionSummaryRequestTokens = 16000
-
 type SummaryState struct {
 	Goal  *SummaryGoal
 	Notes string
@@ -99,15 +95,15 @@ func writeAuthoritativeSummaryState(body *strings.Builder, state SummaryState) {
 }
 
 func CompactionSummaryRequestTokenLimit(policy Policy) int {
-	if policy.TriggerTokens <= 0 {
+	limit := policy.SummaryRequestTokens
+	if limit <= 0 {
+		limit = policy.TriggerTokens
+	}
+	if limit <= 0 {
 		return 0
 	}
-	limit := policy.TriggerTokens
 	if policy.SummaryMaxTokens > 0 && policy.SummaryMaxTokens < limit {
 		limit -= policy.SummaryMaxTokens
-	}
-	if limit > maxCompactionSummaryRequestTokens {
-		limit = maxCompactionSummaryRequestTokens
 	}
 	if limit < 1 {
 		return 1
@@ -253,7 +249,11 @@ func serializeMessageForSummary(msg llm.Message, toolResultMaxChars int) string 
 	for _, block := range msg.Blocks {
 		switch block.Type {
 		case llm.BlockText:
-			writeSummaryField(&sb, "text", block.Text, toolResultMaxChars)
+			maxChars := toolResultMaxChars
+			if msg.Role == llm.RoleUser {
+				maxChars = 0
+			}
+			writeSummaryField(&sb, "text", block.Text, maxChars)
 		case llm.BlockImage:
 			writeMediaReferenceForSummary(&sb, block.Media)
 		case llm.BlockReasoning:

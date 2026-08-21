@@ -3458,7 +3458,7 @@ func TestCompactUsesConfiguredModelChainWithoutDedicatedSummaryModel(t *testing.
 
 func TestCompactRefitsSummaryRequestForFallbackContextWindow(t *testing.T) {
 	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
-	backup := &limitedCompactionProvider{name: "backup:model", maxInputTokens: 7500}
+	backup := &limitedCompactionProvider{name: "backup:model", maxInputTokens: 8000}
 	eng, bus := newEngine(t, primary, false)
 	eng.ContextWindow = 256000
 	eng.ModelCandidates = []ModelCandidate{
@@ -3544,8 +3544,8 @@ func TestCompactClampsSummaryOutputForFallbackContextWindow(t *testing.T) {
 	}
 	policy := effectiveCompactionPolicy(eng.Compaction, 2000)
 	inputTokens := estimateContextTokens(backup.systems[0], nil, backup.histories[0])
-	if got := backup.options[0].MaxOutputTokens; got <= 0 || got >= eng.Compaction.SummaryMaxTokens || inputTokens+got > policy.TriggerTokens {
-		t.Fatalf("fallback request/output = %d/%d tokens, want positive clamped total <= trigger %d", inputTokens, got, policy.TriggerTokens)
+	if got := backup.options[0].MaxOutputTokens; got <= 0 || got >= eng.Compaction.SummaryMaxTokens || inputTokens+got > policy.SummaryRequestTokens {
+		t.Fatalf("fallback request/output = %d/%d tokens, want positive clamped total <= summary request budget %d", inputTokens, got, policy.SummaryRequestTokens)
 	}
 	if len(epochs) != 2 || epochs[1].Provider.Model != "backup:model" || epochs[1].ContextWindow != 2000 || epochs[1].MaxOutputTokens != backup.options[0].MaxOutputTokens {
 		t.Fatalf("epochs = %+v, want clamped fallback provenance", epochs)
@@ -3714,14 +3714,14 @@ func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	if result.SummaryChars != len("recovered summary") || provider.calls != 2 {
 		t.Fatalf("result/calls = %+v, %d", result, provider.calls)
 	}
-	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 1000 || provider.options[1].MaxOutputTokens != 2000 {
-		t.Fatalf("max output tokens = %+v, want [1000 2000]", compactionOptionBudgets(provider.options))
+	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 25 || provider.options[1].MaxOutputTokens != 50 {
+		t.Fatalf("max output tokens = %+v, want [25 50]", compactionOptionBudgets(provider.options))
 	}
-	if retry.Attempt != 2 || retry.Reason != "empty_summary" || retry.StopReason != llm.StopMaxTokens || !retry.ReasoningOnly || retry.PreviousMaxOutputTokens != 1000 || retry.MaxOutputTokens != 2000 {
+	if retry.Attempt != 2 || retry.Reason != "empty_summary" || retry.StopReason != llm.StopMaxTokens || !retry.ReasoningOnly || retry.PreviousMaxOutputTokens != 25 || retry.MaxOutputTokens != 50 {
 		t.Fatalf("retry payload = %+v", retry)
 	}
-	if len(provider.histories) != 2 || provider.histories[0][0].FirstText() == provider.histories[1][0].FirstText() {
-		t.Fatalf("retry summary request was not rebuilt for the larger budget")
+	if len(provider.histories) != 2 || provider.histories[0][0].FirstText() == "" || provider.histories[1][0].FirstText() == "" {
+		t.Fatalf("retry summary requests were not built")
 	}
 	usage := eng.Session.TokenUsageSnapshot()
 	if usage != (llm.Usage{InputTokens: 21, OutputTokens: 5}) {
@@ -3771,8 +3771,8 @@ func TestCompactRetriesFirstIncompleteFallbackWithLargerBudget(t *testing.T) {
 	if result.SummaryModel != "backup:model" || primary.calls != 1 || backup.calls != 2 {
 		t.Fatalf("result/primary/backup = %+v/%d/%d, want recovered backup after retry", result, primary.calls, backup.calls)
 	}
-	if len(backup.options) != 2 || backup.options[0].MaxOutputTokens != 1000 || backup.options[1].MaxOutputTokens != 2000 {
-		t.Fatalf("fallback max output tokens = %+v, want [1000 2000]", compactionOptionBudgets(backup.options))
+	if len(backup.options) != 2 || backup.options[0].MaxOutputTokens != 25 || backup.options[1].MaxOutputTokens != 50 {
+		t.Fatalf("fallback max output tokens = %+v, want [25 50]", compactionOptionBudgets(backup.options))
 	}
 	if len(epochs) != 3 || retry.EpochID != epochs[1].EpochID || retry.RequestDigest != epochs[1].RequestDigest {
 		t.Fatalf("epochs/retry = %+v/%+v, want retry linked to first fallback attempt", epochs, retry)
@@ -3838,12 +3838,19 @@ func TestCompactCheckpointsEachSummaryAttemptAndLinksOutcomes(t *testing.T) {
 		if len(epoch.Messages) != 1 || epoch.Messages[0].Source != "compaction_input" || epoch.Messages[0].Snapshot == nil {
 			t.Fatalf("epoch %d synthesized summary history = %+v", index, epoch.Messages)
 		}
-		var reconstructed llm.Message
-		if err := json.Unmarshal(epoch.Messages[0].Snapshot.Content, &reconstructed); err != nil {
-			t.Fatal(err)
-		}
-		if reconstructed.FirstText() != provider.histories[index][0].FirstText() {
-			t.Fatalf("epoch %d summary history body was not reconstructable", index)
+		snapshot := epoch.Messages[0].Snapshot
+		if snapshot.Reused {
+			if index == 0 || snapshot.Digest != epochs[index-1].Messages[0].Snapshot.Digest || provider.histories[index][0].FirstText() != provider.histories[index-1][0].FirstText() {
+				t.Fatalf("epoch %d reused snapshot does not match the prior request", index)
+			}
+		} else {
+			var reconstructed llm.Message
+			if err := json.Unmarshal(snapshot.Content, &reconstructed); err != nil {
+				t.Fatal(err)
+			}
+			if reconstructed.FirstText() != provider.histories[index][0].FirstText() {
+				t.Fatalf("epoch %d summary history body was not reconstructable", index)
+			}
 		}
 	}
 	if epochs[0].EpochID == epochs[1].EpochID || epochs[0].RequestDigest == epochs[1].RequestDigest {
@@ -3919,8 +3926,8 @@ func TestCompactRetriesPartialSummaryStoppedAtMaxTokens(t *testing.T) {
 	if retry.Reason != "max_tokens" || retry.StopReason != llm.StopMaxTokens || retry.ReasoningOnly {
 		t.Fatalf("retry payload = %+v", retry)
 	}
-	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 1000 || provider.options[1].MaxOutputTokens != 2000 {
-		t.Fatalf("max output tokens = %+v, want [1000 2000]", compactionOptionBudgets(provider.options))
+	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 25 || provider.options[1].MaxOutputTokens != 50 {
+		t.Fatalf("max output tokens = %+v, want [25 50]", compactionOptionBudgets(provider.options))
 	}
 	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 21, OutputTokens: 1003}) {
 		t.Fatalf("token usage = %+v, want aggregate retry usage", usage)
@@ -3991,12 +3998,19 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 		if len(epochs[i].Messages) != 1 || epochs[i].Messages[0].Snapshot == nil {
 			t.Fatalf("request %d epoch message = %+v", i+1, epochs[i].Messages)
 		}
-		var reconstructed llm.Message
-		if err := json.Unmarshal(epochs[i].Messages[0].Snapshot.Content, &reconstructed); err != nil {
-			t.Fatal(err)
-		}
-		if reconstructed.FirstText() != body {
-			t.Fatalf("request %d epoch did not preserve authoritative summary state", i+1)
+		snapshot := epochs[i].Messages[0].Snapshot
+		if snapshot.Reused {
+			if i == 0 || snapshot.Digest != epochs[i-1].Messages[0].Snapshot.Digest || provider.histories[i-1][0].FirstText() != body {
+				t.Fatalf("request %d reused snapshot does not preserve authoritative summary state", i+1)
+			}
+		} else {
+			var reconstructed llm.Message
+			if err := json.Unmarshal(snapshot.Content, &reconstructed); err != nil {
+				t.Fatal(err)
+			}
+			if reconstructed.FirstText() != body {
+				t.Fatalf("request %d epoch did not preserve authoritative summary state", i+1)
+			}
 		}
 	}
 }
@@ -4028,16 +4042,16 @@ func TestCompactCapsSummaryRetryToBoundedRequest(t *testing.T) {
 	policy := effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow)
 	initialBudget := provider.options[0].MaxOutputTokens
 	initialInputTokens := estimateContextTokens(provider.systems[0], nil, provider.histories[0])
-	if initialBudget >= eng.Compaction.SummaryMaxTokens || initialInputTokens+initialBudget > policy.TriggerTokens {
-		t.Fatalf("initial input + output = %d + %d, want clamped below configured %d and total <= trigger %d", initialInputTokens, initialBudget, eng.Compaction.SummaryMaxTokens, policy.TriggerTokens)
+	if initialBudget != 6 || initialInputTokens+initialBudget > policy.SummaryRequestTokens {
+		t.Fatalf("initial input + output = %d + %d, want 0.5%% output budget and total <= summary request budget %d", initialInputTokens, initialBudget, policy.SummaryRequestTokens)
 	}
 	retryBudget := provider.options[1].MaxOutputTokens
-	if retryBudget >= 1200 {
-		t.Fatalf("retry budget = %d, want less than uncapped double 1200", retryBudget)
+	if retryBudget != 12 {
+		t.Fatalf("retry budget = %d, want bounded semantic retry budget 12", retryBudget)
 	}
 	retryInputTokens := estimateContextTokens(provider.systems[1], nil, provider.histories[1])
-	if retryInputTokens+retryBudget > policy.TriggerTokens {
-		t.Fatalf("retry input + output = %d + %d, want <= trigger %d", retryInputTokens, retryBudget, policy.TriggerTokens)
+	if retryInputTokens+retryBudget > policy.SummaryRequestTokens {
+		t.Fatalf("retry input + output = %d + %d, want <= summary request budget %d", retryInputTokens, retryBudget, policy.SummaryRequestTokens)
 	}
 	if retry.PreviousMaxOutputTokens != initialBudget || retry.MaxOutputTokens != retryBudget {
 		t.Fatalf("retry payload = %+v, want bounded budget %d", retry, retryBudget)
@@ -4325,7 +4339,7 @@ func TestCompactPreservesCommittedResultWhenPostPolicyContextCannotBeQueued(t *t
 }
 
 func TestTurn_AutoCompactionBoundsOversizedSummaryRequest(t *testing.T) {
-	prov := &budgetedCompactionProvider{compactionLimit: 800}
+	prov := &budgetedCompactionProvider{compactionLimit: 960}
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 1200
 	configureCompactionRetryTest(t, eng, 80, 2000)
@@ -7194,7 +7208,7 @@ func TestRunToolCallEmitsRequestedRunningCompleted(t *testing.T) {
 		ToolName:  "echo_status_test",
 		Input:     map[string]any{"text": "hello"},
 	}}
-	if err := eng.recordToolBatchLocked(context.Background(), "turn-1", compactionPolicy{}, recordedProviderResponse{
+	if err := eng.recordToolBatchLocked(context.Background(), "turn-1", recordedProviderResponse{
 		toolCalls: calls,
 		iter:      0,
 		messageID: "assistant-test",
@@ -7209,6 +7223,35 @@ func TestRunToolCallEmitsRequestedRunningCompleted(t *testing.T) {
 		if got := <-sequence; got != want {
 			t.Fatalf("event = %q, want %q", got, want)
 		}
+	}
+}
+
+func TestRecordToolBatchUsesServingCandidateContextWindowForProjection(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.ContextWindow = 30_000
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "large_candidate_output",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return strings.Repeat("x", 200), nil
+		},
+	})
+	calls := []llm.Block{{
+		Type:      llm.BlockToolUse,
+		ToolUseID: "candidate-tool-1",
+		ToolName:  "large_candidate_output",
+	}}
+
+	if err := eng.recordToolBatchLocked(context.Background(), "turn-1", recordedProviderResponse{
+		toolCalls:     calls,
+		iter:          0,
+		messageID:     "assistant-candidate",
+		contextWindow: 1_000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result := eng.Session.History[len(eng.Session.History)-1].Blocks[0]
+	if result.Artifact == nil || result.Artifact.OriginalBytes != 200 {
+		t.Fatalf("tool result artifact = %+v, want projection at the serving candidate's 5-byte limit", result.Artifact)
 	}
 }
 
