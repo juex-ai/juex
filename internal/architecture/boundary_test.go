@@ -2849,6 +2849,76 @@ func preserveDeferredReceivers(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionCarriesStateBetweenDeferredClosures(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func assignBeforeOlderDeferredUse(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	defer func() {
+		_ = resource.Close()
+		registry.Register(nil)
+	}()
+	defer func() {
+		resource = application.manager
+		registry = application.registry
+	}()
+}
+func assignAfterNewerDeferredUse(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	defer func() {
+		resource = application.manager
+		registry = application.registry
+	}()
+	defer func() {
+		_ = resource.Close()
+		registry.Register(nil)
+	}()
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "deferred_closure_state.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 1 || cleanupCalls[0] != "resource.Close" {
+		t.Fatalf("cleanup calls = %v, want only older deferred cleanup after assignment", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 1 || registrationCalls[0] != "registry.Register" {
+		t.Fatalf("Tool registration calls = %v, want only older deferred registration after assignment", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionKeepsTerminatingExitStateForDelayedCalls(t *testing.T) {
 	source := `package app
 import (
@@ -3595,6 +3665,20 @@ func firstTaglessCaseAlwaysMatches(application *App) {
 		registry.Register(nil)
 	}
 }
+func firstTaggedCaseAlwaysMatches(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	switch true {
+	case true:
+	case func() bool {
+		resource = application.manager
+		registry = application.registry
+		return true
+	}():
+		_ = resource.Close()
+		registry.Register(nil)
+	}
+}
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tagless_switch_conditions.go")
@@ -3614,14 +3698,14 @@ func firstTaglessCaseAlwaysMatches(application *App) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
 	if len(cleanupCalls) != 0 {
-		t.Fatalf("cleanup calls = %v, want later tagless case unreachable", cleanupCalls)
+		t.Fatalf("cleanup calls = %v, want later constant-boolean case unreachable", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
 	if len(registrationCalls) != 0 {
-		t.Fatalf("Tool registration calls = %v, want later tagless case unreachable", registrationCalls)
+		t.Fatalf("Tool registration calls = %v, want later constant-boolean case unreachable", registrationCalls)
 	}
 }
 
@@ -5592,7 +5676,7 @@ func constantBooleanExpression(expression ast.Expr) (bool, bool) {
 	return false, false
 }
 
-func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, correlateCaseConditions, allowFallthrough bool, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState, enterClause func(*ast.CaseClause)) {
+func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, correlateCaseConditions, matchingBoolean, allowFallthrough bool, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState, enterClause func(*ast.CaseClause)) {
 	base := snapshot()
 	selectedEntries := make(map[*ast.CaseClause]compositionFlowState)
 	remaining := base
@@ -5612,8 +5696,13 @@ func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, 
 		for _, expression := range clause.List {
 			if correlateCaseConditions {
 				trueState, falseState := inspectCompositionCondition(expression, visit, snapshot, restore, merge)
-				matched = append(matched, trueState)
-				restore(falseState)
+				if matchingBoolean {
+					matched = append(matched, trueState)
+					restore(falseState)
+				} else {
+					matched = append(matched, falseState)
+					restore(trueState)
+				}
 			} else {
 				ast.Inspect(expression, visit)
 				matched = append(matched, snapshot())
@@ -5656,6 +5745,13 @@ func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, 
 		exits = append(exits, remaining)
 	}
 	restore(merge(exits))
+}
+
+func switchBooleanCaseMode(statement *ast.SwitchStmt) (bool, bool) {
+	if statement.Tag == nil {
+		return true, true
+	}
+	return constantBooleanExpression(statement.Tag)
 }
 
 func typeSwitchGuard(statement *ast.TypeSwitchStmt) (*ast.Ident, ast.Expr) {
@@ -5899,7 +5995,8 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				ast.Inspect(value.Tag, visit)
 			}
 			breakTarget := router.pushBreakTarget()
-			inspectCompositionCaseClauses(value.Body, true, value.Tag == nil, true, visit, snapshot, restore, merge, nil)
+			correlateCases, matchingBoolean := switchBooleanCaseMode(value)
+			inspectCompositionCaseClauses(value.Body, true, correlateCases, matchingBoolean, true, visit, snapshot, restore, merge, nil)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -5922,7 +6019,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				}
 				values[key] = typeName
 			})
-			inspectCompositionCaseClauses(value.Body, false, false, false, visit, snapshot, restore, merge, bindGuard)
+			inspectCompositionCaseClauses(value.Body, false, false, false, false, visit, snapshot, restore, merge, bindGuard)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -6160,7 +6257,8 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				ast.Inspect(value.Tag, visit)
 			}
 			breakTarget := router.pushBreakTarget()
-			inspectCompositionCaseClauses(value.Body, true, value.Tag == nil, true, visit, snapshot, restore, merge, nil)
+			correlateCases, matchingBoolean := switchBooleanCaseMode(value)
+			inspectCompositionCaseClauses(value.Body, true, correlateCases, matchingBoolean, true, visit, snapshot, restore, merge, nil)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -6183,7 +6281,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				}
 				values[key] = typeName
 			})
-			inspectCompositionCaseClauses(value.Body, false, false, false, visit, snapshot, restore, merge, bindGuard)
+			inspectCompositionCaseClauses(value.Body, false, false, false, false, visit, snapshot, restore, merge, bindGuard)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -7025,7 +7123,8 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					ast.Inspect(value.Tag, visit)
 				}
 				breakTarget := router.pushBreakTarget()
-				inspectCompositionCaseClauses(value.Body, true, value.Tag == nil, true, visit, snapshot, restore, merge, nil)
+				correlateCases, matchingBoolean := switchBooleanCaseMode(value)
+				inspectCompositionCaseClauses(value.Body, true, correlateCases, matchingBoolean, true, visit, snapshot, restore, merge, nil)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -7053,7 +7152,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 						resources[key] = paths
 					}
 				})
-				inspectCompositionCaseClauses(value.Body, false, false, false, visit, snapshot, restore, merge, bindGuard)
+				inspectCompositionCaseClauses(value.Body, false, false, false, false, visit, snapshot, restore, merge, bindGuard)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -7329,20 +7428,25 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			}
 		}
 		router.popReturnTarget(returnTarget)
+		deferredExitStates := functionExitStates
 		for index := len(deferredCalls) - 1; index >= 0; index-- {
 			deferred := deferredCalls[index]
-			exitState, active := compositionExitStateForDelayedCall(deferred.call, functionExitStates, types)
-			if !active {
-				continue
+			nextExitStates := make([]compositionFlowState, 0, len(deferredExitStates))
+			for _, exitState := range deferredExitStates {
+				if !exitState.delayed[deferred.call] {
+					nextExitStates = append(nextExitStates, exitState)
+					continue
+				}
+				restore(exitState)
+				delete(activeDelayed, deferred.call)
+				if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
+					inspectCompositionFunctionBody(literal.Body, visit, router)
+				} else if delayedInvokesCapturedCleanup(deferred, function.Body, imports, values, resources, types) {
+					reportCleanup(deferred.call, selectorChain(deferred.call.Fun))
+				}
+				nextExitStates = append(nextExitStates, snapshot())
 			}
-			restore(exitState)
-			if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
-				inspectCompositionFunctionBody(literal.Body, visit, router)
-				continue
-			}
-			if delayedInvokesCapturedCleanup(deferred, function.Body, imports, values, resources, types) {
-				reportCleanup(deferred.call, selectorChain(deferred.call.Fun))
-			}
+			deferredExitStates = nextExitStates
 		}
 		for _, goroutine := range goroutineCalls {
 			exitState, active := compositionExitStateForDelayedCall(goroutine.call, functionExitStates, types)
@@ -7521,7 +7625,8 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					ast.Inspect(value.Tag, visit)
 				}
 				breakTarget := router.pushBreakTarget()
-				inspectCompositionCaseClauses(value.Body, true, value.Tag == nil, true, visit, snapshot, restore, merge, nil)
+				correlateCases, matchingBoolean := switchBooleanCaseMode(value)
+				inspectCompositionCaseClauses(value.Body, true, correlateCases, matchingBoolean, true, visit, snapshot, restore, merge, nil)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -7544,7 +7649,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					}
 					values[key] = typeName
 				})
-				inspectCompositionCaseClauses(value.Body, false, false, false, visit, snapshot, restore, merge, bindGuard)
+				inspectCompositionCaseClauses(value.Body, false, false, false, false, visit, snapshot, restore, merge, bindGuard)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -7786,20 +7891,25 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			}
 		}
 		router.popReturnTarget(returnTarget)
+		deferredExitStates := functionExitStates
 		for index := len(deferredCalls) - 1; index >= 0; index-- {
 			deferred := deferredCalls[index]
-			exitState, active := compositionExitStateForDelayedCall(deferred.call, functionExitStates, types)
-			if !active {
-				continue
+			nextExitStates := make([]compositionFlowState, 0, len(deferredExitStates))
+			for _, exitState := range deferredExitStates {
+				if !exitState.delayed[deferred.call] {
+					nextExitStates = append(nextExitStates, exitState)
+					continue
+				}
+				restore(exitState)
+				delete(activeDelayed, deferred.call)
+				if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
+					inspectCompositionFunctionBody(literal.Body, visit, router)
+				} else if delayedInvokesCapturedToolRegistration(deferred, function.Body, imports, values, types) {
+					reportTool(deferred.call, selectorChain(deferred.call.Fun))
+				}
+				nextExitStates = append(nextExitStates, snapshot())
 			}
-			restore(exitState)
-			if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
-				inspectCompositionFunctionBody(literal.Body, visit, router)
-				continue
-			}
-			if delayedInvokesCapturedToolRegistration(deferred, function.Body, imports, values, types) {
-				reportTool(deferred.call, selectorChain(deferred.call.Fun))
-			}
+			deferredExitStates = nextExitStates
 		}
 		for _, goroutine := range goroutineCalls {
 			exitState, active := compositionExitStateForDelayedCall(goroutine.call, functionExitStates, types)
