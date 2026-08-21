@@ -2901,6 +2901,19 @@ func repeatedDeferredUse(application *App) {
 		}()
 	}
 }
+func singleIterationDeferredUse(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	for {
+		defer func() {
+			_ = resource.Close()
+			registry.Register(nil)
+			resource = application.manager
+			registry = application.registry
+		}()
+		break
+	}
+}
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "deferred_closure_state.go")
@@ -5364,7 +5377,7 @@ func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]boo
 		case *ast.RangeStmt:
 			loopBody = loop.Body
 		}
-		if loopBody == nil {
+		if loopBody == nil || !compositionLoopBodyMayRepeat(loopBody) {
 			return true
 		}
 		ast.Inspect(loopBody, func(loopNode ast.Node) bool {
@@ -5379,6 +5392,24 @@ func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]boo
 		return true
 	})
 	return repeated
+}
+
+func compositionLoopBodyMayRepeat(body *ast.BlockStmt) bool {
+	if blockFallsThrough(body) || hasBackwardGoto(body) {
+		return true
+	}
+	mayContinue := false
+	ast.Inspect(body, func(node ast.Node) bool {
+		if _, nested := node.(*ast.FuncLit); nested {
+			return false
+		}
+		if statement, ok := node.(*ast.BranchStmt); ok && statement.Tok == token.CONTINUE {
+			mayContinue = true
+			return false
+		}
+		return !mayContinue
+	})
+	return mayContinue
 }
 
 type compositionFlowState struct {
