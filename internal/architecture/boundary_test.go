@@ -160,11 +160,16 @@ func TestAppCompositionDoesNotBypassModuleCatalogOrLifecycle(t *testing.T) {
 
 func TestAppFeatureCleanupInspectionUsesDeclaredTypes(t *testing.T) {
 	source := `package app
-import "github.com/juex-ai/juex/internal/mcp"
+import (
+	"io"
+	"github.com/juex-ai/juex/internal/mcp"
+)
 type App struct { renamed *mcp.Manager }
 func (application *App) Close() error {
 	manager := application.renamed
 	_ = manager.Close()
+	closer := io.Closer(manager)
+	_ = closer.Close()
 	return nil
 }`
 	dir := t.TempDir()
@@ -184,7 +189,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	if len(calls) != 1 || calls[0] != "manager.Close" {
+	if len(calls) != 2 || calls[0] != "manager.Close" || calls[1] != "closer.Close" {
 		t.Fatalf("cleanup calls = %v, want type-derived manager.Close", calls)
 	}
 }
@@ -1291,6 +1296,9 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 	case *ast.CallExpr:
 		if results := expressionResultTypes(value, imports, values, types); len(results) != 0 {
 			return cleanupPathsForType(results[0], types, nil)
+		}
+		if len(value.Args) == 1 {
+			return cleanupPathsForExpression(value.Args[0], imports, values, resources, types)
 		}
 	case *ast.UnaryExpr:
 		if value.Op == token.AND {
