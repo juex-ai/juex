@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	goruntime "runtime"
 	"strings"
 	"testing"
 )
@@ -29,11 +28,24 @@ func TestLegacyModuleAliasesAreAbsent(t *testing.T) {
 
 func legacyAliasRepositoryRoot(t *testing.T) string {
 	t.Helper()
-	_, source, _, ok := goruntime.Caller(0)
-	if !ok {
-		t.Fatal("resolve legacy alias boundary test path")
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("resolve legacy alias boundary test working directory: %v", err)
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(source), "..", ".."))
+	for {
+		info, err := os.Stat(filepath.Join(dir, "go.mod"))
+		if err == nil && !info.IsDir() {
+			return dir
+		}
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("stat go.mod from %s: %v", dir, err)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("find repository root from %s", dir)
+		}
+		dir = parent
+	}
 }
 
 func assertTypeNameAbsent(t *testing.T, dir, forbidden string) {
