@@ -72,6 +72,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 	var failures []modelAttemptFailure
 	useRetryBudget := false
 	candidatePolicy, contextWindow := e.compactionSummaryPolicyForCandidateLocked(candidate, defaultContextWindow)
+	candidatePolicy.SummaryMaxTokens = e.compactionSummaryInitialMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
 	maxOutputTokens := candidatePolicy.SummaryMaxTokens
 	summarySystem, summaryHistory := buildCompactionSummaryRequest(baseSystem, previous, input, state, candidatePolicy, instructions)
 	attempt := 1
@@ -163,6 +164,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 		nextCandidate := candidates[selection.Index]
 		attempted[fallbackRef] = struct{}{}
 		candidatePolicy, contextWindow = e.compactionSummaryPolicyForCandidateLocked(nextCandidate, defaultContextWindow)
+		candidatePolicy.SummaryMaxTokens = e.compactionSummaryInitialMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
 		if useRetryBudget {
 			candidatePolicy.SummaryMaxTokens = e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
 		}
@@ -422,9 +424,34 @@ func (e *Engine) compactionSummaryRetryMaxOutputTokens(
 	policy compactionPolicy,
 	instructions string,
 ) int {
-	desired := doubledSummaryMaxTokens(policy.SummaryMaxTokens)
-	if desired <= 0 || policy.TriggerTokens <= 1 {
+	return e.compactionSummaryMaxOutputTokens(baseSystem, previous, input, state, policy, instructions, doubledSummaryMaxTokens(policy.SummaryMaxTokens))
+}
+
+func (e *Engine) compactionSummaryInitialMaxOutputTokens(
+	baseSystem string,
+	previous llm.Message,
+	input []llm.Message,
+	state compactionSummaryState,
+	policy compactionPolicy,
+	instructions string,
+) int {
+	return e.compactionSummaryMaxOutputTokens(baseSystem, previous, input, state, policy, instructions, policy.SummaryMaxTokens)
+}
+
+func (e *Engine) compactionSummaryMaxOutputTokens(
+	baseSystem string,
+	previous llm.Message,
+	input []llm.Message,
+	state compactionSummaryState,
+	policy compactionPolicy,
+	instructions string,
+	desired int,
+) int {
+	if desired <= 0 {
 		return desired
+	}
+	if policy.TriggerTokens <= 1 {
+		return 1
 	}
 
 	minimumSystem, _ := buildCompactionSummaryRequest(baseSystem, previous, nil, state, policy, instructions)

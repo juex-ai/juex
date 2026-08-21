@@ -491,6 +491,9 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 	if primary.calls != 1 || backup.calls != 2 {
 		t.Fatalf("calls primary=%d backup=%d", primary.calls, backup.calls)
 	}
+	if len(backup.opts) != 2 || backup.opts[0].Purpose != "compaction" || backup.opts[0].MaxOutputTokens <= 0 || backup.opts[0].MaxOutputTokens >= 120 {
+		t.Fatalf("backup compaction options = %+v, want output clamped below 120-token context", backup.opts)
+	}
 	foundCompact := false
 	for _, message := range eng.Session.History {
 		if message.Kind == llm.MessageKindCompact {

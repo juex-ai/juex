@@ -3491,6 +3491,51 @@ func TestCompactRefitsSummaryRequestForFallbackContextWindow(t *testing.T) {
 	}
 }
 
+func TestCompactClampsSummaryOutputForFallbackContextWindow(t *testing.T) {
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &scriptedCompactionProvider{
+		name: "backup:model",
+		attempts: []scriptedCompactionAttempt{{response: llm.Response{
+			Message:    llm.TextMessage(llm.RoleAssistant, "bounded fallback summary"),
+			StopReason: llm.StopEndTurn,
+		}}},
+	}
+	eng, bus := newEngine(t, primary, false)
+	eng.ContextWindow = 256000
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 256000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 2000},
+	}
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	eng.Compaction.SummaryMaxTokens = 2048
+	for i := 0; i < 20; i++ {
+		if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", 500)))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var epochs []provenance.RequestEpoch
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SummaryModel != "backup:model" || len(backup.options) != 1 || len(backup.histories) != 1 {
+		t.Fatalf("result/options/histories = %+v/%+v/%d", result, backup.options, len(backup.histories))
+	}
+	policy := effectiveCompactionPolicy(eng.Compaction, 2000)
+	inputTokens := estimateContextTokens(backup.systems[0], nil, backup.histories[0])
+	if got := backup.options[0].MaxOutputTokens; got <= 0 || got >= eng.Compaction.SummaryMaxTokens || inputTokens+got > policy.TriggerTokens {
+		t.Fatalf("fallback request/output = %d/%d tokens, want positive clamped total <= trigger %d", inputTokens, got, policy.TriggerTokens)
+	}
+	if len(epochs) != 2 || epochs[1].Provider.Model != "backup:model" || epochs[1].ContextWindow != 2000 || epochs[1].MaxOutputTokens != backup.options[0].MaxOutputTokens {
+		t.Fatalf("epochs = %+v, want clamped fallback provenance", epochs)
+	}
+}
+
 func TestCompactSkipsModelAlreadyInSharedHealthCooldown(t *testing.T) {
 	health := llm.NewModelHealth(llm.ModelHealthOptions{})
 	primaryFailure, ok := health.Acquire([]string{"primary:model"}, nil)
