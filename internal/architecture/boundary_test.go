@@ -47,7 +47,11 @@ var featureModuleCleanupMethods = map[string]bool{
 	"QuiesceRuntime": true,
 }
 
-type compositionTypeIndex map[string]map[string]string
+type compositionTypeIndex struct {
+	fields          map[string]map[string]string
+	cleanupMethods  map[string]map[string]bool
+	functionResults map[string][]string
+}
 
 // These are the business-agnostic technical primitives identified as
 // Foundation by ARCHITECTURE.md. Keep the list explicit so moving a package
@@ -167,7 +171,7 @@ func closeFeature(module *mcp.Module) {
 		t.Fatal(err)
 	}
 	var calls []string
-	inspectAppFeatureCleanup(parsed, importPaths(parsed), nil, func(_ *ast.CallExpr, chain string) {
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), compositionTypeIndex{}, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
 	want := []string{"module.QuiesceRuntime", "module.CloseRuntime"}
@@ -203,6 +207,43 @@ func closeFeature(application *App) {
 	})
 	if len(calls) != 1 || calls[0] != "application.composition.builtinTools.CloseRuntime" {
 		t.Fatalf("cleanup calls = %v, want nested Feature Module cleanup", calls)
+	}
+}
+
+func TestAppFeatureCleanupInspectionInfersConstructorsAndClients(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/observable"
+)
+type App struct{}
+func closeFeature() {
+	manager, err := observable.NewManager(observable.ManagerOptions{})
+	_ = err
+	_ = manager.Close()
+	var client *mcp.Client
+	_ = client.Close()
+}`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "constructors.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		calls = append(calls, chain)
+	})
+	want := []string{"manager.Close", "client.Close"}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] {
+		t.Fatalf("cleanup calls = %v, want %v", calls, want)
 	}
 }
 
@@ -337,7 +378,14 @@ func isToolRegistrationName(name string) bool {
 }
 
 func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
-	types := make(compositionTypeIndex)
+	types := compositionTypeIndex{
+		fields:          make(map[string]map[string]string),
+		cleanupMethods:  make(map[string]map[string]bool),
+		functionResults: make(map[string][]string),
+	}
+	for typeName, methods := range featureResourceCleanupMethods {
+		types.cleanupMethods[typeName] = methods
+	}
 	foundApp := false
 	err := filepath.WalkDir(appDir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -351,6 +399,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 			return err
 		}
 		imports := importPaths(parsed)
+		indexCleanupAndConstructors(parsed, modulePath+"/internal/app", imports, &types)
 		for _, declaration := range parsed.Decls {
 			general, ok := declaration.(*ast.GenDecl)
 			if !ok || general.Tok != token.TYPE {
@@ -369,12 +418,12 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 				if spec.Name.Name == "App" {
 					foundApp = true
 				}
-				if types[typeName] == nil {
-					types[typeName] = make(map[string]string)
+				if types.fields[typeName] == nil {
+					types.fields[typeName] = make(map[string]string)
 				}
 				for _, field := range structure.Fields.List {
 					for _, name := range field.Names {
-						types[typeName][name.Name] = canonicalType(field.Type, imports)
+						types.fields[typeName][name.Name] = canonicalType(field.Type, imports)
 					}
 				}
 			}
@@ -382,12 +431,94 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return compositionTypeIndex{}, err
 	}
 	if !foundApp {
-		return nil, fs.ErrNotExist
+		return compositionTypeIndex{}, fs.ErrNotExist
+	}
+	if err := indexConcreteFeatureSources(repositoryRootPath(), &types); err != nil {
+		return compositionTypeIndex{}, err
 	}
 	return types, nil
+}
+
+func indexConcreteFeatureSources(root string, types *compositionTypeIndex) error {
+	for _, relativeDir := range []string{"internal/hooks", "internal/mcp", "internal/modules", "internal/observable", "internal/skills"} {
+		dir := filepath.Join(root, filepath.FromSlash(relativeDir))
+		err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+			if err != nil {
+				return err
+			}
+			packageDir, err := filepath.Rel(root, filepath.Dir(path))
+			if err != nil {
+				return err
+			}
+			packagePath := modulePath + "/" + filepath.ToSlash(packageDir)
+			indexCleanupAndConstructors(parsed, packagePath, importPaths(parsed), types)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func indexCleanupAndConstructors(file *ast.File, packagePath string, imports map[string]string, types *compositionTypeIndex) {
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		if function.Recv == nil {
+			if results := resultTypes(function.Type.Results, imports, packagePath); len(results) != 0 {
+				types.functionResults[packagePath+"."+function.Name.Name] = results
+			}
+			continue
+		}
+		if !isFeatureCleanupMethodName(function.Name.Name) || len(function.Recv.List) == 0 {
+			continue
+		}
+		typeName := canonicalTypeInPackage(function.Recv.List[0].Type, imports, packagePath)
+		if types.cleanupMethods[typeName] == nil {
+			types.cleanupMethods[typeName] = make(map[string]bool)
+		}
+		types.cleanupMethods[typeName][function.Name.Name] = true
+	}
+}
+
+func resultTypes(results *ast.FieldList, imports map[string]string, packagePath string) []string {
+	if results == nil {
+		return nil
+	}
+	var resolved []string
+	for _, field := range results.List {
+		count := len(field.Names)
+		if count == 0 {
+			count = 1
+		}
+		typeName := canonicalTypeInPackage(field.Type, imports, packagePath)
+		for range count {
+			resolved = append(resolved, typeName)
+		}
+	}
+	return resolved
+}
+
+func isFeatureCleanupMethodName(name string) bool {
+	switch name {
+	case "Close", "StartClose", "StopAll", "WaitClose", "CloseRuntime", "QuiesceRuntime", "CloseSession", "QuiesceSession":
+		return true
+	default:
+		return false
+	}
 }
 
 func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types compositionTypeIndex, report func(*ast.CallExpr, string)) {
@@ -396,7 +527,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 		if !ok || function.Body == nil {
 			continue
 		}
-		if ownsFeatureCleanup(function.Recv, imports) {
+		if ownsFeatureCleanup(function.Recv, imports, types) {
 			continue
 		}
 		resources := namedCleanupValues(function.Recv, imports, types)
@@ -408,10 +539,10 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			case *ast.AssignStmt:
 				for index, left := range value.Lhs {
 					name, ok := left.(*ast.Ident)
-					if !ok || index >= len(value.Rhs) {
+					if !ok {
 						continue
 					}
-					if paths := cleanupPathsForExpression(value.Rhs[index], resources); paths != nil {
+					if paths := assignedCleanupPaths(value.Rhs, index, imports, resources, types); paths != nil {
 						resources[name.Name] = paths
 					} else {
 						delete(resources, name.Name)
@@ -426,8 +557,8 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					spec := raw.(*ast.ValueSpec)
 					paths := cleanupPathsForType(canonicalType(spec.Type, imports), types, nil)
 					for index, name := range spec.Names {
-						if index < len(spec.Values) {
-							paths = cleanupPathsForExpression(spec.Values[index], resources)
+						if len(spec.Values) != 0 {
+							paths = assignedCleanupPaths(spec.Values, index, imports, resources, types)
 						}
 						if paths != nil {
 							resources[name.Name] = paths
@@ -449,9 +580,9 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 	}
 }
 
-func ownsFeatureCleanup(receiver *ast.FieldList, imports map[string]string) bool {
+func ownsFeatureCleanup(receiver *ast.FieldList, imports map[string]string, types compositionTypeIndex) bool {
 	for _, typeName := range namedValueTypes(receiver, imports) {
-		if featureCleanupMethods(typeName) != nil || typeName == modulePath+"/internal/app.sideSessionModule" {
+		if featureCleanupMethods(typeName, types) != nil {
 			return true
 		}
 	}
@@ -473,10 +604,10 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			case *ast.AssignStmt:
 				for index, left := range value.Lhs {
 					name, ok := left.(*ast.Ident)
-					if !ok || index >= len(value.Rhs) {
+					if !ok {
 						continue
 					}
-					if typeName := expressionType(value.Rhs[index], imports, values, types); typeName != "" {
+					if typeName := assignedExpressionType(value.Rhs, index, imports, values, types); typeName != "" {
 						values[name.Name] = typeName
 					} else {
 						delete(values, name.Name)
@@ -491,8 +622,8 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					spec := raw.(*ast.ValueSpec)
 					typeName := canonicalType(spec.Type, imports)
 					for index, name := range spec.Names {
-						if index < len(spec.Values) {
-							typeName = expressionType(spec.Values[index], imports, values, types)
+						if len(spec.Values) != 0 {
+							typeName = assignedExpressionType(spec.Values, index, imports, values, types)
 						}
 						if typeName != "" {
 							values[name.Name] = typeName
@@ -526,6 +657,10 @@ func importPaths(file *ast.File) map[string]string {
 }
 
 func canonicalType(expression ast.Expr, imports map[string]string) string {
+	return canonicalTypeInPackage(expression, imports, modulePath+"/internal/app")
+}
+
+func canonicalTypeInPackage(expression ast.Expr, imports map[string]string, packagePath string) string {
 	for {
 		switch value := expression.(type) {
 		case *ast.StarExpr:
@@ -539,7 +674,7 @@ func canonicalType(expression ast.Expr, imports map[string]string) string {
 			}
 			return imports[qualifier.Name] + "." + value.Sel.Name
 		case *ast.Ident:
-			return modulePath + "/internal/app." + value.Name
+			return packagePath + "." + value.Name
 		default:
 			return ""
 		}
@@ -577,8 +712,8 @@ func namedCleanupValues(fields *ast.FieldList, imports map[string]string, types 
 	return resources
 }
 
-func featureCleanupMethods(typeName string) map[string]bool {
-	if methods := featureResourceCleanupMethods[typeName]; methods != nil {
+func featureCleanupMethods(typeName string, types compositionTypeIndex) map[string]bool {
+	if methods := types.cleanupMethods[typeName]; methods != nil {
 		return methods
 	}
 	const moduleType = ".Module"
@@ -589,10 +724,10 @@ func featureCleanupMethods(typeName string) map[string]bool {
 }
 
 func cleanupPathsForType(typeName string, types compositionTypeIndex, visiting map[string]bool) map[string]bool {
-	if methods := featureCleanupMethods(typeName); methods != nil {
+	if methods := featureCleanupMethods(typeName, types); methods != nil {
 		return methods
 	}
-	fields := types[typeName]
+	fields := types.fields[typeName]
 	if len(fields) == 0 || visiting[typeName] {
 		return nil
 	}
@@ -635,6 +770,87 @@ func cleanupPathsForExpression(expression ast.Expr, resources map[string]map[str
 	return nil
 }
 
+func assignedCleanupPaths(expressions []ast.Expr, index int, imports map[string]string, resources map[string]map[string]bool, types compositionTypeIndex) map[string]bool {
+	if len(expressions) == 1 {
+		if results := expressionResultTypes(expressions[0], imports, nil, types); index < len(results) {
+			return cleanupPathsForType(results[index], types, nil)
+		}
+		if index == 0 {
+			return cleanupPathsForExpression(expressions[0], resources)
+		}
+		return nil
+	}
+	if index >= len(expressions) {
+		return nil
+	}
+	return cleanupPathsForExpression(expressions[index], resources)
+}
+
+func expressionResultTypes(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) []string {
+	call, ok := expression.(*ast.CallExpr)
+	if !ok {
+		if typeName := expressionType(expression, imports, values, types); typeName != "" {
+			return []string{typeName}
+		}
+		return nil
+	}
+	if results := types.functionResults[calledFunctionKey(call.Fun, imports)]; len(results) != 0 {
+		return results
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+	qualifier, ok := selector.X.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	switch imports[qualifier.Name] {
+	case modulePath + "/internal/tools":
+		if selector.Sel.Name == "NewRegistry" || selector.Sel.Name == "NewRegistryWithOptions" {
+			return []string{modulePath + "/internal/tools.Registry"}
+		}
+	case modulePath + "/internal/runtime/module":
+		if selector.Sel.Name == "BuildToolRegistry" {
+			return []string{modulePath + "/internal/tools.Registry", modulePath + "/internal/app.error"}
+		}
+	}
+	return nil
+}
+
+func assignedExpressionType(expressions []ast.Expr, index int, imports map[string]string, values map[string]string, types compositionTypeIndex) string {
+	if len(expressions) == 1 {
+		results := expressionResultTypes(expressions[0], imports, values, types)
+		if index < len(results) {
+			return results[index]
+		}
+		return ""
+	}
+	if index >= len(expressions) {
+		return ""
+	}
+	return expressionType(expressions[index], imports, values, types)
+}
+
+func calledFunctionKey(expression ast.Expr, imports map[string]string) string {
+	switch function := expression.(type) {
+	case *ast.Ident:
+		packagePath := imports["."]
+		if packagePath == "" {
+			packagePath = modulePath + "/internal/app"
+		}
+		return packagePath + "." + function.Name
+	case *ast.SelectorExpr:
+		qualifier, ok := function.X.(*ast.Ident)
+		if !ok {
+			return ""
+		}
+		return imports[qualifier.Name] + "." + function.Sel.Name
+	default:
+		return ""
+	}
+}
+
 func expressionType(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) string {
 	switch value := expression.(type) {
 	case *ast.Ident:
@@ -643,7 +859,7 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 		return expressionType(value.X, imports, values, types)
 	case *ast.SelectorExpr:
 		receiverType := expressionType(value.X, imports, values, types)
-		return types[receiverType][value.Sel.Name]
+		return types.fields[receiverType][value.Sel.Name]
 	case *ast.CallExpr:
 		selector, ok := value.Fun.(*ast.SelectorExpr)
 		if !ok {
@@ -699,9 +915,17 @@ func selectorChain(expression ast.Expr) string {
 
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
+	root := repositoryRootPath()
+	if root == "" {
+		t.Fatal("resolve boundary test source path")
+	}
+	return root
+}
+
+func repositoryRootPath() string {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
-		t.Fatal("resolve boundary test source path")
+		return ""
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
