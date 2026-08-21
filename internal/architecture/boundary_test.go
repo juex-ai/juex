@@ -2909,6 +2909,14 @@ func safeCleanup(current, next closer, owned bool) {
 func safeRegistration(current, next registrar, owned bool) {
 	if owned { current = next } else { current.Register(nil) }
 }
+func storeCleanup(destination []closer, value closer) closer {
+	destination[0] = value
+	return value
+}
+func storeRegistration(destination []registrar, value registrar) registrar {
+	destination[0] = value
+	return value
+}
 func useSafeHelpers(application *App, owned bool) {
 	safeCleanup(&unrelatedCloser{}, application.manager, owned)
 	safeRegistration(&unrelatedRegistrar{}, application.registry, owned)
@@ -2960,6 +2968,30 @@ func mutuallyExclusiveSelectClauses(application *App, first, second <-chan struc
 		registry.Register(nil)
 	}
 }
+func selectOperandEffects(application *App, cleanupOutput chan<- closer, registrationOutput chan<- registrar, ready <-chan struct{}) {
+	resources := []closer{&unrelatedCloser{}}
+	registries := []registrar{&unrelatedRegistrar{}}
+	select {
+	case cleanupOutput <- storeCleanup(resources, application.manager):
+	case registrationOutput <- storeRegistration(registries, application.registry):
+	case <-ready:
+		_ = resources[0].Close()
+		registries[0].Register(nil)
+	}
+}
+func continueBeforeUse(application *App, choices []bool) {
+	for _, owned := range choices {
+		var resource closer = &unrelatedCloser{}
+		var registry registrar = &unrelatedRegistrar{}
+		if owned {
+			resource = application.manager
+			registry = application.registry
+			continue
+		}
+		_ = resource.Close()
+		registry.Register(nil)
+	}
+}
 func useMergedSwitchState(application *App, choice int) {
 	var resource closer = &unrelatedCloser{}
 	var registry registrar = &unrelatedRegistrar{}
@@ -2989,15 +3021,15 @@ func useMergedSwitchState(application *App, choice int) {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if len(cleanupCalls) != 1 || cleanupCalls[0] != "resource.Close" {
-		t.Fatalf("cleanup calls = %v, want only post-switch cleanup", cleanupCalls)
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; len(cleanupCalls) != 2 || !strings.Contains(cleanup, ",resources.Close,") || !strings.Contains(cleanup, ",resource.Close,") {
+		t.Fatalf("cleanup calls = %v, want select-operand and post-switch cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if len(registrationCalls) != 1 || registrationCalls[0] != "registry.Register" {
-		t.Fatalf("Tool registration calls = %v, want only post-switch registration", registrationCalls)
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; len(registrationCalls) != 2 || !strings.Contains(registration, ",registries.Register,") || !strings.Contains(registration, ",registry.Register,") {
+		t.Fatalf("Tool registration calls = %v, want select-operand and post-switch registration", registrationCalls)
 	}
 }
 
@@ -4563,6 +4595,8 @@ func statementFallsThrough(statement ast.Stmt) bool {
 		return blockFallsThrough(value)
 	case *ast.IfStmt:
 		return value.Else == nil || blockFallsThrough(value.Body) || statementFallsThrough(value.Else)
+	case *ast.BranchStmt:
+		return value.Tok != token.CONTINUE
 	default:
 		return true
 	}
@@ -4645,6 +4679,20 @@ func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, 
 }
 
 func inspectCompositionCommClauses(body *ast.BlockStmt, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) {
+	for _, raw := range body.List {
+		clause := raw.(*ast.CommClause)
+		switch communication := clause.Comm.(type) {
+		case *ast.SendStmt:
+			ast.Inspect(communication.Chan, visit)
+			ast.Inspect(communication.Value, visit)
+		case *ast.AssignStmt:
+			for _, expression := range communication.Rhs {
+				ast.Inspect(expression, visit)
+			}
+		case *ast.ExprStmt:
+			ast.Inspect(communication.X, visit)
+		}
+	}
 	base := snapshot()
 	var exits []compositionFlowState
 	for _, raw := range body.List {
