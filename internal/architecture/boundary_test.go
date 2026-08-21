@@ -2712,6 +2712,70 @@ func preserveDeferredReceivers(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionKeepsTerminatingExitStateForDelayedCalls(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type unrelatedCloser struct{}
+func (*unrelatedCloser) Close() error { return nil }
+type unrelatedRegistrar struct{}
+func (*unrelatedRegistrar) Register(tools.Tool) error { return nil }
+func delayedBeforeReturn(application *App, owned bool) {
+	var delayedResource closer = &unrelatedCloser{}
+	var delayedRegistry registrar = &unrelatedRegistrar{}
+	if owned {
+		delayedResource = application.manager
+		delayedRegistry = application.registry
+		defer func() { _ = delayedResource.Close() }()
+		defer func() { delayedRegistry.Register(nil) }()
+		return
+	}
+}
+func unreachableAfterReturn(application *App) {
+	unreachableResource := application.manager
+	unreachableRegistry := application.registry
+	return
+	_ = unreachableResource.Close()
+	unreachableRegistry.Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "terminating_delayed.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 1 || cleanupCalls[0] != "delayedResource.Close" {
+		t.Fatalf("cleanup calls = %v, want only terminating-path defer cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 1 || registrationCalls[0] != "delayedRegistry.Register" {
+		t.Fatalf("Tool registration calls = %v, want only terminating-path defer registration", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionUsesLaterStateForGoroutineCaptures(t *testing.T) {
 	source := `package app
 import (
@@ -4592,6 +4656,7 @@ type compositionFlowState struct {
 	resources  map[string]map[string]bool
 	references map[string]bool
 	aliases    map[string]map[string]bool
+	delayed    map[*ast.CallExpr]bool
 }
 
 type compositionFlowTarget struct {
@@ -4605,6 +4670,7 @@ type compositionFlowRouter struct {
 	merge           func([]compositionFlowState) compositionFlowState
 	breakTargets    []*compositionFlowTarget
 	continueTargets []*compositionFlowTarget
+	returnTargets   []*compositionFlowTarget
 	gotoStates      map[string][]compositionFlowState
 	pendingLabel    string
 }
@@ -4637,6 +4703,14 @@ func (router *compositionFlowRouter) routeBranch(branch *ast.BranchStmt) {
 		if branch.Label != nil {
 			router.gotoStates[branch.Label.Name] = append(router.gotoStates[branch.Label.Name], state)
 		}
+	}
+	router.terminate()
+}
+
+func (router *compositionFlowRouter) routeReturn() {
+	if len(router.returnTargets) != 0 {
+		target := router.returnTargets[len(router.returnTargets)-1]
+		target.states = append(target.states, router.snapshot())
 	}
 	router.terminate()
 }
@@ -4676,6 +4750,19 @@ func (router *compositionFlowRouter) popContinueTarget(target *compositionFlowTa
 	router.continueTargets = router.continueTargets[:len(router.continueTargets)-1]
 }
 
+func (router *compositionFlowRouter) pushReturnTarget() *compositionFlowTarget {
+	target := &compositionFlowTarget{}
+	router.returnTargets = append(router.returnTargets, target)
+	return target
+}
+
+func (router *compositionFlowRouter) popReturnTarget(target *compositionFlowTarget) {
+	if len(router.returnTargets) == 0 || router.returnTargets[len(router.returnTargets)-1] != target {
+		panic("composition return target stack mismatch")
+	}
+	router.returnTargets = router.returnTargets[:len(router.returnTargets)-1]
+}
+
 func (router *compositionFlowRouter) mergeTargetStates(target *compositionFlowTarget) {
 	states := append([]compositionFlowState{router.snapshot()}, target.states...)
 	router.restore(router.merge(states))
@@ -4696,6 +4783,9 @@ func (router *compositionFlowRouter) enterLabel(label string) {
 
 func compositionFlowStateWithoutBindings(state compositionFlowState, excluded map[string]bool) compositionFlowState {
 	filtered := snapshotCompositionFlowState(state.origins, state.values, state.resources, state.references, nil)
+	for call := range state.delayed {
+		filtered.delayed[call] = true
+	}
 	for key := range filtered.origins {
 		if excludedCompositionBinding(key, excluded) {
 			delete(filtered.origins, key)
@@ -4783,6 +4873,7 @@ func snapshotCompositionFlowState(origins map[string]map[int]bool, values map[st
 		resources:  cloneCleanupResourceMap(resources),
 		references: cloneBoolMap(references),
 		aliases:    cloneCleanupResourceMap(aliases),
+		delayed:    make(map[*ast.CallExpr]bool),
 	}
 }
 
@@ -4793,6 +4884,7 @@ func mergeCompositionFlowStates(states []compositionFlowState, types composition
 		resources:  make(map[string]map[string]bool),
 		references: make(map[string]bool),
 		aliases:    make(map[string]map[string]bool),
+		delayed:    make(map[*ast.CallExpr]bool),
 	}
 	for _, state := range states {
 		merged.origins = mergeBindingOriginMaps(merged.origins, state.origins)
@@ -4800,6 +4892,9 @@ func mergeCompositionFlowStates(states []compositionFlowState, types composition
 		merged.resources = mergeCleanupResourceMaps(merged.resources, state.resources)
 		merged.references = mergeBoolMaps(merged.references, state.references)
 		merged.aliases = mergeReferenceAliasMaps(merged.aliases, state.aliases)
+		for call := range state.delayed {
+			merged.delayed[call] = true
+		}
 	}
 	return merged
 }
@@ -4961,6 +5056,26 @@ func inspectCompositionLoopBody(body *ast.BlockStmt, visit func(ast.Node) bool, 
 	router.mergeTargetStates(breakTarget)
 }
 
+func inspectCompositionFunctionBody(body *ast.BlockStmt, visit func(ast.Node) bool, router *compositionFlowRouter) {
+	returnTarget := router.pushReturnTarget()
+	ast.Inspect(body, visit)
+	router.mergeTargetStates(returnTarget)
+	router.popReturnTarget(returnTarget)
+}
+
+func compositionExitStateForDelayedCall(call *ast.CallExpr, states []compositionFlowState, types compositionTypeIndex) (compositionFlowState, bool) {
+	var active []compositionFlowState
+	for _, state := range states {
+		if state.delayed[call] {
+			active = append(active, state)
+		}
+	}
+	if len(active) == 0 {
+		return compositionFlowState{}, false
+	}
+	return mergeCompositionFlowStates(active, types), true
+}
+
 func snapshotDelayedCompositionCall(call *ast.CallExpr, imports map[string]string, values map[string]string, types compositionTypeIndex) delayedCompositionCall {
 	delayed := delayedCompositionCall{
 		call:            call,
@@ -5051,6 +5166,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 		return mergeCompositionFlowStates(states, types)
 	}
 	router := newCompositionFlowRouter(snapshot, restore, merge)
+	returnTarget := router.pushReturnTarget()
 	var visit func(ast.Node) bool
 	visit = func(node ast.Node) bool {
 		switch value := node.(type) {
@@ -5065,6 +5181,12 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 			if value.Tok != token.FALLTHROUGH {
 				router.routeBranch(value)
 			}
+			return false
+		case *ast.ReturnStmt:
+			for _, result := range value.Results {
+				ast.Inspect(result, visit)
+			}
+			router.routeReturn()
 			return false
 		case *ast.IfStmt:
 			inspectCompositionIf(value, visit, snapshot, restore, merge)
@@ -5238,10 +5360,12 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 		beforeReferences := cloneBoolMap(references)
 		beforeAliases := cloneCleanupResourceMap(aliases)
 		ast.Inspect(function.body(), visit)
+		router.mergeTargetStates(returnTarget)
 		if !backEdge || equalBindingOrigins(origins, beforeOrigins) && equalStringMap(values, beforeValues) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
 			break
 		}
 	}
+	router.popReturnTarget(returnTarget)
 	return cleaned
 }
 
@@ -5263,6 +5387,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 		return mergeCompositionFlowStates(states, types)
 	}
 	router := newCompositionFlowRouter(snapshot, restore, merge)
+	returnTarget := router.pushReturnTarget()
 	var visit func(ast.Node) bool
 	visit = func(node ast.Node) bool {
 		switch value := node.(type) {
@@ -5277,6 +5402,12 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 			if value.Tok != token.FALLTHROUGH {
 				router.routeBranch(value)
 			}
+			return false
+		case *ast.ReturnStmt:
+			for _, result := range value.Results {
+				ast.Inspect(result, visit)
+			}
+			router.routeReturn()
 			return false
 		case *ast.IfStmt:
 			inspectCompositionIf(value, visit, snapshot, restore, merge)
@@ -5463,10 +5594,12 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 		beforeReferences := cloneBoolMap(references)
 		beforeAliases := cloneCleanupResourceMap(aliases)
 		ast.Inspect(function.body(), visit)
+		router.mergeTargetStates(returnTarget)
 		if !backEdge || equalBindingOrigins(origins, beforeOrigins) && equalStringMap(values, beforeValues) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
 			break
 		}
 	}
+	router.popReturnTarget(returnTarget)
 	return registered
 }
 
@@ -6023,6 +6156,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 		var deferredCalls []delayedCompositionCall
 		goroutineSeen := make(map[*ast.CallExpr]bool)
 		var goroutineCalls []delayedCompositionCall
+		activeDelayed := make(map[*ast.CallExpr]bool)
 		delayedEvaluation := false
 		reportCleanup := func(call *ast.CallExpr, chain string) {
 			if !reportedCalls[call] && !isReceiverOwnedFeatureCleanup(function, call, imports, values, types) {
@@ -6031,18 +6165,27 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			}
 		}
 		snapshot := func() compositionFlowState {
-			return snapshotCompositionFlowState(nil, values, resources, references, aliases)
+			state := snapshotCompositionFlowState(nil, values, resources, references, aliases)
+			for call := range activeDelayed {
+				state.delayed[call] = true
+			}
+			return state
 		}
 		restore := func(state compositionFlowState) {
 			values = cloneStringMap(state.values)
 			resources = cloneCleanupResourceMap(state.resources)
 			references = cloneBoolMap(state.references)
 			aliases = cloneCleanupResourceMap(state.aliases)
+			activeDelayed = make(map[*ast.CallExpr]bool)
+			for call := range state.delayed {
+				activeDelayed[call] = true
+			}
 		}
 		merge := func(states []compositionFlowState) compositionFlowState {
 			return mergeCompositionFlowStates(states, types)
 		}
 		router := newCompositionFlowRouter(snapshot, restore, merge)
+		returnTarget := router.pushReturnTarget()
 		var visit func(ast.Node) bool
 		visit = func(node ast.Node) bool {
 			switch value := node.(type) {
@@ -6058,11 +6201,18 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					router.routeBranch(value)
 				}
 				return false
+			case *ast.ReturnStmt:
+				for _, result := range value.Results {
+					ast.Inspect(result, visit)
+				}
+				router.routeReturn()
+				return false
 			case *ast.DeferStmt:
 				if !deferredSeen[value.Call] {
 					deferredSeen[value.Call] = true
 					deferredCalls = append(deferredCalls, snapshotDelayedCompositionCall(value.Call, imports, values, types))
 				}
+				activeDelayed[value.Call] = true
 				previousDelayedEvaluation := delayedEvaluation
 				delayedEvaluation = true
 				ast.Inspect(value.Call, visit)
@@ -6073,6 +6223,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					goroutineSeen[value.Call] = true
 					goroutineCalls = append(goroutineCalls, snapshotDelayedCompositionCall(value.Call, imports, values, types))
 				}
+				activeDelayed[value.Call] = true
 				previousDelayedEvaluation := delayedEvaluation
 				delayedEvaluation = true
 				ast.Inspect(value.Call, visit)
@@ -6082,6 +6233,8 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				if delayedEvaluation {
 					return false
 				}
+				inspectCompositionFunctionBody(value.Body, visit, router)
+				return false
 			case *ast.IfStmt:
 				inspectCompositionIf(value, visit, snapshot, restore, merge)
 				return false
@@ -6355,20 +6508,30 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			return true
 		}
 		backwardGoto := hasBackwardGoto(function.Body)
+		var functionExitStates []compositionFlowState
 		for {
 			beforeValues := cloneStringMap(values)
 			beforeResources := cloneCleanupResourceMap(resources)
 			beforeReferences := cloneBoolMap(references)
 			beforeAliases := cloneCleanupResourceMap(aliases)
 			ast.Inspect(function.Body, visit)
+			iterationExitStates := append([]compositionFlowState{snapshot()}, returnTarget.states...)
+			router.mergeTargetStates(returnTarget)
 			if !backwardGoto || equalStringMap(values, beforeValues) && equalCleanupResourceMap(resources, beforeResources) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
+				functionExitStates = iterationExitStates
 				break
 			}
 		}
+		router.popReturnTarget(returnTarget)
 		for index := len(deferredCalls) - 1; index >= 0; index-- {
 			deferred := deferredCalls[index]
+			exitState, active := compositionExitStateForDelayedCall(deferred.call, functionExitStates, types)
+			if !active {
+				continue
+			}
+			restore(exitState)
 			if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
-				ast.Inspect(literal.Body, visit)
+				inspectCompositionFunctionBody(literal.Body, visit, router)
 				continue
 			}
 			if delayedInvokesCapturedCleanup(deferred, function.Body, imports, values, resources, types) {
@@ -6376,8 +6539,13 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			}
 		}
 		for _, goroutine := range goroutineCalls {
+			exitState, active := compositionExitStateForDelayedCall(goroutine.call, functionExitStates, types)
+			if !active {
+				continue
+			}
+			restore(exitState)
 			if literal := functionLiteralExpression(goroutine.call.Fun); literal != nil {
-				ast.Inspect(literal.Body, visit)
+				inspectCompositionFunctionBody(literal.Body, visit, router)
 				continue
 			}
 			if delayedInvokesCapturedCleanup(goroutine, function.Body, imports, values, resources, types) {
@@ -6443,6 +6611,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 		var deferredCalls []delayedCompositionCall
 		goroutineSeen := make(map[*ast.CallExpr]bool)
 		var goroutineCalls []delayedCompositionCall
+		activeDelayed := make(map[*ast.CallExpr]bool)
 		delayedEvaluation := false
 		reportTool := func(call *ast.CallExpr, chain string) {
 			if !reportedCalls[call] {
@@ -6451,17 +6620,26 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			}
 		}
 		snapshot := func() compositionFlowState {
-			return snapshotCompositionFlowState(nil, values, nil, references, aliases)
+			state := snapshotCompositionFlowState(nil, values, nil, references, aliases)
+			for call := range activeDelayed {
+				state.delayed[call] = true
+			}
+			return state
 		}
 		restore := func(state compositionFlowState) {
 			values = cloneStringMap(state.values)
 			references = cloneBoolMap(state.references)
 			aliases = cloneCleanupResourceMap(state.aliases)
+			activeDelayed = make(map[*ast.CallExpr]bool)
+			for call := range state.delayed {
+				activeDelayed[call] = true
+			}
 		}
 		merge := func(states []compositionFlowState) compositionFlowState {
 			return mergeCompositionFlowStates(states, types)
 		}
 		router := newCompositionFlowRouter(snapshot, restore, merge)
+		returnTarget := router.pushReturnTarget()
 		var visit func(ast.Node) bool
 		visit = func(node ast.Node) bool {
 			switch value := node.(type) {
@@ -6477,11 +6655,18 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					router.routeBranch(value)
 				}
 				return false
+			case *ast.ReturnStmt:
+				for _, result := range value.Results {
+					ast.Inspect(result, visit)
+				}
+				router.routeReturn()
+				return false
 			case *ast.DeferStmt:
 				if !deferredSeen[value.Call] {
 					deferredSeen[value.Call] = true
 					deferredCalls = append(deferredCalls, snapshotDelayedCompositionCall(value.Call, imports, values, types))
 				}
+				activeDelayed[value.Call] = true
 				previousDelayedEvaluation := delayedEvaluation
 				delayedEvaluation = true
 				ast.Inspect(value.Call, visit)
@@ -6492,6 +6677,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					goroutineSeen[value.Call] = true
 					goroutineCalls = append(goroutineCalls, snapshotDelayedCompositionCall(value.Call, imports, values, types))
 				}
+				activeDelayed[value.Call] = true
 				previousDelayedEvaluation := delayedEvaluation
 				delayedEvaluation = true
 				ast.Inspect(value.Call, visit)
@@ -6501,6 +6687,8 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				if delayedEvaluation {
 					return false
 				}
+				inspectCompositionFunctionBody(value.Body, visit, router)
+				return false
 			case *ast.IfStmt:
 				inspectCompositionIf(value, visit, snapshot, restore, merge)
 				return false
@@ -6741,19 +6929,29 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			return true
 		}
 		backwardGoto := hasBackwardGoto(function.Body)
+		var functionExitStates []compositionFlowState
 		for {
 			beforeValues := cloneStringMap(values)
 			beforeReferences := cloneBoolMap(references)
 			beforeAliases := cloneCleanupResourceMap(aliases)
 			ast.Inspect(function.Body, visit)
+			iterationExitStates := append([]compositionFlowState{snapshot()}, returnTarget.states...)
+			router.mergeTargetStates(returnTarget)
 			if !backwardGoto || equalStringMap(values, beforeValues) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
+				functionExitStates = iterationExitStates
 				break
 			}
 		}
+		router.popReturnTarget(returnTarget)
 		for index := len(deferredCalls) - 1; index >= 0; index-- {
 			deferred := deferredCalls[index]
+			exitState, active := compositionExitStateForDelayedCall(deferred.call, functionExitStates, types)
+			if !active {
+				continue
+			}
+			restore(exitState)
 			if literal := functionLiteralExpression(deferred.call.Fun); literal != nil {
-				ast.Inspect(literal.Body, visit)
+				inspectCompositionFunctionBody(literal.Body, visit, router)
 				continue
 			}
 			if delayedInvokesCapturedToolRegistration(deferred, function.Body, imports, values, types) {
@@ -6761,8 +6959,13 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			}
 		}
 		for _, goroutine := range goroutineCalls {
+			exitState, active := compositionExitStateForDelayedCall(goroutine.call, functionExitStates, types)
+			if !active {
+				continue
+			}
+			restore(exitState)
 			if literal := functionLiteralExpression(goroutine.call.Fun); literal != nil {
-				ast.Inspect(literal.Body, visit)
+				inspectCompositionFunctionBody(literal.Body, visit, router)
 				continue
 			}
 			if delayedInvokesCapturedToolRegistration(goroutine, function.Body, imports, values, types) {
