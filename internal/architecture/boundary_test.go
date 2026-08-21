@@ -409,6 +409,8 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	converted.Register(nil)
 	routes.Register(nil)
 	tools.RegisterBuiltins(registry, tools.BuiltinOptions{})
+	bulkRegister := tools.RegisterBuiltins
+	bulkRegister(registry, tools.BuiltinOptions{})
 	constructed := tools.NewRegistryWithOptions(tools.RegistryOptions{})
 	constructed.MustRegister(nil)
 	application.registry.Register(nil)
@@ -439,8 +441,8 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
-	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] || calls[6] != want[6] || calls[7] != want[7] || calls[8] != want[8] || calls[9] != want[9] || calls[10] != want[10] || calls[11] != want[11] {
+	want := []string{"registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] || calls[6] != want[6] || calls[7] != want[7] || calls[8] != want[8] || calls[9] != want[9] || calls[10] != want[10] || calls[11] != want[11] || calls[12] != want[12] {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
 }
@@ -1500,6 +1502,9 @@ func isToolRegistrationValueExpression(expression ast.Expr, imports map[string]s
 	selector, ok := expression.(*ast.SelectorExpr)
 	if !ok || !isToolRegistrationName(selector.Sel.Name) {
 		return false
+	}
+	if qualifier, ok := selector.X.(*ast.Ident); ok && imports[qualifier.Name] == modulePath+"/internal/tools" {
+		return true
 	}
 	return isToolRegistryExpression(selector.X, imports, values, types)
 }
