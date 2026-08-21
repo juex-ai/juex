@@ -47,7 +47,8 @@ unstaged, and untracked paths. Rename entries retain both paths and deleted
 entries retain the deleted path. Each run writes `plan.json` and `plan.md` with
 sorted changed files, matched rule IDs, selected gates, per-gate causes, and a
 stable behavioral fingerprint. Use `--explain` or `EXPLAIN=1` to print the
-human-readable explanation.
+human-readable explanation. Non-UTF-8 Git path bytes remain round-trippable in
+JSON and render as `\\xNN` escapes in the valid UTF-8 Markdown report.
 
 `verify focused --planned` consumes the dirty plan after explicit opt-in; an
 unscoped invocation remains an error. Go paths select their package,

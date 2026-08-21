@@ -415,7 +415,7 @@ def write_plan(output_dir: pathlib.Path, plan: ValidationPlan) -> tuple[pathlib.
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "plan.json"
     markdown_path = output_dir / "plan.md"
-    json_path.write_text(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    json_path.write_text(json.dumps(plan.as_dict(), ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
     markdown_path.write_text(render_markdown(plan), encoding="utf-8")
     return json_path, markdown_path
 
@@ -459,7 +459,7 @@ def render_markdown(plan: ValidationPlan) -> str:
     lines.extend(_gate_explanation("Final flag", plan.final_flags, plan.matched_rules, "final_flags"))
     if not plan.focused_packages and not plan.candidate_flags and not plan.final_flags:
         lines.append("- No code gates selected (empty or documentation-only diff).")
-    return "\n".join(lines) + "\n"
+    return _utf8_display_text("\n".join(lines) + "\n")
 
 
 def _gate_explanation(
@@ -602,8 +602,13 @@ def _is_compaction_path(path: str) -> bool:
         or "context_projection" in lowered
         or "provider_projection" in lowered
         or path == "internal/llm/history.go"
+        or path.startswith("internal/session/transcript_")
         or path.startswith("internal/runtime/contextbudget/")
     )
+
+
+def _utf8_display_text(value: str) -> str:
+    return value.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
 
 
 def _is_conservative_harness_path(path: str) -> bool:
