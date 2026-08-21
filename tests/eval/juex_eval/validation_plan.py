@@ -16,6 +16,20 @@ FINAL_FLAGS = ("compaction", "integration", "provider-smoke")
 CONSERVATIVE_PACKAGES = ("./...",)
 CONSERVATIVE_CANDIDATE_FLAGS = CANDIDATE_FLAGS
 CONSERVATIVE_FINAL_FLAGS = FINAL_FLAGS
+COMPACTION_PREFIXES = (
+    "internal/app/",
+    "internal/config/",
+    "internal/eventcatalog/",
+    "internal/hooks/",
+    "internal/runtime/",
+    "internal/session/",
+)
+COMPACTION_EXACT_PATHS = {
+    "internal/llm/history.go",
+    "internal/llm/provider_projection.go",
+    "internal/llm/provider_projection_chunked_write.go",
+    "internal/llm/types.go",
+}
 
 
 @dataclass(frozen=True)
@@ -100,7 +114,7 @@ RULE_DESCRIPTIONS = {
     "cross-boundary": "Cross-package runtime paths require the deterministic end-to-end suite.",
     "race-sensitive": "Concurrent or shared-state paths require race validation.",
     "live-runtime": "Provider, protocol, CLI, session, tool-call, or web-runtime paths require live gates.",
-    "compaction": "Compaction behavior requires the live compaction evaluator.",
+    "compaction": "Compaction and long-session behavior require the live compaction evaluator.",
     "conservative-harness": "Build, module, CI, or validation-harness changes require the full plan.",
     "documentation-only": "Documentation-only changes are explained without inventing code gates.",
     "conservative-unknown": "Unclassified paths require the full conservative plan.",
@@ -541,7 +555,7 @@ def _normalized_status(status: str) -> str:
 
 
 def _normalized_path(path: str) -> str:
-    normalized = str(path).replace("\\", "/").removeprefix("./")
+    normalized = str(path).removeprefix("./")
     if not normalized or normalized.startswith("/") or ".." in pathlib.PurePosixPath(normalized).parts:
         raise ValueError(f"invalid repository-relative path: {path}")
     return normalized
@@ -601,9 +615,8 @@ def _is_compaction_path(path: str) -> bool:
         "compact" in lowered
         or "context_projection" in lowered
         or "provider_projection" in lowered
-        or path == "internal/llm/history.go"
-        or path.startswith("internal/session/transcript_")
-        or path.startswith("internal/runtime/contextbudget/")
+        or path in COMPACTION_EXACT_PATHS
+        or path.startswith(COMPACTION_PREFIXES)
     )
 
 
