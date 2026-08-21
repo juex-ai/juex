@@ -3529,6 +3529,93 @@ func TestCompactSkipsModelAlreadyInSharedHealthCooldown(t *testing.T) {
 	}
 }
 
+func TestCompactReportsHealthSkipsWhenNoCandidateCanBeAcquired(t *testing.T) {
+	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	for _, ref := range []string{"primary:model", "backup:model"} {
+		selection, ok := health.Acquire([]string{ref}, nil)
+		if !ok {
+			t.Fatalf("acquire %s health ticket", ref)
+		}
+		health.Complete(selection.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	}
+
+	primary := &namedCompactionProvider{name: "primary:model", text: "unexpected primary summary"}
+	backup := &namedCompactionProvider{name: "backup:model", text: "unexpected backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = health
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var fallbacks []LLMFallbackPayload
+	bus.Subscribe("llm.fallback", func(event events.Event) {
+		fallbacks = append(fallbacks, event.Payload.(LLMFallbackPayload))
+	})
+
+	_, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err == nil || !strings.Contains(err.Error(), "primary:model: unavailable") || !strings.Contains(err.Error(), "backup:model: unavailable") {
+		t.Fatalf("Compact error = %v, want exhausted cooldown candidates", err)
+	}
+	if primary.calls != 0 || backup.calls != 0 {
+		t.Fatalf("primary/backup calls = %d/%d, want no provider calls", primary.calls, backup.calls)
+	}
+	want := []LLMFallbackPayload{
+		{From: "primary:model", Reason: "transient"},
+		{From: "backup:model", Reason: "transient"},
+	}
+	if len(fallbacks) != len(want) {
+		t.Fatalf("fallbacks = %+v, want %+v", fallbacks, want)
+	}
+	for index := range want {
+		if fallbacks[index].From != want[index].From || fallbacks[index].To != "" || fallbacks[index].Reason != want[index].Reason || fallbacks[index].CooldownMS <= 0 {
+			t.Fatalf("fallback[%d] = %+v, want terminal health skip for %s", index, fallbacks[index], want[index].From)
+		}
+	}
+}
+
+func TestCompactReportsRemainingHealthSkipsAfterAttemptFailure(t *testing.T) {
+	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	backupSelection, ok := health.Acquire([]string{"backup:model"}, nil)
+	if !ok {
+		t.Fatal("acquire backup health ticket")
+	}
+	health.Complete(backupSelection.Ticket, llm.ModelHealthEligibleFailure, "transient")
+
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &namedCompactionProvider{name: "backup:model", text: "unexpected backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = health
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var fallbacks []LLMFallbackPayload
+	bus.Subscribe("llm.fallback", func(event events.Event) {
+		fallbacks = append(fallbacks, event.Payload.(LLMFallbackPayload))
+	})
+
+	_, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err == nil || !strings.Contains(err.Error(), "primary:model: status 503") || !strings.Contains(err.Error(), "backup:model: unavailable") {
+		t.Fatalf("Compact error = %v, want attempt failure plus cooldown skip", err)
+	}
+	if primary.calls != 1 || backup.calls != 0 {
+		t.Fatalf("primary/backup calls = %d/%d, want 1/0", primary.calls, backup.calls)
+	}
+	if len(fallbacks) != 1 || fallbacks[0].From != "backup:model" || fallbacks[0].To != "" || fallbacks[0].Reason != "transient" || fallbacks[0].CooldownMS <= 0 {
+		t.Fatalf("fallbacks = %+v, want terminal backup health skip", fallbacks)
+	}
+}
+
 func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	provider := &scriptedCompactionProvider{
 		name: "thinking:model",

@@ -61,6 +61,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 	var skipped []llm.ModelHealthSkip
 	recordCompactionSummaryHealthSkips(attempted, &skipped, selection.Skipped)
 	if !ok {
+		e.emitCompactionSummaryHealthSkips(turnID, "", selection.Skipped)
 		return compactionSummaryGeneration{}, modelChainError(nil, skipped)
 	}
 	candidate := candidates[selection.Index]
@@ -152,6 +153,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 			}
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, fmt.Errorf("commit compaction summary model fallback: %w", emitErr)
 		}
+		e.emitCompactionSummaryHealthSkips(turnID, fallbackRef, selection.Skipped)
 		if !ok {
 			if len(failures) == 1 && len(skipped) == 0 {
 				return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, failureErr
@@ -160,7 +162,6 @@ func (e *Engine) generateCompactionSummaryLocked(
 		}
 		nextCandidate := candidates[selection.Index]
 		attempted[fallbackRef] = struct{}{}
-		e.emitCompactionSummaryHealthSkips(turnID, fallbackRef, selection.Skipped)
 		candidatePolicy, contextWindow = e.compactionSummaryPolicyForCandidateLocked(nextCandidate, defaultContextWindow)
 		if useRetryBudget {
 			candidatePolicy.SummaryMaxTokens = e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
