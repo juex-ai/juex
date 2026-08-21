@@ -774,8 +774,10 @@ func TestEvalPythonModuleAndShellWrappersExposeHelp(t *testing.T) {
 	assertHelpContains(t, verifyHelp, "focused", "candidate", "final")
 	focusedHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "focused", "--help")
 	assertHelpContains(t, focusedHelp, "packages")
+	candidateHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "candidate", "--help")
+	assertHelpContains(t, candidateHelp, "--race", "--web", "--run-id", "--report-dir")
 	finalHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "final", "--help")
-	assertHelpContains(t, finalHelp, "--race", "--web", "--compaction", "--config", "--selection-seed")
+	assertHelpContains(t, finalHelp, "--race", "--web", "--compaction", "--config", "--selection-seed", "--run-id", "--report-dir")
 
 	providerHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "provider-smoke", "--help")
 	assertHelpContains(t, providerHelp, "--only", "--all-models", "--config", "--selection-seed", "--report-dir")
@@ -1226,26 +1228,47 @@ func TestEvalVerificationCleanWorktreePolicy(t *testing.T) {
 	}
 
 	program := strings.Join([]string{
+		"import tempfile",
 		"from argparse import Namespace",
-		"from tests.eval.juex_eval import cli",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli, verification",
 		"calls = []",
+		"snapshot = verification.RepositorySnapshot('a' * 40, 'feature/test', False)",
 		"original_clean = cli.require_clean_worktree",
 		"original_steps = cli.verification_steps",
 		"original_resolved_path = cli.selection.resolved_path",
+		"original_snapshot = verification.repository_snapshot",
+		"original_environment = verification.environment_fingerprint",
+		"original_find = verification.find_reusable_candidate",
+		"original_write = verification.write_record",
+		"original_provider_summary = cli.provider_record_summary",
 		"try:",
-		"    cli.require_clean_worktree = lambda: calls.append('clean')",
+		"    cli.require_clean_worktree = lambda: (calls.append('pre-clean') or snapshot)",
 		"    cli.verification_steps = lambda args: []",
 		"    cli.selection.resolved_path = lambda path: path",
+		"    verification.repository_snapshot = lambda root: (calls.append('post-clean') or snapshot)",
+		"    verification.environment_fingerprint = lambda **kwargs: 'sha256:environment'",
+		"    verification.find_reusable_candidate = lambda *args: verification.ReuseDecision(None, {}, [])",
+		"    verification.write_record = lambda *args: None",
+		"    cli.provider_record_summary = lambda args: {}",
 		"    assert cli.run_verify(Namespace(tier='focused')) == 0",
 		"    assert calls == [], calls",
-		"    assert cli.run_verify(Namespace(tier='candidate')) == 0",
-		"    assert calls == ['clean', 'clean'], calls",
-		"    assert cli.run_verify(Namespace(tier='final', config='/tmp/config')) == 0",
-		"    assert calls == ['clean', 'clean', 'clean', 'clean'], calls",
+		"    with tempfile.TemporaryDirectory() as tmp:",
+		"        common = dict(run_id='unit', race=False, web=False, report_dir=str(Path(tmp) / 'candidate'))",
+		"        assert cli.run_verify(Namespace(tier='candidate', **common)) == 0",
+		"        assert calls == ['pre-clean', 'post-clean'], calls",
+		"        final = dict(common, report_dir=str(Path(tmp) / 'final'), config='/tmp/config', compaction=False, selection_seed='seed', provider_timeout=7)",
+		"        assert cli.run_verify(Namespace(tier='final', **final)) == 0",
+		"        assert calls == ['pre-clean', 'post-clean', 'pre-clean', 'post-clean'], calls",
 		"finally:",
 		"    cli.require_clean_worktree = original_clean",
 		"    cli.verification_steps = original_steps",
 		"    cli.selection.resolved_path = original_resolved_path",
+		"    verification.repository_snapshot = original_snapshot",
+		"    verification.environment_fingerprint = original_environment",
+		"    verification.find_reusable_candidate = original_find",
+		"    verification.write_record = original_write",
+		"    cli.provider_record_summary = original_provider_summary",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
@@ -1269,6 +1292,7 @@ func TestEvalRequireCleanWorktreeRejectsDirtyRepository(t *testing.T) {
 		"    with tempfile.TemporaryDirectory() as tmp:",
 		"        repo = Path(tmp)",
 		"        subprocess.run(['git', 'init', '--quiet'], cwd=repo, check=True)",
+		"        subprocess.run(['git', '-c', 'user.name=Eval', '-c', 'user.email=eval@example.com', 'commit', '--quiet', '--allow-empty', '-m', 'initial'], cwd=repo, check=True)",
 		"        subprocess.run(['git', 'config', 'status.showUntrackedFiles', 'no'], cwd=repo, check=True)",
 		"        cli.REPO_ROOT = repo",
 		"        cli.require_clean_worktree()",
@@ -1281,6 +1305,165 @@ func TestEvalRequireCleanWorktreeRejectsDirtyRepository(t *testing.T) {
 		"            raise AssertionError('dirty repository was accepted')",
 		"finally:",
 		"    cli.REPO_ROOT = original_root",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalCommitVerificationRejectsDirtyBeforePlanningOrPreparation(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from argparse import Namespace",
+		"from tests.eval.juex_eval import cli, verification",
+		"calls = []",
+		"original_snapshot = verification.repository_snapshot",
+		"original_steps = cli.verification_steps",
+		"original_environment = cli.isolated_test_environment",
+		"try:",
+		"    verification.repository_snapshot = lambda root: (calls.append('snapshot') or verification.RepositorySnapshot('a' * 40, 'feature/test', True))",
+		"    cli.verification_steps = lambda args: (_ for _ in ()).throw(AssertionError('planned dirty verification'))",
+		"    cli.isolated_test_environment = lambda: (_ for _ in ()).throw(AssertionError('prepared dirty verification'))",
+		"    for tier in ('candidate', 'final'):",
+		"        args = Namespace(tier=tier, run_id='dirty', report_dir='', race=False, web=False, compaction=False, config='/tmp/config.yaml', selection_seed='seed', provider_timeout=7)",
+		"        try:",
+		"            cli.run_verify(args)",
+		"        except ValueError as exc:",
+		"            assert str(exc) == 'candidate and final verification require a clean worktree', exc",
+		"        else:",
+		"            raise AssertionError(f'{tier} accepted a dirty worktree')",
+		"    assert calls == ['snapshot', 'snapshot'], calls",
+		"finally:",
+		"    verification.repository_snapshot = original_snapshot",
+		"    cli.verification_steps = original_steps",
+		"    cli.isolated_test_environment = original_environment",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalCommitVerificationRecordSchemaAndReuseInvalidation(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli, verification",
+		"snapshot = verification.RepositorySnapshot('a' * 40, 'feature/test', False)",
+		"steps = [cli.VerificationStep('go-test-all', ['go', 'test', './...']), cli.VerificationStep('make-build', ['make', 'build'])]",
+		"plan = verification.plan_fingerprint(steps)",
+		"environment = verification.stable_fingerprint({'platform': 'test', 'go': 'go1.test'})",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    reports = Path(tmp) / 'reports'",
+		"    report_dir = verification.default_report_dir(reports, snapshot, 'candidate-unit')",
+		"    assert report_dir == reports / 'development-validation' / snapshot.head_sha / 'candidate-unit', report_dir",
+		"    rows = []",
+		"    for index, step in enumerate(steps):",
+		"        row = verification.planned_step_record(step)",
+		"        row.update({'started_at': f'2026-08-21T00:00:0{index}Z', 'duration': 0.25, 'exit_status': 0, 'log': str(report_dir / 'command-logs' / f'{step.label}.log'), 'outcome': 'executed'})",
+		"        rows.append(row)",
+		"    record = verification.build_record(",
+		"        tier='candidate', run_id='candidate-unit', snapshot=snapshot, plan_fingerprint=plan,",
+		"        environment_fingerprint=environment, steps=rows, status='pass',",
+		"        reused=[], executed=[step.label for step in steps], invalidated=[],",
+		"        provider_summary={'selected_provider_model': 'provider:model', 'redacted_config_hash': 'sha256:redacted', 'api_key': 'must-not-appear'},",
+		"    )",
+		"    verification.write_record(report_dir, record)",
+		"    parsed = json.loads((report_dir / 'record.json').read_text(encoding='utf-8'))",
+		"    assert parsed['schema_version'] == verification.SCHEMA_VERSION",
+		"    assert parsed['tier'] == 'candidate' and parsed['head_sha'] == snapshot.head_sha and parsed['dirty'] is False",
+		"    assert parsed['provider_model_ref'] == 'provider:model' and parsed['redacted_config_hash'] == 'sha256:redacted'",
+		"    assert all({'command', 'started_at', 'duration', 'exit_status', 'log'} <= row.keys() for row in parsed['steps']), parsed['steps']",
+		"    assert 'must-not-appear' not in (report_dir / 'record.json').read_text(encoding='utf-8')",
+		"    assert 'must-not-appear' not in (report_dir / 'record.md').read_text(encoding='utf-8')",
+		"    matched = verification.find_reusable_candidate(reports, snapshot, plan, environment, steps)",
+		"    assert matched.source == report_dir / 'record.json', matched",
+		"    assert set(matched.reusable) == {'go-test-all', 'make-build'} and not matched.invalidated, matched",
+		"    changed_sha = verification.find_reusable_candidate(reports, verification.RepositorySnapshot('b' * 40, 'feature/test', False), plan, environment, steps)",
+		"    assert not changed_sha.reusable and any(item['reason'] == 'head_sha mismatch' for item in changed_sha.invalidated), changed_sha",
+		"    changed_plan = verification.find_reusable_candidate(reports, snapshot, verification.stable_fingerprint({'plan': 'changed'}), environment, steps)",
+		"    assert not changed_plan.reusable and any(item['reason'] == 'plan_fingerprint mismatch' for item in changed_plan.invalidated), changed_plan",
+		"    changed_environment = verification.find_reusable_candidate(reports, snapshot, plan, verification.stable_fingerprint({'environment': 'changed'}), steps)",
+		"    assert not changed_environment.reusable and any(item['reason'] == 'environment_fingerprint mismatch' for item in changed_environment.invalidated), changed_environment",
+		"    changed_artifact = verification.find_reusable_candidate(reports, snapshot, plan, environment, steps, {'dist/juex': {'sha256': 'sha256:changed', 'size': 1}})",
+		"    assert not changed_artifact.reusable and any(item['reason'] == 'build artifact mismatch' for item in changed_artifact.invalidated), changed_artifact",
+		"    final_steps = [*steps, cli.VerificationStep('live-integration', ['make', 'integration']), cli.VerificationStep('provider-model-smoke', ['provider-smoke'])]",
+		"    assert [step.label for step in final_steps if step.label not in matched.reusable] == ['live-integration', 'provider-model-smoke']",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalFinalExecutesOnlyLiveStepsWhenCandidateIsReusable(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import tempfile",
+		"from argparse import Namespace",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli, verification",
+		"snapshot = verification.RepositorySnapshot('a' * 40, 'feature/test', False)",
+		"candidate = cli.candidate_verification_steps(race=False, web=False)",
+		"reusable = {step.label: {'started_at': '2026-08-21T00:00:00Z', 'duration': 1.0, 'exit_status': 0, 'log': f'/candidate/{step.label}.log'} for step in candidate}",
+		"calls = []",
+		"records = []",
+		"original_clean = cli.require_clean_worktree",
+		"original_snapshot = verification.repository_snapshot",
+		"original_environment = verification.environment_fingerprint",
+		"original_find = verification.find_reusable_candidate",
+		"original_run = cli.run_recorded_verification_step",
+		"original_test_environment = cli.isolated_test_environment",
+		"original_resolved_path = cli.selection.resolved_path",
+		"original_provider_summary = cli.provider_record_summary",
+		"original_write = verification.write_record",
+		"try:",
+		"    cli.require_clean_worktree = lambda: snapshot",
+		"    verification.repository_snapshot = lambda root: snapshot",
+		"    verification.environment_fingerprint = lambda **kwargs: 'sha256:environment'",
+		"    verification.find_reusable_candidate = lambda *args: verification.ReuseDecision(Path('/candidate/record.json'), reusable, [])",
+		"    cli.isolated_test_environment = lambda: {}",
+		"    cli.selection.resolved_path = lambda path: Path(path)",
+		"    cli.provider_record_summary = lambda args: {'selected_provider_model': 'provider:model', 'redacted_config_hash': 'sha256:redacted'}",
+		"    def fake_run(step, log_dir, test_env):",
+		"        calls.append(step.label)",
+		"        return {'started_at': '2026-08-21T00:00:01Z', 'duration': 2.0, 'exit_status': 0, 'log': str(log_dir / f'{step.label}.log'), 'outcome': 'executed'}",
+		"    cli.run_recorded_verification_step = fake_run",
+		"    verification.write_record = lambda report_dir, record: records.append((report_dir, record))",
+		"    with tempfile.TemporaryDirectory() as tmp:",
+		"        args = Namespace(tier='final', run_id='final-unit', report_dir=tmp, race=False, web=False, compaction=False, config='/tmp/config.yaml', selection_seed='seed', provider_timeout=7)",
+		"        assert cli.run_verify(args) == 0",
+		"        assert calls == ['live-integration', 'provider-model-smoke'], calls",
+		"        report_dir, record = records[-1]",
+		"        assert report_dir == Path(tmp) / 'development-validation' / snapshot.head_sha / 'final-unit', report_dir",
+		"        assert record['reused'] == ['web-stub', 'go-test-all', 'make-build'], record",
+		"        assert record['executed'] == calls and record['status'] == 'pass', record",
+		"        assert [row['outcome'] for row in record['steps']] == ['reused', 'reused', 'reused', 'executed', 'executed'], record['steps']",
+		"finally:",
+		"    cli.require_clean_worktree = original_clean",
+		"    verification.repository_snapshot = original_snapshot",
+		"    verification.environment_fingerprint = original_environment",
+		"    verification.find_reusable_candidate = original_find",
+		"    cli.run_recorded_verification_step = original_run",
+		"    cli.isolated_test_environment = original_test_environment",
+		"    cli.selection.resolved_path = original_resolved_path",
+		"    cli.provider_record_summary = original_provider_summary",
+		"    verification.write_record = original_write",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }

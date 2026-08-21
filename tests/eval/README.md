@@ -43,7 +43,9 @@ through `scripts/with-test-juex-home.sh`, and permits a dirty worktree so it can
 be used during implementation. An empty scope is an error; focused verification
 never falls back to `./...`.
 
-`verify candidate` requires a clean worktree before and after the gate. It runs exactly one full
+`verify candidate` captures the full `HEAD` SHA, branch, and porcelain status
+before it plans or prepares any gate, then requires the worktree to remain on
+that clean SHA after the gate. It runs exactly one full
 deterministic Go suite followed by one executable build. Before the Go suite it
 uses the shared non-overwriting `web-stub` target so fresh checkouts satisfy
 the Go embed contract without a frontend build. `RACE=1` replaces the
@@ -51,13 +53,19 @@ ordinary Go suite with the race suite. `WEB=1` runs `web-check`, synchronizes
 the resulting frontend assets into `internal/web/dist`, and invokes the
 Go-only `build-go` target instead of rebuilding the frontend.
 
-`verify final` applies the same pre/post clean-worktree contract. It runs the candidate plan,
-then live integration and one provider-config-selected provider smoke. Set
+`verify final` applies the same commit-bound clean-worktree contract. It first
+looks for a passing candidate record with the same SHA, record schema,
+candidate-plan fingerprint, and stable toolchain/environment fingerprint. When
+one exists, final reuses its successful deterministic, build, web, and race
+steps, then runs live integration and one provider-config-selected provider
+smoke. It never reuses live results. A missing or incompatible candidate makes
+final execute the complete plan and records the exact invalidation reason. Set
 `COMPACTION=1` only when compaction, context projection, reasoning replay, or
 long-session behavior needs the live compaction quality gate. All tiers stop
 after the first failing step. `--config`, `--selection-seed`, and
 `--provider-timeout` are available on the underlying final CLI when an exact
-live rerun is required.
+live rerun is required. Candidate and final also accept `--run-id`; their
+`--report-dir` override is a report root, not a single run directory.
 
 ## Deterministic Capability Harness
 
@@ -134,8 +142,16 @@ Common selection and output flags are intentionally consistent across commands:
 - `--all-models` runs every eligible ref from the resolved config.
 - `--report-dir` overrides the output directory for each command.
 
-By default, local run artifacts are written under
-`.tmp/reports/<report-kind>/<run-id>/` and the directory is created on demand.
+By default, provider smoke, development, and compaction artifacts are written
+under `.tmp/reports/<report-kind>/<run-id>/`. Commit-bound candidate and final
+records instead use
+`.tmp/reports/development-validation/<full-head-sha>/<run-id>/`. Their
+`record.json` and `record.md` list the schema, clean source snapshot, plan and
+environment fingerprints, candidate binary fingerprint, redacted provider
+selection identity, and every reused, executed, invalidated, or
+fail-fast-not-run step. A missing or changed candidate binary invalidates reuse
+so final can rebuild the artifact required by live smoke. Directories are
+created on demand.
 Report kinds are:
 
 - `provider-model-smoke`

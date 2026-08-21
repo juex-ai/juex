@@ -805,8 +805,13 @@ make verify-final RACE=1 WEB=1 COMPACTION=1
 ```
 
 Focused verification requires explicit package patterns and permits a dirty
-worktree. Candidate and final verification require a clean worktree before
-and after their steps. `RACE=1`
+worktree. Candidate and final verification bind their reports to the full
+pre-run `HEAD` SHA and require that snapshot to be clean before and after their
+steps. Reports live under
+`.tmp/reports/development-validation/<full-head-sha>/<run-id>/`. Final reuses a
+passing candidate's deterministic/build prefix only when the record schema,
+SHA, plan, and stable environment fingerprints all match; live gates always
+run. `RACE=1`
 replaces the ordinary deterministic suite, `WEB=1` adds the frontend gate
 without rebuilding it during the binary build, and `COMPACTION=1` adds the
 live compaction evaluator to final verification. Final verification otherwise
