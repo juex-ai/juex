@@ -7,13 +7,15 @@ or longer multi-turn behavior. Keep deterministic cross-platform e2e tests in
 The stable agent-facing entrypoints are:
 
 ```bash
+make verify-plan EXPLAIN=1
+make verify-focused PLANNED=1
 make verify-focused PKGS="./internal/app ./internal/runtime"
 make verify-candidate RACE=1 WEB=1
 make verify-final RACE=1 WEB=1 COMPACTION=1
 ```
 
-They delegate to `python -m tests.eval.juex_eval verify`. Lower-level harness
-entrypoints live next to the evaluation code:
+They delegate to `python -m tests.eval.juex_eval plan` and `verify`.
+Lower-level harness entrypoints live next to the evaluation code:
 
 - `tests/eval/eval_scripts_test.go`
 - `tests/eval/provider_model_smoke.sh`
@@ -37,19 +39,34 @@ uv run --project . python -m tests.eval.juex_eval --help
 
 ## Verification Tiers
 
-`verify focused` requires one or more explicit Go package patterns. It first
-prepares the shared non-overwriting `web-stub`, then provisions ripgrep, runs
-through `scripts/with-test-juex-home.sh`, and permits a dirty worktree so it can
-be used during implementation. An empty scope is an error; focused verification
-never falls back to `./...`.
+`plan` and every verification tier use the same deterministic rule table in
+`juex_eval/validation_plan.py`. Candidate/final default to the changes from
+`git merge-base origin/main HEAD` through `HEAD`; `--base <sha>` uses exactly
+that commit. Focused planning permits a dirty worktree and unions staged,
+unstaged, and untracked paths. Rename entries retain both paths and deleted
+entries retain the deleted path. Each run writes `plan.json` and `plan.md` with
+sorted changed files, matched rule IDs, selected gates, per-gate causes, and a
+stable behavioral fingerprint. Use `--explain` or `EXPLAIN=1` to print the
+human-readable explanation. Non-UTF-8 Git path bytes remain round-trippable in
+JSON and render as `\\xNN` escapes in the valid UTF-8 Markdown report.
+
+`verify focused --planned` consumes the dirty plan after explicit opt-in; an
+unscoped invocation remains an error. Go paths select their package,
+cross-boundary paths add `./tests/e2e`, and
+frontend paths run `web-check` plus the binary build. Race-sensitive paths add
+`-race`. `PKGS=...` remains a required targeted alternative for development
+loops and does not inherit broader diff-selected gates. Documentation-only or
+empty diffs may select no focused code gates. Unknown non-documentation paths
+use the full conservative plan instead of producing an empty scope.
 
 `verify candidate` captures the full `HEAD` SHA, branch, and porcelain status
 before it plans or prepares any gate, then requires the worktree to remain on
 that clean SHA after the gate. It runs exactly one full
 deterministic Go suite followed by one executable build. Before the Go suite it
 uses the shared non-overwriting `web-stub` target so fresh checkouts satisfy
-the Go embed contract without a frontend build. `RACE=1` replaces the
-ordinary Go suite with the race suite. `WEB=1` runs `web-check`, synchronizes
+the Go embed contract without a frontend build. Planned race/web flags are
+applied automatically; `RACE=1` and `WEB=1` are additive overrides. `WEB=1`
+runs `web-check`, synchronizes
 the resulting frontend assets into `internal/web/dist`, and invokes the
 Go-only `build-go` target instead of rebuilding the frontend.
 
@@ -57,12 +74,14 @@ Go-only `build-go` target instead of rebuilding the frontend.
 looks for a passing candidate record with the same SHA, record schema,
 candidate-plan fingerprint, and stable toolchain/environment fingerprint. When
 one exists, final reuses its successful deterministic, build, web, and race
-steps, then runs live integration and one provider-config-selected provider
-smoke. It never reuses live results. A missing or incompatible candidate makes
-final execute the complete plan and records the exact invalidation reason. Set
-`COMPACTION=1` only when compaction, context projection, reasoning replay, or
-long-session behavior needs the live compaction quality gate. All tiers stop
-after the first failing step. `--config`, `--selection-seed`, and
+steps, then always runs live integration and provider smoke. The plan adds the
+optional compaction gate. It never reuses live results. A missing or
+incompatible candidate makes final execute the complete plan and records the
+exact invalidation reason. Set
+`COMPACTION=1` only when compaction, context projection, provider replay, or
+long-session behavior needs the live compaction quality gate as an additive
+override. All tiers stop after the first failing step. `--config`,
+`--selection-seed`, and
 `--provider-timeout` are available on the underlying final CLI when an exact
 live rerun is required. Candidate and final also accept `--run-id`; their
 `--report-dir` override is a report root, not a single run directory. Run IDs
@@ -151,8 +170,12 @@ records instead use
 `record.json` and `record.md` list the schema, clean source snapshot, plan and
 environment fingerprints, candidate binary fingerprint, redacted provider
 selection identity, and every reused, executed, invalidated, or
-fail-fast-not-run step. A missing or changed candidate binary invalidates reuse
-so final can rebuild the artifact required by live smoke. The environment
+fail-fast-not-run step. The record's plan fingerprint combines the
+candidate-relevant Git-diff projection with the concrete candidate step plan,
+so final-only overrides do not invalidate reusable deterministic evidence. The
+corresponding `plan.json` and `plan.md` live beside the record. A missing or
+changed candidate binary invalidates reuse so final can rebuild the artifact
+required by live smoke. The environment
 fingerprint includes effective Go build flags, workspaces, experiments,
 toolchain, architecture, CGO/compiler settings, the build's `git describe`
 value, and the resolved ripgrep executable fingerprint, preventing reuse across
@@ -304,7 +327,7 @@ The deterministic phase reuses the candidate planner, so one `go test ./...`
 run includes `tests/e2e` without a duplicate standalone e2e run. The existing
 JSON/Markdown record shape and live selection evidence remain unchanged.
 
-Use `--compaction-eval` for compaction, context projection, reasoning replay,
+Use `--compaction-eval` for compaction, context projection, provider replay,
 or long-session changes. The record links command logs, provider:model smoke
 summary, Schedule routing coverage, and any scorecards so a later worker can
 tell whether behavior got better, stayed flat, or regressed.
