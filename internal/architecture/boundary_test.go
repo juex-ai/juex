@@ -439,6 +439,15 @@ func cleanupFromPointerAssignment(application *App) {
 	(*owned).resource = application.manager
 	_ = (*owned).resource.Close()
 }
+func cleanupFromAnonymousHolder(application *App) {
+	owned := struct{ resource closer }{resource: application.manager}
+	_ = owned.resource.Close()
+}
+func cleanupFromChannel(application *App) {
+	resources := make(chan closer, 1)
+	resources <- application.manager
+	_ = (<-resources).Close()
+}
 func cleanupFromGenericCollection(application *App) {
 	resources := genericResources[*mcp.Manager]{application.manager}
 	_ = resources[0].Close()
@@ -499,7 +508,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
+	want := []string{"identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -672,6 +681,15 @@ func registerFromPointerAssignment(application *App) {
 	(*owned).registry = application.registry
 	(*owned).registry.Register(nil)
 }
+func registerFromAnonymousHolder(application *App) {
+	owned := struct{ registry registrar }{registry: application.registry}
+	owned.registry.Register(nil)
+}
+func registerFromChannel(application *App) {
+	registries := make(chan registrar, 1)
+	registries <- application.registry
+	(<-registries).Register(nil)
+}
 func registerFromGenericCollection(application *App) {
 	registries := genericRegistries[*tools.Registry]{application.registry}
 	registries[0].Register(nil)
@@ -756,7 +774,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "registry.Register", "registries.Register", "registry.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "registry.Register", "registries.Register", "registry.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -1858,8 +1876,7 @@ func resultParameterPaths(expression ast.Expr, imports map[string]string, values
 		mergeResultParameterPaths(result, resultParameterPaths(value.X, imports, values, origins, types, 0), "")
 	case *ast.CompositeLit:
 		typeName := canonicalType(value.Type, imports)
-		structured := len(instantiatedFields(typeName, types)) != 0
-		fieldOrder := instantiatedFieldOrder(typeName, types)
+		fieldOrder, structured := compositeFieldOrder(value.Type, typeName, imports, types)
 		for index, element := range value.Elts {
 			prefix := ""
 			if pair, ok := element.(*ast.KeyValueExpr); ok {
@@ -2112,6 +2129,14 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 						resources[key] = collectionPaths
 					}
 				}
+			case *ast.SendStmt:
+				name, _ := assignmentBinding(value.Chan)
+				if name != nil {
+					paths := cleanupPathsForExpression(value.Value, imports, values, resources, types)
+					paths = prefixCleanupPaths(assignmentFieldPrefix(value.Chan), paths)
+					key := bindingKey(name)
+					resources[key] = mergeCleanupPaths(resources[key], paths)
+				}
 			case *ast.CallExpr:
 				if isBuiltinCopy(value) {
 					if destination, _ := assignmentBinding(value.Args[0]); destination != nil {
@@ -2229,6 +2254,12 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				}
 				if name, ok := value.Value.(*ast.Ident); ok && name.Name != "_" {
 					values[bindingKey(name)] = valueType
+				}
+			case *ast.SendStmt:
+				if isToolRegistryExpression(value.Value, imports, values, types) || isToolRegistrationValueExpression(value.Value, imports, values, types) {
+					if name, _ := assignmentBinding(value.Chan); name != nil {
+						setMayValueType(values, bindingKey(name), toolRegistryCollectionType, types)
+					}
 				}
 			case *ast.CallExpr:
 				if isBuiltinCopy(value) && isToolRegistryCollectionExpression(value.Args[1], imports, values, types) {
@@ -2565,6 +2596,27 @@ func instantiatedFieldOrder(typeName string, types compositionTypeIndex) []strin
 	return types.fieldOrder[parts[0]]
 }
 
+func compositeFieldOrder(expression ast.Expr, typeName string, imports map[string]string, types compositionTypeIndex) ([]string, bool) {
+	if order := instantiatedFieldOrder(typeName, types); len(order) != 0 {
+		return order, true
+	}
+	structure, ok := expression.(*ast.StructType)
+	if !ok {
+		return nil, false
+	}
+	var order []string
+	for _, field := range structure.Fields.List {
+		if len(field.Names) == 0 {
+			order = append(order, embeddedPrefix+canonicalType(field.Type, imports))
+			continue
+		}
+		for _, name := range field.Names {
+			order = append(order, name.Name)
+		}
+	}
+	return order, true
+}
+
 func rangeTypes(typeName string, types compositionTypeIndex) (string, string, bool) {
 	typeName = resolveNamedType(typeName, types)
 	if typeName == toolRegistryCollectionType {
@@ -2638,7 +2690,7 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 			return cleanupPathsForExpression(value.Args[0], imports, values, resources, types)
 		}
 	case *ast.UnaryExpr:
-		if value.Op == token.AND {
+		if value.Op == token.AND || value.Op == token.ARROW {
 			return cleanupPathsForExpression(value.X, imports, values, resources, types)
 		}
 	case *ast.StarExpr:
@@ -2649,8 +2701,7 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 			return paths
 		}
 		paths := make(map[string]bool)
-		structured := len(instantiatedFields(typeName, types)) != 0
-		fieldOrder := instantiatedFieldOrder(typeName, types)
+		fieldOrder, structured := compositeFieldOrder(value.Type, typeName, imports, types)
 		for index, element := range value.Elts {
 			prefix := ""
 			if pair, ok := element.(*ast.KeyValueExpr); ok {
@@ -2867,6 +2918,13 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 	case *ast.UnaryExpr:
 		if value.Op == token.AND {
 			return expressionType(value.X, imports, values, types)
+		}
+		if value.Op == token.ARROW {
+			typeName := expressionType(value.X, imports, values, types)
+			if typeName == toolRegistryCollectionType {
+				return modulePath + "/internal/tools.Registry"
+			}
+			return typeName
 		}
 	case *ast.CompositeLit:
 		return canonicalType(value.Type, imports)
