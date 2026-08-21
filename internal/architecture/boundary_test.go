@@ -488,6 +488,7 @@ func (application *App) Close() error {
 	runCleanup(application.manager.Close)
 	_ = owned(application).Close()
 	_ = namedOwned(application).Close()
+	_ = closer.Close(application.manager)
 	_ = (*mcp.Manager).Close(application.manager)
 	return nil
 }`
@@ -508,7 +509,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
+	want := []string{"identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -730,6 +731,7 @@ func registerTransitively(registry registrar) { registerOwned(registry) }
 func runRegistration(register func(tools.Tool) error) { _ = register(nil) }
 func configure(application *App, registry *tools.Registry, routes *router) {
 	(*tools.Registry).Register(registry, nil)
+	registrar.Register(application.registry, nil)
 	registerExpression := (*tools.Registry).Register
 	registerExpression(registry, nil)
 	registry.Register(nil)
@@ -774,7 +776,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "registry.Register", "registries.Register", "registry.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "registry.Register", "registries.Register", "registry.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -2724,8 +2726,28 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 }
 
 func isFeatureCleanupMethodExpression(selector *ast.SelectorExpr, imports map[string]string, types compositionTypeIndex) bool {
-	typeName := canonicalType(selector.X, imports)
-	return typeName != "" && featureCleanupMethods(typeName, types)[selector.Sel.Name]
+	_ = types
+	return isTypeExpression(selector.X, imports) && isFeatureCleanupMethodName(selector.Sel.Name)
+}
+
+func isTypeExpression(expression ast.Expr, imports map[string]string) bool {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		return value.Obj != nil && value.Obj.Kind == ast.Typ
+	case *ast.ParenExpr:
+		return isTypeExpression(value.X, imports)
+	case *ast.StarExpr:
+		return isTypeExpression(value.X, imports)
+	case *ast.IndexExpr:
+		return isTypeExpression(value.X, imports)
+	case *ast.IndexListExpr:
+		return isTypeExpression(value.X, imports)
+	case *ast.SelectorExpr:
+		qualifier, ok := value.X.(*ast.Ident)
+		return ok && imports[qualifier.Name] != ""
+	default:
+		return false
+	}
 }
 
 func assignedCleanupPaths(expressions []ast.Expr, index int, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types compositionTypeIndex) map[string]bool {
@@ -3138,8 +3160,8 @@ func isToolRegistrationValueExpression(expression ast.Expr, imports map[string]s
 }
 
 func isToolRegistrationMethodExpression(selector *ast.SelectorExpr, imports map[string]string, types compositionTypeIndex) bool {
-	const registryType = modulePath + "/internal/tools.Registry"
-	return resolveNamedType(canonicalType(selector.X, imports), types) == registryType && isToolRegistrationName(selector.Sel.Name)
+	_ = types
+	return isTypeExpression(selector.X, imports) && isToolRegistrationName(selector.Sel.Name)
 }
 
 func isToolRegistrationCallableExpression(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
