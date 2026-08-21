@@ -856,8 +856,9 @@ func TestEndToEnd_NotesSurviveCompaction(t *testing.T) {
 	}
 	defer a.Close()
 
-	if a.Engine.Notes == nil {
-		t.Fatal("app did not initialize notes store")
+	_, notes := runtime.SessionStateStoresFromModules(a.Engine.SessionRuntimeSnapshot().Modules)
+	if notes == nil {
+		t.Fatal("app did not initialize the Notes Module store")
 	}
 	if _, err := a.Engine.Tools.Call(context.Background(), runtime.NotesToolUpdate, map[string]any{
 		"content": "- [x] bind local services to 0.0.0.0\n- [ ] confirm CI status",

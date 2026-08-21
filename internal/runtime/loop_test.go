@@ -847,11 +847,11 @@ func TestTurn_RequestEpochCheckpointConsumesPolicyContextAndLinksResponse(t *tes
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
 	}}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Notes = NewNotesStore(eng.Session.Dir)
-	if _, err := eng.Notes.Update("- [ ] retain the exact runtime note"); err != nil {
+	notesStore := NewNotesStore(eng.Session.Dir)
+	if _, err := notesStore.Update("- [ ] retain the exact runtime note"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModules(t, eng)
+	installSessionStateModulesWithStores(t, eng, nil, notesStore)
 	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
 		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
 	}}); err != nil {
@@ -3007,17 +3007,18 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
 	eng.Compaction.Instructions = "Preserve configured release criteria."
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	if _, err := eng.GoalState.CreateWithContract(GoalStateCreate{
+	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	if _, err := goalState.CreateWithContract(GoalStateCreate{
 		Description: "Ship authoritative compaction state",
 		Acceptance:  "The persisted goal remains exact:\n- [ ] preserve acceptance line one\n- [ ] preserve acceptance line two",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	eng.Notes = NewNotesStore(eng.Session.Dir)
-	if _, err := eng.Notes.Update("- [x] map the runtime\n- [ ] run the live compaction evaluation"); err != nil {
+	notesStore := NewNotesStore(eng.Session.Dir)
+	if _, err := notesStore.Update("- [x] map the runtime\n- [ ] run the live compaction evaluation"); err != nil {
 		t.Fatal(err)
 	}
+	installSessionStateModulesWithStores(t, eng, goalState, notesStore)
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact: {{Stdout: "Preserve hook deployment evidence."}},
 	}})
@@ -3516,6 +3517,8 @@ func TestCompactRetriesPartialSummaryStoppedAtMaxTokens(t *testing.T) {
 
 func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 	var eng *Engine
+	var goalState *GoalStateStore
+	var notesStore *NotesStore
 	provider := &scriptedCompactionProvider{
 		name: "thinking:model",
 		attempts: []scriptedCompactionAttempt{
@@ -3523,10 +3526,10 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 				response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant}},
 				beforeReturn: func() {
 					updated := "Mutated after the first summary request"
-					if _, err := eng.GoalState.Update(GoalStateUpdate{Description: &updated}); err != nil {
+					if _, err := goalState.Update(GoalStateUpdate{Description: &updated}); err != nil {
 						t.Fatal(err)
 					}
-					if _, err := eng.Notes.Update("- [ ] mutated after first request"); err != nil {
+					if _, err := notesStore.Update("- [ ] mutated after first request"); err != nil {
 						t.Fatal(err)
 					}
 				},
@@ -3540,14 +3543,15 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 	eng.ContextWindow = 5000
 	eng.Compaction.ReserveTokens = 1000
 	eng.Compaction.SummaryMaxTokens = 1000
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	if _, err := eng.GoalState.Create("Original compact goal", "Original acceptance"); err != nil {
+	goalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	if _, err := goalState.Create("Original compact goal", "Original acceptance"); err != nil {
 		t.Fatal(err)
 	}
-	eng.Notes = NewNotesStore(eng.Session.Dir)
-	if _, err := eng.Notes.Update("- [ ] original compact note"); err != nil {
+	notesStore = NewNotesStore(eng.Session.Dir)
+	if _, err := notesStore.Update("- [ ] original compact note"); err != nil {
 		t.Fatal(err)
 	}
+	installSessionStateModulesWithStores(t, eng, goalState, notesStore)
 	var epochs []provenance.RequestEpoch
 	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
 		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
@@ -4724,8 +4728,7 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	installSessionStateModules(t, eng)
+	goalState, _ := installSessionStateModules(t, eng)
 	var continued int32
 	bus.Subscribe("goal.continued", func(e events.Event) { atomic.AddInt32(&continued, 1) })
 
@@ -4755,7 +4758,7 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	if atomic.LoadInt32(&continued) != 1 {
 		t.Fatalf("goal.continued events = %d", continued)
 	}
-	state, err := eng.GoalState.Snapshot()
+	state, err := goalState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4776,12 +4779,12 @@ func TestTurn_GoalCompletionGateAcceptsMaximumGoalContract(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
 	acceptance := strings.Repeat("a", 32*1024)
-	if _, err := eng.GoalState.Create("ship the maximum contract", acceptance); err != nil {
+	if _, err := goalState.Create("ship the maximum contract", acceptance); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModules(t, eng)
+	installSessionStateModulesWithStores(t, eng, goalState, nil)
 
 	out, err := eng.Turn(context.Background(), "finish the goal")
 	if err != nil {
@@ -4800,11 +4803,11 @@ func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "waiting for delegated work"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	if _, err := eng.GoalState.Create("finish delegated work", "all delegated results are incorporated"); err != nil {
+	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	if _, err := goalState.Create("finish delegated work", "all delegated results are incorporated"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModulesWithGoalOptions(t, eng, GoalModuleOptions{
+	installSessionStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
 		EnableContinuation:   true,
 		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
 	})
@@ -4821,7 +4824,7 @@ func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
 	if atomic.LoadInt32(&continued) != 0 {
 		t.Fatalf("goal.continued events = %d", continued)
 	}
-	state, err := eng.GoalState.Snapshot()
+	state, err := goalState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4836,11 +4839,11 @@ func TestTurn_DeferredGoalStillHonorsStopHookContinuation(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	if _, err := eng.GoalState.Create("finish delegated work", "all checks pass"); err != nil {
+	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	if _, err := goalState.Create("finish delegated work", "all checks pass"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModulesWithGoalOptions(t, eng, GoalModuleOptions{
+	installSessionStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
 		EnableContinuation:   true,
 		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
 	})
@@ -4874,11 +4877,11 @@ func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "Which deployment should I use?"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	if _, err := eng.GoalState.Create("deploy the service", "the chosen deployment is healthy"); err != nil {
+	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	if _, err := goalState.Create("deploy the service", "the chosen deployment is healthy"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModulesWithGoalOptions(t, eng, GoalModuleOptions{
+	installSessionStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
 		EnableContinuation:   true,
 		ContinuationDeferrer: panicGoalContinuationDeferrer{t: t},
 	})
@@ -4895,7 +4898,7 @@ func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 	if atomic.LoadInt32(&continued) != 0 {
 		t.Fatalf("goal.continued events = %d", continued)
 	}
-	state, err := eng.GoalState.Snapshot()
+	state, err := goalState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4909,7 +4912,8 @@ func TestTurn_UserMessageDoesNotCreateGoalState(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	installSessionStateModulesWithStores(t, eng, goalState, nil)
 
 	out, err := eng.Turn(context.Background(), "this is normal context, not a goal")
 	if err != nil {
@@ -4918,7 +4922,7 @@ func TestTurn_UserMessageDoesNotCreateGoalState(t *testing.T) {
 	if out != "ok" {
 		t.Fatalf("out = %q", out)
 	}
-	snapshot, err := eng.GoalState.StatusSnapshot()
+	snapshot, err := goalState.StatusSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4932,7 +4936,8 @@ func TestTurn_HookGoalStateOutputDoesNotModifyGoal(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	goalState := NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	installSessionStateModulesWithStores(t, eng, goalState, nil)
 	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
 		Name:    "ignored-goal-output",
 		Events:  []hooks.EventName{hooks.EventStop},
@@ -4950,7 +4955,7 @@ func TestTurn_HookGoalStateOutputDoesNotModifyGoal(t *testing.T) {
 	if out != "ok" {
 		t.Fatalf("out = %q", out)
 	}
-	snapshot, err := eng.GoalState.StatusSnapshot()
+	snapshot, err := goalState.StatusSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6966,8 +6971,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}, false)
-	eng.Notes = NewNotesStore(eng.Session.Dir)
-	installSessionStateModules(t, eng)
+	_, notesStore := installSessionStateModules(t, eng)
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName == hooks.EventPreToolUse && req.ToolName == NotesToolUpdate && req.ToolInput["content"] == "first" {
 			select {
@@ -6982,7 +6986,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 	if out, err := eng.Turn(context.Background(), "rewrite notes twice"); err != nil || out != "done" {
 		t.Fatalf("Turn() = %q, %v", out, err)
 	}
-	snapshot, err := eng.Notes.Snapshot()
+	snapshot, err := notesStore.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6993,8 +6997,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 
 func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	installSessionStateModules(t, eng)
+	goalState, _ := installSessionStateModules(t, eng)
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName == hooks.EventPreToolUse && req.ToolName == GoalToolCreate {
 			select {
@@ -7034,7 +7037,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 			t.Fatalf("result %d unexpectedly failed: %s", i, result.Block.Content)
 		}
 	}
-	snapshot, err := eng.GoalState.Snapshot()
+	snapshot, err := goalState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8030,7 +8033,6 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
 	installSessionStateModules(t, eng)
 	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
 		Name:    "stop-ok",

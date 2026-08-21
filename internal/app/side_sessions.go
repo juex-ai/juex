@@ -231,6 +231,7 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 		model = config.ModelRef{ProviderID: cfg.ProviderID, ModelID: cfg.Model}.String()
 	}
 	state := m.parent.Engine.SessionRuntimeSnapshot()
+	goalState, notes := runtime.SessionStateStoresFromModules(state.Modules)
 	type factoryResult struct {
 		child *App
 		err   error
@@ -242,8 +243,8 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 			Config:            cfg,
 			Model:             model,
 			UseParentProvider: useParentProvider,
-			GoalState:         state.GoalState,
-			Notes:             state.Notes,
+			GoalState:         goalState,
+			Notes:             notes,
 			Observables:       m.parent.obsv,
 		})
 		resultCh <- factoryResult{child: child, err: err}

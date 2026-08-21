@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
+	"github.com/juex-ai/juex/internal/events"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -15,24 +17,38 @@ const notesGuide = `Guide available via skill_load("juex-session-state").`
 
 const NotesModuleID runtimemodule.ID = "notes"
 
-type NotesModule struct {
-	engine *Engine
+type NotesModuleOptions struct {
+	EventSink     func(events.Event) error
+	CurrentTurnID func() string
 }
 
-func NewNotesModule(engine *Engine) *NotesModule { return &NotesModule{engine: engine} }
+type NotesModule struct {
+	store                *NotesStore
+	eventSink            func(events.Event) error
+	currentTurnID        func() string
+	notesContextErrorMu  sync.Mutex
+	notesContextErrorKey string
+}
+
+func NewNotesModule(store *NotesStore) *NotesModule {
+	return NewNotesModuleWithOptions(store, NotesModuleOptions{})
+}
+
+func NewNotesModuleWithOptions(store *NotesStore, opts NotesModuleOptions) *NotesModule {
+	return &NotesModule{store: store, eventSink: opts.EventSink, currentTurnID: opts.CurrentTurnID}
+}
 
 func (*NotesModule) ID() runtimemodule.ID { return NotesModuleID }
 
 func (m *NotesModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
-	return NotesTools(m.engine), nil
+	return NotesTools(m), nil
 }
 
 func (m *NotesModule) Context(_ context.Context, request runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
-	if m == nil || m.engine == nil || request.Purpose != runtimemodule.ContextPurposeProviderIteration {
+	if m == nil || request.Purpose != runtimemodule.ContextPurposeProviderIteration {
 		return nil, nil
 	}
-	runtime := m.engine.SessionRuntimeSnapshot()
-	text, ok := m.engine.notesContextFromStore(runtime.Notes)
+	text, ok := m.notesContextFromStore(m.store)
 	if !ok {
 		return nil, nil
 	}
@@ -61,20 +77,20 @@ func NotesToolDefinitions() []tools.ToolDefinition {
 	}}
 }
 
-func NotesTools(engine *Engine) []tools.Tool {
+func NotesTools(module *NotesModule) []tools.Tool {
 	definition := NotesToolDefinitions()[0]
-	if engine == nil {
+	if module == nil || module.store == nil {
 		return []tools.Tool{definition.Bind(func(context.Context, map[string]any) (string, error) {
 			return "", fmt.Errorf("notes store is unavailable")
 		})}
 	}
 	return []tools.Tool{definition.Bind(func(_ context.Context, input map[string]any) (string, error) {
-		return engine.handleUpdateNotes(input)
+		return module.handleUpdateNotes(input)
 	})}
 }
 
-func (e *Engine) handleUpdateNotes(input map[string]any) (string, error) {
-	store := e.notesStoreLocked()
+func (m *NotesModule) handleUpdateNotes(input map[string]any) (string, error) {
+	store := m.store
 	if store == nil {
 		return "", fmt.Errorf("notes store is unavailable")
 	}
@@ -86,7 +102,7 @@ func (e *Engine) handleUpdateNotes(input map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	e.emitNotesUpdated(e.activeTurnID, snapshot)
+	m.emitNotesUpdated(m.activeTurnID(), snapshot)
 	data, err := json.Marshal(map[string]any{"notes": snapshot})
 	if err != nil {
 		return "", fmt.Errorf("notes response encode: %w", err)

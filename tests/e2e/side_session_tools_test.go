@@ -125,7 +125,11 @@ func TestEndToEnd_SideSessionToolDelegation(t *testing.T) {
 	case <-time.After(sideSessionE2ETimeout):
 		t.Fatal("side worker did not start")
 	}
-	goal, err := a.Engine.GoalState.Snapshot()
+	goalState, _ := juexruntime.SessionStateStoresFromModules(a.Engine.SessionRuntimeSnapshot().Modules)
+	if goalState == nil {
+		t.Fatal("active Goal Module did not provide a store")
+	}
+	goal, err := goalState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +146,7 @@ func TestEndToEnd_SideSessionToolDelegation(t *testing.T) {
 					t.Fatalf("unexpected Goal continuation in history: %+v", message)
 				}
 			}
-			goal, err := a.Engine.GoalState.Snapshot()
+			goal, err := goalState.Snapshot()
 			if err != nil {
 				t.Fatal(err)
 			}
