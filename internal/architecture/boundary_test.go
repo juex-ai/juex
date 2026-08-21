@@ -336,8 +336,10 @@ var appFactory = func(manager *mcp.Manager, registry *tools.Registry) *App {
 	return &AppAlias{closureResource: manager, closureRegistry: registry}
 }
 func (application *App) bind(manager *mcp.Manager, registry *tools.Registry) {
-	application.resource = manager
-	application.registry = registry
+	target := application
+	target.resource = manager
+	var registryTarget = target
+	registryTarget.registry = registry
 }
 func newApp(manager *mcp.Manager, registry *tools.Registry) *App {
 	return &AppAlias{literalResource: manager, literalRegistry: registry}
@@ -10137,6 +10139,7 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 						return false
 					case *ast.AssignStmt:
 						for index, left := range statement.Lhs {
+							trackAppReceiverAlias(left, statement.Rhs, index, receivers)
 							indexAppReceiverFieldAssignment(left, statement.Rhs, index, receivers, source.imports, values, resources, types)
 							if localType := localFunctionType(activeFunctionKey, left, statement.Rhs, index); localType != "" {
 								setMayValueType(values, assignmentValueKey(left), localType, *types)
@@ -10150,6 +10153,7 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 						for _, raw := range general.Specs {
 							spec := raw.(*ast.ValueSpec)
 							for index, name := range spec.Names {
+								trackAppReceiverAlias(name, spec.Values, index, receivers)
 								typeName := canonicalType(spec.Type, source.imports)
 								paths := cleanupPathsForType(typeName, *types, nil)
 								if len(spec.Values) != 0 {
@@ -10325,6 +10329,24 @@ func directAppReceiverField(expression ast.Expr, receivers map[string]bool) stri
 		default:
 			return ""
 		}
+	}
+}
+
+func trackAppReceiverAlias(left ast.Expr, right []ast.Expr, index int, receivers map[string]bool) {
+	if assignmentFieldPrefix(left) != "" {
+		return
+	}
+	target, indexed := assignmentBinding(left)
+	if target == nil || indexed {
+		return
+	}
+	assigned := assignedExpression(right, index)
+	if assigned == nil || assignmentFieldPrefix(assigned) != "" {
+		return
+	}
+	source, _ := assignmentBinding(assigned)
+	if source != nil && receivers[bindingKey(source)] {
+		receivers[bindingKey(target)] = true
 	}
 }
 
