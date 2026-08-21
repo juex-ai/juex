@@ -23,9 +23,3 @@ func appGoalStateStore(t testing.TB, app *App) *runtime.GoalStateStore {
 	goalState, _ := appSessionStateStores(t, app)
 	return goalState
 }
-
-func appNotesStore(t testing.TB, app *App) *runtime.NotesStore {
-	t.Helper()
-	_, notes := appSessionStateStores(t, app)
-	return notes
-}

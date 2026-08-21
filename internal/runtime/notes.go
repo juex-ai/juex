@@ -37,14 +37,6 @@ func (m *NotesModule) NotesCompactionState() (string, error) {
 	return snapshot.Content, nil
 }
 
-func (m *NotesModule) notesContextSnapshot() (string, bool) {
-	store := m.NotesStore()
-	if store == nil {
-		return "", false
-	}
-	return m.notesContextFromStore(store)
-}
-
 func (m *NotesModule) notesContextFromStore(store *NotesStore) (string, bool) {
 	if m == nil || store == nil {
 		return "", false
