@@ -2094,6 +2094,65 @@ func directAfterSkippedLoops(application *App, run bool, values []int) {
 	}
 }
 
+func TestAppCompositionInspectionRejectsImplicitInfiniteLoopExits(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+func cleanupAfterInfiniteLoop(resource closer) {
+	for {}
+	_ = resource.Close()
+}
+func registerAfterInfiniteLoop(registry registrar) {
+	for {}
+	registry.Register(nil)
+}
+func useInfiniteLoopHelpers(application *App) {
+	cleanupAfterInfiniteLoop(application.manager)
+	registerAfterInfiniteLoop(application.registry)
+}
+func directAfterInfiniteLoop(application *App) {
+	for {}
+	_ = application.manager.Close()
+	application.registry.Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "infinite_loops.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 0 {
+		t.Fatalf("cleanup calls = %v, want no implicit infinite-loop exit", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 0 {
+		t.Fatalf("Tool registration calls = %v, want no implicit infinite-loop exit", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionTracksRegistrationFunctionConversions(t *testing.T) {
 	source := `package app
 import "github.com/juex-ai/juex/internal/tools"
@@ -5278,6 +5337,9 @@ func inspectCompositionLoopBody(body *ast.BlockStmt, visit func(ast.Node) bool, 
 	router.excludeTargetBindings(continueTarget, blockDeclaredCompositionBindings(body))
 	router.mergeTargetStates(continueTarget)
 	router.popContinueTarget(continueTarget)
+	if zeroIterationState == nil {
+		router.terminate()
+	}
 	router.popBreakTarget(breakTarget)
 	router.mergeTargetStates(breakTarget)
 }
@@ -6605,6 +6667,9 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 						break
 					}
 				}
+				if value.Cond == nil {
+					router.terminate()
+				}
 				router.popContinueTarget(continueTarget)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
@@ -7086,6 +7151,9 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					if equalStringMap(values, beforeValues) && equalBoolMap(references, beforeReferences) && equalCleanupResourceMap(aliases, beforeAliases) {
 						break
 					}
+				}
+				if value.Cond == nil {
+					router.terminate()
 				}
 				router.popContinueTarget(continueTarget)
 				router.popBreakTarget(breakTarget)
