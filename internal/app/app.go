@@ -30,6 +30,7 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/observability"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/prompt"
@@ -636,7 +637,7 @@ func New(opts Options) (*App, error) {
 		sess,
 		eng,
 		runtimePaths.WorkDir,
-		prompt.ShellProfileFromConfig(cfg.Shell),
+		promptcontext.ShellProfileFromConfig(cfg.Shell),
 		a.shellSessions,
 		sessionModuleOptions{
 			hookRunner:               hookRunner,
@@ -776,7 +777,7 @@ func (a *App) replaceSession(ctx context.Context, sess *session.Session, sessLoc
 		sess,
 		a.Engine,
 		a.cfg.WorkDir,
-		prompt.ShellProfileFromConfig(a.cfg.Shell),
+		promptcontext.ShellProfileFromConfig(a.cfg.Shell),
 		a.shellSessions,
 		sessionModuleOptions{
 			hookRunner:               a.hookRunner,

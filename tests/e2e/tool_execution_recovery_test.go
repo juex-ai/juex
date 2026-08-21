@@ -9,7 +9,7 @@ import (
 	"github.com/juex-ai/juex/internal/eventcatalog"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/prompt"
+	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
@@ -102,7 +102,7 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 		Tools:    registry,
 		Bus:      bus,
 		Session:  recovered,
-		Prompt: e2ePromptBuilder(t, "", []string{root}, root, prompt.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{root}, root, promptcontext.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
 		}, recovered),
 		WorkDir:     root,

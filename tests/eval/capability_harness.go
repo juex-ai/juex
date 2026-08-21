@@ -14,6 +14,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
@@ -192,8 +193,8 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 }
 
 func capabilityPromptBuilder(workDir string, sess *session.Session) *prompt.Builder {
-	guidance := &prompt.GuidanceModule{AgentsMDDirs: []string{workDir}}
-	runtimeContext := &prompt.SessionContextModule{
+	guidance := &promptcontext.GuidanceModule{AgentsMDDirs: []string{workDir}}
+	runtimeContext := &promptcontext.SessionContextModule{
 		WorkDir: workDir,
 		Shell:   capabilityPromptShellProfile(),
 		Now:     func() time.Time { return time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC) },
@@ -270,9 +271,9 @@ func collectCapabilityResult(t *testing.T, name, workDir, sessionDir, finalText 
 	return result
 }
 
-func capabilityPromptShellProfile() prompt.ShellProfile {
+func capabilityPromptShellProfile() promptcontext.ShellProfile {
 	p := tools.DefaultShellProfile()
-	return prompt.ShellProfile{
+	return promptcontext.ShellProfile{
 		Profile:       p.Profile,
 		Family:        p.Family,
 		Binary:        p.Binary,

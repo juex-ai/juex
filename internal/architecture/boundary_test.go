@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -26,6 +27,13 @@ var concreteFeatureImports = []string{
 // directories: adding a new Framework root must be an architectural decision.
 var frameworkImports = []string{
 	modulePath + "/internal/runtime",
+}
+
+var featureResourceCleanupMethods = map[string]map[string]bool{
+	modulePath + "/internal/app.sideSessionManager":    {"Close": true, "StartClose": true, "StopAll": true, "WaitClose": true},
+	modulePath + "/internal/mcp.Manager":               {"Close": true},
+	modulePath + "/internal/observable.Manager":        {"Close": true, "StartClose": true, "WaitClose": true},
+	modulePath + "/internal/tools.ShellSessionManager": {"Close": true},
 }
 
 // These are the business-agnostic technical primitives identified as
@@ -65,7 +73,11 @@ func TestFrameworkDoesNotImportConcreteFeatures(t *testing.T) {
 func TestAppCompositionDoesNotBypassModuleCatalogOrLifecycle(t *testing.T) {
 	root := repositoryRoot(t)
 	appDir := filepath.Join(root, "internal", "app")
-	err := filepath.WalkDir(appDir, func(path string, entry fs.DirEntry, walkErr error) error {
+	resourceFields, err := appFeatureResourceFields(appDir)
+	if err != nil {
+		t.Fatalf("resolve App Feature resources: %v", err)
+	}
+	err = filepath.WalkDir(appDir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -98,16 +110,59 @@ func TestAppCompositionDoesNotBypassModuleCatalogOrLifecycle(t *testing.T) {
 				if function.Sel.Name == "Register" || function.Sel.Name == "MustRegister" {
 					t.Errorf("%s:%d directly calls %s; internal/app must not mutate a serving Tool registry", relative, position.Line, chain)
 				}
-				if isFeatureCleanupCall(chain) {
-					t.Errorf("%s:%d directly calls Feature cleanup %s; cleanup ordering belongs to Module sets", relative, position.Line, chain)
-				}
 			}
 			return true
+		})
+		inspectAppFeatureCleanup(parsed, importPaths(parsed), resourceFields, func(call *ast.CallExpr, chain string) {
+			position := files.Position(call.Pos())
+			t.Errorf("%s:%d directly calls Feature cleanup %s; cleanup ordering belongs to Module sets", relative, position.Line, chain)
 		})
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("scan internal/app: %v", err)
+	}
+}
+
+func TestAppFeatureCleanupInspectionUsesDeclaredTypes(t *testing.T) {
+	source := `package app
+import "github.com/juex-ai/juex/internal/mcp"
+type App struct { renamed *mcp.Manager }
+func (application *App) closeFeature() {
+	manager := application.renamed
+	_ = manager.Close()
+}`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "renamed.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resourceFields, err := appFeatureResourceFields(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resourceFields["renamed"] == nil {
+		t.Fatal("renamed MCP Manager field was not classified as a Feature resource")
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), resourceFields, func(_ *ast.CallExpr, chain string) {
+		calls = append(calls, chain)
+	})
+	if len(calls) != 1 || calls[0] != "manager.Close" {
+		t.Fatalf("cleanup calls = %v, want type-derived manager.Close", calls)
+	}
+}
+
+func TestImportBoundaryClassifiesPromptContextAsConcreteFeature(t *testing.T) {
+	if !isConcreteFeatureImport(modulePath + "/internal/modules/promptcontext") {
+		t.Fatal("prompt context Module package is not classified as a concrete Feature")
+	}
+	if !isFrameworkOrConcreteFeatureImport(modulePath + "/internal/runtime/module") {
+		t.Fatal("runtime Module package is not classified as Framework")
 	}
 }
 
@@ -170,19 +225,200 @@ func matchesImportRoot(importPath string, roots []string) bool {
 	return false
 }
 
-func isFeatureCleanupCall(chain string) bool {
-	parts := strings.Split(chain, ".")
-	if len(parts) < 2 {
-		return false
+func appFeatureResourceFields(appDir string) (map[string]map[string]bool, error) {
+	fields := make(map[string]map[string]bool)
+	foundApp := false
+	err := filepath.WalkDir(appDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			return err
+		}
+		imports := importPaths(parsed)
+		for _, declaration := range parsed.Decls {
+			general, ok := declaration.(*ast.GenDecl)
+			if !ok || general.Tok != token.TYPE {
+				continue
+			}
+			for _, raw := range general.Specs {
+				spec, ok := raw.(*ast.TypeSpec)
+				if !ok || spec.Name.Name != "App" {
+					continue
+				}
+				structure, ok := spec.Type.(*ast.StructType)
+				if !ok {
+					return nil
+				}
+				foundApp = true
+				for _, field := range structure.Fields.List {
+					methods := featureResourceCleanupMethods[canonicalType(field.Type, imports)]
+					for _, name := range field.Names {
+						if methods != nil {
+							fields[name.Name] = methods
+						}
+					}
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	receiver, method := parts[len(parts)-2], parts[len(parts)-1]
-	methods := map[string]map[string]bool{
-		"mcpManager":    {"Close": true},
-		"obsv":          {"Close": true, "StartClose": true, "WaitClose": true},
-		"shellSessions": {"Close": true},
-		"sideSessions":  {"Close": true, "StartClose": true, "StopAll": true, "WaitClose": true},
+	if !foundApp {
+		return nil, fs.ErrNotExist
 	}
-	return methods[receiver][method]
+	return fields, nil
+}
+
+func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, resourceFields map[string]map[string]bool, report func(*ast.CallExpr, string)) {
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Body == nil {
+			continue
+		}
+		appValues := namedValuesOfType(function.Recv, imports, modulePath+"/internal/app.App")
+		for name := range namedValuesOfType(function.Type.Params, imports, modulePath+"/internal/app.App") {
+			appValues[name] = true
+		}
+		resources := make(map[string]map[string]bool)
+		for name, methods := range namedFeatureResources(function.Type.Params, imports) {
+			resources[name] = methods
+		}
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			switch value := node.(type) {
+			case *ast.AssignStmt:
+				for index, left := range value.Lhs {
+					name, ok := left.(*ast.Ident)
+					if !ok || index >= len(value.Rhs) {
+						continue
+					}
+					if methods := resourceMethods(value.Rhs[index], appValues, resources, resourceFields); methods != nil {
+						resources[name.Name] = methods
+					} else {
+						delete(resources, name.Name)
+					}
+				}
+			case *ast.DeclStmt:
+				general, ok := value.Decl.(*ast.GenDecl)
+				if !ok || general.Tok != token.VAR {
+					break
+				}
+				for _, raw := range general.Specs {
+					spec := raw.(*ast.ValueSpec)
+					methods := featureResourceCleanupMethods[canonicalType(spec.Type, imports)]
+					for index, name := range spec.Names {
+						if index < len(spec.Values) {
+							methods = resourceMethods(spec.Values[index], appValues, resources, resourceFields)
+						}
+						if methods != nil {
+							resources[name.Name] = methods
+						}
+					}
+				}
+			case *ast.CallExpr:
+				selector, ok := value.Fun.(*ast.SelectorExpr)
+				if !ok {
+					break
+				}
+				methods := resourceMethods(selector.X, appValues, resources, resourceFields)
+				if methods[selector.Sel.Name] {
+					report(value, selectorChain(selector))
+				}
+			}
+			return true
+		})
+	}
+}
+
+func importPaths(file *ast.File) map[string]string {
+	paths := make(map[string]string)
+	for _, spec := range file.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		name := filepath.Base(path)
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		paths[name] = path
+	}
+	return paths
+}
+
+func canonicalType(expression ast.Expr, imports map[string]string) string {
+	for {
+		switch value := expression.(type) {
+		case *ast.StarExpr:
+			expression = value.X
+		case *ast.ParenExpr:
+			expression = value.X
+		case *ast.SelectorExpr:
+			qualifier, ok := value.X.(*ast.Ident)
+			if !ok {
+				return ""
+			}
+			return imports[qualifier.Name] + "." + value.Sel.Name
+		case *ast.Ident:
+			return modulePath + "/internal/app." + value.Name
+		default:
+			return ""
+		}
+	}
+}
+
+func namedValuesOfType(fields *ast.FieldList, imports map[string]string, wanted string) map[string]bool {
+	values := make(map[string]bool)
+	if fields == nil {
+		return values
+	}
+	for _, field := range fields.List {
+		if canonicalType(field.Type, imports) != wanted {
+			continue
+		}
+		for _, name := range field.Names {
+			values[name.Name] = true
+		}
+	}
+	return values
+}
+
+func namedFeatureResources(fields *ast.FieldList, imports map[string]string) map[string]map[string]bool {
+	resources := make(map[string]map[string]bool)
+	if fields == nil {
+		return resources
+	}
+	for _, field := range fields.List {
+		methods := featureResourceCleanupMethods[canonicalType(field.Type, imports)]
+		if methods == nil {
+			continue
+		}
+		for _, name := range field.Names {
+			resources[name.Name] = methods
+		}
+	}
+	return resources
+}
+
+func resourceMethods(expression ast.Expr, appValues map[string]bool, resources, resourceFields map[string]map[string]bool) map[string]bool {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		return resources[value.Name]
+	case *ast.ParenExpr:
+		return resourceMethods(value.X, appValues, resources, resourceFields)
+	case *ast.SelectorExpr:
+		receiver, ok := value.X.(*ast.Ident)
+		if ok && appValues[receiver.Name] {
+			return resourceFields[value.Sel.Name]
+		}
+	}
+	return nil
 }
 
 func selectorChain(expression ast.Expr) string {

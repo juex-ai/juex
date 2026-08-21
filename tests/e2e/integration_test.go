@@ -20,7 +20,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/prompt"
+	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/tools"
@@ -221,7 +221,7 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 		"",
 		[]string{t.TempDir()}, // empty
 		"",
-		prompt.ShellProfileFromConfig(cfg.Shell),
+		promptcontext.ShellProfileFromConfig(cfg.Shell),
 		func() time.Time { return time.Now().UTC() },
 		sess,
 	)

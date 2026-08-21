@@ -11,6 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
@@ -222,7 +223,7 @@ func TestRecoverSessionProvenanceDoesNotMaterializeUnrelatedEvents(t *testing.T)
 }
 
 func sessionRuntimeTestPrompt(engine *Engine, workDir string) *prompt.Builder {
-	provider := &prompt.SessionContextModule{WorkDir: workDir}
+	provider := &promptcontext.SessionContextModule{WorkDir: workDir}
 	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
 		snapshot := engine.SessionRuntimeSnapshot()
 		request := runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration}

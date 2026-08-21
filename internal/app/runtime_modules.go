@@ -9,9 +9,9 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
+	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/observable"
-	"github.com/juex-ai/juex/internal/prompt"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/sandbox"
@@ -80,10 +80,10 @@ func prepareRuntimeModules(
 			},
 		},
 		{
-			ID:      prompt.GuidanceModuleID,
-			Enabled: cfg.ModuleEnabled(string(prompt.GuidanceModuleID)),
+			ID:      promptcontext.GuidanceModuleID,
+			Enabled: cfg.ModuleEnabled(string(promptcontext.GuidanceModuleID)),
 			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
-				return &prompt.GuidanceModule{
+				return &promptcontext.GuidanceModule{
 					GlobalAgentsMDPath: cfg.GlobalAgentsMDPath(),
 					AgentsMDDirs:       cfg.AgentsMDDirs(),
 				}, nil
@@ -113,12 +113,12 @@ func prepareRuntimeModules(
 func compiledModuleIDs() []string {
 	return []string{
 		string(builtintools.ModuleID),
-		string(prompt.GuidanceModuleID),
+		string(promptcontext.GuidanceModuleID),
 		string(skillsmodule.ModuleID),
 		string(sideSessionModuleID),
 		string(observable.ModuleID),
 		string(mcp.ModuleID),
-		string(prompt.SessionContextModuleID),
+		string(promptcontext.SessionContextModuleID),
 		string(juexruntime.GoalModuleID),
 		string(juexruntime.NotesModuleID),
 		string(hooks.ModuleID),
@@ -153,16 +153,16 @@ func buildSessionModules(
 	sess *session.Session,
 	engine *juexruntime.Engine,
 	workDir string,
-	shell prompt.ShellProfile,
+	shell promptcontext.ShellProfile,
 	shellSessions *tools.ShellSessionManager,
 	opts sessionModuleOptions,
 ) (*runtimemodule.Set, error) {
 	builtinSpecs := []runtimemodule.SessionFactorySpec{
 		{
-			ID:      prompt.SessionContextModuleID,
-			Enabled: cfg.ModuleEnabled(string(prompt.SessionContextModuleID)),
+			ID:      promptcontext.SessionContextModuleID,
+			Enabled: cfg.ModuleEnabled(string(promptcontext.SessionContextModuleID)),
 			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
-				return &prompt.SessionContextModule{WorkDir: workDir, Shell: shell, ShellSessions: shellSessions}, nil
+				return &promptcontext.SessionContextModule{WorkDir: workDir, Shell: shell, ShellSessions: shellSessions}, nil
 			},
 		},
 		{

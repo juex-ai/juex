@@ -37,6 +37,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/modules/builtintools"
+	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
@@ -437,7 +438,7 @@ func TestEndToEnd_ToolFailureLedgerRecordsAndStalesWithoutContinuation(t *testin
 		Tools:    reg,
 		Bus:      bus,
 		Session:  sess,
-		Prompt: e2ePromptBuilder(t, "", []string{root}, root, prompt.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{root}, root, promptcontext.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 14, 9, 0, 0, 0, time.UTC)
 		}, sess),
 	}
@@ -541,7 +542,7 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 		Tools:    reg,
 		Bus:      bus,
 		Session:  sess,
-		Prompt: e2ePromptBuilder(t, "", []string{work}, work, prompt.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{work}, work, promptcontext.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 29, 10, 0, 0, 0, time.UTC)
 		}, sess),
 	}
@@ -614,7 +615,7 @@ func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
 		Tools:    reg,
 		Bus:      bus,
 		Session:  sess,
-		Prompt: e2ePromptBuilder(t, "", []string{work}, work, prompt.ShellProfile{}, func() time.Time {
+		Prompt: e2ePromptBuilder(t, "", []string{work}, work, promptcontext.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 6, 29, 11, 0, 0, 0, time.UTC)
 		}, sess),
 	}
@@ -1092,14 +1093,14 @@ func e2ePromptBuilder(
 	globalAgentsMDPath string,
 	agentsMDDirs []string,
 	workDir string,
-	shell prompt.ShellProfile,
+	shell promptcontext.ShellProfile,
 	now func() time.Time,
 	sess *session.Session,
 	runtimeModules ...runtimemodule.Module,
 ) *prompt.Builder {
 	t.Helper()
 	runtimeContext := runtimemodule.RuntimeContext{WorkDir: workDir}
-	runtimeModules = append([]runtimemodule.Module{&prompt.GuidanceModule{
+	runtimeModules = append([]runtimemodule.Module{&promptcontext.GuidanceModule{
 		GlobalAgentsMDPath: globalAgentsMDPath,
 		AgentsMDDirs:       agentsMDDirs,
 	}}, runtimeModules...)
@@ -1136,7 +1137,7 @@ func e2ePromptBuilder(
 			ScratchpadDir: sess.ScratchpadDir(),
 		}
 	}
-	sessionModule := &prompt.SessionContextModule{WorkDir: workDir, Shell: shell, Now: now}
+	sessionModule := &promptcontext.SessionContextModule{WorkDir: workDir, Shell: shell, Now: now}
 	sessionSet, err := runtimemodule.BuildSessionSet(
 		t.Context(),
 		[]runtimemodule.SessionFactorySpec{{
@@ -1274,8 +1275,8 @@ func e2eToolShellProfile() tools.ShellProfile {
 	}
 }
 
-func e2ePromptShellProfile() prompt.ShellProfile {
-	return prompt.ShellProfile{
+func e2ePromptShellProfile() promptcontext.ShellProfile {
+	return promptcontext.ShellProfile{
 		Profile:   "fake-posix",
 		Family:    "posix",
 		Binary:    os.Args[0],
