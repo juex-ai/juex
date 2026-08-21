@@ -338,11 +338,13 @@ import "github.com/juex-ai/juex/internal/mcp"
 type App struct {
 	manager *mcp.Manager
 	resources genericResources[*mcp.Manager]
+	holder genericHolder[*mcp.Manager]
 }
 type closer interface { Close() error }
 type cleanupFunc func() error
 type ownedHolder struct{ resource closer }
 type genericResources[T any] []T
+type genericHolder[T any] struct{ resource T }
 func closeOwned(resource closer) { _ = resource.Close() }
 func closeTransitively(resource closer) { closeOwned(resource) }
 func runCleanup(cleanup cleanupFunc) { _ = cleanup() }
@@ -408,6 +410,14 @@ func cleanupFromGenericCollection(application *App) {
 func cleanupFromGenericField(application *App) {
 	_ = application.resources[0].Close()
 }
+func cleanupFromGenericHolder(application *App) {
+	_ = application.holder.resource.Close()
+}
+func cleanupFromCopy(application *App) {
+	var resources []closer
+	copy(resources, []closer{application.manager})
+	_ = resources[0].Close()
+}
 func cleanupFromIndexedAssignment(application *App) {
 	resources := map[string]closer{}
 	resources["mcp"] = application.manager
@@ -453,7 +463,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "resource.Close", "Close", "resources.Close", "resource.Close", "owned.resource.Close", "owned.resource.Close", "resources.Close", "application.resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
+	want := []string{"identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "resource.Close", "Close", "resources.Close", "resource.Close", "owned.resource.Close", "owned.resource.Close", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -537,12 +547,14 @@ import "github.com/juex-ai/juex/internal/tools"
 type App struct{
 	registry *tools.Registry
 	registries genericRegistries[*tools.Registry]
+	holder genericRegistryHolder[*tools.Registry]
 }
 type router struct{}
 type registrar interface{ Register(tools.Tool) error }
 type registryList []*tools.Registry
 type registryHolder struct{ registry registrar }
 type genericRegistries[T any] []T
+type genericRegistryHolder[T any] struct{ registry T }
 func localRegistry() *tools.Registry { return nil }
 func localRegistrar(application *App) registrar { return application.registry }
 func namedLocalRegistrar(application *App) (result registrar) {
@@ -601,6 +613,14 @@ func registerFromGenericCollection(application *App) {
 }
 func registerFromGenericField(application *App) {
 	application.registries[0].Register(nil)
+}
+func registerFromGenericHolder(application *App) {
+	application.holder.registry.Register(nil)
+}
+func registerFromCopy(application *App) {
+	var registries []registrar
+	copy(registries, []registrar{application.registry})
+	registries[0].Register(nil)
 }
 func registerFromIndexedAssignment(application *App) {
 	registries := map[string]registrar{}
@@ -670,7 +690,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "registry.Register", "registries.Register", "registry.Register", "owned.registry.Register", "owned.registry.Register", "registries.Register", "application.registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "registry.Register", "registries.Register", "registry.Register", "owned.registry.Register", "owned.registry.Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -1637,6 +1657,13 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					}
 				}
 			case *ast.CallExpr:
+				if isBuiltinCopy(value) {
+					if destination, _ := assignmentBinding(value.Args[0]); destination != nil {
+						paths := cleanupPathsForExpression(value.Args[1], imports, values, resources, types)
+						key := bindingKey(destination)
+						resources[key] = mergeCleanupPaths(resources[key], paths)
+					}
+				}
 				callee := calledFunctionKey(value.Fun, imports, values, types)
 				cleanupParams := types.cleanupParams[callee]
 				if literal := functionLiteralExpression(value.Fun); literal != nil {
@@ -1739,6 +1766,11 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					values[bindingKey(name)] = valueType
 				}
 			case *ast.CallExpr:
+				if isBuiltinCopy(value) && isToolRegistryCollectionExpression(value.Args[1], imports, values, types) {
+					if destination, _ := assignmentBinding(value.Args[0]); destination != nil {
+						setMayValueType(values, bindingKey(destination), toolRegistryCollectionType, types)
+					}
+				}
 				callee := calledFunctionKey(value.Fun, imports, values, types)
 				toolParams := types.toolParams[callee]
 				if literal := functionLiteralExpression(value.Fun); literal != nil {
@@ -1901,6 +1933,11 @@ func assignmentFieldPrefix(expression ast.Expr) string {
 	}
 }
 
+func isBuiltinCopy(call *ast.CallExpr) bool {
+	identifier, ok := call.Fun.(*ast.Ident)
+	return ok && identifier.Name == "copy" && len(call.Args) == 2
+}
+
 func prefixCleanupPaths(prefix string, paths map[string]bool) map[string]bool {
 	if prefix == "" || len(paths) == 0 {
 		return paths
@@ -1953,7 +1990,7 @@ func cleanupPathsForType(typeName string, types compositionTypeIndex, visiting m
 	if methods := featureCleanupMethods(typeName, types); methods != nil {
 		return methods
 	}
-	fields := types.fields[typeName]
+	fields := instantiatedFields(typeName, types)
 	if len(fields) == 0 || visiting[typeName] {
 		return nil
 	}
@@ -2006,6 +2043,33 @@ func resolveNamedType(typeName string, types compositionTypeIndex) string {
 		typeName = underlying
 	}
 	return typeName
+}
+
+func instantiatedFields(typeName string, types compositionTypeIndex) map[string]string {
+	if fields := types.fields[typeName]; len(fields) != 0 {
+		return fields
+	}
+	if !strings.HasPrefix(typeName, genericTypePrefix) {
+		return nil
+	}
+	parts := strings.Split(strings.TrimPrefix(typeName, genericTypePrefix), genericTypeSeparator)
+	if len(parts) < 2 {
+		return nil
+	}
+	base := parts[0]
+	parameters := types.typeParameters[base]
+	fields := types.fields[base]
+	if len(fields) == 0 || len(parameters) != len(parts)-1 {
+		return nil
+	}
+	instantiated := make(map[string]string, len(fields))
+	for field, fieldType := range fields {
+		for index, parameter := range parameters {
+			fieldType = strings.ReplaceAll(fieldType, parameter, parts[index+1])
+		}
+		instantiated[field] = fieldType
+	}
+	return instantiated
 }
 
 func rangeTypes(typeName string, types compositionTypeIndex) (string, string, bool) {
@@ -2325,7 +2389,7 @@ func compositionFieldType(typeName, fieldName string, types compositionTypeIndex
 	}
 	visiting[typeName] = true
 	defer delete(visiting, typeName)
-	fields := types.fields[typeName]
+	fields := instantiatedFields(typeName, types)
 	if fieldType := fields[fieldName]; fieldType != "" {
 		return fieldType
 	}
