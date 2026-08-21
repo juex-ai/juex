@@ -1202,6 +1202,10 @@ func TestEvalVerificationExecutorStopsAtFirstFailure(t *testing.T) {
 		"status = cli.execute_verification_steps(steps, run)",
 		"assert status == 1, status",
 		"assert calls == ['first', 'fail'], calls",
+		"calls.clear()",
+		"status = cli.execute_development_steps(steps, run)",
+		"assert status == 1, status",
+		"assert calls == ['first', 'fail', 'never'], calls",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }

@@ -196,6 +196,14 @@ def execute_verification_steps(steps: list[VerificationStep], run_step: Callable
     return 0
 
 
+def execute_development_steps(steps: list[VerificationStep], run_step: Callable[[VerificationStep], int]) -> int:
+    overall = 0
+    for step in steps:
+        if run_step(step):
+            overall = 1
+    return overall
+
+
 def run_verify(args: argparse.Namespace) -> int:
     requires_clean_worktree = args.tier != "focused"
     if requires_clean_worktree:
@@ -373,7 +381,7 @@ def run_development(args: argparse.Namespace) -> int:
     steps, provider_report_dir, compaction_report_dir = development_steps(args, report_dir)
 
     test_env = isolated_test_environment() if any(step.test_environment for step in steps) else None
-    overall = execute_verification_steps(
+    overall = execute_development_steps(
         steps,
         lambda step: run_logged(
             step.label,
