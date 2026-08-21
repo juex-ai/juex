@@ -161,7 +161,7 @@ Then run:
 ```bash
 juex run "summarize this repository"
 juex run --attach screenshot.png "describe this image"
-juex --model openai:gpt-4.1 run "summarize this repository"
+juex --models openai:gpt-4.1,anthropic:claude-sonnet-5 run "summarize this repository"
 juex --debug run --json "summarize this repository"
 juex repl
 juex listen
@@ -170,13 +170,15 @@ juex fleet serve
 juex fleet status
 ```
 
-`--model` uses the same `provider:model` format as config and can select
-any model declared in the merged provider config, including providers inherited
-from `~/.juex/juex.yaml` and overridden by `$JUEX_HOME/juex.yaml` when the
-effective home is distinct.
-Configure an ordered top-level `fallback_models` list to continue a provider
-request on another declared model after exhausted transient, authentication,
-permission, or model-not-found failures. Juex skips unhealthy models during a
+The top-level `models` list is the complete ordered model chain: the first
+`provider:model` reference is primary and later entries are fallbacks. A nearer
+YAML layer replaces the whole list. Root `--models` accepts the same references
+as a comma-separated list and replaces the effective YAML chain for one
+invocation. Every reference must resolve to a model declared in the merged
+provider config.
+
+Juex continues on the next model after exhausted transient, authentication,
+permission, or model-not-found failures. It skips unhealthy models during a
 process-local cooldown and returns to higher-priority models through real
 request probes. Context overflow, cancellation, and failures after streamed
 output never trigger fallback. Model transitions do not notify the Agent by
@@ -256,7 +258,7 @@ default config when `JUEX_HOME` is unset) or the current workspace config.
 | `juex run "<prompt>"` | Run one prompt in the active primary session and exit. |
 | `juex run --ephemeral "<prompt>"` | Run with isolated temporary agent state; add `--keep` to retain and print the state path. |
 | `juex run --attach <path> ["<prompt>"]` | Attach one or more local images to a text, image-only, or mixed-content turn; repeat `--attach` for multiple images. |
-| `juex --model <provider>:<model> run "<prompt>"` | Override the configured model for this invocation. |
+| `juex --models <provider>:<model>[,...] run "<prompt>"` | Replace the configured model chain for this invocation. |
 | `juex --debug run --json "<prompt>"` | Write detailed session logs while emitting the normal run result. |
 | `juex run --new "<prompt>"` | Create a new active primary session for the prompt. |
 | `juex run --side "<prompt>"` | Create a side session without changing the active primary session. |
@@ -737,7 +739,7 @@ items constrain `Next Steps`. Set `compaction.instructions` for persistent
 summary focus. Instructions from configuration, a manual `/compact <focus>` or
 `juex sessions compact --instructions`, and successful `PreCompact` hook stdout
 are applied in that order. If summary generation fails, Juex retries through
-the ordered primary and `fallback_models` chain without adding a model-change
+the ordered `models` chain without adding a model-change
 message to the Agent conversation.
 
 Each persisted session also has a `scratchpad/` directory for long drafts,

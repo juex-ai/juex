@@ -1147,7 +1147,7 @@ def write_selected_config(
             capabilities["tools"] = False
             target["capabilities"] = capabilities
     out: dict[str, Any] = {
-        "model": f"{provider_id}:{model_id}",
+        "models": [f"{provider_id}:{model_id}"],
         "enable_user_agents_resources": False,
         "providers": [provider],
     }
@@ -1246,7 +1246,10 @@ def write_model_config_command(argv: list[str]) -> int:
         provider_id = parsed.provider
         model_id = parsed.model
     else:
-        provider_id, model_id = split_provider_model_ref(str(cfg.get("model") or ""))
+        models = cfg.get("models")
+        if not isinstance(models, list) or not models:
+            raise ValueError("source config must define a non-empty models list")
+        provider_id, model_id = split_provider_model_ref(str(models[0] or ""))
     write_selected_config(
         cfg,
         provider_id,

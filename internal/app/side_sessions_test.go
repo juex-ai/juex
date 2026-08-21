@@ -1362,11 +1362,14 @@ func TestSideSessionCreateRejectsUnknownModel(t *testing.T) {
 }
 
 func TestSideSessionCreateAppliesConfiguredModelOverride(t *testing.T) {
-	testHome := t.TempDir()
+	userHome := t.TempDir()
+	testHome := filepath.Join(userHome, ".juex")
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
 	t.Setenv("JUEX_HOME", testHome)
 	workDir := t.TempDir()
 	configPath := filepath.Join(t.TempDir(), "juex.yaml")
-	if err := os.WriteFile(configPath, []byte(`model: openai:primary
+	if err := os.WriteFile(configPath, []byte(`models: [openai:primary]
 providers:
   - id: openai
     base_url: https://openai.example

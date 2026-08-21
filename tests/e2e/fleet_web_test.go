@@ -483,7 +483,7 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 		baseURL+"/agents/"+agentID+"/api/sessions/"+sessions.Sessions[0].ID+"/events",
 	)
 
-	invalid := `{"content":"model: [invalid"}`
+	invalid := `{"content":"models: [invalid"}`
 	fleetWebJSON(
 		t,
 		client,
@@ -1024,7 +1024,7 @@ func fleetWebEnvironment(home string) []string {
 }
 
 func fleetWebConfig(model string) []byte {
-	return []byte(`model: local:` + model + `
+	return []byte(`models: [local:` + model + `]
 providers:
   - id: local
     protocol: openai/chat

@@ -75,7 +75,7 @@ func TestWriteModelConfigSelectsTopLevelAndExplicitRef(t *testing.T) {
 	}
 
 	source := filepath.Join(t.TempDir(), "juex.yaml")
-	body := `model: alpha:model-a
+	body := `models: [alpha:model-a]
 environment:
   variables:
     PROVIDER_API_ID: must-not-replace-alpha
@@ -127,7 +127,7 @@ fleet:
 				t.Fatal(err)
 			}
 			var selected struct {
-				Model       string `yaml:"model"`
+				Models      []string `yaml:"models"`
 				Environment struct {
 					Variables map[string]string `yaml:"variables"`
 				} `yaml:"environment"`
@@ -141,8 +141,8 @@ fleet:
 			if err := yaml.Unmarshal(data, &selected); err != nil {
 				t.Fatalf("parse selected config: %v\n%s", err, data)
 			}
-			if selected.Model != tt.want {
-				t.Fatalf("model = %q, want %q", selected.Model, tt.want)
+			if len(selected.Models) != 1 || selected.Models[0] != tt.want {
+				t.Fatalf("models = %q, want [%q]", selected.Models, tt.want)
 			}
 			if len(selected.Providers) != 1 || len(selected.Providers[0].Models) != 1 {
 				t.Fatalf("selected provider shape = %#v", selected.Providers)
@@ -2335,7 +2335,7 @@ func TestTestJuexHomeWrapperIsolatesDeterministicEnvironment(t *testing.T) {
 	telemetryMarker := filepath.Join(productionHome, "go-telemetry", "marker")
 	globalGitConfig := filepath.Join(productionHome, "global.gitconfig")
 	for path, body := range map[string]string{
-		providerConfig:     "model: private:model\n",
+		providerConfig:     "models: [private:model]\n",
 		fleetMarker:        "fleet-unchanged\n",
 		agentMarker:        "agent-unchanged\n",
 		xdgMarker:          "xdg-unchanged\n",
@@ -2472,7 +2472,7 @@ func TestTestJuexHomeWrapperLiveModePreservesExplicitSources(t *testing.T) {
 	goModCache := filepath.Join(cacheRoot, "go-mod")
 	uvCache := filepath.Join(cacheRoot, "uv")
 	for path, body := range map[string]string{
-		providerConfig:                              "model: fake:model\n",
+		providerConfig:                              "models: [fake:model]\n",
 		filepath.Join(codexHome, "auth.json"):       "{}\n",
 		filepath.Join(productionJuexHome, "marker"): "runtime-unchanged\n",
 	} {
@@ -2496,7 +2496,7 @@ func TestTestJuexHomeWrapperLiveModePreservesExplicitSources(t *testing.T) {
 			`test "$JUEX_PROVIDER_CONFIG" = "$1"`,
 			`test -z "${JUEX_TEST_PROVIDER_CONFIG_DEFAULT:-}"`,
 			`test "$CODEX_HOME" = "$2"`,
-			`grep -q 'model: fake:model' "$JUEX_PROVIDER_CONFIG"`,
+			`grep -Fq 'models: [fake:model]' "$JUEX_PROVIDER_CONFIG"`,
 			`test -r "$CODEX_HOME/auth.json"`,
 			`test "$GOCACHE" = "$3"`,
 			`test "$GOMODCACHE" = "$4"`,
@@ -2612,7 +2612,7 @@ func TestTestJuexHomeWrapperLiveModeResolvesOriginalHomeDefaults(t *testing.T) {
 	providerConfig := filepath.Join(productionHome, ".juex", "juex.yaml")
 	codexHome := filepath.Join(productionHome, ".codex")
 	for path, body := range map[string]string{
-		providerConfig:                        "model: default:model\n",
+		providerConfig:                        "models: [default:model]\n",
 		filepath.Join(codexHome, "auth.json"): "{}\n",
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -2632,7 +2632,7 @@ func TestTestJuexHomeWrapperLiveModeResolvesOriginalHomeDefaults(t *testing.T) {
 			`test "$JUEX_TEST_PROVIDER_CONFIG_DEFAULT" = 1`,
 			`test "$JUEX_PROVIDER_CONFIG" != "$HOME/.juex/juex.yaml"`,
 			`test "$CODEX_HOME" != "$HOME/.codex"`,
-			`grep -q 'model: default:model' "$JUEX_PROVIDER_CONFIG"`,
+			`grep -Fq 'models: [default:model]' "$JUEX_PROVIDER_CONFIG"`,
 			`test -r "$CODEX_HOME/auth.json"`,
 		}, "; "),
 	)
@@ -2661,7 +2661,7 @@ func TestTestJuexHomeWrapperLiveModeUsesWindowsUserProfileSources(t *testing.T) 
 	providerConfig := filepath.Join(productionHome, ".juex", "juex.yaml")
 	codexHome := filepath.Join(productionHome, ".codex")
 	for path, body := range map[string]string{
-		providerConfig:                        "model: windows-default:model\n",
+		providerConfig:                        "models: [windows-default:model]\n",
 		filepath.Join(codexHome, "auth.json"): "{}\n",
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -2682,7 +2682,7 @@ func TestTestJuexHomeWrapperLiveModeUsesWindowsUserProfileSources(t *testing.T) 
 			`test "$JUEX_TEST_PROVIDER_CONFIG_DEFAULT" = 1`,
 			`test "$JUEX_PROVIDER_CONFIG" = "$1"`,
 			`test "$CODEX_HOME" = "$2"`,
-			`grep -q 'model: windows-default:model' "$JUEX_PROVIDER_CONFIG"`,
+			`grep -Fq 'models: [windows-default:model]' "$JUEX_PROVIDER_CONFIG"`,
 			`test -r "$CODEX_HOME/auth.json"`,
 		}, "; "),
 		"wrapper-probe",
@@ -2708,7 +2708,7 @@ func TestTestJuexHomeWrapperLiveModeUsesWindowsUserProfileSources(t *testing.T) 
 			`test -z "${JUEX_TEST_PROVIDER_CONFIG_DEFAULT:-}"`,
 			`test "$JUEX_PROVIDER_CONFIG" = "$1"`,
 			`test "$CODEX_HOME" = "$2"`,
-			`grep -q 'model: windows-default:model' "$JUEX_PROVIDER_CONFIG"`,
+			`grep -Fq 'models: [windows-default:model]' "$JUEX_PROVIDER_CONFIG"`,
 			`test -r "$CODEX_HOME/auth.json"`,
 		}, "; "),
 		"wrapper-probe",
@@ -3189,7 +3189,7 @@ func TestEvalWriteSelectedConfigUsesColonModelRef(t *testing.T) {
 		"    out = Path(tmp) / 'juex.yaml'",
 		"    helper.write_selected_config(cfg, 'openrouter', 'meta-llama/llama-3', out)",
 		"    text = out.read_text(encoding='utf-8')",
-		"    assert 'model: openrouter:meta-llama/llama-3' in text, text",
+		"    assert 'openrouter:meta-llama/llama-3' in text and 'models:' in text, text",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
@@ -3932,7 +3932,7 @@ func TestScheduleRoutingEvalRetriesUseFreshAttempts(t *testing.T) {
 		"    attempt_seeds = []",
 		"    def fake_write_config(cfg, provider_id, model_id, output_path):",
 		"        output_path.parent.mkdir(parents=True, exist_ok=True)",
-		"        output_path.write_text('model: provider:model\\n', encoding='utf-8')",
+		"        output_path.write_text('models: [provider:model]\\n', encoding='utf-8')",
 		"    def fake_run_turn(ctx, case_dir, case_config, label, args):",
 		"        attempts.append(case_dir)",
 		"        attempt_seeds.append(json.loads((case_dir / '.juex' / 'observables.json').read_text(encoding='utf-8')))",

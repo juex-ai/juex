@@ -286,7 +286,7 @@ func TestAppNewModelCandidatePrecedenceAndHealthInjection(t *testing.T) {
 	injectedSingle := &stubProvider{}
 	health := llm.NewModelHealth(llm.ModelHealthOptions{})
 	a, err := New(Options{
-		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, FallbackModels: []string{"missing:model"}, NotifyModelChanges: true},
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, Models: []string{"openai:m", "missing:model"}, NotifyModelChanges: true},
 		Provider: injectedSingle,
 		ModelCandidates: []runtime.ModelCandidate{
 			{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
@@ -309,7 +309,7 @@ func TestAppNewInjectedSingleProviderDisablesConfigFallback(t *testing.T) {
 	dir := t.TempDir()
 	provider := &stubProvider{}
 	a, err := New(Options{
-		Config:     config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, FallbackModels: []string{"missing:model"}},
+		Config:     config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, Models: []string{"openai:m", "missing:model"}},
 		Provider:   provider,
 		WorkDir:    dir,
 		DisableMCP: true,

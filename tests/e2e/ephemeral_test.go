@@ -226,7 +226,7 @@ func prepareEphemeralBinaryTest(t *testing.T, providerURL string) (string, strin
 			t.Fatal(err)
 		}
 	}
-	configBody := fmt.Sprintf(`model: local-chat:chat-test
+	configBody := fmt.Sprintf(`models: [local-chat:chat-test]
 providers:
   - id: local-chat
     protocol: openai/chat

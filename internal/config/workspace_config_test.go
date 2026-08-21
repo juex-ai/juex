@@ -12,7 +12,7 @@ func TestValidateWorkspaceConfigReplacesOldWorkspaceLayerWithoutIdentity(t *test
 	workDir := t.TempDir()
 	configPath := filepath.Join(workDir, ".juex", "juex.yaml")
 	writeTextFile(t, configPath, "unknown_old_field: true\n")
-	candidate := []byte(`model: local:new-model
+	candidate := []byte(`models: [local:new-model]
 providers:
   - id: local
     protocol: openai/chat
@@ -38,7 +38,7 @@ func TestWriteWorkspaceConfigPreservesOldFileOnValidationFailure(t *testing.T) {
 	prepareConfigTest(t)
 	workDir := t.TempDir()
 	configPath := filepath.Join(workDir, ".juex", "juex.yaml")
-	old := []byte("model: existing:model\n")
+	old := []byte("models: [existing:model]\n")
 	writeTextFile(t, configPath, string(old))
 
 	if _, err := WriteWorkspaceConfig([]byte("unknown_field: true\n"), workDir); err == nil {
@@ -59,7 +59,7 @@ func TestWriteWorkspaceConfigPreservesOldFileOnValidationFailure(t *testing.T) {
 func TestWriteWorkspaceConfigPublishesValidatedCandidate(t *testing.T) {
 	prepareConfigTest(t)
 	workDir := t.TempDir()
-	candidate := []byte(`model: local:new-model
+	candidate := []byte(`models: [local:new-model]
 providers:
   - id: local
     protocol: openai/chat

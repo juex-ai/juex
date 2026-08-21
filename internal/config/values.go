@@ -105,7 +105,11 @@ func (c Config) ModelChain() ([]ResolvedModel, error) {
 		MaxOutputTokens: c.MaxOutputTokens,
 	}}
 	seen := map[string]struct{}{primaryRef: {}}
-	for _, ref := range c.FallbackModels {
+	configuredTail := c.Models
+	if len(configuredTail) > 0 {
+		configuredTail = configuredTail[1:]
+	}
+	for _, ref := range configuredTail {
 		canonical, err := ParseModelRef(ref)
 		if err != nil {
 			return nil, err

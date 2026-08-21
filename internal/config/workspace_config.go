@@ -14,7 +14,7 @@ func ValidateWorkspaceConfig(content []byte, workDir string) (Config, error) {
 	if err := applyYAMLData(&cfg, content, workspaceYAMLSource(cfg.RuntimeConfigPath())); err != nil {
 		return cfg, err
 	}
-	if err := finalizeConfigLoadForValidation(&cfg, "", true); err != nil {
+	if err := finalizeConfigLoadForValidation(&cfg, nil, true); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
