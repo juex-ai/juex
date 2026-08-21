@@ -5,8 +5,8 @@
 //
 //   - AGENTS.md hierarchy loading (project + subdir + global)
 //   - Skill loading (path appears in system prompt; model loads body via `read`)
-//   - MCP stdio client -> registered as mcp__<server>__<tool> in the registry
-//   - Builtin tools end-to-end: write, read, edit, apply_patch, grep, exec_command
+//   - MCP stdio client -> Runtime Module -> sealed mcp__<server>__<tool> catalog entry
+//   - Builtin Runtime Module tools end-to-end: write, read, edit, apply_patch, grep, exec_command
 //   - Parallel tool calls in a single response
 //   - Event emission landing in events.jsonl
 //   - Conversation messages landing in conversation.jsonl
@@ -36,6 +36,7 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/modules/builtintools"
 	skillsmodule "github.com/juex-ai/juex/internal/modules/skills"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
@@ -98,6 +99,7 @@ type bareScriptProvider struct {
 	steps   []llm.Response
 	called  atomic.Int32
 	history [][]llm.Message
+	tools   [][]string
 }
 
 func (p *bareScriptProvider) Name() string { return "script" }
@@ -105,6 +107,11 @@ func (p *bareScriptProvider) Name() string { return "script" }
 func (p *bareScriptProvider) Complete(ctx context.Context, sys string, hist []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
 	idx := int(p.called.Add(1) - 1)
 	p.history = append(p.history, append([]llm.Message{}, hist...))
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	p.tools = append(p.tools, names)
 	if idx >= len(p.steps) {
 		return llm.Response{}, fmt.Errorf("script exhausted at call %d", idx)
 	}
@@ -199,9 +206,6 @@ func TestEndToEnd_FullStack(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// -- Build registry like the CLI does --
-	reg := tools.NewRegistry()
-	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: root, Shell: e2eToolShellProfile()})
 	skillLoader := skills.NewLoader(filepath.Join(homeAgents, "skills"), filepath.Join(projectAgents, "skills"))
 	if err := skillLoader.Load(); err != nil {
 		t.Fatal(err)
@@ -210,15 +214,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	// Connect MCP server (re-execs this test binary as a fake JSON-RPC server)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	mcpManager, err := installE2EMCPModule(ctx, mcpConfig, reg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := mcpManager.Close(); err != nil {
-			t.Errorf("close MCP manager: %v", err)
-		}
-	}()
+	runtimeSet, reg := e2eServingToolCatalog(t, ctx, root, mcpConfig)
 
 	// -- Build runtime --
 	bus := events.NewBus()
@@ -291,11 +287,12 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	})
 
 	eng := &runtime.Engine{
-		Provider: prov,
-		Tools:    reg,
-		Bus:      bus,
-		Session:  sess,
-		Prompt:   pb,
+		Provider:       prov,
+		Tools:          reg,
+		RuntimeModules: runtimeSet,
+		Bus:            bus,
+		Session:        sess,
+		Prompt:         pb,
 	}
 
 	out, err := eng.Turn(ctx, "drive the demo")
@@ -941,8 +938,6 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reg := tools.NewRegistry()
-	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: root, Shell: e2eToolShellProfile()})
 	skillLoader := skills.NewLoader(filepath.Join(homeAgents, "skills"), filepath.Join(projectAgents, "skills"))
 	if err := skillLoader.Load(); err != nil {
 		t.Fatal(err)
@@ -950,15 +945,7 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	mcpManager, err := installE2EMCPModule(ctx, mcpConfig, reg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := mcpManager.Close(); err != nil {
-			t.Errorf("close MCP manager: %v", err)
-		}
-	}()
+	runtimeSet, reg := e2eServingToolCatalog(t, ctx, root, mcpConfig)
 
 	bus := events.NewBus()
 	sess, err := session.New(filepath.Join(root, ".juex", "sessions"))
@@ -1020,11 +1007,12 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 	})
 
 	eng := &runtime.Engine{
-		Provider: prov,
-		Tools:    reg,
-		Bus:      bus,
-		Session:  sess,
-		Prompt:   pb,
+		Provider:       prov,
+		Tools:          reg,
+		RuntimeModules: runtimeSet,
+		Bus:            bus,
+		Session:        sess,
+		Prompt:         pb,
 	}
 
 	out, err := eng.Turn(ctx, "drive the portable demo")
@@ -1180,23 +1168,38 @@ func e2ePromptBuilder(
 
 // ---- Fake MCP server (re-exec) ----
 
-func installE2EMCPModule(ctx context.Context, cfg mcp.Config, registry *tools.Registry) (*mcp.Manager, error) {
-	manager, err := mcp.NewManagerStrict(ctx, cfg, mcp.ConnectOptions{})
+func e2eServingToolCatalog(t *testing.T, ctx context.Context, workDir string, cfg mcp.Config) (*runtimemodule.Set, *tools.Registry) {
+	t.Helper()
+	runtimeContext := runtimemodule.RuntimeContext{WorkDir: workDir}
+	runtimeSet, err := runtimemodule.BuildAndStartRuntimeSet(ctx, []runtimemodule.RuntimeFactorySpec{
+		{
+			ID:      builtintools.ModuleID,
+			Enabled: true,
+			New: func(factoryCtx context.Context, _ runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				return builtintools.New(factoryCtx, tools.BuiltinOptions{WorkDir: workDir, Shell: e2eToolShellProfile()}), nil
+			},
+		},
+		{
+			ID:      mcp.ModuleID,
+			Enabled: true,
+			New: func(context.Context, runtimemodule.RuntimeContext) (runtimemodule.Module, error) {
+				return mcp.NewRuntimeModule([]mcp.Config{cfg}, mcp.ConnectOptions{}), nil
+			},
+		},
+	}, runtimeContext, runtimemodule.ToolContext{Runtime: runtimeContext})
 	if err != nil {
-		return nil, err
+		t.Fatal(err)
 	}
-	provided, err := mcp.NewModule(manager).Tools(ctx, runtimemodule.ToolContext{})
-	if err != nil {
-		_ = manager.Close()
-		return nil, err
-	}
-	for _, tool := range provided {
-		if err := registry.Register(tool); err != nil {
-			_ = manager.Close()
-			return nil, err
+	t.Cleanup(func() {
+		if err := runtimeSet.CloseRuntime(context.Background()); err != nil {
+			t.Errorf("close E2E Runtime Modules: %v", err)
 		}
+	})
+	registry, err := runtimemodule.BuildToolRegistry(tools.RegistryOptions{DefaultTimeoutSeconds: tools.DefaultTimeoutSeconds}, runtimeSet)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return manager, nil
+	return runtimeSet, registry
 }
 
 func TestAppBuffersStartupMCPNotificationUntilModulePublication(t *testing.T) {

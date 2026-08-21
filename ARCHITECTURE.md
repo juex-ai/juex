@@ -3122,6 +3122,7 @@ and `tests/eval/` covers the local evaluation harness.
 
 | Package | Coverage highlights |
 |---|---|
+| `architecture` | Foundation/Framework import direction; App composition cannot directly register serving Tools or own concrete Feature cleanup |
 | `events` | exact + glob match, auto-fill ID/timestamp, ordering |
 | `frontmatter` | round-trip, embedded quotes, embedded colons, blank lines, comments, malformed handling |
 | `version` | default + ldflags override |
@@ -3138,7 +3139,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `app` | stub-LLM run, sealed Module catalog-to-serving-registry ownership, disabled Module absence, runtime-status catalog projection, REPL multi-line, REPL after error, verbose stderr, AgentStateDir sessions, observability log wiring, history update, missing-key fail, default-cwd |
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flags including model, debug, and log-level |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
-| `tests/e2e` | full-stack tempdir scenario, installed Extension enable/disable flow, apply_patch builtin flow, resume round-trip, canonical session journals and debug logs, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
+| `tests/e2e` | sealed-catalog full-stack tempdir scenario, all-disabled Module composition, Primary Session Module-set replacement, model-driven Builtin/Skill/model-state/Observable/Extension-MCP catalog flow, installed Extension enable/disable and `ext:<name>` data isolation, apply_patch builtin flow, resume round-trip, canonical session journals and debug logs, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
 | `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracles for conversation/event/tool and Schedule persistence artifacts; retry-isolated live Schedule routing; provider-config candidate selection; eval shell wrappers; development step flags; report directory defaults |
 
 Run the deterministic suite with `make test`.
