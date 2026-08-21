@@ -455,7 +455,8 @@ func (e *Engine) compactionSummaryMaxOutputTokens(
 	}
 
 	minimumSystem, _ := buildCompactionSummaryRequest(baseSystem, previous, nil, state, policy, instructions)
-	minimumBody := buildCompactionSummaryBody(previous, nil, state, policy.ToolResultMaxChars, len(input))
+	minimumInput, omitted, minChars := fitCompactionSummaryInput(minimumSystem, previous, input, state, policy, 1)
+	minimumBody := buildCompactionSummaryBody(previous, minimumInput, state, minChars, omitted)
 	minimumHistory := []llm.Message{llm.TextMessage(llm.RoleUser, minimumBody)}
 	maxOutputTokens := policy.TriggerTokens - estimateContextTokens(minimumSystem, nil, minimumHistory)
 	if maxOutputTokens < 1 {

@@ -29,7 +29,9 @@ Implemented:
 - Summary generation traverses the optional dedicated summary model, effective
   primary, and ordered fallback models. It deduplicates refs, honors shared
   model-health cooldown and half-open reservations, and refits each request to
-  the selected candidate's context window.
+  the selected candidate's context window. Candidate-specific fitting removes
+  only the oldest complete Tool Call/Tool Result batches and preserves all
+  user-authored messages.
 
 Still future work:
 

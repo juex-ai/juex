@@ -120,37 +120,108 @@ func FitCompactionSummaryInput(sys string, previous llm.Message, input []llm.Mes
 	if maxChars <= 0 {
 		maxChars = 2000
 	}
+	exchanges := closedToolExchangeStarts(input)
 	for _, capChars := range compactionSummaryCaps(maxChars) {
 		if CompactionSummaryFits(sys, previous, input, state, capChars, 0, limit) {
 			return input, 0, capChars
 		}
-		bestStart := -1
-		for low, high := 0, len(input)-1; low <= high; {
-			mid := low + (high-low)/2
-			if CompactionSummaryFits(sys, previous, input[mid:], state, capChars, mid, limit) {
-				bestStart = mid
-				high = mid - 1
+		best := -1
+		for low, high := 1, len(exchanges); low <= high; {
+			count := low + (high-low)/2
+			trimmed := omitOldestClosedToolExchanges(input, exchanges, count)
+			omitted := count * 2
+			if CompactionSummaryFits(sys, previous, trimmed, state, capChars, omitted, limit) {
+				best = count
+				high = count - 1
 			} else {
-				low = mid + 1
+				low = count + 1
 			}
 		}
-		if bestStart >= 0 {
-			out := append([]llm.Message(nil), input[bestStart:]...)
-			return out, bestStart, capChars
+		if best >= 0 {
+			return omitOldestClosedToolExchanges(input, exchanges, best), best * 2, capChars
 		}
 	}
-	fallbackCap := 256
-	if maxChars < fallbackCap {
-		fallbackCap = maxChars
+	fallbackCap := 1
+	return omitOldestClosedToolExchanges(input, exchanges, len(exchanges)), len(exchanges) * 2, fallbackCap
+}
+
+func closedToolExchangeStarts(input []llm.Message) []int {
+	var starts []int
+	for i := 0; i+1 < len(input); i++ {
+		calls, ok := toolCallBatchIDs(input[i])
+		if !ok {
+			continue
+		}
+		results, ok := toolResultBatchIDs(input[i+1])
+		if !ok || len(calls) != len(results) {
+			continue
+		}
+		matched := true
+		for index := range calls {
+			if calls[index] != results[index] {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		starts = append(starts, i)
+		i++
 	}
-	return nil, len(input), fallbackCap
+	return starts
+}
+
+func omitOldestClosedToolExchanges(input []llm.Message, starts []int, count int) []llm.Message {
+	if count <= 0 {
+		return input
+	}
+	if count > len(starts) {
+		count = len(starts)
+	}
+	out := make([]llm.Message, 0, len(input)-count*2)
+	cursor := 0
+	for _, start := range starts[:count] {
+		out = append(out, input[cursor:start]...)
+		cursor = start + 2
+	}
+	out = append(out, input[cursor:]...)
+	return out
+}
+
+func toolCallBatchIDs(msg llm.Message) ([]string, bool) {
+	if msg.Role != llm.RoleAssistant {
+		return nil, false
+	}
+	var ids []string
+	for _, block := range msg.Blocks {
+		if block.Type != llm.BlockToolUse {
+			continue
+		}
+		if block.ToolUseID == "" {
+			return nil, false
+		}
+		ids = append(ids, block.ToolUseID)
+	}
+	return ids, len(ids) > 0
+}
+
+func toolResultBatchIDs(msg llm.Message) ([]string, bool) {
+	if msg.Role != llm.RoleUser || len(msg.Blocks) == 0 {
+		return nil, false
+	}
+	ids := make([]string, 0, len(msg.Blocks))
+	for _, block := range msg.Blocks {
+		if block.Type != llm.BlockToolResult || block.ToolUseID == "" {
+			return nil, false
+		}
+		ids = append(ids, block.ToolUseID)
+	}
+	return ids, true
 }
 
 func compactionSummaryCaps(maxChars int) []int {
-	minCap := 256
-	if maxChars < minCap {
-		minCap = maxChars
-	}
+	minCap := 1
 	caps := []int{maxChars}
 	for n := maxChars / 2; n >= minCap; n /= 2 {
 		if n != caps[len(caps)-1] {

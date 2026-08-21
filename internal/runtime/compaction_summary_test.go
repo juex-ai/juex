@@ -143,11 +143,9 @@ func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) 
 }
 
 func TestBuildCompactionSummaryRequest_BoundsOversizedTranscript(t *testing.T) {
-	var input []llm.Message
+	input := []llm.Message{testMsg("user-request", llm.RoleUser, "preserve this user request")}
 	for i := 0; i < 80; i++ {
-		msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", 2000)))
-		msg.ID = fmt.Sprintf("msg-%02d", i)
-		input = append(input, msg)
+		input = append(input, runtimeSummaryToolExchange(i, 2000)...)
 	}
 	policy := compactionPolicy{
 		ToolResultMaxChars: 2000,
@@ -165,11 +163,11 @@ func TestBuildCompactionSummaryRequest_BoundsOversizedTranscript(t *testing.T) {
 	if !strings.Contains(body, "messages omitted") {
 		t.Fatalf("summary request did not record omitted transcript:\n%s", body)
 	}
-	if strings.Contains(body, "message-00") {
-		t.Fatalf("oldest transcript should be omitted when over budget:\n%s", body)
+	if strings.Contains(body, "tool-call-00") || strings.Contains(body, "tool-result-00") {
+		t.Fatalf("oldest tool exchange should be omitted when over budget:\n%s", body)
 	}
-	if !strings.Contains(body, "message-79") {
-		t.Fatalf("newest transcript should be retained when over budget:\n%s", body)
+	if !strings.Contains(body, "user-request") || !strings.Contains(body, "preserve this user request") {
+		t.Fatalf("user request should be retained when tool exchanges are omitted:\n%s", body)
 	}
 }
 
@@ -183,32 +181,43 @@ func TestCompactionSummaryRequestTokenLimitCapsLargeWindows(t *testing.T) {
 	}
 }
 
-func TestFitCompactionSummaryInputKeepsLongestFittingSuffix(t *testing.T) {
-	var input []llm.Message
-	for i := 0; i < 8; i++ {
-		msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", 400)))
-		msg.ID = fmt.Sprintf("msg-%02d", i)
-		input = append(input, msg)
-	}
+func TestFitCompactionSummaryInputDropsOldestClosedExchange(t *testing.T) {
+	user := testMsg("user", llm.RoleUser, "preserve the user request")
+	first := runtimeSummaryToolExchange(0, 500)
+	second := runtimeSummaryToolExchange(1, 500)
+	input := append([]llm.Message{user}, first...)
+	input = append(input, second...)
 	sys := "summary system"
 	policy := compactionPolicy{ToolResultMaxChars: 500}
-	wantStart := len(input) - 3
+	want := append([]llm.Message{user}, second...)
 	limit := estimateContextTokens(sys, nil, []llm.Message{
-		llm.TextMessage(llm.RoleUser, buildCompactionSummaryBody(llm.Message{}, input[wantStart:], compactionSummaryState{}, policy.ToolResultMaxChars, wantStart)),
+		llm.TextMessage(llm.RoleUser, buildCompactionSummaryBody(llm.Message{}, want, compactionSummaryState{}, policy.ToolResultMaxChars, 2)),
 	})
-	if compactionSummaryFits(sys, llm.Message{}, input[wantStart-1:], compactionSummaryState{}, policy.ToolResultMaxChars, wantStart-1, limit) {
-		t.Fatal("test setup invalid: four-message suffix should not fit")
+	if compactionSummaryFits(sys, llm.Message{}, input, compactionSummaryState{}, policy.ToolResultMaxChars, 0, limit) {
+		t.Fatal("test setup invalid: both tool exchanges should not fit")
 	}
 
 	selected, omitted, _ := fitCompactionSummaryInput(sys, llm.Message{}, input, compactionSummaryState{}, policy, limit)
 
-	if omitted != wantStart {
-		t.Fatalf("omitted = %d, want %d", omitted, wantStart)
+	if omitted != 2 {
+		t.Fatalf("omitted = %d, want 2", omitted)
 	}
 	if len(selected) != 3 {
 		t.Fatalf("selected len = %d, want 3", len(selected))
 	}
-	if selected[0].ID != "msg-05" || selected[2].ID != "msg-07" {
-		t.Fatalf("selected suffix = %+v", selected)
+	if selected[0].ID != "user" || selected[1].ID != "tool-call-01" || selected[2].ID != "tool-result-01" {
+		t.Fatalf("selected messages = %+v", selected)
+	}
+}
+
+func runtimeSummaryToolExchange(index, size int) []llm.Message {
+	callID := fmt.Sprintf("call-%02d", index)
+	return []llm.Message{
+		{ID: fmt.Sprintf("tool-call-%02d", index), Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: callID, ToolName: "read", Input: map[string]any{"path": strings.Repeat("x", size)},
+		}}},
+		{ID: fmt.Sprintf("tool-result-%02d", index), Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{
+			Type: llm.BlockToolResult, ToolUseID: callID, Content: strings.Repeat("y", size),
+		}}},
 	}
 }

@@ -3467,11 +3467,24 @@ func TestCompactRefitsSummaryRequestForFallbackContextWindow(t *testing.T) {
 	}
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "preserve the original user request")); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 100; i++ {
-		message := llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%03d %s", i, strings.Repeat("x", 1000)))
-		if err := eng.Session.Append(message); err != nil {
+		callID := fmt.Sprintf("call-%03d", i)
+		if err := eng.Session.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: callID, ToolName: "read", Input: map[string]any{"path": strings.Repeat("x", 1000)},
+		}}}); err != nil {
 			t.Fatal(err)
 		}
+		if err := eng.Session.Append(llm.Message{Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{
+			Type: llm.BlockToolResult, ToolUseID: callID, Content: strings.Repeat("result ", 200),
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "preserve the follow-up user request")); err != nil {
+		t.Fatal(err)
 	}
 
 	var epochs []provenance.RequestEpoch
@@ -3485,6 +3498,15 @@ func TestCompactRefitsSummaryRequestForFallbackContextWindow(t *testing.T) {
 	}
 	if result.SummaryModel != "backup:model" || backup.inputTokens > backup.maxInputTokens {
 		t.Fatalf("result/input tokens = %+v/%d, want backup summary within %d", result, backup.inputTokens, backup.maxInputTokens)
+	}
+	backupBody := backup.history[0].FirstText()
+	for _, want := range []string{"preserve the original user request", "User input stored outside context.", "messages omitted"} {
+		if !strings.Contains(backupBody, want) {
+			t.Fatalf("fallback summary request missing %q:\n%s", want, backupBody)
+		}
+	}
+	if strings.Contains(backupBody, "call-000") {
+		t.Fatalf("fallback summary request kept the oldest tool exchange:\n%s", backupBody)
 	}
 	if len(epochs) != 2 || epochs[1].Provider.Model != "backup:model" || epochs[1].ContextWindow != 10000 {
 		t.Fatalf("epochs = %+v, want fallback context window 10000", epochs)
@@ -3506,14 +3528,8 @@ func TestCompactClampsSummaryOutputForFallbackContextWindow(t *testing.T) {
 		{Ref: "primary:model", Provider: primary, ContextWindow: 256000},
 		{Ref: "backup:model", Provider: backup, ContextWindow: 2000},
 	}
-	eng.Compaction = DefaultCompactionPolicy()
-	eng.Compaction.KeepRecentTokens = 1
+	configureCompactionRetryTest(t, eng, 20, 500)
 	eng.Compaction.SummaryMaxTokens = 2048
-	for i := 0; i < 20; i++ {
-		if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", 500)))); err != nil {
-			t.Fatal(err)
-		}
-	}
 	var epochs []provenance.RequestEpoch
 	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
 		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
@@ -4312,15 +4328,10 @@ func TestTurn_AutoCompactionBoundsOversizedSummaryRequest(t *testing.T) {
 	prov := &budgetedCompactionProvider{compactionLimit: 800}
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 1200
-	eng.Compaction = DefaultCompactionPolicy()
+	configureCompactionRetryTest(t, eng, 80, 2000)
 	eng.Compaction.ReserveTokens = 300
 	eng.Compaction.SummaryMaxTokens = 100
 	eng.Compaction.ToolResultMaxChars = 2000
-	for i := 0; i < 80; i++ {
-		if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", 2000)))); err != nil {
-			t.Fatal(err)
-		}
-	}
 
 	out, err := eng.Turn(context.Background(), "latest question")
 	if err != nil {
@@ -4335,8 +4346,11 @@ func TestTurn_AutoCompactionBoundsOversizedSummaryRequest(t *testing.T) {
 	if !strings.Contains(prov.compactionBody, "messages omitted") {
 		t.Fatalf("compaction body did not record omitted transcript:\n%s", prov.compactionBody)
 	}
-	if strings.Contains(prov.compactionBody, "message-00") {
-		t.Fatalf("oldest transcript should be omitted when over budget:\n%s", prov.compactionBody)
+	if strings.Contains(prov.compactionBody, "call-00") {
+		t.Fatalf("oldest tool exchange should be omitted when over budget:\n%s", prov.compactionBody)
+	}
+	if !strings.Contains(prov.compactionBody, "User input stored outside context.") {
+		t.Fatalf("user request reference should remain in the bounded summary:\n%s", prov.compactionBody)
 	}
 }
 
@@ -4398,6 +4412,7 @@ type limitedCompactionProvider struct {
 	name           string
 	maxInputTokens int
 	inputTokens    int
+	history        []llm.Message
 }
 
 func (p *limitedCompactionProvider) Name() string { return p.name }
@@ -4408,6 +4423,7 @@ func (p *limitedCompactionProvider) Complete(ctx context.Context, sys string, hi
 
 func (p *limitedCompactionProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (llm.Response, error) {
 	p.inputTokens = estimateContextTokens(sys, nil, history)
+	p.history = append([]llm.Message(nil), history...)
 	if p.inputTokens > p.maxInputTokens {
 		return llm.Response{}, fmt.Errorf("context_length_exceeded: compaction request has %d tokens", p.inputTokens)
 	}
@@ -4454,11 +4470,24 @@ func configureCompactionRetryTest(t *testing.T, eng *Engine, messageCount, messa
 	t.Helper()
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "preserve retry user request")); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < messageCount; i++ {
-		msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", messageChars)))
-		if err := eng.Session.Append(msg); err != nil {
+		callID := fmt.Sprintf("call-%02d", i)
+		if err := eng.Session.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: callID, ToolName: "read", Input: map[string]any{"path": strings.Repeat("x", messageChars)},
+		}}}); err != nil {
 			t.Fatal(err)
 		}
+		if err := eng.Session.Append(llm.Message{Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{
+			Type: llm.BlockToolResult, ToolUseID: callID, Content: strings.Repeat("y", messageChars),
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "completed tool exchanges")); err != nil {
+		t.Fatal(err)
 	}
 }
 

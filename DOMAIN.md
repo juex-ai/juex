@@ -261,17 +261,21 @@ domain boundary.
 1. Policy or an explicit request selects older provider-visible context while
    retaining recent direct, MCP, and Observable inputs by token budget plus any
    Tool Call/Tool Result suffix required for a valid in-progress execution.
-2. The summary request includes the current Goal and Notes as authoritative
+2. If that selection exceeds a summary candidate's context window, the
+   candidate-specific request may omit the oldest complete Tool Call/Tool Result
+   exchanges. It never omits user-authored messages or changes the durable
+   transcript.
+3. The summary request includes the current Goal and Notes as authoritative
    working state.
-3. A successful summary is appended as a compact message with selection and
+4. A successful summary is appended as a compact message with selection and
    usage metadata.
-4. Future Provider requests use the latest compact marker plus retained
+5. Future Provider requests use the latest compact marker plus retained
    messages; the persisted original transcript remains inspectable.
-5. Cancellation stops summary work before a compact marker is committed, so
+6. Cancellation stops summary work before a compact marker is committed, so
    future active context remains unchanged.
-6. Model-change and one-shot system notices remain in the durable transcript
+7. Model-change and one-shot system notices remain in the durable transcript
    but do not enter the new summary or retained input set.
-7. Every summary Provider attempt has its own `compaction` Request Epoch.
+8. Every summary Provider attempt has its own `compaction` Request Epoch.
    Transport retries remain linked to that epoch; a semantic retry or model
    fallback checkpoints a new epoch before the next Provider call.
 
