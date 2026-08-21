@@ -2948,6 +2948,18 @@ func mutuallyExclusiveTypeSwitchCases(application *App, value any) {
 		registry.Register(nil)
 	}
 }
+func mutuallyExclusiveSelectClauses(application *App, first, second <-chan struct{}) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	select {
+	case <-first:
+		resource = application.manager
+		registry = application.registry
+	case <-second:
+		_ = resource.Close()
+		registry.Register(nil)
+	}
+}
 func useMergedSwitchState(application *App, choice int) {
 	var resource closer = &unrelatedCloser{}
 	var registry registrar = &unrelatedRegistrar{}
@@ -4632,6 +4644,25 @@ func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, 
 	restore(merge(exits))
 }
 
+func inspectCompositionCommClauses(body *ast.BlockStmt, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) {
+	base := snapshot()
+	var exits []compositionFlowState
+	for _, raw := range body.List {
+		clause := raw.(*ast.CommClause)
+		restore(base)
+		if clause.Comm != nil {
+			ast.Inspect(clause.Comm, visit)
+		}
+		for _, statement := range clause.Body {
+			ast.Inspect(statement, visit)
+		}
+		if statementsFallThrough(clause.Body) {
+			exits = append(exits, snapshot())
+		}
+	}
+	restore(merge(exits))
+}
+
 func snapshotDelayedCompositionCall(call *ast.CallExpr, imports map[string]string, values map[string]string, types compositionTypeIndex) delayedCompositionCall {
 	delayed := delayedCompositionCall{
 		call:            call,
@@ -4744,6 +4775,9 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				ast.Inspect(value.Assign, visit)
 			}
 			inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge)
+			return false
+		case *ast.SelectStmt:
+			inspectCompositionCommClauses(value.Body, visit, snapshot, restore, merge)
 			return false
 		case *ast.AssignStmt:
 			for index, left := range value.Lhs {
@@ -4914,6 +4948,9 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				ast.Inspect(value.Assign, visit)
 			}
 			inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge)
+			return false
+		case *ast.SelectStmt:
+			inspectCompositionCommClauses(value.Body, visit, snapshot, restore, merge)
 			return false
 		case *ast.AssignStmt:
 			for index, left := range value.Lhs {
@@ -5677,6 +5714,9 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				}
 				inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge)
 				return false
+			case *ast.SelectStmt:
+				inspectCompositionCommClauses(value.Body, visit, snapshot, restore, merge)
+				return false
 			case *ast.ForStmt:
 				if value.Init != nil {
 					ast.Inspect(value.Init, visit)
@@ -6056,6 +6096,9 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					ast.Inspect(value.Assign, visit)
 				}
 				inspectCompositionCaseClauses(value.Body, false, false, visit, snapshot, restore, merge)
+				return false
+			case *ast.SelectStmt:
+				inspectCompositionCommClauses(value.Body, visit, snapshot, restore, merge)
 				return false
 			case *ast.ForStmt:
 				if value.Init != nil {
