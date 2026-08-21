@@ -42,6 +42,11 @@ var featureResourceCleanupMethods = map[string]map[string]bool{
 	modulePath + "/internal/tools.ShellSessionManager": {"Close": true},
 }
 
+var featureModuleCleanupMethods = map[string]bool{
+	"CloseRuntime":   true,
+	"QuiesceRuntime": true,
+}
+
 // These are the business-agnostic technical primitives identified as
 // Foundation by ARCHITECTURE.md. Keep the list explicit so moving a package
 // across the boundary requires an architectural review, not a glob change.
@@ -163,6 +168,27 @@ func (application *App) closeFeature() {
 	})
 	if len(calls) != 1 || calls[0] != "manager.Close" {
 		t.Fatalf("cleanup calls = %v, want type-derived manager.Close", calls)
+	}
+}
+
+func TestAppFeatureCleanupInspectionClassifiesConcreteModules(t *testing.T) {
+	source := `package app
+import "github.com/juex-ai/juex/internal/mcp"
+func closeFeature(module *mcp.Module) {
+	_ = module.QuiesceRuntime(nil)
+	_ = module.CloseRuntime(nil)
+}`
+	parsed, err := parser.ParseFile(token.NewFileSet(), "module.go", source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), nil, func(_ *ast.CallExpr, chain string) {
+		calls = append(calls, chain)
+	})
+	want := []string{"module.QuiesceRuntime", "module.CloseRuntime"}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] {
+		t.Fatalf("cleanup calls = %v, want %v", calls, want)
 	}
 }
 
@@ -291,7 +317,7 @@ func appFeatureResourceFields(appDir string) (map[string]map[string]bool, error)
 				}
 				foundApp = true
 				for _, field := range structure.Fields.List {
-					methods := featureResourceCleanupMethods[canonicalType(field.Type, imports)]
+					methods := featureCleanupMethods(canonicalType(field.Type, imports))
 					for _, name := range field.Names {
 						if methods != nil {
 							fields[name.Name] = methods
@@ -346,7 +372,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, resourc
 				}
 				for _, raw := range general.Specs {
 					spec := raw.(*ast.ValueSpec)
-					methods := featureResourceCleanupMethods[canonicalType(spec.Type, imports)]
+					methods := featureCleanupMethods(canonicalType(spec.Type, imports))
 					for index, name := range spec.Names {
 						if index < len(spec.Values) {
 							methods = resourceMethods(spec.Values[index], appValues, resources, resourceFields)
@@ -430,7 +456,7 @@ func namedFeatureResources(fields *ast.FieldList, imports map[string]string) map
 		return resources
 	}
 	for _, field := range fields.List {
-		methods := featureResourceCleanupMethods[canonicalType(field.Type, imports)]
+		methods := featureCleanupMethods(canonicalType(field.Type, imports))
 		if methods == nil {
 			continue
 		}
@@ -439,6 +465,17 @@ func namedFeatureResources(fields *ast.FieldList, imports map[string]string) map
 		}
 	}
 	return resources
+}
+
+func featureCleanupMethods(typeName string) map[string]bool {
+	if methods := featureResourceCleanupMethods[typeName]; methods != nil {
+		return methods
+	}
+	const moduleType = ".Module"
+	if strings.HasSuffix(typeName, moduleType) && isConcreteFeatureImport(strings.TrimSuffix(typeName, moduleType)) {
+		return featureModuleCleanupMethods
+	}
+	return nil
 }
 
 func resourceMethods(expression ast.Expr, appValues map[string]bool, resources, resourceFields map[string]map[string]bool) map[string]bool {
