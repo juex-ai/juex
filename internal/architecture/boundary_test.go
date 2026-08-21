@@ -3575,6 +3575,74 @@ func useAfterShadowedPanic(application *App, owned bool) {
 	}
 }
 
+func TestAppCompositionInspectionValidatesBooleanConstants(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+func useShadowedBoolean(application *App, condition bool) {
+	true := condition
+	if true {
+	} else {
+		_ = application.manager.Close()
+		application.registry.Register(nil)
+	}
+}
+func useDivergentIIFE(application *App, condition bool) {
+	if func() bool {
+		if condition { return false }
+		return true
+	}() {
+	} else {
+		_ = application.manager.Close()
+		application.registry.Register(nil)
+	}
+}
+func ignoreUniformIIFEElse(application *App, condition bool) {
+	if func() bool {
+		if condition { return true }
+		return true
+	}() {
+	} else {
+		_ = application.manager.Close()
+		application.registry.Register(nil)
+	}
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "boolean_constants.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if len(cleanupCalls) != 2 {
+		t.Fatalf("cleanup calls = %v, want shadowed boolean and divergent-IIFE cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if len(registrationCalls) != 2 {
+		t.Fatalf("Tool registration calls = %v, want shadowed boolean and divergent-IIFE registration", registrationCalls)
+	}
+}
+
 func TestAppCompositionInspectionEvaluatesSelectOperandsOnce(t *testing.T) {
 	source := `package app
 import (
@@ -5633,6 +5701,9 @@ func inspectCompositionCondition(expression ast.Expr, visit func(ast.Node) bool,
 func constantBooleanExpression(expression ast.Expr) (bool, bool) {
 	switch value := expression.(type) {
 	case *ast.Ident:
+		if value.Obj != nil && value.Obj.Decl != nil {
+			return false, false
+		}
 		switch value.Name {
 		case "true":
 			return true, true
@@ -5667,13 +5738,39 @@ func constantBooleanExpression(expression ast.Expr) (bool, bool) {
 		}
 	case *ast.CallExpr:
 		literal := functionLiteralExpression(value.Fun)
-		if literal != nil && len(literal.Body.List) != 0 {
-			if result, ok := literal.Body.List[len(literal.Body.List)-1].(*ast.ReturnStmt); ok && len(result.Results) == 1 {
-				return constantBooleanExpression(result.Results[0])
-			}
+		if literal != nil {
+			return constantBooleanFunctionLiteral(literal)
 		}
 	}
 	return false, false
+}
+
+func constantBooleanFunctionLiteral(literal *ast.FuncLit) (bool, bool) {
+	result := false
+	seen := false
+	constant := true
+	ast.Inspect(literal.Body, func(node ast.Node) bool {
+		if _, nested := node.(*ast.FuncLit); nested {
+			return false
+		}
+		statement, ok := node.(*ast.ReturnStmt)
+		if !ok {
+			return constant
+		}
+		if len(statement.Results) != 1 {
+			constant = false
+			return false
+		}
+		value, ok := constantBooleanExpression(statement.Results[0])
+		if !ok || seen && value != result {
+			constant = false
+			return false
+		}
+		result = value
+		seen = true
+		return false
+	})
+	return result, seen && constant
 }
 
 func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, correlateCaseConditions, matchingBoolean, allowFallthrough bool, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState, enterClause func(*ast.CaseClause)) {
