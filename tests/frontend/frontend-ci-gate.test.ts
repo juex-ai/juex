@@ -42,6 +42,6 @@ test("frontend tool versions and contributor guidance stay explicit", () => {
   assert.equal(packageJSON.packageManager, "pnpm@11.6.0");
   assert.match(
     agentsSource,
-    /Web work: run `make web-check`; build the frontend and verify the UI in a browser when behavior is visible\./,
+    /Web work: use `WEB=1` on the candidate\/final tier and verify the UI in a browser when behavior is visible\./,
   );
 });
