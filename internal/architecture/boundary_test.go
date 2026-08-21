@@ -406,6 +406,8 @@ func cleanupFromInterfaceCollection(application *App) {
 	for _, resource := range resources {
 		_ = resource.Close()
 	}
+	window := resources[:]
+	_ = window[0].Close()
 }
 func cleanupFromAppend(application *App) {
 	var resources []closer
@@ -515,7 +517,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "callbacks.cleanup", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
+	want := []string{"identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "callbacks.cleanup", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -654,6 +656,8 @@ func registerFromInterfaceCollection(application *App) {
 	for _, registry := range registries {
 		registry.Register(nil)
 	}
+	window := registries[:]
+	window[0].Register(nil)
 }
 func registerFromAppend(application *App) {
 	var registries []registrar
@@ -782,7 +786,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "registry.Register", "registries.Register", "registry.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "application.registry.Register", "func", "withRegistrar", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -1795,6 +1799,8 @@ func originsForExpression(expression ast.Expr, origins map[string]map[int]bool) 
 		return originsForExpression(value.X, origins)
 	case *ast.IndexExpr:
 		return originsForExpression(value.X, origins)
+	case *ast.SliceExpr:
+		return originsForExpression(value.X, origins)
 	case *ast.UnaryExpr:
 		return originsForExpression(value.X, origins)
 	case *ast.StarExpr:
@@ -1877,6 +1883,8 @@ func resultParameterPaths(expression ast.Expr, imports map[string]string, values
 	case *ast.SelectorExpr:
 		mergeResultParameterPaths(result, resultParameterPaths(value.X, imports, values, origins, types, 0), "")
 	case *ast.IndexExpr:
+		mergeResultParameterPaths(result, resultParameterPaths(value.X, imports, values, origins, types, 0), "")
+	case *ast.SliceExpr:
 		mergeResultParameterPaths(result, resultParameterPaths(value.X, imports, values, origins, types, 0), "")
 	case *ast.UnaryExpr:
 		mergeResultParameterPaths(result, resultParameterPaths(value.X, imports, values, origins, types, 0), "")
@@ -2677,6 +2685,8 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 			}
 		}
 		return cleanupPathsForExpression(value.X, imports, values, resources, types)
+	case *ast.SliceExpr:
+		return cleanupPathsForExpression(value.X, imports, values, resources, types)
 	case *ast.TypeAssertExpr:
 		return cleanupPathsForExpression(value.X, imports, values, resources, types)
 	case *ast.CallExpr:
@@ -2969,6 +2979,8 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 	case *ast.IndexExpr:
 		_, valueType, _ := rangeTypes(expressionType(value.X, imports, values, types), types)
 		return valueType
+	case *ast.SliceExpr:
+		return expressionType(value.X, imports, values, types)
 	case *ast.TypeAssertExpr:
 		return canonicalType(value.Type, imports)
 	case *ast.CallExpr:
