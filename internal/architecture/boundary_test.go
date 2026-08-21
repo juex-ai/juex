@@ -1640,6 +1640,88 @@ func arraysDoNotAlias(application *App, unrelated closer, unrelatedRegistry regi
 	}
 }
 
+func TestAppCompositionInspectionPreservesOwnerCleanupBoundary(t *testing.T) {
+	source := `package app
+import (
+	"context"
+	"errors"
+
+	"github.com/juex-ai/juex/internal/mcp"
+)
+type App struct{}
+type sideSessionManager struct{}
+func (m *sideSessionManager) StartClose() error { return nil }
+func (m *sideSessionManager) WaitClose() error { return nil }
+func (m *sideSessionManager) Close() error { return errors.Join(m.StartClose(), m.WaitClose()) }
+func (m *sideSessionManager) reset(foreign *mcp.Manager) { _ = foreign.Close() }
+type sideSessionModule struct { manager *sideSessionManager }
+func (m *sideSessionModule) CloseRuntime(context.Context) error { return m.manager.WaitClose() }
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "owner_cleanup.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if got := strings.Join(cleanupCalls, ","); got != "foreign.Close" {
+		t.Fatalf("cleanup calls = %v, want only foreign Feature cleanup", cleanupCalls)
+	}
+}
+
+func TestAppCompositionInspectionTracksMapsClone(t *testing.T) {
+	source := `package app
+import (
+	"maps"
+
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct { registry *tools.Registry }
+type registrar interface { Register(tools.Tool) error }
+func registerFromClonedValues(application *App) {
+	registries := maps.Clone(map[string]registrar{"main": application.registry})
+	registries["main"].Register(nil)
+}
+func registerFromClonedKeys(application *App) {
+	registries := maps.Clone(map[registrar]struct{}{application.registry: {}})
+	for registry := range registries {
+		registry.Register(nil)
+	}
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "map_clone.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	registration := "," + strings.Join(registrationCalls, ",") + ","
+	if !strings.Contains(registration, ",registries.Register,") || !strings.Contains(registration, ",registry.Register,") {
+		t.Fatalf("Tool registration calls = %v, want maps.Clone value and key registration", registrationCalls)
+	}
+}
+
 func TestSliceCollectionSourceArguments(t *testing.T) {
 	tests := []struct {
 		expression string
@@ -3597,9 +3679,6 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 		if !ok || function.Body == nil {
 			continue
 		}
-		if ownsFeatureCleanup(function.Recv, imports) {
-			continue
-		}
 		functionKey := declaredFunctionKey(function, imports, modulePath+"/internal/app")
 		values, resources := packageBindingState(file, imports, types)
 		for name, typeName := range namedValueTypes(function.Recv, imports) {
@@ -3619,6 +3698,11 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			references[key] = true
 		}
 		aliases := make(map[string]map[string]bool)
+		reportCleanup := func(call *ast.CallExpr, chain string) {
+			if !isReceiverOwnedFeatureCleanup(function, call, imports, values, types) {
+				report(call, chain)
+			}
+		}
 		ast.Inspect(function.Body, func(node ast.Node) bool {
 			switch value := node.(type) {
 			case *ast.AssignStmt:
@@ -3732,7 +3816,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					callbackReported := false
 					for index, argument := range value.Args {
 						if !callbacks[index] && cleanupPathsForExpression(argument, imports, values, resources, types) != nil {
-							report(value, selectorChain(value.Fun))
+							reportCleanup(value, selectorChain(value.Fun))
 							callbackReported = true
 							break
 						}
@@ -3770,7 +3854,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				for index := range cleanupParams {
 					for _, argument := range callArgumentsForParameterAt(value, index, variadicIndex, variadic, imports) {
 						if cleanupPathsForExpression(argument, imports, values, resources, types) != nil {
-							report(value, selectorChain(value.Fun))
+							reportCleanup(value, selectorChain(value.Fun))
 							reported = true
 							break
 						}
@@ -3785,7 +3869,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				selector, selectorCall := value.Fun.(*ast.SelectorExpr)
 				methodExpression := selectorCall && isFeatureCleanupMethodExpression(selector, imports, types)
 				if !methodExpression && cleanupPathsForExpression(value.Fun, imports, values, resources, types)[callableCleanupPath] {
-					report(value, selectorChain(value.Fun))
+					reportCleanup(value, selectorChain(value.Fun))
 					break
 				}
 				if !selectorCall {
@@ -3793,13 +3877,13 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				}
 				if methodExpression && len(value.Args) != 0 {
 					if cleanupPathsForExpression(value.Args[0], imports, values, resources, types) != nil {
-						report(value, selectorChain(selector))
+						reportCleanup(value, selectorChain(selector))
 					}
 					break
 				}
 				paths := cleanupPathsForExpression(selector.X, imports, values, resources, types)
 				if paths[selector.Sel.Name] {
-					report(value, selectorChain(selector))
+					reportCleanup(value, selectorChain(selector))
 				}
 			}
 			return true
@@ -3807,13 +3891,40 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 	}
 }
 
-func ownsFeatureCleanup(receiver *ast.FieldList, imports map[string]string) bool {
-	for _, typeName := range namedValueTypes(receiver, imports) {
-		if appFeatureCleanupOwners[typeName] {
-			return true
+func isReceiverOwnedFeatureCleanup(function *ast.FuncDecl, call *ast.CallExpr, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	target := selector.X
+	if isTypeExpression(selector.X, imports) {
+		if len(call.Args) == 0 {
+			return false
+		}
+		target = call.Args[0]
+	}
+	root, _ := assignmentBinding(target)
+	if root == nil {
+		return false
+	}
+	receiverValues := cloneStringMap(values)
+	receiverRoot := false
+	if function.Recv != nil {
+		for _, field := range function.Recv.List {
+			typeName := canonicalType(field.Type, imports)
+			for _, name := range field.Names {
+				receiverValues[bindingKey(name)] = typeName
+				if root.Name == name.Name && appFeatureCleanupOwners[typeName] {
+					receiverRoot = true
+				}
+			}
 		}
 	}
-	return false
+	if !receiverRoot {
+		return false
+	}
+	targetType := resolveNamedType(expressionType(target, imports, receiverValues, types), types)
+	return appFeatureCleanupOwners[targetType] && featureCleanupMethods(targetType, types)[selector.Sel.Name]
 }
 
 func inspectAppToolRegistration(file *ast.File, imports map[string]string, types compositionTypeIndex, report func(*ast.CallExpr, string)) {
@@ -4502,6 +4613,22 @@ func isMapsInsert(call *ast.CallExpr, imports map[string]string) bool {
 	}
 	qualifier, ok := selector.X.(*ast.Ident)
 	return ok && imports[qualifier.Name] == "maps"
+}
+
+func mapsCloneSource(expression ast.Expr, imports map[string]string) (ast.Expr, bool) {
+	call, ok := expression.(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return nil, false
+	}
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "Clone" {
+		return nil, false
+	}
+	qualifier, ok := selector.X.(*ast.Ident)
+	if !ok || imports[qualifier.Name] != "maps" {
+		return nil, false
+	}
+	return call.Args[0], true
 }
 
 func isCollectionWrite(call *ast.CallExpr, imports map[string]string) bool {
@@ -5452,6 +5579,9 @@ func isToolRegistryCollectionExpression(expression ast.Expr, imports map[string]
 	if call, ok := expression.(*ast.CallExpr); ok && valueIteratorArity(call, imports) != 0 {
 		return isToolRegistryCollectionExpression(call.Args[0], imports, values, types)
 	}
+	if source, ok := mapsCloneSource(expression, imports); ok {
+		return isToolRegistryCollectionExpression(source, imports, values, types)
+	}
 	if call, ok := expression.(*ast.CallExpr); ok {
 		for _, argument := range sliceCollectionSourceArguments(call, imports) {
 			if isToolRegistryCollectionExpression(argument, imports, values, types) || isToolRegistryExpression(argument, imports, values, types) {
@@ -5489,6 +5619,9 @@ func isToolRegistryMapKeyCollectionExpression(expression ast.Expr, imports map[s
 	}
 	if isMapsAllIterator(expression, imports) {
 		return isToolRegistryMapKeyCollectionExpression(expression.(*ast.CallExpr).Args[0], imports, values, types)
+	}
+	if source, ok := mapsCloneSource(expression, imports); ok {
+		return isToolRegistryMapKeyCollectionExpression(source, imports, values, types)
 	}
 	if parenthesized, ok := expression.(*ast.ParenExpr); ok {
 		return isToolRegistryMapKeyCollectionExpression(parenthesized.X, imports, values, types)
