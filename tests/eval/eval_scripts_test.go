@@ -1638,6 +1638,48 @@ func TestEvalProviderRetryBudgetExcludesContractFailures(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
+func TestEvalCompactionPropagatesTransientTurnOutcome(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import tempfile",
+		"from argparse import Namespace",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import compaction, outcomes",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    root = Path(tmp)",
+		"    out = root / 'reports'",
+		"    args = Namespace(config=str(root / 'config.yaml'), keep_workdir=True, context_window=32000, turn_timeout=1, juex='/bin/true')",
+		"    original_write = compaction.helper.write_selected_config",
+		"    original_turn = compaction.run_eval_turn",
+		"    try:",
+		"        compaction.helper.write_selected_config = lambda *args, **kwargs: None",
+		"        def timed_out(args, work, prompt, output):",
+		"            output.write_text('', encoding='utf-8')",
+		"            return 124",
+		"        compaction.run_eval_turn = timed_out",
+		"        status = compaction.run_model(args, {}, 'provider:model', out, [])",
+		"        assert status == 1",
+		"        result = compaction.load_model_outcome(out / compaction.helper.safe_ref('provider:model'), status)",
+		"        assert result.outcome == 'transient_failure' and result.retryable is True and result.matched_rule == 'transient-provider-timeout', result",
+		"        aggregate = compaction.aggregate_compaction_outcome([{'provider_model': 'provider:model', 'status': 'fail', **result.as_dict()}])",
+		"        propagated = outcomes.classify_failure(outcomes.marker(aggregate), deterministic=False, exit_status=1)",
+		"        assert propagated == aggregate and propagated.retryable is True, (propagated, aggregate)",
+		"        product = compaction.aggregate_compaction_outcome([{'provider_model': 'provider:model', 'status': 'fail', **outcomes.ValidationOutcome('product_failure', 'score contract failed', 'compaction-quality-contract', True, 'fix_code').as_dict()}])",
+		"        assert product.outcome == 'product_failure' and product.retryable is False",
+		"    finally:",
+		"        compaction.helper.write_selected_config = original_write",
+		"        compaction.run_eval_turn = original_turn",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func TestEvalOutcomeSummaryDistinguishesCodeEnvironmentAndStopActions(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")

@@ -12,7 +12,7 @@ import time
 
 import yaml
 
-from . import helper, selection
+from . import helper, outcomes, selection
 
 
 DEFAULT_COMPACTION = {
@@ -118,9 +118,20 @@ def run(args: argparse.Namespace) -> int:
             command_prefix=command_prefix,
         )
     except selection.ProviderUnavailable as exc:
-        write_compaction_summary(summary_json, summary_md, args, exc.evidence, [], exc.failure_category, str(exc))
+        unavailable = provider_unavailable_outcome(str(exc))
+        write_compaction_summary(
+            summary_json,
+            summary_md,
+            args,
+            exc.evidence,
+            [],
+            exc.failure_category,
+            str(exc),
+            unavailable,
+        )
         print(f"{selection.PROVIDER_UNAVAILABLE}: {exc}", file=sys.stderr)
         helper.print_selection_evidence(exc.evidence)
+        print(outcomes.marker(unavailable))
         return 1
     except (OSError, ValueError, yaml.YAMLError) as exc:
         error = helper.safe_config_error(exc)
@@ -131,27 +142,47 @@ def run(args: argparse.Namespace) -> int:
             only=explicit_models,
             all_models=args.all_models,
         )
-        write_compaction_summary(summary_json, summary_md, args, evidence, [], selection.PROVIDER_UNAVAILABLE, error)
+        unavailable = provider_unavailable_outcome(error)
+        write_compaction_summary(
+            summary_json,
+            summary_md,
+            args,
+            evidence,
+            [],
+            selection.PROVIDER_UNAVAILABLE,
+            error,
+            unavailable,
+        )
         print(f"{selection.PROVIDER_UNAVAILABLE}: {error}", file=sys.stderr)
         helper.print_selection_evidence(evidence)
+        print(outcomes.marker(unavailable))
         return 1
 
     helper.print_selection_evidence(evidence)
     temp_dirs: list[pathlib.Path] = []
     failed = 0
-    results: list[dict[str, str]] = []
+    results: list[dict[str, object]] = []
     try:
         for candidate in candidates:
             status = run_model(args, cfg, candidate.ref, out_root, temp_dirs)
             failed += status
-            results.append({"provider_model": candidate.ref, "status": "fail" if status else "pass"})
+            result = load_model_outcome(out_root / helper.safe_ref(candidate.ref), status)
+            results.append(
+                {
+                    "provider_model": candidate.ref,
+                    "status": "fail" if status else "pass",
+                    **result.as_dict(),
+                }
+            )
     finally:
         if not args.keep_workdir:
             for temp_dir in temp_dirs:
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
-    write_compaction_summary(summary_json, summary_md, args, evidence, results, "", "")
+    validation_outcome = aggregate_compaction_outcome(results)
+    write_compaction_summary(summary_json, summary_md, args, evidence, results, "", "", validation_outcome)
     print(f"Reports written to {out_root}")
+    print(outcomes.marker(validation_outcome))
     return 1 if failed else 0
 
 
@@ -160,10 +191,12 @@ def write_compaction_summary(
     summary_md: pathlib.Path,
     args: argparse.Namespace,
     evidence: selection.SelectionEvidence,
-    results: list[dict[str, str]],
+    results: list[dict[str, object]],
     failure_category: str,
     error: str,
+    validation_outcome: outcomes.ValidationOutcome | None = None,
 ) -> None:
+    validation_outcome = validation_outcome or aggregate_compaction_outcome(results)
     summary: dict[str, object] = {
         "run_id": args.run_id,
         "failure_category": failure_category or None,
@@ -174,6 +207,7 @@ def write_compaction_summary(
         "passed": sum(1 for result in results if result["status"] == "pass"),
         "failed": sum(1 for result in results if result["status"] != "pass"),
         "results": results,
+        **validation_outcome.as_dict(),
     }
     summary.update(evidence.as_dict())
     summary_json.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -193,6 +227,11 @@ def write_compaction_summary(
         f"- Context window: {args.context_window}",
         f"- Failure category: `{failure_category}`",
         f"- Error: {error}",
+        f"- Outcome: `{validation_outcome.outcome}`",
+        f"- Reason: {validation_outcome.reason}",
+        f"- Matched rule: `{validation_outcome.matched_rule}`",
+        f"- Blocks merge: {str(validation_outcome.blocks_merge).lower()}",
+        f"- Recommended action: `{validation_outcome.recommended_action}`",
         f"- Total: {len(results)}",
         f"- Passed: {summary['passed']}",
         f"- Failed: {summary['failed']}",
@@ -202,6 +241,71 @@ def write_compaction_summary(
         for result in results:
             lines.append(f"| `{result['provider_model']}` | {result['status']} |")
     summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def provider_unavailable_outcome(reason: str) -> outcomes.ValidationOutcome:
+    return outcomes.ValidationOutcome(
+        outcomes.PROVIDER_UNAVAILABLE,
+        reason or "no eligible provider/model is available",
+        "provider-selection-unavailable",
+        True,
+        "stop",
+    )
+
+
+def aggregate_compaction_outcome(results: list[dict[str, object]]) -> outcomes.ValidationOutcome:
+    failed = [result for result in results if result.get("status") != "pass"]
+    if not failed:
+        return outcomes.success(attempt_count=1)
+    priority = {
+        outcomes.PRODUCT_FAILURE: 0,
+        outcomes.ENVIRONMENT_FAILURE: 1,
+        outcomes.PROVIDER_UNAVAILABLE: 2,
+        outcomes.TRANSIENT_FAILURE: 3,
+    }
+    selected = min(failed, key=lambda result: priority.get(str(result.get("outcome")), 99))
+    return outcomes.ValidationOutcome(
+        str(selected.get("outcome") or outcomes.PRODUCT_FAILURE),
+        str(selected.get("reason") or "compaction evaluation failed"),
+        str(selected.get("matched_rule") or "compaction-product-failure"),
+        True,
+        str(selected.get("recommended_action") or "fix_code"),
+        bool(selected.get("retryable")),
+    )
+
+
+def load_model_outcome(out_dir: pathlib.Path, status: int) -> outcomes.ValidationOutcome:
+    path = out_dir / "outcome.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        outcome = str(value.get("outcome"))
+        if outcome not in outcomes.OUTCOME_VALUES:
+            raise ValueError("invalid outcome")
+        return outcomes.ValidationOutcome(
+            outcome,
+            str(value.get("reason") or "compaction evaluation result"),
+            str(value.get("matched_rule") or "compaction-result"),
+            bool(value.get("blocks_merge")),
+            str(value.get("recommended_action") or ("continue" if status == 0 else "fix_code")),
+            bool(value.get("retryable")),
+        )
+    except (OSError, ValueError, json.JSONDecodeError):
+        if status == 0:
+            return outcomes.success(attempt_count=1)
+        return outcomes.ValidationOutcome(
+            outcomes.PRODUCT_FAILURE,
+            "compaction evaluation failed without a structured model outcome",
+            "compaction-unstructured-failure",
+            True,
+            "fix_code",
+        )
+
+
+def write_model_outcome(out_dir: pathlib.Path, result: outcomes.ValidationOutcome) -> None:
+    (out_dir / "outcome.json").write_text(
+        json.dumps(result.as_dict(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def parse_model_ref(model: str) -> tuple[str, str, str]:
@@ -240,6 +344,16 @@ def run_model(args: argparse.Namespace, cfg: dict, model: str, out_root: pathlib
         err = out_dir / "config-error.txt"
         err.write_text(str(exc), encoding="utf-8")
         write_failure_scorecard(model, work, out_dir, "config", "no", "not captured", err, args.keep_workdir, args.context_window, args.turn_timeout)
+        write_model_outcome(
+            out_dir,
+            outcomes.ValidationOutcome(
+                outcomes.ENVIRONMENT_FAILURE,
+                "compaction provider configuration could not be prepared",
+                "environment-compaction-config",
+                True,
+                "fix_environment",
+            ),
+        )
         print(f"FAIL {model}: provider:model not found in {args.config}", file=sys.stderr)
         return 1
 
@@ -253,6 +367,12 @@ def run_model(args: argparse.Namespace, cfg: dict, model: str, out_root: pathlib
             cache_ratio = cache_ratio_from_work(work)
             copy_runtime_artifacts(work, out_dir)
             write_failure_scorecard(model, work, out_dir, turn, compacted, cache_ratio, output, args.keep_workdir, args.context_window, args.turn_timeout)
+            failure = outcomes.classify_failure(
+                output.read_text(encoding="utf-8", errors="replace"),
+                deterministic=False,
+                exit_status=status,
+            )
+            write_model_outcome(out_dir, failure)
             print(f"FAIL {model}: {turn} failed", file=sys.stderr)
             return 1
 
@@ -266,6 +386,16 @@ def run_model(args: argparse.Namespace, cfg: dict, model: str, out_root: pathlib
                 cache_ratio = cache_ratio_from_work(work)
                 copy_runtime_artifacts(work, out_dir)
                 write_failure_scorecard(model, work, out_dir, "state-seed", compacted, cache_ratio, error, args.keep_workdir, args.context_window, args.turn_timeout)
+                write_model_outcome(
+                    out_dir,
+                    outcomes.ValidationOutcome(
+                        outcomes.ENVIRONMENT_FAILURE,
+                        "compaction authoritative state could not be prepared",
+                        "environment-compaction-state",
+                        True,
+                        "fix_environment",
+                    ),
+                )
                 print(f"FAIL {model}: unable to seed authoritative state", file=sys.stderr)
                 return 1
 
@@ -288,6 +418,19 @@ def run_model(args: argparse.Namespace, cfg: dict, model: str, out_root: pathlib
     if failed_state_checks:
         print(f"FAIL {model}: authoritative state checks failed: {', '.join(failed_state_checks)}", file=sys.stderr)
         failed = 1
+    if failed:
+        write_model_outcome(
+            out_dir,
+            outcomes.ValidationOutcome(
+                outcomes.PRODUCT_FAILURE,
+                "compaction quality or authoritative-state contract failed",
+                "compaction-quality-contract",
+                True,
+                "fix_code",
+            ),
+        )
+    else:
+        write_model_outcome(out_dir, outcomes.success(attempt_count=1))
     print(f"==> {model} score {score}/82, compacted={compacted}")
     return failed
 
@@ -494,7 +637,10 @@ def summary_section(summary: str, heading: str, next_heading: str) -> str:
 
 
 def session_files(work: pathlib.Path, name: str) -> list[pathlib.Path]:
-    sessions = session_root(work)
+    try:
+        sessions = session_root(work)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return []
     return sorted(sessions.rglob(name)) if sessions.is_dir() else []
 
 
