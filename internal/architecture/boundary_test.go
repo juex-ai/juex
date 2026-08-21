@@ -323,7 +323,9 @@ func TestAppFeatureCleanupInspectionTracksRangeValues(t *testing.T) {
 	source := `package app
 import "github.com/juex-ai/juex/internal/mcp"
 type App struct{}
-func closeMany(clients []*mcp.Client, indexed map[*mcp.Client]struct{}) {
+func closeMany(clients []*mcp.Client, indexed map[*mcp.Client]struct{}, byName map[string]*mcp.Client) {
+	_ = clients[0].Close()
+	_ = byName["primary"].Close()
 	for _, client := range clients { _ = client.Close() }
 	for client := range indexed { _ = client.Close() }
 }`
@@ -344,8 +346,8 @@ func closeMany(clients []*mcp.Client, indexed map[*mcp.Client]struct{}) {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"client.Close", "client.Close"}
-	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] {
+	want := []string{"Close", "Close", "client.Close", "client.Close"}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] {
 		t.Fatalf("cleanup calls = %v, want %v", calls, want)
 	}
 }
@@ -391,6 +393,8 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	constructed := tools.NewRegistryWithOptions(tools.RegistryOptions{})
 	constructed.MustRegister(nil)
 	application.registry.Register(nil)
+	registries := []*tools.Registry{registry}
+	registries[0].Register(nil)
 	registerTransitively(registry)
 	runRegistration(registry.Register)
 }`
@@ -411,8 +415,8 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"registry.Register", "tools.RegisterBuiltins", "constructed.MustRegister", "application.registry.Register", "registerTransitively", "runRegistration"}
-	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] {
+	want := []string{"registry.Register", "tools.RegisterBuiltins", "constructed.MustRegister", "application.registry.Register", "Register", "registerTransitively", "runRegistration"}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] || calls[2] != want[2] || calls[3] != want[3] || calls[4] != want[4] || calls[5] != want[5] || calls[6] != want[6] {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
 }
@@ -1245,6 +1249,11 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 		if len(trimmed) != 0 {
 			return trimmed
 		}
+	case *ast.IndexExpr:
+		if _, valueType, ok := rangeTypes(expressionType(value.X, imports, values, types)); ok {
+			return cleanupPathsForType(valueType, types, nil)
+		}
+		return cleanupPathsForExpression(value.X, imports, values, resources, types)
 	case *ast.CallExpr:
 		if results := expressionResultTypes(value, imports, values, types); len(results) != 0 {
 			return cleanupPathsForType(results[0], types, nil)
@@ -1364,6 +1373,9 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 	case *ast.SelectorExpr:
 		receiverType := expressionType(value.X, imports, values, types)
 		return compositionFieldType(receiverType, value.Sel.Name, types, nil)
+	case *ast.IndexExpr:
+		_, valueType, _ := rangeTypes(expressionType(value.X, imports, values, types))
+		return valueType
 	case *ast.CallExpr:
 		selector, ok := value.Fun.(*ast.SelectorExpr)
 		if !ok {
