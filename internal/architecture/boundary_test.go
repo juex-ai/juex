@@ -349,6 +349,7 @@ type App struct {
 }
 type closer interface { Close() error }
 type cleanupFunc func() error
+type cleanupCallbacks struct{ cleanup cleanupFunc }
 type ownedHolder struct{ resource closer }
 type nestedOwnedHolder struct{ owned ownedHolder }
 type genericResources[T any] []T
@@ -448,6 +449,11 @@ func cleanupFromChannel(application *App) {
 	resources <- application.manager
 	_ = (<-resources).Close()
 }
+func cleanupFromCallbackField(application *App) {
+	callbacks := cleanupCallbacks{}
+	callbacks.cleanup = application.manager.Close
+	_ = callbacks.cleanup()
+}
 func cleanupFromGenericCollection(application *App) {
 	resources := genericResources[*mcp.Manager]{application.manager}
 	_ = resources[0].Close()
@@ -509,7 +515,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
+	want := []string{"identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "callbacks.cleanup", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -2167,15 +2173,19 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 						break
 					}
 				}
-				_, selectorCall := value.Fun.(*ast.SelectorExpr)
-				if !selectorCall && cleanupPathsForExpression(value.Fun, imports, values, resources, types)[callableCleanupPath] {
-					report(value, selectorChain(value.Fun))
-				}
-				selector, ok := value.Fun.(*ast.SelectorExpr)
-				if !ok {
+				if reported {
 					break
 				}
-				if isFeatureCleanupMethodExpression(selector, imports, types) && len(value.Args) != 0 {
+				selector, selectorCall := value.Fun.(*ast.SelectorExpr)
+				methodExpression := selectorCall && isFeatureCleanupMethodExpression(selector, imports, types)
+				if !methodExpression && cleanupPathsForExpression(value.Fun, imports, values, resources, types)[callableCleanupPath] {
+					report(value, selectorChain(value.Fun))
+					break
+				}
+				if !selectorCall {
+					break
+				}
+				if methodExpression && len(value.Args) != 0 {
 					if cleanupPathsForExpression(value.Args[0], imports, values, resources, types) != nil {
 						report(value, selectorChain(selector))
 					}
