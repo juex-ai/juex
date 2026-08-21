@@ -20,6 +20,8 @@ const callableCleanupPath = "$call"
 const toolRegistrationCallableType = "$tool-registration-callable"
 const toolRegistryCollectionType = "$tool-registry-collection"
 const localFunctionTypePrefix = "$local-function:"
+const genericTypePrefix = "$generic:"
+const genericTypeSeparator = "\x01"
 
 const (
 	sliceTypePrefix = "$slice:"
@@ -71,6 +73,7 @@ type compositionTypeIndex struct {
 	cleanupMethods  map[string]map[string]bool
 	functionResults map[string][]string
 	namedTypes      map[string]string
+	typeParameters  map[string][]string
 	cleanupParams   map[string]map[int]bool
 	toolParams      map[string]map[int]bool
 	cleanupResults  map[string]map[int]map[string]bool
@@ -139,6 +142,7 @@ var foundationDirs = []string{
 	"internal/statusstream",
 	"internal/toolevents",
 	"internal/tools",
+	"internal/version",
 }
 
 func TestFoundationDoesNotImportFrameworkOrConcreteFeatures(t *testing.T) {
@@ -331,10 +335,14 @@ func closeFeature() {
 func TestAppFeatureCleanupInspectionTracksLocalHelpers(t *testing.T) {
 	source := `package app
 import "github.com/juex-ai/juex/internal/mcp"
-type App struct { manager *mcp.Manager }
+type App struct {
+	manager *mcp.Manager
+	resources genericResources[*mcp.Manager]
+}
 type closer interface { Close() error }
 type cleanupFunc func() error
 type ownedHolder struct{ resource closer }
+type genericResources[T any] []T
 func closeOwned(resource closer) { _ = resource.Close() }
 func closeTransitively(resource closer) { closeOwned(resource) }
 func runCleanup(cleanup cleanupFunc) { _ = cleanup() }
@@ -383,6 +391,13 @@ func cleanupFromAssignedHolder(application *App) {
 	owned.resource = application.manager
 	_ = owned.resource.Close()
 }
+func cleanupFromGenericCollection(application *App) {
+	resources := genericResources[*mcp.Manager]{application.manager}
+	_ = resources[0].Close()
+}
+func cleanupFromGenericField(application *App) {
+	_ = application.resources[0].Close()
+}
 func cleanupFromIndexedAssignment(application *App) {
 	resources := map[string]closer{}
 	resources["mcp"] = application.manager
@@ -428,7 +443,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityOwned.Close", "cleanupGeneric", "cleanup", "cleanup", "application.manager.Close", "func", "resource.Close", "resources.Close", "resource.Close", "owned.resource.Close", "owned.resource.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
+	want := []string{"identityOwned.Close", "cleanupGeneric", "cleanup", "cleanup", "application.manager.Close", "func", "resource.Close", "resources.Close", "resource.Close", "owned.resource.Close", "owned.resource.Close", "resources.Close", "application.resources.Close", "resources.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -509,11 +524,15 @@ func TestToolRegistrationNameClassificationIncludesBulkHelpers(t *testing.T) {
 func TestAppToolRegistrationInspectionUsesRegistryTypes(t *testing.T) {
 	source := `package app
 import "github.com/juex-ai/juex/internal/tools"
-type App struct{ registry *tools.Registry }
+type App struct{
+	registry *tools.Registry
+	registries genericRegistries[*tools.Registry]
+}
 type router struct{}
 type registrar interface{ Register(tools.Tool) error }
 type registryList []*tools.Registry
 type registryHolder struct{ registry registrar }
+type genericRegistries[T any] []T
 func localRegistry() *tools.Registry { return nil }
 func localRegistrar(application *App) registrar { return application.registry }
 func namedLocalRegistrar(application *App) (result registrar) {
@@ -559,6 +578,13 @@ func registerFromAssignedHolder(application *App) {
 	owned := registryHolder{}
 	owned.registry = application.registry
 	owned.registry.Register(nil)
+}
+func registerFromGenericCollection(application *App) {
+	registries := genericRegistries[*tools.Registry]{application.registry}
+	registries[0].Register(nil)
+}
+func registerFromGenericField(application *App) {
+	application.registries[0].Register(nil)
 }
 func registerFromIndexedAssignment(application *App) {
 	registries := map[string]registrar{}
@@ -628,7 +654,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"identityRegistrar.Register", "registerGeneric", "register", "register", "application.registry.Register", "func", "registry.Register", "registries.Register", "registry.Register", "owned.registry.Register", "owned.registry.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"identityRegistrar.Register", "registerGeneric", "register", "register", "application.registry.Register", "func", "registry.Register", "registries.Register", "registry.Register", "owned.registry.Register", "owned.registry.Register", "registries.Register", "application.registries.Register", "registries.Register", "registry.Register", "registry.Register", "Register", "registerExpression", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -715,6 +741,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 		cleanupMethods:  make(map[string]map[string]bool),
 		functionResults: make(map[string][]string),
 		namedTypes:      make(map[string]string),
+		typeParameters:  make(map[string][]string),
 		cleanupParams:   make(map[string]map[int]bool),
 		toolParams:      make(map[string]map[int]bool),
 		cleanupResults:  make(map[string]map[int]map[string]bool),
@@ -826,6 +853,7 @@ func indexCleanupAndConstructors(file *ast.File, packagePath string, imports map
 					continue
 				}
 				typeName := packagePath + "." + spec.Name.Name
+				indexTypeParameters(spec, typeName, packagePath, types)
 				structure, ok := spec.Type.(*ast.StructType)
 				if !ok {
 					types.namedTypes[typeName] = canonicalTypeInPackage(spec.Type, imports, packagePath)
@@ -884,6 +912,17 @@ func indexCleanupAndConstructors(file *ast.File, packagePath string, imports map
 			types.cleanupMethods[receiverType] = make(map[string]bool)
 		}
 		types.cleanupMethods[receiverType][function.Name.Name] = true
+	}
+}
+
+func indexTypeParameters(spec *ast.TypeSpec, typeName, packagePath string, types *compositionTypeIndex) {
+	if spec.TypeParams == nil {
+		return
+	}
+	for _, field := range spec.TypeParams.List {
+		for _, name := range field.Names {
+			types.typeParameters[typeName] = append(types.typeParameters[typeName], packagePath+"."+name.Name)
+		}
 	}
 }
 
@@ -1716,6 +1755,16 @@ func canonicalTypeInPackage(expression ast.Expr, imports map[string]string, pack
 				return ""
 			}
 			return imports[qualifier.Name] + "." + value.Sel.Name
+		case *ast.IndexExpr:
+			base := canonicalTypeInPackage(value.X, imports, packagePath)
+			argument := canonicalTypeInPackage(value.Index, imports, packagePath)
+			return genericTypePrefix + base + genericTypeSeparator + argument
+		case *ast.IndexListExpr:
+			parts := []string{canonicalTypeInPackage(value.X, imports, packagePath)}
+			for _, argument := range value.Indices {
+				parts = append(parts, canonicalTypeInPackage(argument, imports, packagePath))
+			}
+			return genericTypePrefix + strings.Join(parts, genericTypeSeparator)
 		case *ast.ArrayType:
 			return sliceTypePrefix + canonicalTypeInPackage(value.Elt, imports, packagePath)
 		case *ast.MapType:
@@ -1892,6 +1941,23 @@ func resolveNamedType(typeName string, types compositionTypeIndex) string {
 	seen := make(map[string]bool)
 	for typeName != "" && !seen[typeName] {
 		seen[typeName] = true
+		if strings.HasPrefix(typeName, genericTypePrefix) {
+			parts := strings.Split(strings.TrimPrefix(typeName, genericTypePrefix), genericTypeSeparator)
+			if len(parts) < 2 {
+				return typeName
+			}
+			base := parts[0]
+			underlying := types.namedTypes[base]
+			parameters := types.typeParameters[base]
+			if underlying == "" || len(parameters) != len(parts)-1 {
+				return typeName
+			}
+			for index, parameter := range parameters {
+				underlying = strings.ReplaceAll(underlying, parameter, parts[index+1])
+			}
+			typeName = underlying
+			continue
+		}
 		underlying := types.namedTypes[typeName]
 		if underlying == "" {
 			return typeName
