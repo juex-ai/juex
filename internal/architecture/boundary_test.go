@@ -3171,6 +3171,22 @@ again:
 		goto again
 	}
 }
+func terminatingSwitchDoesNotRepeatDeferredUse(application *App) {
+	var terminalResource closer = &unrelatedCloser{}
+	var terminalRegistry registrar = &unrelatedRegistrar{}
+	for {
+		defer func() {
+			_ = terminalResource.Close()
+			terminalRegistry.Register(nil)
+			terminalResource = application.manager
+			terminalRegistry = application.registry
+		}()
+		switch 0 {
+		default:
+			return
+		}
+	}
+}
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "deferred_closure_state.go")
@@ -3190,7 +3206,7 @@ again:
 		cleanupCalls = append(cleanupCalls, chain)
 	})
 	cleanup := "," + strings.Join(cleanupCalls, ",") + ","
-	if len(cleanupCalls) != 7 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") || !strings.Contains(cleanup, ",fallthroughResource.Close,") || !strings.Contains(cleanup, ",breakResource.Close,") || !strings.Contains(cleanup, ",chainBreakResource.Close,") {
+	if len(cleanupCalls) != 7 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || strings.Contains(cleanup, ",terminalResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") || !strings.Contains(cleanup, ",fallthroughResource.Close,") || !strings.Contains(cleanup, ",breakResource.Close,") || !strings.Contains(cleanup, ",chainBreakResource.Close,") {
 		t.Fatalf("cleanup calls = %v, want older and repeated deferred cleanup after assignment", cleanupCalls)
 	}
 	var registrationCalls []string
@@ -3198,7 +3214,7 @@ again:
 		registrationCalls = append(registrationCalls, chain)
 	})
 	registration := "," + strings.Join(registrationCalls, ",") + ","
-	if len(registrationCalls) != 7 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") || !strings.Contains(registration, ",fallthroughRegistry.Register,") || !strings.Contains(registration, ",breakRegistry.Register,") || !strings.Contains(registration, ",chainBreakRegistry.Register,") {
+	if len(registrationCalls) != 7 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || strings.Contains(registration, ",terminalRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") || !strings.Contains(registration, ",fallthroughRegistry.Register,") || !strings.Contains(registration, ",breakRegistry.Register,") || !strings.Contains(registration, ",chainBreakRegistry.Register,") {
 		t.Fatalf("Tool registration calls = %v, want older and repeated deferred registration after assignment", registrationCalls)
 	}
 }
@@ -5910,7 +5926,7 @@ func compositionDeferMayReachBackwardGoto(body *ast.BlockStmt, target *ast.Defer
 			if compositionStatementsGotoBefore(statements, target.Pos(), labels, packageConstants) {
 				return true
 			}
-			if !statementsFallThrough(statements) || parent == body {
+			if !compositionStatementsFallThrough(statements, packageConstants) || parent == body {
 				return false
 			}
 		}
@@ -5977,7 +5993,7 @@ func compositionDeferMayReachLoopBackEdge(loop ast.Node, loopBody *ast.BlockStmt
 			if compositionStatementsContinueLoop(statements, loop, parents, packageConstants) || compositionStatementsGotoBefore(statements, target.Pos(), labels, packageConstants) {
 				return true
 			}
-			if !statementsFallThrough(statements) {
+			if !compositionStatementsFallThrough(statements, packageConstants) {
 				return false
 			}
 			if parent == loopBody {
