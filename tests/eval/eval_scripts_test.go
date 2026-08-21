@@ -782,6 +782,7 @@ func TestEvalValidationPlanRulesAreDeterministicAndConservative(t *testing.T) {
 		"    ('internal/events/bus.go', {'./internal/events'}, {'race'}, set(), 'race-sensitive'),",
 		"    ('internal/llm/openai_responses.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'live-runtime'),",
 		"    ('internal/runtime/compaction_policy.go', {'./internal/runtime', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/runtime/context_projection.go', {'./internal/runtime', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
 		"    ('internal/version/version.go', {'./internal/version'}, set(), set(), 'go-package'),",
 		"    ('Makefile', {'./...'}, {'web', 'race'}, {'integration', 'provider-smoke', 'compaction'}, 'conservative'),",
 		"    ('scripts/unknown-new-tool.py', {'./...'}, {'web', 'race'}, {'integration', 'provider-smoke', 'compaction'}, 'conservative'),",
@@ -797,6 +798,8 @@ func TestEvalValidationPlanRulesAreDeterministicAndConservative(t *testing.T) {
 		"assert not docs.focused_packages and not docs.candidate_flags",
 		"assert set(docs.final_flags) == {'integration', 'provider-smoke'}",
 		"assert [row.rule_id for row in docs.matched_rules] == ['documentation-only', 'final-baseline']",
+		"compaction_docs = validation_plan.plan_for_changes('focused', [ChangedFile('M', 'docs/compaction.md')], base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
+		"assert 'compaction' not in compaction_docs.final_flags and [row.rule_id for row in compaction_docs.matched_rules] == ['documentation-only', 'final-baseline']",
 		"changes = [ChangedFile('M', 'internal/app/app.go'), ChangedFile('A', 'frontend/src/App.tsx')]",
 		"first = validation_plan.plan_for_changes('focused', changes, base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
 		"second = validation_plan.plan_for_changes('focused', list(reversed(changes)), base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
@@ -870,7 +873,9 @@ func TestEvalValidationPlanCollectsCleanAndDirtyGitChanges(t *testing.T) {
 		"    (repo / 'internal' / 'removed' / 'only.go').unlink()",
 		"    (repo / 'internal' / 'app' / 'untracked.go').write_text('package app\\n', encoding='utf-8')",
 		"    moved = validation_plan.plan_for_changes('focused', [validation_plan.ChangedFile('R', 'internal/newpkg/only.go', 'internal/legacy/only.go')], base_sha=base, head_sha=git(repo, 'rev-parse', 'HEAD'), dirty=True, repo_root=repo)",
-		"    assert './internal/newpkg' in moved.focused_packages and './internal/legacy' not in moved.focused_packages, moved.as_dict()",
+		"    assert moved.focused_packages == ('./...',), moved.as_dict()",
+		"    cross_package = validation_plan.plan_for_changes('focused', [validation_plan.ChangedFile('R', 'internal/newpkg/only.go', 'internal/app/old.go')], base_sha=base, head_sha=git(repo, 'rev-parse', 'HEAD'), dirty=True, repo_root=repo)",
+		"    assert {'./internal/app', './internal/newpkg'} <= set(cross_package.focused_packages), cross_package.as_dict()",
 		"    removed = validation_plan.plan_for_changes('focused', [validation_plan.ChangedFile('D', 'internal/removed/only.go')], base_sha=base, head_sha=git(repo, 'rev-parse', 'HEAD'), dirty=True, repo_root=repo)",
 		"    assert removed.focused_packages == ('./...',), removed.as_dict()",
 		"    dirty = validation_plan.collect_plan(repo, 'focused')",
@@ -928,6 +933,8 @@ func TestEvalVerificationTiersConsumeOneValidationPlan(t *testing.T) {
 		"forced_final = Namespace(tier='final', race=False, web=False, compaction=True)",
 		"forced_plan = cli.plan_with_cli_overrides(forced_final, docs_plan)",
 		"assert set(forced_plan.final_flags) == {'compaction', 'integration', 'provider-smoke'}",
+		"assert forced_plan.fingerprint != docs_plan.fingerprint",
+		"assert validation_plan.candidate_fingerprint(forced_plan) == validation_plan.candidate_fingerprint(docs_plan)",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }

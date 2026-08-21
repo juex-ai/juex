@@ -342,7 +342,7 @@ def run_verify(args: argparse.Namespace) -> int:
     candidate_steps = candidate_verification_steps(race=args.race, web=args.web)
     candidate_plan_fingerprint = verification.stable_fingerprint(
         {
-            "validation_plan": plan.fingerprint,
+            "validation_plan": validation_plan.candidate_fingerprint(plan),
             "candidate_steps": verification.plan_fingerprint(candidate_steps),
         }
     )

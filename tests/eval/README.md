@@ -169,11 +169,12 @@ records instead use
 `record.json` and `record.md` list the schema, clean source snapshot, plan and
 environment fingerprints, candidate binary fingerprint, redacted provider
 selection identity, and every reused, executed, invalidated, or
-fail-fast-not-run step. The record's plan fingerprint combines the Git-diff
-plan fingerprint with the concrete candidate step plan, and the corresponding
-`plan.json` and `plan.md` live beside the record. A missing or changed
-candidate binary invalidates reuse
-so final can rebuild the artifact required by live smoke. The environment
+fail-fast-not-run step. The record's plan fingerprint combines the
+candidate-relevant Git-diff projection with the concrete candidate step plan,
+so final-only overrides do not invalidate reusable deterministic evidence. The
+corresponding `plan.json` and `plan.md` live beside the record. A missing or
+changed candidate binary invalidates reuse so final can rebuild the artifact
+required by live smoke. The environment
 fingerprint includes effective Go build flags, workspaces, experiments,
 toolchain, architecture, CGO/compiler settings, the build's `git describe`
 value, and the resolved ripgrep executable fingerprint, preventing reuse across

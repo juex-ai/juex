@@ -212,6 +212,10 @@ def plan_for_changes(
         paths = tuple(path for path in (changed.path, changed.old_path) if path)
         matched = False
 
+        if all(_is_documentation_path(path) for path in paths):
+            add("documentation-only", changed)
+            continue
+
         if any(path.startswith("frontend/") for path in paths):
             add("frontend", changed, candidate=("web",), final=("integration", "provider-smoke"))
             matched = True
@@ -255,10 +259,6 @@ def plan_for_changes(
                 candidate=CONSERVATIVE_CANDIDATE_FLAGS,
                 final=CONSERVATIVE_FINAL_FLAGS,
             )
-            matched = True
-
-        if all(_is_documentation_path(path) for path in paths):
-            add("documentation-only", changed)
             matched = True
 
         if not matched:
@@ -506,6 +506,26 @@ def _plan_fingerprint(
     ).hexdigest()
 
 
+def candidate_fingerprint(plan: ValidationPlan) -> str:
+    candidate_rules = [
+        {
+            "rule_id": row.rule_id,
+            "files": list(row.files),
+            "candidate_flags": list(row.candidate_flags),
+        }
+        for row in plan.matched_rules
+        if row.candidate_flags
+    ]
+    projection = {
+        "changed_files": [row.as_dict() for row in plan.changed_files],
+        "candidate_rules": candidate_rules,
+        "candidate_flags": list(plan.candidate_flags),
+    }
+    return "sha256:" + hashlib.sha256(
+        json.dumps(projection, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def _normalized_status(status: str) -> str:
     letters = "".join(character for character in status.upper() if character.isalpha())
     return letters or "M"
@@ -542,8 +562,11 @@ def _go_packages_for_change(
             package = _go_package(changed.path)
             if package:
                 packages.add(package)
-    if changed.old_path and changed.old_path.endswith(".go") and not changed.path.endswith(".go"):
-        packages.add(_existing_go_package_or_full(changed.old_path, repo_root))
+    if changed.old_path and changed.old_path.endswith(".go"):
+        old_package = _go_package(changed.old_path)
+        new_package = _go_package(changed.path) if changed.path.endswith(".go") else None
+        if old_package != new_package:
+            packages.add(_existing_go_package_or_full(changed.old_path, repo_root))
     return packages
 
 
@@ -565,7 +588,11 @@ def _is_live_runtime_path(path: str) -> bool:
 
 def _is_compaction_path(path: str) -> bool:
     lowered = path.lower()
-    return "compact" in lowered or path.startswith("internal/runtime/contextbudget/")
+    return (
+        "compact" in lowered
+        or "context_projection" in lowered
+        or path.startswith("internal/runtime/contextbudget/")
+    )
 
 
 def _is_conservative_harness_path(path: str) -> bool:
