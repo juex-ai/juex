@@ -120,6 +120,7 @@ CROSS_BOUNDARY_PREFIXES = (
     "internal/runtime/",
     "internal/session/",
     "internal/tools/",
+    "tests/e2e/",
 )
 
 RACE_PREFIXES = (

@@ -785,6 +785,7 @@ func TestEvalValidationPlanRulesAreDeterministicAndConservative(t *testing.T) {
 		"    ('internal/runtime/context_projection.go', {'./internal/runtime', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
 		"    ('internal/llm/provider_projection.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
 		"    ('internal/llm/provider_projection_chunked_write.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('tests/e2e/testdata/fake-mcp/server.py', {'./tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
 		"    ('internal/version/version.go', {'./internal/version'}, set(), set(), 'go-package'),",
 		"    ('Makefile', {'./...'}, {'web', 'race'}, {'integration', 'provider-smoke', 'compaction'}, 'conservative'),",
 		"    ('scripts/unknown-new-tool.py', {'./...'}, {'web', 'race'}, {'integration', 'provider-smoke', 'compaction'}, 'conservative'),",
