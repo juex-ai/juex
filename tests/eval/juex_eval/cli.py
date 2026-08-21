@@ -14,7 +14,7 @@ from typing import Callable
 
 import yaml
 
-from . import compaction, helper, selection, validation_plan, verification
+from . import compaction, helper, outcomes, selection, validation_plan, verification
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -46,6 +46,7 @@ class VerificationStep:
     command: list[str]
     test_environment: bool = False
     environment: dict[str, str] | None = None
+    retry_transient: bool = False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -241,14 +242,20 @@ def verification_steps(args: argparse.Namespace) -> list[VerificationStep]:
                     "live-integration",
                     ["make", "integration"],
                     environment={"JUEX_PROVIDER_CONFIG": args.config},
+                    retry_transient=True,
                 )
             )
         if getattr(args, "provider_smoke", True):
             steps.append(
-                VerificationStep("provider-model-smoke", final_provider_smoke_command(args), test_environment=True)
+                VerificationStep(
+                    "provider-model-smoke",
+                    final_provider_smoke_command(args),
+                    test_environment=True,
+                    retry_transient=True,
+                )
             )
         if args.compaction:
-            steps.append(VerificationStep("compaction-eval", final_compaction_command(args)))
+            steps.append(VerificationStep("compaction-eval", final_compaction_command(args), retry_transient=True))
         return steps
     raise ValueError(f"unsupported verification tier: {args.tier}")
 
@@ -281,6 +288,7 @@ def final_provider_smoke_command(args: argparse.Namespace) -> list[str]:
     append_value(command, "--selection-seed", args.selection_seed)
     append_value(command, "--run-id", args.run_id)
     append_value(command, "--timeout", args.provider_timeout)
+    append_value(command, "--retries", 0)
     report_dir = getattr(args, "verification_report_dir", "")
     append_value(command, "--report-dir", pathlib.Path(report_dir) / "provider-model-smoke" if report_dir else "")
     return command
@@ -396,9 +404,22 @@ def run_verify(args: argparse.Namespace) -> int:
         reusable = decision.reusable.get(step.label)
         if reusable is not None:
             row = row_by_label[step.label]
-            for key in ("started_at", "duration", "exit_status", "log"):
+            for key in (
+                "started_at",
+                "duration",
+                "exit_status",
+                "log",
+                "attempts",
+                "initial_outcome",
+                "outcome",
+                "reason",
+                "matched_rule",
+                "blocks_merge",
+                "recommended_action",
+                "retryable",
+            ):
                 row[key] = reusable.get(key)
-            row["outcome"] = "reused"
+            row["execution_state"] = "reused"
             row["reused_from"] = str(decision.source) if decision.source else None
             reused.append(step.label)
             print(f"reused: {step.label} ({decision.source})")
@@ -406,7 +427,7 @@ def run_verify(args: argparse.Namespace) -> int:
         row_by_label[step.label].update(run_recorded_verification_step(step, command_logs, test_env))
         executed.append(step.label)
         print(f"executed: {step.label}")
-        if row_by_label[step.label]["exit_status"]:
+        if row_by_label[step.label]["blocks_merge"]:
             status = 1
             break
 
@@ -462,6 +483,7 @@ def run_verify(args: argparse.Namespace) -> int:
         started_at=started_at,
     )
     verification.write_record(report_dir, record)
+    print(verification.render_terminal_summary(record))
     print(f"record: {report_dir / 'record.md'}")
     return status
 
@@ -514,16 +536,33 @@ def run_visible(step: VerificationStep, test_env: dict[str, str] | None) -> int:
         if env is None:
             env = os.environ.copy()
         env.update(step.environment)
-    completed = subprocess.run(
-        step.command,
-        cwd=REPO_ROOT,
-        env=env,
-        check=False,
+    try:
+        completed = subprocess.run(
+            step.command,
+            cwd=REPO_ROOT,
+            env=env,
+            check=False,
+        )
+        status = completed.returncode
+        process_error = None
+    except OSError as exc:
+        status = 1
+        process_error = exc
+    result = (
+        outcomes.success(attempt_count=1)
+        if status == 0 and process_error is None
+        else outcomes.classify_failure(
+            "",
+            deterministic=True,
+            exit_status=status,
+            process_error=process_error,
+        )
     )
-    if completed.returncode:
-        print(f"FAIL {step.label} (exit {completed.returncode})", file=sys.stderr)
+    print(outcomes.marker(result))
+    if result.blocks_merge:
+        print(f"FAIL {step.label} (exit {status}) outcome={result.outcome}", file=sys.stderr)
         return 1
-    print(f"ok  {step.label}")
+    print(f"ok  {step.label} outcome={result.outcome}")
     return 0
 
 
@@ -532,7 +571,6 @@ def run_recorded_verification_step(
     log_dir: pathlib.Path,
     test_env: dict[str, str] | None,
 ) -> dict[str, object]:
-    log_path = log_dir / f"{step.label}.log"
     rendered = shlex.join(step.command)
     print(f"==> {step.label}: {rendered}")
     env = test_env.copy() if step.test_environment and test_env is not None else None
@@ -540,30 +578,111 @@ def run_recorded_verification_step(
         if env is None:
             env = os.environ.copy()
         env.update(step.environment)
-    started_at = verification.utc_now()
-    started = time.monotonic()
-    with log_path.open("wb") as log:
-        completed = subprocess.run(
-            step.command,
-            cwd=REPO_ROOT,
-            env=env,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            check=False,
+    attempts: list[dict[str, object]] = []
+    for attempt_number in (1, 2):
+        log_path = log_dir / f"{step.label}.attempt-{attempt_number}.log"
+        started_at = verification.utc_now()
+        started = time.monotonic()
+        process_error: OSError | None = None
+        exit_status = 1
+        try:
+            with log_path.open("wb") as log:
+                completed = subprocess.run(
+                    step.command,
+                    cwd=REPO_ROOT,
+                    env=env,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                )
+            exit_status = completed.returncode
+        except OSError as exc:
+            process_error = exc
+            log_path.write_text(f"{exc.__class__.__name__}: {exc}\n", encoding="utf-8")
+        duration = round(time.monotonic() - started, 6)
+        log_text = log_path.read_text(encoding="utf-8", errors="replace")
+        result = (
+            outcomes.success(attempt_count=1)
+            if exit_status == 0 and process_error is None
+            else outcomes.classify_failure(
+                log_text,
+                deterministic=not step.retry_transient,
+                exit_status=exit_status,
+                process_error=process_error,
+            )
         )
-    duration = round(time.monotonic() - started, 6)
-    if completed.returncode:
-        print(f"FAIL {step.label} (exit {completed.returncode}), log: {log_path}", file=sys.stderr)
-        print_tail(log_path, 40)
+        attempt = {
+            "attempt": attempt_number,
+            "started_at": started_at,
+            "duration": duration,
+            "exit_status": exit_status,
+            "log": str(log_path),
+            **result.as_dict(),
+        }
+        attempts.append(attempt)
+        if exit_status == 0 and process_error is None:
+            terminal = outcomes.success(attempt_count=attempt_number)
+            break
+        if attempt_number == 2 or not (step.retry_transient and result.retryable):
+            terminal = result
+            break
+        try:
+            archived_report = archive_step_report(step.command, attempt_number)
+        except OSError as exc:
+            terminal = outcomes.ValidationOutcome(
+                outcomes.ENVIRONMENT_FAILURE,
+                f"could not archive retry artifacts: {exc.__class__.__name__}",
+                "environment-retry-archive",
+                True,
+                "fix_environment",
+            )
+            attempt["archive_error"] = str(exc)
+            break
+        if archived_report is not None:
+            attempt["report"] = archived_report
+        print(
+            f"retry {step.label} after {result.outcome} "
+            f"(rule={result.matched_rule}, attempt 1/2)",
+            file=sys.stderr,
+        )
+
+    final_attempt = attempts[-1]
+    if terminal.blocks_merge:
+        print(
+            f"FAIL {step.label} (exit {final_attempt['exit_status']}), "
+            f"outcome={terminal.outcome}, log: {final_attempt['log']}",
+            file=sys.stderr,
+        )
+        print_tail(pathlib.Path(str(final_attempt["log"])), 40)
     else:
-        print(f"ok  {step.label}")
+        print(f"ok  {step.label} outcome={terminal.outcome}")
     return {
-        "started_at": started_at,
-        "duration": duration,
-        "exit_status": completed.returncode,
-        "log": str(log_path),
-        "outcome": "executed",
+        "execution_state": "executed",
+        "started_at": attempts[0]["started_at"],
+        "duration": round(sum(float(row["duration"]) for row in attempts), 6),
+        "exit_status": final_attempt["exit_status"],
+        "log": final_attempt["log"],
+        "attempts": attempts,
+        "initial_outcome": attempts[0]["outcome"],
+        **terminal.as_dict(),
     }
+
+
+def archive_step_report(command: list[str], attempt_number: int) -> str | None:
+    try:
+        index = command.index("--report-dir")
+        source = pathlib.Path(command[index + 1])
+    except (ValueError, IndexError):
+        return None
+    if not source.is_dir():
+        return None
+    destination = source.with_name(f"{source.name}.attempt-{attempt_number}")
+    collision = 1
+    while destination.exists():
+        destination = source.with_name(f"{source.name}.attempt-{attempt_number}-{collision}")
+        collision += 1
+    shutil.copytree(source, destination)
+    return str(destination)
 
 
 def load_optional_json(path: pathlib.Path) -> dict[str, object] | None:
@@ -672,7 +791,12 @@ def add_provider_args(parser: argparse.ArgumentParser) -> None:
         help="Run exactly one eligible provider:model ref.",
     )
     parser.add_argument("--timeout", type=int, default=int(os.environ.get("JUEX_PROVIDER_SMOKE_TIMEOUT") or "240"))
-    parser.add_argument("--retries", type=int, default=int(os.environ.get("JUEX_PROVIDER_SMOKE_RETRIES") or "1"))
+    parser.add_argument(
+        "--retries",
+        type=int,
+        choices=(0, 1),
+        default=int(os.environ.get("JUEX_PROVIDER_SMOKE_RETRIES") or "1"),
+    )
     parser.add_argument("--keep", action="store_true", default=truthy(os.environ.get("JUEX_PROVIDER_SMOKE_KEEP")))
 
 
@@ -692,11 +816,10 @@ def run_development(args: argparse.Namespace) -> int:
     overall = execute_development_steps(
         steps,
         lambda step: run_logged(
-            step.label,
-            step.command,
+            step,
             command_logs,
             commands_file,
-            env=test_env if step.test_environment else None,
+            test_env,
         ),
     )
 
@@ -710,6 +833,12 @@ def run_development(args: argparse.Namespace) -> int:
         report_dir / "record.json",
         report_dir / "record.md",
     )
+    commands = [
+        json.loads(line)
+        for line in commands_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    print(verification.render_terminal_summary(helper.development_outcome_summary(commands, overall)))
     print(f"record: {report_dir / 'record.md'}")
     return 1 if overall else 0
 
@@ -736,10 +865,17 @@ def development_steps(args: argparse.Namespace, report_dir: pathlib.Path) -> tup
                 "provider-model-smoke",
                 provider_smoke_development_command(args, provider_report_dir),
                 test_environment=True,
+                retry_transient=True,
             )
         )
     if compaction_report_dir is not None:
-        steps.append(VerificationStep("compaction-eval", compaction_development_command(args, compaction_report_dir)))
+        steps.append(
+            VerificationStep(
+                "compaction-eval",
+                compaction_development_command(args, compaction_report_dir),
+                retry_transient=True,
+            )
+        )
     return steps, provider_report_dir, str(compaction_report_dir or "")
 
 
@@ -751,6 +887,7 @@ def provider_smoke_development_command(args: argparse.Namespace, report_dir: pat
     append_value(command, "--report-dir", report_dir)
     append_value(command, "--run-id", args.run_id)
     append_value(command, "--timeout", args.provider_timeout)
+    append_value(command, "--retries", 0)
     append_value(command, "--only", args.provider_only)
     append_flag(command, "--all-models", args.provider_all_models)
     return command
@@ -788,33 +925,21 @@ def append_flag(command: list[str], flag: str, enabled: bool) -> None:
 
 
 def run_logged(
-    label: str,
-    command: list[str],
+    step: VerificationStep,
     log_dir: pathlib.Path,
     commands_file: pathlib.Path,
-    *,
-    env: dict[str, str] | None = None,
+    test_env: dict[str, str] | None,
 ) -> int:
-    log_path = log_dir / f"{label}.log"
-    rendered = " ".join(shlex.quote(part) for part in command)
-    print(f"==> {label}: {rendered}")
-    with log_path.open("wb") as log:
-        proc = subprocess.run(command, cwd=REPO_ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, check=False)
+    result = run_recorded_verification_step(step, log_dir, test_env)
     helper.append_jsonl(
         commands_file,
         {
-            "label": label,
-            "command": rendered,
-            "exit_status": proc.returncode,
-            "log": str(log_path),
+            "label": step.label,
+            "command": shlex.join(step.command),
+            **result,
         },
     )
-    if proc.returncode:
-        print(f"FAIL {label} (exit {proc.returncode}), log: {log_path}", file=sys.stderr)
-        print_tail(log_path, 40)
-        return 1
-    print(f"ok  {label}")
-    return 0
+    return 1 if result["blocks_merge"] else 0
 
 
 def print_tail(path: pathlib.Path, lines: int) -> None:

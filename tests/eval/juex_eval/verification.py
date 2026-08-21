@@ -16,8 +16,10 @@ import time
 from dataclasses import dataclass
 from typing import Any, Iterable, Protocol
 
+from . import outcomes
 
-SCHEMA_VERSION = 1
+
+SCHEMA_VERSION = 2
 REPORT_KIND = "development-validation"
 CANDIDATE_RECORD_NAME = "candidate-record.json"
 GO_ENV_FINGERPRINT_KEYS = (
@@ -52,6 +54,41 @@ class StepLike(Protocol):
     command: list[str]
     test_environment: bool
     environment: dict[str, str] | None
+    retry_transient: bool
+
+
+def summarize_outcomes(steps: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    completed = [row for row in steps if row.get("execution_state") in {"executed", "reused"}]
+    blocking = [row for row in completed if row.get("blocks_merge") is True]
+    kinds = {str(row.get("outcome")) for row in blocking}
+    if outcomes.PRODUCT_FAILURE in kinds:
+        failure_type = "code_failure"
+        action = "fix_code"
+    elif outcomes.ENVIRONMENT_FAILURE in kinds:
+        failure_type = "validation_incomplete"
+        action = "fix_environment"
+    elif blocking:
+        failure_type = "validation_incomplete"
+        action = "stop"
+    else:
+        failure_type = None
+        action = "continue"
+    return {
+        "blocks_merge": bool(blocking),
+        "failure_type": failure_type,
+        "recommended_action": action,
+        "blocking_steps": [str(row.get("label")) for row in blocking],
+    }
+
+
+def render_terminal_summary(summary: dict[str, Any]) -> str:
+    failure_type = summary.get("failure_type") or "none"
+    blocking_steps = ",".join(summary.get("blocking_steps") or []) or "none"
+    return (
+        f"validation summary: blocks_merge={str(bool(summary.get('blocks_merge'))).lower()} "
+        f"failure_type={failure_type} action={summary.get('recommended_action') or 'continue'} "
+        f"blocking_steps={blocking_steps}"
+    )
 
 
 @dataclass(frozen=True)
@@ -116,6 +153,7 @@ def plan_fingerprint(steps: Iterable[StepLike]) -> str:
             "command": [str(part) for part in step.command],
             "test_environment": bool(step.test_environment),
             "environment": dict(sorted((step.environment or {}).items())),
+            "retry_transient": bool(step.retry_transient),
         }
         for step in steps
     ]
@@ -205,11 +243,19 @@ def planned_step_record(step: StepLike) -> dict[str, Any]:
     return {
         "label": step.label,
         "command": [str(part) for part in step.command],
+        "execution_state": "not_run",
         "started_at": None,
         "duration": None,
         "exit_status": None,
         "log": None,
-        "outcome": "not_run",
+        "attempts": [],
+        "initial_outcome": None,
+        "outcome": None,
+        "reason": "not executed because an earlier gate blocked validation",
+        "matched_rule": "fail-fast-not-run",
+        "blocks_merge": None,
+        "recommended_action": None,
+        "retryable": False,
     }
 
 
@@ -236,6 +282,14 @@ def build_record(
     provider_ref = provider_summary.get("selected_provider_model")
     if provider_ref and not provider_refs:
         provider_refs = [provider_ref]
+    outcome_summary = summarize_outcomes(steps)
+    if status != "pass" and not outcome_summary["blocks_merge"]:
+        outcome_summary = {
+            "blocks_merge": True,
+            "failure_type": "validation_incomplete",
+            "recommended_action": "stop",
+            "blocking_steps": [],
+        }
     return {
         "schema_version": SCHEMA_VERSION,
         "tier": tier,
@@ -244,6 +298,7 @@ def build_record(
         "branch": snapshot.branch,
         "dirty": snapshot.dirty,
         "status": status,
+        **outcome_summary,
         "started_at": started_at or utc_now(),
         "completed_at": completed_at or utc_now(),
         "plan_fingerprint": plan_fingerprint,
@@ -305,6 +360,9 @@ def render_markdown(record: dict[str, Any]) -> str:
         f"- Branch: `{record['branch']}`",
         f"- Dirty at start: {str(record['dirty']).lower()}",
         f"- Status: `{record['status']}`",
+        f"- Blocks merge: {str(bool(record.get('blocks_merge'))).lower()}",
+        f"- Failure type: `{record.get('failure_type') or 'none'}`",
+        f"- Recommended action: `{record.get('recommended_action') or 'continue'}`",
         f"- Plan fingerprint: `{record['plan_fingerprint']}`",
         f"- Environment fingerprint: `{record['environment_fingerprint']}`",
         f"- Provider/model: `{record.get('provider_model_ref') or 'not run'}`",
@@ -313,15 +371,19 @@ def render_markdown(record: dict[str, Any]) -> str:
         "",
         "## Steps",
         "",
-        "| Label | Outcome | Exit | Started | Duration | Command | Log |",
-        "| --- | --- | ---: | --- | ---: | --- | --- |",
+        "| Label | State | Outcome | Reason | Rule | Attempts | Exit | Started | Duration | Command | Log |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | --- | ---: | --- | --- |",
     ]
     for step in record["steps"]:
         command = shlex.join(str(part) for part in step["command"])
         lines.append(
-            "| `{label}` | {outcome} | {exit_status} | {started_at} | {duration} | `{command}` | `{log}` |".format(
+            "| `{label}` | {state} | {outcome} | {reason} | {rule} | {attempts} | {exit_status} | {started_at} | {duration} | `{command}` | `{log}` |".format(
                 label=_markdown_cell(step["label"]),
+                state=_markdown_cell(step.get("execution_state") or ""),
                 outcome=_markdown_cell(step.get("outcome") or ""),
+                reason=_markdown_cell(step.get("reason") or ""),
+                rule=_markdown_cell(step.get("matched_rule") or ""),
+                attempts=len(step.get("attempts") or []),
                 exit_status="" if step.get("exit_status") is None else step["exit_status"],
                 started_at=_markdown_cell(step.get("started_at") or ""),
                 duration="" if step.get("duration") is None else step["duration"],
@@ -430,7 +492,11 @@ def _candidate_invalidation_reason(
             return f"candidate step missing: {step.label}"
         if row.get("command") != [str(part) for part in step.command]:
             return f"candidate step command mismatch: {step.label}"
-        if row.get("exit_status") != 0 or row.get("outcome") != "executed":
+        if (
+            row.get("exit_status") != 0
+            or row.get("outcome") not in {outcomes.PASSED, outcomes.FLAKY_PASS}
+            or row.get("blocks_merge") is not False
+        ):
             return f"candidate step did not pass: {step.label}"
     return ""
 

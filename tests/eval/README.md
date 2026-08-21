@@ -170,7 +170,11 @@ records instead use
 `record.json` and `record.md` list the schema, clean source snapshot, plan and
 environment fingerprints, candidate binary fingerprint, redacted provider
 selection identity, and every reused, executed, invalidated, or
-fail-fast-not-run step. The record's plan fingerprint combines the
+fail-fast-not-run step. Execution state is separate from the terminal outcome:
+`passed`, `flaky_pass`, `product_failure`, `environment_failure`,
+`provider_unavailable`, or `transient_failure`. Every completed step records a
+reason, named matching rule, merge-blocking decision, recommended action, and
+one complete log per attempt. The record's plan fingerprint combines the
 candidate-relevant Git-diff projection with the concrete candidate step plan,
 so final-only overrides do not invalidate reusable deterministic evidence. The
 corresponding `plan.json` and `plan.md` live beside the record. A missing or
@@ -270,16 +274,27 @@ Each Schedule retry uses a new workspace and session. Its transcript, events,
 stdout, stderr, prompt, final `observables.json`, and contract report are
 retained under `cases/<provider_model>/schedule-routing/attempt-N/`. Seeded
 attempts also retain `seed-observables.json` so the initial fixture cannot be
-confused with final state. Retryable turn failures and Schedule contract
-failures consume the same bounded `--retries` budget in fresh attempts.
+confused with final state. Only an allowlisted transient turn failure may
+consume the single `--retries 1` budget in a fresh attempt. Schedule contract
+failures are product failures and never retry.
 Persistent failures still fail the selected provider:model result; the command
 never silently switches to a different target.
 The contract report classifies failures as model capability failures or hard
 runtime failures, and every failure fails the strict live gate.
 
-A failed provider:model is not a skip; keep the report and explain whether the
-problem is configuration, provider capability, prompt-following, or a JueX
-regression.
+A failed provider:model is not a skip. Explicit selection of an absent model,
+an empty eligible default rotation, an unreachable endpoint, and a provider
+that explicitly reports unavailability fail as `provider_unavailable`, not as
+a product regression. Keep the report and explain whether the problem is
+configuration, provider capability, prompt-following, or a JueX regression.
+
+Live provider/network commands may retry exactly once only after a named
+allowlist rule matches structured `retryable: true`, an allowlisted transient
+HTTP status, an allowlisted network signature, or the bounded provider timeout.
+Provider smoke invoked from candidate/final validation disables its internal
+retry so the outer step owns that one retry. Standalone provider smoke accepts
+only `--retries 0` or `--retries 1`. Deterministic tests, builds, lint, race,
+and contract assertions never retry.
 
 Use `--all-models` only for broader changes where every eligible configured
 model must be covered. Reports record selected refs, candidate refs, the seed,
@@ -325,7 +340,8 @@ bash tests/eval/development_eval.sh
 
 The deterministic phase reuses the candidate planner, so one `go test ./...`
 run includes `tests/e2e` without a duplicate standalone e2e run. The existing
-JSON/Markdown record shape and live selection evidence remain unchanged.
+live selection evidence remains, and the JSON/Markdown record also includes the
+outcome, rule, reason, retry attempts, `blocks_merge`, and recommended action.
 
 Use `--compaction-eval` for compaction, context projection, provider replay,
 or long-session changes. The record links command logs, provider:model smoke

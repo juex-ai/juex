@@ -1324,36 +1324,6 @@ func TestLiveBinary_ShellYieldIgnoresRuntimeToolTimeout(t *testing.T) {
 
 func TestLiveBinary_ExecCommandOmitsBinaryOutputFromTranscript(t *testing.T) {
 	bin := buildJuex(t)
-
-	var requestCount atomic.Int32
-	var mu sync.Mutex
-	var secondBody map[string]any
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode request: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-
-		switch requestCount.Add(1) {
-		case 1:
-			writeJSON(t, w, chatToolCallResponse("call_exec_binary", "exec_command", map[string]any{
-				"cmd":           "go run emit_binary.go",
-				"yield_time_ms": 30000,
-			}))
-		case 2:
-			mu.Lock()
-			secondBody = body
-			mu.Unlock()
-			writeJSON(t, w, chatCompletionResponseMap("binary output handled"))
-		default:
-			t.Errorf("unexpected provider request %d: %+v", requestCount.Load(), body)
-			writeJSON(t, w, chatCompletionResponseMap("unexpected"))
-		}
-	}))
-	defer srv.Close()
-
 	work := t.TempDir()
 	if err := writeText(filepath.Join(work, "emit_binary.go"), `package main
 
@@ -1369,6 +1339,50 @@ func main() {
 `); err != nil {
 		t.Fatal(err)
 	}
+	helperName := "emit-binary"
+	if runtime.GOOS == "windows" {
+		helperName += ".exe"
+	}
+	helperPath := filepath.Join(work, helperName)
+	buildHelper := exec.Command("go", "build", "-o", helperPath, "emit_binary.go")
+	buildHelper.Dir = work
+	if out, err := buildHelper.CombinedOutput(); err != nil {
+		t.Fatalf("build binary-output helper: %v\n%s", err, out)
+	}
+	helperCommand := shQuote(helperPath)
+	if runtime.GOOS == "windows" {
+		helperCommand = "& '" + strings.ReplaceAll(helperPath, "'", "''") + "'"
+	}
+
+	var requestCount atomic.Int32
+	var mu sync.Mutex
+	var secondBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+
+		switch requestCount.Add(1) {
+		case 1:
+			writeJSON(t, w, chatToolCallResponse("call_exec_binary", "exec_command", map[string]any{
+				"cmd":           helperCommand,
+				"yield_time_ms": 30000,
+			}))
+		case 2:
+			mu.Lock()
+			secondBody = body
+			mu.Unlock()
+			writeJSON(t, w, chatCompletionResponseMap("binary output handled"))
+		default:
+			t.Errorf("unexpected provider request %d: %+v", requestCount.Load(), body)
+			writeJSON(t, w, chatCompletionResponseMap("unexpected"))
+		}
+	}))
+	defer srv.Close()
+
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
 	body := "model: local-chat:chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
