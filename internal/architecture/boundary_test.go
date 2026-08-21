@@ -3205,6 +3205,42 @@ func terminatingUnknownSwitchDoesNotRepeatDeferredUse(application *App, choice i
 		}
 	}
 }
+func terminatingTypeSwitchDoesNotRepeatDeferredUse(application *App, value any) {
+	var typeSwitchResource closer = &unrelatedCloser{}
+	var typeSwitchRegistry registrar = &unrelatedRegistrar{}
+	for {
+		defer func() {
+			_ = typeSwitchResource.Close()
+			typeSwitchRegistry.Register(nil)
+			typeSwitchResource = application.manager
+			typeSwitchRegistry = application.registry
+		}()
+		switch value.(type) {
+		case int:
+			return
+		default:
+			return
+		}
+	}
+}
+func terminatingSelectDoesNotRepeatDeferredUse(application *App, ready <-chan struct{}) {
+	var selectResource closer = &unrelatedCloser{}
+	var selectRegistry registrar = &unrelatedRegistrar{}
+	for {
+		defer func() {
+			_ = selectResource.Close()
+			selectRegistry.Register(nil)
+			selectResource = application.manager
+			selectRegistry = application.registry
+		}()
+		select {
+		case <-ready:
+			return
+		default:
+			return
+		}
+	}
+}
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "deferred_closure_state.go")
@@ -3224,7 +3260,7 @@ func terminatingUnknownSwitchDoesNotRepeatDeferredUse(application *App, choice i
 		cleanupCalls = append(cleanupCalls, chain)
 	})
 	cleanup := "," + strings.Join(cleanupCalls, ",") + ","
-	if len(cleanupCalls) != 7 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || strings.Contains(cleanup, ",terminalResource.Close,") || strings.Contains(cleanup, ",unknownSwitchResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") || !strings.Contains(cleanup, ",fallthroughResource.Close,") || !strings.Contains(cleanup, ",breakResource.Close,") || !strings.Contains(cleanup, ",chainBreakResource.Close,") {
+	if len(cleanupCalls) != 7 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || strings.Contains(cleanup, ",terminalResource.Close,") || strings.Contains(cleanup, ",unknownSwitchResource.Close,") || strings.Contains(cleanup, ",typeSwitchResource.Close,") || strings.Contains(cleanup, ",selectResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") || !strings.Contains(cleanup, ",fallthroughResource.Close,") || !strings.Contains(cleanup, ",breakResource.Close,") || !strings.Contains(cleanup, ",chainBreakResource.Close,") {
 		t.Fatalf("cleanup calls = %v, want older and repeated deferred cleanup after assignment", cleanupCalls)
 	}
 	var registrationCalls []string
@@ -3232,7 +3268,7 @@ func terminatingUnknownSwitchDoesNotRepeatDeferredUse(application *App, choice i
 		registrationCalls = append(registrationCalls, chain)
 	})
 	registration := "," + strings.Join(registrationCalls, ",") + ","
-	if len(registrationCalls) != 7 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || strings.Contains(registration, ",terminalRegistry.Register,") || strings.Contains(registration, ",unknownSwitchRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") || !strings.Contains(registration, ",fallthroughRegistry.Register,") || !strings.Contains(registration, ",breakRegistry.Register,") || !strings.Contains(registration, ",chainBreakRegistry.Register,") {
+	if len(registrationCalls) != 7 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || strings.Contains(registration, ",terminalRegistry.Register,") || strings.Contains(registration, ",unknownSwitchRegistry.Register,") || strings.Contains(registration, ",typeSwitchRegistry.Register,") || strings.Contains(registration, ",selectRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") || !strings.Contains(registration, ",fallthroughRegistry.Register,") || !strings.Contains(registration, ",breakRegistry.Register,") || !strings.Contains(registration, ",chainBreakRegistry.Register,") {
 		t.Fatalf("Tool registration calls = %v, want older and repeated deferred registration after assignment", registrationCalls)
 	}
 }
@@ -6126,14 +6162,18 @@ func compositionStatementFallsThrough(statement ast.Stmt, packageConstants map[s
 		return value.Else == nil || compositionStatementsFallThrough(value.Body.List, packageConstants) || compositionStatementFallsThrough(value.Else, packageConstants)
 	case *ast.SwitchStmt:
 		return compositionSwitchMayFallThrough(value, packageConstants)
+	case *ast.TypeSwitchStmt:
+		return compositionTypeSwitchMayFallThrough(value, packageConstants)
+	case *ast.SelectStmt:
+		return compositionSelectMayFallThrough(value, packageConstants)
 	default:
 		return statementFallsThrough(statement)
 	}
 }
 
-func compositionSwitchClauseBreaksToExit(statement *ast.SwitchStmt, clause *ast.CaseClause, packageConstants map[string]constant.Value) bool {
+func compositionClauseBreaksToExit(statement ast.Node, body []ast.Stmt, packageConstants map[string]constant.Value) bool {
 	parents := compositionParentNodes(statement)
-	return compositionStatementsContainReachableBranch(clause.Body, func(branch *ast.BranchStmt) bool {
+	return compositionStatementsContainReachableBranch(body, func(branch *ast.BranchStmt) bool {
 		if branch.Tok != token.BREAK || branch.Label != nil {
 			return false
 		}
@@ -6145,6 +6185,28 @@ func compositionSwitchClauseBreaksToExit(statement *ast.SwitchStmt, clause *ast.
 		}
 		return false
 	}, packageConstants)
+}
+
+func compositionTypeSwitchMayFallThrough(statement *ast.TypeSwitchStmt, packageConstants map[string]constant.Value) bool {
+	hasDefault := false
+	for _, raw := range statement.Body.List {
+		clause := raw.(*ast.CaseClause)
+		hasDefault = hasDefault || len(clause.List) == 0
+		if compositionClauseBreaksToExit(statement, clause.Body, packageConstants) || compositionStatementsFallThrough(clause.Body, packageConstants) {
+			return true
+		}
+	}
+	return !hasDefault
+}
+
+func compositionSelectMayFallThrough(statement *ast.SelectStmt, packageConstants map[string]constant.Value) bool {
+	for _, raw := range statement.Body.List {
+		clause := raw.(*ast.CommClause)
+		if compositionClauseBreaksToExit(statement, clause.Body, packageConstants) || compositionStatementsFallThrough(clause.Body, packageConstants) {
+			return true
+		}
+	}
+	return false
 }
 
 func compositionStatementsFallThrough(statements []ast.Stmt, packageConstants map[string]constant.Value) bool {
@@ -6184,7 +6246,7 @@ func compositionSwitchMayFallThrough(statement *ast.SwitchStmt, packageConstants
 
 func compositionSwitchChainMayFallThrough(statement *ast.SwitchStmt, clauses []*ast.CaseClause, packageConstants map[string]constant.Value) bool {
 	for _, clause := range clauses {
-		if compositionSwitchClauseBreaksToExit(statement, clause, packageConstants) {
+		if compositionClauseBreaksToExit(statement, clause.Body, packageConstants) {
 			return true
 		}
 	}
