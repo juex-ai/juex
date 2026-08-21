@@ -1471,6 +1471,62 @@ func configure(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionTracksReferenceFields(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type cleanupHolder struct { resources []closer }
+type registrationHolder struct { registries []registrar }
+func cleanupFromField(application *App) {
+	owned := cleanupHolder{resources: make([]closer, 1)}
+	alias := owned.resources
+	alias[0] = application.manager
+	_ = owned.resources[0].Close()
+}
+func registerFromField(application *App) {
+	owned := registrationHolder{registries: make([]registrar, 1)}
+	alias := owned.registries
+	alias[0] = application.registry
+	owned.registries[0].Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "reference_fields.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",owned.resources.Close,") {
+		t.Fatalf("cleanup calls = %v, want reference field alias cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",owned.registries.Register,") {
+		t.Fatalf("Tool registration calls = %v, want reference field alias registration", registrationCalls)
+	}
+}
+
 func checkImports(t *testing.T, root, relativeDir, layer string, forbidden func(string) bool) {
 	t.Helper()
 	dir := filepath.Join(root, filepath.FromSlash(relativeDir))
@@ -2535,7 +2591,7 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 		switch value := node.(type) {
 		case *ast.AssignStmt:
 			for index, left := range value.Lhs {
-				trackReferenceAssignment(references, aliases, left, nil, value.Rhs, index, function.imports, types)
+				trackReferenceAssignment(references, aliases, left, nil, value.Rhs, index, function.imports, values, types)
 				name, indexed := assignmentBinding(left)
 				if name == nil {
 					continue
@@ -2570,7 +2626,7 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 			for _, raw := range general.Specs {
 				spec := raw.(*ast.ValueSpec)
 				for index, name := range spec.Names {
-					trackReferenceAssignment(references, aliases, name, spec.Type, spec.Values, index, function.imports, types)
+					trackReferenceAssignment(references, aliases, name, spec.Type, spec.Values, index, function.imports, values, types)
 					key := bindingKey(name)
 					assignedOrigins := assignedResultParameterOrigins(spec.Values, index, function.imports, values, origins, types)
 					for alias := range referenceAliasKeys(aliases, key) {
@@ -2732,7 +2788,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 		switch value := node.(type) {
 		case *ast.AssignStmt:
 			for index, left := range value.Lhs {
-				trackReferenceAssignment(references, aliases, left, nil, value.Rhs, index, function.imports, types)
+				trackReferenceAssignment(references, aliases, left, nil, value.Rhs, index, function.imports, values, types)
 				name, indexed := assignmentBinding(left)
 				if name == nil {
 					continue
@@ -2758,7 +2814,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 			for _, raw := range general.Specs {
 				spec := raw.(*ast.ValueSpec)
 				for index, name := range spec.Names {
-					trackReferenceAssignment(references, aliases, name, spec.Type, spec.Values, index, function.imports, types)
+					trackReferenceAssignment(references, aliases, name, spec.Type, spec.Values, index, function.imports, values, types)
 					key := bindingKey(name)
 					assignedOrigins := assignedResultParameterOrigins(spec.Values, index, function.imports, values, origins, types)
 					for alias := range referenceAliasKeys(aliases, key) {
@@ -2857,7 +2913,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 		switch value := node.(type) {
 		case *ast.AssignStmt:
 			for index, left := range value.Lhs {
-				trackReferenceAssignment(references, aliases, left, nil, value.Rhs, index, function.imports, types)
+				trackReferenceAssignment(references, aliases, left, nil, value.Rhs, index, function.imports, values, types)
 				name, indexed := assignmentBinding(left)
 				if name == nil {
 					continue
@@ -2883,7 +2939,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 			for _, raw := range general.Specs {
 				spec := raw.(*ast.ValueSpec)
 				for index, name := range spec.Names {
-					trackReferenceAssignment(references, aliases, name, spec.Type, spec.Values, index, function.imports, types)
+					trackReferenceAssignment(references, aliases, name, spec.Type, spec.Values, index, function.imports, values, types)
 					key := bindingKey(name)
 					assignedOrigins := assignedResultParameterOrigins(spec.Values, index, function.imports, values, origins, types)
 					for alias := range referenceAliasKeys(aliases, key) {
@@ -3414,7 +3470,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 			switch value := node.(type) {
 			case *ast.AssignStmt:
 				for index, left := range value.Lhs {
-					trackReferenceAssignment(references, aliases, left, nil, value.Rhs, index, imports, types)
+					trackReferenceAssignment(references, aliases, left, nil, value.Rhs, index, imports, values, types)
 					name, indexed := assignmentBinding(left)
 					if name == nil {
 						continue
@@ -3446,7 +3502,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					spec := raw.(*ast.ValueSpec)
 					paths := cleanupPathsForType(canonicalType(spec.Type, imports), types, nil)
 					for index, name := range spec.Names {
-						trackReferenceAssignment(references, aliases, name, spec.Type, spec.Values, index, imports, types)
+						trackReferenceAssignment(references, aliases, name, spec.Type, spec.Values, index, imports, values, types)
 						key := bindingKey(name)
 						if len(spec.Values) != 0 {
 							paths = assignedCleanupPaths(spec.Values, index, imports, values, resources, types)
@@ -3630,7 +3686,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 			switch value := node.(type) {
 			case *ast.AssignStmt:
 				for index, left := range value.Lhs {
-					trackReferenceAssignment(references, aliases, left, nil, value.Rhs, index, imports, types)
+					trackReferenceAssignment(references, aliases, left, nil, value.Rhs, index, imports, values, types)
 					name, indexed := assignmentBinding(left)
 					if name == nil {
 						continue
@@ -3642,13 +3698,13 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 						continue
 					}
 					typeName := assignedToolExpressionType(value.Rhs, index, imports, values, types)
-					if indexed && resolveNamedType(typeName, types) == modulePath+"/internal/tools.Registry" {
+					if indexed && isCollectionElementAssignment(left, imports, values, types) && resolveNamedType(typeName, types) == modulePath+"/internal/tools.Registry" {
 						typeName = toolRegistryCollectionType
 					}
 					if mapKey := mapAssignmentKey(left, imports, values, types); mapKey != nil && isToolRegistryExpression(mapKey, imports, values, types) {
 						typeName = mergeToolRegistryCollectionTypes(typeName, toolRegistryMapKeyCollectionType)
 					}
-					setAliasedMayValueType(values, aliases, key, typeName, types)
+					setAliasedMayValueTypeAt(values, aliases, key, assignmentFieldPrefix(left), typeName, types)
 				}
 			case *ast.DeclStmt:
 				general, ok := value.Decl.(*ast.GenDecl)
@@ -3659,7 +3715,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					spec := raw.(*ast.ValueSpec)
 					typeName := canonicalType(spec.Type, imports)
 					for index, name := range spec.Names {
-						trackReferenceAssignment(references, aliases, name, spec.Type, spec.Values, index, imports, types)
+						trackReferenceAssignment(references, aliases, name, spec.Type, spec.Values, index, imports, values, types)
 						if len(spec.Values) != 0 {
 							typeName = assignedToolExpressionType(spec.Values, index, imports, values, types)
 						}
@@ -3699,7 +3755,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 						if strings.HasPrefix(resolveNamedType(expressionType(value.Chan, imports, values, types), types), channelTypePrefix) {
 							typeName = channelTypePrefix + modulePath + "/internal/tools.Registry"
 						}
-						setAliasedMayValueType(values, aliases, key, typeName, types)
+						setAliasedMayValueTypeAt(values, aliases, key, assignmentFieldPrefix(value.Chan), typeName, types)
 					}
 				}
 			case *ast.CallExpr:
@@ -4036,7 +4092,7 @@ func assignedExpression(expressions []ast.Expr, index int) ast.Expr {
 	}
 }
 
-func trackReferenceAssignment(references map[string]bool, aliases map[string]map[string]bool, left ast.Expr, declaredType ast.Expr, expressions []ast.Expr, index int, imports map[string]string, types compositionTypeIndex) {
+func trackReferenceAssignment(references map[string]bool, aliases map[string]map[string]bool, left ast.Expr, declaredType ast.Expr, expressions []ast.Expr, index int, imports map[string]string, values map[string]string, types compositionTypeIndex) {
 	name, indexed := assignmentBinding(left)
 	if name == nil || indexed {
 		return
@@ -4044,12 +4100,13 @@ func trackReferenceAssignment(references map[string]bool, aliases map[string]map
 	key := bindingKey(name)
 	expression := assignedExpression(expressions, index)
 	declaredTypeName := resolveNamedType(canonicalType(declaredType, imports), types)
-	if !isReferenceExpression(expression, references, imports, types) && !isReferenceTypeExpression(declaredType) && !isReferenceTypeName(declaredTypeName) {
+	referenceExpression := isReferenceExpression(expression, references, imports, values, types)
+	if !referenceExpression && !isReferenceTypeExpression(declaredType) && !isReferenceTypeName(declaredTypeName) {
 		return
 	}
 	references[key] = true
 	sourceKey := referenceSourceKey(expression)
-	if sourceKey != "" && (references[sourceKey] || isAddressExpression(expression)) {
+	if sourceKey != "" && (references[sourceKey] || isAddressExpression(expression) || referenceExpression) {
 		addReferenceAlias(aliases, key, sourceKey)
 	}
 }
@@ -4082,16 +4139,18 @@ func isAddressExpression(expression ast.Expr) bool {
 	return ok && unary.Op == token.AND
 }
 
-func isReferenceExpression(expression ast.Expr, references map[string]bool, imports map[string]string, types compositionTypeIndex) bool {
+func isReferenceExpression(expression ast.Expr, references map[string]bool, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
 	switch value := expression.(type) {
 	case *ast.Ident:
 		return references[bindingKey(value)]
 	case *ast.ParenExpr:
-		return isReferenceExpression(value.X, references, imports, types)
+		return isReferenceExpression(value.X, references, imports, values, types)
 	case *ast.SliceExpr:
-		return isReferenceExpression(value.X, references, imports, types)
+		return isReferenceExpression(value.X, references, imports, values, types)
 	case *ast.UnaryExpr:
-		return value.Op == token.AND || isReferenceExpression(value.X, references, imports, types)
+		return value.Op == token.AND || isReferenceExpression(value.X, references, imports, values, types)
+	case *ast.SelectorExpr, *ast.IndexExpr:
+		return isReferenceTypeName(resolveNamedType(expressionType(expression, imports, values, types), types))
 	case *ast.CompositeLit:
 		typeName := resolveNamedType(canonicalType(value.Type, imports), types)
 		return isReferenceTypeExpression(value.Type) || isReferenceTypeName(typeName)
@@ -4144,9 +4203,18 @@ func mergeAliasedCleanupPaths(resources map[string]map[string]bool, aliases map[
 }
 
 func setAliasedMayValueType(values map[string]string, aliases map[string]map[string]bool, key, typeName string, types compositionTypeIndex) {
+	setAliasedMayValueTypeAt(values, aliases, key, "", typeName, types)
+}
+
+func setAliasedMayValueTypeAt(values map[string]string, aliases map[string]map[string]bool, key, prefix, typeName string, types compositionTypeIndex) {
 	for alias := range referenceAliasKeys(aliases, key) {
-		root, _ := splitAssignmentValueKey(alias)
-		setMayValueType(values, root, typeName, types)
+		root, aliasPrefix := splitAssignmentValueKey(alias)
+		suffix := strings.TrimSuffix(aliasPrefix+prefix, ".")
+		target := root
+		if suffix != "" {
+			target += "." + suffix
+		}
+		setMayValueType(values, target, typeName, types)
 	}
 }
 
@@ -4232,6 +4300,20 @@ func mapAssignmentKey(expression ast.Expr, imports map[string]string, values map
 			return nil
 		default:
 			return nil
+		}
+	}
+}
+
+func isCollectionElementAssignment(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
+	for {
+		switch value := expression.(type) {
+		case *ast.ParenExpr:
+			expression = value.X
+		case *ast.IndexExpr:
+			typeName := resolveNamedType(expressionType(value.X, imports, values, types), types)
+			return strings.HasPrefix(typeName, sliceTypePrefix) || strings.HasPrefix(typeName, mapTypePrefix)
+		default:
+			return false
 		}
 	}
 }
@@ -4998,6 +5080,9 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 	case *ast.CompositeLit:
 		return canonicalType(value.Type, imports)
 	case *ast.SelectorExpr:
+		if typeName := values[assignmentValueKey(value)]; typeName != "" {
+			return typeName
+		}
 		receiverType := expressionType(value.X, imports, values, types)
 		methodKey := receiverType + "." + value.Sel.Name
 		_, interfaceMethod := types.interfaceMethods[methodKey]
