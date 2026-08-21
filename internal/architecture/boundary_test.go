@@ -17,6 +17,12 @@ const modulePath = "github.com/juex-ai/juex"
 
 const callableCleanupPath = "$call"
 
+const (
+	sliceTypePrefix = "$slice:"
+	mapTypePrefix   = "$map:"
+	typeSeparator   = "\x00"
+)
+
 var concreteFeatureImports = []string{
 	modulePath + "/internal/hooks",
 	modulePath + "/internal/mcp",
@@ -304,6 +310,37 @@ func (application *App) Close() error {
 	})
 	if len(calls) != 2 || calls[0] != "closeTransitively" || calls[1] != "runCleanup" {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
+	}
+}
+
+func TestAppFeatureCleanupInspectionTracksRangeValues(t *testing.T) {
+	source := `package app
+import "github.com/juex-ai/juex/internal/mcp"
+type App struct{}
+func closeMany(clients []*mcp.Client, indexed map[*mcp.Client]struct{}) {
+	for _, client := range clients { _ = client.Close() }
+	for client := range indexed { _ = client.Close() }
+}`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "range.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		calls = append(calls, chain)
+	})
+	want := []string{"client.Close", "client.Close"}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] {
+		t.Fatalf("cleanup calls = %v, want %v", calls, want)
 	}
 }
 
@@ -672,6 +709,17 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 					}
 				}
 			}
+		case *ast.RangeStmt:
+			origin := originsForExpression(value.X, origins)
+			keyType, valueType, _ := rangeTypes(expressionType(value.X, function.imports, values, types))
+			if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" {
+				origins[name.Name] = origin
+				values[name.Name] = keyType
+			}
+			if name, ok := value.Value.(*ast.Ident); ok && name.Name != "_" {
+				origins[name.Name] = origin
+				values[name.Name] = valueType
+			}
 		case *ast.CallExpr:
 			mergeOrigins(cleaned, callableOrigins(value.Fun, origins))
 			if selector, ok := value.Fun.(*ast.SelectorExpr); ok && isFeatureCleanupMethodName(selector.Sel.Name) {
@@ -723,6 +771,17 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 						origins[name.Name] = originsForExpression(spec.Values[index], origins)
 					}
 				}
+			}
+		case *ast.RangeStmt:
+			origin := originsForExpression(value.X, origins)
+			keyType, valueType, _ := rangeTypes(expressionType(value.X, function.imports, values, types))
+			if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" {
+				origins[name.Name] = origin
+				values[name.Name] = keyType
+			}
+			if name, ok := value.Value.(*ast.Ident); ok && name.Name != "_" {
+				origins[name.Name] = origin
+				values[name.Name] = valueType
 			}
 		case *ast.CallExpr:
 			mergeOrigins(registered, callableOrigins(value.Fun, origins))
@@ -884,6 +943,27 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 						}
 					}
 				}
+			case *ast.RangeStmt:
+				keyType, valueType, ok := rangeTypes(expressionType(value.X, imports, values, types))
+				if !ok {
+					break
+				}
+				if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" {
+					values[name.Name] = keyType
+					if paths := cleanupPathsForType(keyType, types, nil); paths != nil {
+						resources[name.Name] = paths
+					} else {
+						delete(resources, name.Name)
+					}
+				}
+				if name, ok := value.Value.(*ast.Ident); ok && name.Name != "_" {
+					values[name.Name] = valueType
+					if paths := cleanupPathsForType(valueType, types, nil); paths != nil {
+						resources[name.Name] = paths
+					} else {
+						delete(resources, name.Name)
+					}
+				}
 			case *ast.CallExpr:
 				callee := calledFunctionKey(value.Fun, imports, values, types)
 				for index := range types.cleanupParams[callee] {
@@ -960,6 +1040,17 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 						}
 					}
 				}
+			case *ast.RangeStmt:
+				keyType, valueType, ok := rangeTypes(expressionType(value.X, imports, values, types))
+				if !ok {
+					break
+				}
+				if name, ok := value.Key.(*ast.Ident); ok && name.Name != "_" {
+					values[name.Name] = keyType
+				}
+				if name, ok := value.Value.(*ast.Ident); ok && name.Name != "_" {
+					values[name.Name] = valueType
+				}
 			case *ast.CallExpr:
 				callee := calledFunctionKey(value.Fun, imports, values, types)
 				for index := range types.toolParams[callee] {
@@ -1014,6 +1105,10 @@ func canonicalTypeInPackage(expression ast.Expr, imports map[string]string, pack
 				return ""
 			}
 			return imports[qualifier.Name] + "." + value.Sel.Name
+		case *ast.ArrayType:
+			return sliceTypePrefix + canonicalTypeInPackage(value.Elt, imports, packagePath)
+		case *ast.MapType:
+			return mapTypePrefix + canonicalTypeInPackage(value.Key, imports, packagePath) + typeSeparator + canonicalTypeInPackage(value.Value, imports, packagePath)
 		case *ast.Ident:
 			return packagePath + "." + value.Name
 		default:
@@ -1065,6 +1160,10 @@ func featureCleanupMethods(typeName string, types compositionTypeIndex) map[stri
 }
 
 func cleanupPathsForType(typeName string, types compositionTypeIndex, visiting map[string]bool) map[string]bool {
+	if keyType, valueType, ok := rangeTypes(typeName); ok {
+		_ = keyType
+		return cleanupPathsForType(valueType, types, visiting)
+	}
 	if typeName == modulePath+"/internal/app.App" && len(visiting) != 0 {
 		return nil
 	}
@@ -1090,6 +1189,19 @@ func cleanupPathsForType(typeName string, types compositionTypeIndex, visiting m
 		return nil
 	}
 	return paths
+}
+
+func rangeTypes(typeName string) (string, string, bool) {
+	if strings.HasPrefix(typeName, sliceTypePrefix) {
+		return "", strings.TrimPrefix(typeName, sliceTypePrefix), true
+	}
+	if strings.HasPrefix(typeName, mapTypePrefix) {
+		parts := strings.SplitN(strings.TrimPrefix(typeName, mapTypePrefix), typeSeparator, 2)
+		if len(parts) == 2 {
+			return parts[0], parts[1], true
+		}
+	}
+	return "", "", false
 }
 
 func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types compositionTypeIndex) map[string]bool {
