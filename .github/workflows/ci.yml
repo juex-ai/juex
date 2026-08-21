@@ -84,7 +84,13 @@ jobs:
             rg_dir="$(cygpath -w "$rg_dir")"
           fi
           printf '%s\n' "$rg_dir" >> "$GITHUB_PATH"
-      - run: go test ./... -race -count=1
+      - name: Run Go race tests
+        if: matrix.os != 'windows-latest'
+        run: go test ./... -race -count=1
+        shell: bash
+      - name: Run Go race tests serially on Windows
+        if: matrix.os == 'windows-latest'
+        run: go test ./... -race -count=1 -p=1
         shell: bash
       - name: Test release installer
         if: matrix.os != 'windows-latest'
