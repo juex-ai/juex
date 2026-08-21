@@ -74,6 +74,7 @@ type compositionTypeIndex struct {
 	toolParams      map[string]map[int]bool
 	cleanupResults  map[string]map[int]map[string]bool
 	toolResults     map[string]map[int]bool
+	appFunctionKeys map[string]bool
 	appFunctions    []indexedAppFunction
 }
 
@@ -343,6 +344,10 @@ func cleanupFromLiteral(application *App) {
 	cleanup := func(resource closer) { _ = resource.Close() }
 	cleanup(application.manager)
 }
+func cleanupThroughAlias(application *App) {
+	cleanup := closeOwned
+	cleanup(application.manager)
+}
 func cleanupAfterShadow(application *App, unrelated closer) {
 	manager := application.manager
 	{
@@ -383,7 +388,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"cleanup", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
+	want := []string{"cleanup", "cleanup", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -473,6 +478,10 @@ func registerFromLiteral(application *App) {
 	register := func(registry registrar) { _ = registry.Register(nil) }
 	register(application.registry)
 }
+func registerThroughAlias(application *App) {
+	register := registerOwned
+	register(application.registry)
+}
 func registerAfterShadow(application *App, unrelated *router) {
 	registry := application.registry
 	{
@@ -533,7 +542,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"register", "registry.Register", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
+	want := []string{"register", "register", "registry.Register", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "Register", "Register", "Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -624,6 +633,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 		toolParams:      make(map[string]map[int]bool),
 		cleanupResults:  make(map[string]map[int]map[string]bool),
 		toolResults:     make(map[string]map[int]bool),
+		appFunctionKeys: make(map[string]bool),
 	}
 	for typeName, methods := range featureResourceCleanupMethods {
 		types.cleanupMethods[typeName] = methods
@@ -761,6 +771,7 @@ func indexCleanupAndConstructors(file *ast.File, packagePath string, imports map
 				imports: imports,
 			}
 			types.appFunctions = append(types.appFunctions, indexed)
+			types.appFunctionKeys[indexed.key] = true
 			indexLocalFunctionLiterals(indexed, types)
 		}
 		if function.Recv == nil {
@@ -832,6 +843,7 @@ func indexLocalFunctionLiteral(parent indexedAppFunction, name *ast.Ident, liter
 		imports: parent.imports,
 	}
 	types.appFunctions = append(types.appFunctions, indexed)
+	types.appFunctionKeys[indexed.key] = true
 	indexLocalFunctionLiterals(indexed, types)
 }
 
@@ -1861,7 +1873,14 @@ func calledFunctionKey(expression ast.Expr, imports map[string]string, values ma
 func expressionType(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) string {
 	switch value := expression.(type) {
 	case *ast.Ident:
-		return values[bindingKey(value)]
+		if typeName := values[bindingKey(value)]; typeName != "" {
+			return typeName
+		}
+		functionKey := modulePath + "/internal/app." + value.Name
+		if types.appFunctionKeys[functionKey] {
+			return localFunctionTypePrefix + functionKey
+		}
+		return ""
 	case *ast.ParenExpr:
 		return expressionType(value.X, imports, values, types)
 	case *ast.StarExpr:
