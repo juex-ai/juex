@@ -330,6 +330,8 @@ type App struct {
 	namedClosureRegistry registrar
 	nestedClosureResource closer
 	nestedClosureRegistry registrar
+	correlatedResource closer
+	correlatedRegistry registrar
 }
 type AppAlias = App
 var appFactory = func(manager *mcp.Manager, registry *tools.Registry) *App {
@@ -381,6 +383,14 @@ func newNestedClosureApp(manager *mcp.Manager, registry *tools.Registry) *App {
 	}
 	return factory(manager, registry)
 }
+func (application *App) bindCorrelated(manager *mcp.Manager, registry *tools.Registry) {
+	setter := func(target *App, resource any, registryValue any) {
+		target.correlatedResource = resource.(closer)
+		target.correlatedRegistry = registryValue.(registrar)
+	}
+	setter(application, struct{}{}, struct{}{})
+	setter(&App{}, manager, registry)
+}
 func (application *App) bypass() {
 	_ = application.resource.Close()
 	application.registry.Register(nil)
@@ -396,6 +406,8 @@ func (application *App) bypass() {
 	application.namedClosureRegistry.Register(nil)
 	_ = application.nestedClosureResource.Close()
 	application.nestedClosureRegistry.Register(nil)
+	_ = application.correlatedResource.Close()
+	application.correlatedRegistry.Register(nil)
 }
 `
 	dir := t.TempDir()
@@ -10112,6 +10124,12 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 							}
 						}
 						if literal != nil {
+							outerValues := values
+							outerResources := resources
+							outerReceivers := receivers
+							values = cloneStringMap(values)
+							resources = cloneCleanupResourceMap(resources)
+							receivers = cloneBoolMap(receivers)
 							seedAppFieldLiteralParameters(literal, source.imports, values, resources, *types)
 							seedAppFieldLiteralArguments(statement, literal, source.imports, values, resources, receivers, *types)
 							if !activeLiterals[literal] {
@@ -10122,6 +10140,9 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 								activeFunctionKey = previousFunctionKey
 								delete(activeLiterals, literal)
 							}
+							values = outerValues
+							resources = outerResources
+							receivers = outerReceivers
 							for _, argument := range statement.Args {
 								ast.Inspect(argument, visit)
 							}
