@@ -96,6 +96,7 @@ type compositionTypeIndex struct {
 	packageValues    map[string]string
 	packageResources map[string]map[string]bool
 	interfaceMethods map[string]methodShape
+	interfaceEmbeds  map[string][]string
 	concreteMethods  map[string]methodShape
 	methodImpls      map[string][]string
 }
@@ -1366,15 +1367,21 @@ type closer interface { Close() error }
 type registrar interface { Register(tools.Tool) error }
 type cleanupDispatcher interface { Run(closer) }
 type registrationDispatcher interface { Run(registrar) }
+type embeddedCleanupDispatcher interface { cleanupDispatcher }
+type embeddedRegistrationDispatcher interface { registrationDispatcher }
 type cleanupDispatchImpl struct{}
 type registrationDispatchImpl struct{}
 func (cleanupDispatchImpl) Run(resource closer) { _ = resource.Close() }
 func (registrationDispatchImpl) Run(registry registrar) { _ = registry.Register(nil) }
 func dispatchCleanup(dispatcher cleanupDispatcher, resource closer) { dispatcher.Run(resource) }
 func dispatchRegistration(dispatcher registrationDispatcher, registry registrar) { dispatcher.Run(registry) }
+func dispatchEmbeddedCleanup(dispatcher embeddedCleanupDispatcher, resource closer) { dispatcher.Run(resource) }
+func dispatchEmbeddedRegistration(dispatcher embeddedRegistrationDispatcher, registry registrar) { dispatcher.Run(registry) }
 func configure(application *App) {
 	dispatchCleanup(cleanupDispatchImpl{}, application.manager)
 	dispatchRegistration(registrationDispatchImpl{}, application.registry)
+	dispatchEmbeddedCleanup(cleanupDispatchImpl{}, application.manager)
+	dispatchEmbeddedRegistration(registrationDispatchImpl{}, application.registry)
 	cleanup := cleanupDispatchImpl{}.Run
 	cleanup(application.manager)
 	registration := registrationDispatchImpl{}.Run
@@ -1398,15 +1405,15 @@ func configure(application *App) {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",dispatchCleanup,") || !strings.Contains(cleanup, ",cleanup,") {
-		t.Fatalf("cleanup calls = %v, want interface-dispatched cleanup and helper method value", cleanupCalls)
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",dispatchCleanup,") || !strings.Contains(cleanup, ",dispatchEmbeddedCleanup,") || !strings.Contains(cleanup, ",cleanup,") {
+		t.Fatalf("cleanup calls = %v, want direct/embedded interface dispatch and helper method value", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",dispatchRegistration,") || !strings.Contains(registration, ",registration,") {
-		t.Fatalf("Tool registration calls = %v, want interface-dispatched registration and helper method value", registrationCalls)
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",dispatchRegistration,") || !strings.Contains(registration, ",dispatchEmbeddedRegistration,") || !strings.Contains(registration, ",registration,") {
+		t.Fatalf("Tool registration calls = %v, want direct/embedded interface dispatch and helper method value", registrationCalls)
 	}
 }
 
@@ -1499,6 +1506,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 		variadicParams:   make(map[string]int),
 		appFunctionKeys:  make(map[string]bool),
 		interfaceMethods: make(map[string]methodShape),
+		interfaceEmbeds:  make(map[string][]string),
 		concreteMethods:  make(map[string]methodShape),
 		methodImpls:      make(map[string][]string),
 	}
@@ -1565,6 +1573,7 @@ func appCompositionTypes(appDir string) (compositionTypeIndex, error) {
 	if err := indexConcreteFeatureSources(repositoryRootPath(), &types); err != nil {
 		return compositionTypeIndex{}, err
 	}
+	indexEmbeddedInterfaceMethods(&types)
 	indexInterfaceMethodImplementations(&types)
 	indexLocalFlows(&types)
 	types.packageValues, types.packageResources = packageBindingStateForSources(appSources, types)
@@ -1717,6 +1726,9 @@ func indexInterfaceMethods(contract *ast.InterfaceType, typeName string, imports
 	for _, field := range contract.Methods.List {
 		function, ok := field.Type.(*ast.FuncType)
 		if !ok {
+			if embedded := canonicalTypeInPackage(field.Type, imports, packagePath); embedded != "" {
+				types.interfaceEmbeds[typeName] = append(types.interfaceEmbeds[typeName], embedded)
+			}
 			continue
 		}
 		for _, name := range field.Names {
@@ -1759,6 +1771,35 @@ func methodFieldTypes(fields *ast.FieldList, imports map[string]string, packageP
 		}
 	}
 	return resolved, variadic
+}
+
+func indexEmbeddedInterfaceMethods(types *compositionTypeIndex) {
+	for {
+		changed := false
+		for interfaceType, embeddedTypes := range types.interfaceEmbeds {
+			for _, embeddedType := range embeddedTypes {
+				prefix := embeddedType + "."
+				for embeddedKey, shape := range types.interfaceMethods {
+					if !strings.HasPrefix(embeddedKey, prefix) {
+						continue
+					}
+					key := interfaceType + "." + strings.TrimPrefix(embeddedKey, prefix)
+					if _, exists := types.interfaceMethods[key]; exists {
+						continue
+					}
+					types.interfaceMethods[key] = shape
+					types.functionResults[key] = append([]string(nil), shape.results...)
+					if shape.variadic {
+						types.variadicParams[key] = len(shape.parameters) - 1
+					}
+					changed = true
+				}
+			}
+		}
+		if !changed {
+			return
+		}
+	}
 }
 
 func indexInterfaceMethodImplementations(types *compositionTypeIndex) {
