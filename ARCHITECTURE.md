@@ -1650,7 +1650,7 @@ run/dry-run output carries structured `warnings`, and REPL warnings use the
 REPL stderr writer.
 
 Root persistent flags are published on non-Fleet subcommands. Fleet help omits
-workspace-scoped `--config`, `--cwd`, and `--model`; the runtime guard still
+workspace-scoped `--config`, `--cwd`, and `--models`; the runtime guard still
 rejects those flags if they are supplied before the Fleet command. Fleet
 continues to publish the operational flags that it accepts:
 
@@ -1658,7 +1658,7 @@ continues to publish the operational flags that it accepts:
 |---|---|---|---|
 | `--config` |  | unset (path to `juex.yaml` override) | unavailable |
 | `--cwd` | `-C` | `$PWD` (mirrors `git -C`) | unavailable |
-| `--model` |  | unset (`provider:model` override) | unavailable |
+| `--models` |  | unset (comma-separated ordered `provider:model` chain) | unavailable |
 | `--enable-user-agents-resources` |  | config value (true/false or 1/0) | available |
 | `--debug` |  | false (write detailed runtime diagnostics) | available |
 | `--log-level` |  | `info` | available |
@@ -2251,8 +2251,8 @@ directory, where Juex reads `<WorkDir>/juex.yaml`. The repository root ships
 `juex.yaml.example` as a copyable template:
 
 ```yaml
-model: openai:gpt-4.1
-fallback_models:
+models:
+  - openai:gpt-4.1
   - anthropic:claude-sonnet-5
 enable_user_agents_resources: true
 environment:
@@ -2325,8 +2325,7 @@ tool_output:
 
 | Field | Description |
 |---|---|
-| `model` | active model reference in `provider:model` form |
-| `fallback_models` | optional ordered `provider:model` list used after eligible request failures; an explicit empty list clears an inherited list |
+| `models` | ordered `provider:model` chain; the first entry is primary, later entries are fallbacks, and a nearer YAML layer replaces the complete list, including with an explicit empty list |
 | `enable_user_agents_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores only `~/.agents/AGENTS.md`, `~/.agents/skills`, and `~/.agents/mcp.json`; the Extension allowlist is unchanged |
 | `environment.load_dotenv` | optional boolean; defaults to `true`; reads exactly `<WorkDir>/.env` once during runtime config loading; a missing file is allowed and malformed input fails startup |
 | `environment.variables` | optional string map merged into the immutable runtime environment; portable names are required and Juex-owned identity/path names are rejected |
@@ -2373,7 +2372,7 @@ tool_output:
 | `compaction.instructions` | persistent summary focus applied before per-request instructions and successful `PreCompact` hook stdout |
 | `compaction.reserve_tokens` | token budget held back from the provider window |
 | `compaction.keep_recent_tokens` | approximate token budget for retaining recent direct, MCP, and Observable inputs verbatim; a single larger input becomes a bounded artifact reference at compaction |
-| `compaction.summary_model` | optional first `provider:model` candidate used only for compaction summary calls; after failure, compaction continues through the ordered primary and `fallback_models` chain without a provider-visible model-change notice |
+| `compaction.summary_model` | optional first `provider:model` candidate used only for compaction summary calls; after failure, compaction continues through the ordered `models` chain without a provider-visible model-change notice |
 | `compaction.summary_max_tokens` | maximum output tokens for summary generation |
 | `compaction.tool_result_max_chars` | per-tool-result truncation limit in summary input |
 | `compaction.user_input_inline_max_bytes` | user text larger than this is stored under `artifacts/sessions/<session-id>/user-inputs/` in Agent state and replaced by a stable preview before provider calls |
@@ -2389,15 +2388,14 @@ YAML resolution order (later wins) is `defaults` <
 `<WorkDir>/.juex/juex.yaml` (or `<WorkDir>/juex.yaml` when `WorkDir` is a
 `.juex` directory) <
 `--config <path>` (if supplied) < supported environment overrides < explicit
-CLI flags. `--model provider:model` selects a configured
-provider:model after YAML merge and wins over `PROVIDER_API_ID`,
+CLI flags. A root `--models provider:model,...` replaces the complete YAML
+model chain after YAML merge and wins over `PROVIDER_API_ID`,
 `PROVIDER_API_PROTOCOL`, and `PROVIDER_API_MODEL`; non-conflicting env overrides
 such as `PROVIDER_API_BASE`, `PROVIDER_API_KEY`, `PROVIDER_THINKING_EFFORT`,
 and `PROVIDER_CONTEXT_WINDOW` still apply.
 `PROVIDER_API_MODEL` remains a model-id-only override under the selected
-provider. Primary overrides preserve `fallback_models`; any fallback selected
-as the primary by YAML layering, environment, or CLI override is removed from
-the effective chain.
+provider and preserves the configured tail. Every configured reference must be
+unique and resolve to a declared provider model.
 
 The runtime child-process environment is a separate immutable snapshot with
 this precedence (later wins): selected Extension manifest defaults <
@@ -2424,8 +2422,9 @@ workspace YAML, `.env`, and Extension defaults. A process may activate only one
 workspace snapshot at a time.
 Provider definitions merge by `providers[].id` and
 `providers[].models[].id`, so an instance or workspace config can set only
-`model: provider:model` or override a few fields while inheriting missing
-values from the preceding home layer. `shell` is an object-level override rather than a
+the top-level `models` list or override a few provider fields while inheriting
+missing values from the preceding home layer. The `models` list itself is not
+merged: a nearer layer replaces it completely. `shell` is an object-level override rather than a
 deep merge: workspace `shell: {}` resets any user-global shell config back to
 auto.
 
@@ -2574,8 +2573,8 @@ expose them, but encrypted/redacted reasoning payloads are represented only as
 small metadata placeholders; those blobs are replay material for compatible
 providers, not useful content for the summary model.
 Compaction summary candidates are the optional dedicated `summary_model`, then
-the effective primary and every configured `fallback_models` entry, in order
-and deduplicated by ref. Selection shares the runtime model-health state, so a
+the effective top-level `models` chain, in order and deduplicated by ref.
+Selection shares the runtime model-health state, so a
 candidate in cooldown or reserved for another half-open probe is skipped. Each
 actual attempt refits the bounded summary request to that candidate's context
 window and checkpoints a fresh Request Epoch. Generic provider failures advance

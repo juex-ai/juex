@@ -438,7 +438,7 @@ func configTestDependencies(entry agentstate.RegistryEntry, runtimeState endpoin
 }
 
 func validFleetConfig(model string) []byte {
-	return []byte(`model: local:` + model + `
+	return []byte(`models: [local:` + model + `]
 providers:
   - id: local
     protocol: openai/chat

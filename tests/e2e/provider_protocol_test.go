@@ -148,7 +148,7 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 
 			work := t.TempDir()
 			configPath := filepath.Join(work, ".juex", "juex.yaml")
-			body := "model: " + tc.modelRef + "\nproviders:\n" +
+			body := "models: [" + tc.modelRef + "]\nproviders:\n" +
 				strings.ReplaceAll(tc.providerYAML, "BASE_URL", srv.URL)
 			if err := writeText(configPath, body); err != nil {
 				t.Fatal(err)
@@ -296,7 +296,7 @@ func TestLiveBinary_OpenAIChatStreamsByDefault(t *testing.T) {
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	configBody := "model: local-chat:chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+	configBody := "models: [local-chat:chat-test]\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
@@ -341,7 +341,7 @@ func TestLiveBinary_SessionOwnedTimeCacheAndActiveSelection(t *testing.T) {
 	defer provider.Close()
 
 	work := t.TempDir()
-	configBody := fmt.Sprintf(`model: local:test-model
+	configBody := fmt.Sprintf(`models: [local:test-model]
 providers:
   - id: local
     protocol: openai/chat
@@ -501,8 +501,8 @@ func TestLiveBinary_ModelFallbackPersistsNoticeAndServingModel(t *testing.T) {
 	defer backup.Close()
 
 	work := t.TempDir()
-	configBody := fmt.Sprintf(`model: primary:primary-model
-fallback_models:
+	configBody := fmt.Sprintf(`models:
+  - primary:primary-model
   - backup:backup-model
 runtime:
   notify_model_changes: true
@@ -606,8 +606,8 @@ func TestLiveBinary_ModelFallbackDoesNotNotifyByDefault(t *testing.T) {
 	defer backup.Close()
 
 	work := t.TempDir()
-	configBody := fmt.Sprintf(`model: primary:primary-model
-fallback_models:
+	configBody := fmt.Sprintf(`models:
+  - primary:primary-model
   - backup:backup-model
 providers:
   - id: primary
@@ -699,7 +699,7 @@ func TestLiveBinary_CodexSSERetriesAfterProvisionalOutput(t *testing.T) {
 	defer provider.Close()
 
 	work := t.TempDir()
-	configBody := fmt.Sprintf(`model: openai-codex:gpt-test
+	configBody := fmt.Sprintf(`models: [openai-codex:gpt-test]
 providers:
   - id: openai-codex
     base_url: %s
@@ -769,7 +769,7 @@ func TestLiveBinary_SessionsContinueResumesSideWithoutActivatingIt(t *testing.T)
 	defer provider.Close()
 
 	work := t.TempDir()
-	configBody := fmt.Sprintf(`model: local-chat:chat-test
+	configBody := fmt.Sprintf(`models: [local-chat:chat-test]
 providers:
   - id: local-chat
     protocol: openai/chat
@@ -879,7 +879,7 @@ func TestLiveBinary_CLIRunAttachmentSendsImageAndPersistsArtifact(t *testing.T) 
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	configBody := `model: local-chat:vision-test
+	configBody := `models: [local-chat:vision-test]
 providers:
   - id: local-chat
     protocol: openai/chat
@@ -968,7 +968,7 @@ func TestLiveBinary_CLIRunNonVisionAttachmentWarnsAndProjectsUnavailableText(t *
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	configBody := `model: local-chat:text-test
+	configBody := `models: [local-chat:text-test]
 providers:
   - id: local-chat
     protocol: openai/chat
@@ -1064,7 +1064,7 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "model: local-chat:chat-test\nextensions:\n  allow: [" + extensionName + "]\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+	body := "models: [local-chat:chat-test]\nextensions:\n  allow: [" + extensionName + "]\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
@@ -1167,7 +1167,7 @@ func TestLiveBinary_CLIVerboseCompactsToolBatch(t *testing.T) {
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	configBody := "model: local-chat:chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+	configBody := "models: [local-chat:chat-test]\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
@@ -1263,7 +1263,7 @@ func TestLiveBinary_ShellYieldIgnoresRuntimeToolTimeout(t *testing.T) {
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "model: local-chat:chat-test\nruntime:\n  tool_timeout: 1s\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+	body := "models: [local-chat:chat-test]\nruntime:\n  tool_timeout: 1s\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
@@ -1384,7 +1384,7 @@ func main() {
 	defer srv.Close()
 
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "model: local-chat:chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+	body := "models: [local-chat:chat-test]\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
@@ -1476,7 +1476,7 @@ func TestLiveBinary_CtrlCCancelsExecCommandTool(t *testing.T) {
 	defer srv.Close()
 
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "model: local-chat:chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+	body := "models: [local-chat:chat-test]\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
@@ -1567,7 +1567,7 @@ func TestLiveBinary_ProviderErrorJSONIncludesSessionMetadata(t *testing.T) {
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "model: openai:gpt-test\nproviders:\n" + strings.ReplaceAll(`  - id: openai
+	body := "models: [openai:gpt-test]\nproviders:\n" + strings.ReplaceAll(`  - id: openai
     protocol: openai/responses
     base_url: BASE_URL
     api_key: k
@@ -1620,7 +1620,7 @@ func TestLiveBinary_ProviderDeadlineErrorJSONIsTimeout(t *testing.T) {
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "model: openai:gpt-test\nproviders:\n" + strings.ReplaceAll(`  - id: openai
+	body := "models: [openai:gpt-test]\nproviders:\n" + strings.ReplaceAll(`  - id: openai
     protocol: openai/responses
     base_url: BASE_URL
     api_key: k

@@ -33,7 +33,7 @@ type Config struct {
 	BaseURL                   string
 	APIKey                    string
 	Model                     string
-	FallbackModels            []string
+	Models                    []string
 	ThinkingEffort            string // "low", "medium", "high", "xhigh", "max", or "" (provider default)
 	ContextWindow             int    // provider context window in tokens; defaults to 256K
 	MaxOutputTokens           int    // optional provider-visible output cap for normal turns
@@ -67,7 +67,6 @@ type Config struct {
 	AgentStateNotices []string
 	agentStateLoaded  bool
 
-	modelRef                     string
 	shellConfig                  ShellConfig
 	providerConfigs              map[string]providerConfig
 	defaultHomeRuntimeConfigPath string
@@ -91,7 +90,7 @@ const (
 type LoadOptions struct {
 	WorkDir    string
 	ConfigPath string
-	ModelRef   string
+	ModelRefs  []string
 	AgentState AgentStateMode
 }
 
@@ -105,8 +104,7 @@ type EnvironmentStatus struct {
 }
 
 type fileConfig struct {
-	Model                     string                  `yaml:"model"`
-	FallbackModels            *[]string               `yaml:"fallback_models"`
+	Models                    *[]string               `yaml:"models"`
 	EnableUserAgentsResources optionalBool            `yaml:"enable_user_agents_resources"`
 	Providers                 []providerConfig        `yaml:"providers"`
 	Compaction                compactionConfig        `yaml:"compaction"`
@@ -166,7 +164,7 @@ type providerCompatConfig struct {
 type CompactionConfig = runtimepolicy.CompactionPolicy
 type ToolOutputConfig = runtimepolicy.ToolOutputPolicy
 
-// ModelRef is the provider:model selector used by the top-level config model.
+// ModelRef is one provider:model selector used by the top-level models chain.
 // The provider id may not contain ":", while the model id may contain slashes
 // for OpenAI-compatible proxy model names such as meta-llama/Llama-3.
 type ModelRef struct {
@@ -189,8 +187,8 @@ func (r ModelRef) String() string {
 	return r.ProviderID + ":" + r.ModelID
 }
 
-// ApplyModelOverride selects a configured provider:model using the same
-// provider:model grammar as the top-level YAML model field.
+// ApplyModelOverride selects one configured provider:model. It is used when a
+// caller needs to resolve a candidate independently of the configured chain.
 func (c *Config) ApplyModelOverride(ref string) error {
 	trimmed := strings.TrimSpace(ref)
 	modelRef, err := ParseModelRef(trimmed)
@@ -200,21 +198,21 @@ func (c *Config) ApplyModelOverride(ref string) error {
 	return resolveSelectedProviderRef(c, modelRef)
 }
 
-// ModelOverrideError marks a failure caused by an explicit model override,
-// allowing CLI callers to map it to usage errors without misclassifying
-// unrelated config load failures.
-type ModelOverrideError struct {
+// ModelsOverrideError marks a failure caused by an explicit model-chain
+// override, allowing CLI callers to map it to usage errors without
+// misclassifying unrelated config load failures.
+type ModelsOverrideError struct {
 	Err error
 }
 
-func (e *ModelOverrideError) Error() string {
+func (e *ModelsOverrideError) Error() string {
 	if e == nil || e.Err == nil {
 		return ""
 	}
 	return e.Err.Error()
 }
 
-func (e *ModelOverrideError) Unwrap() error {
+func (e *ModelsOverrideError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
@@ -397,7 +395,7 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 			return cfg, err
 		}
 	}
-	if err := finalizeConfigLoadWithAgentState(&cfg, opts.ModelRef, true, opts.AgentState); err != nil {
+	if err := finalizeConfigLoadWithAgentState(&cfg, opts.ModelRefs, true, opts.AgentState); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -409,7 +407,7 @@ func LoadForWorkDir(workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if err := finalizeConfigLoad(&cfg, "", true); err != nil {
+	if err := finalizeConfigLoad(&cfg, nil, true); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -422,20 +420,20 @@ func LoadForWorkDirForValidation(workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if err := finalizeConfigLoadForValidation(&cfg, "", true); err != nil {
+	if err := finalizeConfigLoadForValidation(&cfg, nil, true); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
 }
 
-// LoadForWorkDirWithModelOverride is LoadForWorkDir with an explicit model
-// selector that wins over YAML and PROVIDER_API_MODEL.
-func LoadForWorkDirWithModelOverride(workDir, modelRef string) (Config, error) {
+// LoadForWorkDirWithModelsOverride is LoadForWorkDir with an explicit ordered
+// model chain that wins over YAML and provider selector environment values.
+func LoadForWorkDirWithModelsOverride(workDir string, modelRefs []string) (Config, error) {
 	cfg, err := loadConfigFilesForWorkDir(workDir)
 	if err != nil {
 		return cfg, err
 	}
-	if err := finalizeConfigLoad(&cfg, modelRef, true); err != nil {
+	if err := finalizeConfigLoad(&cfg, modelRefs, true); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -512,7 +510,7 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if err := finalizeConfigLoad(&cfg, "", true); err != nil {
+	if err := finalizeConfigLoad(&cfg, nil, true); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -528,15 +526,16 @@ func LoadFromFileForWorkDirForValidation(path, workDir string) (Config, error) {
 	if err := applyExplicitYAMLFile(&cfg, path); err != nil {
 		return cfg, err
 	}
-	if err := finalizeConfigLoadForValidation(&cfg, "", true); err != nil {
+	if err := finalizeConfigLoadForValidation(&cfg, nil, true); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
 }
 
-// LoadFromFileForWorkDirWithModelOverride is LoadFromFileForWorkDir with an
-// explicit model selector that wins over YAML and PROVIDER_API_MODEL.
-func LoadFromFileForWorkDirWithModelOverride(path, workDir, modelRef string) (Config, error) {
+// LoadFromFileForWorkDirWithModelsOverride is LoadFromFileForWorkDir with an
+// explicit ordered model chain that wins over YAML and provider selector
+// environment values.
+func LoadFromFileForWorkDirWithModelsOverride(path, workDir string, modelRefs []string) (Config, error) {
 	cfg, err := loadConfigFilesForWorkDir(workDir)
 	if err != nil {
 		return cfg, err
@@ -545,23 +544,23 @@ func LoadFromFileForWorkDirWithModelOverride(path, workDir, modelRef string) (Co
 	if err != nil {
 		return cfg, err
 	}
-	if err := finalizeConfigLoad(&cfg, modelRef, true); err != nil {
+	if err := finalizeConfigLoad(&cfg, modelRefs, true); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
 }
 
-func finalizeConfigLoad(cfg *Config, modelRef string, resolveAuth bool) error {
-	return finalizeConfigLoadWithAgentState(cfg, modelRef, resolveAuth, AgentStateMint)
+func finalizeConfigLoad(cfg *Config, modelRefs []string, resolveAuth bool) error {
+	return finalizeConfigLoadWithAgentState(cfg, modelRefs, resolveAuth, AgentStateMint)
 }
 
-func finalizeConfigLoadForValidation(cfg *Config, modelRef string, resolveAuth bool) error {
-	return finalizeConfigLoadWithAgentState(cfg, modelRef, resolveAuth, AgentStateNone)
+func finalizeConfigLoadForValidation(cfg *Config, modelRefs []string, resolveAuth bool) error {
+	return finalizeConfigLoadWithAgentState(cfg, modelRefs, resolveAuth, AgentStateNone)
 }
 
 func finalizeConfigLoadWithAgentState(
 	cfg *Config,
-	modelRef string,
+	modelRefs []string,
 	resolveAuth bool,
 	agentStateMode AgentStateMode,
 ) (loadErr error) {
@@ -571,12 +570,19 @@ func finalizeConfigLoadWithAgentState(
 	defer func() {
 		loadErr = redactConfiguredEnvironmentError(cfg.EnvironmentSnapshot(), loadErr)
 	}()
-	if err := validateConfiguredFallbackModels(cfg); err != nil {
+	hasModelsOverride := len(modelRefs) > 0
+	if hasModelsOverride {
+		cfg.Models = append([]string(nil), modelRefs...)
+	}
+	if err := validateConfiguredModels(cfg); err != nil {
+		if hasModelsOverride {
+			return &ModelsOverrideError{Err: err}
+		}
 		return err
 	}
-	if strings.TrimSpace(modelRef) != "" {
-		if err := cfg.ApplyModelOverride(modelRef); err != nil {
-			return &ModelOverrideError{Err: err}
+	if hasModelsOverride {
+		if err := resolveSelectedProvider(cfg); err != nil {
+			return &ModelsOverrideError{Err: err}
 		}
 		if err := applyOSEnvExcept(cfg, map[string]struct{}{
 			"PROVIDER_API_ID":       {},
@@ -838,11 +844,8 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 	if err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
-	if strings.TrimSpace(fc.Model) != "" {
-		cfg.modelRef = strings.TrimSpace(fc.Model)
-	}
-	if fc.FallbackModels != nil {
-		cfg.FallbackModels = append([]string(nil), (*fc.FallbackModels)...)
+	if fc.Models != nil {
+		cfg.Models = append([]string(nil), (*fc.Models)...)
 	}
 	if fc.EnableUserAgentsResources.Set {
 		cfg.EnableUserAgentsResources = fc.EnableUserAgentsResources.Value
@@ -1217,10 +1220,10 @@ func mergeProviderCapabilitiesConfig(base, override providerCapabilitiesConfig) 
 }
 
 func resolveSelectedProvider(cfg *Config) error {
-	rawRef := strings.TrimSpace(cfg.modelRef)
-	if rawRef == "" {
+	if len(cfg.Models) == 0 {
 		return nil
 	}
+	rawRef := cfg.Models[0]
 	ref, err := ParseModelRef(rawRef)
 	if err != nil {
 		return err
@@ -1228,25 +1231,25 @@ func resolveSelectedProvider(cfg *Config) error {
 	return resolveSelectedProviderRef(cfg, ref)
 }
 
-func validateConfiguredFallbackModels(cfg *Config) error {
-	seen := make(map[string]struct{}, len(cfg.FallbackModels))
-	normalized := make([]string, 0, len(cfg.FallbackModels))
-	for i, raw := range cfg.FallbackModels {
+func validateConfiguredModels(cfg *Config) error {
+	seen := make(map[string]struct{}, len(cfg.Models))
+	normalized := make([]string, 0, len(cfg.Models))
+	for i, raw := range cfg.Models {
 		ref, err := ParseModelRef(raw)
 		if err != nil {
-			return fmt.Errorf("config: fallback_models[%d]: %w", i, err)
+			return fmt.Errorf("config: models[%d]: %w", i, err)
 		}
 		canonical := ref.String()
 		if _, ok := seen[canonical]; ok {
-			return fmt.Errorf("config: duplicate fallback_models entry %q", canonical)
+			return fmt.Errorf("config: duplicate models entry %q", canonical)
 		}
 		seen[canonical] = struct{}{}
 		if err := validateConfiguredModelRef(cfg, ref); err != nil {
-			return fmt.Errorf("config: fallback_models[%d]: %w", i, err)
+			return fmt.Errorf("config: models[%d]: %w", i, err)
 		}
 		normalized = append(normalized, canonical)
 	}
-	cfg.FallbackModels = normalized
+	cfg.Models = normalized
 	return nil
 }
 

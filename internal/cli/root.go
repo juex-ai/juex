@@ -152,7 +152,7 @@ func (e *emittedError) Unwrap() error {
 type persistentFlags struct {
 	configPath                string
 	cwd                       string
-	model                     string
+	models                    string
 	enableUserAgentsResources string
 	debug                     bool
 	logLevel                  string
@@ -239,16 +239,15 @@ operate on an agent.`,
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if isFleetCommand(cmd) {
-				for _, name := range []string{"cwd", "config", "model"} {
+				for _, name := range []string{"cwd", "config", "models"} {
 					flag := cmd.Root().PersistentFlags().Lookup(name)
 					if flag != nil && flag.Changed {
 						return &usageError{msg: "juex fleet: --" + name + " is not supported; fleet commands use the effective JUEX_HOME registry"}
 					}
 				}
 			}
-			if flag := cmd.Root().PersistentFlags().Lookup("model"); flag != nil && flag.Changed && strings.TrimSpace(flags.model) == "" {
-				_, err := config.ParseModelRef("")
-				return &usageError{msg: "--model: " + err.Error()}
+			if flag := cmd.Root().PersistentFlags().Lookup("models"); flag != nil && flag.Changed && strings.TrimSpace(flags.models) == "" {
+				return &usageError{msg: "--models: at least one provider:model is required"}
 			}
 			if _, err := observability.ParseLevel(flags.logLevel); err != nil {
 				return &usageError{msg: "--log-level: " + err.Error()}
@@ -259,7 +258,7 @@ operate on an agent.`,
 	cmd.Flags().BoolVarP(&showVersion, "version", "v", false, "print version and exit")
 	cmd.PersistentFlags().StringVar(&flags.configPath, "config", "", "path to juex.yaml override")
 	cmd.PersistentFlags().StringVarP(&flags.cwd, "cwd", "C", "", "working directory (default $PWD)")
-	cmd.PersistentFlags().StringVar(&flags.model, "model", "", "model override in provider:model form")
+	cmd.PersistentFlags().StringVar(&flags.models, "models", "", "ordered model override as comma-separated provider:model refs")
 	cmd.PersistentFlags().StringVar(&flags.enableUserAgentsResources, "enable-user-agents-resources", "", "enable personal ~/.agents resources (true/false or 1/0; default from config)")
 	if flag := cmd.PersistentFlags().Lookup("enable-user-agents-resources"); flag != nil {
 		flag.NoOptDefVal = "true"
@@ -340,13 +339,13 @@ func loadConfigWithPolicy(flags *persistentFlags, policy agentStatePolicy) (conf
 	cfg, err = config.LoadWithOptions(config.LoadOptions{
 		WorkDir:    flags.cwd,
 		ConfigPath: configPath,
-		ModelRef:   modelOverride(flags),
+		ModelRefs:  modelsOverride(flags),
 		AgentState: mode,
 	})
 	if err != nil {
-		var modelErr *config.ModelOverrideError
+		var modelErr *config.ModelsOverrideError
 		if errors.As(err, &modelErr) {
-			return cfg, &usageError{msg: "--model: " + err.Error()}
+			return cfg, &usageError{msg: "--models: " + err.Error()}
 		}
 		var noAgent *agentstate.NoAgentError
 		if errors.As(err, &noAgent) {
@@ -475,11 +474,11 @@ func explicitConfigPath(flags *persistentFlags) string {
 	return flags.configPath
 }
 
-func modelOverride(flags *persistentFlags) string {
-	if flags == nil {
-		return ""
+func modelsOverride(flags *persistentFlags) []string {
+	if flags == nil || strings.TrimSpace(flags.models) == "" {
+		return nil
 	}
-	return flags.model
+	return strings.Split(flags.models, ",")
 }
 
 // cmdPrintln is a small helper so subcommands always write to the cobra

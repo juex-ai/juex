@@ -264,7 +264,7 @@ func loadOmittedSandboxE2EConfig(t *testing.T, root, work string) config.Config 
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("JUEX_HOME", filepath.Join(home, ".juex"))
 
-	body := `model: test:model
+	body := `models: [test:model]
 providers:
   - id: test
     protocol: openai/chat

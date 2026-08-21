@@ -127,7 +127,7 @@ func TestFleetRejectsWorkspaceConfigAndModelOverrides(t *testing.T) {
 	for _, args := range [][]string{
 		{"-C", t.TempDir(), "fleet", "status"},
 		{"--config", filepath.Join(t.TempDir(), "juex.yaml"), "fleet", "status"},
-		{"--model", "openai:test", "fleet", "status"},
+		{"--models", "openai:test", "fleet", "status"},
 	} {
 		root := newRootCmd()
 		root.SetArgs(args)
@@ -354,13 +354,13 @@ func TestFleetHelpAdvertisesOnlyAcceptedInheritedFlags(t *testing.T) {
 	allRootFlags := []string{
 		"config",
 		"cwd",
-		"model",
+		"models",
 		"debug",
 		"enable-user-agents-resources",
 		"log-level",
 		"verbose",
 	}
-	forbidden := map[string]bool{"config": true, "cwd": true, "model": true}
+	forbidden := map[string]bool{"config": true, "cwd": true, "models": true}
 
 	var visit func(*cobra.Command)
 	visit = func(command *cobra.Command) {

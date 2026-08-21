@@ -3422,7 +3422,7 @@ func TestCompactFallsBackThroughConfiguredModelChainWithoutModelChangeNotice(t *
 	}
 }
 
-func TestCompactUsesConfiguredFallbackModelsWithoutDedicatedSummaryModel(t *testing.T) {
+func TestCompactUsesConfiguredModelChainWithoutDedicatedSummaryModel(t *testing.T) {
 	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
 	backup := &namedCompactionProvider{name: "backup:model", text: "backup summary"}
 	eng, bus := newEngine(t, primary, false)

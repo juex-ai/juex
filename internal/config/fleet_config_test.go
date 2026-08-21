@@ -193,7 +193,7 @@ func TestSetHomeFleetSettingsMergesYAMLAtomically(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("JUEX_HOME", home)
 	path := filepath.Join(home, "juex.yaml")
-	const original = "# keep this comment\nmodel: openai:test\nproviders:\n  - id: openai\n    protocol: openai/chat\nfleet:\n  addr: 127.0.0.1:6840 # keep addr comment\n"
+	const original = "# keep this comment\nmodels: [openai:test]\nproviders:\n  - id: openai\n    protocol: openai/chat\nfleet:\n  addr: 127.0.0.1:6840 # keep addr comment\n"
 	if err := os.WriteFile(path, []byte(original), 0o640); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,8 @@ func TestSetHomeFleetSettingsMergesYAMLAtomically(t *testing.T) {
 	}
 	for _, want := range []string{
 		"# keep this comment",
-		"model: openai:test",
+		"models:",
+		"openai:test",
 		"id: openai",
 		"fleet:",
 		"addr: 0.0.0.0:6841",
@@ -245,7 +246,7 @@ func TestSetHomeFleetSettingsWritesOnlyInstanceHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	defaultPath := filepath.Join(defaultHome, "juex.yaml")
-	defaultBody := []byte("model: shared:base\nfleet:\n  addr: 127.0.0.1:5840\n")
+	defaultBody := []byte("models: [shared:base]\nfleet:\n  addr: 127.0.0.1:5840\n")
 	if err := os.WriteFile(defaultPath, defaultBody, 0o640); err != nil {
 		t.Fatal(err)
 	}

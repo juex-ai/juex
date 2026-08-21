@@ -13,7 +13,7 @@ func TestAgentConfigEnvironmentRedactionAndPlaceholderMerge(t *testing.T) {
 	current := AgentConfig{
 		Path:   "/work/.juex/juex.yaml",
 		Exists: true,
-		Content: `model: local:test
+		Content: `models: [local:test]
 environment:
   load_dotenv: true
   variables:

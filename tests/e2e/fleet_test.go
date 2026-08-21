@@ -959,7 +959,7 @@ func writeFleetE2EJSON(t *testing.T, path string, value any) {
 
 func writeFleetProviderConfig(t *testing.T, workspace string, providerURL string) {
 	t.Helper()
-	body := fmt.Sprintf(`model: local-chat:chat-test
+	body := fmt.Sprintf(`models: [local-chat:chat-test]
 extensions:
   allow: []
 providers:

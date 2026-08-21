@@ -274,8 +274,12 @@ func mergeInitConfigFile(path string, spec initProviderSpec) (string, error) {
 		return "", err
 	}
 	changed := false
-	if scalarValue(mappingValue(root, "model")) == "" {
-		setMappingScalar(root, "model", spec.ID+":"+spec.Model)
+	selectedModels := ensureMappingSequence(root, "models")
+	if selectedModels == nil {
+		return "", fmt.Errorf("init: models must be a YAML sequence in %s", path)
+	}
+	if len(selectedModels.Content) == 0 {
+		selectedModels.Content = append(selectedModels.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: spec.ID + ":" + spec.Model})
 		changed = true
 	}
 	providers := ensureMappingSequence(root, "providers")
