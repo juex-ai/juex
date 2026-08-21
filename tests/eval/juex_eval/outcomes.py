@@ -68,7 +68,10 @@ _TRANSIENT_RULES = (
     ),
     (
         "transient-http-status",
-        re.compile(r'(?:(?:"(?:status|status_code)"\s*:\s*)|(?:HTTP(?:/\S+)?\s+))(?:429|502|503|504)\b', re.I),
+        re.compile(
+            r'(?:(?:"(?:status|status_code)"\s*:\s*)|(?:HTTP(?:/\S+)?\s+)|(?:\bstatus(?:\s+code)?\s*[:=]?\s*))(?:429|502|503|504)\b',
+            re.I,
+        ),
         "provider returned an allowlisted transient HTTP status",
     ),
     (
@@ -108,6 +111,16 @@ def success(*, attempt_count: int) -> ValidationOutcome:
     if attempt_count == 1:
         return ValidationOutcome(PASSED, "validation passed on the first attempt", "first-attempt-pass", False, "continue")
     return ValidationOutcome(FLAKY_PASS, "allowlisted transient failure passed on the only retry", "transient-retry-pass", False, "continue")
+
+
+def invalid_config_failure(reason: str) -> ValidationOutcome:
+    return ValidationOutcome(
+        ENVIRONMENT_FAILURE,
+        reason or "local provider configuration is missing or invalid",
+        "environment-invalid-config",
+        True,
+        "fix_environment",
+    )
 
 
 def classify_failure(

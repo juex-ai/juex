@@ -506,7 +506,8 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        assert summary['outcome'] == 'provider_unavailable' and summary['blocks_merge'] is True and summary['recommended_action'] == 'stop', summary",
 		"        assert summary['selected_provider_models'] == [] and summary['eligible_candidate_count'] == 2, summary",
 		"        status, refs, summary, _ = run('missing-config', source=work / 'missing.yaml')",
-		"        assert status == 1 and refs == [] and summary['failure_category'] == 'provider_unavailable', summary",
+		"        assert status == 1 and refs == [] and summary['failure_category'] == 'environment_failure', summary",
+		"        assert summary['outcome'] == 'environment_failure' and summary['matched_rule'] == 'environment-invalid-config' and summary['recommended_action'] == 'fix_environment', summary",
 		"        empty_config = work / 'empty.yaml'",
 		"        empty_config.write_text('providers: []\\n', encoding='utf-8')",
 		"        status, refs, summary, _ = run('zero-candidates', source=empty_config)",
@@ -515,7 +516,7 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        invalid_container = work / 'invalid-container.yaml'",
 		"        invalid_container.write_text('providers:\\n  provider-on:\\n    id: provider-on\\n    models: [{id: alpha}]\\n', encoding='utf-8')",
 		"        status, refs, summary, _ = run('invalid-container', source=invalid_container)",
-		"        assert status == 1 and refs == [] and summary['failure_category'] == 'provider_unavailable', summary",
+		"        assert status == 1 and refs == [] and summary['failure_category'] == 'environment_failure', summary",
 		"        assert \"'providers' must be a YAML sequence\" in summary['error'], summary",
 		"        invalid_full_schema = work / 'invalid-full-schema.yaml'",
 		"        invalid_full_schema.write_text('providers:\\n  - id: provider-on\\n    models: [{id: alpha}]\\n  - id: unselected\\n    protcol: openai/chat\\n    models: [{id: unused}]\\n', encoding='utf-8')",
@@ -524,7 +525,7 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        invalid_context = work / 'invalid-context.yaml'",
 		"        invalid_context.write_text('providers:\\n  - id: provider-on\\n    models: [{id: alpha, context_window: [32000]}]\\n', encoding='utf-8')",
 		"        status, refs, summary, _ = run('invalid-context', source=invalid_context)",
-		"        assert status == 1 and refs == [] and summary['failure_category'] == 'provider_unavailable', summary",
+		"        assert status == 1 and refs == [] and summary['failure_category'] == 'environment_failure', summary",
 		"        assert 'context_window must be a YAML integer' in summary['error'], summary",
 		"        malformed = work / 'malformed.yaml'",
 		"        malformed.write_text('providers:\\n  - id: bad\\n    api_key: never-report-malformed-key: [\\n', encoding='utf-8')",
@@ -532,6 +533,7 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        with contextlib.redirect_stdout(terminal), contextlib.redirect_stderr(terminal):",
 		"            status, refs, summary, _ = run('malformed', source=malformed)",
 		"        assert status == 1 and refs == [] and summary['error'] == 'provider config YAML is invalid', summary",
+		"        assert summary['outcome'] == 'environment_failure' and summary['matched_rule'] == 'environment-invalid-config', summary",
 		"        assert 'never-report-malformed-key' not in terminal.getvalue(), terminal.getvalue()",
 		"        fail_selected = True",
 		"        status, refs, summary, _ = run('selected-failure', '--only', 'provider-on:beta')",
@@ -629,6 +631,7 @@ func TestCompactionDynamicSelectionWritesSummaryAndFiltersWindow(t *testing.T) {
 		"        with contextlib.redirect_stdout(terminal), contextlib.redirect_stderr(terminal):",
 		"            status, refs, summary, _ = run('malformed', source=malformed)",
 		"        assert status == 1 and refs == [] and summary['error'] == 'provider config YAML is invalid', summary",
+		"        assert summary['outcome'] == 'environment_failure' and summary['matched_rule'] == 'environment-invalid-config', summary",
 		"        assert 'never-report-malformed-header' not in terminal.getvalue(), terminal.getvalue()",
 		"        combined = (work / 'all' / 'summary.json').read_text() + (work / 'all' / 'summary.md').read_text()",
 		"        combined += (work / 'malformed' / 'summary.json').read_text() + (work / 'malformed' / 'summary.md').read_text()",
@@ -1492,6 +1495,7 @@ func TestEvalValidationOutcomeFixtures(t *testing.T) {
 		"environment = outcomes.classify_failure('/bin/sh: go: command not found', deterministic=True, exit_status=127)",
 		"provider = outcomes.classify_failure('JUEX_VALIDATION_OUTCOME {\"outcome\":\"provider_unavailable\",\"reason\":\"requested provider:model is not eligible\",\"matched_rule\":\"provider-selection-unavailable\"}', deterministic=False, exit_status=1)",
 		"transient = outcomes.classify_failure('{\"error\":{\"retryable\":true,\"message\":\"upstream reset\"}}', deterministic=False, exit_status=1)",
+		"plain_status = outcomes.classify_failure('codex websocket error: status 503: unavailable', deterministic=False, exit_status=1)",
 		"rows = [passed, flaky, product, environment, provider, transient]",
 		"assert [row.outcome for row in rows] == ['passed', 'flaky_pass', 'product_failure', 'environment_failure', 'provider_unavailable', 'transient_failure'], rows",
 		"assert set(outcomes.OUTCOME_VALUES) == {row.outcome for row in rows}",
@@ -1499,9 +1503,39 @@ func TestEvalValidationOutcomeFixtures(t *testing.T) {
 		"assert environment.matched_rule == 'environment-command-missing' and environment.recommended_action == 'fix_environment'",
 		"assert provider.matched_rule == 'provider-selection-unavailable' and provider.recommended_action == 'stop'",
 		"assert transient.matched_rule == 'transient-structured-retryable' and transient.retryable is True",
+		"assert plain_status.matched_rule == 'transient-http-status' and plain_status.retryable is True",
 		"assert outcomes.classify_failure('{\"retryable\":true}', deterministic=True, exit_status=1).outcome == 'product_failure'",
 		"assert outcomes.classify_failure(outcomes.marker(passed), deterministic=False, exit_status=1).outcome == 'product_failure'",
 		"assert all(row.blocks_merge is (row.outcome not in {'passed', 'flaky_pass'}) for row in rows)",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalMissingProviderConfigIsEnvironmentFailure(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import argparse, json, sys, tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import compaction, helper",
+		"with tempfile.TemporaryDirectory() as work:",
+		"    root = Path(work)",
+		"    missing = root / 'missing.yaml'",
+		"    smoke_report = root / 'provider-smoke'",
+		"    status = helper.provider_smoke(['--juex', sys.executable, '--config', str(missing), '--report-dir', str(smoke_report), '--work-root', str(root / 'smoke-work'), '--run-id', 'missing-config'])",
+		"    smoke = json.loads((smoke_report / 'summary.json').read_text(encoding='utf-8'))",
+		"    assert status == 1 and smoke['outcome'] == 'environment_failure' and smoke['matched_rule'] == 'environment-invalid-config' and smoke['recommended_action'] == 'fix_environment', smoke",
+		"    compaction_report = root / 'compaction'",
+		"    args = argparse.Namespace(only=[], all_models=False, selection_seed='unit', juex=sys.executable, config=str(missing), out_root=str(compaction_report), run_id='missing-config', context_window=32000, turn_timeout=1, keep_workdir=False)",
+		"    status = compaction.run(args)",
+		"    summary = json.loads((compaction_report / 'summary.json').read_text(encoding='utf-8'))",
+		"    assert status == 1 and summary['outcome'] == 'environment_failure' and summary['matched_rule'] == 'environment-invalid-config' and summary['recommended_action'] == 'fix_environment', summary",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }

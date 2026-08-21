@@ -234,7 +234,7 @@ def provider_smoke(argv: list[str]) -> int:
                 work_root,
                 evidence,
                 [],
-                selection.PROVIDER_UNAVAILABLE,
+                outcomes.ENVIRONMENT_FAILURE,
                 error,
             )
             write_smoke_summary(
@@ -243,7 +243,7 @@ def provider_smoke(argv: list[str]) -> int:
                 summary,
                 [],
             )
-            print(f"{selection.PROVIDER_UNAVAILABLE}: {error}", file=sys.stderr)
+            print(f"{outcomes.ENVIRONMENT_FAILURE}: {error}", file=sys.stderr)
             print_selection_evidence(evidence)
             print_summary_outcome(summary)
             return 1
@@ -354,6 +354,8 @@ def aggregate_smoke_outcome(
     failure_category: str,
     error: str,
 ) -> outcomes.ValidationOutcome:
+    if failure_category == outcomes.ENVIRONMENT_FAILURE:
+        return outcomes.invalid_config_failure(error)
     if failure_category == selection.PROVIDER_UNAVAILABLE:
         return outcomes.ValidationOutcome(
             outcomes.PROVIDER_UNAVAILABLE,

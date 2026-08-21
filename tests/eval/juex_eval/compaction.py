@@ -142,20 +142,20 @@ def run(args: argparse.Namespace) -> int:
             only=explicit_models,
             all_models=args.all_models,
         )
-        unavailable = provider_unavailable_outcome(error)
+        invalid_config = outcomes.invalid_config_failure(error)
         write_compaction_summary(
             summary_json,
             summary_md,
             args,
             evidence,
             [],
-            selection.PROVIDER_UNAVAILABLE,
+            outcomes.ENVIRONMENT_FAILURE,
             error,
-            unavailable,
+            invalid_config,
         )
-        print(f"{selection.PROVIDER_UNAVAILABLE}: {error}", file=sys.stderr)
+        print(f"{outcomes.ENVIRONMENT_FAILURE}: {error}", file=sys.stderr)
         helper.print_selection_evidence(evidence)
-        print(outcomes.marker(unavailable))
+        print(outcomes.marker(invalid_config))
         return 1
 
     helper.print_selection_evidence(evidence)
