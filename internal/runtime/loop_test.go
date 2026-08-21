@@ -3451,6 +3451,44 @@ func TestCompactRefitsSummaryRequestForFallbackContextWindow(t *testing.T) {
 	}
 }
 
+func TestCompactSkipsModelAlreadyInSharedHealthCooldown(t *testing.T) {
+	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	primaryFailure, ok := health.Acquire([]string{"primary:model"}, nil)
+	if !ok {
+		t.Fatal("acquire primary health ticket")
+	}
+	health.Complete(primaryFailure.Ticket, llm.ModelHealthEligibleFailure, "transient")
+
+	primary := &namedCompactionProvider{name: "primary:model", text: "unexpected primary summary"}
+	backup := &namedCompactionProvider{name: "backup:model", text: "backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = health
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var epochs []provenance.RequestEpoch
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primary.calls != 0 || backup.calls != 1 || result.SummaryModel != "backup:model" {
+		t.Fatalf("primary/backup/result = %d/%d/%+v, want cooldown skip to backup", primary.calls, backup.calls, result)
+	}
+	if len(epochs) != 1 || epochs[0].Provider.Model != "backup:model" {
+		t.Fatalf("epochs = %+v, want only attempted backup", epochs)
+	}
+}
+
 func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	provider := &scriptedCompactionProvider{
 		name: "thinking:model",

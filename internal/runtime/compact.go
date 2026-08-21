@@ -121,6 +121,10 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string,
 }
 
 func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string, contextWindow int, operationGeneration uint64) (CompactionResult, error) {
+	return e.compactLockedForContextWindowWithHealthReservation(ctx, turnID, systemPrompt, tools, reason, auto, instructions, contextWindow, operationGeneration, "")
+}
+
+func (e *Engine) compactLockedForContextWindowWithHealthReservation(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string, contextWindow int, operationGeneration uint64, reservedModelRef string) (CompactionResult, error) {
 	policy := effectiveCompactionPolicy(e.Compaction, contextWindow)
 	if !policy.Enabled {
 		return CompactionResult{}, nil
@@ -190,7 +194,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	}
 
 	previousModelSummary := compactionModelSummary(selection.PreviousSummary)
-	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, previousModelSummary, summaryInput, summaryState, policy, instructions, contextWindow)
+	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, previousModelSummary, summaryInput, summaryState, policy, instructions, contextWindow, reservedModelRef)
 	if err != nil {
 		sess.RecordResponseUsage(generation.Usage, nil)
 		compactErr := newCompactionError(ctx, err)
