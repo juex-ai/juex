@@ -18,15 +18,24 @@ from . import compaction, helper, selection
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 TEST_HOME_RUNNER = (REPO_ROOT / "scripts" / "with-test-juex-home.sh").as_posix()
 ENSURE_RIPGREP = (REPO_ROOT / "scripts" / "ensure-ripgrep.sh").as_posix()
-BASH_EXECUTABLE = "bash"
-if os.name == "nt":
-    git_executable = shutil.which("git")
-    if git_executable:
-        git_root = pathlib.Path(git_executable).resolve().parent.parent
-        for candidate in (git_root / "bin" / "bash.exe", git_root / "usr" / "bin" / "bash.exe"):
+
+
+def windows_bash_from_git(git_executable: str | None) -> str | None:
+    if not git_executable:
+        return None
+    git_path = pathlib.Path(git_executable).resolve()
+    for ancestor in git_path.parents:
+        for relative in (pathlib.Path("bin") / "bash.exe", pathlib.Path("usr") / "bin" / "bash.exe"):
+            candidate = ancestor / relative
             if candidate.is_file():
-                BASH_EXECUTABLE = str(candidate)
-                break
+                return str(candidate)
+    return None
+
+
+if os.name == "nt":
+    BASH_EXECUTABLE = windows_bash_from_git(shutil.which("git")) or "bash"
+else:
+    BASH_EXECUTABLE = "bash"
 
 
 @dataclass(frozen=True)

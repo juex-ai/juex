@@ -938,6 +938,33 @@ func TestEvalVerifyFocusedPlansOnlyExplicitIsolatedPackages(t *testing.T) {
 	}
 }
 
+func TestEvalWindowsBashDiscoveryWalksGitExecutableAncestors(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    install = Path(tmp) / 'PortableGit'",
+		"    git = install / 'mingw64' / 'bin' / 'git.exe'",
+		"    bash = install / 'bin' / 'bash.exe'",
+		"    git.parent.mkdir(parents=True)",
+		"    bash.parent.mkdir(parents=True)",
+		"    git.touch()",
+		"    bash.touch()",
+		"    resolved = cli.windows_bash_from_git(str(git))",
+		"    assert resolved == str(bash.resolve()), (resolved, bash)",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func TestEvalIsolatedEnvironmentRunsShellProvisionerThroughBash(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
