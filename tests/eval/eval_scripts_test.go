@@ -1259,6 +1259,7 @@ func TestEvalRequireCleanWorktreeRejectsDirtyRepository(t *testing.T) {
 		"    with tempfile.TemporaryDirectory() as tmp:",
 		"        repo = Path(tmp)",
 		"        subprocess.run(['git', 'init', '--quiet'], cwd=repo, check=True)",
+		"        subprocess.run(['git', 'config', 'status.showUntrackedFiles', 'no'], cwd=repo, check=True)",
 		"        cli.REPO_ROOT = repo",
 		"        cli.require_clean_worktree()",
 		"        (repo / 'dirty.txt').write_text('dirty\\n', encoding='utf-8')",

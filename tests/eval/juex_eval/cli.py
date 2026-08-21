@@ -214,7 +214,7 @@ def run_verify(args: argparse.Namespace) -> int:
 
 def require_clean_worktree() -> None:
     completed = subprocess.run(
-        ["git", "status", "--porcelain"],
+        ["git", "status", "--porcelain", "--untracked-files=all"],
         cwd=REPO_ROOT,
         check=False,
         capture_output=True,
