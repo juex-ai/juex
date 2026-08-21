@@ -595,6 +595,10 @@ func cleanupFromBackwardIterator(application *App) {
 		break
 	}
 }
+func cleanupFromConcat(application *App) {
+	resources := slices.Concat([]closer{nil}, []closer{application.manager})
+	_ = resources[1].Close()
+}
 func cleanupFromSliceAssignment(application *App) {
 	resources := make([]closer, 1)
 	resources[:][0] = application.manager
@@ -647,7 +651,7 @@ func (application *App) Close() error {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"packageManager.Close", "packageCleanup", "Run", "cleanupRunner.Run", "identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "closeOwned", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "wrapCleanup.cleanup", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resources.Close", "resources.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "owned.resource.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
+	want := []string{"packageManager.Close", "packageCleanup", "Run", "cleanupRunner.Run", "identityOwned.Close", "cleanupGeneric", "resource.Close", "cleanup", "cleanup", "closeOwned", "application.manager.Close", "func", "withResource", "resource.Close", "Close", "resources.Close", "resource.Close", "window.Close", "resources.Close", "owned.resource.Close", "owned.resource.Close", "wrapOwned.resource.Close", "wrapNestedOwned.owned.resource.Close", "owned.resource.Close", "resource.Close", "owned.resource.Close", "Close", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "callbacks.cleanup", "callbacks.cleanup", "callbacks", "wrapCleanup.cleanup", "resources.Close", "application.resources.Close", "application.holder.resource.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "resources.Close", "owned.resource.Close", "resources.Close", "resources.Close", "resource.Close", "resource.Close", "resource.Close", "resource.Close", "resources.Close", "resources.Close", "owned.resource.Close", "manager.Close", "manager.Close", "closeTransitively", "runCleanup", "owned.Close", "namedOwned.Close", "closer.Close", "Close"}
 	if len(calls) != len(want) {
 		t.Fatalf("cleanup calls = %v, want local helper delegation", calls)
 	}
@@ -965,6 +969,10 @@ func registerFromBackwardIterator(application *App) {
 		break
 	}
 }
+func registerFromConcat(application *App) {
+	registries := slices.Concat([]registrar{nil}, []registrar{application.registry})
+	registries[1].Register(nil)
+}
 func registerFromSliceAssignment(application *App) {
 	registries := make([]registrar, 1)
 	registries[:][0] = application.registry
@@ -1041,7 +1049,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		calls = append(calls, chain)
 	})
-	want := []string{"packageRegistry.Register", "packageRegistration", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "registerOwned", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "callbacks.register", "callbacks.register", "callbacks", "wrapRegistration.register", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want := []string{"packageRegistry.Register", "packageRegistration", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "registerOwned", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "callbacks.register", "callbacks.register", "callbacks", "wrapRegistration.register", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -3477,6 +3485,15 @@ func valueIteratorArity(expression ast.Expr, imports map[string]string) int {
 	}
 }
 
+func isSlicesConcatCall(call *ast.CallExpr, imports map[string]string) bool {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "Concat" {
+		return false
+	}
+	qualifier, ok := selector.X.(*ast.Ident)
+	return ok && imports[qualifier.Name] == "slices"
+}
+
 func prefixCleanupPaths(prefix string, paths map[string]bool) map[string]bool {
 	if prefix == "" || len(paths) == 0 {
 		return paths
@@ -3704,7 +3721,7 @@ func cleanupPathsForExpression(expression ast.Expr, imports map[string]string, v
 	case *ast.TypeAssertExpr:
 		return cleanupPathsForExpression(value.X, imports, values, resources, types)
 	case *ast.CallExpr:
-		if isBuiltinAppend(value) {
+		if isBuiltinAppend(value) || isSlicesConcatCall(value, imports) {
 			var paths map[string]bool
 			for _, argument := range value.Args {
 				paths = mergeCleanupPaths(paths, cleanupPathsForExpression(argument, imports, values, resources, types))
@@ -4174,6 +4191,14 @@ func isToolRegistryCollectionExpression(expression ast.Expr, imports map[string]
 	}
 	if call, ok := expression.(*ast.CallExpr); ok && valueIteratorArity(call, imports) != 0 {
 		return isToolRegistryCollectionExpression(call.Args[0], imports, values, types)
+	}
+	if call, ok := expression.(*ast.CallExpr); ok && isSlicesConcatCall(call, imports) {
+		for _, argument := range call.Args {
+			if isToolRegistryCollectionExpression(argument, imports, values, types) || isToolRegistryExpression(argument, imports, values, types) {
+				return true
+			}
+		}
+		return false
 	}
 	if call, ok := expression.(*ast.CallExpr); ok && isBuiltinAppend(call) {
 		for _, argument := range call.Args {
