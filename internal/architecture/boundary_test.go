@@ -3,6 +3,7 @@ package architecture
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -2118,6 +2119,16 @@ func replaceDuringKnownNonemptyRange(application *App) {
 	_ = resource.Close()
 	registry.Register(nil)
 }
+func replaceDuringNamedNonemptyRange(application *App) {
+	var resource closer = application.manager
+	var registry registrar = application.registry
+	resources := [1]closer{&unrelatedCloser{}}
+	registries := [1]registrar{&unrelatedRegistrar{}}
+	for _, resource = range resources {}
+	for _, registry = range registries {}
+	_ = resource.Close()
+	registry.Register(nil)
+}
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nonempty_range.go")
@@ -2984,6 +2995,43 @@ func disjointBackEdgeDeferredUse(application *App, stop bool) {
 		continue
 	}
 }
+func nestedContinueDoesNotRepeatDeferredUse(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	for {
+		defer func() {
+			_ = resource.Close()
+			registry.Register(nil)
+			resource = application.manager
+			registry = application.registry
+		}()
+		for range []int{0} {
+			continue
+		}
+		break
+	}
+}
+func nestedLabeledContinueRepeatsDeferredUse(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	repeat := true
+outer:
+	for {
+		defer func() {
+			_ = resource.Close()
+			registry.Register(nil)
+			resource = application.manager
+			registry = application.registry
+		}()
+		if repeat {
+			repeat = false
+			for range [1]int{} {
+				continue outer
+			}
+		}
+		break
+	}
+}
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "deferred_closure_state.go")
@@ -3002,14 +3050,14 @@ func disjointBackEdgeDeferredUse(application *App, stop bool) {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if len(cleanupCalls) != 2 || cleanupCalls[0] != "resource.Close" || cleanupCalls[1] != "resource.Close" {
+	if len(cleanupCalls) != 3 || cleanupCalls[0] != "resource.Close" || cleanupCalls[1] != "resource.Close" || cleanupCalls[2] != "resource.Close" {
 		t.Fatalf("cleanup calls = %v, want older and repeated deferred cleanup after assignment", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if len(registrationCalls) != 2 || registrationCalls[0] != "registry.Register" || registrationCalls[1] != "registry.Register" {
+	if len(registrationCalls) != 3 || registrationCalls[0] != "registry.Register" || registrationCalls[1] != "registry.Register" || registrationCalls[2] != "registry.Register" {
 		t.Fatalf("Tool registration calls = %v, want older and repeated deferred registration after assignment", registrationCalls)
 	}
 }
@@ -3837,6 +3885,32 @@ func firstTaggedCaseAlwaysMatches(application *App) {
 		resource = application.manager
 		registry = application.registry
 		return true
+	}():
+		_ = resource.Close()
+		registry.Register(nil)
+	}
+}
+func firstTaggedCaseExpressionAlwaysMatches(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	switch 0 {
+	case 0, func() int {
+		resource = application.manager
+		registry = application.registry
+		return 1
+	}():
+		_ = resource.Close()
+		registry.Register(nil)
+	}
+}
+func foldedTaggedCaseExpressionAlwaysMatches(application *App) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	switch 1 + 1 {
+	case 2, func() int {
+		resource = application.manager
+		registry = application.registry
+		return 3
 	}():
 		_ = resource.Close()
 		registry.Register(nil)
@@ -5436,6 +5510,7 @@ type delayedCompositionCall struct {
 
 func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]bool {
 	repeated := make(map[*ast.CallExpr]bool)
+	parents := compositionParentNodes(body)
 	ast.Inspect(body, func(node ast.Node) bool {
 		if _, nested := node.(*ast.FuncLit); nested {
 			return false
@@ -5454,7 +5529,7 @@ func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]boo
 			if _, nested := loopNode.(*ast.FuncLit); nested {
 				return false
 			}
-			if statement, ok := loopNode.(*ast.DeferStmt); ok && compositionDeferMayReachLoopBackEdge(loopBody, statement) {
+			if statement, ok := loopNode.(*ast.DeferStmt); ok && compositionDeferMayReachLoopBackEdge(node, loopBody, statement, parents) {
 				repeated[statement.Call] = true
 			}
 			return true
@@ -5464,10 +5539,10 @@ func repeatedCompositionDeferredCalls(body *ast.BlockStmt) map[*ast.CallExpr]boo
 	return repeated
 }
 
-func compositionDeferMayReachLoopBackEdge(loopBody *ast.BlockStmt, target *ast.DeferStmt) bool {
+func compositionParentNodes(root ast.Node) map[ast.Node]ast.Node {
 	parents := make(map[ast.Node]ast.Node)
 	var stack []ast.Node
-	ast.Inspect(loopBody, func(node ast.Node) bool {
+	ast.Inspect(root, func(node ast.Node) bool {
 		if node == nil {
 			stack = stack[:len(stack)-1]
 			return false
@@ -5481,6 +5556,10 @@ func compositionDeferMayReachLoopBackEdge(loopBody *ast.BlockStmt, target *ast.D
 		stack = append(stack, node)
 		return true
 	})
+	return parents
+}
+
+func compositionDeferMayReachLoopBackEdge(loop ast.Node, loopBody *ast.BlockStmt, target *ast.DeferStmt, parents map[ast.Node]ast.Node) bool {
 	current := ast.Node(target)
 	for current != nil {
 		parent := parents[current]
@@ -5501,7 +5580,7 @@ func compositionDeferMayReachLoopBackEdge(loopBody *ast.BlockStmt, target *ast.D
 			statements = statementsAfterCompositionNode(container.Body, current)
 		}
 		if statements != nil {
-			if compositionStatementsContainContinue(statements) || hasBackwardGoto(&ast.BlockStmt{List: statements}) {
+			if compositionStatementsContinueLoop(statements, loop, parents) || hasBackwardGoto(&ast.BlockStmt{List: statements}) {
 				return true
 			}
 			if !statementsFallThrough(statements) {
@@ -5525,14 +5604,14 @@ func statementsAfterCompositionNode(statements []ast.Stmt, node ast.Node) []ast.
 	return nil
 }
 
-func compositionStatementsContainContinue(statements []ast.Stmt) bool {
-	found := false
+func compositionStatementsContinueLoop(statements []ast.Stmt, loop ast.Node, parents map[ast.Node]ast.Node) bool {
 	for _, statement := range statements {
+		found := false
 		ast.Inspect(statement, func(node ast.Node) bool {
 			if _, nested := node.(*ast.FuncLit); nested {
 				return false
 			}
-			if branch, ok := node.(*ast.BranchStmt); ok && branch.Tok == token.CONTINUE {
+			if branch, ok := node.(*ast.BranchStmt); ok && branch.Tok == token.CONTINUE && compositionContinueTargetsLoop(branch, loop, parents) {
 				found = true
 				return false
 			}
@@ -5540,6 +5619,22 @@ func compositionStatementsContainContinue(statements []ast.Stmt) bool {
 		})
 		if found {
 			return true
+		}
+	}
+	return false
+}
+
+func compositionContinueTargetsLoop(branch *ast.BranchStmt, loop ast.Node, parents map[ast.Node]ast.Node) bool {
+	for current := parents[branch]; current != nil; current = parents[current] {
+		if branch.Label != nil {
+			if labeled, ok := current.(*ast.LabeledStmt); ok && labeled.Label.Name == branch.Label.Name {
+				return labeled.Stmt == loop
+			}
+			continue
+		}
+		switch current.(type) {
+		case *ast.ForStmt, *ast.RangeStmt:
+			return current == loop
 		}
 	}
 	return false
@@ -6001,7 +6096,7 @@ func constantBooleanFunctionLiteral(literal *ast.FuncLit) (bool, bool) {
 	return result, seen && constant
 }
 
-func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, correlateCaseConditions, matchingBoolean, allowFallthrough bool, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState, enterClause func(*ast.CaseClause)) {
+func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, correlateCaseConditions, matchingBoolean bool, matchingConstant constant.Value, allowFallthrough bool, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState, enterClause func(*ast.CaseClause)) {
 	base := snapshot()
 	selectedEntries := make(map[*ast.CaseClause]compositionFlowState)
 	remaining := base
@@ -6029,6 +6124,14 @@ func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, 
 					restore(trueState)
 				}
 			} else {
+				if caseConstant, ok := compositionConstantExpression(expression); ok && matchingConstant != nil {
+					if compositionConstantsEqual(matchingConstant, caseConstant) {
+						matched = append(matched, snapshot())
+						restore(merge(nil))
+						break
+					}
+					continue
+				}
 				ast.Inspect(expression, visit)
 				matched = append(matched, snapshot())
 			}
@@ -6072,11 +6175,115 @@ func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, 
 	restore(merge(exits))
 }
 
-func switchBooleanCaseMode(statement *ast.SwitchStmt) (bool, bool) {
+func switchCaseMode(statement *ast.SwitchStmt) (bool, bool, constant.Value) {
 	if statement.Tag == nil {
-		return true, true
+		return true, true, nil
 	}
-	return constantBooleanExpression(statement.Tag)
+	if value, ok := constantBooleanExpression(statement.Tag); ok {
+		return true, value, nil
+	}
+	value, _ := compositionConstantExpression(statement.Tag)
+	return false, false, value
+}
+
+func compositionConstantExpression(expression ast.Expr) (constant.Value, bool) {
+	return compositionConstantExpressionWithSeen(expression, make(map[string]bool))
+}
+
+func compositionConstantExpressionWithSeen(expression ast.Expr, seen map[string]bool) (constant.Value, bool) {
+	switch value := expression.(type) {
+	case *ast.BasicLit:
+		result := constant.MakeFromLiteral(value.Value, value.Kind, 0)
+		return result, result.Kind() != constant.Unknown
+	case *ast.ParenExpr:
+		return compositionConstantExpressionWithSeen(value.X, seen)
+	case *ast.Ident:
+		switch value.Name {
+		case "true":
+			return constant.MakeBool(true), true
+		case "false":
+			return constant.MakeBool(false), true
+		}
+		key := stableBindingKey(value)
+		if value.Obj == nil || value.Obj.Kind != ast.Con || seen[key] {
+			return nil, false
+		}
+		seen[key] = true
+		defer delete(seen, key)
+		spec, ok := value.Obj.Decl.(*ast.ValueSpec)
+		if !ok {
+			return nil, false
+		}
+		for index, name := range spec.Names {
+			if name.Obj == value.Obj {
+				assigned := assignedExpression(spec.Values, index)
+				if assigned == nil {
+					return nil, false
+				}
+				return compositionConstantExpressionWithSeen(assigned, seen)
+			}
+		}
+	case *ast.UnaryExpr:
+		operand, ok := compositionConstantExpressionWithSeen(value.X, seen)
+		if !ok {
+			return nil, false
+		}
+		switch value.Op {
+		case token.ADD, token.SUB:
+			if operand.Kind() == constant.Int || operand.Kind() == constant.Float || operand.Kind() == constant.Complex {
+				return constant.UnaryOp(value.Op, operand, 0), true
+			}
+		case token.XOR:
+			if operand.Kind() == constant.Int {
+				return constant.UnaryOp(value.Op, operand, 0), true
+			}
+		case token.NOT:
+			if operand.Kind() == constant.Bool {
+				return constant.UnaryOp(value.Op, operand, 0), true
+			}
+		}
+	case *ast.BinaryExpr:
+		left, leftOK := compositionConstantExpressionWithSeen(value.X, seen)
+		right, rightOK := compositionConstantExpressionWithSeen(value.Y, seen)
+		if leftOK && rightOK {
+			return compositionConstantBinary(left, value.Op, right)
+		}
+	}
+	return nil, false
+}
+
+func compositionConstantBinary(left constant.Value, operator token.Token, right constant.Value) (result constant.Value, ok bool) {
+	defer func() {
+		if recover() != nil {
+			result = nil
+			ok = false
+		}
+	}()
+	switch operator {
+	case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ:
+		return constant.MakeBool(constant.Compare(left, operator, right)), true
+	case token.SHL, token.SHR:
+		shift, exact := constant.Uint64Val(right)
+		if !exact {
+			return nil, false
+		}
+		result = constant.Shift(left, operator, uint(shift))
+	default:
+		result = constant.BinaryOp(left, operator, right)
+	}
+	return result, result.Kind() != constant.Unknown
+}
+
+func compositionConstantsEqual(left, right constant.Value) bool {
+	leftKind := left.Kind()
+	rightKind := right.Kind()
+	if leftKind == constant.Bool || rightKind == constant.Bool {
+		return leftKind == constant.Bool && rightKind == constant.Bool && constant.Compare(left, token.EQL, right)
+	}
+	if leftKind == constant.String || rightKind == constant.String {
+		return leftKind == constant.String && rightKind == constant.String && constant.Compare(left, token.EQL, right)
+	}
+	return constant.Compare(left, token.EQL, right)
 }
 
 func typeSwitchGuard(statement *ast.TypeSwitchStmt) (*ast.Ident, ast.Expr) {
@@ -6159,9 +6366,43 @@ func inspectCompositionLoopBody(body *ast.BlockStmt, visit func(ast.Node) bool, 
 }
 
 func compositionRangeMayBeEmpty(expression ast.Expr) bool {
+	return compositionRangeMayBeEmptyWithSeen(expression, make(map[string]bool))
+}
+
+func compositionRangeMayBeEmptyWithSeen(expression ast.Expr, seen map[string]bool) bool {
 	switch value := expression.(type) {
 	case *ast.ParenExpr:
-		return compositionRangeMayBeEmpty(value.X)
+		return compositionRangeMayBeEmptyWithSeen(value.X, seen)
+	case *ast.Ident:
+		key := stableBindingKey(value)
+		if value.Obj == nil || seen[key] {
+			return true
+		}
+		seen[key] = true
+		switch declaration := value.Obj.Decl.(type) {
+		case *ast.AssignStmt:
+			for index, left := range declaration.Lhs {
+				name, ok := left.(*ast.Ident)
+				if !ok || name.Obj != value.Obj {
+					continue
+				}
+				if assigned := assignedExpression(declaration.Rhs, index); assigned != nil {
+					return compositionRangeMayBeEmptyWithSeen(assigned, seen)
+				}
+			}
+		case *ast.ValueSpec:
+			for index, name := range declaration.Names {
+				if name.Obj != value.Obj {
+					continue
+				}
+				if assigned := assignedExpression(declaration.Values, index); assigned != nil {
+					return compositionRangeMayBeEmptyWithSeen(assigned, seen)
+				}
+				if array, ok := declaration.Type.(*ast.ArrayType); ok {
+					return compositionArrayTypeMayBeEmpty(array)
+				}
+			}
+		}
 	case *ast.CompositeLit:
 		switch collection := value.Type.(type) {
 		case *ast.ArrayType:
@@ -6188,6 +6429,14 @@ func compositionRangeMayBeEmpty(expression ast.Expr) bool {
 		}
 	}
 	return true
+}
+
+func compositionArrayTypeMayBeEmpty(array *ast.ArrayType) bool {
+	if array == nil || array.Len == nil {
+		return true
+	}
+	positive, known := positiveIntegerConstant(array.Len)
+	return !known || !positive
 }
 
 func positiveIntegerConstant(expression ast.Expr) (bool, bool) {
@@ -6358,8 +6607,8 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				ast.Inspect(value.Tag, visit)
 			}
 			breakTarget := router.pushBreakTarget()
-			correlateCases, matchingBoolean := switchBooleanCaseMode(value)
-			inspectCompositionCaseClauses(value.Body, true, correlateCases, matchingBoolean, true, visit, snapshot, restore, merge, nil)
+			correlateCases, matchingBoolean, matchingConstant := switchCaseMode(value)
+			inspectCompositionCaseClauses(value.Body, true, correlateCases, matchingBoolean, matchingConstant, true, visit, snapshot, restore, merge, nil)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -6382,7 +6631,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				}
 				values[key] = typeName
 			})
-			inspectCompositionCaseClauses(value.Body, false, false, false, false, visit, snapshot, restore, merge, bindGuard)
+			inspectCompositionCaseClauses(value.Body, false, false, false, nil, false, visit, snapshot, restore, merge, bindGuard)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -6624,8 +6873,8 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				ast.Inspect(value.Tag, visit)
 			}
 			breakTarget := router.pushBreakTarget()
-			correlateCases, matchingBoolean := switchBooleanCaseMode(value)
-			inspectCompositionCaseClauses(value.Body, true, correlateCases, matchingBoolean, true, visit, snapshot, restore, merge, nil)
+			correlateCases, matchingBoolean, matchingConstant := switchCaseMode(value)
+			inspectCompositionCaseClauses(value.Body, true, correlateCases, matchingBoolean, matchingConstant, true, visit, snapshot, restore, merge, nil)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -6648,7 +6897,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				}
 				values[key] = typeName
 			})
-			inspectCompositionCaseClauses(value.Body, false, false, false, false, visit, snapshot, restore, merge, bindGuard)
+			inspectCompositionCaseClauses(value.Body, false, false, false, nil, false, visit, snapshot, restore, merge, bindGuard)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -7495,8 +7744,8 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					ast.Inspect(value.Tag, visit)
 				}
 				breakTarget := router.pushBreakTarget()
-				correlateCases, matchingBoolean := switchBooleanCaseMode(value)
-				inspectCompositionCaseClauses(value.Body, true, correlateCases, matchingBoolean, true, visit, snapshot, restore, merge, nil)
+				correlateCases, matchingBoolean, matchingConstant := switchCaseMode(value)
+				inspectCompositionCaseClauses(value.Body, true, correlateCases, matchingBoolean, matchingConstant, true, visit, snapshot, restore, merge, nil)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -7524,7 +7773,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 						resources[key] = paths
 					}
 				})
-				inspectCompositionCaseClauses(value.Body, false, false, false, false, visit, snapshot, restore, merge, bindGuard)
+				inspectCompositionCaseClauses(value.Body, false, false, false, nil, false, visit, snapshot, restore, merge, bindGuard)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -8028,8 +8277,8 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					ast.Inspect(value.Tag, visit)
 				}
 				breakTarget := router.pushBreakTarget()
-				correlateCases, matchingBoolean := switchBooleanCaseMode(value)
-				inspectCompositionCaseClauses(value.Body, true, correlateCases, matchingBoolean, true, visit, snapshot, restore, merge, nil)
+				correlateCases, matchingBoolean, matchingConstant := switchCaseMode(value)
+				inspectCompositionCaseClauses(value.Body, true, correlateCases, matchingBoolean, matchingConstant, true, visit, snapshot, restore, merge, nil)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -8052,7 +8301,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					}
 					values[key] = typeName
 				})
-				inspectCompositionCaseClauses(value.Body, false, false, false, false, visit, snapshot, restore, merge, bindGuard)
+				inspectCompositionCaseClauses(value.Body, false, false, false, nil, false, visit, snapshot, restore, merge, bindGuard)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
