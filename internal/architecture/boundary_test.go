@@ -3360,6 +3360,23 @@ func terminatingKnownNonemptyRangeDoesNotRepeatDeferredUse(application *App) {
 		}
 	}
 }
+func nestedTerminatingGotoDoesNotRepeatDeferredUse(application *App) {
+	var nestedGotoResource closer = &unrelatedCloser{}
+	var nestedGotoRegistry registrar = &unrelatedRegistrar{}
+	for {
+		defer func() {
+			_ = nestedGotoResource.Close()
+			nestedGotoRegistry.Register(nil)
+			nestedGotoResource = application.manager
+			nestedGotoRegistry = application.registry
+		}()
+		for {
+			goto inside
+		inside:
+			_ = 0
+		}
+	}
+}
 func knownNonemptyRangeGotoRepeatsDeferredUse(application *App, again bool) {
 	var rangeGotoResource closer = &unrelatedCloser{}
 	var rangeGotoRegistry registrar = &unrelatedRegistrar{}
@@ -3419,7 +3436,7 @@ done:
 		cleanupCalls = append(cleanupCalls, chain)
 	})
 	cleanup := "," + strings.Join(cleanupCalls, ",") + ","
-	if len(cleanupCalls) != 9 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || strings.Contains(cleanup, ",terminalResource.Close,") || strings.Contains(cleanup, ",unknownSwitchResource.Close,") || strings.Contains(cleanup, ",typeSwitchResource.Close,") || strings.Contains(cleanup, ",selectResource.Close,") || strings.Contains(cleanup, ",innerLoopResource.Close,") || strings.Contains(cleanup, ",rangeResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") || !strings.Contains(cleanup, ",fallthroughResource.Close,") || !strings.Contains(cleanup, ",breakResource.Close,") || !strings.Contains(cleanup, ",chainBreakResource.Close,") || !strings.Contains(cleanup, ",rangeGotoResource.Close,") || !strings.Contains(cleanup, ",labeledBreakResource.Close,") {
+	if len(cleanupCalls) != 9 || strings.Contains(cleanup, ",localResource.Close,") || strings.Contains(cleanup, ",deadResource.Close,") || strings.Contains(cleanup, ",switchResource.Close,") || strings.Contains(cleanup, ",terminalResource.Close,") || strings.Contains(cleanup, ",unknownSwitchResource.Close,") || strings.Contains(cleanup, ",typeSwitchResource.Close,") || strings.Contains(cleanup, ",selectResource.Close,") || strings.Contains(cleanup, ",innerLoopResource.Close,") || strings.Contains(cleanup, ",rangeResource.Close,") || strings.Contains(cleanup, ",nestedGotoResource.Close,") || !strings.Contains(cleanup, ",gotoResource.Close,") || !strings.Contains(cleanup, ",fallthroughResource.Close,") || !strings.Contains(cleanup, ",breakResource.Close,") || !strings.Contains(cleanup, ",chainBreakResource.Close,") || !strings.Contains(cleanup, ",rangeGotoResource.Close,") || !strings.Contains(cleanup, ",labeledBreakResource.Close,") {
 		t.Fatalf("cleanup calls = %v, want older and repeated deferred cleanup after assignment", cleanupCalls)
 	}
 	var registrationCalls []string
@@ -3427,8 +3444,36 @@ done:
 		registrationCalls = append(registrationCalls, chain)
 	})
 	registration := "," + strings.Join(registrationCalls, ",") + ","
-	if len(registrationCalls) != 9 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || strings.Contains(registration, ",terminalRegistry.Register,") || strings.Contains(registration, ",unknownSwitchRegistry.Register,") || strings.Contains(registration, ",typeSwitchRegistry.Register,") || strings.Contains(registration, ",selectRegistry.Register,") || strings.Contains(registration, ",innerLoopRegistry.Register,") || strings.Contains(registration, ",rangeRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") || !strings.Contains(registration, ",fallthroughRegistry.Register,") || !strings.Contains(registration, ",breakRegistry.Register,") || !strings.Contains(registration, ",chainBreakRegistry.Register,") || !strings.Contains(registration, ",rangeGotoRegistry.Register,") || !strings.Contains(registration, ",labeledBreakRegistry.Register,") {
+	if len(registrationCalls) != 9 || strings.Contains(registration, ",localRegistry.Register,") || strings.Contains(registration, ",deadRegistry.Register,") || strings.Contains(registration, ",switchRegistry.Register,") || strings.Contains(registration, ",terminalRegistry.Register,") || strings.Contains(registration, ",unknownSwitchRegistry.Register,") || strings.Contains(registration, ",typeSwitchRegistry.Register,") || strings.Contains(registration, ",selectRegistry.Register,") || strings.Contains(registration, ",innerLoopRegistry.Register,") || strings.Contains(registration, ",rangeRegistry.Register,") || strings.Contains(registration, ",nestedGotoRegistry.Register,") || !strings.Contains(registration, ",gotoRegistry.Register,") || !strings.Contains(registration, ",fallthroughRegistry.Register,") || !strings.Contains(registration, ",breakRegistry.Register,") || !strings.Contains(registration, ",chainBreakRegistry.Register,") || !strings.Contains(registration, ",rangeGotoRegistry.Register,") || !strings.Contains(registration, ",labeledBreakRegistry.Register,") {
 		t.Fatalf("Tool registration calls = %v, want older and repeated deferred registration after assignment", registrationCalls)
+	}
+}
+
+func TestCompositionForwardGotoStopsAtTerminatingEnclosingLoop(t *testing.T) {
+	source := `package app
+func work() {}
+func run() {
+	for {
+		defer func() {}()
+		for {
+			goto inside
+		inside:
+			work()
+		}
+	}
+}
+`
+	parsed, err := parser.ParseFile(token.NewFileSet(), "terminating_goto.go", source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	function := parsed.Decls[1].(*ast.FuncDecl)
+	loop := function.Body.List[0].(*ast.ForStmt)
+	deferred := loop.Body.List[0].(*ast.DeferStmt)
+	parents := compositionParentNodes(function.Body)
+	labels := compositionLabelStatements(function.Body)
+	if compositionDeferMayReachLoopBackEdge(loop, loop.Body, deferred, parents, labels, nil) {
+		t.Fatal("forward goto inside a terminating nested loop reached the outer loop back edge")
 	}
 }
 
@@ -4058,10 +4103,25 @@ func useAfterShadowedPanic(application *App, owned bool) {
 	_ = resource.Close()
 	registry.Register(nil)
 }
+func useAfterPackagePanic(application *App, owned bool) {
+	var resource closer = &unrelatedCloser{}
+	var registry registrar = &unrelatedRegistrar{}
+	if owned {
+		resource = application.manager
+		registry = application.registry
+		panic(nil)
+	}
+	_ = resource.Close()
+	registry.Register(nil)
+}
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "shadowed_panic.go")
 	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	packageShadowPath := filepath.Join(dir, "package_shadow.go")
+	if err := os.WriteFile(packageShadowPath, []byte("package app\nfunc panic(any) {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	types, err := appCompositionTypes(dir)
@@ -4076,14 +4136,14 @@ func useAfterShadowedPanic(application *App, owned bool) {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if len(cleanupCalls) != 1 || cleanupCalls[0] != "resource.Close" {
+	if len(cleanupCalls) != 2 || cleanupCalls[0] != "resource.Close" || cleanupCalls[1] != "resource.Close" {
 		t.Fatalf("cleanup calls = %v, want shadowed panic fallthrough cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if len(registrationCalls) != 1 || registrationCalls[0] != "registry.Register" {
+	if len(registrationCalls) != 2 || registrationCalls[0] != "registry.Register" || registrationCalls[1] != "registry.Register" {
 		t.Fatalf("Tool registration calls = %v, want shadowed panic fallthrough registration", registrationCalls)
 	}
 }
@@ -4821,13 +4881,29 @@ func indexAppPackageConstantsForSources(sources []indexedAppSource, types *compo
 func indexAppPackageValueShadows(sources []indexedAppSource, types *compositionTypeIndex) {
 	for _, source := range sources {
 		for _, declaration := range source.file.Decls {
-			general, ok := declaration.(*ast.GenDecl)
-			if !ok || general.Tok != token.VAR {
+			if function, ok := declaration.(*ast.FuncDecl); ok {
+				if function.Name.Name == "panic" {
+					types.packageConstants[function.Name.Name] = constant.MakeUnknown()
+				}
 				continue
 			}
-			for _, raw := range general.Specs {
-				for _, name := range raw.(*ast.ValueSpec).Names {
-					if name.Name == "true" || name.Name == "false" {
+			general, ok := declaration.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			switch general.Tok {
+			case token.VAR, token.CONST:
+				for _, raw := range general.Specs {
+					for _, name := range raw.(*ast.ValueSpec).Names {
+						if name.Name == "panic" || general.Tok == token.VAR && (name.Name == "true" || name.Name == "false") {
+							types.packageConstants[name.Name] = constant.MakeUnknown()
+						}
+					}
+				}
+			case token.TYPE:
+				for _, raw := range general.Specs {
+					name := raw.(*ast.TypeSpec).Name
+					if name.Name == "panic" {
 						types.packageConstants[name.Name] = constant.MakeUnknown()
 					}
 				}
@@ -6210,6 +6286,9 @@ func compositionLabelMayReachBeforePosition(target *ast.LabeledStmt, body *ast.B
 				return false
 			}
 		}
+		if !compositionEnclosingControlFallsThrough(parent, packageConstants) {
+			return false
+		}
 		current = parent
 	}
 	return false
@@ -6340,9 +6419,21 @@ func compositionLabelMayReachLoopBackEdge(target *ast.LabeledStmt, loop ast.Node
 				return true
 			}
 		}
+		if !compositionEnclosingControlFallsThrough(parent, packageConstants) {
+			return false
+		}
 		current = parent
 	}
 	return false
+}
+
+func compositionEnclosingControlFallsThrough(node ast.Node, packageConstants map[string]constant.Value) bool {
+	switch node.(type) {
+	case *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+		return compositionStatementFallsThrough(node.(ast.Stmt), packageConstants)
+	default:
+		return true
+	}
 }
 
 func compositionStatementsGotoBefore(statements []ast.Stmt, position token.Pos, labels map[string]*ast.LabeledStmt, packageConstants map[string]constant.Value) bool {
@@ -6454,6 +6545,15 @@ func compositionStatementFallsThrough(statement ast.Stmt, packageConstants map[s
 		return compositionForMayFallThroughToLabel(value, packageConstants, "")
 	case *ast.RangeStmt:
 		return compositionRangeMayFallThroughToLabel(value, packageConstants, "")
+	case *ast.ExprStmt:
+		if call, ok := value.X.(*ast.CallExpr); ok {
+			if identifier, ok := call.Fun.(*ast.Ident); ok && identifier.Name == "panic" && identifier.Obj == nil {
+				if _, shadowed := packageConstants[identifier.Name]; shadowed {
+					return true
+				}
+			}
+		}
+		return statementFallsThrough(value)
 	case *ast.IfStmt:
 		if condition, known := compositionBooleanExpressionInPackage(value.Cond, packageConstants); known {
 			if condition {
@@ -7010,7 +7110,7 @@ func inspectCompositionIf(statement *ast.IfStmt, visit func(ast.Node) bool, snap
 	var exits []compositionFlowState
 	restore(trueState)
 	ast.Inspect(statement.Body, visit)
-	if blockFallsThrough(statement.Body) {
+	if compositionStatementsFallThrough(statement.Body.List, packageConstants) {
 		exits = append(exits, snapshot())
 	}
 	restore(falseState)
@@ -7018,7 +7118,7 @@ func inspectCompositionIf(statement *ast.IfStmt, visit func(ast.Node) bool, snap
 		exits = append(exits, snapshot())
 	} else {
 		ast.Inspect(statement.Else, visit)
-		if statementFallsThrough(statement.Else) {
+		if compositionStatementFallsThrough(statement.Else, packageConstants) {
 			exits = append(exits, snapshot())
 		}
 	}
@@ -7206,7 +7306,7 @@ func inspectCompositionCaseClauses(body *ast.BlockStmt, inspectCaseExpressions, 
 			continue
 		}
 		fallthroughState = nil
-		if statementsFallThrough(clause.Body) {
+		if compositionStatementsFallThrough(clause.Body, packageConstants) {
 			exits = append(exits, state)
 		}
 	}
@@ -7379,7 +7479,7 @@ func typeSwitchClauseBinder(statement *ast.TypeSwitchStmt, fallbackType string, 
 	}
 }
 
-func inspectCompositionCommClauses(body *ast.BlockStmt, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState) {
+func inspectCompositionCommClauses(body *ast.BlockStmt, visit func(ast.Node) bool, snapshot func() compositionFlowState, restore func(compositionFlowState), merge func([]compositionFlowState) compositionFlowState, packageConstants map[string]constant.Value) {
 	for _, raw := range body.List {
 		clause := raw.(*ast.CommClause)
 		switch communication := clause.Comm.(type) {
@@ -7405,7 +7505,7 @@ func inspectCompositionCommClauses(body *ast.BlockStmt, visit func(ast.Node) boo
 		for _, statement := range clause.Body {
 			ast.Inspect(statement, visit)
 		}
-		if statementsFallThrough(clause.Body) {
+		if compositionStatementsFallThrough(clause.Body, packageConstants) {
 			exits = append(exits, snapshot())
 		}
 	}
@@ -7792,7 +7892,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 			return false
 		case *ast.SelectStmt:
 			breakTarget := router.pushBreakTarget()
-			inspectCompositionCommClauses(value.Body, visit, snapshot, restore, merge)
+			inspectCompositionCommClauses(value.Body, visit, snapshot, restore, merge, types.packageConstants)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -8058,7 +8158,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 			return false
 		case *ast.SelectStmt:
 			breakTarget := router.pushBreakTarget()
-			inspectCompositionCommClauses(value.Body, visit, snapshot, restore, merge)
+			inspectCompositionCommClauses(value.Body, visit, snapshot, restore, merge, types.packageConstants)
 			router.popBreakTarget(breakTarget)
 			router.mergeTargetStates(breakTarget)
 			return false
@@ -8934,7 +9034,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 				return false
 			case *ast.SelectStmt:
 				breakTarget := router.pushBreakTarget()
-				inspectCompositionCommClauses(value.Body, visit, snapshot, restore, merge)
+				inspectCompositionCommClauses(value.Body, visit, snapshot, restore, merge, types.packageConstants)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
@@ -9462,7 +9562,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 				return false
 			case *ast.SelectStmt:
 				breakTarget := router.pushBreakTarget()
-				inspectCompositionCommClauses(value.Body, visit, snapshot, restore, merge)
+				inspectCompositionCommClauses(value.Body, visit, snapshot, restore, merge, types.packageConstants)
 				router.popBreakTarget(breakTarget)
 				router.mergeTargetStates(breakTarget)
 				return false
