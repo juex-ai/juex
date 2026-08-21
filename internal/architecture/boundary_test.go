@@ -2197,6 +2197,60 @@ func useDefinedPointer(application *App) {
 	}
 }
 
+func TestAppCompositionInspectionTracksReferenceTypeConversions(t *testing.T) {
+	source := `package app
+import (
+	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/tools"
+)
+type App struct {
+	manager *mcp.Manager
+	registry *tools.Registry
+}
+type closer interface { Close() error }
+type registrar interface { Register(tools.Tool) error }
+type closers []closer
+type registrars []registrar
+func useReferenceConversions(application *App) {
+	resources := make([]closer, 1)
+	resourceAlias := closers(resources)
+	resourceAlias[0] = application.manager
+	_ = resources[0].Close()
+	registries := make([]registrar, 1)
+	registryAlias := registrars(registries)
+	registryAlias[0] = application.registry
+	registries[0].Register(nil)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "reference_conversions.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	types, err := appCompositionTypes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCalls []string
+	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		cleanupCalls = append(cleanupCalls, chain)
+	})
+	if cleanup := "," + strings.Join(cleanupCalls, ",") + ","; !strings.Contains(cleanup, ",resources.Close,") {
+		t.Fatalf("cleanup calls = %v, want reference conversion cleanup", cleanupCalls)
+	}
+	var registrationCalls []string
+	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
+		registrationCalls = append(registrationCalls, chain)
+	})
+	if registration := "," + strings.Join(registrationCalls, ",") + ","; !strings.Contains(registration, ",registries.Register,") {
+		t.Fatalf("Tool registration calls = %v, want reference conversion registration", registrationCalls)
+	}
+}
+
 func TestSliceCollectionSourceArguments(t *testing.T) {
 	tests := []struct {
 		expression string
@@ -4998,7 +5052,7 @@ func returnedReferenceSourceKeys(expressions []ast.Expr, resultIndex int, import
 	}
 	var keys []string
 	if resultIndex == 0 {
-		for _, argument := range referenceAliasingCallArguments(call, imports) {
+		for _, argument := range referenceAliasingCallArguments(call, imports, types) {
 			if key := referenceSourceKey(argument); key != "" {
 				keys = append(keys, key)
 			}
@@ -5028,8 +5082,11 @@ func returnedReferenceSourceKeys(expressions []ast.Expr, resultIndex int, import
 	return keys
 }
 
-func referenceAliasingCallArguments(call *ast.CallExpr, imports map[string]string) []ast.Expr {
+func referenceAliasingCallArguments(call *ast.CallExpr, imports map[string]string, types compositionTypeIndex) []ast.Expr {
 	if isBuiltinAppend(call) {
+		return call.Args[:1]
+	}
+	if len(call.Args) == 1 && isReferenceTypeName(canonicalType(call.Fun, imports), types) {
 		return call.Args[:1]
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
@@ -5095,7 +5152,7 @@ func isReferenceExpression(expression ast.Expr, references map[string]bool, impo
 		if identifier, ok := value.Fun.(*ast.Ident); ok && (identifier.Name == "make" || identifier.Name == "new") {
 			return true
 		}
-		if len(referenceAliasingCallArguments(value, imports)) != 0 {
+		if len(referenceAliasingCallArguments(value, imports, types)) != 0 {
 			return true
 		}
 		if isReferenceTypeName(canonicalType(value.Fun, imports), types) {
@@ -5971,7 +6028,12 @@ func expressionResultTypes(expression ast.Expr, imports map[string]string, value
 	if identifier, ok := call.Fun.(*ast.Ident); ok && identifier.Name == "new" && len(call.Args) == 1 {
 		return []string{canonicalType(call.Args[0], imports)}
 	}
-	if typeName := canonicalType(call.Fun, imports); cleanupPathsForType(typeName, types, nil) != nil {
+	typeName := canonicalType(call.Fun, imports)
+	_, namedType := types.namedTypes[typeName]
+	if namedType || types.functionTypes[typeName] || types.referenceTypes[typeName] || types.fields[typeName] != nil {
+		return []string{typeName}
+	}
+	if cleanupPathsForType(typeName, types, nil) != nil {
 		return []string{typeName}
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
