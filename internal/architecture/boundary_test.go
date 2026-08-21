@@ -1365,6 +1365,8 @@ type App struct {
 }
 type closer interface { Close() error }
 type registrar interface { Register(tools.Tool) error }
+type closerAlias = closer
+type registrarAlias = registrar
 type cleanupDispatcher interface { Run(closer) }
 type registrationDispatcher interface { Run(registrar) }
 type embeddedCleanupDispatcher interface { cleanupDispatcher }
@@ -1373,8 +1375,8 @@ type cleanupDispatchImpl struct{}
 type registrationDispatchImpl struct{}
 type cleanupWrapper struct{ cleanupDispatchImpl }
 type registrationWrapper struct{ registrationDispatchImpl }
-func (cleanupDispatchImpl) Run(resource closer) { _ = resource.Close() }
-func (registrationDispatchImpl) Run(registry registrar) { _ = registry.Register(nil) }
+func (cleanupDispatchImpl) Run(resource closerAlias) { _ = resource.Close() }
+func (registrationDispatchImpl) Run(registry registrarAlias) { _ = registry.Register(nil) }
 func dispatchCleanup(dispatcher cleanupDispatcher, resource closer) { dispatcher.Run(resource) }
 func dispatchRegistration(dispatcher registrationDispatcher, registry registrar) { dispatcher.Run(registry) }
 func dispatchEmbeddedCleanup(dispatcher embeddedCleanupDispatcher, resource closer) { dispatcher.Run(resource) }
@@ -1863,24 +1865,24 @@ func indexInterfaceMethodImplementations(types *compositionTypeIndex) {
 	for interfaceKey, contract := range types.interfaceMethods {
 		methodName := interfaceKey[strings.LastIndex(interfaceKey, ".")+1:]
 		for concreteKey, implementation := range types.concreteMethods {
-			if concreteKey[strings.LastIndex(concreteKey, ".")+1:] == methodName && equalMethodShape(contract, implementation) {
+			if concreteKey[strings.LastIndex(concreteKey, ".")+1:] == methodName && equalMethodShape(contract, implementation, *types) {
 				types.methodImpls[interfaceKey] = append(types.methodImpls[interfaceKey], concreteKey)
 			}
 		}
 	}
 }
 
-func equalMethodShape(left, right methodShape) bool {
+func equalMethodShape(left, right methodShape, types compositionTypeIndex) bool {
 	if left.variadic != right.variadic || len(left.parameters) != len(right.parameters) || len(left.results) != len(right.results) {
 		return false
 	}
 	for index := range left.parameters {
-		if left.parameters[index] != right.parameters[index] {
+		if resolveNamedType(left.parameters[index], types) != resolveNamedType(right.parameters[index], types) {
 			return false
 		}
 	}
 	for index := range left.results {
-		if left.results[index] != right.results[index] {
+		if resolveNamedType(left.results[index], types) != resolveNamedType(right.results[index], types) {
 			return false
 		}
 	}
