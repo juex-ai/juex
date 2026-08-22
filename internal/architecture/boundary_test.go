@@ -400,8 +400,10 @@ func setAppFields(target *App, resource any, registryValue any) {
 func delegateAppFields(target *App, resource any, registryValue any) {
 	setAppFields(target, resource, registryValue)
 }
+var appFieldSetter = delegateAppFields
 func (application *App) bindNamedHelper(manager *mcp.Manager, registry *tools.Registry) {
-	delegateAppFields(application, manager, registry)
+	setter := appFieldSetter
+	setter(application, manager, registry)
 }
 func (application *App) bypass() {
 	_ = application.resource.Close()
