@@ -408,11 +408,13 @@ func (application *App) bindNamedHelper(manager *mcp.Manager, registry *tools.Re
 	setter := appFieldSetter
 	setter(application, manager, registry)
 }
+func setCompositeAppFields(target *App, resource any, registryValue any) {
+	target.compositeClosureResource = resource.(closer)
+	target.compositeClosureRegistry = registryValue.(registrar)
+}
+var compositeAppFieldSetter = setCompositeAppFields
 func (application *App) bindCompositeClosure(manager *mcp.Manager, registry *tools.Registry) {
-	binder := appFieldBinder{bind: func(target *App, resource any, registryValue any) {
-		target.compositeClosureResource = resource.(closer)
-		target.compositeClosureRegistry = registryValue.(registrar)
-	}}
+	binder := appFieldBinder{bind: compositeAppFieldSetter}
 	binder.bind(application, manager, registry)
 }
 func (application *App) bypass() {
@@ -5518,6 +5520,11 @@ type compositeFunctionLiteral struct {
 	literal *ast.FuncLit
 }
 
+type compositeValueExpression struct {
+	suffix     string
+	expression ast.Expr
+}
+
 func assignedCompositeFunctionLiterals(expressions []ast.Expr, index int, imports map[string]string, types compositionTypeIndex) []compositeFunctionLiteral {
 	expression := assignedExpression(expressions, index)
 	return compositeFunctionLiterals(expression, "", imports, types)
@@ -5557,6 +5564,41 @@ func compositeFunctionLiterals(expression ast.Expr, prefix string, imports map[s
 	return result
 }
 
+func compositeValueExpressions(expression ast.Expr, prefix string, imports map[string]string, types compositionTypeIndex) []compositeValueExpression {
+	for {
+		parenthesized, ok := expression.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expression = parenthesized.X
+	}
+	literal, ok := expression.(*ast.CompositeLit)
+	if !ok {
+		return nil
+	}
+	typeName := canonicalType(literal.Type, imports)
+	fieldOrder, structured := compositeFieldOrder(literal.Type, typeName, imports, types)
+	var result []compositeValueExpression
+	for index, element := range literal.Elts {
+		suffix := "[]"
+		if pair, ok := element.(*ast.KeyValueExpr); ok {
+			if field, ok := pair.Key.(*ast.Ident); structured && ok {
+				suffix = "." + field.Name
+			}
+			element = pair.Value
+		} else if structured && index < len(fieldOrder) && !strings.HasPrefix(fieldOrder[index], embeddedPrefix) {
+			suffix = "." + fieldOrder[index]
+		}
+		nested := compositeValueExpressions(element, prefix+suffix, imports, types)
+		if len(nested) != 0 {
+			result = append(result, nested...)
+			continue
+		}
+		result = append(result, compositeValueExpression{suffix: prefix + suffix, expression: element})
+	}
+	return result
+}
+
 func trackCompositeFunctionTypes(values map[string]string, parent string, target ast.Expr, expressions []ast.Expr, index int, imports map[string]string, types compositionTypeIndex) {
 	root := assignmentValueKey(target)
 	if root == "" {
@@ -5564,6 +5606,12 @@ func trackCompositeFunctionTypes(values map[string]string, parent string, target
 	}
 	for _, embedded := range assignedCompositeFunctionLiterals(expressions, index, imports, types) {
 		setMayValueType(values, root+embedded.suffix, localFunctionTypePrefix+localFunctionKey(parent, embedded.literal), types)
+	}
+	for _, embedded := range compositeValueExpressions(assignedExpression(expressions, index), "", imports, types) {
+		typeName := expressionType(embedded.expression, imports, values, types)
+		if strings.HasPrefix(typeName, localFunctionTypePrefix) {
+			setMayValueType(values, root+embedded.suffix, typeName, types)
+		}
 	}
 }
 
