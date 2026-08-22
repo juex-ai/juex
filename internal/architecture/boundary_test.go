@@ -344,11 +344,12 @@ type AppAlias = App
 var appFactory = func(manager *mcp.Manager, registry *tools.Registry) *App {
 	return &AppAlias{closureResource: manager, closureRegistry: registry}
 }
-func appIdentity(target *App) *App { return target }
+func appIdentity(target *App) (error, *App) { return nil, target }
 func (application *App) bind(manager *mcp.Manager, registry *tools.Registry) {
 	target := &application
 	converted := (*App)(*target)
-	appIdentity(converted).resource = manager
+	_, identity := appIdentity(converted)
+	identity.resource = manager
 	func(registryTarget *App) {
 		registryTarget.registry = registry
 	}(application)
@@ -10497,12 +10498,12 @@ func trackAppReceiverAlias(left ast.Expr, right []ast.Expr, index int, receivers
 	if target == "" {
 		return
 	}
-	assigned := assignedExpression(right, index)
+	assigned, resultIndex := assignedAppReceiverExpression(right, index)
 	if assigned == nil {
 		return
 	}
 	source := appReceiverExpressionKey(assigned, imports, types)
-	if hasAppReceiverAlias(assigned, receivers, imports, values, types) {
+	if hasAppReceiverAliasResult(assigned, resultIndex, receivers, imports, values, types) {
 		receivers[target] = true
 	}
 	if source != "" && source != target {
@@ -10517,6 +10518,16 @@ func trackAppReceiverAlias(left ast.Expr, right []ast.Expr, index int, receivers
 			receivers[target+embedded.suffix] = true
 		}
 	}
+}
+
+func assignedAppReceiverExpression(expressions []ast.Expr, index int) (ast.Expr, int) {
+	if len(expressions) == 1 {
+		return expressions[0], index
+	}
+	if index >= 0 && index < len(expressions) {
+		return expressions[index], 0
+	}
+	return nil, 0
 }
 
 func appReceiverExpressionKey(expression ast.Expr, imports map[string]string, types compositionTypeIndex) string {
@@ -10547,6 +10558,10 @@ func appReceiverExpressionValueKey(expression ast.Expr, imports map[string]strin
 }
 
 func hasAppReceiverAlias(expression ast.Expr, receivers map[string]bool, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
+	return hasAppReceiverAliasResult(expression, 0, receivers, imports, values, types)
+}
+
+func hasAppReceiverAliasResult(expression ast.Expr, resultIndex int, receivers map[string]bool, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
 	exact := appReceiverExpressionValueKey(expression, imports, types, true)
 	if exact != "" && receivers[exact] {
 		return true
@@ -10572,7 +10587,7 @@ func hasAppReceiverAlias(expression ast.Expr, receivers map[string]bool, imports
 				continue
 			}
 			callee := calledFunctionKey(value.Fun, imports, values, types)
-			for parameterIndex := range types.resultParams[callee][0] {
+			for parameterIndex := range types.resultParams[callee][resultIndex] {
 				for _, argument := range callArgumentsForParameter(value, callee, parameterIndex, imports, types) {
 					if hasAppReceiverAlias(argument, receivers, imports, values, types) {
 						return true
