@@ -155,6 +155,7 @@ type App struct {
 	pendingHandoffs      sync.WaitGroup
 	pendingHandoffClosed bool
 	pendingHandoffIDs    map[string]struct{}
+	sessionHandoffMu     sync.RWMutex
 
 	sessionLock       *session.Lock
 	sessionResource   *session.Session
@@ -745,6 +746,11 @@ func (a *App) SwitchToNewPrimarySessionContext(ctx context.Context) error {
 	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
 		return err
 	}
+	a.sessionHandoffMu.Lock()
+	defer a.sessionHandoffMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	a.lifecycleMu.RLock()
 	defer a.lifecycleMu.RUnlock()
 	a.sessionReplaceMu.Lock()
@@ -1180,6 +1186,8 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	if a == nil || a.Engine == nil {
 		return nil
 	}
+	sessionLease := a.acquireExternalInputSessionLease()
+	defer sessionLease.Release()
 	a.sessionMu.RLock()
 	defer a.sessionMu.RUnlock()
 	if a.Session == nil {
@@ -1201,7 +1209,7 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	_, err = a.deliverExternalInputLocked(ctx, msg, runtime.PendingInputOptions{
 		ID:  mcpNotificationPendingInputID(n, eventType),
 		TTL: a.Engine.ExternalEventTTL,
-	})
+	}, sessionLease)
 	return err
 }
 
@@ -1214,6 +1222,8 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 	if a == nil || a.Engine == nil {
 		return observable.DeliveryOutcome{}, nil
 	}
+	sessionLease := a.acquireExternalInputSessionLease()
+	defer sessionLease.Release()
 	a.sessionMu.RLock()
 	defer a.sessionMu.RUnlock()
 	targetSession := ""
@@ -1236,7 +1246,7 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 	delivery, err := a.deliverExternalInputLocked(ctx, msg, runtime.PendingInputOptions{
 		ID:  pendingID,
 		TTL: a.Engine.ExternalEventTTL,
-	})
+	}, sessionLease)
 	if delivery.Queued {
 		return observable.DeliveryOutcome{
 			State:          observable.ObservationStateQueued,

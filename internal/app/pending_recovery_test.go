@@ -36,6 +36,10 @@ type retryUntilReleasedEventCommitter struct {
 	release   <-chan struct{}
 	failed    chan struct{}
 	once      sync.Once
+	retrying  chan struct{}
+	retryOnce sync.Once
+	mu        sync.Mutex
+	failures  int
 }
 
 func (c *retryUntilReleasedEventCommitter) Commit(event events.Event) (events.Event, error) {
@@ -43,7 +47,14 @@ func (c *retryUntilReleasedEventCommitter) Commit(event events.Event) (events.Ev
 		select {
 		case <-c.release:
 		default:
+			c.mu.Lock()
+			c.failures++
+			failures := c.failures
+			c.mu.Unlock()
 			c.once.Do(func() { close(c.failed) })
+			if failures >= 2 && c.retrying != nil {
+				c.retryOnce.Do(func() { close(c.retrying) })
+			}
 			return events.Event{}, c.err
 		}
 	}
@@ -661,6 +672,69 @@ func TestAppStartupRecoveryKeepsBarrierThroughReplayableAdmissionRetry(t *testin
 	}
 	if calls, _ := provider.snapshot(); calls != 1 {
 		t.Fatalf("provider calls = %d, want recovered input processed once before session switch", calls)
+	}
+}
+
+func TestAppExternalDeliveryHandoffKeepsOriginSessionThroughRetry(t *testing.T) {
+	dir := t.TempDir()
+	provider := &recoveryProvider{}
+	a, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(release)
+		}
+		_ = a.CloseAndWait()
+	})
+	failed := make(chan struct{})
+	retrying := make(chan struct{})
+	wantErr := errors.New("injected persistent external admission failure")
+	a.Bus.SetCommitter(&retryUntilReleasedEventCommitter{
+		delegate:  a.eventSink,
+		eventType: runtime.TurnAdmittedType,
+		err:       wantErr,
+		release:   release,
+		failed:    failed,
+		retrying:  retrying,
+	})
+
+	outcome, err := a.DeliverObservation(context.Background(), testObservationRecord("obs-session-bound-handoff"))
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("DeliverObservation error = %v, want injected admission failure", err)
+	}
+	if outcome.State != observable.ObservationStateQueued {
+		t.Fatalf("DeliverObservation outcome = %+v, want queued", outcome)
+	}
+	select {
+	case <-retrying:
+	case <-time.After(2 * time.Second):
+		t.Fatal("App-owned handoff did not retry admission")
+	}
+
+	switchDone := make(chan error, 1)
+	go func() { switchDone <- a.SwitchToNewPrimarySession() }()
+	select {
+	case err := <-switchDone:
+		t.Fatalf("session switch completed while origin-session handoff was retrying: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	released = true
+	select {
+	case err := <-switchDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("session switch did not continue after handoff became safe")
+	}
+	if calls, _ := provider.snapshot(); calls != 1 {
+		t.Fatalf("provider calls = %d, want origin-session handoff processed once", calls)
 	}
 }
 

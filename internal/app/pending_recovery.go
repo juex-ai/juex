@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
@@ -17,21 +18,50 @@ type externalInputDelivery struct {
 	Delivered bool
 }
 
+type externalInputSessionLease struct {
+	app  *App
+	refs atomic.Int32
+}
+
+func (a *App) acquireExternalInputSessionLease() *externalInputSessionLease {
+	a.sessionHandoffMu.RLock()
+	lease := &externalInputSessionLease{app: a}
+	lease.refs.Store(1)
+	return lease
+}
+
+func (l *externalInputSessionLease) Retain() {
+	if l != nil {
+		l.refs.Add(1)
+	}
+}
+
+func (l *externalInputSessionLease) Release() {
+	if l != nil && l.refs.Add(-1) == 0 {
+		l.app.sessionHandoffMu.RUnlock()
+	}
+}
+
 // deliverExternalInputLocked persists transport input before asking the
 // process-level admission queue whether to attach it or start an idle Turn.
 // The caller holds sessionMu.RLock for the complete attached-session lifetime.
-func (a *App) deliverExternalInputLocked(ctx context.Context, message llm.Message, opts runtime.PendingInputOptions) (externalInputDelivery, error) {
+func (a *App) deliverExternalInputLocked(
+	ctx context.Context,
+	message llm.Message,
+	opts runtime.PendingInputOptions,
+	sessionLease *externalInputSessionLease,
+) (externalInputDelivery, error) {
 	record, err := a.Engine.PersistPendingMessageWithOptions(ctx, message, opts)
 	if err != nil {
 		return externalInputDelivery{}, err
 	}
 	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
-		a.handoffPersistedInputAfterRecovery(record)
+		a.handoffPersistedInputAfterRecovery(record, sessionLease)
 		return externalInputDelivery{Record: record, Queued: true}, err
 	}
 	delivery, err := a.resumePersistedInputLocked(ctx, record)
 	if shouldRetryPersistedInputHandoff(delivery, err) {
-		a.handoffPersistedInputAfterRecovery(record)
+		a.handoffPersistedInputAfterRecovery(record, sessionLease)
 	}
 	return delivery, err
 }
@@ -237,7 +267,10 @@ func (a *App) waitPendingInputRecoveryContext(ctx context.Context) error {
 // handoffPersistedInputAfterRecovery transfers caller-canceled delivery to
 // App-owned work. The durable record remains available for restart if the App
 // is already closing, and duplicate callers share one handoff by record ID.
-func (a *App) handoffPersistedInputAfterRecovery(record runtime.PendingInputRecord) bool {
+func (a *App) handoffPersistedInputAfterRecovery(
+	record runtime.PendingInputRecord,
+	sessionLease *externalInputSessionLease,
+) bool {
 	if a == nil || a.Engine == nil || record.ID == "" || a.ctx == nil {
 		return false
 	}
@@ -255,6 +288,7 @@ func (a *App) handoffPersistedInputAfterRecovery(record runtime.PendingInputReco
 	}
 	a.pendingHandoffIDs[record.ID] = struct{}{}
 	a.pendingHandoffs.Add(1)
+	sessionLease.Retain()
 	a.pendingHandoffMu.Unlock()
 
 	go func() {
@@ -263,6 +297,7 @@ func (a *App) handoffPersistedInputAfterRecovery(record runtime.PendingInputReco
 			delete(a.pendingHandoffIDs, record.ID)
 			a.pendingHandoffMu.Unlock()
 			a.pendingHandoffs.Done()
+			sessionLease.Release()
 		}()
 		delay := 25 * time.Millisecond
 		for {
