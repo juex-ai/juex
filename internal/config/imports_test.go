@@ -178,6 +178,31 @@ func TestConfigImportsTreatColonContainingRelativeFilenameAsLocal(t *testing.T) 
 	}
 }
 
+func TestDeclaringConfigIdentityIsStableWhenMissingParentsAppearThroughSymlink(t *testing.T) {
+	realRoot := t.TempDir()
+	aliasRoot := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Skipf("create directory symlink: %v", err)
+	}
+	path := filepath.Join(aliasRoot, "workspace", ".juex", "juex.yaml")
+	before := declaringConfigIdentity(path)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	after := declaringConfigIdentity(path)
+	if before != after {
+		t.Fatalf("declaring identity changed after parents appeared: before=%q after=%q", before, after)
+	}
+	canonicalRoot, err := filepath.EvalSymlinks(realRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(canonicalRoot, "workspace", ".juex", "juex.yaml")
+	if before != want {
+		t.Fatalf("declaring identity = %q, want canonical %q", before, want)
+	}
+}
+
 func TestConfigImportsRejectNestedImportsIncludingEmptyList(t *testing.T) {
 	for _, importedBody := range []string{"imports: []\nmodels: [local:nested]\n", "imports:\n  - source: other.yaml\n"} {
 		t.Run(strings.ReplaceAll(strings.TrimSpace(importedBody), "\n", "_"), func(t *testing.T) {
@@ -763,6 +788,112 @@ fleet:
 	}
 }
 
+func TestFleetOnlyLoadReusesRuntimeLKGFromAnotherWorkspaceContext(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	var unavailable atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if unavailable.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`models: [remote:ok]
+providers:
+  - id: remote
+    protocol: openai/chat
+    base_url: https://example.invalid
+    api_key: test-key
+    models: [{id: ok}]
+fleet:
+  addr: 127.0.0.1:5888
+`))
+	}))
+	defer server.Close()
+	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), "imports:\n  - source: "+server.URL+"/config.yaml\n")
+
+	runtimeWorkDir := t.TempDir()
+	if _, err := LoadForWorkDirForValidation(runtimeWorkDir); err != nil {
+		t.Fatal(err)
+	}
+	unavailable.Store(true)
+	t.Chdir(t.TempDir())
+
+	fleet, err := LoadHomeFleetConfig()
+	if err != nil {
+		t.Fatalf("fleet-only load from runtime LKG: %v", err)
+	}
+	if fleet.Addr != "127.0.0.1:5888" {
+		t.Fatalf("fleet addr = %q, want runtime-validated LKG address", fleet.Addr)
+	}
+}
+
+func TestFleetOnlyLoadSelectsOneCompleteRuntimeCacheContext(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	var phase atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := phase.Load()
+		switch r.URL.Path {
+		case "/addr.yaml":
+			if current == 3 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			if current == 1 {
+				_, _ = w.Write([]byte("fleet:\n  addr: 127.0.0.1:5999\n"))
+				return
+			}
+			_, _ = w.Write([]byte("fleet:\n  addr: 0.0.0.0:5888\n"))
+		case "/unsafe.yaml":
+			if current >= 2 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			if current == 1 {
+				_, _ = w.Write([]byte("fleet:\n  unsafe_bind_any: true\n"))
+				return
+			}
+			_, _ = w.Write([]byte("fleet:\n  unsafe_bind_any: false\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), `imports:
+  - source: `+server.URL+`/addr.yaml
+  - source: `+server.URL+`/unsafe.yaml
+models: [local:test]
+providers:
+  - id: local
+    protocol: openai/chat
+    api_key: test-key
+    models: [{id: test}]
+`)
+
+	contextA := t.TempDir()
+	if _, err := LoadForWorkDirForValidation(contextA); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	phase.Store(1)
+	contextB := t.TempDir()
+	if _, err := LoadForWorkDirForValidation(contextB); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	phase.Store(2)
+	if _, err := LoadForWorkDirForValidation(contextA); err != nil {
+		t.Fatal(err)
+	}
+	phase.Store(3)
+
+	fleet, err := LoadHomeFleetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fleet.Addr != "127.0.0.1:5999" || !fleet.UnsafeBindAny {
+		t.Fatalf("fleet fallback = %+v, want the complete newer context B", fleet)
+	}
+}
+
 func TestConfigRemoteImportBoundsTimeoutAndResponseSize(t *testing.T) {
 	t.Run("response size", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -797,6 +928,74 @@ func TestConfigRemoteImportBoundsTimeoutAndResponseSize(t *testing.T) {
 }
 
 func TestConfigRemoteImportControlsRedirects(t *testing.T) {
+	t.Run("cross-origin referer", func(t *testing.T) {
+		var referer atomic.Value
+		referer.Store("")
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			referer.Store(r.Header.Get("Referer"))
+			_, _ = w.Write([]byte("runtime:\n  tool_timeout: 1m\n"))
+		}))
+		defer target.Close()
+		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, target.URL+"/config.yaml", http.StatusFound)
+		}))
+		defer origin.Close()
+		mainPath := filepath.Join(t.TempDir(), "juex.yaml")
+		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml?token=query-secret\n", origin.URL))
+		loader := newConfigImportLoaderForTest(t, t.TempDir())
+		if err := applyYAMLFileWithImportLoader(&Config{HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader); err != nil {
+			t.Fatal(err)
+		}
+		if got := referer.Load().(string); got != "" {
+			t.Fatalf("cross-origin Referer = %q, want empty", got)
+		}
+	})
+
+	t.Run("cached validators are not forwarded", func(t *testing.T) {
+		var requests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/config.yaml":
+				if requests.Add(1) == 1 {
+					w.Header().Set("ETag", `"config-v1"`)
+					w.Header().Set("Last-Modified", "Fri, 22 Aug 2025 00:00:00 GMT")
+					_, _ = w.Write([]byte("runtime:\n  tool_timeout: 41s\n"))
+					return
+				}
+				http.Redirect(w, r, "/replacement.yaml", http.StatusFound)
+			case "/replacement.yaml":
+				if etag, modified := r.Header.Get("If-None-Match"), r.Header.Get("If-Modified-Since"); etag != "" || modified != "" {
+					t.Errorf("redirect target received original validators: etag=%q modified=%q", etag, modified)
+					w.WriteHeader(http.StatusNotModified)
+					return
+				}
+				_, _ = w.Write([]byte("runtime:\n  tool_timeout: 42s\n"))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer server.Close()
+
+		home := t.TempDir()
+		mainPath := filepath.Join(t.TempDir(), "juex.yaml")
+		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", server.URL))
+		loader := newConfigImportLoaderForTest(t, home)
+		first := Config{HomeJuexDir: home}
+		if err := applyYAMLFileWithImportLoader(&first, explicitYAMLSource(mainPath), loader); err != nil {
+			t.Fatal(err)
+		}
+		commitImportCacheForTest(t, &first)
+
+		resetImportLoaderMemoForTest(loader)
+		second := Config{HomeJuexDir: home}
+		if err := applyYAMLFileWithImportLoader(&second, explicitYAMLSource(mainPath), loader); err != nil {
+			t.Fatal(err)
+		}
+		if second.ToolTimeout != 42*time.Second {
+			t.Fatalf("redirected tool timeout = %s, want replacement 42s", second.ToolTimeout)
+		}
+	})
+
 	t.Run("redirect limit", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/again", http.StatusFound)
@@ -826,6 +1025,29 @@ func TestConfigRemoteImportControlsRedirects(t *testing.T) {
 		err := applyYAMLFileWithImportLoader(&Config{HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader)
 		if err == nil || !strings.Contains(err.Error(), "redirect from https to http is not allowed") {
 			t.Fatalf("downgrade redirect error = %v", err)
+		}
+	})
+
+	t.Run("intermediate https downgrade", func(t *testing.T) {
+		plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("runtime:\n  tool_timeout: 1m\n"))
+		}))
+		defer plain.Close()
+		secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, plain.URL+"/config.yaml", http.StatusFound)
+		}))
+		defer secure.Close()
+		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, secure.URL+"/config.yaml", http.StatusFound)
+		}))
+		defer origin.Close()
+		mainPath := filepath.Join(t.TempDir(), "juex.yaml")
+		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", origin.URL))
+		loader := newConfigImportLoaderForTest(t, t.TempDir())
+		loader.client = secure.Client()
+		err := applyYAMLFileWithImportLoader(&Config{HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader)
+		if err == nil || !strings.Contains(err.Error(), "redirect from https to http is not allowed") {
+			t.Fatalf("intermediate downgrade redirect error = %v", err)
 		}
 	})
 }
@@ -896,21 +1118,25 @@ func newConfigImportLoaderForTest(t *testing.T, home string) *configImportLoader
 
 func TestCommitConfigImportCachesPreservesEarlierRecordsWhenLaterWriteFails(t *testing.T) {
 	home := t.TempDir()
-	firstPath := filepath.Join(home, "cache", "config-imports", "first.json")
+	firstSource := "https://config.example/first.yaml"
+	declaringDigest := sourceDigest("first-declarer")
+	contextDigest := sourceDigest("standalone")
+	firstPath := filepath.Join(home, "cache", "config-imports", sourceDigest(firstSource)+"-"+declaringDigest+"-"+contextDigest+".json")
 	old := configImportCacheRecord{
 		Version:         configImportCacheVersion,
-		Source:          "https://config.example/first.yaml",
-		SourceSHA256:    sourceDigest("https://config.example/first.yaml"),
-		DeclaringSHA256: sourceDigest("first-declarer"),
-		ContextSHA256:   sourceDigest("standalone"),
+		Source:          firstSource,
+		SourceSHA256:    sourceDigest(firstSource),
+		DeclaringSHA256: declaringDigest,
+		ContextSHA256:   contextDigest,
 		FetchedAt:       time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC),
 		Content:         "runtime:\n  tool_timeout: 41s\n",
 		cachePath:       firstPath,
 	}
 	old.ContentSHA256 = contentDigest([]byte(old.Content))
-	secondPath := filepath.Join(home, "cache", "config-imports", "second.json")
+	secondSource := "https://config.example/second.yaml"
+	secondPath := filepath.Join(home, "cache", "config-imports", sourceDigest(secondSource)+"-"+declaringDigest+"-"+contextDigest+".json")
 	secondOld := old
-	secondOld.Source = "https://config.example/second.yaml"
+	secondOld.Source = secondSource
 	secondOld.SourceSHA256 = sourceDigest(secondOld.Source)
 	secondOld.Content = "runtime:\n  tool_timeout: 40s\n"
 	secondOld.ContentSHA256 = contentDigest([]byte(secondOld.Content))
@@ -968,6 +1194,106 @@ func TestCommitConfigImportCachesPreservesEarlierRecordsWhenLaterWriteFails(t *t
 	}
 	if !bytes.Equal(secondAfter, secondBefore) {
 		t.Fatalf("second cache changed after its write failure:\n%s", secondAfter)
+	}
+}
+
+func TestConfigImportCacheRecoversInterruptedPublication(t *testing.T) {
+	home := t.TempDir()
+	loader := newConfigImportLoaderForTest(t, home)
+	declarer := filepath.Join(t.TempDir(), "juex.yaml")
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	newRecord := func(source, content string) configImportCacheRecord {
+		record := configImportCacheRecord{
+			Version:         configImportCacheVersion,
+			Source:          source,
+			SourceSHA256:    sourceDigest(source),
+			DeclaringSHA256: declaringConfigDigest(declarer),
+			ContextSHA256:   loader.cacheContextDigest(),
+			FetchedAt:       now,
+			Content:         content,
+			cachePath:       loader.cachePath(source, declarer),
+		}
+		record.ContentSHA256 = contentDigest([]byte(record.Content))
+		return record
+	}
+
+	firstSource := "https://config.example/first.yaml"
+	secondSource := "https://config.example/second.yaml"
+	firstOld := newRecord(firstSource, "runtime:\n  tool_timeout: 40s\n")
+	secondOld := newRecord(secondSource, "runtime:\n  tool_timeout: 41s\n")
+	if err := commitConfigImportCaches(&Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{firstOld, secondOld}}); err != nil {
+		t.Fatal(err)
+	}
+
+	firstNew := newRecord(firstSource, "runtime:\n  tool_timeout: 42s\n")
+	secondNew := newRecord(secondSource, "runtime:\n  tool_timeout: 43s\n")
+	commits, err := prepareConfigImportCacheCommits([]configImportCacheRecord{firstNew, secondNew})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := beginConfigImportCachePublication(commits); err != nil {
+		t.Fatal(err)
+	}
+	if err := homestore.WriteFileAtomic(firstNew.cachePath, commits[0].data, 0o600, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(firstNew.cachePath); err != nil || bytes.Equal(got, commits[0].previous) {
+		t.Fatalf("first cache was not replaced before simulated death: changed=%t err=%v", !bytes.Equal(got, commits[0].previous), err)
+	}
+
+	reader := newConfigImportLoader(home)
+	firstRecovered, err := reader.readCache(firstSource, declarer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRecovered, err := reader.readCache(secondSource, declarer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.closeConfigImportCacheLock(); err != nil {
+		t.Fatal(err)
+	}
+	if firstRecovered.Content != firstOld.Content || secondRecovered.Content != secondOld.Content {
+		t.Fatalf("recovered generation = (%q, %q), want old/old", firstRecovered.Content, secondRecovered.Content)
+	}
+	if _, err := os.Stat(configImportCacheJournalPath(home)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("publication journal remains after recovery: %v", err)
+	}
+
+	commits, err = prepareConfigImportCacheCommits([]configImportCacheRecord{firstNew, secondNew})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalPath, err := beginConfigImportCachePublication(commits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, commit := range commits {
+		if err := homestore.WriteFileAtomic(commit.record.cachePath, commit.data, 0o600, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := markConfigImportCachePublicationCommitted(journalPath); err != nil {
+		t.Fatal(err)
+	}
+
+	committedReader := newConfigImportLoader(home)
+	firstCommitted, err := committedReader.readCache(firstSource, declarer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCommitted, err := committedReader.readCache(secondSource, declarer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := committedReader.closeConfigImportCacheLock(); err != nil {
+		t.Fatal(err)
+	}
+	if firstCommitted.Content != firstNew.Content || secondCommitted.Content != secondNew.Content {
+		t.Fatalf("committed generation = (%q, %q), want new/new", firstCommitted.Content, secondCommitted.Content)
+	}
+	if _, err := os.Stat(configImportCacheJournalPath(home)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("committed publication journal remains after recovery: %v", err)
 	}
 }
 
@@ -1147,6 +1473,105 @@ func TestConfigImportsPreserveHomeWorkspaceExplicitPriorityAndProvenance(t *test
 		if metadata[key] != want {
 			t.Fatalf("%s metadata = %q, want %q", key, metadata[key], want)
 		}
+	}
+}
+
+func TestExplicitWorkspaceConfigDoesNotReapplyImports(t *testing.T) {
+	prepareConfigTest(t)
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "imported.yaml"), `hooks:
+  trusted: true
+  commands:
+    - name: imported
+      events: [UserPromptSubmit]
+      command: [echo, imported]
+`)
+	workspacePath := filepath.Join(workDir, ".juex", "juex.yaml")
+	writeTextFile(t, workspacePath, `imports:
+  - source: imported.yaml
+models: [local:test]
+providers:
+  - id: local
+    protocol: openai/chat
+    api_key: test-key
+    models: [{id: test}]
+hooks:
+  trusted: true
+  commands:
+    - name: declaring
+      events: [UserPromptSubmit]
+      command: [echo, declaring]
+`)
+
+	cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, ConfigPath: workspacePath, AgentState: AgentStateNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Hooks.Commands) != 2 {
+		t.Fatalf("hooks = %v, want workspace source chain applied once", cfg.Hooks.Commands)
+	}
+	if got := []string{cfg.Hooks.Commands[0].Name, cfg.Hooks.Commands[1].Name}; !reflect.DeepEqual(got, []string{"imported", "declaring"}) {
+		t.Fatalf("hooks = %v, want workspace source chain applied once", cfg.Hooks.Commands)
+	}
+	if statuses := cfg.ImportStatuses(); len(statuses) != 1 {
+		t.Fatalf("import statuses = %+v, want one workspace import", statuses)
+	}
+}
+
+func TestExplicitHomeConfigReappliesOnlyDeclaringDocument(t *testing.T) {
+	home := prepareConfigTest(t)
+	homeConfigDir := filepath.Join(home, ".juex")
+	writeTextFile(t, filepath.Join(homeConfigDir, "imported.yaml"), `hooks:
+  commands:
+    - name: imported
+      events: [UserPromptSubmit]
+      command: [echo, imported]
+`)
+	homePath := filepath.Join(homeConfigDir, "juex.yaml")
+	writeTextFile(t, homePath, `imports:
+  - source: imported.yaml
+models: [local:home]
+providers:
+  - id: local
+    protocol: openai/chat
+    api_key: test-key
+    models: [{id: home}, {id: workspace}]
+fleet:
+  addr: 127.0.0.1:5998
+  unsafe_bind_any: true
+hooks:
+  commands:
+    - name: declaring
+      events: [UserPromptSubmit]
+      command: [echo, declaring]
+sandbox:
+  file_system:
+    blocked_paths: [home-secret]
+`)
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [local:workspace]\nsandbox:\n  file_system:\n    blocked_paths: [workspace-secret]\n")
+
+	cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, ConfigPath: homePath, AgentState: AgentStateNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model != "home" {
+		t.Fatalf("model = %q, want explicit Home declaring document to win", cfg.Model)
+	}
+	if cfg.Fleet.Addr != "127.0.0.1:5998" || !cfg.Fleet.UnsafeBindAny {
+		t.Fatalf("fleet = %+v, want replayed default-Home scope", cfg.Fleet)
+	}
+	if len(cfg.Hooks.Commands) != 2 {
+		t.Fatalf("hooks = %v, want imported and declaring Home hooks applied once", cfg.Hooks.Commands)
+	}
+	if got := []string{cfg.Hooks.Commands[0].Name, cfg.Hooks.Commands[1].Name}; !reflect.DeepEqual(got, []string{"imported", "declaring"}) {
+		t.Fatalf("hooks = %v, want imported and declaring Home hooks applied once", cfg.Hooks.Commands)
+	}
+	if got := cfg.Sandbox.FileSystem.BlockedPaths; !reflect.DeepEqual(got, []string{"home-secret", "workspace-secret"}) {
+		t.Fatalf("blocked paths = %v, want append-only Home values applied once", got)
+	}
+	if statuses := cfg.ImportStatuses(); len(statuses) != 1 {
+		t.Fatalf("import statuses = %+v, want one Home import", statuses)
 	}
 }
 

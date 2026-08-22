@@ -66,6 +66,26 @@ ISOLATED_PROVIDER_ENVIRONMENT_KEYS = (
 CONFIG_IMPORT_TIMEOUT_SECONDS = 5
 CONFIG_IMPORT_MAX_BYTES = 1 << 20
 CONFIG_IMPORT_MAX_CACHE_AGE = datetime.timedelta(days=7)
+CONFIG_IMPORT_JOURNAL_NAME = ".publication-journal.json"
+CONFIG_IMPORT_CACHE_FIELDS = frozenset(
+    {
+        "version",
+        "source",
+        "source_sha256",
+        "declaring_sha256",
+        "context_sha256",
+        "etag",
+        "last_modified",
+        "fetched_at",
+        "content_sha256",
+        "content",
+    }
+)
+CONFIG_IMPORT_RFC3339_PATTERN = re.compile(
+    r"\A\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T"
+    r"(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?"
+    r"(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)\Z"
+)
 
 
 def main() -> int:
@@ -1249,7 +1269,7 @@ def validate_source_config(juex_bin: str, config_path: pathlib.Path) -> None:
     _require_valid_source_config(result)
 
 
-def validate_source_layers(juex_bin: str, layers: list[SourceConfigLayer]) -> None:
+def validate_source_layers(juex_bin: str | list[str], layers: list[SourceConfigLayer]) -> None:
     """Ask Juex to validate materialized source documents at their original scopes."""
     by_scope: dict[str, SourceConfigLayer] = {}
     for layer in layers:
@@ -1276,7 +1296,7 @@ def validate_source_layers(juex_bin: str, layers: list[SourceConfigLayer]) -> No
         for scope, layer in by_scope.items():
             _materialize_source_layer(layer, paths[scope])
 
-        command = [juex_bin, "-C", str(workspace)]
+        command = [*_juex_validation_command(juex_bin), "-C", str(workspace)]
         env = os.environ.copy()
         for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
             env.pop(name, None)
@@ -1292,11 +1312,24 @@ def validate_source_layers(juex_bin: str, layers: list[SourceConfigLayer]) -> No
     _require_valid_source_config(result)
 
 
+def _juex_validation_command(juex_bin: str | list[str]) -> list[str]:
+    if isinstance(juex_bin, list):
+        if not juex_bin:
+            raise ValueError("Juex validation command cannot be empty")
+        return list(juex_bin)
+    if juex_bin.strip():
+        return [juex_bin]
+    go = shutil.which("go")
+    if not go:
+        raise ValueError("Juex binary not found and go is unavailable for source validation")
+    return [go, "-C", str(REPO_ROOT), "run", "./cmd/juex"]
+
+
 def _materialize_source_layer(layer: SourceConfigLayer, config_path: pathlib.Path) -> None:
     imports: list[dict[str, str]] = []
     for index, imported in enumerate(layer.imports):
         imported_path = config_path.parent / "imports" / f"import-{index}.yaml"
-        imported_path.parent.mkdir(parents=True, mode=0o700)
+        imported_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         imported_path.write_text(dump_yaml(imported), encoding="utf-8")
         imported_path.chmod(0o600)
         imports.append({"source": str(imported_path.relative_to(config_path.parent))})
@@ -1314,7 +1347,7 @@ def _run_source_config_validation(command: list[str], env: dict[str, str]) -> An
             check=False,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=120,
             env=env,
         )
         return json.loads(completed.stdout)
@@ -1335,6 +1368,7 @@ def _require_valid_source_config(result: Any) -> None:
 def write_model_config_command(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True)
+    parser.add_argument("--juex", default=env_default("JUEX_BIN", default_juex_bin()))
     parser.add_argument("--ref", default="")
     parser.add_argument("--provider", default="")
     parser.add_argument("--model", default="")
@@ -1356,7 +1390,8 @@ def write_model_config_command(argv: list[str]) -> int:
             "tool_result_max_chars": 1200,
             "user_input_inline_max_bytes": 524288,
         }
-    cfg = load_source_config(pathlib.Path(parsed.source).expanduser())
+    cfg, source_layers = load_source_config_with_layers(pathlib.Path(parsed.source).expanduser())
+    validate_source_layers(parsed.juex, source_layers)
     if parsed.ref:
         provider_id, model_id = split_provider_model_ref(parsed.ref)
     elif parsed.provider:
@@ -1734,20 +1769,83 @@ def _read_config_import(
     return result
 
 
-class _ConfigImportRedirectHandler(urllib.request.HTTPRedirectHandler):
-    max_redirections = 3
-    max_repeats = 3
-
+class _ConfigImportNoRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201 - urllib hook signature.
-        old_scheme = urllib.parse.urlsplit(req.full_url).scheme.lower()
-        parsed = urllib.parse.urlsplit(newurl)
-        if parsed.scheme.lower() not in {"http", "https"}:
-            raise urllib.error.URLError("config import redirect uses an unsupported scheme")
-        if old_scheme == "https" and parsed.scheme.lower() == "http":
-            raise urllib.error.URLError("config import redirect from https to http is not allowed")
-        if parsed.username is not None or parsed.password is not None or parsed.fragment:
-            raise urllib.error.URLError("config import redirect contains forbidden URL metadata")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        return None
+
+
+def _remaining_config_import_time(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("remote config import exceeded the total timeout")
+    return remaining
+
+
+def _open_remote_config_import(identity: str, headers: dict[str, str], deadline: float):  # noqa: ANN201
+    current = identity
+    current_headers = headers
+    opener = urllib.request.build_opener(_ConfigImportNoRedirectHandler())
+    for redirect_count in range(4):
+        request = urllib.request.Request(current, headers=current_headers, method="GET")
+        try:
+            return opener.open(request, timeout=_remaining_config_import_time(deadline))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 304 and redirect_count > 0:
+                exc.close()
+                raise ValueError("remote config import returned 304 after an unvalidated redirect") from None
+            if exc.code not in {301, 302, 303, 307, 308}:
+                raise
+            location = exc.headers.get("Location", "")
+            exc.close()
+            if redirect_count >= 3:
+                raise urllib.error.URLError("config import exceeded three redirects") from None
+            redirected = urllib.parse.urljoin(current, location)
+            old_scheme = urllib.parse.urlsplit(current).scheme.lower()
+            parsed = urllib.parse.urlsplit(redirected)
+            if parsed.scheme.lower() not in {"http", "https"}:
+                raise urllib.error.URLError("config import redirect uses an unsupported scheme")
+            if old_scheme == "https" and parsed.scheme.lower() == "http":
+                raise urllib.error.URLError("config import redirect from https to http is not allowed")
+            if not parsed.netloc or parsed.username is not None or parsed.password is not None or parsed.fragment:
+                raise urllib.error.URLError("config import redirect contains forbidden URL metadata")
+            current = redirected
+            current_headers = {}
+    raise urllib.error.URLError("config import exceeded three redirects")
+
+
+def _set_config_import_response_timeout(response: Any, timeout: float) -> None:
+    queue = [response]
+    seen: set[int] = set()
+    while queue:
+        candidate = queue.pop(0)
+        if candidate is None or id(candidate) in seen:
+            continue
+        seen.add(id(candidate))
+        setter = getattr(candidate, "settimeout", None)
+        if callable(setter):
+            setter(timeout)
+            return
+        for name in ("fp", "raw", "_sock", "sock"):
+            child = getattr(candidate, name, None)
+            if child is not None:
+                queue.append(child)
+    raise TimeoutError("remote config import response has no controllable socket")
+
+
+def _read_config_import_response(response: Any, deadline: float) -> bytes:
+    data = bytearray()
+    read_once = getattr(response, "read1", None)
+    if not callable(read_once):
+        read_once = response.read
+    while len(data) <= CONFIG_IMPORT_MAX_BYTES:
+        if getattr(response, "length", None) == 0:
+            break
+        _set_config_import_response_timeout(response, _remaining_config_import_time(deadline))
+        chunk = read_once(min(64 * 1024, CONFIG_IMPORT_MAX_BYTES + 1 - len(data)))
+        if not chunk:
+            break
+        data.extend(chunk)
+    return bytes(data)
 
 
 def _read_remote_config_import(
@@ -1763,13 +1861,12 @@ def _read_remote_config_import(
             headers["If-None-Match"] = str(cache["etag"])
         if cache.get("last_modified"):
             headers["If-Modified-Since"] = str(cache["last_modified"])
-    request = urllib.request.Request(identity, headers=headers, method="GET")
-    opener = urllib.request.build_opener(_ConfigImportRedirectHandler())
+    deadline = time.monotonic() + CONFIG_IMPORT_TIMEOUT_SECONDS
     try:
-        with opener.open(request, timeout=CONFIG_IMPORT_TIMEOUT_SECONDS) as response:
+        with _open_remote_config_import(identity, headers, deadline) as response:
             if response.status != 200:
                 raise ValueError(f"remote config import returned HTTP {response.status}")
-            data = response.read(CONFIG_IMPORT_MAX_BYTES + 1)
+            data = _read_config_import_response(response, deadline)
             if len(data) > CONFIG_IMPORT_MAX_BYTES:
                 raise ValueError("remote config import exceeds the one-MiB response limit")
             return data.decode("utf-8"), True
@@ -1806,6 +1903,7 @@ def _read_config_import_cache(
         return None
     if (
         not isinstance(record, dict)
+        or not set(record).issubset(CONFIG_IMPORT_CACHE_FIELDS)
         or record.get("version") != 3
         or record.get("source_sha256") != source_digest
         or record.get("declaring_sha256") != declaring_digest
@@ -1823,6 +1921,8 @@ def _read_config_import_cache(
         value = record.get(name)
         if value is not None and (not isinstance(value, str) or len(value) > 8192 or "\r" in value or "\n" in value):
             return None
+    if _config_import_cache_fetched_at(record) is None:
+        return None
     return record
 
 
@@ -1838,11 +1938,22 @@ def _config_import_context_digest(work_dir: pathlib.Path, *explicit_paths: pathl
 
 def _config_import_path_identity(path: pathlib.Path) -> pathlib.Path:
     absolute = pathlib.Path(os.path.abspath(os.path.normpath(os.fspath(path))))
-    try:
-        parent = absolute.parent.resolve(strict=True)
-    except OSError:
-        return absolute
-    return parent / absolute.name
+    parent = absolute.parent
+    unresolved = [absolute.name]
+    while True:
+        try:
+            resolved = parent.resolve(strict=True)
+            for name in reversed(unresolved):
+                resolved /= name
+            return resolved
+        except FileNotFoundError:
+            next_parent = parent.parent
+            if next_parent == parent:
+                return absolute
+            unresolved.append(parent.name)
+            parent = next_parent
+        except OSError:
+            return absolute
 
 
 @contextlib.contextmanager
@@ -1868,6 +1979,9 @@ def _config_import_cache_lock(effective_home: pathlib.Path) -> Iterator[None]:
         os.close(descriptor)
         raise ValueError(f"cannot lock config import cache: {exc}") from None
     try:
+        journal_path = effective_home / "cache" / "config-imports" / CONFIG_IMPORT_JOURNAL_NAME
+        if journal_path.exists():
+            raise ValueError("config import cache requires runtime publication recovery")
         yield
     finally:
         try:
@@ -1885,17 +1999,24 @@ def _config_import_cache_lock(effective_home: pathlib.Path) -> Iterator[None]:
             os.close(descriptor)
 
 
-def _config_import_cache_is_current(record: dict[str, Any]) -> bool:
+def _config_import_cache_fetched_at(record: dict[str, Any]) -> datetime.datetime | None:
     fetched_at = record.get("fetched_at")
-    if not isinstance(fetched_at, str):
-        return False
+    if not isinstance(fetched_at, str) or CONFIG_IMPORT_RFC3339_PATTERN.fullmatch(fetched_at) is None:
+        return None
     try:
         instant = datetime.datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
     except ValueError:
-        return False
+        return None
     if instant.tzinfo is None:
+        return None
+    return instant.astimezone(datetime.timezone.utc)
+
+
+def _config_import_cache_is_current(record: dict[str, Any]) -> bool:
+    instant = _config_import_cache_fetched_at(record)
+    if instant is None:
         return False
-    age = datetime.datetime.now(datetime.timezone.utc) - instant.astimezone(datetime.timezone.utc)
+    age = datetime.datetime.now(datetime.timezone.utc) - instant
     return datetime.timedelta(0) <= age <= CONFIG_IMPORT_MAX_CACHE_AGE
 
 

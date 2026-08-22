@@ -83,19 +83,28 @@ cached as a permission-restricted
 Last-Known-Good copy under `$JUEX_HOME/cache/config-imports`; a temporary
 network failure may use an unexpired cache and `juex doctor` reports the source,
 fresh/stale state, and digest without URL query values or configuration
-contents. One full configuration load resolves each remote identity once and
+contents. Redirects never forward a `Referer` or the original resource's
+conditional validators, so a source query token is not disclosed and a
+redirect target cannot reuse an unrelated cached representation. One full configuration load resolves each remote identity once and
 publishes the complete pending LKG set only after runtime validation succeeds,
 restoring earlier records if any publication fails. Cache readers hold the
 same home-scoped lock across the complete load, so they cannot observe a mix
-of records from two publications. LKG entries are scoped by remote identity,
+of records from two publications. A permission-restricted prepared/committed
+journal lets the next locked reader roll back an interrupted set publication
+or retain a fully committed generation after process or machine failure. For a
+workspace update, the same journal includes the previous workspace bytes before
+the replacement becomes visible, keeping the file and LKG set in one recoverable
+generation. LKG entries are scoped by remote identity,
 declaring configuration, and the complete downstream load identity (workspace
 plus an explicit config, when present), so one load cannot replace another
-load's validated version. Fleet-only loading
-may consume an existing runtime LKG but does not replace it without those full
-checks. Workspace candidate validation is read-only; an update publishes its
-fresh LKG content only after the workspace file replacement succeeds, and
-restores the previous workspace file (or removes a newly created one) if cache
-publication fails.
+load's validated version. Fleet-only loading has no Agent workspace identity,
+so it selects the newest complete runtime-validated load context shared by all
+remote Home imports and consumes every fallback record from that one context;
+it does not replace those records without the full checks. Workspace candidate validation is read-only; an update
+retains the cache lock through the write, publishes fresh LKG content only after
+the workspace file replacement succeeds, and restores the previous workspace
+file (or removes a newly created one) if cache publication fails or the process
+dies before the combined generation is committed.
 Configuration is still loaded only at process startup, so restart a resident
 Agent after changing either the declaring or imported source.
 

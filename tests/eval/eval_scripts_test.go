@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/homestore"
 	"gopkg.in/yaml.v3"
@@ -74,6 +75,7 @@ func TestWriteModelConfigSelectsTopLevelAndExplicitRef(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
 	}
+	isolateWriteModelConfigHomes(t)
 	root, err := findRepoRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -100,8 +102,8 @@ providers:
     api_key: beta-key
     models:
       - id: model-b
-fleet:
-  unsafe_bind_any: true
+runtime:
+  tool_timeout: 45s
 `
 	if err := os.WriteFile(source, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -175,8 +177,8 @@ fleet:
 					t.Fatalf("selected config retained %s in environment.variables", key)
 				}
 			}
-			if strings.Contains(string(data), "unsafe_bind_any") {
-				t.Fatalf("selected config retained unrelated fleet settings:\n%s", data)
+			if strings.Contains(string(data), "tool_timeout") {
+				t.Fatalf("selected config retained unrelated runtime settings:\n%s", data)
 			}
 		})
 	}
@@ -186,6 +188,7 @@ func TestWriteModelConfigResolvesDirectConfigImports(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
 	}
+	isolateWriteModelConfigHomes(t)
 	root, err := findRepoRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -235,6 +238,7 @@ providers:
 	}
 	cmd := exec.Command("uv", "run", "--quiet", "--project", root,
 		"python", "-m", "tests.eval.juex_eval", "write-model-config",
+		"--juex", "",
 		"--source", source,
 		"--output", output,
 	)
@@ -245,10 +249,50 @@ providers:
 	}
 }
 
+func TestWriteModelConfigRejectsInvalidUnprojectedImportedSchema(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	isolateWriteModelConfigHomes(t)
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	imported := filepath.Join(dir, "providers.yaml")
+	if err := os.WriteFile(imported, []byte(`runtime:
+  typo: true
+models: [local:imported]
+providers:
+  - id: local
+    protocol: openai/chat
+    models: [{id: imported}]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(dir, "juex.yaml")
+	if err := os.WriteFile(source, []byte("imports:\n  - source: providers.yaml\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("uv", "run", "--quiet", "--project", root,
+		"python", "-m", "tests.eval.juex_eval", "write-model-config",
+		"--juex", "",
+		"--source", source,
+		"--output", filepath.Join(dir, "selected.yaml"),
+	)
+	cmd.Dir = root
+	combined, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(combined), "provider config is not loadable by Juex") {
+		t.Fatalf("invalid imported source error = %v, output = %s", err, combined)
+	}
+}
+
 func TestWriteModelConfigPreservesTopLevelNullImportSemantics(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
 	}
+	isolateWriteModelConfigHomes(t)
 	root, err := findRepoRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -295,6 +339,7 @@ func TestWriteModelConfigResolvesColonNamedLocalImport(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
 	}
+	isolateWriteModelConfigHomes(t)
 	root, err := findRepoRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -336,6 +381,7 @@ func TestWriteModelConfigResolvesHTTPConfigImport(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
 	}
+	isolateWriteModelConfigHomes(t)
 	root, err := findRepoRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -379,6 +425,7 @@ func TestWriteModelConfigRejectsIncompleteHTTPConfigImport(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
 	}
+	isolateWriteModelConfigHomes(t)
 	root, err := findRepoRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -759,6 +806,217 @@ func TestProviderConfigLoaderUsesRuntimeImportCacheLock(t *testing.T) {
 	if err := command.Wait(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestProviderConfigLoaderRejectsUnknownRuntimeCacheFields(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	program := strings.Join([]string{
+		"import datetime",
+		"import hashlib",
+		"import json",
+		"import os",
+		"import tempfile",
+		"import urllib.error",
+		"import urllib.parse",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    root = Path(tmp)",
+		"    home = root / 'home'",
+		"    instance = root / 'instance'",
+		"    declaring = home / '.juex' / 'juex.yaml'",
+		"    declaring.parent.mkdir(parents=True)",
+		"    instance.mkdir(parents=True)",
+		"    original_env = {name: os.environ.get(name) for name in ['HOME', 'USERPROFILE', 'JUEX_HOME']}",
+		"    os.environ.update({'HOME': str(home), 'USERPROFILE': str(home), 'JUEX_HOME': str(instance)})",
+		"    try:",
+		"        identity = 'https://config.example/shared.yaml?token=secret'",
+		"        parsed = urllib.parse.urlsplit(identity)",
+		"        context_digest = helper._config_import_context_digest(root / 'work')",
+		"        source_digest = hashlib.sha256(identity.encode('utf-8')).hexdigest()",
+		"        declaring_digest = hashlib.sha256(str(helper._config_import_path_identity(declaring)).encode('utf-8')).hexdigest()",
+		"        content = 'runtime:\\n  tool_timeout: 41s\\n'",
+		"        record = {",
+		"            'version': 3, 'source': helper._safe_remote_import_label(parsed),",
+		"            'source_sha256': source_digest, 'declaring_sha256': declaring_digest,",
+		"            'context_sha256': context_digest, 'fetched_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),",
+		"            'content_sha256': 'sha256:' + hashlib.sha256(content.encode('utf-8')).hexdigest(),",
+		"            'content': content, 'unexpected_field': 'must-reject',",
+		"        }",
+		"        cache_dir = instance / 'cache' / 'config-imports'",
+		"        cache_dir.mkdir(parents=True)",
+		"        cache_path = cache_dir / f'{source_digest}-{declaring_digest}-{context_digest}.json'",
+		"        cache_path.write_text(json.dumps(record), encoding='utf-8')",
+		"        cache_path.chmod(0o600)",
+		"        assert helper._read_config_import_cache(identity, parsed, declaring, context_digest) is None",
+		"        record.pop('unexpected_field')",
+		"        record['fetched_at'] = datetime.datetime.now(datetime.timezone.utc).isoformat(sep=' ')",
+		"        assert not helper._config_import_cache_is_current(record)",
+		"        cache_path.write_text(json.dumps(record), encoding='utf-8')",
+		"        assert helper._read_config_import_cache(identity, parsed, declaring, context_digest) is None",
+		"        original_open = helper._open_remote_config_import",
+		"        def not_modified(*_args, **_kwargs):",
+		"            raise urllib.error.HTTPError(identity, 304, 'Not Modified', {}, None)",
+		"        helper._open_remote_config_import = not_modified",
+		"        try:",
+		"            try:",
+		"                helper._read_remote_config_import(identity, parsed, declaring, context_digest)",
+		"            except ValueError as exc:",
+		"                assert 'HTTP 304' in str(exc)",
+		"            else:",
+		"                raise AssertionError('invalid cache timestamp was reused after 304')",
+		"        finally:",
+		"            helper._open_remote_config_import = original_open",
+		"        record['fetched_at'] = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=1)).strftime('%Y-%m-%dT%H:%M:%S.') + '1234567890Z'",
+		"        assert helper._config_import_cache_is_current(record)",
+		"        cache_path.write_text(json.dumps(record), encoding='utf-8')",
+		"        assert helper._read_config_import_cache(identity, parsed, declaring, context_digest) is not None",
+		"        journal_path = cache_dir / helper.CONFIG_IMPORT_JOURNAL_NAME",
+		"        journal_path.write_text('{}', encoding='utf-8')",
+		"        journal_path.chmod(0o600)",
+		"        try:",
+		"            with helper._config_import_cache_lock(instance):",
+		"                pass",
+		"        except ValueError as exc:",
+		"            assert 'runtime publication recovery' in str(exc)",
+		"        else:",
+		"            raise AssertionError('eval cache reader accepted a pending runtime journal')",
+		"    finally:",
+		"        for name, value in original_env.items():",
+		"            if value is None:",
+		"                os.environ.pop(name, None)",
+		"            else:",
+		"                os.environ[name] = value",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestProviderConfigLoaderEnforcesOverallRemoteImportTimeout(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		for range 20 {
+			if _, err := w.Write([]byte("x")); err != nil {
+				return
+			}
+			flusher.Flush()
+			time.Sleep(50 * time.Millisecond)
+		}
+	}))
+	defer server.Close()
+	program := strings.Join([]string{
+		"import os",
+		"import sys",
+		"import tempfile",
+		"import time",
+		"import urllib.parse",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    root = Path(tmp)",
+		"    original_env = {name: os.environ.get(name) for name in ['HOME', 'USERPROFILE', 'JUEX_HOME']}",
+		"    original_timeout = helper.CONFIG_IMPORT_TIMEOUT_SECONDS",
+		"    os.environ.update({'HOME': str(root / 'home'), 'USERPROFILE': str(root / 'home'), 'JUEX_HOME': str(root / 'instance')})",
+		"    helper.CONFIG_IMPORT_TIMEOUT_SECONDS = 0.2",
+		"    started = time.monotonic()",
+		"    try:",
+		"        identity = sys.argv[1] + '/slow.yaml'",
+		"        try:",
+		"            helper._read_remote_config_import(identity, urllib.parse.urlsplit(identity), root / 'juex.yaml', helper._config_import_standalone_digest())",
+		"        except ValueError:",
+		"            pass",
+		"        else:",
+		"            raise AssertionError('slow response exceeded the total deadline without failing')",
+		"        assert time.monotonic() - started < 0.75",
+		"    finally:",
+		"        helper.CONFIG_IMPORT_TIMEOUT_SECONDS = original_timeout",
+		"        for name, value in original_env.items():",
+		"            if value is None:",
+		"                os.environ.pop(name, None)",
+		"            else:",
+		"                os.environ[name] = value",
+	}, "\n")
+	runUV(t, root, "python", "-c", program, server.URL)
+}
+
+func TestProviderConfigLoaderDoesNotForwardValidatorsAcrossRedirects(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/original.yaml":
+			http.Redirect(w, r, "/replacement.yaml", http.StatusFound)
+		case "/replacement.yaml":
+			if etag, modified := r.Header.Get("If-None-Match"), r.Header.Get("If-Modified-Since"); etag != "" || modified != "" {
+				t.Errorf("redirect target received original validators: etag=%q modified=%q", etag, modified)
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			_, _ = w.Write([]byte("runtime:\n  tool_timeout: 42s\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	program := strings.Join([]string{
+		"import sys",
+		"import time",
+		"from tests.eval.juex_eval import helper",
+		"headers = {'If-None-Match': '\"config-v1\"', 'If-Modified-Since': 'Fri, 22 Aug 2025 00:00:00 GMT'}",
+		"with helper._open_remote_config_import(sys.argv[1] + '/original.yaml', headers, time.monotonic() + 5) as response:",
+		"    assert response.status == 200, response.status",
+		"    assert response.read().decode('utf-8') == 'runtime:\\n  tool_timeout: 42s\\n'",
+	}, "\n")
+	runUV(t, root, "python", "-c", program, server.URL)
+}
+
+func TestProviderConfigLoaderCanonicalizesMissingImportPathParents(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	program := strings.Join([]string{
+		"import sys",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    root = Path(tmp)",
+		"    real = root / 'real'",
+		"    alias = root / 'alias'",
+		"    real.mkdir()",
+		"    alias.symlink_to(real, target_is_directory=True)",
+		"    candidate = alias / 'workspace' / '.juex' / 'juex.yaml'",
+		"    before = helper._config_import_path_identity(candidate)",
+		"    candidate.parent.mkdir(parents=True)",
+		"    after = helper._config_import_path_identity(candidate)",
+		"    assert before == after == real.resolve() / 'workspace' / '.juex' / 'juex.yaml', (before, after)",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
 }
 
 func TestProviderConfigLoaderDoesNotMemoizeStaleImportsAcrossDeclarers(t *testing.T) {
@@ -4536,6 +4794,15 @@ func runUV(t *testing.T, root string, args ...string) string {
 		t.Fatalf("uv command failed: %v\n%s", err, out)
 	}
 	return string(out)
+}
+
+func isolateWriteModelConfigHomes(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("JUEX_HOME", filepath.Join(home, "juex-home"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-home"))
 }
 
 func assertEvalBashExecutable(t *testing.T, executable string) {

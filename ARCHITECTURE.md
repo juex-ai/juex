@@ -2403,9 +2403,13 @@ apply error discards the candidate. Imported documents containing the
 `imports` key, even with an empty value, fail instead of recursing. Local
 relative paths resolve from the declaring file directory; remote sources
 accept only HTTP(S) with a complete `200 OK` representation or a conditional
-`304 Not Modified`, use a five-second request timeout, a one-MiB response cap,
+`304 Not Modified`, use a five-second end-to-end deadline covering redirects
+and response-body consumption, a one-MiB response cap,
 and at most three redirects, and never include response bodies or URL query
-values in diagnostics. A full configuration load resolves a repeated remote
+values in diagnostics. Redirect requests suppress `Referer` and the original
+resource's conditional validators, preventing a source query token from
+reaching another origin or a redirect target from returning `304` for an
+unrelated cached representation. A full configuration load resolves a repeated remote
 identity once and reuses the same bytes at every declaring layer.
 
 After the complete layered runtime configuration passes semantic, environment,
@@ -2422,21 +2426,32 @@ refresh a `304` entry; transient network,
 days and mark it stale. Other HTTP failures, expired or tampered cache, and an
 invalid new `200` response fail without replacing the previous LKG. Pending
 records publish as one locked set; if any replacement fails, already replaced
-records are restored before the load returns an error. Cache readers hold that
+records are restored before the load returns an error. Before replacement, a
+`0600` journal records every prior target as `prepared`; after all replacements
+it is atomically marked `committed`. The next locked reader rolls back a
+leftover prepared journal or retains a committed generation, so process or
+machine death cannot leave a consumable mixed set. Cache readers hold that
 same home-scoped lock from their first LKG read through completion of the full
 configuration load, so a reader cannot combine records from two publication
 generations. Import
 resolution happens once during startup; there is no watcher or live reload.
 Workspace candidate validation leaves remote cache records pending and a
-read-only validation discards them; `WriteWorkspaceConfig` publishes them only
-after the atomic workspace replacement succeeds. A home-scoped, path-keyed
-writer lock covers the snapshot, workspace replacement, cache publication, and
-rollback. If the cache-set publication then fails, the writer atomically
-restores the previous workspace bytes and mode, or durably removes a newly
-created workspace file.
-The narrow Fleet-only home reader may consume an existing runtime LKG but never
-publishes fresh content because it deliberately skips unrelated runtime fields
-and cannot perform the complete validation required to protect that cache.
+read-only validation discards them; `WriteWorkspaceConfig` retains the
+home-scoped cache lock acquired before source loading, including when validation
+used only a stale LKG and has no pending cache record. Under that lock and a
+path-keyed writer lock, it durably journals the previous workspace bytes and
+pending cache targets before the atomic workspace replacement becomes visible,
+then publishes the caches and commits the combined generation. A failed cache
+publication or a prepared journal found by the next Go reader restores the
+previous workspace bytes and mode, or durably removes a newly created workspace
+file, together with the prior cache generation.
+The narrow Fleet-only home reader has no canonical Agent workspace. Before
+loading, it intersects the usable runtime LKG contexts for every remote Home
+import and selects the context whose oldest record is newest. Every fallback
+therefore comes from one complete downstream load context instead of composing
+fields from independently refreshed workspaces. Fleet never publishes fresh
+content because it deliberately skips unrelated runtime fields and cannot
+perform the complete validation required to protect that cache.
 `juex doctor` exposes only source, fresh/stale state, digest, and fetch time.
 
 The runtime child-process environment is a separate immutable snapshot with

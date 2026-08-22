@@ -10,13 +10,17 @@ import (
 	"github.com/juex-ai/juex/internal/homestore"
 )
 
-func ValidateWorkspaceConfig(content []byte, workDir string) (Config, error) {
-	cfg, err := validateWorkspaceConfig(content, workDir)
-	if err != nil {
-		return cfg, err
+func ValidateWorkspaceConfig(content []byte, workDir string) (cfg Config, returnErr error) {
+	cfg, returnErr = validateWorkspaceConfig(content, workDir)
+	if returnErr != nil {
+		return cfg, returnErr
 	}
 	cfg.pendingImportCache = nil
-	return cfg, nil
+	if cfg.importLoader != nil {
+		returnErr = cfg.importLoader.closeConfigImportCacheLock()
+		cfg.importLoader = nil
+	}
+	return cfg, returnErr
 }
 
 func validateWorkspaceConfig(content []byte, workDir string) (Config, error) {
@@ -36,7 +40,7 @@ func validateWorkspaceConfig(content []byte, workDir string) (Config, error) {
 		cfg.importLoader = nil
 		return cfg, errors.Join(err, loader.closeConfigImportCacheLock())
 	}
-	if err := finalizeConfigLoadForValidationWithoutImportCache(&cfg, nil, true); err != nil {
+	if err := finalizeConfigLoadForValidationRetainingImportCacheLock(&cfg, nil, true); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -44,7 +48,7 @@ func validateWorkspaceConfig(content []byte, workDir string) (Config, error) {
 
 func WriteWorkspaceConfig(content []byte, workDir string) (string, error) {
 	return writeWorkspaceConfig(content, workDir, func(cfg *Config) error {
-		return commitConfigImportCachesWhileLocked(cfg, func(path string, data []byte) error {
+		return publishPendingConfigImportCachesWhileLocked(cfg, func(path string, data []byte) error {
 			return homestore.WriteFileAtomic(path, data, 0o600, 0o700)
 		})
 	})
@@ -55,6 +59,24 @@ func writeWorkspaceConfig(content []byte, workDir string, commitImportCache func
 	if err != nil {
 		return "", err
 	}
+	if cfg.importLoader == nil {
+		return "", errors.New("config: workspace config update lost the import cache lock")
+	}
+	if cfg.importLoader.cacheLock == nil {
+		if err := cfg.importLoader.ensureConfigImportCacheLock(); err != nil {
+			return "", err
+		}
+	}
+	cacheLock := cfg.importLoader.takeConfigImportCacheLock()
+	cfg.importLoader = nil
+	if cacheLock == nil {
+		return "", errors.New("config: workspace config update requires the import cache lock")
+	}
+	defer func() {
+		if err := cacheLock.Close(); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("config: unlock import cache publication: %w", err))
+		}
+	}()
 	path := cfg.RuntimeConfigPath()
 	if path == "" {
 		return "", fmt.Errorf("config: workspace config path is empty")
@@ -73,30 +95,36 @@ func writeWorkspaceConfig(content []byte, workDir string, commitImportCache func
 			returnErr = errors.Join(returnErr, fmt.Errorf("config: unlock workspace config update: %w", err))
 		}
 	}()
-	if len(cfg.pendingImportCache) > 0 {
-		cacheLock, err := homestore.AcquireLock(configImportCacheLockPath(lockHome), homestore.LockWait)
-		if err != nil {
-			return "", fmt.Errorf("config: lock import cache publication: %w", err)
-		}
-		defer func() {
-			if err := cacheLock.Close(); err != nil {
-				returnErr = errors.Join(returnErr, fmt.Errorf("config: unlock import cache publication: %w", err))
-			}
-		}()
-	}
 	snapshot, err := snapshotWorkspaceConfig(path)
 	if err != nil {
 		return "", err
 	}
-	if err := homestore.WriteFileAtomic(path, content, 0o600, 0o755); err != nil {
-		if homestore.ReplacementOccurred(err) {
-			return "", errors.Join(err, rollbackWorkspaceConfig(snapshot))
-		}
+	writes := uniqueConfigImportCacheWrites(cfg.pendingImportCache)
+	commits, err := prepareConfigImportCacheCommits(writes)
+	if err != nil {
 		return "", err
 	}
-	if err := commitImportCache(&cfg); err != nil {
-		return "", errors.Join(err, rollbackWorkspaceConfig(snapshot))
+	journalPath, err := beginConfigImportCachePublicationWithWorkspace(lockHome, commits, &snapshot)
+	if err != nil {
+		return "", err
 	}
+	recoverPreparedPublication := func(operationErr error) error {
+		return errors.Join(operationErr, recoverConfigImportCachePublicationAt(journalPath))
+	}
+	if err := homestore.WriteFileAtomic(path, content, 0o600, 0o755); err != nil {
+		return "", recoverPreparedPublication(err)
+	}
+	if err := commitImportCache(&cfg); err != nil {
+		return "", recoverPreparedPublication(err)
+	}
+	if err := markConfigImportCachePublicationCommitted(journalPath); err != nil {
+		if journal, readErr := readConfigImportCacheJournal(journalPath); readErr == nil && journal.State == configImportJournalCommitted {
+			_ = clearConfigImportCacheJournal(journalPath)
+			return path, nil
+		}
+		return "", recoverPreparedPublication(fmt.Errorf("config: commit workspace config publication: %w", err))
+	}
+	_ = clearConfigImportCacheJournal(journalPath)
 	return path, nil
 }
 

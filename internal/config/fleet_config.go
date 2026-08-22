@@ -32,18 +32,51 @@ func LoadHomeFleetConfig() (cfg FleetConfig, returnErr error) {
 		return cfg, err
 	}
 	loader := newConfigImportLoader(resolution.EffectiveHomeDir)
-	if workDir, workDirErr := os.Getwd(); workDirErr == nil {
-		loader.contextDigest = configImportContextDigest(workDir)
-	}
 	defer func() {
 		returnErr = errors.Join(returnErr, loader.closeConfigImportCacheLock())
 	}()
+	references, err := fleetConfigImportCacheReferences(resolution.Sources)
+	if err != nil {
+		return cfg, err
+	}
+	// A resident Fleet service has no canonical Agent workspace. Select one
+	// complete runtime-validated load context for every remote Home import so
+	// fallback cannot synthesize fields from independently refreshed contexts.
+	contextDigest, err := loader.selectNewestCompleteCacheContext(references)
+	if err != nil {
+		return cfg, fmt.Errorf("config: select Fleet import cache context: %w", err)
+	}
+	loader.contextDigest = contextDigest
 	for _, source := range resolution.Sources {
 		if err := applyHomeFleetConfig(&cfg, source, loader); err != nil {
 			return cfg, err
 		}
 	}
 	return cfg, nil
+}
+
+func fleetConfigImportCacheReferences(sources []yamlConfigSource) ([]configImportCacheReference, error) {
+	var references []configImportCacheReference
+	for _, source := range sources {
+		_, root, _, err := readFleetConfigDocument(source.Path)
+		if err != nil {
+			return nil, err
+		}
+		imports, err := fleetImports(root, source.Path)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range imports {
+			identity, remote := remoteConfigImportIdentity(item.Source)
+			if remote {
+				references = append(references, configImportCacheReference{
+					identity:      identity,
+					declaringPath: source.Path,
+				})
+			}
+		}
+	}
+	return references, nil
 }
 
 func applyHomeFleetConfig(cfg *FleetConfig, source yamlConfigSource, loader *configImportLoader) error {

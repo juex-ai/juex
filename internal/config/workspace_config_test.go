@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -150,6 +151,13 @@ func TestValidateWorkspaceConfigDoesNotPublishRemoteImportCache(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(homeDir, "cache", "config-imports")); !os.IsNotExist(err) {
 		t.Fatalf("validation published remote cache directory: %v", err)
 	}
+	lock, err := homestore.AcquireLock(configImportCacheLockPath(homeDir), homestore.LockTry)
+	if err != nil {
+		t.Fatalf("successful validation left the import cache lock held: %v", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestValidateWorkspaceConfigReleasesImportCacheLockOnCandidateFailure(t *testing.T) {
@@ -285,6 +293,119 @@ func TestWriteWorkspaceConfigRollsBackWorkspaceWhenImportCachePublicationFails(t
 			}
 			if string(got) != string(tc.old) {
 				t.Fatalf("workspace config after cache failure = %q, want %q", got, tc.old)
+			}
+		})
+	}
+}
+
+func TestWriteWorkspaceConfigRetainsImportCacheLockForStaleCandidate(t *testing.T) {
+	prepareConfigTest(t)
+	var unavailable atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if unavailable.Load() {
+			http.Error(w, "offline", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("runtime:\n  tool_timeout: 44s\n"))
+	}))
+	defer server.Close()
+
+	workDir := t.TempDir()
+	candidate := []byte("imports:\n  - source: " + server.URL + "/shared.yaml\n")
+	if _, err := WriteWorkspaceConfig(candidate, workDir); err != nil {
+		t.Fatal(err)
+	}
+	homeDir, err := EffectiveHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheReader := newConfigImportLoader(homeDir)
+	cacheReader.contextDigest = configImportContextDigest(workDir)
+	if _, err := cacheReader.readCache(server.URL+"/shared.yaml", filepath.Join(workDir, ".juex", "juex.yaml")); err != nil {
+		entries, _ := os.ReadDir(filepath.Join(homeDir, "cache", "config-imports"))
+		t.Fatalf("seeded workspace cache is unreadable: %v entries=%v", err, entries)
+	}
+	if err := cacheReader.closeConfigImportCacheLock(); err != nil {
+		t.Fatal(err)
+	}
+	unavailable.Store(true)
+
+	if _, err := writeWorkspaceConfig(candidate, workDir, func(cfg *Config) error {
+		if len(cfg.pendingImportCache) != 0 {
+			t.Fatalf("stale candidate pending cache records = %d, want 0", len(cfg.pendingImportCache))
+		}
+		probe, lockErr := homestore.AcquireLock(configImportCacheLockPath(cfg.HomeJuexDir), homestore.LockTry)
+		if probe != nil {
+			_ = probe.Close()
+		}
+		if !errors.Is(lockErr, homestore.ErrLockBusy) {
+			t.Fatalf("stale candidate import cache lock probe = %v, want ErrLockBusy", lockErr)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkspaceConfigRecoversInterruptedPublicationBeforeLoad(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		old  []byte
+	}{
+		{name: "existing workspace", old: []byte("runtime:\n  tool_timeout: 40s\n")},
+		{name: "new workspace"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepareConfigTest(t)
+			workDir := t.TempDir()
+			path := filepath.Join(workDir, ".juex", "juex.yaml")
+			candidate := []byte("runtime:\n  tool_timeout: 41s\n")
+			if tc.old != nil {
+				writeTextFile(t, path, string(tc.old))
+			}
+			snapshot, err := snapshotWorkspaceConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			homeDir, err := EffectiveHomeDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := beginConfigImportCachePublicationWithWorkspace(homeDir, nil, &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			if err := homestore.WriteFileAtomic(path, candidate, 0o600, 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := loadConfigFilesForWorkDir(workDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.importLoader == nil {
+				t.Fatal("config load did not retain its import loader")
+			}
+			if err := cfg.importLoader.closeConfigImportCacheLock(); err != nil {
+				t.Fatal(err)
+			}
+			got, readErr := os.ReadFile(path)
+			if tc.old == nil {
+				if !errors.Is(readErr, os.ErrNotExist) {
+					t.Fatalf("new workspace survived interrupted publication: data=%q err=%v", got, readErr)
+				}
+			} else {
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				if cfg.ToolTimeout != 40*time.Second {
+					t.Fatalf("loaded tool timeout = %s, want recovered 40s", cfg.ToolTimeout)
+				}
+				if string(got) != string(tc.old) {
+					t.Fatalf("workspace after recovery = %q, want %q", got, tc.old)
+				}
+			}
+			if _, err := os.Stat(configImportCacheJournalPath(homeDir)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("workspace publication journal remains after recovery: %v", err)
 			}
 		})
 	}

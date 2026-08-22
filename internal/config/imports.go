@@ -23,11 +23,19 @@ import (
 )
 
 const (
-	configImportTimeout      = 5 * time.Second
-	configImportMaxBytes     = 1 << 20
-	configImportMaxRedirects = 3
-	configImportMaxCacheAge  = 7 * 24 * time.Hour
-	configImportCacheVersion = 3
+	configImportTimeout         = 5 * time.Second
+	configImportMaxBytes        = 1 << 20
+	configImportMaxRedirects    = 3
+	configImportMaxCacheAge     = 7 * 24 * time.Hour
+	configImportCacheVersion    = 3
+	configImportJournalVersion  = 1
+	configImportJournalMaxBytes = 64 << 20
+	configImportJournalName     = ".publication-journal.json"
+)
+
+const (
+	configImportJournalPrepared  = "prepared"
+	configImportJournalCommitted = "committed"
 )
 
 type importConfig struct {
@@ -107,6 +115,9 @@ func applyYAMLFileWithImportLoaderAndOptions(cfg *Config, source yamlConfigSourc
 	if source.Path == "" {
 		return nil
 	}
+	if err := loader.recoverConfigImportPublicationIfPresent(); err != nil {
+		return err
+	}
 	data, err := os.ReadFile(source.Path)
 	if err != nil {
 		if source.MissingOK && os.IsNotExist(err) {
@@ -114,7 +125,48 @@ func applyYAMLFileWithImportLoaderAndOptions(cfg *Config, source yamlConfigSourc
 		}
 		return err
 	}
+	mainConfig, err := decodeFileConfig(data, source.Path)
+	if err != nil {
+		return err
+	}
+	if configImportsRemoteSource(mainConfig.Imports) && loader.cacheLock == nil && strings.TrimSpace(loader.homeDir) != "" {
+		if err := loader.ensureConfigImportCacheLock(); err != nil {
+			return err
+		}
+		// A workspace writer may have committed or rolled back after the first
+		// read but before this reader acquired the cache-generation lock.
+		// Re-read under the lock so the declaring YAML and its LKG generation
+		// always come from the same publication.
+		data, err = os.ReadFile(source.Path)
+		if err != nil {
+			if source.MissingOK && os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+	}
 	return applyYAMLContentWithImportLoader(cfg, data, source, loader, opts)
+}
+
+func configImportsRemoteSource(imports []importConfig) bool {
+	for _, item := range imports {
+		if _, ok := remoteConfigImportIdentity(item.Source); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func remoteConfigImportIdentity(rawSource string) (string, bool) {
+	rawSource = strings.TrimSpace(rawSource)
+	if filepath.IsAbs(rawSource) || !strings.Contains(rawSource, "://") {
+		return "", false
+	}
+	parsed, err := url.Parse(rawSource)
+	if err != nil || (!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https")) {
+		return "", false
+	}
+	return parsed.String(), true
 }
 
 func applyYAMLContentWithImportLoader(cfg *Config, data []byte, source yamlConfigSource, loader *configImportLoader, opts applyYAMLDataOptions) error {
@@ -268,6 +320,7 @@ func (l *configImportLoader) loadRemote(declaring yamlConfigSource, parsed *url.
 	}
 	client := *l.client
 	priorRedirect := client.CheckRedirect
+	redirected := false
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) > l.maxRedirects {
 			return fmt.Errorf("too many redirects (maximum %d)", l.maxRedirects)
@@ -275,15 +328,28 @@ func (l *configImportLoader) loadRemote(declaring yamlConfigSource, parsed *url.
 		if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
 			return fmt.Errorf("redirect uses unsupported scheme %q", req.URL.Scheme)
 		}
-		if strings.EqualFold(parsed.Scheme, "https") && strings.EqualFold(req.URL.Scheme, "http") {
+		if len(via) > 0 && strings.EqualFold(via[len(via)-1].URL.Scheme, "https") && strings.EqualFold(req.URL.Scheme, "http") {
 			return errors.New("redirect from https to http is not allowed")
 		}
 		if req.URL.User != nil || req.URL.Fragment != "" {
 			return errors.New("redirect URL contains forbidden user information or fragment")
 		}
+		// net/http derives Referer from the prior request, including its query.
+		// Imports do not need redirect referrers, so remove it before a redirect
+		// can disclose a signed URL or query token to another origin.
+		req.Header.Del("Referer")
+		req.Header.Del("If-None-Match")
+		req.Header.Del("If-Modified-Since")
 		if priorRedirect != nil {
-			return priorRedirect(req, via)
+			if err := priorRedirect(req, via); err != nil {
+				return err
+			}
 		}
+		// A custom callback must not reattach validators for the original
+		// resource to the redirect target.
+		req.Header.Del("If-None-Match")
+		req.Header.Del("If-Modified-Since")
+		redirected = true
 		return nil
 	}
 	resp, requestErr := client.Do(req)
@@ -293,6 +359,9 @@ func (l *configImportLoader) loadRemote(declaring yamlConfigSource, parsed *url.
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotModified {
+		if redirected {
+			return configImportDocument{}, errors.New("server returned 304 after a redirect without a matching validator")
+		}
 		if cacheErr != nil {
 			return configImportDocument{}, errors.New("server returned 304 without a valid cache entry")
 		}
@@ -369,7 +438,94 @@ func (l *configImportLoader) readCache(identity, declaringPath string) (configIm
 	if err := l.ensureConfigImportCacheLock(); err != nil {
 		return configImportCacheRecord{}, err
 	}
-	path := l.cachePath(identity, declaringPath)
+	return l.readCachePath(l.cachePath(identity, declaringPath), identity, declaringPath, l.cacheContextDigest())
+}
+
+type configImportCacheReference struct {
+	identity      string
+	declaringPath string
+}
+
+func (l *configImportLoader) selectNewestCompleteCacheContext(references []configImportCacheReference) (string, error) {
+	if len(references) == 0 {
+		return "", nil
+	}
+	if err := l.ensureConfigImportCacheLock(); err != nil {
+		return "", err
+	}
+	type candidate struct {
+		oldestFetch time.Time
+	}
+	candidates := make(map[string]candidate)
+	seen := make(map[configImportCacheReference]struct{}, len(references))
+	first := true
+	for _, reference := range references {
+		if _, duplicate := seen[reference]; duplicate {
+			continue
+		}
+		seen[reference] = struct{}{}
+		records := l.usableCacheRecordsByContext(reference.identity, reference.declaringPath)
+		if first {
+			for contextDigest, record := range records {
+				candidates[contextDigest] = candidate{oldestFetch: record.FetchedAt}
+			}
+			first = false
+			continue
+		}
+		for contextDigest, current := range candidates {
+			record, ok := records[contextDigest]
+			if !ok {
+				delete(candidates, contextDigest)
+				continue
+			}
+			if record.FetchedAt.Before(current.oldestFetch) {
+				current.oldestFetch = record.FetchedAt
+				candidates[contextDigest] = current
+			}
+		}
+	}
+	var selected string
+	var selectedOldest time.Time
+	for contextDigest, current := range candidates {
+		if selected == "" || current.oldestFetch.After(selectedOldest) ||
+			(current.oldestFetch.Equal(selectedOldest) && contextDigest < selected) {
+			selected = contextDigest
+			selectedOldest = current.oldestFetch
+		}
+	}
+	return selected, nil
+}
+
+func (l *configImportLoader) usableCacheRecordsByContext(identity, declaringPath string) map[string]configImportCacheRecord {
+	dir := filepath.Join(l.homeDir, "cache", "config-imports")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	prefix := sourceDigest(identity) + "-" + declaringConfigDigest(declaringPath) + "-"
+	records := make(map[string]configImportCacheRecord)
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		contextDigest := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".json")
+		if len(contextDigest) != sha256.Size*2 {
+			continue
+		}
+		if decoded, decodeErr := hex.DecodeString(contextDigest); decodeErr != nil || len(decoded) != sha256.Size {
+			continue
+		}
+		record, readErr := l.readCachePath(filepath.Join(dir, name), identity, declaringPath, contextDigest)
+		if readErr != nil || !l.cacheUsable(record) {
+			continue
+		}
+		records[contextDigest] = record
+	}
+	return records
+}
+
+func (l *configImportLoader) readCachePath(path, identity, declaringPath, contextDigest string) (configImportCacheRecord, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return configImportCacheRecord{}, err
@@ -401,7 +557,7 @@ func (l *configImportLoader) readCache(identity, declaringPath string) (configIm
 	if record.Version != configImportCacheVersion ||
 		record.SourceSHA256 != sourceDigest(identity) ||
 		record.DeclaringSHA256 != declaringConfigDigest(declaringPath) ||
-		record.ContextSHA256 != l.cacheContextDigest() {
+		record.ContextSHA256 != contextDigest {
 		return configImportCacheRecord{}, errors.New("cache identity does not match source")
 	}
 	parsed, err := url.Parse(identity)
@@ -458,6 +614,27 @@ type configImportCacheCommit struct {
 	existed      bool
 }
 
+type configImportCacheJournal struct {
+	Version   int                                `json:"version"`
+	State     string                             `json:"state"`
+	Entries   []configImportCacheJournalEntry    `json:"entries"`
+	Workspace *configImportWorkspaceJournalEntry `json:"workspace,omitempty"`
+}
+
+type configImportCacheJournalEntry struct {
+	CacheFile    string `json:"cache_file"`
+	Previous     []byte `json:"previous,omitempty"`
+	PreviousMode uint32 `json:"previous_mode,omitempty"`
+	Existed      bool   `json:"existed"`
+}
+
+type configImportWorkspaceJournalEntry struct {
+	Path         string `json:"path"`
+	Previous     []byte `json:"previous,omitempty"`
+	PreviousMode uint32 `json:"previous_mode,omitempty"`
+	Existed      bool   `json:"existed"`
+}
+
 func commitConfigImportCachesWithWriter(cfg *Config, publish func(string, []byte) error) (returnErr error) {
 	return commitConfigImportCachesWithWriterAndLock(cfg, publish, nil)
 }
@@ -467,11 +644,11 @@ func commitConfigImportCachesWithWriterAndLock(
 	publish func(string, []byte) error,
 	lock *homestore.Lock,
 ) (returnErr error) {
+	lockHome := strings.TrimSpace(cfg.HomeJuexDir)
+	if lockHome == "" && len(cfg.pendingImportCache) > 0 {
+		lockHome = filepath.Dir(filepath.Dir(filepath.Dir(cfg.pendingImportCache[0].cachePath)))
+	}
 	if lock == nil && len(cfg.pendingImportCache) > 0 {
-		lockHome := strings.TrimSpace(cfg.HomeJuexDir)
-		if lockHome == "" {
-			lockHome = filepath.Dir(filepath.Dir(filepath.Dir(cfg.pendingImportCache[0].cachePath)))
-		}
 		var err error
 		lock, err = homestore.AcquireLock(configImportCacheLockPath(lockHome), homestore.LockWait)
 		if err != nil {
@@ -490,6 +667,15 @@ func commitConfigImportCachesWithWriterAndLock(
 
 func commitConfigImportCachesWhileLocked(cfg *Config, publish func(string, []byte) error) error {
 	writes := uniqueConfigImportCacheWrites(cfg.pendingImportCache)
+	lockHome := strings.TrimSpace(cfg.HomeJuexDir)
+	if lockHome == "" && len(writes) > 0 {
+		lockHome = filepath.Dir(filepath.Dir(filepath.Dir(writes[0].cachePath)))
+	}
+	if len(writes) > 0 {
+		if err := recoverConfigImportCachePublication(lockHome); err != nil {
+			return fmt.Errorf("config: recover import cache publication: %w", err)
+		}
+	}
 	cfg.pendingImportCache = nil
 	if len(writes) == 0 {
 		return nil
@@ -498,17 +684,42 @@ func commitConfigImportCachesWhileLocked(cfg *Config, publish func(string, []byt
 	if err != nil {
 		return err
 	}
-	for index, commit := range commits {
+	journalPath, err := beginConfigImportCachePublication(commits)
+	if err != nil {
+		return err
+	}
+	if err := publishConfigImportCacheCommits(commits, publish); err != nil {
+		rollbackErr := recoverConfigImportCachePublicationAt(journalPath)
+		return errors.Join(err, rollbackErr)
+	}
+	if err := markConfigImportCachePublicationCommitted(journalPath); err != nil {
+		if journal, readErr := readConfigImportCacheJournal(journalPath); readErr == nil && journal.State == configImportJournalCommitted {
+			_ = clearConfigImportCacheJournal(journalPath)
+			return nil
+		}
+		rollbackErr := recoverConfigImportCachePublicationAt(journalPath)
+		return errors.Join(fmt.Errorf("config: commit import cache publication: %w", err), rollbackErr)
+	}
+	// Once the committed marker is durable, either this process or the next
+	// reader may remove it without changing the selected cache generation.
+	_ = clearConfigImportCacheJournal(journalPath)
+	return nil
+}
+
+func publishPendingConfigImportCachesWhileLocked(cfg *Config, publish func(string, []byte) error) error {
+	writes := uniqueConfigImportCacheWrites(cfg.pendingImportCache)
+	cfg.pendingImportCache = nil
+	commits, err := prepareConfigImportCacheCommits(writes)
+	if err != nil {
+		return err
+	}
+	return publishConfigImportCacheCommits(commits, publish)
+}
+
+func publishConfigImportCacheCommits(commits []configImportCacheCommit, publish func(string, []byte) error) error {
+	for _, commit := range commits {
 		if err := publish(commit.record.cachePath, commit.data); err != nil {
-			rollbackCount := index
-			if homestore.ReplacementOccurred(err) {
-				rollbackCount++
-			}
-			rollbackErr := rollbackConfigImportCacheCommits(commits[:rollbackCount])
-			return errors.Join(
-				fmt.Errorf("config: cache import %s: %w", commit.record.Source, err),
-				rollbackErr,
-			)
+			return fmt.Errorf("config: cache import %s: %w", commit.record.Source, err)
 		}
 	}
 	return nil
@@ -522,8 +733,23 @@ func (l *configImportLoader) ensureConfigImportCacheLock() error {
 	if err != nil {
 		return fmt.Errorf("lock import cache read: %w", err)
 	}
+	if err := recoverConfigImportCachePublication(l.homeDir); err != nil {
+		return errors.Join(fmt.Errorf("recover interrupted import cache publication: %w", err), lock.Close())
+	}
 	l.cacheLock = lock
 	return nil
+}
+
+func (l *configImportLoader) recoverConfigImportPublicationIfPresent() error {
+	if l.cacheLock != nil || strings.TrimSpace(l.homeDir) == "" {
+		return nil
+	}
+	if _, err := os.Stat(configImportCacheJournalPath(l.homeDir)); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect interrupted import cache publication: %w", err)
+	}
+	return l.ensureConfigImportCacheLock()
 }
 
 func (l *configImportLoader) takeConfigImportCacheLock() *homestore.Lock {
@@ -545,6 +771,226 @@ func (l *configImportLoader) closeConfigImportCacheLock() error {
 
 func configImportCacheLockPath(homeDir string) string {
 	return filepath.Join(homeDir, ".locks", "config-imports-cache.lock")
+}
+
+func configImportCacheJournalPath(homeDir string) string {
+	return filepath.Join(homeDir, "cache", "config-imports", configImportJournalName)
+}
+
+func beginConfigImportCachePublication(commits []configImportCacheCommit) (string, error) {
+	if len(commits) == 0 {
+		return "", errors.New("config: import cache publication is empty")
+	}
+	homeDir := filepath.Dir(filepath.Dir(filepath.Dir(commits[0].record.cachePath)))
+	return beginConfigImportCachePublicationWithWorkspace(homeDir, commits, nil)
+}
+
+func beginConfigImportCachePublicationWithWorkspace(
+	homeDir string,
+	commits []configImportCacheCommit,
+	workspace *workspaceConfigSnapshot,
+) (string, error) {
+	if len(commits) == 0 && workspace == nil {
+		return "", errors.New("config: import cache publication is empty")
+	}
+	homeDir = strings.TrimSpace(homeDir)
+	if homeDir == "" {
+		return "", errors.New("config: import cache publication requires a configured JUEX_HOME")
+	}
+	dir := filepath.Dir(configImportCacheJournalPath(homeDir))
+	journal := configImportCacheJournal{
+		Version: configImportJournalVersion,
+		State:   configImportJournalPrepared,
+		Entries: make([]configImportCacheJournalEntry, 0, len(commits)),
+	}
+	if workspace != nil {
+		journal.Workspace = &configImportWorkspaceJournalEntry{
+			Path:         workspace.path,
+			Previous:     workspace.data,
+			PreviousMode: uint32(workspace.mode.Perm()),
+			Existed:      workspace.existed,
+		}
+	}
+	for _, commit := range commits {
+		if filepath.Dir(commit.record.cachePath) != dir {
+			return "", errors.New("config: import cache publication spans multiple cache directories")
+		}
+		journal.Entries = append(journal.Entries, configImportCacheJournalEntry{
+			CacheFile:    filepath.Base(commit.record.cachePath),
+			Previous:     commit.previous,
+			PreviousMode: uint32(commit.previousMode.Perm()),
+			Existed:      commit.existed,
+		})
+	}
+	path := filepath.Join(dir, configImportJournalName)
+	if err := writeConfigImportCacheJournal(path, journal); err != nil {
+		return "", fmt.Errorf("config: prepare import cache publication journal: %w", err)
+	}
+	return path, nil
+}
+
+func markConfigImportCachePublicationCommitted(path string) error {
+	journal, err := readConfigImportCacheJournal(path)
+	if err != nil {
+		return err
+	}
+	if journal.State != configImportJournalPrepared {
+		return fmt.Errorf("publication journal state is %q, want %q", journal.State, configImportJournalPrepared)
+	}
+	journal.State = configImportJournalCommitted
+	return writeConfigImportCacheJournal(path, journal)
+}
+
+func writeConfigImportCacheJournal(path string, journal configImportCacheJournal) error {
+	data, err := json.MarshalIndent(journal, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if len(data) > configImportJournalMaxBytes {
+		return fmt.Errorf("publication journal exceeds %d byte limit", configImportJournalMaxBytes)
+	}
+	return homestore.WriteFileAtomic(path, data, 0o600, 0o700)
+}
+
+func recoverConfigImportCachePublication(homeDir string) error {
+	return recoverConfigImportCachePublicationAt(configImportCacheJournalPath(homeDir))
+}
+
+func recoverConfigImportCachePublicationAt(path string) error {
+	journal, err := readConfigImportCacheJournal(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if journal.State == configImportJournalPrepared {
+		dir := filepath.Dir(path)
+		var rollbackErr error
+		for index := len(journal.Entries) - 1; index >= 0; index-- {
+			entry := journal.Entries[index]
+			cachePath := filepath.Join(dir, entry.CacheFile)
+			var restoreErr error
+			if entry.Existed {
+				restoreErr = homestore.WriteFileAtomic(cachePath, entry.Previous, os.FileMode(entry.PreviousMode), 0o700)
+			} else {
+				restoreErr = os.Remove(cachePath)
+				if errors.Is(restoreErr, os.ErrNotExist) {
+					restoreErr = nil
+				}
+				if restoreErr == nil {
+					restoreErr = homestore.SyncDir(dir)
+				}
+			}
+			if restoreErr != nil {
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore %s: %w", entry.CacheFile, restoreErr))
+			}
+		}
+		if journal.Workspace != nil {
+			workspace := workspaceConfigSnapshot{
+				path:    journal.Workspace.Path,
+				data:    journal.Workspace.Previous,
+				mode:    os.FileMode(journal.Workspace.PreviousMode),
+				existed: journal.Workspace.Existed,
+			}
+			rollbackErr = errors.Join(rollbackErr, rollbackWorkspaceConfig(workspace))
+		}
+		if rollbackErr != nil {
+			return rollbackErr
+		}
+	}
+	return clearConfigImportCacheJournal(path)
+}
+
+func readConfigImportCacheJournal(path string) (configImportCacheJournal, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return configImportCacheJournal{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return configImportCacheJournal{}, errors.New("publication journal is not a regular file")
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		return configImportCacheJournal{}, fmt.Errorf("publication journal permissions are %o, want 0600", info.Mode().Perm())
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return configImportCacheJournal{}, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, configImportJournalMaxBytes+1))
+	if err != nil {
+		return configImportCacheJournal{}, err
+	}
+	if len(data) > configImportJournalMaxBytes {
+		return configImportCacheJournal{}, fmt.Errorf("publication journal exceeds %d byte limit", configImportJournalMaxBytes)
+	}
+	var journal configImportCacheJournal
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&journal); err != nil {
+		return configImportCacheJournal{}, fmt.Errorf("decode publication journal: %w", err)
+	}
+	if err := requireJSONEOF(dec); err != nil {
+		return configImportCacheJournal{}, err
+	}
+	if journal.Version != configImportJournalVersion ||
+		(journal.State != configImportJournalPrepared && journal.State != configImportJournalCommitted) ||
+		(len(journal.Entries) == 0 && journal.Workspace == nil) {
+		return configImportCacheJournal{}, errors.New("publication journal metadata is invalid")
+	}
+	seen := make(map[string]struct{}, len(journal.Entries))
+	for _, entry := range journal.Entries {
+		if !validConfigImportCacheFilename(entry.CacheFile) {
+			return configImportCacheJournal{}, errors.New("publication journal cache filename is invalid")
+		}
+		if _, duplicate := seen[entry.CacheFile]; duplicate {
+			return configImportCacheJournal{}, errors.New("publication journal contains a duplicate cache file")
+		}
+		seen[entry.CacheFile] = struct{}{}
+		if entry.PreviousMode > 0o777 || (!entry.Existed && (len(entry.Previous) != 0 || entry.PreviousMode != 0)) {
+			return configImportCacheJournal{}, errors.New("publication journal prior state is invalid")
+		}
+	}
+	if workspace := journal.Workspace; workspace != nil {
+		cleanPath := filepath.Clean(workspace.Path)
+		workspaceDir := filepath.Dir(cleanPath)
+		if !filepath.IsAbs(workspace.Path) || cleanPath != workspace.Path ||
+			filepath.Base(cleanPath) != "juex.yaml" || filepath.Base(workspaceDir) != ".juex" ||
+			workspace.PreviousMode > 0o777 ||
+			(!workspace.Existed && (len(workspace.Previous) != 0 || workspace.PreviousMode != 0)) {
+			return configImportCacheJournal{}, errors.New("publication journal workspace prior state is invalid")
+		}
+	}
+	return journal, nil
+}
+
+func validConfigImportCacheFilename(name string) bool {
+	if filepath.Base(name) != name || !strings.HasSuffix(name, ".json") {
+		return false
+	}
+	parts := strings.Split(strings.TrimSuffix(name, ".json"), "-")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		decoded, err := hex.DecodeString(part)
+		if err != nil || len(decoded) != sha256.Size {
+			return false
+		}
+	}
+	return true
+}
+
+func clearConfigImportCacheJournal(path string) error {
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return homestore.SyncDir(filepath.Dir(path))
 }
 
 func uniqueConfigImportCacheWrites(writes []configImportCacheRecord) []configImportCacheRecord {
@@ -593,29 +1039,6 @@ func prepareConfigImportCacheCommits(writes []configImportCacheRecord) ([]config
 	return commits, nil
 }
 
-func rollbackConfigImportCacheCommits(commits []configImportCacheCommit) error {
-	var rollbackErr error
-	for index := len(commits) - 1; index >= 0; index-- {
-		commit := commits[index]
-		var err error
-		if commit.existed {
-			err = homestore.WriteFileAtomic(commit.record.cachePath, commit.previous, commit.previousMode, 0o700)
-		} else {
-			err = os.Remove(commit.record.cachePath)
-			if errors.Is(err, os.ErrNotExist) {
-				err = nil
-			}
-			if err == nil {
-				err = homestore.SyncDir(filepath.Dir(commit.record.cachePath))
-			}
-		}
-		if err != nil {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("config: rollback import cache %s: %w", commit.record.Source, err))
-		}
-	}
-	return rollbackErr
-}
-
 func (l *configImportLoader) cachePath(identity, declaringPath string) string {
 	filename := sourceDigest(identity) + "-" + declaringConfigDigest(declaringPath) + "-" + l.cacheContextDigest() + ".json"
 	return filepath.Join(l.homeDir, "cache", "config-imports", filename)
@@ -648,10 +1071,25 @@ func declaringConfigIdentity(path string) string {
 		return filepath.Clean(path)
 	}
 	parent, base := filepath.Dir(abs), filepath.Base(abs)
-	if resolved, resolveErr := filepath.EvalSymlinks(parent); resolveErr == nil {
-		return filepath.Join(resolved, base)
+	unresolved := []string{base}
+	for {
+		resolved, resolveErr := filepath.EvalSymlinks(parent)
+		if resolveErr == nil {
+			for index := len(unresolved) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, unresolved[index])
+			}
+			return resolved
+		}
+		if !errors.Is(resolveErr, os.ErrNotExist) {
+			return abs
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			return abs
+		}
+		unresolved = append(unresolved, filepath.Base(parent))
+		parent = next
 	}
-	return abs
 }
 
 func sourceDigest(value string) string {

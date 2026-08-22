@@ -492,6 +492,11 @@ func loadUserConfigForWorkDir(workDir string, explicitPaths ...string) (Config, 
 	}
 	cfg.HomeJuexDir = homeConfig.EffectiveHomeDir
 	cfg.defaultHomeRuntimeConfigPath = homeConfig.DefaultConfigPath
+	loader := configImportLoaderFor(&cfg)
+	if err := loader.recoverConfigImportPublicationIfPresent(); err != nil {
+		cfg.importLoader = nil
+		return cfg, err
+	}
 
 	for _, source := range homeConfig.Sources {
 		if err := applyYAMLFile(&cfg, source); err != nil {
@@ -571,15 +576,15 @@ func finalizeConfigLoadWithAgentState(
 	resolveAuth bool,
 	agentStateMode AgentStateMode,
 ) error {
-	return finalizeConfigLoadWithAgentStateAndImportCache(cfg, modelRefs, resolveAuth, agentStateMode, true)
+	return finalizeConfigLoadWithAgentStateAndImportCache(cfg, modelRefs, resolveAuth, agentStateMode, true, false)
 }
 
-func finalizeConfigLoadForValidationWithoutImportCache(
+func finalizeConfigLoadForValidationRetainingImportCacheLock(
 	cfg *Config,
 	modelRefs []string,
 	resolveAuth bool,
 ) error {
-	return finalizeConfigLoadWithAgentStateAndImportCache(cfg, modelRefs, resolveAuth, AgentStateNone, false)
+	return finalizeConfigLoadWithAgentStateAndImportCache(cfg, modelRefs, resolveAuth, AgentStateNone, false, true)
 }
 
 func finalizeConfigLoadWithAgentStateAndImportCache(
@@ -588,6 +593,7 @@ func finalizeConfigLoadWithAgentStateAndImportCache(
 	resolveAuth bool,
 	agentStateMode AgentStateMode,
 	publishImportCache bool,
+	retainImportCacheLock bool,
 ) (loadErr error) {
 	if err := resolveRuntimeEnvironment(cfg); err != nil {
 		cfg.pendingImportCache = nil
@@ -602,10 +608,10 @@ func finalizeConfigLoadWithAgentStateAndImportCache(
 		if loadErr != nil {
 			cfg.pendingImportCache = nil
 		}
-		if cfg.importLoader != nil {
+		if cfg.importLoader != nil && (loadErr != nil || !retainImportCacheLock) {
 			loadErr = errors.Join(loadErr, cfg.importLoader.closeConfigImportCacheLock())
+			cfg.importLoader = nil
 		}
-		cfg.importLoader = nil
 		loadErr = redactConfiguredEnvironmentError(cfg.EnvironmentSnapshot(), loadErr)
 	}()
 	hasModelsOverride := len(modelRefs) > 0
@@ -846,38 +852,54 @@ func configImportLoaderFor(cfg *Config) *configImportLoader {
 }
 
 func applyExplicitYAMLFile(cfg *Config, path string) error {
-	// A CLI may point --config at a durable file that was already loaded.
-	// Reapply its ordinary explicit overrides while preserving the Extension
-	// allowlist at the file's durable scope.
-	loadedPaths := []string{
-		cfg.DefaultHomeRuntimeConfigPath(),
-		cfg.HomeRuntimeConfigPath(),
-		cfg.RuntimeConfigPath(),
+	// A workspace file is already the highest ordinary YAML layer, so naming it
+	// again through --config must not replay append-only values. A loaded Home
+	// file still needs its declaring values replayed above the workspace, but its
+	// imports, append-only hooks/sandbox paths, and durable Extension allowlist
+	// must not be applied twice.
+	workspacePath := cfg.RuntimeConfigPath()
+	if workspacePath != "" {
+		sameWorkspaceFile, err := sameConfigPath(path, workspacePath)
+		if err != nil {
+			return err
+		}
+		if sameWorkspaceFile {
+			return nil
+		}
 	}
-	for _, loadedPath := range loadedPaths {
-		if loadedPath == "" {
+	loadedSources := []yamlConfigSource{
+		{Path: cfg.DefaultHomeRuntimeConfigPath(), Scope: configScopeDefaultHome},
+		{Path: cfg.HomeRuntimeConfigPath(), Scope: configScopeInstanceHome},
+	}
+	for _, loadedSource := range loadedSources {
+		if loadedSource.Path == "" {
 			continue
 		}
-		sameLoadedFile, err := sameConfigPath(path, loadedPath)
+		sameLoadedFile, err := sameConfigPath(path, loadedSource.Path)
 		if err != nil {
 			return err
 		}
 		if sameLoadedFile {
-			hadLoader := cfg.importLoader != nil
-			loader := configImportLoaderFor(cfg)
-			err := applyYAMLFileWithImportLoaderAndOptions(cfg, explicitYAMLSource(path), loader, applyYAMLDataOptions{
-				SkipExtensionPolicy: true,
-			})
-			if err != nil {
-				err = errors.Join(err, loader.closeConfigImportCacheLock())
-				if !hadLoader {
-					cfg.importLoader = nil
-				}
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return closeConfigImportLoaderAfterError(cfg, readErr)
 			}
-			return err
+			loadedSource.Path = path
+			applyErr := applyYAMLDataWithOptions(cfg, data, loadedSource, applyYAMLDataOptions{
+				SkipExtensionPolicy:  true,
+				SkipAppendOnlyValues: true,
+			})
+			return closeConfigImportLoaderAfterError(cfg, applyErr)
 		}
 	}
 	return applyYAMLFile(cfg, explicitYAMLSource(path))
+}
+
+func closeConfigImportLoaderAfterError(cfg *Config, err error) error {
+	if err == nil || cfg.importLoader == nil {
+		return err
+	}
+	return errors.Join(err, cfg.importLoader.closeConfigImportCacheLock())
 }
 
 func applyYAMLData(cfg *Config, data []byte, source yamlConfigSource) error {
@@ -885,7 +907,8 @@ func applyYAMLData(cfg *Config, data []byte, source yamlConfigSource) error {
 }
 
 type applyYAMLDataOptions struct {
-	SkipExtensionPolicy bool
+	SkipExtensionPolicy  bool
+	SkipAppendOnlyValues bool
 }
 
 func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource, opts applyYAMLDataOptions) error {
@@ -919,8 +942,10 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 	if err := applyProvidersConfig(cfg, fc.Providers); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
-	if err := applyHooksConfig(cfg, fc.Hooks, source.hookSource(), source.requireHookTrust()); err != nil {
-		return fmt.Errorf("config: parse %s: %w", source.Path, err)
+	if !opts.SkipAppendOnlyValues {
+		if err := applyHooksConfig(cfg, fc.Hooks, source.hookSource(), source.requireHookTrust()); err != nil {
+			return fmt.Errorf("config: parse %s: %w", source.Path, err)
+		}
 	}
 	applyCompactionConfig(cfg, fc.Compaction)
 	applyToolOutputConfig(cfg, fc.ToolOutput)
@@ -946,6 +971,9 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 		sandboxLayer := sandboxConfig{}
 		if fc.Sandbox != nil {
 			sandboxLayer = *fc.Sandbox
+		}
+		if opts.SkipAppendOnlyValues {
+			sandboxLayer.FileSystem.BlockedPaths = nil
 		}
 		if err := applySandboxConfig(cfg, sandboxLayer); err != nil {
 			return fmt.Errorf("config: parse %s: %w", source.Path, err)

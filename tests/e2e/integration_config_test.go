@@ -210,8 +210,8 @@ func TestLoadLiveConfigRejectsUnusableExistingConfig(t *testing.T) {
 	if err == nil {
 		t.Fatal("load live config succeeded, want unusable provider error")
 	}
-	if !strings.Contains(err.Error(), "provider not found: missing") {
-		t.Fatalf("error = %q, want missing provider detail", err)
+	if !strings.Contains(err.Error(), "provider config is not loadable by Juex") {
+		t.Fatalf("error = %q, want full-source validation detail", err)
 	}
 }
 
