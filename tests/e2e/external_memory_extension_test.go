@@ -2,7 +2,6 @@ package e2e
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -38,6 +37,32 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	}
 	extensionDir := filepath.Join(home, "extensions", "memory")
 	installMemoryExtensionFixture(t, extensionDir)
+	probePath := filepath.Join(work, "module-catalog-probe.txt")
+	if err := os.WriteFile(probePath, []byte("module catalog\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	provider := &bareScriptProvider{steps: []llm.Response{
+		{
+			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+				{Type: llm.BlockToolUse, ToolUseID: "builtin-read", ToolName: "read", Input: map[string]any{"path": probePath}},
+				{Type: llm.BlockToolUse, ToolUseID: "skill-search", ToolName: "skill_search", Input: map[string]any{"query": "memory"}},
+				{Type: llm.BlockToolUse, ToolUseID: "goal-get", ToolName: juexruntime.GoalToolGet, Input: map[string]any{}},
+				{Type: llm.BlockToolUse, ToolUseID: "notes-update", ToolName: juexruntime.NotesToolUpdate, Input: map[string]any{"content": "- [x] exercise the Module catalog"}},
+				{Type: llm.BlockToolUse, ToolUseID: "observable-list", ToolName: "observable_list", Input: map[string]any{}},
+				{Type: llm.BlockToolUse, ToolUseID: "memory-write", ToolName: "mcp__memory__memory_write", Input: map[string]any{
+					"name": "isolated-home", "description": "test isolation", "type": "feedback", "body": "use a temporary JUEX_HOME",
+				}},
+			}},
+			StopReason: llm.StopToolUse,
+		},
+		{
+			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+				Type: llm.BlockToolUse, ToolUseID: "memory-search", ToolName: "mcp__memory__memory_search", Input: map[string]any{"query": "isolated"},
+			}}},
+			StopReason: llm.StopToolUse,
+		},
+		{Message: llm.TextMessage(llm.RoleAssistant, "Module catalog flow complete"), StopReason: llm.StopEndTurn},
+	}}
 
 	cfg := config.Config{
 		ProviderID: "openai", APIKey: "test", Model: "test", WorkDir: work,
@@ -45,7 +70,7 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 		Extensions: config.ExtensionPolicy{Allow: []string{"memory"}, Configured: true},
 	}
 	enabled, err := app.New(app.Options{
-		Config: cfg, Provider: &bareScriptProvider{}, WorkDir: work,
+		Config: cfg, Provider: provider, WorkDir: work,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -87,37 +112,38 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 		}
 	}
 
-	probePath := filepath.Join(work, "module-catalog-probe.txt")
-	if err := os.WriteFile(probePath, []byte("module catalog\n"), 0o600); err != nil {
+	wantOffered := []string{
+		"read",
+		"skill_search",
+		juexruntime.GoalToolGet,
+		juexruntime.NotesToolUpdate,
+		"observable_list",
+		"mcp__memory__memory_write",
+		"mcp__memory__memory_search",
+	}
+	result, err := enabled.Engine.Turn(t.Context(), "exercise every Module catalog family")
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, call := range []struct {
-		name  string
-		input map[string]any
-	}{
-		{name: "read", input: map[string]any{"path": probePath}},
-		{name: "skill_search", input: map[string]any{"query": "memory"}},
-		{name: juexruntime.GoalToolGet, input: map[string]any{}},
-		{name: juexruntime.NotesToolUpdate, input: map[string]any{"content": "- [x] exercise the Module catalog"}},
-		{name: "observable_list", input: map[string]any{}},
-	} {
-		if _, err := enabled.Engine.Tools.Call(context.Background(), call.name, call.input); err != nil {
-			t.Fatalf("Module catalog tool %q: %v", call.name, err)
-		}
+	if result != "Module catalog flow complete" {
+		t.Fatalf("Turn result = %q", result)
 	}
+	if len(provider.history) != 3 {
+		t.Fatalf("Provider calls = %d, want 3", len(provider.history))
+	}
+	assertProviderOfferedTools(t, provider, wantOffered)
+	assertSuccessfulProviderToolResults(t, provider.history[len(provider.history)-1], map[string]string{
+		"builtin-read":    "module catalog",
+		"skill-search":    "memory",
+		"goal-get":        "",
+		"notes-update":    "",
+		"observable-list": "",
+		"memory-write":    "saved memory",
+		"memory-search":   "temporary JUEX_HOME",
+	})
 	dataDir := filepath.Join(address.StateDir(), "extensions", "memory")
 	if marker, err := os.ReadFile(filepath.Join(dataDir, "hook-ran")); err != nil || string(marker) != "SessionStart" {
 		t.Fatalf("extension hook marker = %q, err=%v", marker, err)
-	}
-	writeResult, err := enabled.Engine.Tools.Call(context.Background(), "mcp__memory__memory_write", map[string]any{
-		"name": "isolated-home", "description": "test isolation", "type": "feedback", "body": "use a temporary JUEX_HOME",
-	})
-	if err != nil || !strings.Contains(writeResult, "saved memory") {
-		t.Fatalf("memory_write result = %q, err=%v", writeResult, err)
-	}
-	searchResult, err := enabled.Engine.Tools.Call(context.Background(), "mcp__memory__memory_search", map[string]any{"query": "isolated"})
-	if err != nil || !strings.Contains(searchResult, "temporary JUEX_HOME") {
-		t.Fatalf("memory_search result = %q, err=%v", searchResult, err)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "memory-entry")); err != nil {
 		t.Fatalf("Memory MCP did not write Agent-private extension data: %v", err)
@@ -200,6 +226,47 @@ func TestExternalMemoryExtensionEnabledAndDisabled(t *testing.T) {
 	}
 	if disabledStatus.Extensions.Count != 0 || disabledStatus.MCP.Configured != 0 || disabledStatus.Hooks.Configured != 0 {
 		t.Fatalf("disabled extension resources remain: %+v", disabledStatus)
+	}
+}
+
+func assertProviderOfferedTools(t *testing.T, provider *bareScriptProvider, names []string) {
+	t.Helper()
+	if len(provider.tools) == 0 {
+		t.Fatal("Provider received no Tool catalog")
+	}
+	offered := make(map[string]bool, len(provider.tools[0]))
+	for _, name := range provider.tools[0] {
+		offered[name] = true
+	}
+	for _, name := range names {
+		if !offered[name] {
+			t.Errorf("Provider Tool catalog is missing %q", name)
+		}
+	}
+}
+
+func assertSuccessfulProviderToolResults(t *testing.T, history []llm.Message, wants map[string]string) {
+	t.Helper()
+	found := make(map[string]bool, len(wants))
+	for _, message := range history {
+		for _, block := range message.Blocks {
+			want, ok := wants[block.ToolUseID]
+			if !ok || block.Type != llm.BlockToolResult {
+				continue
+			}
+			found[block.ToolUseID] = true
+			if block.IsError {
+				t.Errorf("Tool result %q failed: %s", block.ToolUseID, block.Content)
+			}
+			if want != "" && !strings.Contains(block.Content, want) {
+				t.Errorf("Tool result %q = %q, want content %q", block.ToolUseID, block.Content, want)
+			}
+		}
+	}
+	for id := range wants {
+		if !found[id] {
+			t.Errorf("Provider history is missing Tool result %q", id)
+		}
 	}
 }
 

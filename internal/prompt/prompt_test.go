@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
@@ -38,11 +38,11 @@ func TestBuilder_AllSourcesPresent(t *testing.T) {
 	b := &Builder{
 		ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 			request := runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration}
-			guidance, err := (&GuidanceModule{GlobalAgentsMDPath: globalAgents, AgentsMDDirs: []string{root, subdir}}).Context(context.Background(), request)
+			guidance, err := (&promptcontext.GuidanceModule{GlobalAgentsMDPath: globalAgents, AgentsMDDirs: []string{root, subdir}}).Context(context.Background(), request)
 			if err != nil {
 				return nil, err
 			}
-			runtimeSections, err := (&SessionContextModule{Now: func() time.Time {
+			runtimeSections, err := (&promptcontext.SessionContextModule{Now: func() time.Time {
 				return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 			}}).Context(context.Background(), request)
 			if err != nil {
@@ -70,8 +70,8 @@ func TestBuilder_AllSourcesPresent(t *testing.T) {
 func TestBuilder_EmptySourcesSkipped(t *testing.T) {
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		&GuidanceModule{AgentsMDDirs: []string{t.TempDir()}},
-		&SessionContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
+		&promptcontext.GuidanceModule{AgentsMDDirs: []string{t.TempDir()}},
+		&promptcontext.SessionContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
 	)
 	got := b.Build()
 	if strings.Contains(got, "Available Skills") {
@@ -91,7 +91,7 @@ func TestBuilder_AgentsMDOrderingDeterministic(t *testing.T) {
 	}
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		&GuidanceModule{AgentsMDDirs: []string{rootA, rootB}},
+		&promptcontext.GuidanceModule{AgentsMDDirs: []string{rootA, rootB}},
 	)
 	got := b.Build()
 	posA := strings.Index(got, "AAA")
@@ -113,35 +113,12 @@ func TestBuilder_OnlyGlobalAgentsMD(t *testing.T) {
 
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		&GuidanceModule{GlobalAgentsMDPath: globalAgents, AgentsMDDirs: []string{t.TempDir()}},
-		&SessionContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
+		&promptcontext.GuidanceModule{GlobalAgentsMDPath: globalAgents, AgentsMDDirs: []string{t.TempDir()}},
+		&promptcontext.SessionContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
 	)
 	got := b.Build()
 	mustContain(t, got, "only-global-rule")
 	mustContain(t, got, "Operating Context")
-}
-
-func TestGuidanceModuleDeduplicatesGlobalWorkspaceFile(t *testing.T) {
-	home := t.TempDir()
-	homeAgents := filepath.Join(home, ".agents")
-	if err := os.MkdirAll(homeAgents, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	globalAgents := filepath.Join(homeAgents, "AGENTS.md")
-	if err := os.WriteFile(globalAgents, []byte("one global rule"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	sections, err := (&GuidanceModule{
-		GlobalAgentsMDPath: globalAgents,
-		AgentsMDDirs:       []string{home, homeAgents},
-	}).Context(context.Background(), runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sections) != 1 || sections[0].Key != "agents_global" {
-		t.Fatalf("sections = %+v, want one global AGENTS section", sections)
-	}
 }
 
 func TestBuilder_OnlyProjectAgentsMD(t *testing.T) {
@@ -152,7 +129,7 @@ func TestBuilder_OnlyProjectAgentsMD(t *testing.T) {
 
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		&GuidanceModule{AgentsMDDirs: []string{root}},
+		&promptcontext.GuidanceModule{AgentsMDDirs: []string{root}},
 	)
 	got := b.Build()
 	mustContain(t, got, "only-project-rule")
@@ -178,8 +155,8 @@ func TestBuilder_SectionsIncludeInspectableAgentsEntries(t *testing.T) {
 
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		&GuidanceModule{GlobalAgentsMDPath: globalAgents, AgentsMDDirs: []string{root, projectAgents}},
-		&SessionContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
+		&promptcontext.GuidanceModule{GlobalAgentsMDPath: globalAgents, AgentsMDDirs: []string{root, projectAgents}},
+		&promptcontext.SessionContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 	sections := b.Sections()
 	if len(sections) != 4 {
@@ -210,7 +187,7 @@ func TestBuilder_ModuleSectionsPreserveProviderOrder(t *testing.T) {
 		staticContextProvider{sections: []runtimemodule.ContextSection{{
 			Key: "active_shell_sessions", Label: "Active Shell Sessions", Source: "runtime", Text: "## Active Shell Sessions\n- session_id=7", Projection: runtimemodule.ContextProjectionSystemPrompt, Budget: runtimemodule.UnboundedContextBudget(),
 		}}},
-		&SessionContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
+		&promptcontext.SessionContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 
 	sections := b.Sections()
@@ -240,7 +217,7 @@ func TestBuilder_SessionScratchpadSection(t *testing.T) {
 	dir := filepath.Join(work, ".juex", "sessions", "session-1", "scratchpad")
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration, Session: &runtimemodule.SessionContext{ScratchpadDir: dir}},
-		&SessionContextModule{WorkDir: work, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
+		&promptcontext.SessionContextModule{WorkDir: work, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 
 	sections := b.Sections()
@@ -272,7 +249,7 @@ func TestBuilder_SessionScratchpadSection(t *testing.T) {
 func TestBuilder_OperatingContextHasCwdOSAndTime(t *testing.T) {
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		&SessionContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
+		&promptcontext.SessionContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 	got := b.Build()
 	for _, want := range []string{"cwd:", "os:", "time:", "2026-05-01T12:30:45Z"} {
@@ -288,7 +265,7 @@ func TestBuilder_OperatingContextUsesWorkDir(t *testing.T) {
 	workDir := t.TempDir()
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		&SessionContextModule{WorkDir: workDir, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
+		&promptcontext.SessionContextModule{WorkDir: workDir, Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 
 	got := b.Build()
@@ -301,7 +278,7 @@ func TestBuilder_OperatingContextUsesWorkDir(t *testing.T) {
 func TestBuilder_OperatingContextIncludesShellProfile(t *testing.T) {
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		&SessionContextModule{Shell: ShellProfile{
+		&promptcontext.SessionContextModule{Shell: promptcontext.ShellProfile{
 			Profile:   "powershell",
 			Family:    "powershell",
 			Binary:    "pwsh",
@@ -324,27 +301,6 @@ func TestBuilder_OperatingContextIncludesShellProfile(t *testing.T) {
 	}
 }
 
-func TestShellProfileFromConfigCopiesArgs(t *testing.T) {
-	cfg := config.ShellProfile{
-		Profile:       "custom",
-		Family:        "posix",
-		Binary:        "bash",
-		Args:          []string{"-lc"},
-		PathStyle:     "posix",
-		HostPathStyle: "platform",
-	}
-
-	got := ShellProfileFromConfig(cfg)
-	cfg.Args[0] = "-c"
-
-	if got.Profile != "custom" || got.Family != "posix" || got.Binary != "bash" || got.PathStyle != "posix" || got.HostPathStyle != "platform" {
-		t.Fatalf("ShellProfileFromConfig = %+v", got)
-	}
-	if len(got.Args) != 1 || got.Args[0] != "-lc" {
-		t.Fatalf("args = %+v, want defensive copy", got.Args)
-	}
-}
-
 func TestBuilder_OperatingContextNormalizesRelativeWorkDir(t *testing.T) {
 	base := t.TempDir()
 	t.Chdir(base)
@@ -353,7 +309,7 @@ func TestBuilder_OperatingContextNormalizesRelativeWorkDir(t *testing.T) {
 	}
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		&SessionContextModule{WorkDir: "workspace", Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
+		&promptcontext.SessionContextModule{WorkDir: "workspace", Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) }},
 	)
 
 	got := b.Build()
@@ -388,8 +344,8 @@ func TestBuilder_SectionsSeparatedByDivider(t *testing.T) {
 
 	b := builderFromProviders(
 		runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration},
-		&GuidanceModule{AgentsMDDirs: []string{root}},
-		&SessionContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
+		&promptcontext.GuidanceModule{AgentsMDDirs: []string{root}},
+		&promptcontext.SessionContextModule{Now: func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) }},
 	)
 	got := b.Build()
 	if !strings.Contains(got, "---") {

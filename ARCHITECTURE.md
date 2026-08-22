@@ -108,6 +108,7 @@ juex/
 │   │   └── chunked_write.go
 │   ├── modules/                  # concrete trusted Feature Module adapters
 │   │   ├── builtintools/         # builtin Tool contributions + shell resource ownership
+│   │   ├── promptcontext/        # project guidance + Session operating context
 │   │   └── skills/               # Skill Tools + provider context
 │   ├── mcp/                      # official Go SDK adapter for local and remote MCP
 │   │   ├── config.go
@@ -217,6 +218,7 @@ implementation decisions live.
 | `internal/observability` | Redacted human-readable Session logs projected from Events | Authoritative transcript/Event state, runtime decisions, Web presentation |
 | `internal/tools` | Tool registry and dispatch, builtin file/shell/search adapters, Tool result normalization and output hygiene | Canonical chunked-write lifecycle, Provider wire quirks, Session persistence, Observable/MCP source lifecycles |
 | `internal/modules/builtintools` | Runtime-scoped builtin Tool contributions and shell-session resource ownership | Tool dispatch, sandbox policy definition, Session state |
+| `internal/modules/promptcontext` | Project-guidance and Session operating-context contributions, including shell and scratchpad context | Framework prompt assembly, Module ordering, Skill discovery |
 | `internal/modules/skills` | Runtime-scoped Skill Tool contributions and bounded Skill catalog context | Skill discovery rules, prompt section ordering, Extension discovery |
 | `internal/chunkedwrite` | Canonical chunked-write lifecycle facts and deterministic state derivation | Tool schemas/dispatch, filesystem execution, runtime Event transport |
 | `internal/hooks` | Trusted hook config, matching, bounded command execution, and hook result facts | Lifecycle phase ordering, interpretation of deny/continue results, Tool execution |
@@ -225,7 +227,7 @@ implementation decisions live.
 | `internal/eventmedia` | Workspace/current-AgentStateDir external-event attachment validation, size gates, blocked-path enforcement, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
 | `internal/mcp` | Adapter over the official Go SDK: Claude-compatible MCP config normalization, command and Streamable HTTP sessions, static HTTP header handling, Tool discovery, staged remote readiness, custom notification preservation, and transport-specific diagnostics | Protocol framing/negotiation, Turn policy, active Session selection, Web ownership |
 | `internal/skills` | `SKILL.md` frontmatter loading, Skill metadata, catalog prompt rendering, compression, and budget selection | Final system-prompt section assembly, task execution policy, Tool dispatch |
-| `internal/prompt` | AGENTS.md hierarchy loading and system-prompt section assembly from guidance, typed Module context, runtime metadata, and shell profile | Skill discovery, Provider wire formatting, Session persistence, resource discovery policy |
+| `internal/prompt` | Framework system-prompt assembly from validated typed Module context | Concrete context collection, Module ordering, Provider wire formatting, Session persistence |
 | `internal/artifact` | Workspace-rooted path safety, atomic byte storage, content addressing, bounded reads, integrity verification | Media format policy, Provider encoding, context preview policy, retention |
 | `internal/usermedia` | User image validation, per-turn limits, Session namespace policy, media-reference verification | Artifact filesystem mechanics, HTTP multipart parsing, Provider encoding |
 | `internal/app` | Configuration/resource resolution, enabled Feature Module construction, explicit cross-feature dependency wiring, Session attachment, Turn admission, external input Session selection/delivery, application slash commands | Module capability ordering and validation, Module cleanup policy, Cobra grammar, HTTP parsing, Provider SDK behavior |
@@ -3151,12 +3153,13 @@ and `tests/eval/` covers the local evaluation harness.
 
 | Package | Coverage highlights |
 |---|---|
+| `architecture` | Foundation/Framework import direction; App composition cannot directly register serving Tools or own concrete Feature cleanup |
 | `events` | exact + glob match, auto-fill ID/timestamp, ordering |
 | `frontmatter` | round-trip, embedded quotes, embedded colons, blank lines, comments, malformed handling |
 | `version` | default + ldflags override |
 | `tools` | registry duplicate, read/write/edit/apply_patch/chunked_write/grep/exec_command/write_stdin/list_shell_sessions, regex grep, command timeout/session yield, default WorkDir |
 | `runtime/module` | unique identity, multi-capability indexing, stable order, sealing, atomic complete Tool registry construction, Tool/context owner conflicts, context projection and budget validation, disabled factory construction, Runtime/Session startup rollback, reverse quiesce/close, joined errors |
-| `modules/builtintools`, `modules/skills` | real builtin Tool contribution and shell cleanup; Skill Tool/context contribution, sandbox checks, filtering, and `ext:<name>` provenance |
+| `modules/builtintools`, `modules/promptcontext`, `modules/skills` | real builtin Tool contribution and shell cleanup; project-guidance and Session operating context; Skill Tool/context contribution, sandbox checks, filtering, and `ext:<name>` provenance |
 | `mcp` | round-trip, tool errors, env propagation, no-schema default, multi-server, layered project-over-user, ctx cancellation |
 | `skills` | fail-loud embedded builtin catalog, private builtin provenance, prompt exclusion, filter immunity, dir scan, project-over-user, strict-name collisions, name-fallback, malformed filesystem skill skip, sort, reload, missing dir |
 | `prompt` | AGENTS.md hierarchy, typed Module context including Skills, ops context, divider, fresh rebuild |
@@ -3167,7 +3170,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `app` | stub-LLM run, sealed Module catalog-to-serving-registry ownership, disabled Module absence, runtime-status catalog projection, REPL multi-line, REPL after error, verbose stderr, AgentStateDir sessions, observability log wiring, history update, missing-key fail, default-cwd |
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flags including model, debug, and log-level |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
-| `tests/e2e` | full-stack tempdir scenario, installed Extension enable/disable flow, apply_patch builtin flow, resume round-trip, canonical session journals and debug logs, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
+| `tests/e2e` | sealed-catalog full-stack tempdir scenario, all-disabled Module composition, Primary Session Module-set replacement, model-driven Builtin/Skill/model-state/Observable/Extension-MCP catalog flow, installed Extension enable/disable and `ext:<name>` data isolation, apply_patch builtin flow, resume round-trip, canonical session journals and debug logs, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
 | `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracles for conversation/event/tool and Schedule persistence artifacts; retry-isolated live Schedule routing; provider-config candidate selection; eval shell wrappers; development step flags; report directory defaults |
 
 Agents use `make verify-focused`, `make verify-candidate`, and `make

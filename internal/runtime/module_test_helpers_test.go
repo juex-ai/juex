@@ -9,6 +9,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/prompt"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
@@ -99,7 +100,7 @@ func appendPolicyAdditionalContext(msg llm.Message, results []hooks.Result) llm.
 }
 
 func newTestPromptBuilder(workDir string, now func() time.Time) *prompt.Builder {
-	provider := &prompt.SessionContextModule{WorkDir: workDir, Now: now}
+	provider := &promptcontext.SessionContextModule{WorkDir: workDir, Now: now}
 	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		return provider.Context(context.Background(), runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration})
 	}}

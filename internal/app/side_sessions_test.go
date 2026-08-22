@@ -16,7 +16,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
-	"github.com/juex-ai/juex/internal/prompt"
+	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/runtime/workmem"
@@ -113,7 +113,7 @@ func installSideHookRunner(t *testing.T, a *App, runner hooks.PolicyRunner) {
 		a.Session,
 		a.Engine,
 		a.cfg.WorkDir,
-		prompt.ShellProfileFromConfig(a.cfg.Shell),
+		promptcontext.ShellProfileFromConfig(a.cfg.Shell),
 		a.shellSessions,
 		sessionModuleOptions{
 			hookRunner:               runner,
