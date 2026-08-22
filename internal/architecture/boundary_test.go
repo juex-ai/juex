@@ -439,7 +439,7 @@ func (application *App) bindVariadicReceiver(manager *mcp.Manager, registry *too
 	func(targets ...*App) {
 		targets[0].variadicReceiverResource = manager
 		targets[0].variadicReceiverRegistry = registry
-	}(application)
+	}([]*App{application}...)
 }
 func (application *App) bypass() {
 	_ = application.resource.Close()
@@ -10378,6 +10378,11 @@ func seedAppFieldArguments(call *ast.CallExpr, parameters *ast.FieldList, import
 						for receiver := range cloneBoolMap(receivers) {
 							if isNestedAssignmentValueKey(receiver, source) {
 								receivers[key+strings.TrimPrefix(receiver, source)] = true
+							}
+						}
+						for _, embedded := range appReceiverCompositeValueExpressions(argument, "", imports, types) {
+							if hasAppReceiverAlias(embedded.expression, receivers, imports, values, types) {
+								receivers[key+embedded.suffix] = true
 							}
 						}
 					}
