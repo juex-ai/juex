@@ -1122,6 +1122,9 @@ func (a *App) CompactWithInstructions(ctx context.Context, reason string, auto b
 	if a == nil || a.Engine == nil {
 		return runtime.CompactionResult{}, fmt.Errorf("app: nil engine")
 	}
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		return runtime.CompactionResult{}, err
+	}
 	admitted := events.Normalize(events.Event{Type: runtime.TurnAdmittedType, Payload: runtime.TurnAdmittedPayload{}})
 	turnID := "compact-" + admitted.ID
 	admitted.TurnID = turnID

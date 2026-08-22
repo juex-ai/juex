@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 
+	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
@@ -179,6 +181,12 @@ func (a *App) RunAdmittedTurn(ctx context.Context, turnID string, message llm.Me
 		return "", ErrSessionUnavailable
 	}
 	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		unwindCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, unwindErr := a.Engine.TurnMessageWithID(unwindCtx, message, turnID)
+		if unwindErr != nil && !cancellation.IsUserCancelled(unwindErr) {
+			return "", errors.Join(err, fmt.Errorf("release canceled admitted turn %q: %w", turnID, unwindErr))
+		}
 		return "", err
 	}
 	return a.Engine.TurnMessageWithID(ctx, message, turnID)

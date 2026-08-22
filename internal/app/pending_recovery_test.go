@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
@@ -328,6 +329,42 @@ func TestAppBeginCloseCancelsTurnWaitingForStartupPendingInputRecovery(t *testin
 	}
 }
 
+func TestAppCanceledAdmittedTurnReleasesEngineReservation(t *testing.T) {
+	a, provider := newStubApp(t, llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "handled after cancellation"),
+		StopReason: llm.StopEndTurn,
+	})
+	first := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+		Prompt: "accepted before cancellation",
+		IDs:    TurnIDFunc(func(string) string { return "canceled-admitted-turn" }),
+	})
+	if first.Kind != TurnAdmissionStarted || first.Start == nil {
+		t.Fatalf("first admission = %+v, want started", first)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := a.RunAdmittedTurn(canceled, first.Start.TurnID, first.Start.Message); !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunAdmittedTurn error = %v, want context.Canceled", err)
+	}
+	a.CompleteAdmittedTurn(first.Start.TurnID)
+
+	second := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+		Prompt: "run after canceled admission",
+		IDs:    TurnIDFunc(func(string) string { return "turn-after-canceled-admission" }),
+	})
+	if second.Kind != TurnAdmissionStarted || second.Start == nil {
+		t.Fatalf("second admission = %+v, want started instead of queued behind a phantom turn", second)
+	}
+	out, err := a.RunAdmittedTurn(context.Background(), second.Start.TurnID, second.Start.Message)
+	a.CompleteAdmittedTurn(second.Start.TurnID)
+	if err != nil || out != "handled after cancellation" {
+		t.Fatalf("second RunAdmittedTurn = %q, %v", out, err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("provider calls = %d, want one post-cancellation turn", provider.calls)
+	}
+}
+
 func TestAppExternalDeliveryTransfersToAppAfterRecoveryWaitTimeout(t *testing.T) {
 	dir := t.TempDir()
 	first, err := New(recoveryAppOptions(dir, &recoveryProvider{}))
@@ -448,6 +485,87 @@ func TestAppExternalDeliveryRetriesDurableInputAfterLiveQueueFull(t *testing.T) 
 			t.Fatalf("overflow input = %+v ok=%v, want App-owned retry to process it", pending, ok)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestAppExternalDeliveryRetriesReplayableAdmissionCommitFailure(t *testing.T) {
+	dir := t.TempDir()
+	provider := &recoveryProvider{}
+	a, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+	wantErr := errors.New("injected turn admission commit failure")
+	a.Bus.SetCommitter(&failOnceEventCommitter{
+		delegate:  a.eventSink,
+		eventType: runtime.TurnAdmittedType,
+		err:       wantErr,
+	})
+
+	record := testObservationRecord("obs-admission-commit-retry")
+	outcome, err := a.DeliverObservation(context.Background(), record)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("DeliverObservation error = %v, want injected commit failure", err)
+	}
+	if outcome.State != observable.ObservationStateQueued || outcome.PendingInputID != observationPendingInputID(record) {
+		t.Fatalf("delivery outcome = %+v, want replayable queued record", outcome)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		pending, ok, stateErr := a.Engine.PersistedPendingMessage(outcome.PendingInputID)
+		if stateErr != nil {
+			t.Fatal(stateErr)
+		}
+		calls, _ := provider.snapshot()
+		if ok && pending.State == runtime.PendingInputStateProcessed && a.Session.HasMessageID(pending.MessageID) && calls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("failed-admission input = %+v ok=%v, want App-owned retry to process it", pending, ok)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestAppCompactWaitsForStartupPendingInputRecovery(t *testing.T) {
+	a, _ := newStubApp(t)
+	recoveryDone := make(chan struct{})
+	a.pendingRecoveryDone = recoveryDone
+	admitted := make(chan struct{}, 1)
+	unsubscribe := a.Bus.Subscribe(runtime.TurnAdmittedType, func(events.Event) {
+		admitted <- struct{}{}
+	})
+	t.Cleanup(unsubscribe)
+
+	type compactResult struct {
+		err error
+	}
+	finished := make(chan compactResult, 1)
+	go func() {
+		_, err := a.CompactWithInstructions(context.Background(), "manual", false, "")
+		finished <- compactResult{err: err}
+	}()
+	select {
+	case <-admitted:
+		t.Fatal("compaction admission committed before startup recovery completed")
+	case result := <-finished:
+		t.Fatalf("compaction completed before startup recovery: %+v", result)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(recoveryDone)
+	select {
+	case result := <-finished:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("compaction did not continue after startup recovery")
+	}
+	select {
+	case <-admitted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("compaction admission was not committed after startup recovery")
 	}
 }
 

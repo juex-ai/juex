@@ -230,14 +230,7 @@ func (a *App) handoffPersistedInputAfterRecovery(record runtime.PendingInputReco
 }
 
 func shouldRetryPersistedInputHandoff(delivery externalInputDelivery, err error) bool {
-	if !delivery.Queued || err == nil {
-		return false
-	}
-	return errors.Is(err, runtime.ErrPendingInputQueueFull) ||
-		errors.Is(err, runtime.ErrNoActiveTurn) ||
-		errors.Is(err, errTurnAdmissionChanged) ||
-		errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded)
+	return delivery.Queued && err != nil
 }
 
 func (a *App) waitPendingInputRecovery() error {
