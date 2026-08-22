@@ -139,7 +139,7 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 		return err
 	}
 	if len(recorded.toolCalls) > 0 {
-		return l.engine.recordToolBatchLocked(ctx, l.turnID, l.prepared.policy, recorded)
+		return l.engine.recordToolBatchLocked(ctx, l.turnID, recorded)
 	}
 	outcome, err := l.applyFinishPolicyLocked(ctx, recorded)
 	if err != nil {

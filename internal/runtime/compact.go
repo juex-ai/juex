@@ -388,9 +388,10 @@ func (e *Engine) compactionSummaryCandidatesLocked(policy compactionPolicy) []Mo
 			ref = e.SummaryProvider.Name()
 		}
 		candidates = append(candidates, ModelCandidate{
-			Ref:        ref,
-			Provider:   e.SummaryProvider,
-			Provenance: e.SummaryProvenance,
+			Ref:           ref,
+			Provider:      e.SummaryProvider,
+			Provenance:    e.SummaryProvenance,
+			ContextWindow: e.SummaryContextWindow,
 		})
 	}
 	seen := make(map[string]struct{}, len(candidates)+len(e.ModelCandidates))

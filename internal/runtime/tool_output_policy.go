@@ -8,16 +8,41 @@ func DefaultToolOutputPolicy() ToolOutputPolicy {
 	return runtimepolicy.DefaultToolOutputPolicy()
 }
 
-func effectiveToolOutputPolicy(policy ToolOutputPolicy) ToolOutputPolicy {
-	defaults := DefaultToolOutputPolicy()
+func effectiveToolOutputPolicy(policy ToolOutputPolicy, contextWindow int) ToolOutputPolicy {
+	limit := contextWindow / 200
+	if limit < 1 {
+		limit = 1
+	}
 	if policy.InlineMaxBytes <= 0 {
-		policy.InlineMaxBytes = defaults.InlineMaxBytes
+		policy.InlineMaxBytes = limit
+	} else if policy.InlineMaxBytes > limit {
+		policy.InlineMaxBytes = limit
 	}
-	if policy.PreviewHeadBytes <= 0 {
-		policy.PreviewHeadBytes = defaults.PreviewHeadBytes
-	}
-	if policy.PreviewTailBytes <= 0 {
-		policy.PreviewTailBytes = defaults.PreviewTailBytes
+	previewLimit := policy.InlineMaxBytes
+	headConfigured := policy.PreviewHeadBytes > 0
+	tailConfigured := policy.PreviewTailBytes > 0
+	switch {
+	case !headConfigured && !tailConfigured:
+		policy.PreviewHeadBytes = previewLimit / 2
+		policy.PreviewTailBytes = previewLimit - policy.PreviewHeadBytes
+	case headConfigured && !tailConfigured:
+		if policy.PreviewHeadBytes > previewLimit {
+			policy.PreviewHeadBytes = previewLimit
+		}
+		policy.PreviewTailBytes = previewLimit - policy.PreviewHeadBytes
+	case !headConfigured && tailConfigured:
+		if policy.PreviewTailBytes > previewLimit {
+			policy.PreviewTailBytes = previewLimit
+		}
+		policy.PreviewHeadBytes = previewLimit - policy.PreviewTailBytes
+	case headConfigured && tailConfigured:
+		if policy.PreviewHeadBytes > previewLimit {
+			policy.PreviewHeadBytes = previewLimit
+		}
+		remaining := previewLimit - policy.PreviewHeadBytes
+		if policy.PreviewTailBytes > remaining {
+			policy.PreviewTailBytes = remaining
+		}
 	}
 	return policy
 }

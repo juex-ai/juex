@@ -40,7 +40,7 @@ func (e *Engine) projectMessageWithRetentionLocked(msg llm.Message, policy compa
 	if msg.ID == "" && policy.Enabled {
 		msg.ID = "msg-" + newID()
 	}
-	toolOutput := effectiveToolOutputPolicy(e.ToolOutput)
+	toolOutput := effectiveToolOutputPolicy(e.ToolOutput, policy.ContextWindow)
 	var stats projectionStats
 	var clonedBlocks []llm.Block
 	for i := range msg.Blocks {

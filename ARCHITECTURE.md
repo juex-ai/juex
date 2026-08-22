@@ -2308,19 +2308,11 @@ runtime:
 compaction:
   enabled: true
   instructions: ""
-  reserve_tokens: 16384
-  keep_recent_tokens: 20000
   summary_model: ""
-  summary_max_tokens: 2048
-  tool_result_max_chars: 2000
   user_input_inline_max_bytes: 65536
   user_input_preview_head_bytes: 8192
   user_input_preview_tail_bytes: 8192
   max_auto_failures: 3
-tool_output:
-  inline_max_bytes: 32768
-  preview_head_bytes: 8192
-  preview_tail_bytes: 8192
 ```
 
 | Field | Description |
@@ -2370,18 +2362,18 @@ tool_output:
 | `runtime.notify_model_changes` | adds provider-visible and durable `model_change` reminders for successful fallback and recovery transitions; defaults to false and does not change model selection or runtime events |
 | `compaction.enabled` | enables automatic and manual context compaction |
 | `compaction.instructions` | persistent summary focus applied before per-request instructions and successful `PreCompact` hook stdout |
-| `compaction.reserve_tokens` | token budget held back from the provider window |
-| `compaction.keep_recent_tokens` | approximate token budget for retaining recent direct, MCP, and Observable inputs verbatim; a single larger input becomes a bounded artifact reference at compaction |
+| `compaction.reserve_tokens` | optional absolute reserve that can trigger compaction earlier than the default 70% context-window threshold |
+| `compaction.keep_recent_tokens` | optional stricter ceiling on the default 5/64 context-window budget for retaining recent direct, MCP, and Observable inputs verbatim; a single larger input becomes a bounded artifact reference at compaction |
 | `compaction.summary_model` | optional first `provider:model` candidate used only for compaction summary calls; after failure, compaction continues through the ordered `models` chain without a provider-visible model-change notice |
-| `compaction.summary_max_tokens` | maximum output tokens for summary generation |
-| `compaction.tool_result_max_chars` | per-tool-result truncation limit in summary input |
+| `compaction.summary_max_tokens` | optional stricter ceiling on the default 0.5% context-window summary output budget |
+| `compaction.tool_result_max_chars` | optional stricter ceiling on the default 0.5% context-window per-Tool Result serialization limit in summary input |
 | `compaction.user_input_inline_max_bytes` | user text larger than this is stored under `artifacts/sessions/<session-id>/user-inputs/` in Agent state and replaced by a stable preview before provider calls |
 | `compaction.user_input_preview_head_bytes` | leading bytes kept inline for externalized user input |
 | `compaction.user_input_preview_tail_bytes` | trailing bytes kept inline for externalized user input |
 | `compaction.max_auto_failures` | consecutive automatic compaction failures before the session pauses proactive compaction with a clear error |
-| `tool_output.inline_max_bytes` | tool output larger than this is stored under `artifacts/sessions/<session-id>/tool-results/` in Agent state and replaced by a stable preview before provider calls, independently of compaction |
-| `tool_output.preview_head_bytes` | leading bytes kept inline for externalized tool output |
-| `tool_output.preview_tail_bytes` | trailing bytes kept inline for externalized tool output |
+| `tool_output.inline_max_bytes` | optional stricter ceiling on the default 0.5% context-window threshold; larger tool output is stored under `artifacts/sessions/<session-id>/tool-results/` in Agent state and replaced by a stable preview before provider calls, independently of compaction |
+| `tool_output.preview_head_bytes` | optional leading-byte preview ceiling; omitted head and tail limits split the effective inline budget evenly |
+| `tool_output.preview_tail_bytes` | optional trailing-byte preview ceiling; the combined preview never exceeds the effective inline budget |
 
 YAML resolution order (later wins) is `defaults` <
 `~/.juex/juex.yaml` < a canonically distinct `$JUEX_HOME/juex.yaml` <
@@ -2568,6 +2560,13 @@ messages after the compact marker. Large user inputs and tool results are
 materialized to `sessions/<session-id>/user-inputs/` and
 `sessions/<session-id>/tool-results/` relative to that root; provider-visible messages keep a
 stable replacement with path, byte count, SHA-256, and head/tail preview.
+For each selected model candidate, the configured context window determines the
+effective budgets: automatic compaction triggers at 70%, the complete summary
+request envelope fits within 80%, summary output and Tool Result limits each use
+0.5%, and recent-tail retention uses 5/64. Positive absolute compaction and tool
+output values are stricter ceilings; `reserve_tokens` may only move the trigger
+earlier. Candidate fallback recomputes every derived budget for the fallback
+model's context window.
 Compaction summary input keeps readable reasoning summaries when providers
 expose them, but encrypted/redacted reasoning payloads are represented only as
 small metadata placeholders; those blobs are replay material for compatible
@@ -2581,11 +2580,13 @@ window and checkpoints a fresh Request Epoch. Request fitting lowers the
 existing block serialization cap and removes the oldest complete assistant Tool
 Call plus matching user-role Tool Result batches atomically until the estimate
 fits. It preserves every user-authored message and never changes the durable
-transcript or compact selection metadata. Generic provider failures advance
+transcript or compact selection metadata. If the irreducible request still
+exceeds a candidate's summary-request envelope, the runtime skips that candidate
+without dispatching a Provider request. Generic provider failures advance
 directly through the chain. The first candidate anywhere in the chain that
 returns no text or a max-token-truncated summary receives one semantic retry
 with up to twice its summary output budget; the retry budget remains capped so
-the fixed prompt and requested output fit the compaction trigger budget. The
+the fixed prompt and requested output fit the summary-request budget. The
 runtime fails compaction only after the available chain and that bounded retry
 are exhausted, without adding a provider-visible `model_change` message.
 A canceled or expired parent context stops before fallback and does not emit a

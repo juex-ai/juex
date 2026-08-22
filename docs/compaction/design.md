@@ -31,7 +31,8 @@ Implemented:
   model-health cooldown and half-open reservations, and refits each request to
   the selected candidate's context window. Candidate-specific fitting removes
   only the oldest complete Tool Call/Tool Result batches and preserves all
-  user-authored messages.
+  user-authored messages; an irreducible oversized request skips that candidate
+  before Provider dispatch.
 
 Still future work:
 
@@ -137,11 +138,13 @@ compaction:
   user_input_inline_max_bytes: 65536
   user_input_preview_head_bytes: 8192
   user_input_preview_tail_bytes: 8192
-tool_output:
-  inline_max_bytes: 32768
-  preview_head_bytes: 8192
-  preview_tail_bytes: 8192
 ```
+
+The context-window-derived defaults are a 70% automatic-compaction trigger, an
+80% complete summary request envelope, 0.5% each for summary output, summary
+Tool Result serialization, and ordinary Tool Result projection, plus 5/64 for
+the retained recent tail. Positive absolute values are stricter ceilings, while
+`reserve_tokens` may only move the trigger earlier.
 
 Rationale:
 
@@ -163,8 +166,10 @@ V2 extends this with a projection pass:
 // internal/runtime/compaction_policy.go and tool_output_policy.go
 type compactionPolicy struct {
     Enabled                   bool
+    ContextWindow             int
     ReserveTokens             int
     KeepRecentTokens          int
+    SummaryRequestTokens      int
     SummaryMaxTokens          int
     ToolResultMaxChars        int
     UserInputInlineMaxBytes   int
@@ -308,7 +313,8 @@ type CompactWindow struct {
 Trigger points:
 
 - Pre-turn: projected active context plus incoming message would exceed
-  `context_window - reserve_tokens`.
+  70% of the selected candidate's configured context window, or the earlier
+  threshold implied by an explicit `reserve_tokens` value.
 - Mid-turn: before each provider call, after draining pending input and tool
   results, if growth after baseline exceeds the trigger.
 - Overflow retry: if the provider returns a context overflow error.

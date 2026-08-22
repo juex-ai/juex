@@ -26,23 +26,44 @@ func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult
 	}
 }
 
-func TestBuildCompactionSummaryRequest_TruncatesTextAndToolUseInput(t *testing.T) {
+func TestBuildCompactionSummaryRequest_PreservesAssistantTextAndTruncatesToolUseInput(t *testing.T) {
+	assistantText := "HEAD-" + strings.Repeat("t", 40) + "-TAIL"
+	reasoningText := "REASON-" + strings.Repeat("r", 40) + "-END"
 	input := []llm.Message{
-		{ID: "large", Role: llm.RoleUser, Blocks: []llm.Block{
-			{Type: llm.BlockText, Text: "HEAD-" + strings.Repeat("t", 40) + "-TAIL"},
+		{ID: "large", Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockText, Text: assistantText},
+			{Type: llm.BlockReasoning, Text: reasoningText},
 			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "write", Input: map[string]any{"payload": strings.Repeat("x", 50)}},
 		}},
 	}
 	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 10}, "")
 	body := hist[0].FirstText()
-	if !strings.Contains(body, "HEAD-") || !strings.Contains(body, "-TAIL") || !strings.Contains(body, "omitted") {
-		t.Fatalf("text did not preserve a bounded head and tail:\n%s", body)
+	if !strings.Contains(body, assistantText) || strings.Contains(body, "bytes omitted") {
+		t.Fatalf("assistant text was truncated by the tool-result budget:\n%s", body)
+	}
+	if !strings.Contains(body, reasoningText) {
+		t.Fatalf("assistant reasoning was truncated by the tool-result budget:\n%s", body)
 	}
 	if !strings.Contains(body, "tool_use tu1 write:") || !strings.Contains(body, "truncated") {
 		t.Fatalf("tool use input was not truncated:\n%s", body)
 	}
 	if strings.Contains(body, strings.Repeat("x", 30)) {
 		t.Fatalf("tool use input leaked untruncated payload:\n%s", body)
+	}
+}
+
+func TestBuildCompactionSummaryRequest_DoesNotApplyToolResultLimitToUserText(t *testing.T) {
+	userText := "HEAD-" + strings.Repeat("u", 40) + "-TAIL"
+	input := []llm.Message{{
+		ID:     "user-large",
+		Role:   llm.RoleUser,
+		Blocks: []llm.Block{{Type: llm.BlockText, Text: userText}},
+	}}
+
+	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 10}, "")
+	body := hist[0].FirstText()
+	if !strings.Contains(body, userText) || strings.Contains(body, "bytes omitted") {
+		t.Fatalf("user text was truncated by the tool-result budget:\n%s", body)
 	}
 }
 
@@ -252,13 +273,13 @@ func summaryGoalFromBody(t *testing.T, body string) SummaryGoal {
 	return goal
 }
 
-func TestCompactionSummaryRequestTokenLimitCapsLargeWindows(t *testing.T) {
+func TestCompactionSummaryRequestTokenLimitUsesCandidateWindowRatio(t *testing.T) {
 	policy := Policy{
-		TriggerTokens:    239616,
-		SummaryMaxTokens: 2048,
+		SummaryRequestTokens: 204_800,
+		SummaryMaxTokens:     1_280,
 	}
-	if got := CompactionSummaryRequestTokenLimit(policy); got != 16000 {
-		t.Fatalf("limit = %d, want 16000", got)
+	if got := CompactionSummaryRequestTokenLimit(policy); got != 203_520 {
+		t.Fatalf("limit = %d, want 203520", got)
 	}
 }
 

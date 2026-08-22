@@ -58,12 +58,15 @@ type Engine struct {
 	Provider          llm.Provider
 	SummaryProvider   llm.Provider
 	SummaryProvenance provenance.SafeProvider
-	ModelCandidates   []ModelCandidate
-	ModelHealth       *llm.ModelHealth
-	Tools             *tools.Registry
-	RuntimeModules    *runtimemodule.Set
-	RuntimeContext    runtimemodule.RuntimeContext
-	Bus               *events.Bus
+	// SummaryContextWindow is the dedicated compaction summary model's context
+	// window. Zero keeps the serving candidate window as the fallback.
+	SummaryContextWindow int
+	ModelCandidates      []ModelCandidate
+	ModelHealth          *llm.ModelHealth
+	Tools                *tools.Registry
+	RuntimeModules       *runtimemodule.Set
+	RuntimeContext       runtimemodule.RuntimeContext
+	Bus                  *events.Bus
 	// Session, Prompt, and PendingInputQueue seed the first session runtime
 	// bundle during bootstrap. Concurrent production code must use the
 	// synchronized session-runtime methods after publication instead of reading
@@ -655,11 +658,12 @@ type providerTurnResult struct {
 }
 
 type recordedProviderResponse struct {
-	finalText  string
-	stopReason llm.StopReason
-	toolCalls  []llm.Block
-	iter       int
-	messageID  string
+	finalText     string
+	stopReason    llm.StopReason
+	toolCalls     []llm.Block
+	iter          int
+	messageID     string
+	contextWindow int
 }
 
 func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, userMsg llm.Message) (preparedTurnContext, error) {
@@ -1065,15 +1069,16 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 
 	toolCalls := msg.ToolCalls()
 	return recordedProviderResponse{
-		finalText:  llm.FormatBlocksForTerminal(msg.Blocks),
-		stopReason: resp.StopReason,
-		toolCalls:  toolCalls,
-		iter:       request.iter,
-		messageID:  msg.ID,
+		finalText:     llm.FormatBlocksForTerminal(msg.Blocks),
+		stopReason:    resp.StopReason,
+		toolCalls:     toolCalls,
+		iter:          request.iter,
+		messageID:     msg.ID,
+		contextWindow: candidateContextWindow(result.candidate, e.ContextWindow),
 	}, nil
 }
 
-func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, policy compactionPolicy, recorded recordedProviderResponse) error {
+func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, recorded recordedProviderResponse) error {
 	if err := e.emit(events.Event{Type: TurnPhaseType, TurnID: turnID, Payload: TurnPhasePayload{Phase: TurnPhaseToolBatch}}); err != nil {
 		return fmt.Errorf("commit tool batch phase: %w", err)
 	}
@@ -1103,6 +1108,11 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, polic
 		Kind:   llm.MessageKindToolResult,
 		Blocks: results,
 	}
+	contextWindow := recorded.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = e.ContextWindow
+	}
+	policy := effectiveCompactionPolicy(e.Compaction, contextWindow)
 	projectedToolResultMsg, projection, err := e.projectMessageLocked(toolResultMsg, policy)
 	if err != nil {
 		return errors.Join(fatalErr, err)

@@ -159,6 +159,7 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 		Session:        sess,
 		Prompt:         capabilityPromptBuilder(workDir, sess),
 		WorkDir:        workDir,
+		ArtifactDir:    filepath.Join(workDir, ".juex", "artifacts"),
 		RuntimeContext: runtimemodule.RuntimeContext{WorkDir: workDir},
 	}
 	if hookRunner != nil {

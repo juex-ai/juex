@@ -68,11 +68,30 @@ func (c Config) ProviderSelection() ProviderSelection {
 }
 
 func (c Config) ProviderSelectionForModelRef(ref string) (ProviderSelection, error) {
-	cfg, err := c.configForModelRef(ref)
+	resolved, err := c.ResolvedModelForRef(ref)
 	if err != nil {
 		return ProviderSelection{}, err
 	}
-	return cfg.ProviderSelection(), nil
+	return resolved.Selection, nil
+}
+
+// ResolvedModelForRef returns the effective provider selection and model
+// limits for a model ref that is not necessarily part of the serving chain.
+func (c Config) ResolvedModelForRef(ref string) (ResolvedModel, error) {
+	canonical, err := ParseModelRef(ref)
+	if err != nil {
+		return ResolvedModel{}, err
+	}
+	cfg, err := c.configForModelRef(canonical.String())
+	if err != nil {
+		return ResolvedModel{}, err
+	}
+	return ResolvedModel{
+		Ref:             canonical.String(),
+		Selection:       cfg.ProviderSelection(),
+		ContextWindow:   cfg.ContextWindow,
+		MaxOutputTokens: cfg.MaxOutputTokens,
+	}, nil
 }
 
 func (c Config) configForModelRef(ref string) (Config, error) {

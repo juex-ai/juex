@@ -42,17 +42,23 @@ func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult
 	}
 }
 
-func TestBuildCompactionSummaryRequest_TruncatesTextAndToolUseInput(t *testing.T) {
+func TestBuildCompactionSummaryRequest_PreservesAssistantTextAndTruncatesToolUseInput(t *testing.T) {
+	assistantText := "HEAD-" + strings.Repeat("t", 40) + "-TAIL"
+	reasoningText := "REASON-" + strings.Repeat("r", 40) + "-END"
 	input := []llm.Message{
-		{ID: "large", Role: llm.RoleUser, Blocks: []llm.Block{
-			{Type: llm.BlockText, Text: "HEAD-" + strings.Repeat("t", 40) + "-TAIL"},
+		{ID: "large", Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockText, Text: assistantText},
+			{Type: llm.BlockReasoning, Text: reasoningText},
 			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "write", Input: map[string]any{"payload": strings.Repeat("x", 50)}},
 		}},
 	}
 	_, hist := buildCompactionSummaryRequest("", llm.Message{}, input, compactionSummaryState{}, compactionPolicy{ToolResultMaxChars: 10}, "")
 	body := hist[0].FirstText()
-	if !strings.Contains(body, "HEAD-") || !strings.Contains(body, "-TAIL") || !strings.Contains(body, "omitted") {
-		t.Fatalf("text did not preserve a bounded head and tail:\n%s", body)
+	if !strings.Contains(body, assistantText) || strings.Contains(body, "bytes omitted") {
+		t.Fatalf("assistant text was truncated by the tool-result budget:\n%s", body)
+	}
+	if !strings.Contains(body, reasoningText) {
+		t.Fatalf("assistant reasoning was truncated by the tool-result budget:\n%s", body)
 	}
 	if !strings.Contains(body, "tool_use tu1 write:") || !strings.Contains(body, "truncated") {
 		t.Fatalf("tool use input was not truncated:\n%s", body)
@@ -171,13 +177,13 @@ func TestBuildCompactionSummaryRequest_BoundsOversizedTranscript(t *testing.T) {
 	}
 }
 
-func TestCompactionSummaryRequestTokenLimitCapsLargeWindows(t *testing.T) {
+func TestCompactionSummaryRequestTokenLimitUsesCandidateWindowRatio(t *testing.T) {
 	policy := compactionPolicy{
-		TriggerTokens:    239616,
-		SummaryMaxTokens: 2048,
+		SummaryRequestTokens: 204800,
+		SummaryMaxTokens:     1280,
 	}
-	if got := compactionSummaryRequestTokenLimit(policy); got != 16000 {
-		t.Fatalf("limit = %d, want 16000", got)
+	if got := compactionSummaryRequestTokenLimit(policy); got != 203520 {
+		t.Fatalf("limit = %d, want 203520", got)
 	}
 }
 

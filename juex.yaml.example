@@ -191,17 +191,14 @@ compaction:
   enabled: true
   # Optional persistent focus applied before per-request and PreCompact hook instructions.
   # instructions: Preserve exact release gates and unfinished Notes items.
-  reserve_tokens: 16384
-  keep_recent_tokens: 20000
-  summary_max_tokens: 2048
-  tool_result_max_chars: 2000
+  # Trigger, retention, summary, and Tool Result budgets scale from each
+  # candidate model's context_window. The corresponding absolute settings are
+  # optional stricter ceilings; reserve_tokens can only trigger earlier.
   user_input_inline_max_bytes: 65536
   user_input_preview_head_bytes: 8192
   user_input_preview_tail_bytes: 8192
   max_auto_failures: 3
 
 # Always-on provider-context projection for large tool results.
-tool_output:
-  inline_max_bytes: 32768
-  preview_head_bytes: 8192
-  preview_tail_bytes: 8192
+# Defaults scale from the selected model's context_window; these fields are
+# optional stricter ceilings.

@@ -7,9 +7,5 @@ type ToolOutputPolicy struct {
 }
 
 func DefaultToolOutputPolicy() ToolOutputPolicy {
-	return ToolOutputPolicy{
-		InlineMaxBytes:   32768,
-		PreviewHeadBytes: 8192,
-		PreviewTailBytes: 8192,
-	}
+	return ToolOutputPolicy{}
 }
