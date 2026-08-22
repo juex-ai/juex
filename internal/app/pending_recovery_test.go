@@ -391,6 +391,66 @@ func TestAppExternalDeliveryTransfersToAppAfterRecoveryWaitTimeout(t *testing.T)
 	}
 }
 
+func TestAppExternalDeliveryRetriesDurableInputAfterLiveQueueFull(t *testing.T) {
+	dir := t.TempDir()
+	provider := newBlockingAppProvider()
+	a, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+	a.Engine.MaxPendingInputs = 1
+
+	turnDone := make(chan error, 1)
+	go func() {
+		_, err := a.Run(context.Background(), "active turn")
+		turnDone <- err
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("active turn did not reach provider")
+	}
+
+	first := testObservationRecord("obs-fills-live-queue")
+	firstOutcome, err := a.DeliverObservation(context.Background(), first)
+	if err != nil || firstOutcome.State != observable.ObservationStateQueued {
+		t.Fatalf("first delivery = %+v, %v, want queued", firstOutcome, err)
+	}
+	second := testObservationRecord("obs-overflows-live-queue")
+	secondOutcome, err := a.DeliverObservation(context.Background(), second)
+	if !errors.Is(err, runtime.ErrPendingInputQueueFull) {
+		t.Fatalf("second delivery error = %v, want ErrPendingInputQueueFull", err)
+	}
+	if secondOutcome.State != observable.ObservationStateQueued || secondOutcome.PendingInputID != observationPendingInputID(second) {
+		t.Fatalf("second delivery = %+v, want durable queued outcome", secondOutcome)
+	}
+
+	close(provider.release)
+	select {
+	case err := <-turnDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("active turn did not finish after provider release")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		pending, ok, stateErr := a.Engine.PersistedPendingMessage(secondOutcome.PendingInputID)
+		if stateErr != nil {
+			t.Fatal(stateErr)
+		}
+		if ok && pending.State == runtime.PendingInputStateProcessed && a.Session.HasMessageID(pending.MessageID) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("overflow input = %+v ok=%v, want App-owned retry to process it", pending, ok)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestAppDeliverObservationReportsTranscriptConsumptionDespiteTurnError(t *testing.T) {
 	dir := t.TempDir()
 	wantErr := errors.New("provider unavailable")

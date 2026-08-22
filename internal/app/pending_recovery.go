@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
@@ -28,7 +29,11 @@ func (a *App) deliverExternalInputLocked(ctx context.Context, message llm.Messag
 		a.handoffPersistedInputAfterRecovery(record)
 		return externalInputDelivery{Record: record, Queued: true}, err
 	}
-	return a.resumePersistedInputLocked(ctx, record)
+	delivery, err := a.resumePersistedInputLocked(ctx, record)
+	if shouldRetryPersistedInputHandoff(delivery, err) {
+		a.handoffPersistedInputAfterRecovery(record)
+	}
+	return delivery, err
 }
 
 // resumePersistedInputLocked classifies delivery from the Framework-owned
@@ -192,17 +197,47 @@ func (a *App) handoffPersistedInputAfterRecovery(record runtime.PendingInputReco
 			a.pendingHandoffMu.Unlock()
 			a.pendingHandoffs.Done()
 		}()
-		if err := a.waitPendingInputRecoveryContext(a.ctx); err != nil {
-			return
-		}
-		a.sessionMu.RLock()
-		_, err := a.resumePersistedInputLocked(a.ctx, record)
-		a.sessionMu.RUnlock()
-		if err != nil && a.ctx.Err() == nil && !errors.Is(err, context.Canceled) && a.stderr != nil {
-			fmt.Fprintf(a.stderr, "juex: warning: resume handed-off pending input %q: %v\n", record.ID, err)
+		delay := 25 * time.Millisecond
+		for {
+			if err := a.waitPendingInputRecoveryContext(a.ctx); err != nil {
+				return
+			}
+			a.sessionMu.RLock()
+			delivery, err := a.resumePersistedInputLocked(a.ctx, record)
+			a.sessionMu.RUnlock()
+			if !shouldRetryPersistedInputHandoff(delivery, err) {
+				if err != nil && a.ctx.Err() == nil && !errors.Is(err, context.Canceled) && a.stderr != nil {
+					fmt.Fprintf(a.stderr, "juex: warning: resume handed-off pending input %q: %v\n", record.ID, err)
+				}
+				return
+			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-a.ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			if delay < time.Second {
+				delay *= 2
+				if delay > time.Second {
+					delay = time.Second
+				}
+			}
 		}
 	}()
 	return true
+}
+
+func shouldRetryPersistedInputHandoff(delivery externalInputDelivery, err error) bool {
+	if !delivery.Queued || err == nil {
+		return false
+	}
+	return errors.Is(err, runtime.ErrPendingInputQueueFull) ||
+		errors.Is(err, runtime.ErrNoActiveTurn) ||
+		errors.Is(err, errTurnAdmissionChanged) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded)
 }
 
 func (a *App) waitPendingInputRecovery() error {
