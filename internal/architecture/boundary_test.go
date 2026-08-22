@@ -344,10 +344,11 @@ type AppAlias = App
 var appFactory = func(manager *mcp.Manager, registry *tools.Registry) *App {
 	return &AppAlias{closureResource: manager, closureRegistry: registry}
 }
+func appIdentity(target *App) *App { return target }
 func (application *App) bind(manager *mcp.Manager, registry *tools.Registry) {
 	target := &application
 	converted := (*App)(*target)
-	converted.resource = manager
+	appIdentity(converted).resource = manager
 	func(registryTarget *App) {
 		registryTarget.registry = registry
 	}(application)
@@ -422,10 +423,12 @@ func (application *App) bindCompositeClosure(manager *mcp.Manager, registry *too
 	alias.bind(application, manager, registry)
 }
 func (application *App) bindCollection(manager *mcp.Manager, registry *tools.Registry) {
-	targets := make([]*App, 1)
-	targets[0] = application
+	other := &App{}
+	targets := []*App{application, other}
 	targets[0].collectionResource = manager
 	targets[0].collectionRegistry = registry
+	targets[1].correlatedResource = manager
+	targets[1].correlatedRegistry = registry
 }
 func (application *App) bypass() {
 	_ = application.resource.Close()
@@ -10287,7 +10290,7 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 						return false
 					case *ast.AssignStmt:
 						for index, left := range statement.Lhs {
-							trackAppReceiverAlias(left, statement.Rhs, index, receivers, currentImports, *types)
+							trackAppReceiverAlias(left, statement.Rhs, index, receivers, currentImports, values, *types)
 							indexAppReceiverFieldAssignment(left, statement.Rhs, index, receivers, currentImports, values, resources, types)
 							trackCompositeFunctionTypes(values, activeFunctionKey, left, statement.Rhs, index, currentImports, *types)
 							if localType := localFunctionType(activeFunctionKey, left, statement.Rhs, index); localType != "" {
@@ -10302,7 +10305,7 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 						for _, raw := range general.Specs {
 							spec := raw.(*ast.ValueSpec)
 							for index, name := range spec.Names {
-								trackAppReceiverAlias(name, spec.Values, index, receivers, currentImports, *types)
+								trackAppReceiverAlias(name, spec.Values, index, receivers, currentImports, values, *types)
 								trackCompositeFunctionTypes(values, activeFunctionKey, name, spec.Values, index, currentImports, *types)
 								typeName := canonicalType(spec.Type, currentImports)
 								paths := cleanupPathsForType(typeName, *types, nil)
@@ -10351,7 +10354,7 @@ func seedAppFieldArguments(call *ast.CallExpr, parameters *ast.FieldList, import
 			arguments := callArgumentsForParameterAt(call, parameterIndex, variadicIndex, variadic, imports)
 			if !variadic || parameterIndex != variadicIndex {
 				for _, argument := range arguments {
-					if isAppReceiverAliasExpression(argument, receivers, imports) {
+					if isAppReceiverAliasExpression(argument, receivers, imports, values, types) {
 						receivers[key] = true
 					}
 				}
@@ -10386,8 +10389,8 @@ func seedAppFieldArguments(call *ast.CallExpr, parameters *ast.FieldList, import
 	}
 }
 
-func isAppReceiverAliasExpression(expression ast.Expr, receivers map[string]bool, imports map[string]string) bool {
-	return receivers[appReceiverExpressionKey(expression, imports)]
+func isAppReceiverAliasExpression(expression ast.Expr, receivers map[string]bool, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
+	return hasAppReceiverAlias(expression, receivers, imports, values, types)
 }
 
 func indexAppCompositeLiteralFields(literal *ast.CompositeLit, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types *compositionTypeIndex) {
@@ -10450,17 +10453,17 @@ func seedAppReceiverFieldState(values map[string]string, resources map[string]ma
 }
 
 func indexAppReceiverFieldAssignment(left ast.Expr, right []ast.Expr, index int, receivers map[string]bool, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types *compositionTypeIndex) {
-	name, indexed := assignmentBinding(left)
-	if name == nil {
-		return
-	}
 	typeName := assignedToolExpressionType(right, index, imports, values, *types)
 	paths := assignedCleanupPaths(right, index, imports, values, resources, *types)
-	if field := directAppReceiverField(left, receivers, imports); field != "" {
+	if field := directAppReceiverField(left, receivers, imports, values, *types); field != "" {
 		setMayValueType(types.appFieldValues, field, typeName, *types)
 		if paths != nil {
 			types.appFieldResources[field] = mergeCleanupPaths(types.appFieldResources[field], paths)
 		}
+	}
+	name, indexed := assignmentBinding(left)
+	if name == nil {
+		return
 	}
 	key := bindingKey(name)
 	setMayValueType(values, assignmentValueKey(left), typeName, *types)
@@ -10473,13 +10476,13 @@ func indexAppReceiverFieldAssignment(left ast.Expr, right []ast.Expr, index int,
 	}
 }
 
-func directAppReceiverField(expression ast.Expr, receivers map[string]bool, imports map[string]string) string {
+func directAppReceiverField(expression ast.Expr, receivers map[string]bool, imports map[string]string, values map[string]string, types compositionTypeIndex) string {
 	for {
 		switch value := expression.(type) {
 		case *ast.ParenExpr:
 			expression = value.X
 		case *ast.SelectorExpr:
-			if receivers[appReceiverExpressionKey(value.X, imports)] {
+			if hasAppReceiverAlias(value.X, receivers, imports, values, types) {
 				return value.Sel.Name
 			}
 			return ""
@@ -10489,8 +10492,8 @@ func directAppReceiverField(expression ast.Expr, receivers map[string]bool, impo
 	}
 }
 
-func trackAppReceiverAlias(left ast.Expr, right []ast.Expr, index int, receivers map[string]bool, imports map[string]string, types compositionTypeIndex) {
-	target := assignmentValueKey(left)
+func trackAppReceiverAlias(left ast.Expr, right []ast.Expr, index int, receivers map[string]bool, imports map[string]string, values map[string]string, types compositionTypeIndex) {
+	target := appReceiverExpressionKey(left, imports, types)
 	if target == "" {
 		return
 	}
@@ -10498,8 +10501,8 @@ func trackAppReceiverAlias(left ast.Expr, right []ast.Expr, index int, receivers
 	if assigned == nil {
 		return
 	}
-	source := appReceiverExpressionKey(assigned, imports)
-	if receivers[source] {
+	source := appReceiverExpressionKey(assigned, imports, types)
+	if hasAppReceiverAlias(assigned, receivers, imports, values, types) {
 		receivers[target] = true
 	}
 	if source != "" && source != target {
@@ -10509,14 +10512,18 @@ func trackAppReceiverAlias(left ast.Expr, right []ast.Expr, index int, receivers
 			}
 		}
 	}
-	for _, embedded := range compositeValueExpressions(assigned, "", imports, types) {
-		if receivers[appReceiverExpressionKey(embedded.expression, imports)] {
+	for _, embedded := range appReceiverCompositeValueExpressions(assigned, "", imports, types) {
+		if hasAppReceiverAlias(embedded.expression, receivers, imports, values, types) {
 			receivers[target+embedded.suffix] = true
 		}
 	}
 }
 
-func appReceiverExpressionKey(expression ast.Expr, imports map[string]string) string {
+func appReceiverExpressionKey(expression ast.Expr, imports map[string]string, types compositionTypeIndex) string {
+	return appReceiverExpressionValueKey(expression, imports, types, true)
+}
+
+func appReceiverExpressionValueKey(expression ast.Expr, imports map[string]string, types compositionTypeIndex, precise bool) string {
 	for {
 		switch value := expression.(type) {
 		case *ast.ParenExpr:
@@ -10534,9 +10541,119 @@ func appReceiverExpressionKey(expression ast.Expr, imports map[string]string) st
 			}
 			expression = value.Args[0]
 		default:
-			return assignmentValueKey(expression)
+			return appReceiverValueKey(expression, types, precise)
 		}
 	}
+}
+
+func hasAppReceiverAlias(expression ast.Expr, receivers map[string]bool, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
+	exact := appReceiverExpressionValueKey(expression, imports, types, true)
+	if exact != "" && receivers[exact] {
+		return true
+	}
+	aggregate := appReceiverExpressionValueKey(expression, imports, types, false)
+	if aggregate != "" && aggregate != exact && receivers[aggregate] {
+		return true
+	}
+	for {
+		switch value := expression.(type) {
+		case *ast.ParenExpr:
+			expression = value.X
+		case *ast.StarExpr:
+			expression = value.X
+		case *ast.UnaryExpr:
+			if value.Op != token.AND {
+				return false
+			}
+			expression = value.X
+		case *ast.CallExpr:
+			if len(value.Args) == 1 && isTypeExpression(value.Fun, imports) {
+				expression = value.Args[0]
+				continue
+			}
+			callee := calledFunctionKey(value.Fun, imports, values, types)
+			for parameterIndex := range types.resultParams[callee][0] {
+				for _, argument := range callArgumentsForParameter(value, callee, parameterIndex, imports, types) {
+					if hasAppReceiverAlias(argument, receivers, imports, values, types) {
+						return true
+					}
+				}
+			}
+			return false
+		default:
+			return false
+		}
+	}
+}
+
+func appReceiverValueKey(expression ast.Expr, types compositionTypeIndex, precise bool) string {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if value.Name == "_" {
+			return ""
+		}
+		return bindingKey(value)
+	case *ast.SelectorExpr:
+		prefix := appReceiverValueKey(value.X, types, precise)
+		if prefix == "" {
+			return ""
+		}
+		return prefix + "." + value.Sel.Name
+	case *ast.IndexExpr:
+		prefix := appReceiverValueKey(value.X, types, precise)
+		if prefix == "" {
+			return ""
+		}
+		return prefix + appReceiverIndexSuffix(value.Index, types, precise)
+	case *ast.SliceExpr:
+		return appReceiverValueKey(value.X, types, precise) + "[]"
+	case *ast.ParenExpr:
+		return appReceiverValueKey(value.X, types, precise)
+	case *ast.StarExpr:
+		return appReceiverValueKey(value.X, types, precise)
+	default:
+		return ""
+	}
+}
+
+func appReceiverIndexSuffix(expression ast.Expr, types compositionTypeIndex, precise bool) string {
+	if precise {
+		if value, ok := compositionConstantExpressionInPackage(expression, types.packageConstants); ok {
+			return "[" + value.Kind().String() + ":" + value.ExactString() + "]"
+		}
+	}
+	return "[]"
+}
+
+func appReceiverCompositeValueExpressions(expression ast.Expr, prefix string, imports map[string]string, types compositionTypeIndex) []compositeValueExpression {
+	expression = unwrapCompositeExpression(expression)
+	literal, ok := expression.(*ast.CompositeLit)
+	if !ok {
+		return nil
+	}
+	typeName := canonicalType(literal.Type, imports)
+	fieldOrder, structured := compositeFieldOrder(literal.Type, typeName, imports, types)
+	var result []compositeValueExpression
+	for index, element := range literal.Elts {
+		suffix := fmt.Sprintf("[Int:%d]", index)
+		if pair, ok := element.(*ast.KeyValueExpr); ok {
+			if field, ok := pair.Key.(*ast.Ident); structured && ok {
+				suffix = "." + field.Name
+			} else {
+				suffix = appReceiverIndexSuffix(pair.Key, types, true)
+			}
+			element = pair.Value
+		} else if structured && index < len(fieldOrder) && !strings.HasPrefix(fieldOrder[index], embeddedPrefix) {
+			suffix = "." + fieldOrder[index]
+		}
+		nested := appReceiverCompositeValueExpressions(element, prefix+suffix, imports, types)
+		if len(nested) != 0 {
+			result = append(result, nested...)
+			continue
+		}
+		result = append(result, compositeValueExpression{suffix: prefix + suffix, expression: element})
+	}
+	return result
 }
 
 func packageBindingStateForSources(sources []indexedAppSource, types compositionTypeIndex) (map[string]string, map[string]map[string]bool) {
