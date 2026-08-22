@@ -29,6 +29,27 @@ type cancelAwareRecoveryProvider struct {
 	called chan struct{}
 }
 
+type retryUntilReleasedEventCommitter struct {
+	delegate  events.Committer
+	eventType string
+	err       error
+	release   <-chan struct{}
+	failed    chan struct{}
+	once      sync.Once
+}
+
+func (c *retryUntilReleasedEventCommitter) Commit(event events.Event) (events.Event, error) {
+	if event.Type == c.eventType {
+		select {
+		case <-c.release:
+		default:
+			c.once.Do(func() { close(c.failed) })
+			return events.Event{}, c.err
+		}
+	}
+	return c.delegate.Commit(event)
+}
+
 func (*cancelAwareRecoveryProvider) Name() string { return "cancel-aware-recovery" }
 
 func (p *cancelAwareRecoveryProvider) Complete(ctx context.Context, _ string, _ []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
@@ -530,7 +551,7 @@ func TestAppExternalDeliveryRetriesReplayableAdmissionCommitFailure(t *testing.T
 	}
 }
 
-func TestAppStartupRecoveryTransfersReplayableAdmissionFailureToHandoff(t *testing.T) {
+func TestAppStartupRecoveryRetriesReplayableAdmissionFailure(t *testing.T) {
 	dir := t.TempDir()
 	provider := &recoveryProvider{}
 	a, err := New(recoveryAppOptions(dir, provider))
@@ -567,6 +588,79 @@ func TestAppStartupRecoveryTransfersReplayableAdmissionFailureToHandoff(t *testi
 			t.Fatalf("startup admission input = %+v ok=%v calls=%d, want handoff retry", pending, ok, calls)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestAppStartupRecoveryKeepsBarrierThroughReplayableAdmissionRetry(t *testing.T) {
+	dir := t.TempDir()
+	provider := &recoveryProvider{}
+	a, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(release)
+		}
+		_ = a.CloseAndWait()
+	})
+	record, err := a.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "retry startup admission before session switch"),
+		runtime.PendingInputOptions{ID: "startup-admission-barrier", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := make(chan struct{})
+	a.Bus.SetCommitter(&retryUntilReleasedEventCommitter{
+		delegate:  a.eventSink,
+		eventType: runtime.TurnAdmittedType,
+		err:       errors.New("injected persistent startup admission failure"),
+		release:   release,
+		failed:    failed,
+	})
+	a.startPendingInputRecovery([]runtime.PendingInputRecord{record})
+	recoveryDone := a.pendingRecoveryDone
+
+	select {
+	case <-failed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup recovery did not attempt admission")
+	}
+	select {
+	case <-recoveryDone:
+		t.Fatal("startup recovery barrier closed while replayable admission retry was still pending")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	switchDone := make(chan error, 1)
+	go func() { switchDone <- a.SwitchToNewPrimarySession() }()
+	select {
+	case err := <-switchDone:
+		t.Fatalf("session switch completed while startup admission retry was pending: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	released = true
+	select {
+	case <-recoveryDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup recovery did not finish after admission recovered")
+	}
+	select {
+	case err := <-switchDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("session switch did not continue after startup recovery")
+	}
+	if calls, _ := provider.snapshot(); calls != 1 {
+		t.Fatalf("provider calls = %d, want recovered input processed once before session switch", calls)
 	}
 }
 

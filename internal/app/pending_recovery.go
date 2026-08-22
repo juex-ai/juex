@@ -120,28 +120,51 @@ func (a *App) startPendingInputRecovery(records []runtime.PendingInputRecord) {
 		defer a.pendingRecovery.Done()
 		defer close(done)
 		for _, record := range records {
-			if a.ctx.Err() != nil {
-				return
-			}
 			if record.ID == "" {
 				continue
 			}
-			a.sessionMu.RLock()
-			delivery, err := a.resumePersistedInputLocked(a.ctx, record)
-			a.sessionMu.RUnlock()
-			handedOff := false
-			if shouldRetryPersistedInputHandoff(delivery, err) {
-				handedOff = a.handoffPersistedInputAfterRecovery(record)
-			}
+			delivery, err := a.resumePersistedInputDuringRecovery(record)
 			inert := pendingRecoveryRecordInert(delivery.Record)
-			if err != nil && !handedOff && !inert && a.ctx.Err() == nil && !errors.Is(err, context.Canceled) && a.stderr != nil {
+			if err != nil && !inert && a.ctx.Err() == nil && !errors.Is(err, context.Canceled) && a.stderr != nil {
 				fmt.Fprintf(a.stderr, "juex: warning: resume pending input %q: %v\n", record.ID, err)
 			}
-			if handedOff || !inert {
+			if !inert {
 				return
 			}
 		}
 	}()
+}
+
+// resumePersistedInputDuringRecovery keeps the startup barrier and its Session
+// ownership until a replayable admission either attaches or becomes inert.
+// A generic handoff cannot own this retry because handoffs wait for the startup
+// barrier and would release newer inputs before they finish.
+func (a *App) resumePersistedInputDuringRecovery(record runtime.PendingInputRecord) (externalInputDelivery, error) {
+	delay := 25 * time.Millisecond
+	for {
+		if err := a.ctx.Err(); err != nil {
+			return externalInputDelivery{Record: record}, err
+		}
+		a.sessionMu.RLock()
+		delivery, err := a.resumePersistedInputLocked(a.ctx, record)
+		a.sessionMu.RUnlock()
+		if !shouldRetryPersistedInputHandoff(delivery, err) {
+			return delivery, err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-a.ctx.Done():
+			timer.Stop()
+			return delivery, a.ctx.Err()
+		case <-timer.C:
+		}
+		if delay < time.Second {
+			delay *= 2
+			if delay > time.Second {
+				delay = time.Second
+			}
+		}
+	}
 }
 
 func pendingRecoveryRecordInert(record runtime.PendingInputRecord) bool {
