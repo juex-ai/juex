@@ -437,7 +437,7 @@ type configImportCacheCommit struct {
 	existed      bool
 }
 
-func commitConfigImportCachesWithWriter(cfg *Config, publish func(string, []byte) error) error {
+func commitConfigImportCachesWithWriter(cfg *Config, publish func(string, []byte) error) (returnErr error) {
 	writes := uniqueConfigImportCacheWrites(cfg.pendingImportCache)
 	cfg.pendingImportCache = nil
 	if len(writes) == 0 {
@@ -452,7 +452,11 @@ func commitConfigImportCachesWithWriter(cfg *Config, publish func(string, []byte
 	if err != nil {
 		return fmt.Errorf("config: lock import cache publication: %w", err)
 	}
-	defer lock.Close()
+	defer func() {
+		if err := lock.Close(); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("config: unlock import cache publication: %w", err))
+		}
+	}()
 
 	commits, err := prepareConfigImportCacheCommits(writes)
 	if err != nil {
