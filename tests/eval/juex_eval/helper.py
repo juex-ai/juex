@@ -203,7 +203,8 @@ def provider_smoke(argv: list[str]) -> int:
         try:
             if not config_path.is_file():
                 raise FileNotFoundError(f"provider config not found: {config_path}")
-            cfg = load_source_config(config_path)
+            cfg, source_layers = load_source_config_with_layers(config_path)
+            validate_source_layers(parsed.juex, source_layers)
             rows, evidence = selection.select(
                 cfg,
                 kind="provider-smoke",
@@ -416,6 +417,13 @@ def print_selection_evidence(evidence: selection.SelectionEvidence) -> None:
 
 
 MatrixRow = selection.Candidate
+
+
+@dataclass(frozen=True)
+class SourceConfigLayer:
+    scope: str
+    imports: tuple[dict[str, Any], ...]
+    declaring: dict[str, Any]
 
 
 @dataclass
@@ -1194,7 +1202,6 @@ def materialize_and_validate_selected_configs(
 ) -> dict[str, pathlib.Path]:
     shutil.rmtree(output_dir, ignore_errors=True)
     output_dir.mkdir(parents=True, mode=0o700)
-    materialize_and_validate_source_config(juex_bin, cfg, output_dir / "merged-source.yaml")
     materialized: dict[str, pathlib.Path] = {}
     for row in rows:
         output = output_dir / f"{safe_ref(row.ref)}.yaml"
@@ -1202,17 +1209,6 @@ def materialize_and_validate_selected_configs(
         validate_source_config(juex_bin, output)
         materialized[row.ref] = output
     return materialized
-
-
-def materialize_and_validate_source_config(
-    juex_bin: str,
-    cfg: dict[str, Any],
-    output_path: pathlib.Path,
-) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(dump_yaml(cfg), encoding="utf-8")
-    output_path.chmod(0o600)
-    validate_source_config(juex_bin, output_path)
 
 
 def selected_provider_model(cfg: dict[str, Any], provider_id: str, model_id: str) -> tuple[dict[str, Any], Any]:
@@ -1247,18 +1243,84 @@ def validate_source_config(juex_bin: str, config_path: pathlib.Path) -> None:
             env["JUEX_HOME"] = str(pathlib.Path(work) / "juex-home")
             command.extend(["--config", str(config_path)])
         command.extend(["doctor", "--offline", "--format", "json"])
-        try:
-            completed = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env=env,
-            )
-            result = json.loads(completed.stdout)
-        except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
-            raise ValueError("provider config validation through Juex failed") from exc
+        result = _run_source_config_validation(command, env)
+    _require_valid_source_config(result)
+
+
+def validate_source_layers(juex_bin: str, layers: list[SourceConfigLayer]) -> None:
+    """Ask Juex to validate materialized source documents at their original scopes."""
+    by_scope: dict[str, SourceConfigLayer] = {}
+    for layer in layers:
+        if layer.scope not in {"default-home", "effective-home", "explicit"}:
+            raise ValueError("provider config has an unsupported source scope")
+        if layer.scope in by_scope:
+            raise ValueError("provider config has duplicate source scopes")
+        by_scope[layer.scope] = layer
+
+    with tempfile.TemporaryDirectory(prefix="juex-eval-source-check.") as work:
+        root = pathlib.Path(work)
+        default_home = root / "home" / ".juex"
+        effective_home = root / "juex-home"
+        explicit_dir = root / "explicit"
+        workspace = root / "work"
+        for directory in (default_home, effective_home, explicit_dir, workspace):
+            directory.mkdir(parents=True, mode=0o700)
+
+        paths = {
+            "default-home": default_home / "juex.yaml",
+            "effective-home": effective_home / "juex.yaml",
+            "explicit": explicit_dir / "juex.yaml",
+        }
+        for scope, layer in by_scope.items():
+            _materialize_source_layer(layer, paths[scope])
+
+        command = [juex_bin, "-C", str(workspace)]
+        env = os.environ.copy()
+        for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
+            env.pop(name, None)
+        if not env.get("CODEX_HOME", "").strip():
+            env["CODEX_HOME"] = str(pathlib.Path.home() / ".codex")
+        env["HOME"] = str(root / "home")
+        env["USERPROFILE"] = str(root / "home")
+        env["JUEX_HOME"] = str(effective_home if "effective-home" in by_scope else default_home)
+        if "explicit" in by_scope:
+            command.extend(["--config", str(paths["explicit"])])
+        command.extend(["doctor", "--offline", "--format", "json"])
+        result = _run_source_config_validation(command, env)
+    _require_valid_source_config(result)
+
+
+def _materialize_source_layer(layer: SourceConfigLayer, config_path: pathlib.Path) -> None:
+    imports: list[dict[str, str]] = []
+    for index, imported in enumerate(layer.imports):
+        imported_path = config_path.parent / "imports" / f"import-{index}.yaml"
+        imported_path.parent.mkdir(parents=True, mode=0o700)
+        imported_path.write_text(dump_yaml(imported), encoding="utf-8")
+        imported_path.chmod(0o600)
+        imports.append({"source": str(imported_path.relative_to(config_path.parent))})
+    declaring = copy.deepcopy(layer.declaring)
+    if imports:
+        declaring = {"imports": imports, **declaring}
+    config_path.write_text(dump_yaml(declaring), encoding="utf-8")
+    config_path.chmod(0o600)
+
+
+def _run_source_config_validation(command: list[str], env: dict[str, str]) -> Any:
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+        return json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise ValueError("provider config validation through Juex failed") from exc
+
+
+def _require_valid_source_config(result: Any) -> None:
     checks = result.get("checks") if isinstance(result, dict) else None
     config_check = next(
         (check for check in checks or [] if isinstance(check, dict) and check.get("name") == "config"),
@@ -1548,6 +1610,12 @@ def load_yaml_file(path: pathlib.Path) -> dict[str, Any]:
 
 def load_source_config(path: pathlib.Path) -> dict[str, Any]:
     """Load the same Home layers plus explicit overlay used by Juex validation."""
+    config, _ = load_source_config_with_layers(path)
+    return config
+
+
+def load_source_config_with_layers(path: pathlib.Path) -> tuple[dict[str, Any], list[SourceConfigLayer]]:
+    """Load selection data and retain the exact source-scope layers for Juex validation."""
     config_path = selection.resolved_path(path)
     default_home, effective_home = provider_home_dirs()
     default_config = default_home / "juex.yaml"
@@ -1561,6 +1629,7 @@ def load_source_config(path: pathlib.Path) -> dict[str, Any]:
     merged: dict[str, Any] = {}
     seen: set[pathlib.Path] = set()
     remote_memo: dict[str, tuple[str, str]] = {}
+    layers: list[SourceConfigLayer] = []
     for source in sources:
         source = selection.resolved_path(source)
         if source in seen:
@@ -1568,28 +1637,46 @@ def load_source_config(path: pathlib.Path) -> dict[str, Any]:
         seen.add(source)
         if source != config_path and not source.is_file():
             continue
-        merged = _merge_source_config(merged, _load_config_document(source, remote_memo))
-    return merged
+        document, imported, declaring = _load_config_document_parts(source, remote_memo)
+        merged = _merge_source_config(merged, document)
+        if source == default_config:
+            scope = "default-home"
+        elif source == effective_config:
+            scope = "effective-home"
+        else:
+            scope = "explicit"
+        layers.append(SourceConfigLayer(scope=scope, imports=tuple(imported), declaring=declaring))
+    return merged, layers
 
 
 def _load_config_document(
     path: pathlib.Path,
     remote_memo: dict[str, tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
+    document, _, _ = _load_config_document_parts(path, remote_memo)
+    return document
+
+
+def _load_config_document_parts(
+    path: pathlib.Path,
+    remote_memo: dict[str, tuple[str, str]] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     if remote_memo is None:
         remote_memo = {}
     main = load_yaml_file(path)
     imported = _config_imports(main, str(path))
     merged: dict[str, Any] = {}
+    imported_values: list[dict[str, Any]] = []
     for index, raw_source in enumerate(imported):
         source, label = _read_config_import(path, raw_source, remote_memo)
         value = _load_yaml_text(source, label)
         if "imports" in value:
             raise ValueError(f"{path} imports[{index}] {label}: nested imports are not supported")
+        imported_values.append(value)
         merged = _merge_source_config(merged, value)
     declaring = copy.deepcopy(main)
     declaring.pop("imports", None)
-    return _merge_source_config(merged, declaring)
+    return _merge_source_config(merged, declaring), imported_values, declaring
 
 
 def _config_imports(value: dict[str, Any], label: str) -> list[str]:
@@ -1745,13 +1832,35 @@ def _safe_remote_import_label(parsed: urllib.parse.SplitResult) -> str:
 
 
 def _load_yaml_text(text: str, label: str) -> dict[str, Any]:
+    node = yaml.compose(text)
+    if node is not None:
+        _reject_duplicate_yaml_keys(node, label, set())
     value = yaml.safe_load(text) or {}
     if not isinstance(value, dict):
         raise ValueError(f"{label} must contain a YAML mapping")
-    node = yaml.compose(text)
     if isinstance(node, yaml.nodes.MappingNode):
         _restore_runtime_string_values(value, node)
     return value
+
+
+def _reject_duplicate_yaml_keys(node: yaml.nodes.Node, label: str, visited: set[int]) -> None:
+    identity = id(node)
+    if identity in visited:
+        return
+    visited.add(identity)
+    if isinstance(node, yaml.nodes.MappingNode):
+        seen: set[tuple[str, str]] = set()
+        for key, value in node.value:
+            if isinstance(key, yaml.nodes.ScalarNode):
+                marker = (key.tag, key.value)
+                if marker in seen:
+                    raise ValueError(f"{label} contains duplicate YAML key {key.value!r}")
+                seen.add(marker)
+            _reject_duplicate_yaml_keys(key, label, visited)
+            _reject_duplicate_yaml_keys(value, label, visited)
+    elif isinstance(node, yaml.nodes.SequenceNode):
+        for item in node.value:
+            _reject_duplicate_yaml_keys(item, label, visited)
 
 
 def provider_home_dirs() -> tuple[pathlib.Path, pathlib.Path]:
@@ -1796,6 +1905,185 @@ def _merge_source_config(base: dict[str, Any], override: dict[str, Any]) -> dict
                 else:
                     environment[environment_name] = copy.deepcopy(environment_value)
             merged[name] = environment
+        elif name == "runtime":
+            merged[name] = _merge_config_mapping(merged.get(name), value)
+        elif name == "compaction":
+            merged[name] = _merge_positive_config_mapping(
+                merged.get(name),
+                value,
+                positive_fields={
+                    "reserve_tokens",
+                    "keep_recent_tokens",
+                    "summary_max_tokens",
+                    "tool_result_max_chars",
+                    "user_input_inline_max_bytes",
+                    "user_input_preview_head_bytes",
+                    "user_input_preview_tail_bytes",
+                    "max_auto_failures",
+                },
+                string_fields={"summary_model"},
+                nullable_fields={"enabled", "instructions"},
+            )
+        elif name == "tool_output":
+            merged[name] = _merge_positive_config_mapping(
+                merged.get(name),
+                value,
+                positive_fields={"inline_max_bytes", "preview_head_bytes", "preview_tail_bytes"},
+            )
+        elif name == "skills":
+            merged[name] = _merge_positive_config_mapping(
+                merged.get(name),
+                value,
+                positive_fields={"prompt_budget_chars"},
+                nullable_fields={"include", "exclude"},
+            )
+        elif name == "extensions":
+            merged[name] = _merge_nullable_config_mapping(merged.get(name), value, {"allow"})
+        elif name == "modules":
+            merged[name] = _merge_modules_config(merged.get(name), value)
+        elif name == "fleet":
+            merged[name] = _merge_fleet_config(merged.get(name), value)
+        elif name == "hooks":
+            merged[name] = _merge_hooks_config(merged.get(name), value)
+        elif name == "sandbox":
+            merged[name] = _merge_sandbox_config(merged.get(name), value)
+        else:
+            merged[name] = copy.deepcopy(value)
+    return merged
+
+
+def _merge_config_mapping(base: Any, override: Any) -> Any:
+    if override is None:
+        return copy.deepcopy(base)
+    if not isinstance(override, dict):
+        return copy.deepcopy(override)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    merged.update(copy.deepcopy(override))
+    return merged
+
+
+def _merge_positive_config_mapping(
+    base: Any,
+    override: Any,
+    *,
+    positive_fields: set[str],
+    string_fields: set[str] | None = None,
+    nullable_fields: set[str] | None = None,
+) -> Any:
+    if override is None:
+        return copy.deepcopy(base)
+    if not isinstance(override, dict):
+        return copy.deepcopy(override)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    string_fields = string_fields or set()
+    nullable_fields = nullable_fields or set()
+    for name, value in override.items():
+        if name in nullable_fields:
+            if value is not None:
+                merged[name] = copy.deepcopy(value)
+        elif name in string_fields:
+            if isinstance(value, str) and value.strip():
+                merged[name] = copy.deepcopy(value)
+            elif not isinstance(value, (str, type(None))):
+                merged[name] = copy.deepcopy(value)
+        elif name in positive_fields:
+            if isinstance(value, int) and not isinstance(value, bool):
+                if value > 0:
+                    merged[name] = value
+            elif value is not None:
+                merged[name] = copy.deepcopy(value)
+        else:
+            merged[name] = copy.deepcopy(value)
+    return merged
+
+
+def _merge_nullable_config_mapping(base: Any, override: Any, nullable_fields: set[str]) -> Any:
+    if override is None:
+        return copy.deepcopy(base)
+    if not isinstance(override, dict):
+        return copy.deepcopy(override)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for name, value in override.items():
+        if name not in nullable_fields or value is not None:
+            merged[name] = copy.deepcopy(value)
+    return merged
+
+
+def _merge_modules_config(base: Any, override: Any) -> Any:
+    if override is None:
+        return copy.deepcopy(base)
+    if not isinstance(override, dict):
+        return copy.deepcopy(override)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for module_id, settings in override.items():
+        if not isinstance(settings, dict):
+            merged[module_id] = copy.deepcopy(settings)
+            continue
+        existing = merged.get(module_id)
+        module = copy.deepcopy(existing) if isinstance(existing, dict) else {}
+        if settings.get("enabled") is not None:
+            module["enabled"] = copy.deepcopy(settings["enabled"])
+        for field, value in settings.items():
+            if field != "enabled":
+                module[field] = copy.deepcopy(value)
+        merged[module_id] = module
+    return merged
+
+
+def _merge_fleet_config(base: Any, override: Any) -> Any:
+    if override is None:
+        return copy.deepcopy(base)
+    if not isinstance(override, dict):
+        return copy.deepcopy(override)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for name, value in override.items():
+        if name == "addr" and isinstance(value, str) and not value.strip():
+            continue
+        if name == "unsafe_bind_any" and value is None:
+            continue
+        merged[name] = copy.deepcopy(value)
+    return merged
+
+
+def _merge_hooks_config(base: Any, override: Any) -> Any:
+    if override is None:
+        return copy.deepcopy(base)
+    if not isinstance(override, dict):
+        return copy.deepcopy(override)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for name, value in override.items():
+        if name == "commands" and isinstance(value, list):
+            existing = merged.get(name)
+            merged[name] = [*(existing if isinstance(existing, list) else []), *copy.deepcopy(value)]
+        else:
+            merged[name] = copy.deepcopy(value)
+    return merged
+
+
+def _merge_sandbox_config(base: Any, override: Any) -> Any:
+    if not isinstance(override, dict):
+        return copy.deepcopy(override)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for name, value in override.items():
+        if name == "file_system" and isinstance(value, dict):
+            file_system = copy.deepcopy(merged.get(name)) if isinstance(merged.get(name), dict) else {}
+            for field, field_value in value.items():
+                if field == "blocked_paths" and isinstance(field_value, list):
+                    existing = file_system.get(field)
+                    if field_value:
+                        file_system[field] = [
+                            *(existing if isinstance(existing, list) else []),
+                            *copy.deepcopy(field_value),
+                        ]
+                elif field == "outside_workspace" and isinstance(field_value, str) and not field_value.strip():
+                    continue
+                else:
+                    file_system[field] = copy.deepcopy(field_value)
+            merged[name] = file_system
+        elif name == "network" and isinstance(value, dict):
+            merged[name] = _merge_nullable_config_mapping(merged.get(name), value, {"enabled"})
+        elif name == "enabled" and value is None:
+            continue
         else:
             merged[name] = copy.deepcopy(value)
     return merged

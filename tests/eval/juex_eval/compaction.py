@@ -105,13 +105,8 @@ def run(args: argparse.Namespace) -> int:
     try:
         if not config.is_file():
             raise FileNotFoundError(f"Missing provider config: {config}")
-        cfg = helper.load_source_config(config)
-        with tempfile.TemporaryDirectory(prefix="juex-compaction-config-check.") as validation_dir:
-            helper.materialize_and_validate_source_config(
-                args.juex,
-                cfg,
-                pathlib.Path(validation_dir) / "juex.yaml",
-            )
+        cfg, source_layers = helper.load_source_config_with_layers(config)
+        helper.validate_source_layers(args.juex, source_layers)
         candidates, evidence = selection.select(
             cfg,
             kind="compaction",

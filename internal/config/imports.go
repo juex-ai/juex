@@ -460,12 +460,10 @@ func commitConfigImportCachesWithWriterAndLock(
 	publish func(string, []byte) error,
 	lock *homestore.Lock,
 ) (returnErr error) {
-	writes := uniqueConfigImportCacheWrites(cfg.pendingImportCache)
-	cfg.pendingImportCache = nil
-	if lock == nil && len(writes) > 0 {
+	if lock == nil && len(cfg.pendingImportCache) > 0 {
 		lockHome := strings.TrimSpace(cfg.HomeJuexDir)
 		if lockHome == "" {
-			lockHome = filepath.Dir(filepath.Dir(filepath.Dir(writes[0].cachePath)))
+			lockHome = filepath.Dir(filepath.Dir(filepath.Dir(cfg.pendingImportCache[0].cachePath)))
 		}
 		var err error
 		lock, err = homestore.AcquireLock(configImportCacheLockPath(lockHome), homestore.LockWait)
@@ -480,10 +478,15 @@ func commitConfigImportCachesWithWriterAndLock(
 			}
 		}()
 	}
+	return commitConfigImportCachesWhileLocked(cfg, publish)
+}
+
+func commitConfigImportCachesWhileLocked(cfg *Config, publish func(string, []byte) error) error {
+	writes := uniqueConfigImportCacheWrites(cfg.pendingImportCache)
+	cfg.pendingImportCache = nil
 	if len(writes) == 0 {
 		return nil
 	}
-
 	commits, err := prepareConfigImportCacheCommits(writes)
 	if err != nil {
 		return err

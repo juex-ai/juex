@@ -259,6 +259,14 @@ func TestWriteWorkspaceConfigRollsBackWorkspaceWhenImportCachePublicationFails(t
 				if len(cfg.pendingImportCache) != 1 {
 					t.Fatalf("pending import cache records = %d, want 1", len(cfg.pendingImportCache))
 				}
+				unexpectedLock, lockErr := homestore.AcquireLock(configImportCacheLockPath(cfg.HomeJuexDir), homestore.LockTry)
+				if lockErr == nil {
+					_ = unexpectedLock.Close()
+					t.Fatal("workspace config became visible before the import cache lock was held")
+				}
+				if !errors.Is(lockErr, homestore.ErrLockBusy) {
+					t.Fatalf("probe import cache lock: %v", lockErr)
+				}
 				return publishErr
 			})
 			if !errors.Is(err, publishErr) {

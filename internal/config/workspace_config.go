@@ -43,7 +43,11 @@ func validateWorkspaceConfig(content []byte, workDir string) (Config, error) {
 }
 
 func WriteWorkspaceConfig(content []byte, workDir string) (string, error) {
-	return writeWorkspaceConfig(content, workDir, commitConfigImportCaches)
+	return writeWorkspaceConfig(content, workDir, func(cfg *Config) error {
+		return commitConfigImportCachesWhileLocked(cfg, func(path string, data []byte) error {
+			return homestore.WriteFileAtomic(path, data, 0o600, 0o700)
+		})
+	})
 }
 
 func writeWorkspaceConfig(content []byte, workDir string, commitImportCache func(*Config) error) (writtenPath string, returnErr error) {
@@ -69,6 +73,17 @@ func writeWorkspaceConfig(content []byte, workDir string, commitImportCache func
 			returnErr = errors.Join(returnErr, fmt.Errorf("config: unlock workspace config update: %w", err))
 		}
 	}()
+	if len(cfg.pendingImportCache) > 0 {
+		cacheLock, err := homestore.AcquireLock(configImportCacheLockPath(lockHome), homestore.LockWait)
+		if err != nil {
+			return "", fmt.Errorf("config: lock import cache publication: %w", err)
+		}
+		defer func() {
+			if err := cacheLock.Close(); err != nil {
+				returnErr = errors.Join(returnErr, fmt.Errorf("config: unlock import cache publication: %w", err))
+			}
+		}()
+	}
 	snapshot, err := snapshotWorkspaceConfig(path)
 	if err != nil {
 		return "", err
