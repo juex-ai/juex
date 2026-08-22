@@ -1657,6 +1657,8 @@ def _read_remote_config_import(
     opener = urllib.request.build_opener(_ConfigImportRedirectHandler())
     try:
         with opener.open(request, timeout=CONFIG_IMPORT_TIMEOUT_SECONDS) as response:
+            if response.status != 200:
+                raise ValueError(f"remote config import returned HTTP {response.status}")
             data = response.read(CONFIG_IMPORT_MAX_BYTES + 1)
             if len(data) > CONFIG_IMPORT_MAX_BYTES:
                 raise ValueError("remote config import exceeds the one-MiB response limit")

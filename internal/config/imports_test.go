@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/juex-ai/juex/internal/homestore"
 )
 
 func TestConfigImportsPreserveExistingMergeSemantics(t *testing.T) {
@@ -427,6 +430,28 @@ func TestConfigRemoteImportUsesCacheOnlyForRetryableFailures(t *testing.T) {
 	}
 }
 
+func TestConfigRemoteImportRejectsNonRepresentationSuccessStatuses(t *testing.T) {
+	var status atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(int(status.Load()))
+		_, _ = w.Write([]byte("runtime:\n  tool_timeout: 53s\n"))
+	}))
+	defer server.Close()
+
+	mainPath := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, mainPath, "imports:\n  - source: "+server.URL+"/config.yaml\n")
+	for _, code := range []int{http.StatusNoContent, http.StatusPartialContent} {
+		status.Store(int32(code))
+		err := applyYAMLFile(
+			&Config{HomeJuexDir: t.TempDir()},
+			explicitYAMLSource(mainPath),
+		)
+		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("HTTP %d", code)) {
+			t.Fatalf("HTTP %d error = %v", code, err)
+		}
+	}
+}
+
 func TestConfigRemoteImportDoesNotReplaceLKGWithInvalidContent(t *testing.T) {
 	var body atomic.Value
 	body.Store("runtime:\n  tool_timeout: 61s\n")
@@ -731,6 +756,82 @@ func commitImportCacheForTest(t *testing.T, cfg *Config) {
 	t.Helper()
 	if err := commitConfigImportCaches(cfg); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCommitConfigImportCachesPreservesEarlierRecordsWhenLaterWriteFails(t *testing.T) {
+	home := t.TempDir()
+	firstPath := filepath.Join(home, "cache", "config-imports", "first.json")
+	old := configImportCacheRecord{
+		Version:         configImportCacheVersion,
+		Source:          "https://config.example/first.yaml",
+		SourceSHA256:    sourceDigest("https://config.example/first.yaml"),
+		DeclaringSHA256: sourceDigest("first-declarer"),
+		FetchedAt:       time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC),
+		Content:         "runtime:\n  tool_timeout: 41s\n",
+		cachePath:       firstPath,
+	}
+	old.ContentSHA256 = contentDigest([]byte(old.Content))
+	secondPath := filepath.Join(home, "cache", "config-imports", "second.json")
+	secondOld := old
+	secondOld.Source = "https://config.example/second.yaml"
+	secondOld.SourceSHA256 = sourceDigest(secondOld.Source)
+	secondOld.Content = "runtime:\n  tool_timeout: 40s\n"
+	secondOld.ContentSHA256 = contentDigest([]byte(secondOld.Content))
+	secondOld.cachePath = secondPath
+	seed := Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{old, secondOld}}
+	if err := commitConfigImportCaches(&seed); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(firstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondBefore, err := os.ReadFile(secondPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstUpdate := old
+	firstUpdate.Content = "runtime:\n  tool_timeout: 42s\n"
+	firstUpdate.ContentSHA256 = contentDigest([]byte(firstUpdate.Content))
+	secondUpdate := secondOld
+	secondUpdate.Content = "runtime:\n  tool_timeout: 43s\n"
+	secondUpdate.ContentSHA256 = contentDigest([]byte(secondUpdate.Content))
+
+	cfg := Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{firstUpdate, secondUpdate}}
+	writes := 0
+	err = commitConfigImportCachesWithWriter(&cfg, func(path string, data []byte) error {
+		writes++
+		if writes == 2 {
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				return err
+			}
+			return &homestore.AtomicWriteError{
+				Operation: "sync parent directory",
+				Path:      filepath.Dir(path),
+				Replaced:  true,
+				Err:       fmt.Errorf("injected second write failure"),
+			}
+		}
+		return os.WriteFile(path, data, 0o600)
+	})
+	if err == nil {
+		t.Fatal("commitConfigImportCaches() error = nil")
+	}
+	after, err := os.ReadFile(firstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("first cache changed after later write failure:\n%s", after)
+	}
+	secondAfter, err := os.ReadFile(secondPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(secondAfter, secondBefore) {
+		t.Fatalf("second cache changed after its write failure:\n%s", secondAfter)
 	}
 }
 

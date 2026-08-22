@@ -293,7 +293,7 @@ func (l *configImportLoader) loadRemote(declaring yamlConfigSource, parsed *url.
 		}
 		return l.remoteDocument(declaring, safeSource, cache, "fresh", true), nil
 	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+	if resp.StatusCode != http.StatusOK {
 		statusErr := fmt.Errorf("server returned HTTP %d", resp.StatusCode)
 		if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 			return l.staleOrError(declaring, identity, safeSource, cache, cacheErr, statusErr)
@@ -414,24 +414,133 @@ func requireJSONEOF(dec *json.Decoder) error {
 	return errors.New("cache record contains trailing JSON data")
 }
 
-func writeConfigImportCache(record configImportCacheRecord) error {
+func marshalConfigImportCache(record configImportCacheRecord) ([]byte, error) {
 	data, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	data = append(data, '\n')
-	return homestore.WriteFileAtomic(record.cachePath, data, 0o600, 0o700)
+	return data, nil
 }
 
 func commitConfigImportCaches(cfg *Config) error {
-	writes := cfg.pendingImportCache
+	return commitConfigImportCachesWithWriter(cfg, func(path string, data []byte) error {
+		return homestore.WriteFileAtomic(path, data, 0o600, 0o700)
+	})
+}
+
+type configImportCacheCommit struct {
+	record       configImportCacheRecord
+	data         []byte
+	previous     []byte
+	previousMode os.FileMode
+	existed      bool
+}
+
+func commitConfigImportCachesWithWriter(cfg *Config, publish func(string, []byte) error) error {
+	writes := uniqueConfigImportCacheWrites(cfg.pendingImportCache)
 	cfg.pendingImportCache = nil
-	for _, record := range writes {
-		if err := writeConfigImportCache(record); err != nil {
-			return fmt.Errorf("config: cache import %s: %w", record.Source, err)
+	if len(writes) == 0 {
+		return nil
+	}
+
+	lockHome := strings.TrimSpace(cfg.HomeJuexDir)
+	if lockHome == "" {
+		lockHome = filepath.Dir(filepath.Dir(filepath.Dir(writes[0].cachePath)))
+	}
+	lock, err := homestore.AcquireLock(filepath.Join(lockHome, ".locks", "config-imports-cache.lock"), homestore.LockWait)
+	if err != nil {
+		return fmt.Errorf("config: lock import cache publication: %w", err)
+	}
+	defer lock.Close()
+
+	commits, err := prepareConfigImportCacheCommits(writes)
+	if err != nil {
+		return err
+	}
+	for index, commit := range commits {
+		if err := publish(commit.record.cachePath, commit.data); err != nil {
+			rollbackCount := index
+			if homestore.ReplacementOccurred(err) {
+				rollbackCount++
+			}
+			rollbackErr := rollbackConfigImportCacheCommits(commits[:rollbackCount])
+			return errors.Join(
+				fmt.Errorf("config: cache import %s: %w", commit.record.Source, err),
+				rollbackErr,
+			)
 		}
 	}
 	return nil
+}
+
+func uniqueConfigImportCacheWrites(writes []configImportCacheRecord) []configImportCacheRecord {
+	unique := make([]configImportCacheRecord, 0, len(writes))
+	indices := make(map[string]int, len(writes))
+	for _, record := range writes {
+		if index, ok := indices[record.cachePath]; ok {
+			unique[index] = record
+			continue
+		}
+		indices[record.cachePath] = len(unique)
+		unique = append(unique, record)
+	}
+	return unique
+}
+
+func prepareConfigImportCacheCommits(writes []configImportCacheRecord) ([]configImportCacheCommit, error) {
+	commits := make([]configImportCacheCommit, 0, len(writes))
+	for _, record := range writes {
+		if strings.TrimSpace(record.cachePath) == "" {
+			return nil, fmt.Errorf("config: cache import %s: cache path is empty", record.Source)
+		}
+		data, err := marshalConfigImportCache(record)
+		if err != nil {
+			return nil, fmt.Errorf("config: cache import %s: %w", record.Source, err)
+		}
+		commit := configImportCacheCommit{record: record, data: data}
+		info, err := os.Stat(record.cachePath)
+		switch {
+		case err == nil:
+			if !info.Mode().IsRegular() {
+				return nil, fmt.Errorf("config: cache import %s: existing cache is not a regular file", record.Source)
+			}
+			commit.previous, err = os.ReadFile(record.cachePath)
+			if err != nil {
+				return nil, fmt.Errorf("config: cache import %s: read existing cache: %w", record.Source, err)
+			}
+			commit.previousMode = info.Mode().Perm()
+			commit.existed = true
+		case errors.Is(err, os.ErrNotExist):
+		case err != nil:
+			return nil, fmt.Errorf("config: cache import %s: inspect existing cache: %w", record.Source, err)
+		}
+		commits = append(commits, commit)
+	}
+	return commits, nil
+}
+
+func rollbackConfigImportCacheCommits(commits []configImportCacheCommit) error {
+	var rollbackErr error
+	for index := len(commits) - 1; index >= 0; index-- {
+		commit := commits[index]
+		var err error
+		if commit.existed {
+			err = homestore.WriteFileAtomic(commit.record.cachePath, commit.previous, commit.previousMode, 0o700)
+		} else {
+			err = os.Remove(commit.record.cachePath)
+			if errors.Is(err, os.ErrNotExist) {
+				err = nil
+			}
+			if err == nil {
+				err = homestore.SyncDir(filepath.Dir(commit.record.cachePath))
+			}
+		}
+		if err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("config: rollback import cache %s: %w", commit.record.Source, err))
+		}
+	}
+	return rollbackErr
 }
 
 func (l *configImportLoader) cachePath(identity, declaringPath string) string {

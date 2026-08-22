@@ -77,12 +77,15 @@ Imports run in declaration order and use the declaring file's scope and the
 same field merge rules as ordinary YAML layers; the declaring file always wins
 last. Relative paths resolve beside that file. Imported documents cannot
 contain `imports`, including `imports: []`, and `--config` itself remains a
-local path. Remote responses are bounded and cached as a permission-restricted
+local path. Remote imports accept only complete `200 OK` representations (or a
+conditional `304 Not Modified` with a valid cache); responses are bounded and
+cached as a permission-restricted
 Last-Known-Good copy under `$JUEX_HOME/cache/config-imports`; a temporary
 network failure may use an unexpired cache and `juex doctor` reports the source,
 fresh/stale state, and digest without URL query values or configuration
 contents. One full configuration load resolves each remote identity once and
-publishes fresh LKG content only after runtime validation succeeds. LKG entries
+publishes the complete pending LKG set only after runtime validation succeeds,
+restoring earlier records if any publication fails. LKG entries
 are scoped by both remote identity and declaring configuration so separate
 workspaces do not replace one another's validated version. Fleet-only loading
 may consume an existing runtime LKG but does not replace it without those full

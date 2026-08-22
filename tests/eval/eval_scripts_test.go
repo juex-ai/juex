@@ -372,6 +372,41 @@ providers:
 	}
 }
 
+func TestWriteModelConfigRejectsIncompleteHTTPConfigImport(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte(`models: [remote:model]
+providers:
+  - id: remote
+    protocol: openai/chat
+    models: [{id: model}]
+`))
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "juex.yaml")
+	if err := os.WriteFile(source, []byte("imports:\n  - source: "+server.URL+"/config.yaml\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("uv", "run", "--quiet", "--project", root,
+		"python", "-m", "tests.eval.juex_eval", "write-model-config",
+		"--source", source,
+		"--output", filepath.Join(dir, "selected.yaml"),
+	)
+	cmd.Dir = root
+	combined, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(combined), "HTTP 206") {
+		t.Fatalf("partial response error = %v, output = %s", err, combined)
+	}
+}
+
 func TestProviderConfigSelectionIsStableAndRedacted(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")

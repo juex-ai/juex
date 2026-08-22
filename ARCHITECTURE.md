@@ -2402,7 +2402,8 @@ functions, and followed by the declaring document. Any read, parse, scope, or
 apply error discards the candidate. Imported documents containing the
 `imports` key, even with an empty value, fail instead of recursing. Local
 relative paths resolve from the declaring file directory; remote sources
-accept only HTTP(S), use a five-second request timeout, a one-MiB response cap,
+accept only HTTP(S) with a complete `200 OK` representation or a conditional
+`304 Not Modified`, use a five-second request timeout, a one-MiB response cap,
 and at most three redirects, and never include response bodies or URL query
 values in diagnostics. A full configuration load resolves a repeated remote
 identity once and reuses the same bytes at every declaring layer.
@@ -2417,7 +2418,9 @@ plus both identity digests, safe source metadata, ETag/Last-Modified, fetch
 time, and content SHA-256. Conditional requests refresh a `304` entry; transient network,
 `408`, `429`, or `5xx` failures may use a digest-valid entry no older than seven
 days and mark it stale. Other HTTP failures, expired or tampered cache, and an
-invalid new `200` response fail without replacing the previous LKG. Import
+invalid new `200` response fail without replacing the previous LKG. Pending
+records publish as one locked set; if any replacement fails, already replaced
+records are restored before the load returns an error. Import
 resolution happens once during startup; there is no watcher or live reload.
 Workspace candidate validation leaves remote cache records pending and a
 read-only validation discards them; `WriteWorkspaceConfig` publishes them only
