@@ -1516,6 +1516,16 @@ func registerPointerRegistryParameter(registries []*tools.Registry) {
 	}
 }
 
+func TestResolveIndirectTypeBreaksPointerAliasCycles(t *testing.T) {
+	types := compositionTypeIndex{namedTypes: map[string]string{
+		"app.A": pointerTypePrefix + "app.B",
+		"app.B": pointerTypePrefix + "app.A",
+	}}
+	if got := resolveIndirectType("app.A", types); got != "app.A" {
+		t.Fatalf("resolveIndirectType() = %q, want cycle root", got)
+	}
+}
+
 func TestAppCompositionInspectionTracksMultiResultAndVariadicParameters(t *testing.T) {
 	source := `package app
 import (
@@ -11925,14 +11935,16 @@ func resolveNamedType(typeName string, types compositionTypeIndex) string {
 }
 
 func resolveIndirectType(typeName string, types compositionTypeIndex) string {
-	for typeName != "" {
+	seen := make(map[string]bool)
+	for typeName != "" && !seen[typeName] {
+		seen[typeName] = true
 		resolved := resolveNamedType(typeName, types)
 		if !strings.HasPrefix(resolved, pointerTypePrefix) {
 			return resolved
 		}
 		typeName = strings.TrimPrefix(resolved, pointerTypePrefix)
 	}
-	return ""
+	return typeName
 }
 
 func instantiatedFields(typeName string, types compositionTypeIndex) map[string]string {
