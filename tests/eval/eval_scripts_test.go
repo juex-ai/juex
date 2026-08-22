@@ -1547,7 +1547,7 @@ func TestJuexSourceConfigValidationUsesCompleteConfigDoctor(t *testing.T) {
 		"    workspace = Path(command[2])",
 		"    if workspace.name == 'work':",
 		"        root = workspace.parent",
-		"        materialized.append({str(path.relative_to(root)): path.read_text(encoding='utf-8') for path in root.rglob('*.yaml')})",
+		"        materialized.append({path.relative_to(root).as_posix(): path.read_text(encoding='utf-8') for path in root.rglob('*.yaml')})",
 		"    return SimpleNamespace(stdout=json.dumps({'checks': [{'name': 'config', 'status': 'ok'}]}), stderr='', returncode=6)",
 		"helper.subprocess.run = fake_run",
 		"try:",
