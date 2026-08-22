@@ -414,7 +414,8 @@ func delegateAppFields(target *App, resource any, registryValue any) {
 }
 var appFieldSetter = delegateAppFields
 func (application *App) bindNamedHelper(manager *mcp.Manager, registry *tools.Registry) {
-	setter := appFieldSetter
+	var erasedSetter any = appFieldSetter
+	setter := erasedSetter.(func(*App, any, any))
 	setter(application, manager, registry)
 }
 func setCompositeAppFields(target *App, resource any, registryValue any) {
@@ -12284,6 +12285,9 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 	case *ast.SliceExpr:
 		return expressionType(value.X, imports, values, types)
 	case *ast.TypeAssertExpr:
+		if typeName := expressionType(value.X, imports, values, types); strings.HasPrefix(typeName, localFunctionTypePrefix) {
+			return typeName
+		}
 		return canonicalType(value.Type, imports)
 	case *ast.CallExpr:
 		if identifier, ok := value.Fun.(*ast.Ident); ok && (identifier.Name == "make" || identifier.Name == "new") && len(value.Args) != 0 {
