@@ -205,8 +205,13 @@ func TestWriteWorkspaceConfigPublishesRemoteImportCacheOnlyAfterWriteSucceeds(t 
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := os.Stat(filepath.Join(homeDir, "cache", "config-imports")); !os.IsNotExist(err) {
-			t.Fatalf("failed workspace write published remote cache directory: %v", err)
+		cacheDir := filepath.Join(homeDir, "cache", "config-imports")
+		entries, err := os.ReadDir(cacheDir)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatalf("inspect remote cache directory after failed workspace write: %v", err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("failed workspace write published remote cache entries: %v", entries)
 		}
 	})
 
