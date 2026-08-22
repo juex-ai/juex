@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
 )
@@ -525,6 +527,136 @@ func TestAppExternalDeliveryRetriesReplayableAdmissionCommitFailure(t *testing.T
 			t.Fatalf("failed-admission input = %+v ok=%v, want App-owned retry to process it", pending, ok)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestAppStartupRecoveryTransfersReplayableAdmissionFailureToHandoff(t *testing.T) {
+	dir := t.TempDir()
+	provider := &recoveryProvider{}
+	a, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+	record, err := a.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "retry failed startup admission"),
+		runtime.PendingInputOptions{ID: "startup-admission-retry", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Bus.SetCommitter(&failOnceEventCommitter{
+		delegate:  a.eventSink,
+		eventType: runtime.TurnAdmittedType,
+		err:       errors.New("injected startup admission failure"),
+	})
+	a.startPendingInputRecovery(record)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		pending, ok, stateErr := a.Engine.PersistedPendingMessage(record.ID)
+		if stateErr != nil {
+			t.Fatal(stateErr)
+		}
+		calls, _ := provider.snapshot()
+		if ok && pending.State == runtime.PendingInputStateProcessed && a.Session.HasMessageID(pending.MessageID) && calls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("startup admission input = %+v ok=%v calls=%d, want handoff retry", pending, ok, calls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestAppPendingRecoveryBarrierPrecedesNotificationActivation(t *testing.T) {
+	dir := t.TempDir()
+	provider := newBlockingAppProvider()
+	a, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+	record, err := a.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "oldest durable input"),
+		runtime.PendingInputOptions{ID: "oldest-before-notification", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveryErr := make(chan error, 1)
+	gate := newMCPNotificationGate(func(notification mcp.Notification) {
+		deliveryErr <- a.HandleMCPNotification(a.ctx, notification)
+	})
+	gate.Enqueue(mcp.Notification{
+		ServerName: "startup",
+		EventType:  "message",
+		Content:    "newer startup notification",
+		Params:     map[string]any{"content": "newer startup notification"},
+	})
+	activated := make(chan struct{})
+	go func() {
+		a.activateExternalInputAfterPendingRecovery(gate, []runtime.PendingInputRecord{record})
+		close(activated)
+	}()
+
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup recovery did not reach provider")
+	}
+	provider.mu.Lock()
+	firstHistory := append([]llm.Message(nil), provider.histories[0]...)
+	provider.mu.Unlock()
+	oldestIndex := -1
+	notificationIndex := -1
+	for i, message := range firstHistory {
+		text := message.FirstText()
+		if text == "oldest durable input" {
+			oldestIndex = i
+		}
+		if strings.Contains(text, "newer startup notification") {
+			notificationIndex = i
+		}
+	}
+	if oldestIndex < 0 || (notificationIndex >= 0 && notificationIndex < oldestIndex) {
+		t.Fatalf("first provider history = %+v, want oldest durable input before notification", firstHistory)
+	}
+	select {
+	case <-activated:
+		t.Fatal("notification activation completed while startup recovery was blocked")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(provider.release)
+	select {
+	case <-activated:
+	case <-time.After(2 * time.Second):
+		t.Fatal("notification activation did not finish after startup recovery")
+	}
+	select {
+	case err := <-deliveryErr:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup notification was not delivered")
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if provider.calls < 1 || provider.calls > 2 {
+		t.Fatalf("provider calls = %d, want one ordered recovery Turn or recovery then notification", provider.calls)
+	}
+	if notificationIndex < 0 {
+		if provider.calls != 2 {
+			t.Fatalf("provider histories = %+v, want startup notification", provider.histories)
+		}
+		got := provider.histories[1][len(provider.histories[1])-1].FirstText()
+		if !strings.Contains(got, "newer startup notification") {
+			t.Fatalf("second provider input = %q, want startup notification", got)
+		}
 	}
 }
 

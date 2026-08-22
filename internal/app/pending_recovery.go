@@ -119,12 +119,27 @@ func (a *App) startPendingInputRecovery(record runtime.PendingInputRecord) {
 		defer a.pendingRecovery.Done()
 		defer close(done)
 		a.sessionMu.RLock()
-		_, err := a.resumePersistedInputLocked(a.ctx, record)
+		delivery, err := a.resumePersistedInputLocked(a.ctx, record)
 		a.sessionMu.RUnlock()
-		if err != nil && a.ctx.Err() == nil && !errors.Is(err, context.Canceled) && a.stderr != nil {
+		handedOff := false
+		if shouldRetryPersistedInputHandoff(delivery, err) {
+			handedOff = a.handoffPersistedInputAfterRecovery(record)
+		}
+		if err != nil && !handedOff && a.ctx.Err() == nil && !errors.Is(err, context.Canceled) && a.stderr != nil {
 			fmt.Fprintf(a.stderr, "juex: warning: resume pending input %q: %v\n", record.ID, err)
 		}
 	}()
+}
+
+// activateExternalInputAfterPendingRecovery publishes and starts the recovery
+// barrier before a startup notification gate can expose external producers.
+func (a *App) activateExternalInputAfterPendingRecovery(gate *mcpNotificationGate, records []runtime.PendingInputRecord) {
+	if len(records) > 0 {
+		a.startPendingInputRecovery(records[0])
+	}
+	if gate != nil {
+		gate.Activate()
+	}
 }
 
 func (a *App) waitPendingInputRecoveryContext(ctx context.Context) error {

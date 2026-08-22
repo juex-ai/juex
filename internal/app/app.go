@@ -698,12 +698,7 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 	appContextTransferred = true
-	if notificationGate != nil {
-		notificationGate.Activate()
-	}
-	if len(replayablePendingInput) > 0 {
-		a.startPendingInputRecovery(replayablePendingInput[0])
-	}
+	a.activateExternalInputAfterPendingRecovery(notificationGate, replayablePendingInput)
 	return a, nil
 }
 
