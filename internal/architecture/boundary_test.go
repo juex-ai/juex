@@ -348,7 +348,9 @@ func appIdentity(target *App) (error, *App) { return nil, target }
 func (application *App) bind(manager *mcp.Manager, registry *tools.Registry) {
 	target := &application
 	converted := (*App)(*target)
-	_, identity := appIdentity(converted)
+	_, returned := appIdentity(converted)
+	var erased any = returned
+	identity, _ := erased.(*App)
 	identity.resource = manager
 	func(registryTarget *App) {
 		registryTarget.registry = registry
@@ -10503,7 +10505,8 @@ func trackAppReceiverAlias(left ast.Expr, right []ast.Expr, index int, receivers
 		return
 	}
 	source := appReceiverExpressionKey(assigned, imports, types)
-	if hasAppReceiverAliasResult(assigned, resultIndex, receivers, imports, values, types) {
+	hasAlias := hasAppReceiverAliasResult(assigned, resultIndex, receivers, imports, values, types)
+	if hasAlias {
 		receivers[target] = true
 	}
 	if source != "" && source != target {
@@ -10581,6 +10584,11 @@ func hasAppReceiverAliasResult(expression ast.Expr, resultIndex int, receivers m
 				return false
 			}
 			expression = value.X
+		case *ast.TypeAssertExpr:
+			if resultIndex != 0 {
+				return false
+			}
+			return hasAppReceiverAliasResult(value.X, 0, receivers, imports, values, types)
 		case *ast.CallExpr:
 			if len(value.Args) == 1 && isTypeExpression(value.Fun, imports) {
 				expression = value.Args[0]
