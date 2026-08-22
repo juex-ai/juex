@@ -87,9 +87,10 @@ contents. One full configuration load resolves each remote identity once and
 publishes the complete pending LKG set only after runtime validation succeeds,
 restoring earlier records if any publication fails. Cache readers hold the
 same home-scoped lock across the complete load, so they cannot observe a mix
-of records from two publications. LKG entries
-are scoped by both remote identity and declaring configuration so separate
-workspaces do not replace one another's validated version. Fleet-only loading
+of records from two publications. LKG entries are scoped by remote identity,
+declaring configuration, and the complete downstream load identity (workspace
+plus an explicit config, when present), so one load cannot replace another
+load's validated version. Fleet-only loading
 may consume an existing runtime LKG but does not replace it without those full
 checks. Workspace candidate validation is read-only; an update publishes its
 fresh LKG content only after the workspace file replacement succeeds, and

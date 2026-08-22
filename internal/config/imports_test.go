@@ -404,6 +404,99 @@ func TestConfigRemoteImportCachesAreScopedToDeclaringConfig(t *testing.T) {
 	}
 }
 
+func TestConfigHomeImportCachesAreScopedToDownstreamWorkspace(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	var body atomic.Value
+	body.Store("models: [workspace-a:model]\n")
+	var offline atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if offline.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(body.Load().(string)))
+	}))
+	defer server.Close()
+
+	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), "imports:\n  - source: "+server.URL+"/config.yaml\n")
+	workspaceA := t.TempDir()
+	workspaceB := t.TempDir()
+	writeTextFile(t, filepath.Join(workspaceA, ".juex", "juex.yaml"), `providers:
+  - id: workspace-a
+    protocol: openai/chat
+    models: [{id: model}]
+`)
+	writeTextFile(t, filepath.Join(workspaceB, ".juex", "juex.yaml"), `providers:
+  - id: workspace-b
+    protocol: openai/chat
+    models: [{id: model}]
+`)
+
+	if _, err := LoadForWorkDirForValidation(workspaceA); err != nil {
+		t.Fatal(err)
+	}
+	body.Store("models: [workspace-b:model]\n")
+	if _, err := LoadForWorkDirForValidation(workspaceB); err != nil {
+		t.Fatal(err)
+	}
+	offline.Store(true)
+
+	first, err := LoadForWorkDirForValidation(workspaceA)
+	if err != nil {
+		t.Fatalf("workspace A offline load: %v", err)
+	}
+	second, err := LoadForWorkDirForValidation(workspaceB)
+	if err != nil {
+		t.Fatalf("workspace B offline load: %v", err)
+	}
+	if !reflect.DeepEqual(first.Models, []string{"workspace-a:model"}) || !reflect.DeepEqual(second.Models, []string{"workspace-b:model"}) {
+		t.Fatalf("offline Home import models = (%v, %v), want workspace-scoped LKGs", first.Models, second.Models)
+	}
+}
+
+func TestConfigHomeImportCachesAreScopedToDownstreamExplicitConfig(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	var body atomic.Value
+	body.Store("models: [explicit-a:model]\n")
+	var offline atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if offline.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(body.Load().(string)))
+	}))
+	defer server.Close()
+
+	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), "imports:\n  - source: "+server.URL+"/config.yaml\n")
+	workDir := t.TempDir()
+	explicitA := filepath.Join(t.TempDir(), "explicit-a.yaml")
+	explicitB := filepath.Join(t.TempDir(), "explicit-b.yaml")
+	writeTextFile(t, explicitA, "providers:\n  - id: explicit-a\n    protocol: openai/chat\n    models: [{id: model}]\n")
+	writeTextFile(t, explicitB, "providers:\n  - id: explicit-b\n    protocol: openai/chat\n    models: [{id: model}]\n")
+
+	if _, err := LoadFromFileForWorkDirForValidation(explicitA, workDir); err != nil {
+		t.Fatal(err)
+	}
+	body.Store("models: [explicit-b:model]\n")
+	if _, err := LoadFromFileForWorkDirForValidation(explicitB, workDir); err != nil {
+		t.Fatal(err)
+	}
+	offline.Store(true)
+
+	first, err := LoadFromFileForWorkDirForValidation(explicitA, workDir)
+	if err != nil {
+		t.Fatalf("explicit A offline load: %v", err)
+	}
+	second, err := LoadFromFileForWorkDirForValidation(explicitB, workDir)
+	if err != nil {
+		t.Fatalf("explicit B offline load: %v", err)
+	}
+	if !reflect.DeepEqual(first.Models, []string{"explicit-a:model"}) || !reflect.DeepEqual(second.Models, []string{"explicit-b:model"}) {
+		t.Fatalf("offline Home import models = (%v, %v), want explicit-config-scoped LKGs", first.Models, second.Models)
+	}
+}
+
 func TestConfigRemoteImportUsesCacheOnlyForRetryableFailures(t *testing.T) {
 	var status atomic.Int32
 	status.Store(http.StatusOK)
@@ -809,6 +902,7 @@ func TestCommitConfigImportCachesPreservesEarlierRecordsWhenLaterWriteFails(t *t
 		Source:          "https://config.example/first.yaml",
 		SourceSHA256:    sourceDigest("https://config.example/first.yaml"),
 		DeclaringSHA256: sourceDigest("first-declarer"),
+		ContextSHA256:   sourceDigest("standalone"),
 		FetchedAt:       time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC),
 		Content:         "runtime:\n  tool_timeout: 41s\n",
 		cachePath:       firstPath,
@@ -888,6 +982,7 @@ func TestConfigImportCacheReaderObservesOnePublishedGeneration(t *testing.T) {
 			Source:          source,
 			SourceSHA256:    sourceDigest(source),
 			DeclaringSHA256: declaringConfigDigest(declarer),
+			ContextSHA256:   loader.cacheContextDigest(),
 			FetchedAt:       now,
 			Content:         content,
 			cachePath:       loader.cachePath(source, declarer),

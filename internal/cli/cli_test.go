@@ -1766,11 +1766,12 @@ providers:
 		t.Fatal(err)
 	}
 
-	if _, err := config.LoadForWorkDirForValidation(t.TempDir()); err != nil {
+	workDir := t.TempDir()
+	if _, err := config.LoadForWorkDirForValidation(workDir); err != nil {
 		t.Fatal(err)
 	}
 	server.Close()
-	cfg, err := config.LoadForWorkDirForValidation(t.TempDir())
+	cfg, err := config.LoadForWorkDirForValidation(workDir)
 	if err != nil {
 		t.Fatal(err)
 	}

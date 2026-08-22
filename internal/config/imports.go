@@ -27,7 +27,7 @@ const (
 	configImportMaxBytes     = 1 << 20
 	configImportMaxRedirects = 3
 	configImportMaxCacheAge  = 7 * 24 * time.Hour
-	configImportCacheVersion = 2
+	configImportCacheVersion = 3
 )
 
 type importConfig struct {
@@ -50,15 +50,16 @@ func (c Config) ImportStatuses() []ConfigImportStatus {
 }
 
 type configImportLoader struct {
-	homeDir      string
-	client       *http.Client
-	now          func() time.Time
-	timeout      time.Duration
-	maxBytes     int64
-	maxCacheAge  time.Duration
-	maxRedirects int
-	remoteMemo   map[string]configImportDocument
-	cacheLock    *homestore.Lock
+	homeDir       string
+	contextDigest string
+	client        *http.Client
+	now           func() time.Time
+	timeout       time.Duration
+	maxBytes      int64
+	maxCacheAge   time.Duration
+	maxRedirects  int
+	remoteMemo    map[string]configImportDocument
+	cacheLock     *homestore.Lock
 }
 
 type configImportDocument struct {
@@ -73,6 +74,7 @@ type configImportCacheRecord struct {
 	Source          string    `json:"source"`
 	SourceSHA256    string    `json:"source_sha256"`
 	DeclaringSHA256 string    `json:"declaring_sha256"`
+	ContextSHA256   string    `json:"context_sha256"`
 	ETag            string    `json:"etag,omitempty"`
 	LastModified    string    `json:"last_modified,omitempty"`
 	FetchedAt       time.Time `json:"fetched_at"`
@@ -198,6 +200,7 @@ func (l *configImportLoader) load(declaring yamlConfigSource, rawSource string) 
 		if document.cacheWrite != nil {
 			record := *document.cacheWrite
 			record.DeclaringSHA256 = declaringConfigDigest(declaring.Path)
+			record.ContextSHA256 = l.cacheContextDigest()
 			record.cachePath = l.cachePath(identity, declaring.Path)
 			document.cacheWrite = &record
 		}
@@ -321,6 +324,7 @@ func (l *configImportLoader) loadRemote(declaring yamlConfigSource, parsed *url.
 		Source:          safeSource,
 		SourceSHA256:    sourceDigest(identity),
 		DeclaringSHA256: declaringConfigDigest(declaring.Path),
+		ContextSHA256:   l.cacheContextDigest(),
 		ETag:            boundedCacheValidator(resp.Header.Get("ETag")),
 		LastModified:    boundedCacheValidator(resp.Header.Get("Last-Modified")),
 		FetchedAt:       l.now().UTC(),
@@ -396,7 +400,8 @@ func (l *configImportLoader) readCache(identity, declaringPath string) (configIm
 	}
 	if record.Version != configImportCacheVersion ||
 		record.SourceSHA256 != sourceDigest(identity) ||
-		record.DeclaringSHA256 != declaringConfigDigest(declaringPath) {
+		record.DeclaringSHA256 != declaringConfigDigest(declaringPath) ||
+		record.ContextSHA256 != l.cacheContextDigest() {
 		return configImportCacheRecord{}, errors.New("cache identity does not match source")
 	}
 	parsed, err := url.Parse(identity)
@@ -612,8 +617,25 @@ func rollbackConfigImportCacheCommits(commits []configImportCacheCommit) error {
 }
 
 func (l *configImportLoader) cachePath(identity, declaringPath string) string {
-	filename := sourceDigest(identity) + "-" + declaringConfigDigest(declaringPath) + ".json"
+	filename := sourceDigest(identity) + "-" + declaringConfigDigest(declaringPath) + "-" + l.cacheContextDigest() + ".json"
 	return filepath.Join(l.homeDir, "cache", "config-imports", filename)
+}
+
+func (l *configImportLoader) cacheContextDigest() string {
+	if strings.TrimSpace(l.contextDigest) != "" {
+		return l.contextDigest
+	}
+	return sourceDigest("standalone")
+}
+
+func configImportContextDigest(workDir string, explicitPaths ...string) string {
+	identities := []string{"work_dir=" + declaringConfigIdentity(workDir)}
+	for _, path := range explicitPaths {
+		if strings.TrimSpace(path) != "" {
+			identities = append(identities, "explicit="+declaringConfigIdentity(path))
+		}
+	}
+	return sourceDigest(strings.Join(identities, "\n"))
 }
 
 func declaringConfigDigest(path string) string {

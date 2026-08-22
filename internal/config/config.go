@@ -81,6 +81,7 @@ type Config struct {
 	importStatuses     []ConfigImportStatus
 	pendingImportCache []configImportCacheRecord
 	importLoader       *configImportLoader
+	importCacheContext string
 }
 
 type AgentStateMode uint8
@@ -391,7 +392,7 @@ func Load() (Config, error) {
 // LoadWithOptions loads runtime configuration with an explicit workspace
 // identity policy. AgentStateMint preserves the historical loader behavior.
 func LoadWithOptions(opts LoadOptions) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(opts.WorkDir)
+	cfg, err := loadConfigFilesForWorkDir(opts.WorkDir, opts.ConfigPath)
 	if err != nil {
 		return cfg, err
 	}
@@ -444,8 +445,8 @@ func LoadForWorkDirWithModelsOverride(workDir string, modelRefs []string) (Confi
 	return cfg, nil
 }
 
-func loadConfigFilesForWorkDir(workDir string) (Config, error) {
-	cfg, err := loadUserConfigForWorkDir(workDir)
+func loadConfigFilesForWorkDir(workDir string, explicitPaths ...string) (Config, error) {
+	cfg, err := loadUserConfigForWorkDir(workDir, explicitPaths...)
 	if err != nil {
 		return cfg, err
 	}
@@ -455,7 +456,7 @@ func loadConfigFilesForWorkDir(workDir string) (Config, error) {
 	return cfg, nil
 }
 
-func loadUserConfigForWorkDir(workDir string) (Config, error) {
+func loadUserConfigForWorkDir(workDir string, explicitPaths ...string) (Config, error) {
 	cfg := Config{
 		ContextWindow:             DefaultContextWindow,
 		Compaction:                DefaultCompactionConfig(),
@@ -481,6 +482,7 @@ func loadUserConfigForWorkDir(workDir string) (Config, error) {
 		workDir = abs
 	}
 	cfg.WorkDir = workDir
+	cfg.importCacheContext = configImportContextDigest(workDir, explicitPaths...)
 	if home, err := os.UserHomeDir(); err == nil {
 		cfg.HomeAgentsDir = filepath.Join(home, ".agents")
 	}
@@ -507,7 +509,7 @@ func LoadFromFile(path string) (Config, error) {
 
 // LoadFromFileForWorkDir is LoadFromFile with an explicit working directory.
 func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(workDir)
+	cfg, err := loadConfigFilesForWorkDir(workDir, path)
 	if err != nil {
 		return cfg, err
 	}
@@ -524,7 +526,7 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 // LoadFromFileForWorkDirForValidation is LoadFromFileForWorkDir without
 // resolving or creating a workspace agent identity.
 func LoadFromFileForWorkDirForValidation(path, workDir string) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(workDir)
+	cfg, err := loadConfigFilesForWorkDir(workDir, path)
 	if err != nil {
 		return cfg, err
 	}
@@ -541,7 +543,7 @@ func LoadFromFileForWorkDirForValidation(path, workDir string) (Config, error) {
 // explicit ordered model chain that wins over YAML and provider selector
 // environment values.
 func LoadFromFileForWorkDirWithModelsOverride(path, workDir string, modelRefs []string) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(workDir)
+	cfg, err := loadConfigFilesForWorkDir(workDir, path)
 	if err != nil {
 		return cfg, err
 	}
@@ -838,6 +840,7 @@ func applyYAMLFile(cfg *Config, source yamlConfigSource) error {
 func configImportLoaderFor(cfg *Config) *configImportLoader {
 	if cfg.importLoader == nil {
 		cfg.importLoader = newConfigImportLoader(cfg.HomeJuexDir)
+		cfg.importLoader.contextDigest = cfg.importCacheContext
 	}
 	return cfg.importLoader
 }

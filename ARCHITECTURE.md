@@ -2411,11 +2411,13 @@ identity once and reuses the same bytes at every declaring layer.
 After the complete layered runtime configuration passes semantic, environment,
 shell, and authentication finalization, validated remote content is atomically
 cached with mode `0600` under
-`$JUEX_HOME/cache/config-imports/<source-sha256>-<declaring-config-sha256>.json`.
-Scoping by both identities prevents separate workspaces or explicit configs
-from replacing one another's validated LKG. The record contains the content
-plus both identity digests, safe source metadata, ETag/Last-Modified, fetch
-time, and content SHA-256. Conditional requests refresh a `304` entry; transient network,
+`$JUEX_HOME/cache/config-imports/<source-sha256>-<declaring-config-sha256>-<load-context-sha256>.json`.
+The load context covers the canonical workspace plus any explicit config path;
+this third identity prevents a shared Home declaration from replacing the LKG
+validated with another workspace or explicit overlay. The record contains the
+content plus all three identity digests, safe source metadata,
+ETag/Last-Modified, fetch time, and content SHA-256. Conditional requests
+refresh a `304` entry; transient network,
 `408`, `429`, or `5xx` failures may use a digest-valid entry no older than seven
 days and mark it stale. Other HTTP failures, expired or tampered cache, and an
 invalid new `200` response fail without replacing the previous LKG. Pending

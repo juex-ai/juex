@@ -1,7 +1,9 @@
 package eval
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/homestore"
 	"gopkg.in/yaml.v3"
 )
 
@@ -637,6 +640,7 @@ func TestProviderConfigLoaderMemoizesRemoteImportsAcrossLayers(t *testing.T) {
 	}
 
 	program := strings.Join([]string{
+		"import contextlib",
 		"import os",
 		"import tempfile",
 		"from pathlib import Path",
@@ -656,16 +660,132 @@ func TestProviderConfigLoaderMemoizesRemoteImportsAcrossLayers(t *testing.T) {
 		"    explicit_config.write_text(declaration, encoding='utf-8')",
 		"    original_env = {name: os.environ.get(name) for name in ['HOME', 'USERPROFILE', 'JUEX_HOME']}",
 		"    original_remote = helper._read_remote_config_import",
+		"    original_lock = helper._config_import_cache_lock",
 		"    remote_reads = []",
-		"    def fake_remote(identity, _parsed, _declaring):",
+		"    lock_events = []",
+		"    @contextlib.contextmanager",
+		"    def fake_lock(_home):",
+		"        lock_events.append('enter')",
+		"        yield",
+		"        lock_events.append('exit')",
+		"    def fake_remote(identity, _parsed, _declaring, _cache_context_digest):",
 		"        remote_reads.append(identity)",
-		"        return 'models: [remote:model]\\nproviders:\\n  - id: remote\\n    protocol: openai/chat\\n    models: [{id: model}]\\n'",
+		"        return 'models: [remote:model]\\nproviders:\\n  - id: remote\\n    protocol: openai/chat\\n    models: [{id: model}]\\n', True",
 		"    os.environ.update({'HOME': str(home), 'USERPROFILE': str(home), 'JUEX_HOME': str(instance)})",
 		"    helper._read_remote_config_import = fake_remote",
+		"    helper._config_import_cache_lock = fake_lock",
 		"    try:",
 		"        cfg = helper.load_source_config(explicit_config)",
 		"        assert remote_reads == ['https://config.example/shared.yaml'], remote_reads",
+		"        assert lock_events == ['enter', 'exit'], lock_events",
 		"        assert [item.ref for item in selection.enumerate_candidates(cfg)] == ['remote:model']",
+		"    finally:",
+		"        helper._read_remote_config_import = original_remote",
+		"        helper._config_import_cache_lock = original_lock",
+		"        for name, value in original_env.items():",
+		"            if value is None:",
+		"                os.environ.pop(name, None)",
+		"            else:",
+		"                os.environ[name] = value",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestProviderConfigLoaderUsesRuntimeImportCacheLock(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	program := strings.Join([]string{
+		"import sys",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper",
+		"with helper._config_import_cache_lock(Path(sys.argv[1])):",
+		"    print('ready', flush=True)",
+		"    sys.stdin.readline()",
+	}, "\n")
+	command := exec.Command("uv", "run", "python", "-c", program, home)
+	command.Dir = root
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.Stderr = os.Stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		if command.ProcessState == nil {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+	})
+	scanner := bufio.NewScanner(stdout)
+	if !scanner.Scan() || scanner.Text() != "ready" {
+		t.Fatalf("Python lock helper did not become ready: line=%q err=%v", scanner.Text(), scanner.Err())
+	}
+	lockPath := filepath.Join(home, ".locks", "config-imports-cache.lock")
+	lock, lockErr := homestore.AcquireLock(lockPath, homestore.LockTry)
+	if lock != nil {
+		_ = lock.Close()
+	}
+	if !errors.Is(lockErr, homestore.ErrLockBusy) {
+		t.Fatalf("Go lock attempt while Python holds cache lock = %v, want ErrLockBusy", lockErr)
+	}
+	if _, err := stdin.Write([]byte("continue\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProviderConfigLoaderDoesNotMemoizeStaleImportsAcrossDeclarers(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import os",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    root = Path(tmp)",
+		"    home = root / 'home'",
+		"    instance = root / 'instance'",
+		"    configs = [home / '.juex' / 'juex.yaml', instance / 'juex.yaml', root / 'explicit.yaml']",
+		"    for config in configs:",
+		"        config.parent.mkdir(parents=True, exist_ok=True)",
+		"        config.write_text('imports:\\n  - source: https://config.example/shared.yaml\\n', encoding='utf-8')",
+		"    original_env = {name: os.environ.get(name) for name in ['HOME', 'USERPROFILE', 'JUEX_HOME']}",
+		"    original_remote = helper._read_remote_config_import",
+		"    remote_reads = []",
+		"    def fake_remote(identity, _parsed, declaring, _cache_context_digest):",
+		"        remote_reads.append(str(declaring))",
+		"        return f'providers:\\n  - id: provider-{len(remote_reads)}\\n    models: [{{id: model}}]\\n', False",
+		"    os.environ.update({'HOME': str(home), 'USERPROFILE': str(home), 'JUEX_HOME': str(instance)})",
+		"    helper._read_remote_config_import = fake_remote",
+		"    try:",
+		"        cfg = helper.load_source_config(configs[-1])",
+		"        assert remote_reads == [str(path.resolve()) for path in configs], remote_reads",
+		"        assert [provider['id'] for provider in cfg['providers']] == ['provider-1', 'provider-2', 'provider-3']",
 		"    finally:",
 		"        helper._read_remote_config_import = original_remote",
 		"        for name, value in original_env.items():",
@@ -861,9 +981,9 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        source.write_text(helper.dump_yaml(merged), encoding='utf-8')",
 		"        fake_validate(_juex, source)",
 		"    helper.validate_source_layers = fake_validate_layers",
-		"    def fake_remote(identity, _parsed, _declaring):",
+		"    def fake_remote(identity, _parsed, _declaring, _cache_context_digest):",
 		"        remote_reads.append(identity)",
-		"        return 'models: [remote:model]\\nproviders:\\n  - id: remote\\n    api_key: remote-secret\\n    models: [{id: model}]\\n'",
+		"        return 'models: [remote:model]\\nproviders:\\n  - id: remote\\n    api_key: remote-secret\\n    models: [{id: model}]\\n', True",
 		"    helper._read_remote_config_import = fake_remote",
 		"    def run(name, *scope, seed='stable', source=config):",
 		"        captured.clear()",

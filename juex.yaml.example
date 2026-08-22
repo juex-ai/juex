@@ -12,8 +12,9 @@
 # rules. Imported documents cannot contain imports, including `imports: []`.
 # Remote content accepts only 200/304 responses, has bounded requests, and uses
 # a permission-restricted seven-day Last-Known-Good cache under
-# $JUEX_HOME/cache/config-imports, scoped by remote and declaring-config
-# identity. A full runtime load resolves each remote identity once and publishes
+# $JUEX_HOME/cache/config-imports, scoped by remote, declaring-config, and
+# downstream workspace/explicit-config identity. A full runtime load resolves
+# each remote identity once and publishes
 # the pending cache set transactionally after validation; Fleet-only loading may
 # consume but does not replace this cache. Juex loads
 # all configuration only at startup; restart resident Agents after a change.

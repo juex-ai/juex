@@ -32,6 +32,9 @@ func LoadHomeFleetConfig() (cfg FleetConfig, returnErr error) {
 		return cfg, err
 	}
 	loader := newConfigImportLoader(resolution.EffectiveHomeDir)
+	if workDir, workDirErr := os.Getwd(); workDirErr == nil {
+		loader.contextDigest = configImportContextDigest(workDir)
+	}
 	defer func() {
 		returnErr = errors.Join(returnErr, loader.closeConfigImportCacheLock())
 	}()

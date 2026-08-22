@@ -9,6 +9,7 @@ consistently across developer machines.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import datetime
 import hashlib
@@ -27,6 +28,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -1630,22 +1632,25 @@ def load_source_config_with_layers(path: pathlib.Path) -> tuple[dict[str, Any], 
     seen: set[pathlib.Path] = set()
     remote_memo: dict[str, tuple[str, str]] = {}
     layers: list[SourceConfigLayer] = []
-    for source in sources:
-        source = selection.resolved_path(source)
-        if source in seen:
-            continue
-        seen.add(source)
-        if source != config_path and not source.is_file():
-            continue
-        document, imported, declaring = _load_config_document_parts(source, remote_memo)
-        merged = _merge_source_config(merged, document)
-        if source == default_config:
-            scope = "default-home"
-        elif source == effective_config:
-            scope = "effective-home"
-        else:
-            scope = "explicit"
-        layers.append(SourceConfigLayer(scope=scope, imports=tuple(imported), declaring=declaring))
+    explicit_paths = [] if config_path in {default_config, effective_config} else [config_path]
+    cache_context_digest = _config_import_context_digest(pathlib.Path.cwd(), *explicit_paths)
+    with _config_import_cache_lock(effective_home):
+        for source in sources:
+            source = selection.resolved_path(source)
+            if source in seen:
+                continue
+            seen.add(source)
+            if source != config_path and not source.is_file():
+                continue
+            document, imported, declaring = _load_config_document_parts(source, remote_memo, cache_context_digest)
+            merged = _merge_source_config(merged, document)
+            if source == default_config:
+                scope = "default-home"
+            elif source == effective_config:
+                scope = "effective-home"
+            else:
+                scope = "explicit"
+            layers.append(SourceConfigLayer(scope=scope, imports=tuple(imported), declaring=declaring))
     return merged, layers
 
 
@@ -1653,13 +1658,14 @@ def _load_config_document(
     path: pathlib.Path,
     remote_memo: dict[str, tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
-    document, _, _ = _load_config_document_parts(path, remote_memo)
+    document, _, _ = _load_config_document_parts(path, remote_memo, _config_import_standalone_digest())
     return document
 
 
 def _load_config_document_parts(
     path: pathlib.Path,
     remote_memo: dict[str, tuple[str, str]] | None = None,
+    cache_context_digest: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     if remote_memo is None:
         remote_memo = {}
@@ -1667,8 +1673,9 @@ def _load_config_document_parts(
     imported = _config_imports(main, str(path))
     merged: dict[str, Any] = {}
     imported_values: list[dict[str, Any]] = []
+    cache_context_digest = cache_context_digest or _config_import_standalone_digest()
     for index, raw_source in enumerate(imported):
-        source, label = _read_config_import(path, raw_source, remote_memo)
+        source, label = _read_config_import(path, raw_source, remote_memo, cache_context_digest)
         value = _load_yaml_text(source, label)
         if "imports" in value:
             raise ValueError(f"{path} imports[{index}] {label}: nested imports are not supported")
@@ -1702,6 +1709,7 @@ def _read_config_import(
     declaring: pathlib.Path,
     raw_source: str,
     remote_memo: dict[str, tuple[str, str]],
+    cache_context_digest: str,
 ) -> tuple[str, str]:
     local_candidate = pathlib.Path(raw_source)
     if local_candidate.is_absolute():
@@ -1719,8 +1727,10 @@ def _read_config_import(
         raise ValueError("invalid remote config import source")
     if raw_source in remote_memo:
         return remote_memo[raw_source]
-    result = _read_remote_config_import(raw_source, parsed, declaring), _safe_remote_import_label(parsed)
-    remote_memo[raw_source] = result
+    content, fresh = _read_remote_config_import(raw_source, parsed, declaring, cache_context_digest)
+    result = content, _safe_remote_import_label(parsed)
+    if fresh:
+        remote_memo[raw_source] = result
     return result
 
 
@@ -1744,8 +1754,9 @@ def _read_remote_config_import(
     identity: str,
     parsed: urllib.parse.SplitResult,
     declaring: pathlib.Path,
-) -> str:
-    cache = _read_config_import_cache(identity, parsed, declaring)
+    cache_context_digest: str,
+) -> tuple[str, bool]:
+    cache = _read_config_import_cache(identity, parsed, declaring, cache_context_digest)
     headers: dict[str, str] = {}
     if cache is not None:
         if cache.get("etag"):
@@ -1761,18 +1772,18 @@ def _read_remote_config_import(
             data = response.read(CONFIG_IMPORT_MAX_BYTES + 1)
             if len(data) > CONFIG_IMPORT_MAX_BYTES:
                 raise ValueError("remote config import exceeds the one-MiB response limit")
-            return data.decode("utf-8")
+            return data.decode("utf-8"), True
     except urllib.error.HTTPError as exc:
         if exc.code == 304 and cache is not None:
-            return str(cache["content"])
+            return str(cache["content"]), True
         if exc.code not in {408, 429} and exc.code < 500:
             raise ValueError(f"remote config import returned HTTP {exc.code}") from None
         if cache is not None and _config_import_cache_is_current(cache):
-            return str(cache["content"])
+            return str(cache["content"]), False
         raise ValueError("remote config import is unavailable and has no current Last-Known-Good cache") from None
     except (OSError, urllib.error.URLError):
         if cache is not None and _config_import_cache_is_current(cache):
-            return str(cache["content"])
+            return str(cache["content"]), False
         raise ValueError("remote config import is unavailable and has no current Last-Known-Good cache") from None
 
 
@@ -1780,12 +1791,13 @@ def _read_config_import_cache(
     identity: str,
     parsed: urllib.parse.SplitResult,
     declaring: pathlib.Path,
+    cache_context_digest: str,
 ) -> dict[str, Any] | None:
     _, effective_home = provider_home_dirs()
     source_digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-    declaring_identity = declaring.parent.resolve() / declaring.name
+    declaring_identity = _config_import_path_identity(declaring)
     declaring_digest = hashlib.sha256(str(declaring_identity).encode("utf-8")).hexdigest()
-    path = effective_home / "cache" / "config-imports" / f"{source_digest}-{declaring_digest}.json"
+    path = effective_home / "cache" / "config-imports" / f"{source_digest}-{declaring_digest}-{cache_context_digest}.json"
     try:
         if os.name != "nt" and (path.stat().st_mode & 0o777) != 0o600:
             return None
@@ -1794,9 +1806,10 @@ def _read_config_import_cache(
         return None
     if (
         not isinstance(record, dict)
-        or record.get("version") != 2
+        or record.get("version") != 3
         or record.get("source_sha256") != source_digest
         or record.get("declaring_sha256") != declaring_digest
+        or record.get("context_sha256") != cache_context_digest
     ):
         return None
     safe_source = _safe_remote_import_label(parsed)
@@ -1811,6 +1824,65 @@ def _read_config_import_cache(
         if value is not None and (not isinstance(value, str) or len(value) > 8192 or "\r" in value or "\n" in value):
             return None
     return record
+
+
+def _config_import_standalone_digest() -> str:
+    return hashlib.sha256(b"standalone").hexdigest()
+
+
+def _config_import_context_digest(work_dir: pathlib.Path, *explicit_paths: pathlib.Path) -> str:
+    identities = [f"work_dir={_config_import_path_identity(work_dir)}"]
+    identities.extend(f"explicit={_config_import_path_identity(path)}" for path in explicit_paths)
+    return hashlib.sha256("\n".join(identities).encode("utf-8")).hexdigest()
+
+
+def _config_import_path_identity(path: pathlib.Path) -> pathlib.Path:
+    absolute = pathlib.Path(os.path.abspath(os.path.normpath(os.fspath(path))))
+    try:
+        parent = absolute.parent.resolve(strict=True)
+    except OSError:
+        return absolute
+    return parent / absolute.name
+
+
+@contextlib.contextmanager
+def _config_import_cache_lock(effective_home: pathlib.Path) -> Iterator[None]:
+    lock_path = effective_home / ".locks" / "config-imports-cache.lock"
+    lock_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    locked = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            if os.fstat(descriptor).st_size == 0:
+                os.write(descriptor, b"\0")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        locked = True
+    except OSError as exc:
+        os.close(descriptor)
+        raise ValueError(f"cannot lock config import cache: {exc}") from None
+    try:
+        yield
+    finally:
+        try:
+            if locked:
+                if os.name == "nt":
+                    import msvcrt
+
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
 
 def _config_import_cache_is_current(record: dict[str, Any]) -> bool:

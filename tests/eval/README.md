@@ -148,7 +148,10 @@ Live model scope comes from the resolved provider config. Candidates are
 deduplicated and sorted by `provider:model`; routine commands use a recorded
 seed to select one candidate.
 Before provider smoke or compaction projects a selected provider/model, it
-materializes the complete merged source in a permission-restricted work area
+loads all Home and explicit source layers while holding the runtime-compatible
+`$JUEX_HOME/.locks/config-imports-cache.lock`, including every Last-Known-Good
+cache read, then materializes the complete merged source in a
+permission-restricted work area
 and asks `juex doctor --offline` to validate its full schema. Unknown fields in
 unselected sections therefore fail the environment gate instead of being
 dropped by projection.
