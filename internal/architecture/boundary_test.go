@@ -338,6 +338,8 @@ type App struct {
 	compositeClosureRegistry registrar
 	collectionResource closer
 	collectionRegistry registrar
+	returnedCollectionResource closer
+	returnedCollectionRegistry registrar
 	variadicReceiverResource closer
 	variadicReceiverRegistry registrar
 }
@@ -416,11 +418,22 @@ var appFieldSetter = delegateAppFields
 func preserveAppFieldSetter(setter func(*App, any, any)) (error, appFieldBinder) {
 	return nil, appFieldBinder{bind: setter}
 }
+func preserveAppFieldSetters(setter func(*App, any, any)) []appFieldBinder {
+	return []appFieldBinder{{bind: setter}}
+}
+func setReturnedCollectionAppFields(target *App, resource any, registryValue any) {
+	target.returnedCollectionResource = resource.(closer)
+	target.returnedCollectionRegistry = registryValue.(registrar)
+}
 func (application *App) bindNamedHelper(manager *mcp.Manager, registry *tools.Registry) {
 	_, holder := preserveAppFieldSetter(appFieldSetter)
 	var erasedSetter any = holder.bind
 	setter := erasedSetter.(func(*App, any, any))
 	setter(application, manager, registry)
+}
+func (application *App) bindReturnedCollection(manager *mcp.Manager, registry *tools.Registry) {
+	holders := preserveAppFieldSetters(setReturnedCollectionAppFields)
+	holders[0].bind(application, manager, registry)
 }
 func setCompositeAppFields(target *App, resource any, registryValue any) {
 	target.compositeClosureResource = resource.(closer)
@@ -469,6 +482,8 @@ func (application *App) bypass() {
 	application.compositeClosureRegistry.Register(nil)
 	_ = application.collectionResource.Close()
 	application.collectionRegistry.Register(nil)
+	_ = application.returnedCollectionResource.Close()
+	application.returnedCollectionRegistry.Register(nil)
 	_ = application.variadicReceiverResource.Close()
 	application.variadicReceiverRegistry.Register(nil)
 }
@@ -490,14 +505,14 @@ func (application *App) bypass() {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if len(cleanupCalls) != 11 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" || cleanupCalls[2] != "application.closureResource.Close" || cleanupCalls[3] != "application.iifeResource.Close" || cleanupCalls[4] != "application.variadicResource.Close" || cleanupCalls[5] != "application.namedClosureResource.Close" || cleanupCalls[6] != "application.nestedClosureResource.Close" || cleanupCalls[7] != "application.namedHelperResource.Close" || cleanupCalls[8] != "application.compositeClosureResource.Close" || cleanupCalls[9] != "application.collectionResource.Close" || cleanupCalls[10] != "application.variadicReceiverResource.Close" {
+	if len(cleanupCalls) != 12 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" || cleanupCalls[2] != "application.closureResource.Close" || cleanupCalls[3] != "application.iifeResource.Close" || cleanupCalls[4] != "application.variadicResource.Close" || cleanupCalls[5] != "application.namedClosureResource.Close" || cleanupCalls[6] != "application.nestedClosureResource.Close" || cleanupCalls[7] != "application.namedHelperResource.Close" || cleanupCalls[8] != "application.compositeClosureResource.Close" || cleanupCalls[9] != "application.collectionResource.Close" || cleanupCalls[10] != "application.returnedCollectionResource.Close" || cleanupCalls[11] != "application.variadicReceiverResource.Close" {
 		t.Fatalf("cleanup calls = %v, want receiver field cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if len(registrationCalls) != 11 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" || registrationCalls[2] != "application.closureRegistry.Register" || registrationCalls[3] != "application.iifeRegistry.Register" || registrationCalls[4] != "application.variadicRegistry.Register" || registrationCalls[5] != "application.namedClosureRegistry.Register" || registrationCalls[6] != "application.nestedClosureRegistry.Register" || registrationCalls[7] != "application.namedHelperRegistry.Register" || registrationCalls[8] != "application.compositeClosureRegistry.Register" || registrationCalls[9] != "application.collectionRegistry.Register" || registrationCalls[10] != "application.variadicReceiverRegistry.Register" {
+	if len(registrationCalls) != 12 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" || registrationCalls[2] != "application.closureRegistry.Register" || registrationCalls[3] != "application.iifeRegistry.Register" || registrationCalls[4] != "application.variadicRegistry.Register" || registrationCalls[5] != "application.namedClosureRegistry.Register" || registrationCalls[6] != "application.nestedClosureRegistry.Register" || registrationCalls[7] != "application.namedHelperRegistry.Register" || registrationCalls[8] != "application.compositeClosureRegistry.Register" || registrationCalls[9] != "application.collectionRegistry.Register" || registrationCalls[10] != "application.returnedCollectionRegistry.Register" || registrationCalls[11] != "application.variadicReceiverRegistry.Register" {
 		t.Fatalf("Tool registration calls = %v, want receiver field registration", registrationCalls)
 	}
 }
@@ -5674,7 +5689,7 @@ func trackCompositeFunctionTypes(values map[string]string, parent string, target
 			for path := range paths {
 				path = strings.TrimSuffix(path, ".")
 				if path != "" {
-					setMayValueType(values, root+"."+path, typeName, types)
+					setMayValueType(values, appendAssignmentPath(root, path), typeName, types)
 				}
 			}
 		}
@@ -5686,8 +5701,14 @@ func isNestedAssignmentValueKey(key, root string) bool {
 }
 
 func compositeCallablePath(suffix string) string {
-	path := strings.ReplaceAll(suffix, "[]", "")
-	return strings.TrimPrefix(path, ".")
+	return strings.TrimPrefix(suffix, ".")
+}
+
+func appendAssignmentPath(root, path string) string {
+	if strings.HasPrefix(path, "[") {
+		return root + path
+	}
+	return root + "." + path
 }
 
 func functionLiteralExpression(expression ast.Expr) *ast.FuncLit {
@@ -8865,9 +8886,9 @@ func resultParameterPaths(expression ast.Expr, imports map[string]string, values
 		typeName := canonicalType(value.Type, imports)
 		fieldOrder, structured := compositeFieldOrder(value.Type, typeName, imports, types)
 		for index, element := range value.Elts {
-			prefix := ""
+			prefix := "[]"
 			if pair, ok := element.(*ast.KeyValueExpr); ok {
-				if field, ok := pair.Key.(*ast.Ident); structured && ok {
+				if field, ok := pair.Key.(*ast.Ident); ok && (structured || value.Type == nil) {
 					prefix = field.Name + "."
 				}
 				element = pair.Value
@@ -8920,7 +8941,11 @@ func mergeResultParameterPaths(destination, source map[int]map[string]bool, pref
 			destination[parameterIndex] = make(map[string]bool)
 		}
 		for path := range paths {
-			destination[parameterIndex][prefix+path] = true
+			separator := ""
+			if strings.HasSuffix(prefix, "[]") && path != "" && !strings.HasPrefix(path, "[]") {
+				separator = "."
+			}
+			destination[parameterIndex][prefix+separator+path] = true
 		}
 	}
 }
