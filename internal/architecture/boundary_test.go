@@ -1481,7 +1481,11 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 	named[0].Register(nil)
 	registerTransitively(registry)
 	runRegistration(registry.Register)
-}`
+}
+func registerPointerRegistryParameter(registries []*tools.Registry) {
+	registries[0].Register(nil)
+}
+`
 	dir := t.TempDir()
 	path := filepath.Join(dir, "registration.go")
 	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
@@ -1500,6 +1504,7 @@ func configure(application *App, registry *tools.Registry, routes *router) {
 		calls = append(calls, chain)
 	})
 	want := []string{"packageRegistry.Register", "packageRegistration", "Run", "registrationRunner.Run", "identityRegistrar.Register", "registerGeneric", "registry.Register", "register", "register", "registerOwned", "application.registry.Register", "func", "withRegistrar", "callbacks.register", "callbacks", "callbacks.register", "callbacks.register", "callbacks", "wrapRegistration.register", "registry.Register", "registries.Register", "registry.Register", "window.Register", "registries.Register", "owned.registry.Register", "owned.registry.Register", "wrapRegistry.registry.Register", "wrapNestedRegistry.owned.registry.Register", "owned.registry.Register", "registry.Register", "owned.registry.Register", "Register", "Register", "registries.Register", "application.registries.Register", "application.holder.registry.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registries.Register", "registries.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "registries.Register", "owned.registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registry.Register", "registries.Register", "registries.Register", "slices.DeleteFunc", "slices.DeleteFunc", "deleteRegistrars", "registry.Register", "registry.Register", "Register", "registrar.Register", "registerExpression", "registry.Register", "registry.Register", "register", "converted.Register", "tools.RegisterBuiltins", "bulkRegister", "constructed.MustRegister", "application.registry.Register", "localRegistry.Register", "localRegistrar.Register", "namedLocalRegistrar.Register", "registries.Register", "registries.Register", "named.Register", "registerTransitively", "runRegistration"}
+	want = append(want, "registries.Register")
 	if len(calls) != len(want) {
 		t.Fatalf("Tool registration calls = %v, want %v", calls, want)
 	}
@@ -9961,7 +9966,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 						continue
 					}
 					typeName := assignedToolExpressionType(value.Rhs, index, imports, values, types)
-					if indexed && isCollectionElementAssignment(left, imports, values, types) && resolveNamedType(typeName, types) == modulePath+"/internal/tools.Registry" {
+					if indexed && isCollectionElementAssignment(left, imports, values, types) && resolveIndirectType(typeName, types) == modulePath+"/internal/tools.Registry" {
 						typeName = toolRegistryCollectionType
 					}
 					if mapKey := mapAssignmentKey(left, imports, values, types); mapKey != nil && isToolRegistryExpression(mapKey, imports, values, types) {
@@ -11801,7 +11806,7 @@ func setMayValueType(values map[string]string, key, typeName string, types compo
 }
 
 func isTrackedMayType(typeName string, types compositionTypeIndex) bool {
-	return resolveNamedType(typeName, types) == modulePath+"/internal/tools.Registry" ||
+	return resolveIndirectType(typeName, types) == modulePath+"/internal/tools.Registry" ||
 		typeName == toolRegistrationCallableType ||
 		typeName == toolRegistryCollectionType ||
 		typeName == toolRegistryMapKeyCollectionType ||
@@ -11917,6 +11922,17 @@ func resolveNamedType(typeName string, types compositionTypeIndex) string {
 		typeName = underlying
 	}
 	return typeName
+}
+
+func resolveIndirectType(typeName string, types compositionTypeIndex) string {
+	for typeName != "" {
+		resolved := resolveNamedType(typeName, types)
+		if !strings.HasPrefix(resolved, pointerTypePrefix) {
+			return resolved
+		}
+		typeName = strings.TrimPrefix(resolved, pointerTypePrefix)
+	}
+	return ""
 }
 
 func instantiatedFields(typeName string, types compositionTypeIndex) map[string]string {
@@ -12530,11 +12546,11 @@ func isToolRegistryExpression(expression ast.Expr, imports map[string]string, va
 			return true
 		}
 	}
-	if resolveNamedType(expressionType(expression, imports, values, types), types) == registryType {
+	if resolveIndirectType(expressionType(expression, imports, values, types), types) == registryType {
 		return true
 	}
 	results := expressionResultTypes(expression, imports, values, types)
-	return len(results) != 0 && resolveNamedType(results[0], types) == registryType
+	return len(results) != 0 && resolveIndirectType(results[0], types) == registryType
 }
 
 func isReturnedToolRegistrySelector(expression *ast.SelectorExpr, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
@@ -12593,7 +12609,7 @@ func isToolRegistryResultExpression(expression ast.Expr, resultIndex int, import
 		return true
 	}
 	results := expressionResultTypes(expression, imports, values, types)
-	return resultIndex < len(results) && resolveNamedType(results[resultIndex], types) == modulePath+"/internal/tools.Registry"
+	return resultIndex < len(results) && resolveIndirectType(results[resultIndex], types) == modulePath+"/internal/tools.Registry"
 }
 
 func isToolRegistryCollectionExpression(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) bool {
