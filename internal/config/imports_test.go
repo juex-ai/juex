@@ -155,6 +155,25 @@ skills:
 	}
 }
 
+func TestConfigImportsTreatColonContainingRelativeFilenameAsLocal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filenames cannot contain colons")
+	}
+	dir := t.TempDir()
+	importedName := "shared:providers.yaml"
+	writeTextFile(t, filepath.Join(dir, importedName), "models: [local:colon]\n")
+	mainPath := filepath.Join(dir, "juex.yaml")
+	writeTextFile(t, mainPath, "imports:\n  - source: "+importedName+"\n")
+
+	cfg := Config{HomeJuexDir: t.TempDir()}
+	if err := applyYAMLFile(&cfg, explicitYAMLSource(mainPath)); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cfg.Models, []string{"local:colon"}) {
+		t.Fatalf("models = %v, want colon-named local import", cfg.Models)
+	}
+}
+
 func TestConfigImportsRejectNestedImportsIncludingEmptyList(t *testing.T) {
 	for _, importedBody := range []string{"imports: []\nmodels: [local:nested]\n", "imports:\n  - source: other.yaml\n"} {
 		t.Run(strings.ReplaceAll(strings.TrimSpace(importedBody), "\n", "_"), func(t *testing.T) {

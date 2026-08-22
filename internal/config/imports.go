@@ -175,17 +175,17 @@ func (l *configImportLoader) load(declaring yamlConfigSource, rawSource string) 
 	if filepath.IsAbs(rawSource) {
 		return l.loadLocal(declaring, rawSource)
 	}
+	if !strings.Contains(rawSource, "://") {
+		return l.loadLocal(declaring, rawSource)
+	}
 	parsed, err := url.Parse(rawSource)
 	if err != nil {
 		return configImportDocument{}, errors.New("invalid source syntax")
 	}
-	if parsed.Scheme != "" {
-		if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
-			return configImportDocument{}, fmt.Errorf("unsupported URL scheme %q; only http and https are allowed", parsed.Scheme)
-		}
-		return l.loadRemote(declaring, parsed)
+	if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
+		return configImportDocument{}, fmt.Errorf("unsupported URL scheme %q; only http and https are allowed", parsed.Scheme)
 	}
-	return l.loadLocal(declaring, rawSource)
+	return l.loadRemote(declaring, parsed)
 }
 
 func (l *configImportLoader) loadLocal(declaring yamlConfigSource, path string) (configImportDocument, error) {
@@ -444,12 +444,12 @@ func safeImportSource(raw string) string {
 	if filepath.IsAbs(trimmed) {
 		return raw
 	}
+	if !strings.Contains(trimmed, "://") {
+		return raw
+	}
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
 		return "<invalid source>"
-	}
-	if parsed.Scheme == "" {
-		return raw
 	}
 	return sanitizedRemoteSource(parsed)
 }
