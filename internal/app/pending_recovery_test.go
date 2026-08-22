@@ -551,7 +551,7 @@ func TestAppStartupRecoveryTransfersReplayableAdmissionFailureToHandoff(t *testi
 		eventType: runtime.TurnAdmittedType,
 		err:       errors.New("injected startup admission failure"),
 	})
-	a.startPendingInputRecovery(record)
+	a.startPendingInputRecovery([]runtime.PendingInputRecord{record})
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -949,6 +949,61 @@ func TestAppStartupDoesNotReplayExpiredOrExplicitlyDroppedInput(t *testing.T) {
 		}
 		if !ok || current.State != want.state {
 			t.Fatalf("record %q = %+v ok=%v, want state %q", want.id, current, ok, want.state)
+		}
+	}
+}
+
+func TestAppStartupRecoveryAdvancesPastOldestRecordThatExpiresBeforeWorker(t *testing.T) {
+	dir := t.TempDir()
+	provider := &recoveryProvider{}
+	a, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+	oldest, err := a.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "expires before startup worker"),
+		runtime.PendingInputOptions{ID: "expires-before-worker", TTL: time.Millisecond},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later, err := a.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "recover after expired oldest"),
+		runtime.PendingInputOptions{ID: "recover-after-expired-oldest", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	a.activateExternalInputAfterPendingRecovery(nil, []runtime.PendingInputRecord{oldest, later}, nil)
+	if err := a.waitPendingInputRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	calls, histories := provider.snapshot()
+	if calls != 1 || len(histories) != 1 {
+		t.Fatalf("provider calls = %d histories=%+v, want later record recovered once", calls, histories)
+	}
+	last := histories[0][len(histories[0])-1]
+	if last.ID != later.MessageID {
+		t.Fatalf("recovered message = %q, want later message %q", last.ID, later.MessageID)
+	}
+	for _, want := range []struct {
+		id    string
+		state runtime.PendingInputState
+	}{
+		{id: oldest.ID, state: runtime.PendingInputStateExpired},
+		{id: later.ID, state: runtime.PendingInputStateProcessed},
+	} {
+		record, ok, err := a.Engine.PersistedPendingMessage(want.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || record.State != want.state {
+			t.Fatalf("record %q = %+v ok=%v, want %q", want.id, record, ok, want.state)
 		}
 	}
 }

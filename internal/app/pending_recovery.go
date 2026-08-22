@@ -108,27 +108,49 @@ func nextExternalTurnID(prefix string) string {
 	return prefix + "-" + event.ID
 }
 
-func (a *App) startPendingInputRecovery(record runtime.PendingInputRecord) {
-	if a == nil || a.Engine == nil || record.ID == "" {
+func (a *App) startPendingInputRecovery(records []runtime.PendingInputRecord) {
+	if a == nil || a.Engine == nil || len(records) == 0 {
 		return
 	}
+	records = append([]runtime.PendingInputRecord(nil), records...)
 	done := make(chan struct{})
 	a.pendingRecoveryDone = done
 	a.pendingRecovery.Add(1)
 	go func() {
 		defer a.pendingRecovery.Done()
 		defer close(done)
-		a.sessionMu.RLock()
-		delivery, err := a.resumePersistedInputLocked(a.ctx, record)
-		a.sessionMu.RUnlock()
-		handedOff := false
-		if shouldRetryPersistedInputHandoff(delivery, err) {
-			handedOff = a.handoffPersistedInputAfterRecovery(record)
-		}
-		if err != nil && !handedOff && a.ctx.Err() == nil && !errors.Is(err, context.Canceled) && a.stderr != nil {
-			fmt.Fprintf(a.stderr, "juex: warning: resume pending input %q: %v\n", record.ID, err)
+		for _, record := range records {
+			if a.ctx.Err() != nil {
+				return
+			}
+			if record.ID == "" {
+				continue
+			}
+			a.sessionMu.RLock()
+			delivery, err := a.resumePersistedInputLocked(a.ctx, record)
+			a.sessionMu.RUnlock()
+			handedOff := false
+			if shouldRetryPersistedInputHandoff(delivery, err) {
+				handedOff = a.handoffPersistedInputAfterRecovery(record)
+			}
+			inert := pendingRecoveryRecordInert(delivery.Record)
+			if err != nil && !handedOff && !inert && a.ctx.Err() == nil && !errors.Is(err, context.Canceled) && a.stderr != nil {
+				fmt.Fprintf(a.stderr, "juex: warning: resume pending input %q: %v\n", record.ID, err)
+			}
+			if handedOff || !inert {
+				return
+			}
 		}
 	}()
+}
+
+func pendingRecoveryRecordInert(record runtime.PendingInputRecord) bool {
+	switch record.State {
+	case runtime.PendingInputStateExpired, runtime.PendingInputStateDropped, runtime.PendingInputStateProcessed:
+		return true
+	default:
+		return false
+	}
 }
 
 // activateExternalInputAfterPendingRecovery publishes and starts the recovery
@@ -139,7 +161,7 @@ func (a *App) activateExternalInputAfterPendingRecovery(
 	activateProducers func(),
 ) {
 	if len(records) > 0 {
-		a.startPendingInputRecovery(records[0])
+		a.startPendingInputRecovery(records)
 	}
 	if activateProducers != nil {
 		activateProducers()
