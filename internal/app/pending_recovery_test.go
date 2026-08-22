@@ -790,6 +790,36 @@ func TestAppCompactWaitsForStartupPendingInputRecovery(t *testing.T) {
 	}
 }
 
+func TestAppBeginCompactAdmissionWaitsForStartupPendingInputRecovery(t *testing.T) {
+	a, _ := newStubApp(t)
+	recoveryDone := make(chan struct{})
+	a.pendingRecoveryDone = recoveryDone
+
+	const compactTurnID = "web-compact-after-recovery"
+	admitted := make(chan error, 1)
+	go func() {
+		admitted <- a.BeginCompactAdmission(context.Background(), compactTurnID)
+	}()
+	select {
+	case err := <-admitted:
+		t.Fatalf("admitted compaction reserved before startup recovery: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(recoveryDone)
+	select {
+	case err := <-admitted:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("admitted compaction did not continue after startup recovery")
+	}
+	if _, err := a.FinishCompactAdmission(compactTurnID, TurnIDFunc(func(string) string { return "unused" })); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAppDeliverObservationReportsTranscriptConsumptionDespiteTurnError(t *testing.T) {
 	dir := t.TempDir()
 	wantErr := errors.New("provider unavailable")

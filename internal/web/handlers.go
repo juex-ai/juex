@@ -467,7 +467,7 @@ func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request, id
 	}
 
 	compactTurnID := s.nextTurnID("compact")
-	if err := as.app.BeginCompactAdmission(compactTurnID); err != nil {
+	if err := as.app.BeginCompactAdmission(r.Context(), compactTurnID); err != nil {
 		writeErr(w, http.StatusConflict, "conflict", "session busy")
 		return
 	}

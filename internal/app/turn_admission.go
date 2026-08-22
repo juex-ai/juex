@@ -139,7 +139,10 @@ func (a *App) CompleteAdmittedTurn(turnID string) {
 	a.admissionQueue().complete(turnID)
 }
 
-func (a *App) BeginCompactAdmission(turnID string) error {
+func (a *App) BeginCompactAdmission(ctx context.Context, turnID string) error {
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		return err
+	}
 	return a.beginCompactAdmission(turnID)
 }
 
