@@ -378,7 +378,7 @@ func TestPendingInputQueue_ReconcileRecoveryFactsPromotesCommittedAdmissionAndDe
 	}
 
 	if err := store.ReconcileRecoveryFacts(PendingInputRecoveryFacts{
-		AdmittedTurnIDs:      map[string]struct{}{"turn-committed": {}},
+		AdmittedMessageIDs:   map[string]struct{}{committed.MessageID: {}},
 		TranscriptMessageIDs: map[string]struct{}{transcribed.MessageID: {}},
 	}); err != nil {
 		t.Fatal(err)
@@ -402,6 +402,45 @@ func TestPendingInputQueue_ReconcileRecoveryFactsPromotesCommittedAdmissionAndDe
 	}
 	if len(replayable) != 1 || replayable[0].ID != committed.ID {
 		t.Fatalf("replayable records = %+v, want only committed admission", replayable)
+	}
+}
+
+func TestPendingInputQueue_ReconcileRecoveryFactsDoesNotMatchReusedTurnID(t *testing.T) {
+	dir := t.TempDir()
+	store := NewPendingInputQueue(dir, PendingInputQueueOptions{})
+	current, err := store.StageTurnInput(
+		"turn-1",
+		llm.TextMessage(llm.RoleUser, "accepted after restart"),
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ReconcileRecoveryFacts(PendingInputRecoveryFacts{
+		AdmittedMessageIDs: map[string]struct{}{"pending-input-from-earlier-process": {}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[current.ID]; got.State != PendingInputStateAccepting {
+		t.Fatalf("reused turn ID promoted unmatched input: %+v", got)
+	}
+
+	if err := store.ReconcileRecoveryFacts(PendingInputRecoveryFacts{
+		AdmittedMessageIDs: map[string]struct{}{current.MessageID: {}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	records, err = store.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[current.ID]; got.State != PendingInputStateAdmitted {
+		t.Fatalf("matching admission message ID did not promote input: %+v", got)
 	}
 }
 

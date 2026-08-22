@@ -1384,8 +1384,9 @@ a stable message id. The runtime establishes the active Turn, commits
 `turn.admitted`, and then promotes the intent to `admitted`. A failure before
 promotion completes drops the new intent when possible; even if that
 compensation cannot be written, its durable `accepting` state remains excluded
-from recovery unless a matching committed `turn.admitted` Event proves that
-the process stopped between the Event commit and queue promotion. Startup
+from recovery unless a committed `turn.admitted` Event carrying the same
+Framework-owned message id proves that the process stopped between the Event
+commit and queue promotion. Startup
 reconciliation promotes that proven record to `admitted`; an `accepting`
 record without the Event remains inert. An input already accepted as a
 replayable pending record is not overwritten during staging: it stays
@@ -1404,7 +1405,7 @@ and verify the journal file fingerprint without rescanning the append-only
 history. Ordinary Turn admission advances `accepting` to `admitted` only after
 its admission event commits; queued records use `pending` until they are
 drained or promoted to a main Turn input. Session attachment reconciles the
-latest journal records against committed admission Turn ids and the complete
+latest journal records against committed admission message ids and the complete
 transcript index, then App resumes the oldest unexpired replayable record. The
 normal Turn restore path drains later records in acceptance order, so startup
 does not need a transport retry and cannot duplicate a transcript message.
@@ -1573,8 +1574,9 @@ records are also appended to session-local `pending_input.jsonl` with stable
 record/message ids, state, timestamps, attempts, and expiry. On restart, the
 runtime reloads unexpired `pending` or `admitted` records while ignoring
 uncommitted `accepting` intents, promotes an `accepting` record when a matching
-durable `turn.admitted` Event proves admission, skips records whose stable
-message id is already present in conversation history, and marks processed
+durable `turn.admitted` Event with the same message id proves admission, skips
+records whose stable message id is already present in conversation history,
+and marks processed
 records so the same user input or external event is not executed twice. App
 starts the oldest replayable record after Session startup; the Turn restore
 path drains the remaining records in acceptance order. That keeps assistant

@@ -49,11 +49,11 @@ type PendingInputQueueOptions struct {
 }
 
 // PendingInputRecoveryFacts are durable facts that can close a journal update
-// interrupted by process termination. Admission events prove that an
-// accepting Turn input crossed the Framework boundary; transcript message IDs
-// prove that accepted input was already consumed.
+// interrupted by process termination. Admission-event message IDs prove that
+// the exact accepting Turn input crossed the Framework boundary; transcript
+// message IDs prove that accepted input was already consumed.
 type PendingInputRecoveryFacts struct {
-	AdmittedTurnIDs      map[string]struct{}
+	AdmittedMessageIDs   map[string]struct{}
 	TranscriptMessageIDs map[string]struct{}
 }
 
@@ -443,10 +443,10 @@ func (q *PendingInputQueue) ReconcileRecoveryFacts(facts PendingInputRecoveryFac
 			updates = append(updates, record)
 			continue
 		}
-		if record.State != PendingInputStateAccepting || record.TurnID == "" {
+		if record.State != PendingInputStateAccepting || record.MessageID == "" {
 			continue
 		}
-		if _, ok := facts.AdmittedTurnIDs[record.TurnID]; !ok {
+		if _, ok := facts.AdmittedMessageIDs[record.MessageID]; !ok {
 			continue
 		}
 		record.Origin = PendingInputOriginTurn

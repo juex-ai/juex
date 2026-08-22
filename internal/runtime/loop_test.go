@@ -515,10 +515,17 @@ func TestAdmitTurnMessage_DurableAdmissionEventFailureDropsAcceptedInput(t *test
 }
 
 func TestAdmitTurnMessage_RepeatedAdmissionKeepsCommittedRecord(t *testing.T) {
-	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	var admitted TurnAdmittedPayload
+	bus.Subscribe(TurnAdmittedType, func(event events.Event) {
+		admitted = payloadAs[TurnAdmittedPayload](event.Payload)
+	})
 	first, err := eng.AdmitTurnMessage("turn-1", llm.TextMessage(llm.RoleUser, "accepted once"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if admitted.MessageID != first.ID {
+		t.Fatalf("admission message id = %q, want %q", admitted.MessageID, first.ID)
 	}
 	second, err := eng.AdmitTurnMessage("turn-1", first)
 	if err != nil {
@@ -6272,6 +6279,7 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	eng.RuntimeModules = set
 	var drained int32
 	var promoted PendingInputPromotedPayload
+	var admitted TurnAdmittedPayload
 	eng.Bus.Subscribe("pending_input.drained", func(e events.Event) {
 		atomic.AddInt32(&drained, 1)
 	})
@@ -6279,7 +6287,8 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 		promoted, _ = e.Payload.(PendingInputPromotedPayload)
 		admissionOrder = append(admissionOrder, "pending_input.promoted")
 	})
-	eng.Bus.Subscribe(TurnAdmittedType, func(events.Event) {
+	eng.Bus.Subscribe(TurnAdmittedType, func(event events.Event) {
+		admitted = payloadAs[TurnAdmittedPayload](event.Payload)
 		admissionOrder = append(admissionOrder, "turn.admitted")
 	})
 
@@ -6289,6 +6298,9 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	}
 	if !ok {
 		t.Fatal("pending input was not promoted")
+	}
+	if admitted.MessageID != msg.ID {
+		t.Fatalf("promoted admission message id = %q, want %q", admitted.MessageID, msg.ID)
 	}
 	if promotedStatus.PendingCount != 0 ||
 		promoted.PendingCount != 0 ||

@@ -21,10 +21,13 @@ func (e *Engine) RecoverPendingInputRecords() ([]PendingInputRecord, error) {
 		return nil, nil
 	}
 
-	admittedTurnIDs := map[string]struct{}{}
+	admittedMessageIDs := map[string]struct{}{}
 	if err := session.ReplayEvents(sess.Dir, func(event events.Event) {
-		if event.Type == TurnAdmittedType && event.TurnID != "" {
-			admittedTurnIDs[event.TurnID] = struct{}{}
+		if event.Type == TurnAdmittedType {
+			payload := payloadAs[TurnAdmittedPayload](event.Payload)
+			if payload.MessageID != "" {
+				admittedMessageIDs[payload.MessageID] = struct{}{}
+			}
 		}
 	}); err != nil {
 		return nil, fmt.Errorf("runtime: recover pending input admission facts: %w", err)
@@ -40,7 +43,7 @@ func (e *Engine) RecoverPendingInputRecords() ([]PendingInputRecord, error) {
 		}
 	}
 	if err := queue.ReconcileRecoveryFacts(PendingInputRecoveryFacts{
-		AdmittedTurnIDs:      admittedTurnIDs,
+		AdmittedMessageIDs:   admittedMessageIDs,
 		TranscriptMessageIDs: transcriptMessageIDs,
 	}); err != nil {
 		return nil, fmt.Errorf("runtime: reconcile pending input recovery facts: %w", err)

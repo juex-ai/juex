@@ -160,7 +160,14 @@ func TestRecoverPendingInputRecordsUsesAdmissionEventsAndTranscriptFacts(t *test
 	if err := sess.AppendEvent(events.Normalize(events.Event{
 		Type:    TurnAdmittedType,
 		TurnID:  "turn-committed",
-		Payload: TurnAdmittedPayload{},
+		Payload: TurnAdmittedPayload{MessageID: committed.MessageID},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendEvent(events.Normalize(events.Event{
+		Type:    TurnAdmittedType,
+		TurnID:  "turn-uncommitted",
+		Payload: TurnAdmittedPayload{MessageID: "message-from-earlier-process"},
 	})); err != nil {
 		t.Fatal(err)
 	}

@@ -172,7 +172,8 @@ domain boundary.
    boundary, or restart cannot execute the same input twice. An admitted but
    unprocessed record is recovered from the durable queue, not from a live
    transport or observer. Restart reconciles the queue with committed
-   `turn.admitted` Events and transcript message ids: a committed admission can
+   `turn.admitted` Events carrying the accepted message id and transcript
+   message ids: a committed admission can
    finish an interrupted `accepting -> admitted` transition, while an
    uncommitted acceptance intent remains inert.
 5. Expired input becomes inert. Queue overflow is rejected loudly without

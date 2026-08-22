@@ -201,7 +201,7 @@ func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Messa
 	e.pendingMu.Unlock()
 
 	if admitted {
-		if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{}}); err != nil {
+		if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{MessageID: record.MessageID}}); err != nil {
 			var dropErr error
 			if createdAdmissionIntent {
 				dropErr = queue.MarkDropped([]string{record.ID})
@@ -503,7 +503,7 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 	e.pendingEventAnnouncing = true
 	e.pendingMu.Unlock()
 
-	if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{}}); err != nil {
+	if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{MessageID: item.Message.ID}}); err != nil {
 		e.finishActiveTurn(nextTurnID)
 		e.flushPendingEvents()
 		status := e.PendingInputStatus()
