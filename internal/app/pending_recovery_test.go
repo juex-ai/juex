@@ -269,6 +269,128 @@ func TestAppExternalDeliveryWaitsForStartupPendingInputRecovery(t *testing.T) {
 	}
 }
 
+func TestAppBeginCloseCancelsTurnWaitingForStartupPendingInputRecovery(t *testing.T) {
+	dir := t.TempDir()
+	first, err := New(recoveryAppOptions(dir, &recoveryProvider{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "recover before closing"),
+		runtime.PendingInputOptions{ID: "restart-before-close", TTL: time.Hour},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.CloseAndWait(); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := newBlockingAppProvider()
+	restarted, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup recovery did not reach provider")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := restarted.Run(context.Background(), "must not run during close")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("Run completed during startup recovery: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := restarted.BeginClose(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run after BeginClose error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not stop when the App began closing")
+	}
+	if err := restarted.CloseAndWait(); err != nil {
+		t.Fatal(err)
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if provider.calls != 1 {
+		t.Fatalf("provider calls = %d, want startup recovery only", provider.calls)
+	}
+}
+
+func TestAppExternalDeliveryTransfersToAppAfterRecoveryWaitTimeout(t *testing.T) {
+	dir := t.TempDir()
+	first, err := New(recoveryAppOptions(dir, &recoveryProvider{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "recover before timed delivery"),
+		runtime.PendingInputOptions{ID: "restart-before-timed-observation", TTL: time.Hour},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.CloseAndWait(); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := newBlockingAppProvider()
+	restarted, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.CloseAndWait() })
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup recovery did not reach provider")
+	}
+
+	record := testObservationRecord("obs-timeout-during-recovery")
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	outcome, err := restarted.DeliverObservation(ctx, record)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("DeliverObservation error = %v, want context.DeadlineExceeded", err)
+	}
+	if outcome.State != observable.ObservationStateQueued || outcome.PendingInputID != observationPendingInputID(record) {
+		t.Fatalf("delivery outcome = %+v, want queued durable input", outcome)
+	}
+
+	close(provider.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		provider.mu.Lock()
+		calls := provider.calls
+		provider.mu.Unlock()
+		if calls == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("provider calls = %d, want App-owned handoff after recovery", calls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pending, ok, stateErr := restarted.Engine.PersistedPendingMessage(outcome.PendingInputID)
+	if stateErr != nil {
+		t.Fatal(stateErr)
+	}
+	if !ok || pending.State != runtime.PendingInputStateProcessed || !restarted.Session.HasMessageID(pending.MessageID) {
+		t.Fatalf("pending after App-owned handoff = %+v ok=%v", pending, ok)
+	}
+}
+
 func TestAppDeliverObservationReportsTranscriptConsumptionDespiteTurnError(t *testing.T) {
 	dir := t.TempDir()
 	wantErr := errors.New("provider unavailable")

@@ -150,7 +150,11 @@ type App struct {
 	pendingRecovery sync.WaitGroup
 	// pendingRecoveryDone is non-nil only when startup found durable input to
 	// replay. It closes after that recovery Turn releases the Engine.
-	pendingRecoveryDone <-chan struct{}
+	pendingRecoveryDone  <-chan struct{}
+	pendingHandoffMu     sync.Mutex
+	pendingHandoffs      sync.WaitGroup
+	pendingHandoffClosed bool
+	pendingHandoffIDs    map[string]struct{}
 
 	sessionLock       *session.Lock
 	sessionResource   *session.Session
@@ -522,7 +526,7 @@ func New(opts Options) (*App, error) {
 			return nil
 		}
 		return a.runtimeModules.QuiesceRuntime(context.Background())
-	}, a.waitPendingInputRecovery, func() error {
+	}, a.closeAndWaitPendingInputWork, func() error {
 		if err := a.detachObservability(); err != nil {
 			return err
 		}

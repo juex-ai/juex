@@ -173,13 +173,13 @@ func (a *App) RunAdmittedTurn(ctx context.Context, turnID string, message llm.Me
 	if a == nil || a.Engine == nil {
 		return "", errors.New("app: admitted turn requires an initialized engine")
 	}
-	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
-		return "", err
-	}
 	a.sessionMu.RLock()
 	defer a.sessionMu.RUnlock()
 	if a.Session == nil {
 		return "", ErrSessionUnavailable
+	}
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		return "", err
 	}
 	return a.Engine.TurnMessageWithID(ctx, message, turnID)
 }

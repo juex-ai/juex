@@ -25,6 +25,7 @@ func (a *App) deliverExternalInputLocked(ctx context.Context, message llm.Messag
 		return externalInputDelivery{}, err
 	}
 	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		a.handoffPersistedInputAfterRecovery(record)
 		return externalInputDelivery{Record: record, Queued: true}, err
 	}
 	return a.resumePersistedInputLocked(ctx, record)
@@ -115,25 +116,93 @@ func (a *App) startPendingInputRecovery(record runtime.PendingInputRecord) {
 		a.sessionMu.RLock()
 		_, err := a.resumePersistedInputLocked(a.ctx, record)
 		a.sessionMu.RUnlock()
-		if err != nil && !errors.Is(err, context.Canceled) && a.stderr != nil {
+		if err != nil && a.ctx.Err() == nil && !errors.Is(err, context.Canceled) && a.stderr != nil {
 			fmt.Fprintf(a.stderr, "juex: warning: resume pending input %q: %v\n", record.ID, err)
 		}
 	}()
 }
 
 func (a *App) waitPendingInputRecoveryContext(ctx context.Context) error {
-	if a == nil || a.pendingRecoveryDone == nil {
+	if a == nil {
 		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var appDone <-chan struct{}
+	if a.ctx != nil {
+		if err := a.ctx.Err(); err != nil {
+			return err
+		}
+		appDone = a.ctx.Done()
+	}
+	if a.pendingRecoveryDone == nil {
+		return nil
+	}
 	select {
 	case <-a.pendingRecoveryDone:
+		// BeginClose and recovery completion may become ready together. Check
+		// both lifetimes again so shutdown always wins that race.
+		if a.ctx != nil {
+			if err := a.ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-appDone:
+		return a.ctx.Err()
 	}
+}
+
+// handoffPersistedInputAfterRecovery transfers caller-canceled delivery to
+// App-owned work. The durable record remains available for restart if the App
+// is already closing, and duplicate callers share one handoff by record ID.
+func (a *App) handoffPersistedInputAfterRecovery(record runtime.PendingInputRecord) bool {
+	if a == nil || a.Engine == nil || record.ID == "" || a.ctx == nil {
+		return false
+	}
+	a.pendingHandoffMu.Lock()
+	if a.pendingHandoffClosed || a.ctx.Err() != nil {
+		a.pendingHandoffMu.Unlock()
+		return false
+	}
+	if _, ok := a.pendingHandoffIDs[record.ID]; ok {
+		a.pendingHandoffMu.Unlock()
+		return true
+	}
+	if a.pendingHandoffIDs == nil {
+		a.pendingHandoffIDs = make(map[string]struct{})
+	}
+	a.pendingHandoffIDs[record.ID] = struct{}{}
+	a.pendingHandoffs.Add(1)
+	a.pendingHandoffMu.Unlock()
+
+	go func() {
+		defer func() {
+			a.pendingHandoffMu.Lock()
+			delete(a.pendingHandoffIDs, record.ID)
+			a.pendingHandoffMu.Unlock()
+			a.pendingHandoffs.Done()
+		}()
+		if err := a.waitPendingInputRecoveryContext(a.ctx); err != nil {
+			return
+		}
+		a.sessionMu.RLock()
+		_, err := a.resumePersistedInputLocked(a.ctx, record)
+		a.sessionMu.RUnlock()
+		if err != nil && a.ctx.Err() == nil && !errors.Is(err, context.Canceled) && a.stderr != nil {
+			fmt.Fprintf(a.stderr, "juex: warning: resume handed-off pending input %q: %v\n", record.ID, err)
+		}
+	}()
+	return true
 }
 
 func (a *App) waitPendingInputRecovery() error {
@@ -141,5 +210,17 @@ func (a *App) waitPendingInputRecovery() error {
 		return nil
 	}
 	a.pendingRecovery.Wait()
+	return nil
+}
+
+func (a *App) closeAndWaitPendingInputWork() error {
+	if a == nil {
+		return nil
+	}
+	a.pendingHandoffMu.Lock()
+	a.pendingHandoffClosed = true
+	a.pendingHandoffMu.Unlock()
+	a.pendingRecovery.Wait()
+	a.pendingHandoffs.Wait()
 	return nil
 }
