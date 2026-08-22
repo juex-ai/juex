@@ -414,7 +414,7 @@ func setCompositeAppFields(target *App, resource any, registryValue any) {
 }
 var compositeAppFieldSetter = setCompositeAppFields
 func (application *App) bindCompositeClosure(manager *mcp.Manager, registry *tools.Registry) {
-	binder := appFieldBinder{bind: compositeAppFieldSetter}
+	binder := &appFieldBinder{bind: compositeAppFieldSetter}
 	binder.bind(application, manager, registry)
 }
 func (application *App) bypass() {
@@ -5531,13 +5531,7 @@ func assignedCompositeFunctionLiterals(expressions []ast.Expr, index int, import
 }
 
 func compositeFunctionLiterals(expression ast.Expr, prefix string, imports map[string]string, types compositionTypeIndex) []compositeFunctionLiteral {
-	for {
-		parenthesized, ok := expression.(*ast.ParenExpr)
-		if !ok {
-			break
-		}
-		expression = parenthesized.X
-	}
+	expression = unwrapCompositeExpression(expression)
 	literal, ok := expression.(*ast.CompositeLit)
 	if !ok {
 		return nil
@@ -5565,13 +5559,7 @@ func compositeFunctionLiterals(expression ast.Expr, prefix string, imports map[s
 }
 
 func compositeValueExpressions(expression ast.Expr, prefix string, imports map[string]string, types compositionTypeIndex) []compositeValueExpression {
-	for {
-		parenthesized, ok := expression.(*ast.ParenExpr)
-		if !ok {
-			break
-		}
-		expression = parenthesized.X
-	}
+	expression = unwrapCompositeExpression(expression)
 	literal, ok := expression.(*ast.CompositeLit)
 	if !ok {
 		return nil
@@ -5597,6 +5585,22 @@ func compositeValueExpressions(expression ast.Expr, prefix string, imports map[s
 		result = append(result, compositeValueExpression{suffix: prefix + suffix, expression: element})
 	}
 	return result
+}
+
+func unwrapCompositeExpression(expression ast.Expr) ast.Expr {
+	for {
+		switch value := expression.(type) {
+		case *ast.ParenExpr:
+			expression = value.X
+		case *ast.UnaryExpr:
+			if value.Op != token.AND {
+				return expression
+			}
+			expression = value.X
+		default:
+			return expression
+		}
+	}
 }
 
 func trackCompositeFunctionTypes(values map[string]string, parent string, target ast.Expr, expressions []ast.Expr, index int, imports map[string]string, types compositionTypeIndex) {
