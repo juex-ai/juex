@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1263,6 +1265,16 @@ func TestInitCmd_MergesExistingProviderWithoutOverwriting(t *testing.T) {
 	if err := writeJuexConfigFile(configPath, "openai", "https://old.example", "sk-old", "gpt-old"); err != nil {
 		t.Fatal(err)
 	}
+	original, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextFile(filepath.Join(work, ".juex", "shared.yaml"), "runtime:\n  tool_timeout: 45s\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextFile(configPath, "imports:\n  - source: shared.yaml\n"+string(original)); err != nil {
+		t.Fatal(err)
+	}
 	root.SetOut(&out)
 	root.SetErr(&out)
 	root.SetArgs([]string{
@@ -1285,7 +1297,7 @@ func TestInitCmd_MergesExistingProviderWithoutOverwriting(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(bodyBytes)
-	for _, want := range []string{"models:", "openai:gpt-old", "base_url: https://old.example", "api_key: sk-old", "id: gpt-new"} {
+	for _, want := range []string{"imports:", "source: shared.yaml", "models:", "openai:gpt-old", "base_url: https://old.example", "api_key: sk-old", "id: gpt-new"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("merged config missing %q:\n%s", want, body)
 		}
@@ -1724,6 +1736,61 @@ func TestDoctorConfigCheckDistinguishesDefaultAndInstanceHomePaths(t *testing.T)
 	}
 	if got := check.Details["effective_home_config_path"]; got != instancePath {
 		t.Fatalf("effective home config path = %#v, want %q", got, instancePath)
+	}
+}
+
+func TestDoctorConfigCheckReportsImportFreshnessWithoutSecrets(t *testing.T) {
+	home := setHomeForCLITest(t)
+	for _, key := range []string{
+		"PROVIDER_API_ID",
+		"PROVIDER_API_PROTOCOL",
+		"PROVIDER_API_BASE",
+		"PROVIDER_API_KEY",
+		"PROVIDER_API_MODEL",
+	} {
+		t.Setenv(key, "")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`models: [local:test]
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: https://example.invalid
+    api_key: imported-api-secret
+    models:
+      - id: test
+`))
+	}))
+	configPath := filepath.Join(home, ".juex", "juex.yaml")
+	if err := writeTextFile(configPath, "imports:\n  - source: "+server.URL+"/config.yaml?token=url-secret\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	workDir := t.TempDir()
+	if _, err := config.LoadForWorkDirForValidation(workDir); err != nil {
+		t.Fatal(err)
+	}
+	server.Close()
+	cfg, err := config.LoadForWorkDirForValidation(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := doctorConfigCheck(cfg)
+	if check.Status != doctorStatusWarn || !strings.Contains(check.Message, "stale") {
+		t.Fatalf("check = %+v, want stale import warning", check)
+	}
+	imports, ok := check.Details["config_imports"].([]map[string]any)
+	if !ok || len(imports) != 1 || imports[0]["state"] != "stale" || imports[0]["digest"] == "" {
+		t.Fatalf("config imports = %#v", check.Details["config_imports"])
+	}
+	encoded, err := json.Marshal(check)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"imported-api-secret", "url-secret"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("doctor output leaked %q: %s", secret, encoded)
+		}
 	}
 }
 

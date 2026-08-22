@@ -4,6 +4,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -77,6 +78,10 @@ type Config struct {
 	launchEnvironment  environment.Snapshot
 	runtimeEnvStatus   EnvironmentStatus
 	sandboxConfigured  bool
+	importStatuses     []ConfigImportStatus
+	pendingImportCache []configImportCacheRecord
+	importLoader       *configImportLoader
+	importCacheContext string
 }
 
 type AgentStateMode uint8
@@ -104,6 +109,7 @@ type EnvironmentStatus struct {
 }
 
 type fileConfig struct {
+	Imports                   []importConfig          `yaml:"imports"`
 	Models                    *[]string               `yaml:"models"`
 	EnableUserAgentsResources optionalBool            `yaml:"enable_user_agents_resources"`
 	Providers                 []providerConfig        `yaml:"providers"`
@@ -386,7 +392,7 @@ func Load() (Config, error) {
 // LoadWithOptions loads runtime configuration with an explicit workspace
 // identity policy. AgentStateMint preserves the historical loader behavior.
 func LoadWithOptions(opts LoadOptions) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(opts.WorkDir)
+	cfg, err := loadConfigFilesForWorkDir(opts.WorkDir, opts.ConfigPath)
 	if err != nil {
 		return cfg, err
 	}
@@ -439,8 +445,8 @@ func LoadForWorkDirWithModelsOverride(workDir string, modelRefs []string) (Confi
 	return cfg, nil
 }
 
-func loadConfigFilesForWorkDir(workDir string) (Config, error) {
-	cfg, err := loadUserConfigForWorkDir(workDir)
+func loadConfigFilesForWorkDir(workDir string, explicitPaths ...string) (Config, error) {
+	cfg, err := loadUserConfigForWorkDir(workDir, explicitPaths...)
 	if err != nil {
 		return cfg, err
 	}
@@ -450,7 +456,7 @@ func loadConfigFilesForWorkDir(workDir string) (Config, error) {
 	return cfg, nil
 }
 
-func loadUserConfigForWorkDir(workDir string) (Config, error) {
+func loadUserConfigForWorkDir(workDir string, explicitPaths ...string) (Config, error) {
 	cfg := Config{
 		ContextWindow:             DefaultContextWindow,
 		Compaction:                DefaultCompactionConfig(),
@@ -476,6 +482,7 @@ func loadUserConfigForWorkDir(workDir string) (Config, error) {
 		workDir = abs
 	}
 	cfg.WorkDir = workDir
+	cfg.importCacheContext = configImportContextDigest(workDir, explicitPaths...)
 	if home, err := os.UserHomeDir(); err == nil {
 		cfg.HomeAgentsDir = filepath.Join(home, ".agents")
 	}
@@ -485,6 +492,11 @@ func loadUserConfigForWorkDir(workDir string) (Config, error) {
 	}
 	cfg.HomeJuexDir = homeConfig.EffectiveHomeDir
 	cfg.defaultHomeRuntimeConfigPath = homeConfig.DefaultConfigPath
+	loader := configImportLoaderFor(&cfg)
+	if err := loader.recoverConfigImportPublicationIfPresent(); err != nil {
+		cfg.importLoader = nil
+		return cfg, err
+	}
 
 	for _, source := range homeConfig.Sources {
 		if err := applyYAMLFile(&cfg, source); err != nil {
@@ -502,7 +514,7 @@ func LoadFromFile(path string) (Config, error) {
 
 // LoadFromFileForWorkDir is LoadFromFile with an explicit working directory.
 func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(workDir)
+	cfg, err := loadConfigFilesForWorkDir(workDir, path)
 	if err != nil {
 		return cfg, err
 	}
@@ -519,7 +531,7 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 // LoadFromFileForWorkDirForValidation is LoadFromFileForWorkDir without
 // resolving or creating a workspace agent identity.
 func LoadFromFileForWorkDirForValidation(path, workDir string) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(workDir)
+	cfg, err := loadConfigFilesForWorkDir(workDir, path)
 	if err != nil {
 		return cfg, err
 	}
@@ -536,7 +548,7 @@ func LoadFromFileForWorkDirForValidation(path, workDir string) (Config, error) {
 // explicit ordered model chain that wins over YAML and provider selector
 // environment values.
 func LoadFromFileForWorkDirWithModelsOverride(path, workDir string, modelRefs []string) (Config, error) {
-	cfg, err := loadConfigFilesForWorkDir(workDir)
+	cfg, err := loadConfigFilesForWorkDir(workDir, path)
 	if err != nil {
 		return cfg, err
 	}
@@ -563,11 +575,43 @@ func finalizeConfigLoadWithAgentState(
 	modelRefs []string,
 	resolveAuth bool,
 	agentStateMode AgentStateMode,
+) error {
+	return finalizeConfigLoadWithAgentStateAndImportCache(cfg, modelRefs, resolveAuth, agentStateMode, true, false)
+}
+
+func finalizeConfigLoadForValidationRetainingImportCacheLock(
+	cfg *Config,
+	modelRefs []string,
+	resolveAuth bool,
+) error {
+	return finalizeConfigLoadWithAgentStateAndImportCache(cfg, modelRefs, resolveAuth, AgentStateNone, false, true)
+}
+
+func finalizeConfigLoadWithAgentStateAndImportCache(
+	cfg *Config,
+	modelRefs []string,
+	resolveAuth bool,
+	agentStateMode AgentStateMode,
+	publishImportCache bool,
+	retainImportCacheLock bool,
 ) (loadErr error) {
 	if err := resolveRuntimeEnvironment(cfg); err != nil {
-		return err
+		cfg.pendingImportCache = nil
+		var closeErr error
+		if cfg.importLoader != nil {
+			closeErr = cfg.importLoader.closeConfigImportCacheLock()
+		}
+		cfg.importLoader = nil
+		return errors.Join(err, closeErr)
 	}
 	defer func() {
+		if loadErr != nil {
+			cfg.pendingImportCache = nil
+		}
+		if cfg.importLoader != nil && (loadErr != nil || !retainImportCacheLock) {
+			loadErr = errors.Join(loadErr, cfg.importLoader.closeConfigImportCacheLock())
+			cfg.importLoader = nil
+		}
 		loadErr = redactConfiguredEnvironmentError(cfg.EnvironmentSnapshot(), loadErr)
 	}()
 	hasModelsOverride := len(modelRefs) > 0
@@ -591,7 +635,7 @@ func finalizeConfigLoadWithAgentState(
 		}); err != nil {
 			return err
 		}
-		return finalizeLoadedConfig(cfg, resolveAuth, agentStateMode)
+		return finalizeLoadedConfig(cfg, resolveAuth, agentStateMode, publishImportCache)
 	}
 	if err := resolveSelectedProvider(cfg); err != nil {
 		return err
@@ -599,7 +643,7 @@ func finalizeConfigLoadWithAgentState(
 	if err := applyOSEnv(cfg); err != nil {
 		return err
 	}
-	return finalizeLoadedConfig(cfg, resolveAuth, agentStateMode)
+	return finalizeLoadedConfig(cfg, resolveAuth, agentStateMode, publishImportCache)
 }
 
 type configuredEnvironmentError struct {
@@ -630,12 +674,17 @@ func redactConfiguredEnvironmentError(snapshot environment.Snapshot, err error) 
 	}
 }
 
-func finalizeLoadedConfig(cfg *Config, resolveAuth bool, agentStateMode AgentStateMode) error {
+func finalizeLoadedConfig(cfg *Config, resolveAuth bool, agentStateMode AgentStateMode, publishImportCache bool) error {
 	if err := resolveShellProfileForConfig(cfg); err != nil {
 		return err
 	}
 	if resolveAuth {
 		if err := resolveCodexAuth(cfg); err != nil {
+			return err
+		}
+	}
+	if publishImportCache {
+		if err := commitConfigImportCaches(cfg); err != nil {
 			return err
 		}
 	}
@@ -782,47 +831,75 @@ func (c Config) EnvironmentStatus() EnvironmentStatus {
 }
 
 func applyYAMLFile(cfg *Config, source yamlConfigSource) error {
-	if source.Path == "" {
-		return nil
-	}
-	data, err := os.ReadFile(source.Path)
+	hadLoader := cfg.importLoader != nil
+	loader := configImportLoaderFor(cfg)
+	err := applyYAMLFileWithImportLoader(cfg, source, loader)
 	if err != nil {
-		if source.MissingOK && os.IsNotExist(err) {
-			return nil
+		err = errors.Join(err, loader.closeConfigImportCacheLock())
+		if !hadLoader {
+			cfg.importLoader = nil
 		}
-		return err
 	}
-	return applyYAMLData(cfg, data, source)
+	return err
+}
+
+func configImportLoaderFor(cfg *Config) *configImportLoader {
+	if cfg.importLoader == nil {
+		cfg.importLoader = newConfigImportLoader(cfg.HomeJuexDir)
+		cfg.importLoader.contextDigest = cfg.importCacheContext
+	}
+	return cfg.importLoader
 }
 
 func applyExplicitYAMLFile(cfg *Config, path string) error {
-	// A CLI may point --config at a durable file that was already loaded.
-	// Reapply its ordinary explicit overrides while preserving the Extension
-	// allowlist at the file's durable scope.
-	loadedPaths := []string{
-		cfg.DefaultHomeRuntimeConfigPath(),
-		cfg.HomeRuntimeConfigPath(),
-		cfg.RuntimeConfigPath(),
+	// A workspace file is already the highest ordinary YAML layer, so naming it
+	// again through --config must not replay append-only values. A loaded Home
+	// file still needs its declaring values replayed above the workspace, but its
+	// imports, append-only hooks/sandbox paths, and durable Extension allowlist
+	// must not be applied twice.
+	workspacePath := cfg.RuntimeConfigPath()
+	if workspacePath != "" {
+		sameWorkspaceFile, err := sameConfigPath(path, workspacePath)
+		if err != nil {
+			return err
+		}
+		if sameWorkspaceFile {
+			return nil
+		}
 	}
-	for _, loadedPath := range loadedPaths {
-		if loadedPath == "" {
+	loadedSources := []yamlConfigSource{
+		{Path: cfg.DefaultHomeRuntimeConfigPath(), Scope: configScopeDefaultHome},
+		{Path: cfg.HomeRuntimeConfigPath(), Scope: configScopeInstanceHome},
+	}
+	for _, loadedSource := range loadedSources {
+		if loadedSource.Path == "" {
 			continue
 		}
-		sameLoadedFile, err := sameConfigPath(path, loadedPath)
+		sameLoadedFile, err := sameConfigPath(path, loadedSource.Path)
 		if err != nil {
 			return err
 		}
 		if sameLoadedFile {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return closeConfigImportLoaderAfterError(cfg, readErr)
 			}
-			return applyYAMLDataWithOptions(cfg, data, explicitYAMLSource(path), applyYAMLDataOptions{
-				SkipExtensionPolicy: true,
+			loadedSource.Path = path
+			applyErr := applyYAMLDataWithOptions(cfg, data, loadedSource, applyYAMLDataOptions{
+				SkipExtensionPolicy:  true,
+				SkipAppendOnlyValues: true,
 			})
+			return closeConfigImportLoaderAfterError(cfg, applyErr)
 		}
 	}
 	return applyYAMLFile(cfg, explicitYAMLSource(path))
+}
+
+func closeConfigImportLoaderAfterError(cfg *Config, err error) error {
+	if err == nil || cfg.importLoader == nil {
+		return err
+	}
+	return errors.Join(err, cfg.importLoader.closeConfigImportCacheLock())
 }
 
 func applyYAMLData(cfg *Config, data []byte, source yamlConfigSource) error {
@@ -830,7 +907,8 @@ func applyYAMLData(cfg *Config, data []byte, source yamlConfigSource) error {
 }
 
 type applyYAMLDataOptions struct {
-	SkipExtensionPolicy bool
+	SkipExtensionPolicy  bool
+	SkipAppendOnlyValues bool
 }
 
 func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource, opts applyYAMLDataOptions) error {
@@ -864,8 +942,10 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 	if err := applyProvidersConfig(cfg, fc.Providers); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source.Path, err)
 	}
-	if err := applyHooksConfig(cfg, fc.Hooks, source.hookSource(), source.requireHookTrust()); err != nil {
-		return fmt.Errorf("config: parse %s: %w", source.Path, err)
+	if !opts.SkipAppendOnlyValues {
+		if err := applyHooksConfig(cfg, fc.Hooks, source.hookSource(), source.requireHookTrust()); err != nil {
+			return fmt.Errorf("config: parse %s: %w", source.Path, err)
+		}
 	}
 	applyCompactionConfig(cfg, fc.Compaction)
 	applyToolOutputConfig(cfg, fc.ToolOutput)
@@ -891,6 +971,9 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 		sandboxLayer := sandboxConfig{}
 		if fc.Sandbox != nil {
 			sandboxLayer = *fc.Sandbox
+		}
+		if opts.SkipAppendOnlyValues {
+			sandboxLayer.FileSystem.BlockedPaths = nil
 		}
 		if err := applySandboxConfig(cfg, sandboxLayer); err != nil {
 			return fmt.Errorf("config: parse %s: %w", source.Path, err)

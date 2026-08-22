@@ -147,6 +147,22 @@ provider smoke and compaction eval commands below.
 Live model scope comes from the resolved provider config. Candidates are
 deduplicated and sorted by `provider:model`; routine commands use a recorded
 seed to select one candidate.
+Before provider smoke or compaction projects a selected provider/model, it
+loads all Home and explicit source layers while holding the runtime-compatible
+`$JUEX_HOME/.locks/config-imports-cache.lock`, including every Last-Known-Good
+cache read. Eval rejects runtime cache records with fields outside the exact v3
+schema and refuses to read while a runtime publication journal awaits Go-side
+recovery. Remote imports share the runtime's five-second overall deadline across
+redirects and body consumption, and redirects do not forward conditional
+validators from the original resource. The loader then materializes the complete merged source in a
+permission-restricted work area
+and asks `juex doctor --offline` to validate its full schema. Unknown fields in
+unselected sections therefore fail the environment gate instead of being
+dropped by projection.
+The lower-level `write-model-config` command uses the same source-layer
+materialization and Juex validation before selecting a provider/model. Pass
+`--juex` or `JUEX_BIN` to pin the validator; when neither a local build nor an
+installed binary exists, the repository helper validates through `go run`.
 Provider smoke excludes profiles whose effective provider/model capability is
 explicitly `tools: false`. Compaction excludes models whose declared context
 window is smaller than the requested eval window; an omitted declaration uses

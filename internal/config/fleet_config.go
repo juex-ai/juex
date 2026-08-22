@@ -25,25 +25,112 @@ type fleetFileConfig struct {
 	UnsafeBindAny optionalBool `yaml:"unsafe_bind_any"`
 }
 
-func LoadHomeFleetConfig() (FleetConfig, error) {
-	cfg := FleetConfig{Addr: DefaultFleetAddr}
+func LoadHomeFleetConfig() (cfg FleetConfig, returnErr error) {
+	cfg = FleetConfig{Addr: DefaultFleetAddr}
 	resolution, err := resolveHomeConfigSources()
 	if err != nil {
 		return cfg, err
 	}
+	loader := newConfigImportLoader(resolution.EffectiveHomeDir)
+	defer func() {
+		returnErr = errors.Join(returnErr, loader.closeConfigImportCacheLock())
+	}()
+	references, err := fleetConfigImportCacheReferences(resolution.Sources)
+	if err != nil {
+		return cfg, err
+	}
+	// A resident Fleet service has no canonical Agent workspace. Select one
+	// complete runtime-validated load context for every remote Home import so
+	// fallback cannot synthesize fields from independently refreshed contexts.
+	contextDigest, err := loader.selectNewestCompleteCacheContext(references)
+	if err != nil {
+		return cfg, fmt.Errorf("config: select Fleet import cache context: %w", err)
+	}
+	loader.contextDigest = contextDigest
 	for _, source := range resolution.Sources {
-		if err := applyHomeFleetConfig(&cfg, source.Path); err != nil {
+		if err := applyHomeFleetConfig(&cfg, source, loader); err != nil {
 			return cfg, err
 		}
 	}
 	return cfg, nil
 }
 
-func applyHomeFleetConfig(cfg *FleetConfig, path string) error {
-	_, root, _, err := readFleetConfigDocument(path)
+func fleetConfigImportCacheReferences(sources []yamlConfigSource) ([]configImportCacheReference, error) {
+	var references []configImportCacheReference
+	for _, source := range sources {
+		_, root, _, err := readFleetConfigDocument(source.Path)
+		if err != nil {
+			return nil, err
+		}
+		imports, err := fleetImports(root, source.Path)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range imports {
+			identity, remote := remoteConfigImportIdentity(item.Source)
+			if remote {
+				references = append(references, configImportCacheReference{
+					identity:      identity,
+					declaringPath: source.Path,
+				})
+			}
+		}
+	}
+	return references, nil
+}
+
+func applyHomeFleetConfig(cfg *FleetConfig, source yamlConfigSource, loader *configImportLoader) error {
+	_, root, _, err := readFleetConfigDocument(source.Path)
 	if err != nil {
 		return err
 	}
+	imports, err := fleetImports(root, source.Path)
+	if err != nil {
+		return err
+	}
+	documents := make([]configImportDocument, 0, len(imports))
+	for i, item := range imports {
+		document, loadErr := loader.load(source, item.Source)
+		if loadErr != nil {
+			return fmt.Errorf("config: %s imports[%d] %s: %w", source.Path, i, safeImportSource(item.Source), loadErr)
+		}
+		_, importedRoot, parseErr := parseFleetConfigDocument(document.data, document.source.Path)
+		if parseErr != nil {
+			return fmt.Errorf("config: %s imports[%d] %s: %w", source.Path, i, document.source.Path, parseErr)
+		}
+		if yamlMappingKeyPresent(importedRoot, "imports", map[*yaml.Node]bool{}) {
+			return fmt.Errorf("config: %s imports[%d] %s: nested imports are not supported", source.Path, i, document.source.Path)
+		}
+		if _, parseErr := decodeFileConfig(document.data, document.source.Path); parseErr != nil {
+			return fmt.Errorf("config: %s imports[%d] %s: %w", source.Path, i, document.source.Path, parseErr)
+		}
+		validation := Config{providerConfigs: map[string]providerConfig{}}
+		if parseErr := applyYAMLData(&validation, document.data, document.source); parseErr != nil {
+			return fmt.Errorf("config: %s imports[%d] %s: %w", source.Path, i, document.source.Path, parseErr)
+		}
+		documents = append(documents, document)
+	}
+
+	staged := *cfg
+	for i, document := range documents {
+		_, importedRoot, parseErr := parseFleetConfigDocument(document.data, document.source.Path)
+		if parseErr != nil {
+			return fmt.Errorf("config: %s imports[%d] %s: %w", source.Path, i, document.source.Path, parseErr)
+		}
+		if err := applyFleetConfigNode(&staged, importedRoot, document.source.Path); err != nil {
+			return fmt.Errorf("config: %s imports[%d] %s: %w", source.Path, i, document.source.Path, err)
+		}
+	}
+	if err := applyFleetConfigNode(&staged, root, source.Path); err != nil {
+		return err
+	}
+	// Fleet-only loading may consume an existing runtime LKG, but it cannot
+	// safely publish fresh content without the runtime's full semantic checks.
+	*cfg = staged
+	return nil
+}
+
+func applyFleetConfigNode(cfg *FleetConfig, root *yaml.Node, path string) error {
 	fleetNode := yamlMappingValue(root, "fleet")
 	if fleetNode == nil || fleetNode.Tag == "!!null" {
 		return nil
@@ -85,6 +172,44 @@ func applyHomeFleetConfig(cfg *FleetConfig, path string) error {
 		}
 	}
 	return nil
+}
+
+func fleetImports(root *yaml.Node, path string) ([]importConfig, error) {
+	node := yamlMappingValue(root, "imports")
+	if node == nil || node.Tag == "!!null" {
+		return nil, nil
+	}
+	if node.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("config: parse %s: imports must be a sequence", path)
+	}
+	imports := make([]importConfig, 0, len(node.Content))
+	for i, item := range node.Content {
+		if item.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("config: parse %s: imports[%d] must be a mapping", path, i)
+		}
+		var source string
+		seenSource := false
+		for j := 0; j+1 < len(item.Content); j += 2 {
+			key := strings.TrimSpace(item.Content[j].Value)
+			if key != "source" {
+				return nil, fmt.Errorf("config: parse %s: field imports[%d].%s not found", path, i, key)
+			}
+			if seenSource {
+				return nil, fmt.Errorf("config: parse %s: duplicate imports[%d].source", path, i)
+			}
+			seenSource = true
+			value := item.Content[j+1]
+			if value.Kind != yaml.ScalarNode || value.Tag == "!!null" {
+				return nil, fmt.Errorf("config: parse %s: imports[%d].source must be a string", path, i)
+			}
+			source = strings.TrimSpace(value.Value)
+		}
+		if source == "" {
+			return nil, fmt.Errorf("config: parse %s: imports[%d].source is required", path, i)
+		}
+		imports = append(imports, importConfig{Source: source})
+	}
+	return imports, nil
 }
 
 func ValidateStableFleetAddr(addr string) error {
@@ -143,21 +268,26 @@ func readFleetConfigDocument(path string) (*yaml.Node, *yaml.Node, bool, error) 
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("config: read %s: %w", path, err)
 	}
+	doc, root, err := parseFleetConfigDocument(data, path)
+	return doc, root, true, err
+}
+
+func parseFleetConfigDocument(data []byte, path string) (*yaml.Node, *yaml.Node, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, nil, true, fmt.Errorf("config: parse %s: %w", path, err)
+		return nil, nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	if len(doc.Content) == 0 {
 		root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 		doc.Kind = yaml.DocumentNode
 		doc.Content = []*yaml.Node{root}
-		return &doc, root, true, nil
+		return &doc, root, nil
 	}
 	root := doc.Content[0]
 	if root.Kind != yaml.MappingNode {
-		return nil, nil, true, fmt.Errorf("config: parse %s: top level must be a mapping", path)
+		return nil, nil, fmt.Errorf("config: parse %s: top level must be a mapping", path)
 	}
-	return &doc, root, true, nil
+	return &doc, root, nil
 }
 
 func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {

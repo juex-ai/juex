@@ -64,6 +64,50 @@ juex init --scope workspace
 juex doctor
 ```
 
+Each home, workspace, or explicit local `juex.yaml` may import reusable local
+or HTTP(S) configuration before applying its own fields:
+
+```yaml
+imports:
+  - source: ./shared/providers.yaml
+  - source: https://config.example/juex/common.yaml
+```
+
+Imports run in declaration order and use the declaring file's scope and the
+same field merge rules as ordinary YAML layers; the declaring file always wins
+last. Relative paths resolve beside that file. Imported documents cannot
+contain `imports`, including `imports: []`, and `--config` itself remains a
+local path. Remote imports accept only complete `200 OK` representations (or a
+conditional `304 Not Modified` with a valid cache); responses are bounded and
+cached as a permission-restricted
+Last-Known-Good copy under `$JUEX_HOME/cache/config-imports`; a temporary
+network failure may use an unexpired cache and `juex doctor` reports the source,
+fresh/stale state, and digest without URL query values or configuration
+contents. Redirects never forward a `Referer` or the original resource's
+conditional validators, so a source query token is not disclosed and a
+redirect target cannot reuse an unrelated cached representation. One full configuration load resolves each remote identity once and
+publishes the complete pending LKG set only after runtime validation succeeds,
+restoring earlier records if any publication fails. Cache readers hold the
+same home-scoped lock across the complete load, so they cannot observe a mix
+of records from two publications. A permission-restricted prepared/committed
+journal lets the next locked reader roll back an interrupted set publication
+or retain a fully committed generation after process or machine failure. For a
+workspace update, the same journal includes the previous workspace bytes before
+the replacement becomes visible, keeping the file and LKG set in one recoverable
+generation. LKG entries are scoped by remote identity,
+declaring configuration, and the complete downstream load identity (workspace
+plus an explicit config, when present), so one load cannot replace another
+load's validated version. Fleet-only loading has no Agent workspace identity,
+so it selects the newest complete runtime-validated load context shared by all
+remote Home imports and consumes every fallback record from that one context;
+it does not replace those records without the full checks. Workspace candidate validation is read-only; an update
+retains the cache lock through the write, publishes fresh LKG content only after
+the workspace file replacement succeeds, and restores the previous workspace
+file (or removes a newly created one) if cache publication fails or the process
+dies before the combined generation is committed.
+Configuration is still loaded only at process startup, so restart a resident
+Agent after changing either the declaring or imported source.
+
 Juex loads a runtime environment once for `run`, `repl`, `listen`, and manual
 session compaction. `environment.load_dotenv` defaults to `true` and reads
 exactly `<WorkDir>/.env`; parent directories are never searched and dotenv
@@ -108,8 +152,9 @@ The selected bundle contributes the `mcp__memory__memory_search`,
 removes all of those resources without deleting its Agent-private data.
 
 Environment precedence is selected Extension manifest defaults, default-home
-YAML, a distinct instance-home YAML, workspace `.env`, workspace YAML,
-explicit `--config` YAML, the environment inherited at launch, child-local
+YAML imports then its file, a distinct instance-home YAML imports then its
+file, workspace `.env`, workspace YAML imports then its file, explicit
+`--config` imports then its YAML, the environment inherited at launch, child-local
 MCP/Observable values, then Juex-owned runtime injection. Existing Agent
 values, including empty values, therefore shadow Extension defaults and
 preserve service and shell overrides. `--config` never changes the `.env`

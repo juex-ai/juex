@@ -9,7 +9,9 @@ consistently across developer machines.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
+import datetime
 import hashlib
 import json
 import os
@@ -23,6 +25,10 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -56,6 +62,29 @@ ISOLATED_PROVIDER_ENVIRONMENT_KEYS = (
     "PROVIDER_API_MODEL",
     "PROVIDER_THINKING_EFFORT",
     "PROVIDER_CONTEXT_WINDOW",
+)
+CONFIG_IMPORT_TIMEOUT_SECONDS = 5
+CONFIG_IMPORT_MAX_BYTES = 1 << 20
+CONFIG_IMPORT_MAX_CACHE_AGE = datetime.timedelta(days=7)
+CONFIG_IMPORT_JOURNAL_NAME = ".publication-journal.json"
+CONFIG_IMPORT_CACHE_FIELDS = frozenset(
+    {
+        "version",
+        "source",
+        "source_sha256",
+        "declaring_sha256",
+        "context_sha256",
+        "etag",
+        "last_modified",
+        "fetched_at",
+        "content_sha256",
+        "content",
+    }
+)
+CONFIG_IMPORT_RFC3339_PATTERN = re.compile(
+    r"\A\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T"
+    r"(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?"
+    r"(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)\Z"
 )
 
 
@@ -196,8 +225,8 @@ def provider_smoke(argv: list[str]) -> int:
         try:
             if not config_path.is_file():
                 raise FileNotFoundError(f"provider config not found: {config_path}")
-            validate_source_config(parsed.juex, config_path)
-            cfg = load_source_config(config_path)
+            cfg, source_layers = load_source_config_with_layers(config_path)
+            validate_source_layers(parsed.juex, source_layers)
             rows, evidence = selection.select(
                 cfg,
                 kind="provider-smoke",
@@ -206,6 +235,12 @@ def provider_smoke(argv: list[str]) -> int:
                 only=[parsed.only] if parsed.only else [],
                 all_models=parsed.all_models,
                 command_prefix=command_prefix,
+            )
+            materialized_configs = materialize_and_validate_selected_configs(
+                parsed.juex,
+                cfg,
+                rows,
+                work_root / ".validated-provider-configs",
             )
         except selection.ProviderUnavailable as exc:
             summary = provider_summary(parsed, report_dir, work_root, exc.evidence, [], exc.failure_category, str(exc))
@@ -287,6 +322,7 @@ def provider_smoke(argv: list[str]) -> int:
                     timeout_seconds=parsed.timeout,
                     retries=parsed.retries,
                     codex_home=env_default("CODEX_HOME", str(pathlib.Path.home() / ".codex")),
+                    materialized_config=materialized_configs[row.ref],
                 )
             )
             results.append(result)
@@ -405,6 +441,13 @@ def print_selection_evidence(evidence: selection.SelectionEvidence) -> None:
 MatrixRow = selection.Candidate
 
 
+@dataclass(frozen=True)
+class SourceConfigLayer:
+    scope: str
+    imports: tuple[dict[str, Any], ...]
+    declaring: dict[str, Any]
+
+
 @dataclass
 class SmokeResult:
     run_id: str
@@ -452,6 +495,7 @@ class ProviderSmokeContext:
     timeout_seconds: int
     retries: int
     codex_home: str
+    materialized_config: pathlib.Path | None = None
 
 
 @dataclass(frozen=True)
@@ -501,7 +545,11 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
     manifest_file = case_dir / "release-manifest.txt"
     notes_file = case_dir / "agent-notes.txt"
     try:
-        write_selected_config(ctx.config, row.provider_id, row.model_id, case_config)
+        if ctx.materialized_config is None:
+            write_selected_config(ctx.config, row.provider_id, row.model_id, case_config)
+        else:
+            shutil.copyfile(ctx.materialized_config, case_config)
+            case_config.chmod(0o600)
         manifest_file.write_text(
             "\n".join(
                 [
@@ -1168,6 +1216,23 @@ def write_selected_config(
     output_path.chmod(0o600)
 
 
+def materialize_and_validate_selected_configs(
+    juex_bin: str,
+    cfg: dict[str, Any],
+    rows: list[MatrixRow],
+    output_dir: pathlib.Path,
+) -> dict[str, pathlib.Path]:
+    shutil.rmtree(output_dir, ignore_errors=True)
+    output_dir.mkdir(parents=True, mode=0o700)
+    materialized: dict[str, pathlib.Path] = {}
+    for row in rows:
+        output = output_dir / f"{safe_ref(row.ref)}.yaml"
+        write_selected_config(cfg, row.provider_id, row.model_id, output)
+        validate_source_config(juex_bin, output)
+        materialized[row.ref] = output
+    return materialized
+
+
 def selected_provider_model(cfg: dict[str, Any], provider_id: str, model_id: str) -> tuple[dict[str, Any], Any]:
     for provider in selection.merged_providers(cfg):
         if str(provider.get("id") or "").strip() != provider_id:
@@ -1187,25 +1252,110 @@ def validate_source_config(juex_bin: str, config_path: pathlib.Path) -> None:
         env = os.environ.copy()
         for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
             env.pop(name, None)
+        if not env.get("CODEX_HOME", "").strip():
+            env["CODEX_HOME"] = str(pathlib.Path.home() / ".codex")
         default_home, effective_home = provider_home_dirs()
         home_config_paths = {home / "juex.yaml" for home in (default_home, effective_home)}
+        isolated_user_home = pathlib.Path(work) / "home"
+        env["HOME"] = str(isolated_user_home)
+        env["USERPROFILE"] = str(isolated_user_home)
         if config_path in home_config_paths:
             env["JUEX_HOME"] = str(config_path.parent)
         else:
+            env["JUEX_HOME"] = str(pathlib.Path(work) / "juex-home")
             command.extend(["--config", str(config_path)])
         command.extend(["doctor", "--offline", "--format", "json"])
-        try:
-            completed = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env=env,
-            )
-            result = json.loads(completed.stdout)
-        except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
-            raise ValueError("provider config validation through Juex failed") from exc
+        result = _run_source_config_validation(command, env)
+    _require_valid_source_config(result)
+
+
+def validate_source_layers(juex_bin: str | list[str], layers: list[SourceConfigLayer]) -> None:
+    """Ask Juex to validate materialized source documents at their original scopes."""
+    by_scope: dict[str, SourceConfigLayer] = {}
+    for layer in layers:
+        if layer.scope not in {"default-home", "effective-home", "explicit"}:
+            raise ValueError("provider config has an unsupported source scope")
+        if layer.scope in by_scope:
+            raise ValueError("provider config has duplicate source scopes")
+        by_scope[layer.scope] = layer
+
+    with tempfile.TemporaryDirectory(prefix="juex-eval-source-check.") as work:
+        root = pathlib.Path(work)
+        default_home = root / "home" / ".juex"
+        effective_home = root / "juex-home"
+        explicit_dir = root / "explicit"
+        workspace = root / "work"
+        for directory in (default_home, effective_home, explicit_dir, workspace):
+            directory.mkdir(parents=True, mode=0o700)
+
+        paths = {
+            "default-home": default_home / "juex.yaml",
+            "effective-home": effective_home / "juex.yaml",
+            "explicit": explicit_dir / "juex.yaml",
+        }
+        for scope, layer in by_scope.items():
+            _materialize_source_layer(layer, paths[scope])
+
+        command = [*_juex_validation_command(juex_bin), "-C", str(workspace)]
+        env = os.environ.copy()
+        for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
+            env.pop(name, None)
+        if not env.get("CODEX_HOME", "").strip():
+            env["CODEX_HOME"] = str(pathlib.Path.home() / ".codex")
+        env["HOME"] = str(root / "home")
+        env["USERPROFILE"] = str(root / "home")
+        env["JUEX_HOME"] = str(effective_home if "effective-home" in by_scope else default_home)
+        if "explicit" in by_scope:
+            command.extend(["--config", str(paths["explicit"])])
+        command.extend(["doctor", "--offline", "--format", "json"])
+        result = _run_source_config_validation(command, env)
+    _require_valid_source_config(result)
+
+
+def _juex_validation_command(juex_bin: str | list[str]) -> list[str]:
+    if isinstance(juex_bin, list):
+        if not juex_bin:
+            raise ValueError("Juex validation command cannot be empty")
+        return list(juex_bin)
+    if juex_bin.strip():
+        return [juex_bin]
+    go = shutil.which("go")
+    if not go:
+        raise ValueError("Juex binary not found and go is unavailable for source validation")
+    return [go, "-C", str(REPO_ROOT), "run", "./cmd/juex"]
+
+
+def _materialize_source_layer(layer: SourceConfigLayer, config_path: pathlib.Path) -> None:
+    imports: list[dict[str, str]] = []
+    for index, imported in enumerate(layer.imports):
+        imported_path = config_path.parent / "imports" / f"import-{index}.yaml"
+        imported_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        imported_path.write_text(dump_yaml(imported), encoding="utf-8")
+        imported_path.chmod(0o600)
+        imports.append({"source": str(imported_path.relative_to(config_path.parent))})
+    declaring = copy.deepcopy(layer.declaring)
+    if imports:
+        declaring = {"imports": imports, **declaring}
+    config_path.write_text(dump_yaml(declaring), encoding="utf-8")
+    config_path.chmod(0o600)
+
+
+def _run_source_config_validation(command: list[str], env: dict[str, str]) -> Any:
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+        return json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise ValueError("provider config validation through Juex failed") from exc
+
+
+def _require_valid_source_config(result: Any) -> None:
     checks = result.get("checks") if isinstance(result, dict) else None
     config_check = next(
         (check for check in checks or [] if isinstance(check, dict) and check.get("name") == "config"),
@@ -1218,6 +1368,7 @@ def validate_source_config(juex_bin: str, config_path: pathlib.Path) -> None:
 def write_model_config_command(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True)
+    parser.add_argument("--juex", default=env_default("JUEX_BIN", default_juex_bin()))
     parser.add_argument("--ref", default="")
     parser.add_argument("--provider", default="")
     parser.add_argument("--model", default="")
@@ -1239,7 +1390,8 @@ def write_model_config_command(argv: list[str]) -> int:
             "tool_result_max_chars": 1200,
             "user_input_inline_max_bytes": 524288,
         }
-    cfg = load_source_config(pathlib.Path(parsed.source).expanduser())
+    cfg, source_layers = load_source_config_with_layers(pathlib.Path(parsed.source).expanduser())
+    validate_source_layers(parsed.juex, source_layers)
     if parsed.ref:
         provider_id, model_id = split_provider_model_ref(parsed.ref)
     elif parsed.provider:
@@ -1490,18 +1642,17 @@ def append_jsonl(path: pathlib.Path, value: dict[str, Any]) -> None:
 
 
 def load_yaml_file(path: pathlib.Path) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8")
-    value = yaml.safe_load(text) or {}
-    if not isinstance(value, dict):
-        raise ValueError(f"{path} must contain a YAML mapping")
-    node = yaml.compose(text)
-    if isinstance(node, yaml.nodes.MappingNode):
-        _restore_runtime_string_values(value, node)
-    return value
+    return _load_yaml_text(path.read_text(encoding="utf-8"), str(path))
 
 
 def load_source_config(path: pathlib.Path) -> dict[str, Any]:
     """Load the same Home layers plus explicit overlay used by Juex validation."""
+    config, _ = load_source_config_with_layers(path)
+    return config
+
+
+def load_source_config_with_layers(path: pathlib.Path) -> tuple[dict[str, Any], list[SourceConfigLayer]]:
+    """Load selection data and retain the exact source-scope layers for Juex validation."""
     config_path = selection.resolved_path(path)
     default_home, effective_home = provider_home_dirs()
     default_config = default_home / "juex.yaml"
@@ -1514,15 +1665,397 @@ def load_source_config(path: pathlib.Path) -> dict[str, Any]:
         sources = [default_config, effective_config, config_path]
     merged: dict[str, Any] = {}
     seen: set[pathlib.Path] = set()
-    for source in sources:
-        source = selection.resolved_path(source)
-        if source in seen:
+    remote_memo: dict[str, tuple[str, str]] = {}
+    layers: list[SourceConfigLayer] = []
+    explicit_paths = [] if config_path in {default_config, effective_config} else [config_path]
+    cache_context_digest = _config_import_context_digest(pathlib.Path.cwd(), *explicit_paths)
+    with _config_import_cache_lock(effective_home):
+        for source in sources:
+            source = selection.resolved_path(source)
+            if source in seen:
+                continue
+            seen.add(source)
+            if source != config_path and not source.is_file():
+                continue
+            document, imported, declaring = _load_config_document_parts(source, remote_memo, cache_context_digest)
+            merged = _merge_source_config(merged, document)
+            if source == default_config:
+                scope = "default-home"
+            elif source == effective_config:
+                scope = "effective-home"
+            else:
+                scope = "explicit"
+            layers.append(SourceConfigLayer(scope=scope, imports=tuple(imported), declaring=declaring))
+    return merged, layers
+
+
+def _load_config_document(
+    path: pathlib.Path,
+    remote_memo: dict[str, tuple[str, str]] | None = None,
+) -> dict[str, Any]:
+    document, _, _ = _load_config_document_parts(path, remote_memo, _config_import_standalone_digest())
+    return document
+
+
+def _load_config_document_parts(
+    path: pathlib.Path,
+    remote_memo: dict[str, tuple[str, str]] | None = None,
+    cache_context_digest: str | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    if remote_memo is None:
+        remote_memo = {}
+    main = load_yaml_file(path)
+    imported = _config_imports(main, str(path))
+    merged: dict[str, Any] = {}
+    imported_values: list[dict[str, Any]] = []
+    cache_context_digest = cache_context_digest or _config_import_standalone_digest()
+    for index, raw_source in enumerate(imported):
+        source, label = _read_config_import(path, raw_source, remote_memo, cache_context_digest)
+        value = _load_yaml_text(source, label)
+        if "imports" in value:
+            raise ValueError(f"{path} imports[{index}] {label}: nested imports are not supported")
+        imported_values.append(value)
+        merged = _merge_source_config(merged, value)
+    declaring = copy.deepcopy(main)
+    declaring.pop("imports", None)
+    return _merge_source_config(merged, declaring), imported_values, declaring
+
+
+def _config_imports(value: dict[str, Any], label: str) -> list[str]:
+    imports = value.get("imports")
+    if imports is None:
+        return []
+    if not isinstance(imports, list):
+        raise ValueError(f"{label} imports must be a YAML sequence")
+    sources: list[str] = []
+    for index, item in enumerate(imports):
+        if not isinstance(item, dict):
+            raise ValueError(f"{label} imports[{index}] must be a YAML mapping")
+        if set(item) != {"source"}:
+            raise ValueError(f"{label} imports[{index}] must contain only source")
+        source = item.get("source")
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError(f"{label} imports[{index}].source must be a non-empty YAML string")
+        sources.append(source.strip())
+    return sources
+
+
+def _read_config_import(
+    declaring: pathlib.Path,
+    raw_source: str,
+    remote_memo: dict[str, tuple[str, str]],
+    cache_context_digest: str,
+) -> tuple[str, str]:
+    local_candidate = pathlib.Path(raw_source)
+    if local_candidate.is_absolute():
+        source = local_candidate.resolve()
+        return source.read_text(encoding="utf-8"), str(source)
+    if "://" not in raw_source:
+        source = (declaring.parent / raw_source).resolve()
+        return source.read_text(encoding="utf-8"), str(source)
+    parsed = urllib.parse.urlsplit(raw_source)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError(f"unsupported config import URL scheme {parsed.scheme!r}")
+    if not parsed.netloc or parsed.username is not None or parsed.password is not None or parsed.fragment:
+        raise ValueError("invalid remote config import source")
+    if any(ord(character) < 0x20 for character in raw_source):
+        raise ValueError("invalid remote config import source")
+    if raw_source in remote_memo:
+        return remote_memo[raw_source]
+    content, fresh = _read_remote_config_import(raw_source, parsed, declaring, cache_context_digest)
+    result = content, _safe_remote_import_label(parsed)
+    if fresh:
+        remote_memo[raw_source] = result
+    return result
+
+
+class _ConfigImportNoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201 - urllib hook signature.
+        return None
+
+
+def _remaining_config_import_time(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("remote config import exceeded the total timeout")
+    return remaining
+
+
+def _open_remote_config_import(identity: str, headers: dict[str, str], deadline: float):  # noqa: ANN201
+    current = identity
+    current_headers = headers
+    opener = urllib.request.build_opener(_ConfigImportNoRedirectHandler())
+    for redirect_count in range(4):
+        request = urllib.request.Request(current, headers=current_headers, method="GET")
+        try:
+            return opener.open(request, timeout=_remaining_config_import_time(deadline))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 304 and redirect_count > 0:
+                exc.close()
+                raise ValueError("remote config import returned 304 after an unvalidated redirect") from None
+            if exc.code not in {301, 302, 303, 307, 308}:
+                raise
+            location = exc.headers.get("Location", "")
+            exc.close()
+            if redirect_count >= 3:
+                raise urllib.error.URLError("config import exceeded three redirects") from None
+            redirected = urllib.parse.urljoin(current, location)
+            old_scheme = urllib.parse.urlsplit(current).scheme.lower()
+            parsed = urllib.parse.urlsplit(redirected)
+            if parsed.scheme.lower() not in {"http", "https"}:
+                raise urllib.error.URLError("config import redirect uses an unsupported scheme")
+            if old_scheme == "https" and parsed.scheme.lower() == "http":
+                raise urllib.error.URLError("config import redirect from https to http is not allowed")
+            if not parsed.netloc or parsed.username is not None or parsed.password is not None or parsed.fragment:
+                raise urllib.error.URLError("config import redirect contains forbidden URL metadata")
+            current = redirected
+            current_headers = {}
+    raise urllib.error.URLError("config import exceeded three redirects")
+
+
+def _set_config_import_response_timeout(response: Any, timeout: float) -> None:
+    queue = [response]
+    seen: set[int] = set()
+    while queue:
+        candidate = queue.pop(0)
+        if candidate is None or id(candidate) in seen:
             continue
-        seen.add(source)
-        if source != config_path and not source.is_file():
-            continue
-        merged = _merge_source_config(merged, load_yaml_file(source))
-    return merged
+        seen.add(id(candidate))
+        setter = getattr(candidate, "settimeout", None)
+        if callable(setter):
+            setter(timeout)
+            return
+        for name in ("fp", "raw", "_sock", "sock"):
+            child = getattr(candidate, name, None)
+            if child is not None:
+                queue.append(child)
+    raise TimeoutError("remote config import response has no controllable socket")
+
+
+def _read_config_import_response(response: Any, deadline: float) -> bytes:
+    data = bytearray()
+    read_once = getattr(response, "read1", None)
+    if not callable(read_once):
+        read_once = response.read
+    while len(data) <= CONFIG_IMPORT_MAX_BYTES:
+        if getattr(response, "length", None) == 0:
+            break
+        _set_config_import_response_timeout(response, _remaining_config_import_time(deadline))
+        chunk = read_once(min(64 * 1024, CONFIG_IMPORT_MAX_BYTES + 1 - len(data)))
+        if not chunk:
+            break
+        data.extend(chunk)
+    return bytes(data)
+
+
+def _read_remote_config_import(
+    identity: str,
+    parsed: urllib.parse.SplitResult,
+    declaring: pathlib.Path,
+    cache_context_digest: str,
+) -> tuple[str, bool]:
+    cache = _read_config_import_cache(identity, parsed, declaring, cache_context_digest)
+    headers: dict[str, str] = {}
+    if cache is not None:
+        if cache.get("etag"):
+            headers["If-None-Match"] = str(cache["etag"])
+        if cache.get("last_modified"):
+            headers["If-Modified-Since"] = str(cache["last_modified"])
+    deadline = time.monotonic() + CONFIG_IMPORT_TIMEOUT_SECONDS
+    try:
+        with _open_remote_config_import(identity, headers, deadline) as response:
+            if response.status != 200:
+                raise ValueError(f"remote config import returned HTTP {response.status}")
+            data = _read_config_import_response(response, deadline)
+            if len(data) > CONFIG_IMPORT_MAX_BYTES:
+                raise ValueError("remote config import exceeds the one-MiB response limit")
+            return data.decode("utf-8"), True
+    except urllib.error.HTTPError as exc:
+        if exc.code == 304 and cache is not None:
+            return str(cache["content"]), True
+        if exc.code not in {408, 429} and exc.code < 500:
+            raise ValueError(f"remote config import returned HTTP {exc.code}") from None
+        if cache is not None and _config_import_cache_is_current(cache):
+            return str(cache["content"]), False
+        raise ValueError("remote config import is unavailable and has no current Last-Known-Good cache") from None
+    except (OSError, urllib.error.URLError):
+        if cache is not None and _config_import_cache_is_current(cache):
+            return str(cache["content"]), False
+        raise ValueError("remote config import is unavailable and has no current Last-Known-Good cache") from None
+
+
+def _read_config_import_cache(
+    identity: str,
+    parsed: urllib.parse.SplitResult,
+    declaring: pathlib.Path,
+    cache_context_digest: str,
+) -> dict[str, Any] | None:
+    _, effective_home = provider_home_dirs()
+    source_digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    declaring_identity = _config_import_path_identity(declaring)
+    declaring_digest = hashlib.sha256(str(declaring_identity).encode("utf-8")).hexdigest()
+    path = effective_home / "cache" / "config-imports" / f"{source_digest}-{declaring_digest}-{cache_context_digest}.json"
+    try:
+        if os.name != "nt" and (path.stat().st_mode & 0o777) != 0o600:
+            return None
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if (
+        not isinstance(record, dict)
+        or not set(record).issubset(CONFIG_IMPORT_CACHE_FIELDS)
+        or record.get("version") != 3
+        or record.get("source_sha256") != source_digest
+        or record.get("declaring_sha256") != declaring_digest
+        or record.get("context_sha256") != cache_context_digest
+    ):
+        return None
+    safe_source = _safe_remote_import_label(parsed)
+    content = record.get("content")
+    content_digest = record.get("content_sha256")
+    if record.get("source") != safe_source or not isinstance(content, str) or len(content.encode("utf-8")) > CONFIG_IMPORT_MAX_BYTES:
+        return None
+    if content_digest != "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest():
+        return None
+    for name in ("etag", "last_modified"):
+        value = record.get(name)
+        if value is not None and (not isinstance(value, str) or len(value) > 8192 or "\r" in value or "\n" in value):
+            return None
+    if _config_import_cache_fetched_at(record) is None:
+        return None
+    return record
+
+
+def _config_import_standalone_digest() -> str:
+    return hashlib.sha256(b"standalone").hexdigest()
+
+
+def _config_import_context_digest(work_dir: pathlib.Path, *explicit_paths: pathlib.Path) -> str:
+    identities = [f"work_dir={_config_import_path_identity(work_dir)}"]
+    identities.extend(f"explicit={_config_import_path_identity(path)}" for path in explicit_paths)
+    return hashlib.sha256("\n".join(identities).encode("utf-8")).hexdigest()
+
+
+def _config_import_path_identity(path: pathlib.Path) -> pathlib.Path:
+    absolute = pathlib.Path(os.path.abspath(os.path.normpath(os.fspath(path))))
+    parent = absolute.parent
+    unresolved = [absolute.name]
+    while True:
+        try:
+            resolved = parent.resolve(strict=True)
+            for name in reversed(unresolved):
+                resolved /= name
+            return resolved
+        except FileNotFoundError:
+            next_parent = parent.parent
+            if next_parent == parent:
+                return absolute
+            unresolved.append(parent.name)
+            parent = next_parent
+        except OSError:
+            return absolute
+
+
+@contextlib.contextmanager
+def _config_import_cache_lock(effective_home: pathlib.Path) -> Iterator[None]:
+    lock_path = effective_home / ".locks" / "config-imports-cache.lock"
+    lock_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    locked = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            if os.fstat(descriptor).st_size == 0:
+                os.write(descriptor, b"\0")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        locked = True
+    except OSError as exc:
+        os.close(descriptor)
+        raise ValueError(f"cannot lock config import cache: {exc}") from None
+    try:
+        journal_path = effective_home / "cache" / "config-imports" / CONFIG_IMPORT_JOURNAL_NAME
+        if journal_path.exists():
+            raise ValueError("config import cache requires runtime publication recovery")
+        yield
+    finally:
+        try:
+            if locked:
+                if os.name == "nt":
+                    import msvcrt
+
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+def _config_import_cache_fetched_at(record: dict[str, Any]) -> datetime.datetime | None:
+    fetched_at = record.get("fetched_at")
+    if not isinstance(fetched_at, str) or CONFIG_IMPORT_RFC3339_PATTERN.fullmatch(fetched_at) is None:
+        return None
+    try:
+        instant = datetime.datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if instant.tzinfo is None:
+        return None
+    return instant.astimezone(datetime.timezone.utc)
+
+
+def _config_import_cache_is_current(record: dict[str, Any]) -> bool:
+    instant = _config_import_cache_fetched_at(record)
+    if instant is None:
+        return False
+    age = datetime.datetime.now(datetime.timezone.utc) - instant
+    return datetime.timedelta(0) <= age <= CONFIG_IMPORT_MAX_CACHE_AGE
+
+
+def _safe_remote_import_label(parsed: urllib.parse.SplitResult) -> str:
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
+def _load_yaml_text(text: str, label: str) -> dict[str, Any]:
+    node = yaml.compose(text)
+    if node is not None:
+        _reject_duplicate_yaml_keys(node, label, set())
+    value = yaml.safe_load(text)
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must contain a YAML mapping")
+    if isinstance(node, yaml.nodes.MappingNode):
+        _restore_runtime_string_values(value, node)
+    return value
+
+
+def _reject_duplicate_yaml_keys(node: yaml.nodes.Node, label: str, visited: set[int]) -> None:
+    identity = id(node)
+    if identity in visited:
+        return
+    visited.add(identity)
+    if isinstance(node, yaml.nodes.MappingNode):
+        seen: set[tuple[str, str]] = set()
+        for key, value in node.value:
+            if isinstance(key, yaml.nodes.ScalarNode):
+                marker = (key.tag, key.value)
+                if marker in seen:
+                    raise ValueError(f"{label} contains duplicate YAML key {key.value!r}")
+                seen.add(marker)
+            _reject_duplicate_yaml_keys(key, label, visited)
+            _reject_duplicate_yaml_keys(value, label, visited)
+    elif isinstance(node, yaml.nodes.SequenceNode):
+        for item in node.value:
+            _reject_duplicate_yaml_keys(item, label, visited)
 
 
 def provider_home_dirs() -> tuple[pathlib.Path, pathlib.Path]:
@@ -1535,7 +2068,10 @@ def provider_home_dirs() -> tuple[pathlib.Path, pathlib.Path]:
 def _merge_source_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = copy.deepcopy(base)
     for name, value in override.items():
-        if name == "providers":
+        if name == "models":
+            if value is not None:
+                merged[name] = copy.deepcopy(value)
+        elif name == "providers":
             if value is None:
                 continue
             if isinstance(value, list):
@@ -1564,6 +2100,185 @@ def _merge_source_config(base: dict[str, Any], override: dict[str, Any]) -> dict
                 else:
                     environment[environment_name] = copy.deepcopy(environment_value)
             merged[name] = environment
+        elif name == "runtime":
+            merged[name] = _merge_config_mapping(merged.get(name), value)
+        elif name == "compaction":
+            merged[name] = _merge_positive_config_mapping(
+                merged.get(name),
+                value,
+                positive_fields={
+                    "reserve_tokens",
+                    "keep_recent_tokens",
+                    "summary_max_tokens",
+                    "tool_result_max_chars",
+                    "user_input_inline_max_bytes",
+                    "user_input_preview_head_bytes",
+                    "user_input_preview_tail_bytes",
+                    "max_auto_failures",
+                },
+                string_fields={"summary_model"},
+                nullable_fields={"enabled", "instructions"},
+            )
+        elif name == "tool_output":
+            merged[name] = _merge_positive_config_mapping(
+                merged.get(name),
+                value,
+                positive_fields={"inline_max_bytes", "preview_head_bytes", "preview_tail_bytes"},
+            )
+        elif name == "skills":
+            merged[name] = _merge_positive_config_mapping(
+                merged.get(name),
+                value,
+                positive_fields={"prompt_budget_chars"},
+                nullable_fields={"include", "exclude"},
+            )
+        elif name == "extensions":
+            merged[name] = _merge_nullable_config_mapping(merged.get(name), value, {"allow"})
+        elif name == "modules":
+            merged[name] = _merge_modules_config(merged.get(name), value)
+        elif name == "fleet":
+            merged[name] = _merge_fleet_config(merged.get(name), value)
+        elif name == "hooks":
+            merged[name] = _merge_hooks_config(merged.get(name), value)
+        elif name == "sandbox":
+            merged[name] = _merge_sandbox_config(merged.get(name), value)
+        else:
+            merged[name] = copy.deepcopy(value)
+    return merged
+
+
+def _merge_config_mapping(base: Any, override: Any) -> Any:
+    if override is None:
+        return copy.deepcopy(base)
+    if not isinstance(override, dict):
+        return copy.deepcopy(override)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    merged.update(copy.deepcopy(override))
+    return merged
+
+
+def _merge_positive_config_mapping(
+    base: Any,
+    override: Any,
+    *,
+    positive_fields: set[str],
+    string_fields: set[str] | None = None,
+    nullable_fields: set[str] | None = None,
+) -> Any:
+    if override is None:
+        return copy.deepcopy(base)
+    if not isinstance(override, dict):
+        return copy.deepcopy(override)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    string_fields = string_fields or set()
+    nullable_fields = nullable_fields or set()
+    for name, value in override.items():
+        if name in nullable_fields:
+            if value is not None:
+                merged[name] = copy.deepcopy(value)
+        elif name in string_fields:
+            if isinstance(value, str) and value.strip():
+                merged[name] = copy.deepcopy(value)
+            elif not isinstance(value, (str, type(None))):
+                merged[name] = copy.deepcopy(value)
+        elif name in positive_fields:
+            if isinstance(value, int) and not isinstance(value, bool):
+                if value > 0:
+                    merged[name] = value
+            elif value is not None:
+                merged[name] = copy.deepcopy(value)
+        else:
+            merged[name] = copy.deepcopy(value)
+    return merged
+
+
+def _merge_nullable_config_mapping(base: Any, override: Any, nullable_fields: set[str]) -> Any:
+    if override is None:
+        return copy.deepcopy(base)
+    if not isinstance(override, dict):
+        return copy.deepcopy(override)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for name, value in override.items():
+        if name not in nullable_fields or value is not None:
+            merged[name] = copy.deepcopy(value)
+    return merged
+
+
+def _merge_modules_config(base: Any, override: Any) -> Any:
+    if override is None:
+        return copy.deepcopy(base)
+    if not isinstance(override, dict):
+        return copy.deepcopy(override)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for module_id, settings in override.items():
+        if not isinstance(settings, dict):
+            merged[module_id] = copy.deepcopy(settings)
+            continue
+        existing = merged.get(module_id)
+        module = copy.deepcopy(existing) if isinstance(existing, dict) else {}
+        if settings.get("enabled") is not None:
+            module["enabled"] = copy.deepcopy(settings["enabled"])
+        for field, value in settings.items():
+            if field != "enabled":
+                module[field] = copy.deepcopy(value)
+        merged[module_id] = module
+    return merged
+
+
+def _merge_fleet_config(base: Any, override: Any) -> Any:
+    if override is None:
+        return copy.deepcopy(base)
+    if not isinstance(override, dict):
+        return copy.deepcopy(override)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for name, value in override.items():
+        if name == "addr" and isinstance(value, str) and not value.strip():
+            continue
+        if name == "unsafe_bind_any" and value is None:
+            continue
+        merged[name] = copy.deepcopy(value)
+    return merged
+
+
+def _merge_hooks_config(base: Any, override: Any) -> Any:
+    if override is None:
+        return copy.deepcopy(base)
+    if not isinstance(override, dict):
+        return copy.deepcopy(override)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for name, value in override.items():
+        if name == "commands" and isinstance(value, list):
+            existing = merged.get(name)
+            merged[name] = [*(existing if isinstance(existing, list) else []), *copy.deepcopy(value)]
+        else:
+            merged[name] = copy.deepcopy(value)
+    return merged
+
+
+def _merge_sandbox_config(base: Any, override: Any) -> Any:
+    if not isinstance(override, dict):
+        return copy.deepcopy(override)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for name, value in override.items():
+        if name == "file_system" and isinstance(value, dict):
+            file_system = copy.deepcopy(merged.get(name)) if isinstance(merged.get(name), dict) else {}
+            for field, field_value in value.items():
+                if field == "blocked_paths" and isinstance(field_value, list):
+                    existing = file_system.get(field)
+                    if field_value:
+                        file_system[field] = [
+                            *(existing if isinstance(existing, list) else []),
+                            *copy.deepcopy(field_value),
+                        ]
+                elif field == "outside_workspace" and isinstance(field_value, str) and not field_value.strip():
+                    continue
+                else:
+                    file_system[field] = copy.deepcopy(field_value)
+            merged[name] = file_system
+        elif name == "network" and isinstance(value, dict):
+            merged[name] = _merge_nullable_config_mapping(merged.get(name), value, {"enabled"})
+        elif name == "enabled" and value is None:
+            continue
         else:
             merged[name] = copy.deepcopy(value)
     return merged
