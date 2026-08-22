@@ -336,6 +336,8 @@ type App struct {
 	namedHelperRegistry registrar
 	compositeClosureResource closer
 	compositeClosureRegistry registrar
+	collectionResource closer
+	collectionRegistry registrar
 }
 type appFieldBinder struct { bind func(*App, any, any) }
 type AppAlias = App
@@ -343,8 +345,9 @@ var appFactory = func(manager *mcp.Manager, registry *tools.Registry) *App {
 	return &AppAlias{closureResource: manager, closureRegistry: registry}
 }
 func (application *App) bind(manager *mcp.Manager, registry *tools.Registry) {
-	target := application
-	target.resource = manager
+	target := &application
+	converted := (*App)(*target)
+	converted.resource = manager
 	func(registryTarget *App) {
 		registryTarget.registry = registry
 	}(application)
@@ -415,7 +418,14 @@ func setCompositeAppFields(target *App, resource any, registryValue any) {
 var compositeAppFieldSetter = setCompositeAppFields
 func (application *App) bindCompositeClosure(manager *mcp.Manager, registry *tools.Registry) {
 	binder := &appFieldBinder{bind: compositeAppFieldSetter}
-	binder.bind(application, manager, registry)
+	alias := binder
+	alias.bind(application, manager, registry)
+}
+func (application *App) bindCollection(manager *mcp.Manager, registry *tools.Registry) {
+	targets := make([]*App, 1)
+	targets[0] = application
+	targets[0].collectionResource = manager
+	targets[0].collectionRegistry = registry
 }
 func (application *App) bypass() {
 	_ = application.resource.Close()
@@ -438,6 +448,8 @@ func (application *App) bypass() {
 	application.namedHelperRegistry.Register(nil)
 	_ = application.compositeClosureResource.Close()
 	application.compositeClosureRegistry.Register(nil)
+	_ = application.collectionResource.Close()
+	application.collectionRegistry.Register(nil)
 }
 `
 	dir := t.TempDir()
@@ -457,14 +469,14 @@ func (application *App) bypass() {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if len(cleanupCalls) != 9 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" || cleanupCalls[2] != "application.closureResource.Close" || cleanupCalls[3] != "application.iifeResource.Close" || cleanupCalls[4] != "application.variadicResource.Close" || cleanupCalls[5] != "application.namedClosureResource.Close" || cleanupCalls[6] != "application.nestedClosureResource.Close" || cleanupCalls[7] != "application.namedHelperResource.Close" || cleanupCalls[8] != "application.compositeClosureResource.Close" {
+	if len(cleanupCalls) != 10 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" || cleanupCalls[2] != "application.closureResource.Close" || cleanupCalls[3] != "application.iifeResource.Close" || cleanupCalls[4] != "application.variadicResource.Close" || cleanupCalls[5] != "application.namedClosureResource.Close" || cleanupCalls[6] != "application.nestedClosureResource.Close" || cleanupCalls[7] != "application.namedHelperResource.Close" || cleanupCalls[8] != "application.compositeClosureResource.Close" || cleanupCalls[9] != "application.collectionResource.Close" {
 		t.Fatalf("cleanup calls = %v, want receiver field cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if len(registrationCalls) != 9 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" || registrationCalls[2] != "application.closureRegistry.Register" || registrationCalls[3] != "application.iifeRegistry.Register" || registrationCalls[4] != "application.variadicRegistry.Register" || registrationCalls[5] != "application.namedClosureRegistry.Register" || registrationCalls[6] != "application.nestedClosureRegistry.Register" || registrationCalls[7] != "application.namedHelperRegistry.Register" || registrationCalls[8] != "application.compositeClosureRegistry.Register" {
+	if len(registrationCalls) != 10 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" || registrationCalls[2] != "application.closureRegistry.Register" || registrationCalls[3] != "application.iifeRegistry.Register" || registrationCalls[4] != "application.variadicRegistry.Register" || registrationCalls[5] != "application.namedClosureRegistry.Register" || registrationCalls[6] != "application.nestedClosureRegistry.Register" || registrationCalls[7] != "application.namedHelperRegistry.Register" || registrationCalls[8] != "application.compositeClosureRegistry.Register" || registrationCalls[9] != "application.collectionRegistry.Register" {
 		t.Fatalf("Tool registration calls = %v, want receiver field registration", registrationCalls)
 	}
 }
@@ -5617,6 +5629,20 @@ func trackCompositeFunctionTypes(values map[string]string, parent string, target
 			setMayValueType(values, root+embedded.suffix, typeName, types)
 		}
 	}
+	source := assignmentValueKey(unwrapCompositeExpression(assignedExpression(expressions, index)))
+	if source == "" || source == root {
+		return
+	}
+	for key, typeName := range cloneStringMap(values) {
+		if !strings.HasPrefix(typeName, localFunctionTypePrefix) || !isNestedAssignmentValueKey(key, source) {
+			continue
+		}
+		setMayValueType(values, root+strings.TrimPrefix(key, source), typeName, types)
+	}
+}
+
+func isNestedAssignmentValueKey(key, root string) bool {
+	return strings.HasPrefix(key, root+".") || strings.HasPrefix(key, root+"[]")
 }
 
 func compositeCallablePath(suffix string) string {
@@ -10261,7 +10287,7 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 						return false
 					case *ast.AssignStmt:
 						for index, left := range statement.Lhs {
-							trackAppReceiverAlias(left, statement.Rhs, index, receivers)
+							trackAppReceiverAlias(left, statement.Rhs, index, receivers, currentImports, *types)
 							indexAppReceiverFieldAssignment(left, statement.Rhs, index, receivers, currentImports, values, resources, types)
 							trackCompositeFunctionTypes(values, activeFunctionKey, left, statement.Rhs, index, currentImports, *types)
 							if localType := localFunctionType(activeFunctionKey, left, statement.Rhs, index); localType != "" {
@@ -10276,7 +10302,7 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 						for _, raw := range general.Specs {
 							spec := raw.(*ast.ValueSpec)
 							for index, name := range spec.Names {
-								trackAppReceiverAlias(name, spec.Values, index, receivers)
+								trackAppReceiverAlias(name, spec.Values, index, receivers, currentImports, *types)
 								trackCompositeFunctionTypes(values, activeFunctionKey, name, spec.Values, index, currentImports, *types)
 								typeName := canonicalType(spec.Type, currentImports)
 								paths := cleanupPathsForType(typeName, *types, nil)
@@ -10325,7 +10351,7 @@ func seedAppFieldArguments(call *ast.CallExpr, parameters *ast.FieldList, import
 			arguments := callArgumentsForParameterAt(call, parameterIndex, variadicIndex, variadic, imports)
 			if !variadic || parameterIndex != variadicIndex {
 				for _, argument := range arguments {
-					if isAppReceiverAliasExpression(argument, receivers) {
+					if isAppReceiverAliasExpression(argument, receivers, imports) {
 						receivers[key] = true
 					}
 				}
@@ -10360,12 +10386,8 @@ func seedAppFieldArguments(call *ast.CallExpr, parameters *ast.FieldList, import
 	}
 }
 
-func isAppReceiverAliasExpression(expression ast.Expr, receivers map[string]bool) bool {
-	if assignmentFieldPrefix(expression) != "" {
-		return false
-	}
-	root, _ := assignmentBinding(expression)
-	return root != nil && receivers[bindingKey(root)]
+func isAppReceiverAliasExpression(expression ast.Expr, receivers map[string]bool, imports map[string]string) bool {
+	return receivers[appReceiverExpressionKey(expression, imports)]
 }
 
 func indexAppCompositeLiteralFields(literal *ast.CompositeLit, imports map[string]string, values map[string]string, resources map[string]map[string]bool, types *compositionTypeIndex) {
@@ -10434,7 +10456,7 @@ func indexAppReceiverFieldAssignment(left ast.Expr, right []ast.Expr, index int,
 	}
 	typeName := assignedToolExpressionType(right, index, imports, values, *types)
 	paths := assignedCleanupPaths(right, index, imports, values, resources, *types)
-	if field := directAppReceiverField(left, receivers); field != "" {
+	if field := directAppReceiverField(left, receivers, imports); field != "" {
 		setMayValueType(types.appFieldValues, field, typeName, *types)
 		if paths != nil {
 			types.appFieldResources[field] = mergeCleanupPaths(types.appFieldResources[field], paths)
@@ -10451,17 +10473,13 @@ func indexAppReceiverFieldAssignment(left ast.Expr, right []ast.Expr, index int,
 	}
 }
 
-func directAppReceiverField(expression ast.Expr, receivers map[string]bool) string {
+func directAppReceiverField(expression ast.Expr, receivers map[string]bool, imports map[string]string) string {
 	for {
 		switch value := expression.(type) {
 		case *ast.ParenExpr:
 			expression = value.X
 		case *ast.SelectorExpr:
-			if assignmentFieldPrefix(value.X) != "" {
-				return ""
-			}
-			root, _ := assignmentBinding(value.X)
-			if root != nil && receivers[bindingKey(root)] {
+			if receivers[appReceiverExpressionKey(value.X, imports)] {
 				return value.Sel.Name
 			}
 			return ""
@@ -10471,21 +10489,53 @@ func directAppReceiverField(expression ast.Expr, receivers map[string]bool) stri
 	}
 }
 
-func trackAppReceiverAlias(left ast.Expr, right []ast.Expr, index int, receivers map[string]bool) {
-	if assignmentFieldPrefix(left) != "" {
-		return
-	}
-	target, indexed := assignmentBinding(left)
-	if target == nil || indexed {
+func trackAppReceiverAlias(left ast.Expr, right []ast.Expr, index int, receivers map[string]bool, imports map[string]string, types compositionTypeIndex) {
+	target := assignmentValueKey(left)
+	if target == "" {
 		return
 	}
 	assigned := assignedExpression(right, index)
-	if assigned == nil || assignmentFieldPrefix(assigned) != "" {
+	if assigned == nil {
 		return
 	}
-	source, _ := assignmentBinding(assigned)
-	if source != nil && receivers[bindingKey(source)] {
-		receivers[bindingKey(target)] = true
+	source := appReceiverExpressionKey(assigned, imports)
+	if receivers[source] {
+		receivers[target] = true
+	}
+	if source != "" && source != target {
+		for key := range cloneBoolMap(receivers) {
+			if isNestedAssignmentValueKey(key, source) {
+				receivers[target+strings.TrimPrefix(key, source)] = true
+			}
+		}
+	}
+	for _, embedded := range compositeValueExpressions(assigned, "", imports, types) {
+		if receivers[appReceiverExpressionKey(embedded.expression, imports)] {
+			receivers[target+embedded.suffix] = true
+		}
+	}
+}
+
+func appReceiverExpressionKey(expression ast.Expr, imports map[string]string) string {
+	for {
+		switch value := expression.(type) {
+		case *ast.ParenExpr:
+			expression = value.X
+		case *ast.StarExpr:
+			expression = value.X
+		case *ast.UnaryExpr:
+			if value.Op != token.AND {
+				return ""
+			}
+			expression = value.X
+		case *ast.CallExpr:
+			if len(value.Args) != 1 || !isTypeExpression(value.Fun, imports) {
+				return ""
+			}
+			expression = value.Args[0]
+		default:
+			return assignmentValueKey(expression)
+		}
 	}
 }
 
