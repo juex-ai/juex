@@ -2404,9 +2404,12 @@ apply error discards the candidate. Imported documents containing the
 relative paths resolve from the declaring file directory; remote sources
 accept only HTTP(S), use a five-second request timeout, a one-MiB response cap,
 and at most three redirects, and never include response bodies or URL query
-values in diagnostics.
+values in diagnostics. A full configuration load resolves a repeated remote
+identity once and reuses the same bytes at every declaring layer.
 
-Validated remote content is atomically cached with mode `0600` under
+After the complete layered runtime configuration passes semantic, environment,
+shell, and authentication finalization, validated remote content is atomically
+cached with mode `0600` under
 `$JUEX_HOME/cache/config-imports/<source-sha256>.json`. The record contains the
 content plus source identity, ETag/Last-Modified, fetch time, and content
 SHA-256. Conditional requests refresh a `304` entry; transient network,
@@ -2414,6 +2417,9 @@ SHA-256. Conditional requests refresh a `304` entry; transient network,
 days and mark it stale. Other HTTP failures, expired or tampered cache, and an
 invalid new `200` response fail without replacing the previous LKG. Import
 resolution happens once during startup; there is no watcher or live reload.
+The narrow Fleet-only home reader may consume an existing runtime LKG but never
+publishes fresh content because it deliberately skips unrelated runtime fields
+and cannot perform the complete validation required to protect that cache.
 `juex doctor` exposes only source, fresh/stale state, digest, and fetch time.
 
 The runtime child-process environment is a separate immutable snapshot with

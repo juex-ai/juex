@@ -312,6 +312,7 @@ func TestConfigHTTPSImportCachesValidatedContentAndRevalidatesWithETag(t *testin
 	}
 
 	now = now.Add(time.Hour)
+	resetImportLoaderMemoForTest(loader)
 	second := Config{HomeJuexDir: home}
 	if err := applyYAMLFileWithImportLoader(&second, explicitYAMLSource(mainPath), loader); err != nil {
 		t.Fatal(err)
@@ -353,6 +354,7 @@ func TestConfigRemoteImportUsesCacheOnlyForRetryableFailures(t *testing.T) {
 	commitImportCacheForTest(t, &first)
 	status.Store(http.StatusInternalServerError)
 	now = now.Add(time.Hour)
+	resetImportLoaderMemoForTest(loader)
 	stale := Config{HomeJuexDir: home}
 	if err := applyYAMLFileWithImportLoader(&stale, explicitYAMLSource(mainPath), loader); err != nil {
 		t.Fatal(err)
@@ -362,6 +364,7 @@ func TestConfigRemoteImportUsesCacheOnlyForRetryableFailures(t *testing.T) {
 	}
 
 	status.Store(http.StatusNotFound)
+	resetImportLoaderMemoForTest(loader)
 	nonRetryable := Config{HomeJuexDir: home}
 	err := applyYAMLFileWithImportLoader(&nonRetryable, explicitYAMLSource(mainPath), loader)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
@@ -373,6 +376,7 @@ func TestConfigRemoteImportUsesCacheOnlyForRetryableFailures(t *testing.T) {
 
 	status.Store(http.StatusInternalServerError)
 	now = now.Add(8 * 24 * time.Hour)
+	resetImportLoaderMemoForTest(loader)
 	expired := Config{HomeJuexDir: home}
 	err = applyYAMLFileWithImportLoader(&expired, explicitYAMLSource(mainPath), loader)
 	if err == nil || !strings.Contains(err.Error(), "expired") {
@@ -405,12 +409,14 @@ func TestConfigRemoteImportDoesNotReplaceLKGWithInvalidContent(t *testing.T) {
 	commitImportCacheForTest(t, &first)
 
 	body.Store("unknown_field: invalid\n")
+	resetImportLoaderMemoForTest(loader)
 	invalid := Config{HomeJuexDir: home}
 	err := applyYAMLFileWithImportLoader(&invalid, explicitYAMLSource(mainPath), loader)
 	if err == nil || !strings.Contains(err.Error(), "unknown_field") {
 		t.Fatalf("invalid update error = %v", err)
 	}
 	body.Store("retry")
+	resetImportLoaderMemoForTest(loader)
 	stale := Config{HomeJuexDir: home}
 	if err := applyYAMLFileWithImportLoader(&stale, explicitYAMLSource(mainPath), loader); err != nil {
 		t.Fatal(err)
@@ -464,6 +470,104 @@ providers:
 	}
 	if !reflect.DeepEqual(stale.Models, []string{"remote:ok"}) || len(stale.ImportStatuses()) != 1 || stale.ImportStatuses()[0].State != "stale" {
 		t.Fatalf("stale fallback = models:%v statuses:%+v", stale.Models, stale.ImportStatuses())
+	}
+}
+
+func TestConfigRepeatedRemoteIdentityResolvesOnceAcrossLayers(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	var requests atomic.Int32
+	var offline atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if offline.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		switch requests.Add(1) {
+		case 1:
+			_, _ = w.Write([]byte(`models: [remote:first]
+providers:
+  - id: remote
+    protocol: openai/chat
+    base_url: https://example.invalid
+    api_key: test-key
+    models: [{id: first}]
+`))
+		default:
+			_, _ = w.Write([]byte("models: [remote:first]\n"))
+		}
+	}))
+	defer server.Close()
+
+	importLine := "imports:\n  - source: " + server.URL + "/config.yaml\n"
+	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), importLine)
+	explicitPath := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, explicitPath, importLine)
+	workDir := t.TempDir()
+	first, err := LoadFromFileForWorkDirForValidation(explicitPath, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("remote requests = %d, want one resolution for repeated identity", got)
+	}
+	if !reflect.DeepEqual(first.Models, []string{"remote:first"}) {
+		t.Fatalf("first models = %v", first.Models)
+	}
+
+	offline.Store(true)
+	stale, err := LoadFromFileForWorkDirForValidation(explicitPath, workDir)
+	if err != nil {
+		t.Fatalf("offline repeated-identity load: %v", err)
+	}
+	if !reflect.DeepEqual(stale.Models, []string{"remote:first"}) || len(stale.ImportStatuses()) != 2 || stale.ImportStatuses()[0].State != "stale" || stale.ImportStatuses()[1].State != "stale" {
+		t.Fatalf("stale repeated identity = models:%v statuses:%+v", stale.Models, stale.ImportStatuses())
+	}
+}
+
+func TestFleetOnlyLoadDoesNotReplaceRuntimeLKG(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	var body atomic.Value
+	body.Store(`models: [remote:ok]
+providers:
+  - id: remote
+    protocol: openai/chat
+    base_url: https://example.invalid
+    api_key: test-key
+    models: [{id: ok}]
+fleet:
+  addr: 127.0.0.1:5888
+`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		value := body.Load().(string)
+		if value == "retry" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(value))
+	}))
+	defer server.Close()
+	writeTextFile(t, filepath.Join(userHome, ".juex", "juex.yaml"), "imports:\n  - source: "+server.URL+"/config.yaml\n")
+	workDir := t.TempDir()
+	if _, err := LoadForWorkDirForValidation(workDir); err != nil {
+		t.Fatal(err)
+	}
+
+	body.Store("models: [missing:model]\nfleet:\n  addr: 127.0.0.1:5999\n")
+	fleet, err := LoadHomeFleetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fleet.Addr != "127.0.0.1:5999" {
+		t.Fatalf("fleet addr = %q, want fresh fleet-only value", fleet.Addr)
+	}
+
+	body.Store("retry")
+	stale, err := LoadForWorkDirForValidation(workDir)
+	if err != nil {
+		t.Fatalf("runtime stale load after fleet-only update: %v", err)
+	}
+	if !reflect.DeepEqual(stale.Models, []string{"remote:ok"}) || len(stale.ImportStatuses()) != 1 || stale.ImportStatuses()[0].State != "stale" {
+		t.Fatalf("runtime LKG after fleet-only load = models:%v statuses:%+v", stale.Models, stale.ImportStatuses())
 	}
 }
 
@@ -560,6 +664,7 @@ func TestConfigRemoteImportRejectsTamperedCacheAndRedactsInvalidSource(t *testin
 		if err := os.Chmod(cachePath, 0o644); err != nil {
 			t.Fatal(err)
 		}
+		resetImportLoaderMemoForTest(loader)
 		err = applyYAMLFileWithImportLoader(&Config{HomeJuexDir: home}, explicitYAMLSource(mainPath), loader)
 		if err == nil || !strings.Contains(err.Error(), "permissions") {
 			t.Fatalf("tampered cache error = %v", err)
@@ -584,6 +689,10 @@ func commitImportCacheForTest(t *testing.T, cfg *Config) {
 	if err := commitConfigImportCaches(cfg); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func resetImportLoaderMemoForTest(loader *configImportLoader) {
+	loader.remoteMemo = make(map[string]configImportDocument)
 }
 
 func TestConfigImportFailureDoesNotCreateAgentStateOrPublishRemoteCache(t *testing.T) {

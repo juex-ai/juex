@@ -37,9 +37,6 @@ func LoadHomeFleetConfig() (FleetConfig, error) {
 			return cfg, err
 		}
 	}
-	if err := loader.commitPendingCache(); err != nil {
-		return cfg, err
-	}
 	return cfg, nil
 }
 
@@ -88,11 +85,8 @@ func applyHomeFleetConfig(cfg *FleetConfig, source yamlConfigSource, loader *con
 	if err := applyFleetConfigNode(&staged, root, source.Path); err != nil {
 		return err
 	}
-	for _, document := range documents {
-		if document.cacheWrite != nil {
-			loader.pendingCache = append(loader.pendingCache, *document.cacheWrite)
-		}
-	}
+	// Fleet-only loading may consume an existing runtime LKG, but it cannot
+	// safely publish fresh content without the runtime's full semantic checks.
 	*cfg = staged
 	return nil
 }

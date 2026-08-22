@@ -134,7 +134,7 @@ func TestLoadHomeFleetConfigRejectsNestedImportedDocumentAtomically(t *testing.T
 	}
 }
 
-func TestLoadHomeFleetConfigCommitsRemoteCacheAfterAllSourcesSucceed(t *testing.T) {
+func TestLoadHomeFleetConfigDoesNotPublishRuntimeImportCache(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("fleet:\n  addr: 127.0.0.1:5888\n"))
 	}))
@@ -166,12 +166,8 @@ func TestLoadHomeFleetConfigCommitsRemoteCacheAfterAllSourcesSucceed(t *testing.
 	if got.Addr != "127.0.0.1:5888" {
 		t.Fatalf("fleet addr = %q, want imported address", got.Addr)
 	}
-	entries, err := os.ReadDir(cacheDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("fleet cache entries = %d, want 1", len(entries))
+	if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
+		t.Fatalf("successful fleet-only load published runtime cache: %v", err)
 	}
 }
 

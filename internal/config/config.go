@@ -79,6 +79,7 @@ type Config struct {
 	sandboxConfigured  bool
 	importStatuses     []ConfigImportStatus
 	pendingImportCache []configImportCacheRecord
+	importLoader       *configImportLoader
 }
 
 type AgentStateMode uint8
@@ -569,12 +570,14 @@ func finalizeConfigLoadWithAgentState(
 ) (loadErr error) {
 	if err := resolveRuntimeEnvironment(cfg); err != nil {
 		cfg.pendingImportCache = nil
+		cfg.importLoader = nil
 		return err
 	}
 	defer func() {
 		if loadErr != nil {
 			cfg.pendingImportCache = nil
 		}
+		cfg.importLoader = nil
 		loadErr = redactConfiguredEnvironmentError(cfg.EnvironmentSnapshot(), loadErr)
 	}()
 	hasModelsOverride := len(modelRefs) > 0
@@ -792,7 +795,19 @@ func (c Config) EnvironmentStatus() EnvironmentStatus {
 }
 
 func applyYAMLFile(cfg *Config, source yamlConfigSource) error {
-	return applyYAMLFileWithImportLoader(cfg, source, newConfigImportLoader(cfg.HomeJuexDir))
+	hadLoader := cfg.importLoader != nil
+	err := applyYAMLFileWithImportLoader(cfg, source, configImportLoaderFor(cfg))
+	if err != nil && !hadLoader {
+		cfg.importLoader = nil
+	}
+	return err
+}
+
+func configImportLoaderFor(cfg *Config) *configImportLoader {
+	if cfg.importLoader == nil {
+		cfg.importLoader = newConfigImportLoader(cfg.HomeJuexDir)
+	}
+	return cfg.importLoader
 }
 
 func applyExplicitYAMLFile(cfg *Config, path string) error {
@@ -813,9 +828,14 @@ func applyExplicitYAMLFile(cfg *Config, path string) error {
 			return err
 		}
 		if sameLoadedFile {
-			return applyYAMLFileWithImportLoaderAndOptions(cfg, explicitYAMLSource(path), newConfigImportLoader(cfg.HomeJuexDir), applyYAMLDataOptions{
+			hadLoader := cfg.importLoader != nil
+			err := applyYAMLFileWithImportLoaderAndOptions(cfg, explicitYAMLSource(path), configImportLoaderFor(cfg), applyYAMLDataOptions{
 				SkipExtensionPolicy: true,
 			})
+			if err != nil && !hadLoader {
+				cfg.importLoader = nil
+			}
+			return err
 		}
 	}
 	return applyYAMLFile(cfg, explicitYAMLSource(path))

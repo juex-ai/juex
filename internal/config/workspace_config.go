@@ -15,7 +15,7 @@ func ValidateWorkspaceConfig(content []byte, workDir string) (Config, error) {
 		&cfg,
 		content,
 		workspaceYAMLSource(cfg.RuntimeConfigPath()),
-		newConfigImportLoader(cfg.HomeJuexDir),
+		configImportLoaderFor(&cfg),
 		applyYAMLDataOptions{},
 	); err != nil {
 		return cfg, err

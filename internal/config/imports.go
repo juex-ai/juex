@@ -57,7 +57,7 @@ type configImportLoader struct {
 	maxBytes     int64
 	maxCacheAge  time.Duration
 	maxRedirects int
-	pendingCache []configImportCacheRecord
+	remoteMemo   map[string]configImportDocument
 }
 
 type configImportDocument struct {
@@ -88,6 +88,7 @@ func newConfigImportLoader(homeDir string) *configImportLoader {
 		maxBytes:     configImportMaxBytes,
 		maxCacheAge:  configImportMaxCacheAge,
 		maxRedirects: configImportMaxRedirects,
+		remoteMemo:   make(map[string]configImportDocument),
 	}
 }
 
@@ -183,7 +184,18 @@ func (l *configImportLoader) load(declaring yamlConfigSource, rawSource string) 
 	if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
 		return configImportDocument{}, fmt.Errorf("unsupported URL scheme %q; only http and https are allowed", parsed.Scheme)
 	}
-	return l.loadRemote(declaring, parsed)
+	identity := parsed.String()
+	if document, ok := l.remoteMemo[identity]; ok {
+		document.source.Scope = declaring.Scope
+		document.cacheWrite = nil
+		return document, nil
+	}
+	document, err := l.loadRemote(declaring, parsed)
+	if err != nil {
+		return configImportDocument{}, err
+	}
+	l.remoteMemo[identity] = document
+	return document, nil
 }
 
 func (l *configImportLoader) loadLocal(declaring yamlConfigSource, path string) (configImportDocument, error) {
@@ -394,10 +406,6 @@ func requireJSONEOF(dec *json.Decoder) error {
 	return errors.New("cache record contains trailing JSON data")
 }
 
-func (l *configImportLoader) writeCache(record configImportCacheRecord) error {
-	return writeConfigImportCache(record)
-}
-
 func writeConfigImportCache(record configImportCacheRecord) error {
 	data, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
@@ -412,17 +420,6 @@ func commitConfigImportCaches(cfg *Config) error {
 	cfg.pendingImportCache = nil
 	for _, record := range writes {
 		if err := writeConfigImportCache(record); err != nil {
-			return fmt.Errorf("config: cache import %s: %w", record.Source, err)
-		}
-	}
-	return nil
-}
-
-func (l *configImportLoader) commitPendingCache() error {
-	writes := l.pendingCache
-	l.pendingCache = nil
-	for _, record := range writes {
-		if err := l.writeCache(record); err != nil {
 			return fmt.Errorf("config: cache import %s: %w", record.Source, err)
 		}
 	}
