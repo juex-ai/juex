@@ -413,10 +413,12 @@ func delegateAppFields(target *App, resource any, registryValue any) {
 	setAppFields(target, resource, registryValue)
 }
 var appFieldSetter = delegateAppFields
-func preserveAppFieldSetter(setter func(*App, any, any)) (error, func(*App, any, any)) { return nil, setter }
+func preserveAppFieldSetter(setter func(*App, any, any)) (error, appFieldBinder) {
+	return nil, appFieldBinder{bind: setter}
+}
 func (application *App) bindNamedHelper(manager *mcp.Manager, registry *tools.Registry) {
-	_, preservedSetter := preserveAppFieldSetter(appFieldSetter)
-	var erasedSetter any = preservedSetter
+	_, holder := preserveAppFieldSetter(appFieldSetter)
+	var erasedSetter any = holder.bind
 	setter := erasedSetter.(func(*App, any, any))
 	setter(application, manager, registry)
 }
@@ -5649,14 +5651,33 @@ func trackCompositeFunctionTypes(values map[string]string, parent string, target
 		}
 	}
 	source := assignmentValueKey(unwrapCompositeExpression(assignedExpression(expressions, index)))
-	if source == "" || source == root {
+	if source != "" && source != root {
+		for key, typeName := range cloneStringMap(values) {
+			if !strings.HasPrefix(typeName, localFunctionTypePrefix) || !isNestedAssignmentValueKey(key, source) {
+				continue
+			}
+			setMayValueType(values, root+strings.TrimPrefix(key, source), typeName, types)
+		}
+	}
+	assigned, resultIndex := assignedAppReceiverExpression(expressions, index)
+	call, ok := assigned.(*ast.CallExpr)
+	if !ok {
 		return
 	}
-	for key, typeName := range cloneStringMap(values) {
-		if !strings.HasPrefix(typeName, localFunctionTypePrefix) || !isNestedAssignmentValueKey(key, source) {
-			continue
+	callee := calledFunctionKey(call.Fun, imports, values, types)
+	for parameterIndex, paths := range resultParameterPathSummary(callee, resultIndex, types) {
+		for _, argument := range callArgumentsForParameter(call, callee, parameterIndex, imports, types) {
+			typeName := expressionType(argument, imports, values, types)
+			if !strings.HasPrefix(typeName, localFunctionTypePrefix) {
+				continue
+			}
+			for path := range paths {
+				path = strings.TrimSuffix(path, ".")
+				if path != "" {
+					setMayValueType(values, root+"."+path, typeName, types)
+				}
+			}
 		}
-		setMayValueType(values, root+strings.TrimPrefix(key, source), typeName, types)
 	}
 }
 
