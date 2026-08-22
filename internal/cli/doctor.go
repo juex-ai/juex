@@ -262,6 +262,27 @@ func doctorConfigCheck(cfg config.Config) doctorCheck {
 	}
 	check.Details["default_home_config_path"] = cfg.DefaultHomeRuntimeConfigPath()
 	check.Details["effective_home_config_path"] = cfg.HomeRuntimeConfigPath()
+	statuses := cfg.ImportStatuses()
+	imports := make([]map[string]any, 0, len(statuses))
+	stale := false
+	for _, status := range statuses {
+		detail := map[string]any{
+			"source": status.Source,
+			"state":  status.State,
+			"digest": status.Digest,
+		}
+		if !status.FetchedAt.IsZero() {
+			detail["fetched_at"] = status.FetchedAt
+		}
+		imports = append(imports, detail)
+		stale = stale || status.State == "stale"
+	}
+	check.Details["config_imports"] = imports
+	if stale && check.Status == doctorStatusOK {
+		check.Status = doctorStatusWarn
+		check.Message += "; one or more config imports use stale Last-Known-Good cache"
+		check.Suggestion = "restore the imported config source before the cache expires"
+	}
 	return check
 }
 

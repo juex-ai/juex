@@ -88,6 +88,50 @@ func TestLoadHomeFleetConfigMergesDefaultAndInstanceHomes(t *testing.T) {
 	}
 }
 
+func TestLoadHomeFleetConfigAppliesImportsBeforeDeclaringFile(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	home := t.TempDir()
+	t.Setenv("JUEX_HOME", home)
+	writeTextFile(t, filepath.Join(home, "fleet-base.yaml"), "fleet:\n  addr: 127.0.0.1:5888\n  unsafe_bind_any: true\n")
+	writeTextFile(t, filepath.Join(home, "juex.yaml"), `imports:
+  - source: fleet-base.yaml
+providers: deliberately-not-parsed
+fleet:
+  addr: 127.0.0.1:5999
+`)
+
+	got, err := LoadHomeFleetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Addr != "127.0.0.1:5999" || !got.AddrConfigured || !got.UnsafeBindAny {
+		t.Fatalf("fleet config = %+v, want imported base then main override", got)
+	}
+}
+
+func TestLoadHomeFleetConfigRejectsNestedImportedDocumentAtomically(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	home := t.TempDir()
+	t.Setenv("JUEX_HOME", home)
+	importedPath := filepath.Join(home, "fleet-base.yaml")
+	writeTextFile(t, importedPath, "imports: []\nfleet:\n  addr: 127.0.0.1:5888\n")
+	mainPath := filepath.Join(home, "juex.yaml")
+	writeTextFile(t, mainPath, "imports:\n  - source: fleet-base.yaml\nfleet:\n  addr: 127.0.0.1:5999\n")
+
+	_, err := LoadHomeFleetConfig()
+	hasExpectedPaths := err != nil && strings.Contains(err.Error(), mainPath) && strings.Contains(err.Error(), importedPath)
+	if runtime.GOOS == "windows" && err != nil {
+		hasExpectedPaths = strings.Contains(err.Error(), filepath.Base(mainPath)) && strings.Contains(err.Error(), filepath.Base(importedPath))
+	}
+	if err == nil || !hasExpectedPaths || !strings.Contains(err.Error(), "imports[0]") || !strings.Contains(err.Error(), "nested imports") {
+		t.Fatalf("nested fleet import error = %v", err)
+	}
+}
+
 func TestLoadHomeFleetConfigInstanceFalseOverridesDefaultTrue(t *testing.T) {
 	userHome := t.TempDir()
 	t.Setenv("HOME", userHome)
@@ -193,7 +237,7 @@ func TestSetHomeFleetSettingsMergesYAMLAtomically(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("JUEX_HOME", home)
 	path := filepath.Join(home, "juex.yaml")
-	const original = "# keep this comment\nmodels: [openai:test]\nproviders:\n  - id: openai\n    protocol: openai/chat\nfleet:\n  addr: 127.0.0.1:6840 # keep addr comment\n"
+	const original = "# keep this comment\nimports:\n  - source: ./shared.yaml\nmodels: [openai:test]\nproviders:\n  - id: openai\n    protocol: openai/chat\nfleet:\n  addr: 127.0.0.1:6840 # keep addr comment\n"
 	if err := os.WriteFile(path, []byte(original), 0o640); err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +260,8 @@ func TestSetHomeFleetSettingsMergesYAMLAtomically(t *testing.T) {
 	}
 	for _, want := range []string{
 		"# keep this comment",
+		"imports:",
+		"source: ./shared.yaml",
 		"models:",
 		"openai:test",
 		"id: openai",

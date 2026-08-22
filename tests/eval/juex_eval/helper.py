@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import datetime
 import hashlib
 import json
 import os
@@ -23,6 +24,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
@@ -57,6 +61,9 @@ ISOLATED_PROVIDER_ENVIRONMENT_KEYS = (
     "PROVIDER_THINKING_EFFORT",
     "PROVIDER_CONTEXT_WINDOW",
 )
+CONFIG_IMPORT_TIMEOUT_SECONDS = 5
+CONFIG_IMPORT_MAX_BYTES = 1 << 20
+CONFIG_IMPORT_MAX_CACHE_AGE = datetime.timedelta(days=7)
 
 
 def main() -> int:
@@ -196,7 +203,6 @@ def provider_smoke(argv: list[str]) -> int:
         try:
             if not config_path.is_file():
                 raise FileNotFoundError(f"provider config not found: {config_path}")
-            validate_source_config(parsed.juex, config_path)
             cfg = load_source_config(config_path)
             rows, evidence = selection.select(
                 cfg,
@@ -206,6 +212,12 @@ def provider_smoke(argv: list[str]) -> int:
                 only=[parsed.only] if parsed.only else [],
                 all_models=parsed.all_models,
                 command_prefix=command_prefix,
+            )
+            materialized_configs = materialize_and_validate_selected_configs(
+                parsed.juex,
+                cfg,
+                rows,
+                work_root / ".validated-provider-configs",
             )
         except selection.ProviderUnavailable as exc:
             summary = provider_summary(parsed, report_dir, work_root, exc.evidence, [], exc.failure_category, str(exc))
@@ -287,6 +299,7 @@ def provider_smoke(argv: list[str]) -> int:
                     timeout_seconds=parsed.timeout,
                     retries=parsed.retries,
                     codex_home=env_default("CODEX_HOME", str(pathlib.Path.home() / ".codex")),
+                    materialized_config=materialized_configs[row.ref],
                 )
             )
             results.append(result)
@@ -452,6 +465,7 @@ class ProviderSmokeContext:
     timeout_seconds: int
     retries: int
     codex_home: str
+    materialized_config: pathlib.Path | None = None
 
 
 @dataclass(frozen=True)
@@ -501,7 +515,11 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
     manifest_file = case_dir / "release-manifest.txt"
     notes_file = case_dir / "agent-notes.txt"
     try:
-        write_selected_config(ctx.config, row.provider_id, row.model_id, case_config)
+        if ctx.materialized_config is None:
+            write_selected_config(ctx.config, row.provider_id, row.model_id, case_config)
+        else:
+            shutil.copyfile(ctx.materialized_config, case_config)
+            case_config.chmod(0o600)
         manifest_file.write_text(
             "\n".join(
                 [
@@ -1168,6 +1186,23 @@ def write_selected_config(
     output_path.chmod(0o600)
 
 
+def materialize_and_validate_selected_configs(
+    juex_bin: str,
+    cfg: dict[str, Any],
+    rows: list[MatrixRow],
+    output_dir: pathlib.Path,
+) -> dict[str, pathlib.Path]:
+    shutil.rmtree(output_dir, ignore_errors=True)
+    output_dir.mkdir(parents=True, mode=0o700)
+    materialized: dict[str, pathlib.Path] = {}
+    for row in rows:
+        output = output_dir / f"{safe_ref(row.ref)}.yaml"
+        write_selected_config(cfg, row.provider_id, row.model_id, output)
+        validate_source_config(juex_bin, output)
+        materialized[row.ref] = output
+    return materialized
+
+
 def selected_provider_model(cfg: dict[str, Any], provider_id: str, model_id: str) -> tuple[dict[str, Any], Any]:
     for provider in selection.merged_providers(cfg):
         if str(provider.get("id") or "").strip() != provider_id:
@@ -1187,11 +1222,17 @@ def validate_source_config(juex_bin: str, config_path: pathlib.Path) -> None:
         env = os.environ.copy()
         for name in ISOLATED_PROVIDER_ENVIRONMENT_KEYS:
             env.pop(name, None)
+        if not env.get("CODEX_HOME", "").strip():
+            env["CODEX_HOME"] = str(pathlib.Path.home() / ".codex")
         default_home, effective_home = provider_home_dirs()
         home_config_paths = {home / "juex.yaml" for home in (default_home, effective_home)}
+        isolated_user_home = pathlib.Path(work) / "home"
+        env["HOME"] = str(isolated_user_home)
+        env["USERPROFILE"] = str(isolated_user_home)
         if config_path in home_config_paths:
             env["JUEX_HOME"] = str(config_path.parent)
         else:
+            env["JUEX_HOME"] = str(pathlib.Path(work) / "juex-home")
             command.extend(["--config", str(config_path)])
         command.extend(["doctor", "--offline", "--format", "json"])
         try:
@@ -1490,14 +1531,7 @@ def append_jsonl(path: pathlib.Path, value: dict[str, Any]) -> None:
 
 
 def load_yaml_file(path: pathlib.Path) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8")
-    value = yaml.safe_load(text) or {}
-    if not isinstance(value, dict):
-        raise ValueError(f"{path} must contain a YAML mapping")
-    node = yaml.compose(text)
-    if isinstance(node, yaml.nodes.MappingNode):
-        _restore_runtime_string_values(value, node)
-    return value
+    return _load_yaml_text(path.read_text(encoding="utf-8"), str(path))
 
 
 def load_source_config(path: pathlib.Path) -> dict[str, Any]:
@@ -1521,8 +1555,160 @@ def load_source_config(path: pathlib.Path) -> dict[str, Any]:
         seen.add(source)
         if source != config_path and not source.is_file():
             continue
-        merged = _merge_source_config(merged, load_yaml_file(source))
+        merged = _merge_source_config(merged, _load_config_document(source))
     return merged
+
+
+def _load_config_document(path: pathlib.Path) -> dict[str, Any]:
+    main = load_yaml_file(path)
+    imported = _config_imports(main, str(path))
+    merged: dict[str, Any] = {}
+    for index, raw_source in enumerate(imported):
+        source, label = _read_config_import(path, raw_source)
+        value = _load_yaml_text(source, label)
+        if "imports" in value:
+            raise ValueError(f"{path} imports[{index}] {label}: nested imports are not supported")
+        merged = _merge_source_config(merged, value)
+    declaring = copy.deepcopy(main)
+    declaring.pop("imports", None)
+    return _merge_source_config(merged, declaring)
+
+
+def _config_imports(value: dict[str, Any], label: str) -> list[str]:
+    imports = value.get("imports")
+    if imports is None:
+        return []
+    if not isinstance(imports, list):
+        raise ValueError(f"{label} imports must be a YAML sequence")
+    sources: list[str] = []
+    for index, item in enumerate(imports):
+        if not isinstance(item, dict):
+            raise ValueError(f"{label} imports[{index}] must be a YAML mapping")
+        if set(item) != {"source"}:
+            raise ValueError(f"{label} imports[{index}] must contain only source")
+        source = item.get("source")
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError(f"{label} imports[{index}].source must be a non-empty YAML string")
+        sources.append(source.strip())
+    return sources
+
+
+def _read_config_import(declaring: pathlib.Path, raw_source: str) -> tuple[str, str]:
+    local_candidate = pathlib.Path(raw_source)
+    if local_candidate.is_absolute():
+        source = local_candidate.resolve()
+        return source.read_text(encoding="utf-8"), str(source)
+    parsed = urllib.parse.urlsplit(raw_source)
+    if parsed.scheme:
+        if parsed.scheme.lower() not in {"http", "https"}:
+            raise ValueError(f"unsupported config import URL scheme {parsed.scheme!r}")
+        if not parsed.netloc or parsed.username is not None or parsed.password is not None or parsed.fragment:
+            raise ValueError("invalid remote config import source")
+        if any(ord(character) < 0x20 for character in raw_source):
+            raise ValueError("invalid remote config import source")
+        return _read_remote_config_import(raw_source, parsed), _safe_remote_import_label(parsed)
+    source = (declaring.parent / raw_source).resolve()
+    return source.read_text(encoding="utf-8"), str(source)
+
+
+class _ConfigImportRedirectHandler(urllib.request.HTTPRedirectHandler):
+    max_redirections = 3
+    max_repeats = 3
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201 - urllib hook signature.
+        old_scheme = urllib.parse.urlsplit(req.full_url).scheme.lower()
+        parsed = urllib.parse.urlsplit(newurl)
+        if parsed.scheme.lower() not in {"http", "https"}:
+            raise urllib.error.URLError("config import redirect uses an unsupported scheme")
+        if old_scheme == "https" and parsed.scheme.lower() == "http":
+            raise urllib.error.URLError("config import redirect from https to http is not allowed")
+        if parsed.username is not None or parsed.password is not None or parsed.fragment:
+            raise urllib.error.URLError("config import redirect contains forbidden URL metadata")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _read_remote_config_import(identity: str, parsed: urllib.parse.SplitResult) -> str:
+    cache = _read_config_import_cache(identity, parsed)
+    headers: dict[str, str] = {}
+    if cache is not None:
+        if cache.get("etag"):
+            headers["If-None-Match"] = str(cache["etag"])
+        if cache.get("last_modified"):
+            headers["If-Modified-Since"] = str(cache["last_modified"])
+    request = urllib.request.Request(identity, headers=headers, method="GET")
+    opener = urllib.request.build_opener(_ConfigImportRedirectHandler())
+    try:
+        with opener.open(request, timeout=CONFIG_IMPORT_TIMEOUT_SECONDS) as response:
+            data = response.read(CONFIG_IMPORT_MAX_BYTES + 1)
+            if len(data) > CONFIG_IMPORT_MAX_BYTES:
+                raise ValueError("remote config import exceeds the one-MiB response limit")
+            return data.decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 304 and cache is not None:
+            return str(cache["content"])
+        if exc.code not in {408, 429} and exc.code < 500:
+            raise ValueError(f"remote config import returned HTTP {exc.code}") from None
+        if cache is not None and _config_import_cache_is_current(cache):
+            return str(cache["content"])
+        raise ValueError("remote config import is unavailable and has no current Last-Known-Good cache") from None
+    except (OSError, urllib.error.URLError):
+        if cache is not None and _config_import_cache_is_current(cache):
+            return str(cache["content"])
+        raise ValueError("remote config import is unavailable and has no current Last-Known-Good cache") from None
+
+
+def _read_config_import_cache(identity: str, parsed: urllib.parse.SplitResult) -> dict[str, Any] | None:
+    _, effective_home = provider_home_dirs()
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    path = effective_home / "cache" / "config-imports" / f"{digest}.json"
+    try:
+        if os.name != "nt" and (path.stat().st_mode & 0o777) != 0o600:
+            return None
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(record, dict) or record.get("version") != 1 or record.get("source_sha256") != digest:
+        return None
+    safe_source = _safe_remote_import_label(parsed)
+    content = record.get("content")
+    content_digest = record.get("content_sha256")
+    if record.get("source") != safe_source or not isinstance(content, str) or len(content.encode("utf-8")) > CONFIG_IMPORT_MAX_BYTES:
+        return None
+    if content_digest != "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest():
+        return None
+    for name in ("etag", "last_modified"):
+        value = record.get(name)
+        if value is not None and (not isinstance(value, str) or len(value) > 8192 or "\r" in value or "\n" in value):
+            return None
+    return record
+
+
+def _config_import_cache_is_current(record: dict[str, Any]) -> bool:
+    fetched_at = record.get("fetched_at")
+    if not isinstance(fetched_at, str):
+        return False
+    try:
+        instant = datetime.datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if instant.tzinfo is None:
+        return False
+    age = datetime.datetime.now(datetime.timezone.utc) - instant.astimezone(datetime.timezone.utc)
+    return datetime.timedelta(0) <= age <= CONFIG_IMPORT_MAX_CACHE_AGE
+
+
+def _safe_remote_import_label(parsed: urllib.parse.SplitResult) -> str:
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
+def _load_yaml_text(text: str, label: str) -> dict[str, Any]:
+    value = yaml.safe_load(text) or {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must contain a YAML mapping")
+    node = yaml.compose(text)
+    if isinstance(node, yaml.nodes.MappingNode):
+        _restore_runtime_string_values(value, node)
+    return value
 
 
 def provider_home_dirs() -> tuple[pathlib.Path, pathlib.Path]:

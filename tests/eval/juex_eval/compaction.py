@@ -105,7 +105,6 @@ def run(args: argparse.Namespace) -> int:
     try:
         if not config.is_file():
             raise FileNotFoundError(f"Missing provider config: {config}")
-        helper.validate_source_config(args.juex, config)
         cfg = helper.load_source_config(config)
         candidates, evidence = selection.select(
             cfg,
@@ -332,14 +331,16 @@ def run_model(args: argparse.Namespace, cfg: dict, model: str, out_root: pathlib
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        selected_config = work / ".juex" / "juex.yaml"
         helper.write_selected_config(
             cfg,
             provider_id,
             model_id,
-            work / ".juex" / "juex.yaml",
+            selected_config,
             disable_tools=True,
             compaction=DEFAULT_COMPACTION,
         )
+        helper.validate_source_config(args.juex, selected_config)
     except Exception as exc:  # noqa: BLE001
         err = out_dir / "config-error.txt"
         err.write_text(str(exc), encoding="utf-8")

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestValidateWorkspaceConfigReplacesOldWorkspaceLayerWithoutIdentity(t *testing.T) {
@@ -90,5 +91,32 @@ providers:
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestValidateAndWriteWorkspaceConfigResolveCandidateImports(t *testing.T) {
+	prepareConfigTest(t)
+	workDir := t.TempDir()
+	importPath := filepath.Join(workDir, ".juex", "shared.yaml")
+	writeTextFile(t, importPath, "runtime:\n  tool_timeout: 44s\n")
+	candidate := []byte("imports:\n  - source: shared.yaml\n")
+
+	cfg, err := ValidateWorkspaceConfig(candidate, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ToolTimeout != 44*time.Second {
+		t.Fatalf("tool timeout = %s, want imported 44s", cfg.ToolTimeout)
+	}
+	path, err := WriteWorkspaceConfig(candidate, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(candidate) {
+		t.Fatalf("written candidate = %q, want imports preserved verbatim", got)
 	}
 }

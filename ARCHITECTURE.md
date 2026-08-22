@@ -60,6 +60,7 @@ juex/
 │   ├── version/    version.go    # ldflags-injected build metadata
 │   ├── config/                   # juex.yaml, shell profile, Codex auth loading
 │   │   ├── config.go
+│   │   ├── imports.go            # ordered local/HTTP(S) sources + LKG cache
 │   │   ├── values.go             # resolved ProviderSelection, paths, and limits
 │   │   ├── shell.go
 │   │   └── codex_auth.go
@@ -199,7 +200,7 @@ implementation decisions live.
 | `internal/fleetweb` | Fleet HTTP/SSE transport, roster DTOs, directory-browser endpoints, verified Agent reverse proxy, embedded SPA fallback | Registry/process policy, single-Agent routes, frontend domain policy |
 | `internal/processmetrics` | Cross-platform per-process RSS and cumulative CPU-time sampling, interval CPU derivation, process-identity baseline reset | Polling cadence, Agent health policy, HTTP DTOs, UI formatting, persistence |
 | `internal/extensions` | Ordered extension-root discovery, allowed-name filtering, same-name winner selection, source identity, resource references, trust requirement projection | Extension allowlist inheritance, Skill/MCP/hook/Observable parsing, runtime registration, Extension execution |
-| `internal/config` | YAML and user/Workspace config layering, extension allowlist inheritance, runtime-environment layer ordering, Provider selection inputs, path and policy projection | Extension directory scanning, Dotenv syntax, mutable process-global environment ownership, canonical Provider Profile semantics, Turn behavior, Provider requests, HTTP routing |
+| `internal/config` | YAML and user/Workspace config layering, direct local/HTTP(S) import resolution and Last-Known-Good cache, extension allowlist inheritance, runtime-environment layer ordering, Provider selection inputs, path and policy projection | Extension directory scanning, Dotenv syntax, mutable process-global environment ownership, canonical Provider Profile semantics, Turn behavior, Provider requests, general HTTP routing |
 | `internal/environment` | Portable environment-name validation, deterministic dotenv parsing, immutable effective snapshots, low-priority child-runtime defaults, child overlays, value-free metadata, controlled single-workspace activation | Config-file discovery, Extension discovery, subprocess ownership, runtime policy, diagnostic presentation |
 | `internal/providerreadiness` | Provider selection, credential, construction, and connectivity readiness checks | Provider Protocol semantics, runtime fallback, CLI presentation |
 | `internal/llm` | Canonical messages and blocks, Provider interfaces/profiles, Protocol and Capability resolution, wire/SDK adapters, provider transport/API/stream retry, model health | Model-chain fallback, Session lifecycle, Tool execution, CLI/HTTP DTOs |
@@ -2251,6 +2252,9 @@ directory, where Juex reads `<WorkDir>/juex.yaml`. The repository root ships
 `juex.yaml.example` as a copyable template:
 
 ```yaml
+imports:
+  - source: ./shared/providers.yaml
+  - source: https://config.example/juex/common.yaml
 models:
   - openai:gpt-4.1
   - anthropic:claude-sonnet-5
@@ -2317,6 +2321,7 @@ compaction:
 
 | Field | Description |
 |---|---|
+| `imports[].source` | optional ordered direct local path or HTTP(S) source applied before the declaring file; relative paths resolve beside that file, imported documents inherit its scope and may not contain `imports`, and `--config` itself remains local |
 | `models` | ordered `provider:model` chain; the first entry is primary, later entries are fallbacks, and a nearer YAML layer replaces the complete list, including with an explicit empty list |
 | `enable_user_agents_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores only `~/.agents/AGENTS.md`, `~/.agents/skills`, and `~/.agents/mcp.json`; the Extension allowlist is unchanged |
 | `environment.load_dotenv` | optional boolean; defaults to `true`; reads exactly `<WorkDir>/.env` once during runtime config loading; a missing file is allowed and malformed input fails startup |
@@ -2376,10 +2381,11 @@ compaction:
 | `tool_output.preview_tail_bytes` | optional trailing-byte preview ceiling; the combined preview never exceeds the effective inline budget |
 
 YAML resolution order (later wins) is `defaults` <
-`~/.juex/juex.yaml` < a canonically distinct `$JUEX_HOME/juex.yaml` <
+default-home imports < `~/.juex/juex.yaml` < instance-home imports < a
+canonically distinct `$JUEX_HOME/juex.yaml` < workspace imports <
 `<WorkDir>/.juex/juex.yaml` (or `<WorkDir>/juex.yaml` when `WorkDir` is a
-`.juex` directory) <
-`--config <path>` (if supplied) < supported environment overrides < explicit
+`.juex` directory) < explicit imports < `--config <path>` (if supplied) <
+supported environment overrides < explicit
 CLI flags. A root `--models provider:model,...` replaces the complete YAML
 model chain after YAML merge and wins over `PROVIDER_API_ID`,
 `PROVIDER_API_PROTOCOL`, and `PROVIDER_API_MODEL`; non-conflicting env overrides
@@ -2388,6 +2394,27 @@ and `PROVIDER_CONTEXT_WINDOW` still apply.
 `PROVIDER_API_MODEL` remains a model-id-only override under the selected
 provider and preserves the configured tail. Every configured reference must be
 unique and resolve to a declared provider model.
+
+Each declaring YAML document is parsed strictly before any import is fetched.
+Its direct imports are then read and strictly parsed in declaration order,
+applied to an isolated candidate through the existing field-specific apply
+functions, and followed by the declaring document. Any read, parse, scope, or
+apply error discards the candidate. Imported documents containing the
+`imports` key, even with an empty value, fail instead of recursing. Local
+relative paths resolve from the declaring file directory; remote sources
+accept only HTTP(S), use a five-second request timeout, a one-MiB response cap,
+and at most three redirects, and never include response bodies or URL query
+values in diagnostics.
+
+Validated remote content is atomically cached with mode `0600` under
+`$JUEX_HOME/cache/config-imports/<source-sha256>.json`. The record contains the
+content plus source identity, ETag/Last-Modified, fetch time, and content
+SHA-256. Conditional requests refresh a `304` entry; transient network,
+`408`, `429`, or `5xx` failures may use a digest-valid entry no older than seven
+days and mark it stale. Other HTTP failures, expired or tampered cache, and an
+invalid new `200` response fail without replacing the previous LKG. Import
+resolution happens once during startup; there is no watcher or live reload.
+`juex doctor` exposes only source, fresh/stale state, digest, and fetch time.
 
 The runtime child-process environment is a separate immutable snapshot with
 this precedence (later wins): selected Extension manifest defaults <

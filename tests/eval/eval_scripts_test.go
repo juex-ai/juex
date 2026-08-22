@@ -2,6 +2,8 @@ package eval
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -174,6 +176,112 @@ fleet:
 				t.Fatalf("selected config retained unrelated fleet settings:\n%s", data)
 			}
 		})
+	}
+}
+
+func TestWriteModelConfigResolvesDirectConfigImports(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	imported := filepath.Join(dir, "providers.yaml")
+	if err := os.WriteFile(imported, []byte(`models: [local:imported]
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: https://base.invalid
+    api_key: imported-secret
+    headers: {X-Imported: base}
+    models:
+      - id: imported
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(dir, "juex.yaml")
+	if err := os.WriteFile(source, []byte(`imports:
+  - source: providers.yaml
+providers:
+  - id: local
+    headers: {X-Main: override}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(dir, "selected.yaml")
+	runUV(t, root,
+		"python", "-m", "tests.eval.juex_eval", "write-model-config",
+		"--source", source,
+		"--output", output,
+	)
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"local:imported", "imported-secret", "X-Imported: base", "X-Main: override"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("selected config missing %q:\n%s", want, body)
+		}
+	}
+
+	if err := os.WriteFile(imported, []byte("imports: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("uv", "run", "--quiet", "--project", root,
+		"python", "-m", "tests.eval.juex_eval", "write-model-config",
+		"--source", source,
+		"--output", output,
+	)
+	cmd.Dir = root
+	combined, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(combined), "nested imports are not supported") {
+		t.Fatalf("nested import command error = %v, output = %s", err, combined)
+	}
+}
+
+func TestWriteModelConfigResolvesHTTPConfigImport(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`models: [remote:model]
+providers:
+  - id: remote
+    protocol: openai/chat
+    api_key: remote-secret
+    models: [{id: model}]
+`))
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "juex.yaml")
+	if err := os.WriteFile(source, []byte("imports:\n  - source: "+server.URL+"/config.yaml?token=request-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(dir, "selected.yaml")
+	runUV(t, root,
+		"python", "-m", "tests.eval.juex_eval", "write-model-config",
+		"--source", source,
+		"--output", output,
+	)
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"remote:model", "remote-secret"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("selected config missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(string(body), "request-secret") {
+		t.Fatalf("selected config retained import URL query:\n%s", body)
 	}
 }
 
@@ -514,9 +622,13 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"    headers: {Authorization: never-report-header}",
 		"    models: [{id: alpha}, {id: beta}]",
 		"''', encoding='utf-8')",
+		"    remote_entry = work / 'remote-entry.yaml'",
+		"    remote_entry.write_text('imports:\\n  - source: https://config.example/providers.yaml\\n', encoding='utf-8')",
 		"    true_bin = shutil.which('true')",
 		"    assert true_bin",
 		"    captured = []",
+		"    validated = []",
+		"    remote_reads = []",
 		"    fail_selected = False",
 		"    def fake_case(ctx):",
 		"        captured.append(ctx.row.ref)",
@@ -529,13 +641,22 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        )",
 		"    original_case = helper.run_provider_smoke_case",
 		"    original_validate = helper.validate_source_config",
+		"    original_remote = helper._read_remote_config_import",
 		"    helper.run_provider_smoke_case = fake_case",
 		"    def fake_validate(_juex, source):",
-		"        if 'protcol:' in Path(source).read_text(encoding='utf-8'):",
+		"        materialized = Path(source).read_text(encoding='utf-8')",
+		"        validated.append(materialized)",
+		"        if 'protcol:' in materialized:",
 		"            raise ValueError('provider config is not loadable by Juex')",
 		"    helper.validate_source_config = fake_validate",
+		"    def fake_remote(identity, _parsed):",
+		"        remote_reads.append(identity)",
+		"        return 'models: [remote:model]\\nproviders:\\n  - id: remote\\n    api_key: remote-secret\\n    models: [{id: model}]\\n'",
+		"    helper._read_remote_config_import = fake_remote",
 		"    def run(name, *scope, seed='stable', source=config):",
 		"        captured.clear()",
+		"        validated.clear()",
+		"        remote_reads.clear()",
 		"        report = work / f'report-{name}'",
 		"        status = helper.provider_smoke([",
 		"            '--juex', true_bin, '--config', str(source), '--selection-seed', seed,",
@@ -551,6 +672,10 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        assert summary['eligible_candidate_refs'] == ['provider-on:alpha', 'provider-on:beta'], summary",
 		"        assert summary['resolved_config_path'] == str(config.resolve()), summary",
 		"        assert '--selection-seed stable' in summary['reproduction_command'], summary",
+		"        status, refs, summary, _ = run('remote-import', '--only', 'remote:model', source=remote_entry)",
+		"        assert status == 0 and refs == ['remote:model'], (status, refs)",
+		"        assert remote_reads == ['https://config.example/providers.yaml'], remote_reads",
+		"        assert len(validated) == 1 and 'imports:' not in validated[0] and 'remote-secret' in validated[0], validated",
 		"        status, refs, summary, _ = run('all', '--all-models')",
 		"        assert status == 0 and refs == ['provider-on:alpha', 'provider-on:beta'], refs",
 		"        status, refs, summary, _ = run('blocked', '--only', 'provider-off:blocked')",
@@ -571,7 +696,7 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        assert status == 1 and refs == [] and summary['failure_category'] == 'environment_failure', summary",
 		"        assert \"'providers' must be a YAML sequence\" in summary['error'], summary",
 		"        invalid_full_schema = work / 'invalid-full-schema.yaml'",
-		"        invalid_full_schema.write_text('providers:\\n  - id: provider-on\\n    models: [{id: alpha}]\\n  - id: unselected\\n    protcol: openai/chat\\n    models: [{id: unused}]\\n', encoding='utf-8')",
+		"        invalid_full_schema.write_text('providers:\\n  - id: provider-on\\n    protcol: openai/chat\\n    models: [{id: alpha}]\\n', encoding='utf-8')",
 		"        status, refs, summary, _ = run('invalid-full-schema', '--only', 'provider-on:alpha', source=invalid_full_schema)",
 		"        assert status == 1 and refs == [] and summary['error'] == 'provider config is not loadable by Juex', summary",
 		"        invalid_context = work / 'invalid-context.yaml'",
@@ -599,6 +724,7 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"    finally:",
 		"        helper.run_provider_smoke_case = original_case",
 		"        helper.validate_source_config = original_validate",
+		"        helper._read_remote_config_import = original_remote",
 		"        for name, value in original_home.items():",
 		"            if value is None:",
 		"                os.environ.pop(name, None)",
@@ -782,14 +908,19 @@ func TestJuexSourceConfigValidationUsesCompleteConfigDoctor(t *testing.T) {
 		"        root = Path(tmp)",
 		"        config = root / 'juex.yaml'",
 		"        config.write_text('providers: []\\n', encoding='utf-8')",
-		"        original_environment = {name: helper.os.environ.get(name) for name in [*helper.ISOLATED_PROVIDER_ENVIRONMENT_KEYS, 'JUEX_HOME']}",
+		"        original_environment = {name: helper.os.environ.get(name) for name in [*helper.ISOLATED_PROVIDER_ENVIRONMENT_KEYS, 'CODEX_HOME', 'HOME', 'USERPROFILE', 'JUEX_HOME']}",
 		"        helper.os.environ.update({name: f'inherited-{name.lower()}' for name in helper.ISOLATED_PROVIDER_ENVIRONMENT_KEYS})",
+		"        helper.os.environ.pop('CODEX_HOME', None)",
 		"        helper.os.environ['JUEX_HOME'] = str(root / 'effective-home')",
 		"        helper.validate_source_config('/path/to/juex', config)",
 		"        command, kwargs = captured[-1]",
 		"        assert command[-4:] == ['doctor', '--offline', '--format', 'json'], command",
 		"        assert command[3:5] == ['--config', str(config.resolve())], command",
 		"        assert all(name not in kwargs['env'] for name in helper.ISOLATED_PROVIDER_ENVIRONMENT_KEYS), kwargs['env']",
+		"        assert kwargs['env']['HOME'] == str(Path(command[2]) / 'home'), kwargs['env']['HOME']",
+		"        assert kwargs['env']['USERPROFILE'] == str(Path(command[2]) / 'home'), kwargs['env']['USERPROFILE']",
+		"        assert kwargs['env']['JUEX_HOME'] == str(Path(command[2]) / 'juex-home'), kwargs['env']['JUEX_HOME']",
+		"        assert kwargs['env']['CODEX_HOME'] == str(Path.home() / '.codex'), kwargs['env']['CODEX_HOME']",
 		"        home_config = root / 'effective-home' / 'juex.yaml'",
 		"        home_config.parent.mkdir()",
 		"        home_config.write_text('providers: []\\n', encoding='utf-8')",
@@ -1755,15 +1886,19 @@ func TestEvalCompactionPropagatesTransientTurnOutcome(t *testing.T) {
 		"    out = root / 'reports'",
 		"    args = Namespace(config=str(root / 'config.yaml'), keep_workdir=True, context_window=32000, turn_timeout=1, juex='/bin/true')",
 		"    original_write = compaction.helper.write_selected_config",
+		"    original_validate = compaction.helper.validate_source_config",
 		"    original_turn = compaction.run_eval_turn",
+		"    validated = []",
 		"    try:",
 		"        compaction.helper.write_selected_config = lambda *args, **kwargs: None",
+		"        compaction.helper.validate_source_config = lambda juex, config: validated.append((juex, Path(config)))",
 		"        def timed_out(args, work, prompt, output):",
 		"            output.write_text('', encoding='utf-8')",
 		"            return 124",
 		"        compaction.run_eval_turn = timed_out",
 		"        status = compaction.run_model(args, {}, 'provider:model', out, [])",
 		"        assert status == 1",
+		"        assert len(validated) == 1 and validated[0][0] == '/bin/true' and validated[0][1].name == 'juex.yaml', validated",
 		"        result = compaction.load_model_outcome(out / compaction.helper.safe_ref('provider:model'), status)",
 		"        assert result.outcome == 'transient_failure' and result.retryable is True and result.matched_rule == 'transient-provider-timeout', result",
 		"        aggregate = compaction.aggregate_compaction_outcome([{'provider_model': 'provider:model', 'status': 'fail', **result.as_dict()}])",
@@ -1773,6 +1908,7 @@ func TestEvalCompactionPropagatesTransientTurnOutcome(t *testing.T) {
 		"        assert product.outcome == 'product_failure' and product.retryable is False",
 		"    finally:",
 		"        compaction.helper.write_selected_config = original_write",
+		"        compaction.helper.validate_source_config = original_validate",
 		"        compaction.run_eval_turn = original_turn",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)

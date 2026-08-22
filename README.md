@@ -64,6 +64,26 @@ juex init --scope workspace
 juex doctor
 ```
 
+Each home, workspace, or explicit local `juex.yaml` may import reusable local
+or HTTP(S) configuration before applying its own fields:
+
+```yaml
+imports:
+  - source: ./shared/providers.yaml
+  - source: https://config.example/juex/common.yaml
+```
+
+Imports run in declaration order and use the declaring file's scope and the
+same field merge rules as ordinary YAML layers; the declaring file always wins
+last. Relative paths resolve beside that file. Imported documents cannot
+contain `imports`, including `imports: []`, and `--config` itself remains a
+local path. Remote responses are bounded and cached as a permission-restricted
+Last-Known-Good copy under `$JUEX_HOME/cache/config-imports`; a temporary
+network failure may use an unexpired cache and `juex doctor` reports the source,
+fresh/stale state, and digest without URL query values or configuration
+contents. Configuration is still loaded only at process startup, so restart a
+resident Agent after changing either the declaring or imported source.
+
 Juex loads a runtime environment once for `run`, `repl`, `listen`, and manual
 session compaction. `environment.load_dotenv` defaults to `true` and reads
 exactly `<WorkDir>/.env`; parent directories are never searched and dotenv
@@ -108,8 +128,9 @@ The selected bundle contributes the `mcp__memory__memory_search`,
 removes all of those resources without deleting its Agent-private data.
 
 Environment precedence is selected Extension manifest defaults, default-home
-YAML, a distinct instance-home YAML, workspace `.env`, workspace YAML,
-explicit `--config` YAML, the environment inherited at launch, child-local
+YAML imports then its file, a distinct instance-home YAML imports then its
+file, workspace `.env`, workspace YAML imports then its file, explicit
+`--config` imports then its YAML, the environment inherited at launch, child-local
 MCP/Observable values, then Juex-owned runtime injection. Existing Agent
 values, including empty values, therefore shadow Extension defaults and
 preserve service and shell overrides. `--config` never changes the `.env`

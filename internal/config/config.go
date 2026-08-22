@@ -77,6 +77,7 @@ type Config struct {
 	launchEnvironment  environment.Snapshot
 	runtimeEnvStatus   EnvironmentStatus
 	sandboxConfigured  bool
+	importStatuses     []ConfigImportStatus
 }
 
 type AgentStateMode uint8
@@ -104,6 +105,7 @@ type EnvironmentStatus struct {
 }
 
 type fileConfig struct {
+	Imports                   []importConfig          `yaml:"imports"`
 	Models                    *[]string               `yaml:"models"`
 	EnableUserAgentsResources optionalBool            `yaml:"enable_user_agents_resources"`
 	Providers                 []providerConfig        `yaml:"providers"`
@@ -782,17 +784,7 @@ func (c Config) EnvironmentStatus() EnvironmentStatus {
 }
 
 func applyYAMLFile(cfg *Config, source yamlConfigSource) error {
-	if source.Path == "" {
-		return nil
-	}
-	data, err := os.ReadFile(source.Path)
-	if err != nil {
-		if source.MissingOK && os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	return applyYAMLData(cfg, data, source)
+	return applyYAMLFileWithImportLoader(cfg, source, newConfigImportLoader(cfg.HomeJuexDir))
 }
 
 func applyExplicitYAMLFile(cfg *Config, path string) error {
@@ -813,11 +805,7 @@ func applyExplicitYAMLFile(cfg *Config, path string) error {
 			return err
 		}
 		if sameLoadedFile {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			return applyYAMLDataWithOptions(cfg, data, explicitYAMLSource(path), applyYAMLDataOptions{
+			return applyYAMLFileWithImportLoaderAndOptions(cfg, explicitYAMLSource(path), newConfigImportLoader(cfg.HomeJuexDir), applyYAMLDataOptions{
 				SkipExtensionPolicy: true,
 			})
 		}
