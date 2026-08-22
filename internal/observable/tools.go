@@ -23,19 +23,19 @@ const (
 const ModuleID runtimemodule.ID = "observables"
 
 type Module struct {
-	mu       sync.RWMutex
-	manager  *Manager
-	options  ManagerOptions
-	startAll bool
-	owned    bool
+	mu      sync.RWMutex
+	manager *Manager
+	options ManagerOptions
+	owned   bool
 }
 
 func NewModule(manager *Manager) *Module { return &Module{manager: manager} }
 
-// NewRuntimeModule defers config loading, durable store construction, and
-// worker startup until the runtime Module lifecycle starts.
-func NewRuntimeModule(options ManagerOptions, startAll bool) *Module {
-	return &Module{options: options, startAll: startAll, owned: true}
+// NewRuntimeModule defers config loading and durable store construction until
+// the runtime Module lifecycle starts. Producer startup remains an explicit
+// App action after Session recovery barriers have been published.
+func NewRuntimeModule(options ManagerOptions) *Module {
+	return &Module{options: options, owned: true}
 }
 
 func (*Module) ID() runtimemodule.ID { return ModuleID }
@@ -53,7 +53,7 @@ func (m *Module) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool
 	return observableTools(manager), nil
 }
 
-func (m *Module) StartRuntime(ctx context.Context, _ runtimemodule.RuntimeContext) error {
+func (m *Module) StartRuntime(context.Context, runtimemodule.RuntimeContext) error {
 	if m == nil || !m.owned {
 		return nil
 	}
@@ -66,14 +66,24 @@ func (m *Module) StartRuntime(ctx context.Context, _ runtimemodule.RuntimeContex
 	if err != nil {
 		return err
 	}
-	if m.startAll {
-		// Individual startup failures remain visible in Manager status and do
-		// not prevent the rest of the runtime from serving, matching the
-		// optional Observable startup contract.
-		_ = manager.StartAll(ctx)
-	}
 	m.manager = manager
 	return nil
+}
+
+// StartAll starts producers for an App-owned manager after the App has
+// published its Session recovery boundary. Injected managers retain lifecycle
+// ownership in their caller and are intentionally left untouched.
+func (m *Module) StartAll(ctx context.Context) error {
+	if m == nil || !m.owned {
+		return nil
+	}
+	m.mu.RLock()
+	manager := m.manager
+	m.mu.RUnlock()
+	if manager == nil {
+		return fmt.Errorf("observable: runtime module manager is not started")
+	}
+	return manager.StartAll(ctx)
 }
 
 func (m *Module) QuiesceRuntime(context.Context) error { return m.closeOwned() }

@@ -598,7 +598,7 @@ func TestAppPendingRecoveryBarrierPrecedesNotificationActivation(t *testing.T) {
 	})
 	activated := make(chan struct{})
 	go func() {
-		a.activateExternalInputAfterPendingRecovery(gate, []runtime.PendingInputRecord{record})
+		a.activateExternalInputAfterPendingRecovery(gate, []runtime.PendingInputRecord{record}, nil)
 		close(activated)
 	}()
 
@@ -656,6 +656,95 @@ func TestAppPendingRecoveryBarrierPrecedesNotificationActivation(t *testing.T) {
 		got := provider.histories[1][len(provider.histories[1])-1].FirstText()
 		if !strings.Contains(got, "newer startup notification") {
 			t.Fatalf("second provider input = %q, want startup notification", got)
+		}
+	}
+}
+
+func TestAppPendingRecoveryBarrierPrecedesObservableActivation(t *testing.T) {
+	dir := t.TempDir()
+	provider := newBlockingAppProvider()
+	a, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+	record, err := a.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "oldest before observable startup"),
+		runtime.PendingInputOptions{ID: "oldest-before-observable", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type observableResult struct {
+		outcome observable.DeliveryOutcome
+		err     error
+	}
+	delivered := make(chan observableResult, 1)
+	observation := testObservationRecord("obs-during-observable-startup")
+	activated := make(chan struct{})
+	go func() {
+		a.activateExternalInputAfterPendingRecovery(nil, []runtime.PendingInputRecord{record}, func() {
+			outcome, err := a.DeliverObservation(context.Background(), observation)
+			delivered <- observableResult{outcome: outcome, err: err}
+		})
+		close(activated)
+	}()
+
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup recovery did not reach provider")
+	}
+	provider.mu.Lock()
+	firstHistory := append([]llm.Message(nil), provider.histories[0]...)
+	provider.mu.Unlock()
+	oldestIndex := -1
+	observationIndex := -1
+	for i, message := range firstHistory {
+		text := message.FirstText()
+		if text == "oldest before observable startup" {
+			oldestIndex = i
+		}
+		if strings.Contains(text, observation.ID) {
+			observationIndex = i
+		}
+	}
+	if oldestIndex < 0 || (observationIndex >= 0 && observationIndex < oldestIndex) {
+		t.Fatalf("first provider history = %+v, want oldest durable input before observation", firstHistory)
+	}
+	select {
+	case <-activated:
+		t.Fatal("Observable activation completed while startup recovery was blocked")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(provider.release)
+	select {
+	case <-activated:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Observable activation did not finish after startup recovery")
+	}
+	select {
+	case result := <-delivered:
+		if result.err != nil || result.outcome.State != observable.ObservationStateDelivered {
+			t.Fatalf("Observable startup delivery = %+v, %v", result.outcome, result.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup observation was not delivered")
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if provider.calls < 1 || provider.calls > 2 {
+		t.Fatalf("provider calls = %d, want one ordered recovery Turn or recovery then observation", provider.calls)
+	}
+	if observationIndex < 0 {
+		if provider.calls != 2 {
+			t.Fatalf("provider histories = %+v, want startup observation", provider.histories)
+		}
+		got := provider.histories[1][len(provider.histories[1])-1].FirstText()
+		if !strings.Contains(got, observation.ID) {
+			t.Fatalf("second provider input = %q, want startup observation", got)
 		}
 	}
 }

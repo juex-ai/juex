@@ -599,7 +599,7 @@ func New(opts Options) (*App, error) {
 						SandboxRunner:         sandboxRunner,
 						Bus:                   bus,
 						Deliver:               a.DeliverObservation,
-					}, sess.Kind == session.KindPrimary)
+					})
 				}
 				return observableRuntimeModule, nil
 			},
@@ -698,7 +698,11 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 	appContextTransferred = true
-	a.activateExternalInputAfterPendingRecovery(notificationGate, replayablePendingInput)
+	var activateObservables func()
+	if observableRuntimeModule != nil && opts.sharedObservables == nil && sess.Kind == session.KindPrimary {
+		activateObservables = func() { _ = observableRuntimeModule.StartAll(startupCtx) }
+	}
+	a.activateExternalInputAfterPendingRecovery(notificationGate, replayablePendingInput, activateObservables)
 	return a, nil
 }
 

@@ -14,7 +14,7 @@ func TestRuntimeModuleDefersManagerConstructionUntilStart(t *testing.T) {
 		ConfigPath: filepath.Join(dir, "observables.yaml"),
 		StateDir:   filepath.Join(dir, "state"),
 		WorkDir:    dir,
-	}, false)
+	})
 	if mod.Manager() != nil {
 		t.Fatal("runtime module constructed Observable manager before StartRuntime")
 	}
@@ -24,6 +24,9 @@ func TestRuntimeModuleDefersManagerConstructionUntilStart(t *testing.T) {
 	manager := mod.Manager()
 	if manager == nil {
 		t.Fatal("runtime module did not publish started Observable manager")
+	}
+	if err := mod.StartAll(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	if err := mod.QuiesceRuntime(context.Background()); err != nil {
 		t.Fatal(err)
