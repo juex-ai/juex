@@ -57,6 +57,44 @@ func TestSwitchToNewPrimarySessionWaitsForLifecycleReaders(t *testing.T) {
 	}
 }
 
+func TestSwitchToNewPrimarySessionWaitsForStartupPendingInputRecovery(t *testing.T) {
+	a, _ := newStubApp(t)
+	oldIdentity, ok := a.SessionIdentity()
+	if !ok {
+		t.Fatal("missing initial session")
+	}
+	recoveryDone := make(chan struct{})
+	a.pendingRecoveryDone = recoveryDone
+
+	switchDone := make(chan error, 1)
+	go func() {
+		switchDone <- a.SwitchToNewPrimarySession()
+	}()
+	select {
+	case err := <-switchDone:
+		t.Fatalf("session switch completed before startup recovery: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	identity, ok := a.SessionIdentity()
+	if !ok || identity.ID != oldIdentity.ID {
+		t.Fatalf("active session during recovery = %+v, want %q", identity, oldIdentity.ID)
+	}
+
+	close(recoveryDone)
+	select {
+	case err := <-switchDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("session switch did not continue after startup recovery")
+	}
+	identity, ok = a.SessionIdentity()
+	if !ok || identity.ID == oldIdentity.ID {
+		t.Fatalf("active session after recovery = %+v, want a replacement", identity)
+	}
+}
+
 func TestSwitchToNewPrimarySessionBusyRestoresHistory(t *testing.T) {
 	a, _ := newStubApp(t)
 	oldIdentity, ok := a.SessionIdentity()

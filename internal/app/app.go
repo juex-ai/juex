@@ -742,6 +742,9 @@ func (a *App) SwitchToNewPrimarySessionContext(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		return err
+	}
 	a.lifecycleMu.RLock()
 	defer a.lifecycleMu.RUnlock()
 	a.sessionReplaceMu.Lock()
