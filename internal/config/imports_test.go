@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -278,7 +279,7 @@ func TestConfigHTTPSImportCachesValidatedContentAndRevalidatesWithETag(t *testin
 	dir := t.TempDir()
 	mainPath := filepath.Join(dir, "juex.yaml")
 	writeTextFile(t, mainPath, "imports:\n  - source: "+server.URL+"/config.yaml?token=secret\n")
-	loader := newConfigImportLoader(home)
+	loader := newConfigImportLoaderForTest(t, home)
 	loader.client = server.Client()
 	now := time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC)
 	loader.now = func() time.Time { return now }
@@ -345,27 +346,37 @@ func TestConfigRemoteImportCachesAreScopedToDeclaringConfig(t *testing.T) {
 	writeTextFile(t, secondPath, declaration)
 
 	first := Config{HomeJuexDir: home}
-	if err := applyYAMLFileWithImportLoader(&first, explicitYAMLSource(firstPath), newConfigImportLoader(home)); err != nil {
+	if err := applyYAMLFileWithImportLoader(&first, explicitYAMLSource(firstPath), newConfigImportLoaderForTest(t, home)); err != nil {
 		t.Fatal(err)
 	}
 	commitImportCacheForTest(t, &first)
 	body.Store("runtime:\n  tool_timeout: 42s\n")
 	second := Config{HomeJuexDir: home}
-	if err := applyYAMLFileWithImportLoader(&second, explicitYAMLSource(secondPath), newConfigImportLoader(home)); err != nil {
+	if err := applyYAMLFileWithImportLoader(&second, explicitYAMLSource(secondPath), newConfigImportLoaderForTest(t, home)); err != nil {
 		t.Fatal(err)
 	}
 	commitImportCacheForTest(t, &second)
 	server.Close()
 
 	firstOffline := Config{HomeJuexDir: home}
-	if err := applyYAMLFileWithImportLoader(&firstOffline, explicitYAMLSource(firstPath), newConfigImportLoader(home)); err != nil {
+	firstOfflineLoader := newConfigImportLoaderForTest(t, home)
+	if err := applyYAMLFileWithImportLoader(&firstOffline, explicitYAMLSource(firstPath), firstOfflineLoader); err != nil {
 		t.Fatal(err)
 	}
 	if firstOffline.ToolTimeout != 41*time.Second {
 		t.Fatalf("first offline timeout = %s, want its validated 41s LKG", firstOffline.ToolTimeout)
 	}
+	if err := firstOfflineLoader.closeConfigImportCacheLock(); err != nil {
+		t.Fatal(err)
+	}
 	secondOffline := Config{HomeJuexDir: home}
-	if err := applyYAMLFileWithImportLoader(&secondOffline, explicitYAMLSource(secondPath), newConfigImportLoader(home)); err != nil {
+	secondOfflineLoader := newConfigImportLoaderForTest(t, home)
+	defer func() {
+		if err := secondOfflineLoader.closeConfigImportCacheLock(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := applyYAMLFileWithImportLoader(&secondOffline, explicitYAMLSource(secondPath), secondOfflineLoader); err != nil {
 		t.Fatal(err)
 	}
 	if secondOffline.ToolTimeout != 42*time.Second {
@@ -389,7 +400,7 @@ func TestConfigRemoteImportUsesCacheOnlyForRetryableFailures(t *testing.T) {
 	home := t.TempDir()
 	mainPath := filepath.Join(t.TempDir(), "juex.yaml")
 	writeTextFile(t, mainPath, "imports:\n  - source: "+server.URL+"/config.yaml?token=top-secret-query\n")
-	loader := newConfigImportLoader(home)
+	loader := newConfigImportLoaderForTest(t, home)
 	now := time.Date(2026, 8, 22, 11, 0, 0, 0, time.UTC)
 	loader.now = func() time.Time { return now }
 
@@ -468,7 +479,7 @@ func TestConfigRemoteImportDoesNotReplaceLKGWithInvalidContent(t *testing.T) {
 	home := t.TempDir()
 	mainPath := filepath.Join(t.TempDir(), "juex.yaml")
 	writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", server.URL))
-	loader := newConfigImportLoader(home)
+	loader := newConfigImportLoaderForTest(t, home)
 	loader.now = func() time.Time { return time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC) }
 	first := Config{HomeJuexDir: home}
 	if err := applyYAMLFileWithImportLoader(&first, explicitYAMLSource(mainPath), loader); err != nil {
@@ -647,7 +658,7 @@ func TestConfigRemoteImportBoundsTimeoutAndResponseSize(t *testing.T) {
 		defer server.Close()
 		mainPath := filepath.Join(t.TempDir(), "juex.yaml")
 		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", server.URL))
-		loader := newConfigImportLoader(t.TempDir())
+		loader := newConfigImportLoaderForTest(t, t.TempDir())
 		loader.maxBytes = 64
 		err := applyYAMLFileWithImportLoader(&Config{HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader)
 		if err == nil || !strings.Contains(err.Error(), "64 byte limit") {
@@ -663,7 +674,7 @@ func TestConfigRemoteImportBoundsTimeoutAndResponseSize(t *testing.T) {
 		defer server.Close()
 		mainPath := filepath.Join(t.TempDir(), "juex.yaml")
 		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", server.URL))
-		loader := newConfigImportLoader(t.TempDir())
+		loader := newConfigImportLoaderForTest(t, t.TempDir())
 		loader.timeout = 10 * time.Millisecond
 		err := applyYAMLFileWithImportLoader(&Config{HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader)
 		if err == nil || !strings.Contains(err.Error(), "no valid Last-Known-Good cache") {
@@ -697,7 +708,7 @@ func TestConfigRemoteImportControlsRedirects(t *testing.T) {
 		defer secure.Close()
 		mainPath := filepath.Join(t.TempDir(), "juex.yaml")
 		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", secure.URL))
-		loader := newConfigImportLoader(t.TempDir())
+		loader := newConfigImportLoaderForTest(t, t.TempDir())
 		loader.client = secure.Client()
 		err := applyYAMLFileWithImportLoader(&Config{HomeJuexDir: loader.homeDir}, explicitYAMLSource(mainPath), loader)
 		if err == nil || !strings.Contains(err.Error(), "redirect from https to http is not allowed") {
@@ -717,7 +728,7 @@ func TestConfigRemoteImportRejectsTamperedCacheAndRedactsInvalidSource(t *testin
 		home := t.TempDir()
 		mainPath := filepath.Join(t.TempDir(), "juex.yaml")
 		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", server.URL))
-		loader := newConfigImportLoader(home)
+		loader := newConfigImportLoaderForTest(t, home)
 		cfg := Config{HomeJuexDir: home}
 		if err := applyYAMLFileWithImportLoader(&cfg, explicitYAMLSource(mainPath), loader); err != nil {
 			t.Fatal(err)
@@ -757,6 +768,17 @@ func commitImportCacheForTest(t *testing.T, cfg *Config) {
 	if err := commitConfigImportCaches(cfg); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func newConfigImportLoaderForTest(t *testing.T, home string) *configImportLoader {
+	t.Helper()
+	loader := newConfigImportLoader(home)
+	t.Cleanup(func() {
+		if err := loader.closeConfigImportCacheLock(); err != nil {
+			t.Errorf("close config import cache lock: %v", err)
+		}
+	})
+	return loader
 }
 
 func TestCommitConfigImportCachesPreservesEarlierRecordsWhenLaterWriteFails(t *testing.T) {
@@ -832,6 +854,105 @@ func TestCommitConfigImportCachesPreservesEarlierRecordsWhenLaterWriteFails(t *t
 	}
 	if !bytes.Equal(secondAfter, secondBefore) {
 		t.Fatalf("second cache changed after its write failure:\n%s", secondAfter)
+	}
+}
+
+func TestConfigImportCacheReaderObservesOnePublishedGeneration(t *testing.T) {
+	home := t.TempDir()
+	loader := newConfigImportLoaderForTest(t, home)
+	declarer := filepath.Join(t.TempDir(), "juex.yaml")
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	newRecord := func(source, content string) configImportCacheRecord {
+		record := configImportCacheRecord{
+			Version:         configImportCacheVersion,
+			Source:          source,
+			SourceSHA256:    sourceDigest(source),
+			DeclaringSHA256: declaringConfigDigest(declarer),
+			FetchedAt:       now,
+			Content:         content,
+			cachePath:       loader.cachePath(source, declarer),
+		}
+		record.ContentSHA256 = contentDigest([]byte(record.Content))
+		return record
+	}
+
+	firstSource := "https://config.example/first.yaml"
+	secondSource := "https://config.example/second.yaml"
+	firstOld := newRecord(firstSource, "runtime:\n  tool_timeout: 40s\n")
+	secondOld := newRecord(secondSource, "runtime:\n  tool_timeout: 41s\n")
+	seed := Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{firstOld, secondOld}}
+	if err := commitConfigImportCaches(&seed); err != nil {
+		t.Fatal(err)
+	}
+
+	firstNew := newRecord(firstSource, "runtime:\n  tool_timeout: 42s\n")
+	secondNew := newRecord(secondSource, "runtime:\n  tool_timeout: 43s\n")
+	firstPublished := make(chan struct{})
+	continuePublish := make(chan struct{})
+	writerDone := make(chan error, 1)
+	writerCfg := Config{HomeJuexDir: home, pendingImportCache: []configImportCacheRecord{firstNew, secondNew}}
+	go func() {
+		writes := 0
+		writerDone <- commitConfigImportCachesWithWriter(&writerCfg, func(path string, data []byte) error {
+			if err := homestore.WriteFileAtomic(path, data, 0o600, 0o700); err != nil {
+				return err
+			}
+			writes++
+			if writes == 1 {
+				close(firstPublished)
+				<-continuePublish
+			}
+			return nil
+		})
+	}()
+
+	select {
+	case <-firstPublished:
+	case err := <-writerDone:
+		t.Fatalf("cache writer stopped before publishing its first record: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the first cache record publication")
+	}
+
+	type cacheReadResult struct {
+		first  configImportCacheRecord
+		second configImportCacheRecord
+		err    error
+	}
+	readerDone := make(chan cacheReadResult, 1)
+	go func() {
+		reader := newConfigImportLoader(home)
+		first, err := reader.readCache(firstSource, declarer)
+		if err == nil {
+			var second configImportCacheRecord
+			second, err = reader.readCache(secondSource, declarer)
+			readerDone <- cacheReadResult{first: first, second: second, err: errors.Join(err, reader.closeConfigImportCacheLock())}
+			return
+		}
+		readerDone <- cacheReadResult{err: errors.Join(err, reader.closeConfigImportCacheLock())}
+	}()
+
+	select {
+	case result := <-readerDone:
+		close(continuePublish)
+		<-writerDone
+		t.Fatalf("cache reader completed between set publications: first=%q second=%q err=%v", result.first.Content, result.second.Content, result.err)
+	case <-time.After(150 * time.Millisecond):
+		close(continuePublish)
+	}
+	if err := <-writerDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-readerDone:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.first.Content != firstNew.Content || result.second.Content != secondNew.Content {
+			t.Fatalf("cache reader generation = (%q, %q), want (%q, %q)", result.first.Content, result.second.Content, firstNew.Content, secondNew.Content)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cache reader remained blocked after publication completed")
 	}
 }
 

@@ -1194,6 +1194,7 @@ def materialize_and_validate_selected_configs(
 ) -> dict[str, pathlib.Path]:
     shutil.rmtree(output_dir, ignore_errors=True)
     output_dir.mkdir(parents=True, mode=0o700)
+    materialize_and_validate_source_config(juex_bin, cfg, output_dir / "merged-source.yaml")
     materialized: dict[str, pathlib.Path] = {}
     for row in rows:
         output = output_dir / f"{safe_ref(row.ref)}.yaml"
@@ -1201,6 +1202,17 @@ def materialize_and_validate_selected_configs(
         validate_source_config(juex_bin, output)
         materialized[row.ref] = output
     return materialized
+
+
+def materialize_and_validate_source_config(
+    juex_bin: str,
+    cfg: dict[str, Any],
+    output_path: pathlib.Path,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(dump_yaml(cfg), encoding="utf-8")
+    output_path.chmod(0o600)
+    validate_source_config(juex_bin, output_path)
 
 
 def selected_provider_model(cfg: dict[str, Any], provider_id: str, model_id: str) -> tuple[dict[str, Any], Any]:

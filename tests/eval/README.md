@@ -147,6 +147,11 @@ provider smoke and compaction eval commands below.
 Live model scope comes from the resolved provider config. Candidates are
 deduplicated and sorted by `provider:model`; routine commands use a recorded
 seed to select one candidate.
+Before provider smoke or compaction projects a selected provider/model, it
+materializes the complete merged source in a permission-restricted work area
+and asks `juex doctor --offline` to validate its full schema. Unknown fields in
+unselected sections therefore fail the environment gate instead of being
+dropped by projection.
 Provider smoke excludes profiles whose effective provider/model capability is
 explicitly `tools: false`. Compaction excludes models whose declared context
 window is smaller than the requested eval window; an omitted declaration uses

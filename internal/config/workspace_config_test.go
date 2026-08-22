@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/juex-ai/juex/internal/homestore"
 )
 
 func TestValidateWorkspaceConfigReplacesOldWorkspaceLayerWithoutIdentity(t *testing.T) {
@@ -149,6 +152,30 @@ func TestValidateWorkspaceConfigDoesNotPublishRemoteImportCache(t *testing.T) {
 	}
 }
 
+func TestValidateWorkspaceConfigReleasesImportCacheLockOnCandidateFailure(t *testing.T) {
+	prepareConfigTest(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("runtime:\n  tool_timeout: 44s\n"))
+	}))
+	defer server.Close()
+
+	candidate := []byte("imports:\n  - source: " + server.URL + "/shared.yaml\nunknown_field: true\n")
+	if _, err := ValidateWorkspaceConfig(candidate, t.TempDir()); err == nil {
+		t.Fatal("ValidateWorkspaceConfig() accepted an unknown candidate field")
+	}
+	homeDir, err := EffectiveHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := homestore.AcquireLock(configImportCacheLockPath(homeDir), homestore.LockTry)
+	if err != nil {
+		t.Fatalf("candidate failure left the import cache lock held: %v", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWriteWorkspaceConfigPublishesRemoteImportCacheOnlyAfterWriteSucceeds(t *testing.T) {
 	t.Run("write failure", func(t *testing.T) {
 		prepareConfigTest(t)
@@ -204,4 +231,53 @@ func TestWriteWorkspaceConfigPublishesRemoteImportCacheOnlyAfterWriteSucceeds(t 
 			t.Fatalf("remote cache entries = %+v, want one file", entries)
 		}
 	})
+}
+
+func TestWriteWorkspaceConfigRollsBackWorkspaceWhenImportCachePublicationFails(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		old  []byte
+	}{
+		{name: "existing workspace", old: []byte("runtime:\n  tool_timeout: 40s\n")},
+		{name: "new workspace"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepareConfigTest(t)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte("runtime:\n  tool_timeout: 44s\n"))
+			}))
+			defer server.Close()
+
+			workDir := t.TempDir()
+			configPath := filepath.Join(workDir, ".juex", "juex.yaml")
+			if tc.old != nil {
+				writeTextFile(t, configPath, string(tc.old))
+			}
+			candidate := []byte("imports:\n  - source: " + server.URL + "/shared.yaml\n")
+			publishErr := errors.New("injected cache publication failure")
+			_, err := writeWorkspaceConfig(candidate, workDir, func(cfg *Config) error {
+				if len(cfg.pendingImportCache) != 1 {
+					t.Fatalf("pending import cache records = %d, want 1", len(cfg.pendingImportCache))
+				}
+				return publishErr
+			})
+			if !errors.Is(err, publishErr) {
+				t.Fatalf("writeWorkspaceConfig() error = %v, want injected publication failure", err)
+			}
+
+			got, readErr := os.ReadFile(configPath)
+			if tc.old == nil {
+				if !errors.Is(readErr, os.ErrNotExist) {
+					t.Fatalf("new workspace config survived cache failure: data=%q err=%v", got, readErr)
+				}
+				return
+			}
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(got) != string(tc.old) {
+				t.Fatalf("workspace config after cache failure = %q, want %q", got, tc.old)
+			}
+		})
+	}
 }

@@ -4,6 +4,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -588,12 +589,19 @@ func finalizeConfigLoadWithAgentStateAndImportCache(
 ) (loadErr error) {
 	if err := resolveRuntimeEnvironment(cfg); err != nil {
 		cfg.pendingImportCache = nil
+		var closeErr error
+		if cfg.importLoader != nil {
+			closeErr = cfg.importLoader.closeConfigImportCacheLock()
+		}
 		cfg.importLoader = nil
-		return err
+		return errors.Join(err, closeErr)
 	}
 	defer func() {
 		if loadErr != nil {
 			cfg.pendingImportCache = nil
+		}
+		if cfg.importLoader != nil {
+			loadErr = errors.Join(loadErr, cfg.importLoader.closeConfigImportCacheLock())
 		}
 		cfg.importLoader = nil
 		loadErr = redactConfiguredEnvironmentError(cfg.EnvironmentSnapshot(), loadErr)
@@ -816,9 +824,13 @@ func (c Config) EnvironmentStatus() EnvironmentStatus {
 
 func applyYAMLFile(cfg *Config, source yamlConfigSource) error {
 	hadLoader := cfg.importLoader != nil
-	err := applyYAMLFileWithImportLoader(cfg, source, configImportLoaderFor(cfg))
-	if err != nil && !hadLoader {
-		cfg.importLoader = nil
+	loader := configImportLoaderFor(cfg)
+	err := applyYAMLFileWithImportLoader(cfg, source, loader)
+	if err != nil {
+		err = errors.Join(err, loader.closeConfigImportCacheLock())
+		if !hadLoader {
+			cfg.importLoader = nil
+		}
 	}
 	return err
 }
@@ -849,11 +861,15 @@ func applyExplicitYAMLFile(cfg *Config, path string) error {
 		}
 		if sameLoadedFile {
 			hadLoader := cfg.importLoader != nil
-			err := applyYAMLFileWithImportLoaderAndOptions(cfg, explicitYAMLSource(path), configImportLoaderFor(cfg), applyYAMLDataOptions{
+			loader := configImportLoaderFor(cfg)
+			err := applyYAMLFileWithImportLoaderAndOptions(cfg, explicitYAMLSource(path), loader, applyYAMLDataOptions{
 				SkipExtensionPolicy: true,
 			})
-			if err != nil && !hadLoader {
-				cfg.importLoader = nil
+			if err != nil {
+				err = errors.Join(err, loader.closeConfigImportCacheLock())
+				if !hadLoader {
+					cfg.importLoader = nil
+				}
 			}
 			return err
 		}

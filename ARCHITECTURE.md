@@ -2420,12 +2420,18 @@ time, and content SHA-256. Conditional requests refresh a `304` entry; transient
 days and mark it stale. Other HTTP failures, expired or tampered cache, and an
 invalid new `200` response fail without replacing the previous LKG. Pending
 records publish as one locked set; if any replacement fails, already replaced
-records are restored before the load returns an error. Import
+records are restored before the load returns an error. Cache readers hold that
+same home-scoped lock from their first LKG read through completion of the full
+configuration load, so a reader cannot combine records from two publication
+generations. Import
 resolution happens once during startup; there is no watcher or live reload.
 Workspace candidate validation leaves remote cache records pending and a
 read-only validation discards them; `WriteWorkspaceConfig` publishes them only
-after the sibling temporary-file replacement and final permission update both
-succeed.
+after the atomic workspace replacement succeeds. A home-scoped, path-keyed
+writer lock covers the snapshot, workspace replacement, cache publication, and
+rollback. If the cache-set publication then fails, the writer atomically
+restores the previous workspace bytes and mode, or durably removes a newly
+created workspace file.
 The narrow Fleet-only home reader may consume an existing runtime LKG but never
 publishes fresh content because it deliberately skips unrelated runtime fields
 and cannot perform the complete validation required to protect that cache.

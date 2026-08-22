@@ -85,12 +85,16 @@ network failure may use an unexpired cache and `juex doctor` reports the source,
 fresh/stale state, and digest without URL query values or configuration
 contents. One full configuration load resolves each remote identity once and
 publishes the complete pending LKG set only after runtime validation succeeds,
-restoring earlier records if any publication fails. LKG entries
+restoring earlier records if any publication fails. Cache readers hold the
+same home-scoped lock across the complete load, so they cannot observe a mix
+of records from two publications. LKG entries
 are scoped by both remote identity and declaring configuration so separate
 workspaces do not replace one another's validated version. Fleet-only loading
 may consume an existing runtime LKG but does not replace it without those full
 checks. Workspace candidate validation is read-only; an update publishes its
-fresh LKG content only after the workspace file replacement succeeds.
+fresh LKG content only after the workspace file replacement succeeds, and
+restores the previous workspace file (or removes a newly created one) if cache
+publication fails.
 Configuration is still loaded only at process startup, so restart a resident
 Agent after changing either the declaring or imported source.
 

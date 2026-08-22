@@ -58,6 +58,7 @@ type configImportLoader struct {
 	maxCacheAge  time.Duration
 	maxRedirects int
 	remoteMemo   map[string]configImportDocument
+	cacheLock    *homestore.Lock
 }
 
 type configImportDocument struct {
@@ -98,6 +99,9 @@ func applyYAMLFileWithImportLoader(cfg *Config, source yamlConfigSource, loader 
 }
 
 func applyYAMLFileWithImportLoaderAndOptions(cfg *Config, source yamlConfigSource, loader *configImportLoader, opts applyYAMLDataOptions) error {
+	if cfg.importLoader == nil {
+		cfg.importLoader = loader
+	}
 	if source.Path == "" {
 		return nil
 	}
@@ -112,6 +116,9 @@ func applyYAMLFileWithImportLoaderAndOptions(cfg *Config, source yamlConfigSourc
 }
 
 func applyYAMLContentWithImportLoader(cfg *Config, data []byte, source yamlConfigSource, loader *configImportLoader, opts applyYAMLDataOptions) error {
+	if cfg.importLoader == nil {
+		cfg.importLoader = loader
+	}
 	mainConfig, err := decodeFileConfig(data, source.Path)
 	if err != nil {
 		return err
@@ -353,6 +360,9 @@ func (l *configImportLoader) cacheUsable(record configImportCacheRecord) bool {
 }
 
 func (l *configImportLoader) readCache(identity, declaringPath string) (configImportCacheRecord, error) {
+	if err := l.ensureConfigImportCacheLock(); err != nil {
+		return configImportCacheRecord{}, err
+	}
 	path := l.cachePath(identity, declaringPath)
 	info, err := os.Stat(path)
 	if err != nil {
@@ -424,9 +434,13 @@ func marshalConfigImportCache(record configImportCacheRecord) ([]byte, error) {
 }
 
 func commitConfigImportCaches(cfg *Config) error {
-	return commitConfigImportCachesWithWriter(cfg, func(path string, data []byte) error {
+	var lock *homestore.Lock
+	if cfg.importLoader != nil {
+		lock = cfg.importLoader.takeConfigImportCacheLock()
+	}
+	return commitConfigImportCachesWithWriterAndLock(cfg, func(path string, data []byte) error {
 		return homestore.WriteFileAtomic(path, data, 0o600, 0o700)
-	})
+	}, lock)
 }
 
 type configImportCacheCommit struct {
@@ -438,25 +452,37 @@ type configImportCacheCommit struct {
 }
 
 func commitConfigImportCachesWithWriter(cfg *Config, publish func(string, []byte) error) (returnErr error) {
+	return commitConfigImportCachesWithWriterAndLock(cfg, publish, nil)
+}
+
+func commitConfigImportCachesWithWriterAndLock(
+	cfg *Config,
+	publish func(string, []byte) error,
+	lock *homestore.Lock,
+) (returnErr error) {
 	writes := uniqueConfigImportCacheWrites(cfg.pendingImportCache)
 	cfg.pendingImportCache = nil
+	if lock == nil && len(writes) > 0 {
+		lockHome := strings.TrimSpace(cfg.HomeJuexDir)
+		if lockHome == "" {
+			lockHome = filepath.Dir(filepath.Dir(filepath.Dir(writes[0].cachePath)))
+		}
+		var err error
+		lock, err = homestore.AcquireLock(configImportCacheLockPath(lockHome), homestore.LockWait)
+		if err != nil {
+			return fmt.Errorf("config: lock import cache publication: %w", err)
+		}
+	}
+	if lock != nil {
+		defer func() {
+			if err := lock.Close(); err != nil {
+				returnErr = errors.Join(returnErr, fmt.Errorf("config: unlock import cache publication: %w", err))
+			}
+		}()
+	}
 	if len(writes) == 0 {
 		return nil
 	}
-
-	lockHome := strings.TrimSpace(cfg.HomeJuexDir)
-	if lockHome == "" {
-		lockHome = filepath.Dir(filepath.Dir(filepath.Dir(writes[0].cachePath)))
-	}
-	lock, err := homestore.AcquireLock(filepath.Join(lockHome, ".locks", "config-imports-cache.lock"), homestore.LockWait)
-	if err != nil {
-		return fmt.Errorf("config: lock import cache publication: %w", err)
-	}
-	defer func() {
-		if err := lock.Close(); err != nil {
-			returnErr = errors.Join(returnErr, fmt.Errorf("config: unlock import cache publication: %w", err))
-		}
-	}()
 
 	commits, err := prepareConfigImportCacheCommits(writes)
 	if err != nil {
@@ -476,6 +502,39 @@ func commitConfigImportCachesWithWriter(cfg *Config, publish func(string, []byte
 		}
 	}
 	return nil
+}
+
+func (l *configImportLoader) ensureConfigImportCacheLock() error {
+	if l.cacheLock != nil {
+		return nil
+	}
+	lock, err := homestore.AcquireLock(configImportCacheLockPath(l.homeDir), homestore.LockWait)
+	if err != nil {
+		return fmt.Errorf("lock import cache read: %w", err)
+	}
+	l.cacheLock = lock
+	return nil
+}
+
+func (l *configImportLoader) takeConfigImportCacheLock() *homestore.Lock {
+	lock := l.cacheLock
+	l.cacheLock = nil
+	return lock
+}
+
+func (l *configImportLoader) closeConfigImportCacheLock() error {
+	lock := l.takeConfigImportCacheLock()
+	if lock == nil {
+		return nil
+	}
+	if err := lock.Close(); err != nil {
+		return fmt.Errorf("unlock import cache read: %w", err)
+	}
+	return nil
+}
+
+func configImportCacheLockPath(homeDir string) string {
+	return filepath.Join(homeDir, ".locks", "config-imports-cache.lock")
 }
 
 func uniqueConfigImportCacheWrites(writes []configImportCacheRecord) []configImportCacheRecord {

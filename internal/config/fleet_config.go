@@ -25,13 +25,16 @@ type fleetFileConfig struct {
 	UnsafeBindAny optionalBool `yaml:"unsafe_bind_any"`
 }
 
-func LoadHomeFleetConfig() (FleetConfig, error) {
-	cfg := FleetConfig{Addr: DefaultFleetAddr}
+func LoadHomeFleetConfig() (cfg FleetConfig, returnErr error) {
+	cfg = FleetConfig{Addr: DefaultFleetAddr}
 	resolution, err := resolveHomeConfigSources()
 	if err != nil {
 		return cfg, err
 	}
 	loader := newConfigImportLoader(resolution.EffectiveHomeDir)
+	defer func() {
+		returnErr = errors.Join(returnErr, loader.closeConfigImportCacheLock())
+	}()
 	for _, source := range resolution.Sources {
 		if err := applyHomeFleetConfig(&cfg, source, loader); err != nil {
 			return cfg, err
