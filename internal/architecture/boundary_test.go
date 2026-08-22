@@ -419,7 +419,7 @@ func preserveAppFieldSetter(setter func(*App, any, any)) (error, appFieldBinder)
 	return nil, appFieldBinder{bind: setter}
 }
 func preserveAppFieldSetters(setter func(*App, any, any)) []appFieldBinder {
-	return []appFieldBinder{{bind: setter}}
+	return []appFieldBinder{{bind: setter}, {}}
 }
 func setReturnedCollectionAppFields(target *App, resource any, registryValue any) {
 	target.returnedCollectionResource = resource.(closer)
@@ -433,6 +433,7 @@ func (application *App) bindNamedHelper(manager *mcp.Manager, registry *tools.Re
 }
 func (application *App) bindReturnedCollection(manager *mcp.Manager, registry *tools.Registry) {
 	holders := preserveAppFieldSetters(setReturnedCollectionAppFields)
+	holders[1].bind = func(*App, any, any) {}
 	holders[0].bind(application, manager, registry)
 }
 func setCompositeAppFields(target *App, resource any, registryValue any) {
@@ -5588,20 +5589,30 @@ func compositeFunctionLiterals(expression ast.Expr, prefix string, imports map[s
 	fieldOrder, structured := compositeFieldOrder(literal.Type, typeName, imports, types)
 	var result []compositeFunctionLiteral
 	for index, element := range literal.Elts {
-		suffix := "[]"
+		suffixes := []string{fmt.Sprintf("[Int:%d]", index), "[]"}
 		if pair, ok := element.(*ast.KeyValueExpr); ok {
-			if field, ok := pair.Key.(*ast.Ident); structured && ok {
-				suffix = "." + field.Name
+			if field, ok := pair.Key.(*ast.Ident); ok && (structured || literal.Type == nil) {
+				suffixes = []string{"." + field.Name}
+			} else {
+				exact := appReceiverIndexSuffix(pair.Key, types, true)
+				suffixes = []string{exact}
+				if exact != "[]" {
+					suffixes = append(suffixes, "[]")
+				}
 			}
 			element = pair.Value
 		} else if structured && index < len(fieldOrder) && !strings.HasPrefix(fieldOrder[index], embeddedPrefix) {
-			suffix = "." + fieldOrder[index]
+			suffixes = []string{"." + fieldOrder[index]}
 		}
 		if callback := functionLiteralExpression(element); callback != nil {
-			result = append(result, compositeFunctionLiteral{suffix: prefix + suffix, literal: callback})
+			for _, suffix := range suffixes {
+				result = append(result, compositeFunctionLiteral{suffix: prefix + suffix, literal: callback})
+			}
 			continue
 		}
-		result = append(result, compositeFunctionLiterals(element, prefix+suffix, imports, types)...)
+		for _, suffix := range suffixes {
+			result = append(result, compositeFunctionLiterals(element, prefix+suffix, imports, types)...)
+		}
 	}
 	return result
 }
@@ -5616,21 +5627,29 @@ func compositeValueExpressions(expression ast.Expr, prefix string, imports map[s
 	fieldOrder, structured := compositeFieldOrder(literal.Type, typeName, imports, types)
 	var result []compositeValueExpression
 	for index, element := range literal.Elts {
-		suffix := "[]"
+		suffixes := []string{fmt.Sprintf("[Int:%d]", index), "[]"}
 		if pair, ok := element.(*ast.KeyValueExpr); ok {
-			if field, ok := pair.Key.(*ast.Ident); structured && ok {
-				suffix = "." + field.Name
+			if field, ok := pair.Key.(*ast.Ident); ok && (structured || literal.Type == nil) {
+				suffixes = []string{"." + field.Name}
+			} else {
+				exact := appReceiverIndexSuffix(pair.Key, types, true)
+				suffixes = []string{exact}
+				if exact != "[]" {
+					suffixes = append(suffixes, "[]")
+				}
 			}
 			element = pair.Value
 		} else if structured && index < len(fieldOrder) && !strings.HasPrefix(fieldOrder[index], embeddedPrefix) {
-			suffix = "." + fieldOrder[index]
+			suffixes = []string{"." + fieldOrder[index]}
 		}
-		nested := compositeValueExpressions(element, prefix+suffix, imports, types)
-		if len(nested) != 0 {
-			result = append(result, nested...)
-			continue
+		for _, suffix := range suffixes {
+			nested := compositeValueExpressions(element, prefix+suffix, imports, types)
+			if len(nested) != 0 {
+				result = append(result, nested...)
+				continue
+			}
+			result = append(result, compositeValueExpression{suffix: prefix + suffix, expression: element})
 		}
-		result = append(result, compositeValueExpression{suffix: prefix + suffix, expression: element})
 	}
 	return result
 }
@@ -5652,7 +5671,7 @@ func unwrapCompositeExpression(expression ast.Expr) ast.Expr {
 }
 
 func trackCompositeFunctionTypes(values map[string]string, parent string, target ast.Expr, expressions []ast.Expr, index int, imports map[string]string, types compositionTypeIndex) {
-	root := assignmentValueKey(target)
+	root := preciseAssignmentValueKey(target, types)
 	if root == "" {
 		return
 	}
@@ -5665,7 +5684,11 @@ func trackCompositeFunctionTypes(values map[string]string, parent string, target
 			setMayValueType(values, root+embedded.suffix, typeName, types)
 		}
 	}
-	source := assignmentValueKey(unwrapCompositeExpression(assignedExpression(expressions, index)))
+	sourceExpression := unwrapCompositeExpression(assignedExpression(expressions, index))
+	source := preciseAssignmentValueKey(sourceExpression, types)
+	if source != "" && values[source] == "" {
+		source = assignmentValueKey(sourceExpression)
+	}
 	if source != "" && source != root {
 		for key, typeName := range cloneStringMap(values) {
 			if !strings.HasPrefix(typeName, localFunctionTypePrefix) || !isNestedAssignmentValueKey(key, source) {
@@ -6182,7 +6205,7 @@ func inferLocalResultFlows(function indexedAppFunction, types compositionTypeInd
 				}
 				trackCompositeFunctionTypes(values, function.key, left, value.Rhs, index, function.imports, concreteTypes)
 				if localType := localFunctionType(function.key, left, value.Rhs, index); localType != "" {
-					setMayValueType(values, assignmentValueKey(left), localType, concreteTypes)
+					setMayValueType(values, preciseAssignmentValueKey(left, concreteTypes), localType, concreteTypes)
 				} else if !indexed {
 					if paths := assignedCleanupPaths(value.Rhs, index, function.imports, values, resources, concreteTypes); paths != nil {
 						resources[key] = paths
@@ -8241,7 +8264,7 @@ func inferCleanupParameters(function indexedAppFunction, types compositionTypeIn
 				}
 				trackCompositeFunctionTypes(values, function.key, left, value.Rhs, index, function.imports, types)
 				if localType := localFunctionType(function.key, left, value.Rhs, index); localType != "" {
-					setMayValueType(values, assignmentValueKey(left), localType, types)
+					setMayValueType(values, preciseAssignmentValueKey(left, types), localType, types)
 				} else if !indexed {
 					typeName := assignedExpressionType(value.Rhs, index, function.imports, values, types)
 					setMayValueType(values, key, typeName, types)
@@ -8507,7 +8530,7 @@ func inferToolRegistrationParameters(function indexedAppFunction, types composit
 				}
 				trackCompositeFunctionTypes(values, function.key, left, value.Rhs, index, function.imports, types)
 				if localType := localFunctionType(function.key, left, value.Rhs, index); localType != "" {
-					setMayValueType(values, assignmentValueKey(left), localType, types)
+					setMayValueType(values, preciseAssignmentValueKey(left, types), localType, types)
 				} else if !indexed {
 					typeName := assignedExpressionType(value.Rhs, index, function.imports, values, types)
 					setMayValueType(values, key, typeName, types)
@@ -8886,16 +8909,25 @@ func resultParameterPaths(expression ast.Expr, imports map[string]string, values
 		typeName := canonicalType(value.Type, imports)
 		fieldOrder, structured := compositeFieldOrder(value.Type, typeName, imports, types)
 		for index, element := range value.Elts {
-			prefix := "[]"
+			prefixes := []string{fmt.Sprintf("[Int:%d]", index), "[]"}
 			if pair, ok := element.(*ast.KeyValueExpr); ok {
 				if field, ok := pair.Key.(*ast.Ident); ok && (structured || value.Type == nil) {
-					prefix = field.Name + "."
+					prefixes = []string{field.Name + "."}
+				} else {
+					exact := appReceiverIndexSuffix(pair.Key, types, true)
+					prefixes = []string{exact}
+					if exact != "[]" {
+						prefixes = append(prefixes, "[]")
+					}
 				}
 				element = pair.Value
 			} else if structured && index < len(fieldOrder) && !strings.HasPrefix(fieldOrder[index], embeddedPrefix) {
-				prefix = fieldOrder[index] + "."
+				prefixes = []string{fieldOrder[index] + "."}
 			}
-			mergeResultParameterPaths(result, resultParameterPaths(element, imports, values, origins, types, 0), prefix)
+			paths := resultParameterPaths(element, imports, values, origins, types, 0)
+			for _, prefix := range prefixes {
+				mergeResultParameterPaths(result, paths, prefix)
+			}
 		}
 	case *ast.CallExpr:
 		callee := calledFunctionKey(value.Fun, imports, values, types)
@@ -8942,7 +8974,7 @@ func mergeResultParameterPaths(destination, source map[int]map[string]bool, pref
 		}
 		for path := range paths {
 			separator := ""
-			if strings.HasSuffix(prefix, "[]") && path != "" && !strings.HasPrefix(path, "[]") {
+			if strings.HasSuffix(prefix, "]") && path != "" && !strings.HasPrefix(path, "[") {
 				separator = "."
 			}
 			destination[parameterIndex][prefix+separator+path] = true
@@ -9406,7 +9438,7 @@ func inspectAppFeatureCleanup(file *ast.File, imports map[string]string, types c
 					}
 					trackCompositeFunctionTypes(values, functionKey, left, value.Rhs, index, imports, types)
 					if localType := localFunctionType(functionKey, left, value.Rhs, index); localType != "" {
-						setMayValueType(values, assignmentValueKey(left), localType, types)
+						setMayValueType(values, preciseAssignmentValueKey(left, types), localType, types)
 					} else if !indexed {
 						typeName := assignedExpressionType(value.Rhs, index, imports, values, types)
 						setMayValueType(values, key, typeName, types)
@@ -9925,7 +9957,7 @@ func inspectAppToolRegistration(file *ast.File, imports map[string]string, types
 					key := bindingKey(name)
 					trackCompositeFunctionTypes(values, functionKey, left, value.Rhs, index, imports, types)
 					if localType := localFunctionType(functionKey, left, value.Rhs, index); localType != "" {
-						setMayValueType(values, assignmentValueKey(left), localType, types)
+						setMayValueType(values, preciseAssignmentValueKey(left, types), localType, types)
 						continue
 					}
 					typeName := assignedToolExpressionType(value.Rhs, index, imports, values, types)
@@ -10356,7 +10388,7 @@ func indexAppReceiverFieldWrites(sources []indexedAppSource, types *compositionT
 							indexAppReceiverFieldAssignment(left, statement.Rhs, index, receivers, currentImports, values, resources, types)
 							trackCompositeFunctionTypes(values, activeFunctionKey, left, statement.Rhs, index, currentImports, *types)
 							if localType := localFunctionType(activeFunctionKey, left, statement.Rhs, index); localType != "" {
-								setMayValueType(values, assignmentValueKey(left), localType, *types)
+								setMayValueType(values, preciseAssignmentValueKey(left, *types), localType, *types)
 							}
 						}
 					case *ast.DeclStmt:
@@ -10550,7 +10582,11 @@ func indexAppReceiverFieldAssignment(left ast.Expr, right []ast.Expr, index int,
 		return
 	}
 	key := bindingKey(name)
-	setMayValueType(values, assignmentValueKey(left), typeName, *types)
+	preciseKey := preciseAssignmentValueKey(left, *types)
+	setMayValueType(values, preciseKey, typeName, *types)
+	if aggregateKey := assignmentValueKey(left); aggregateKey != preciseKey {
+		setMayValueType(values, aggregateKey, typeName, *types)
+	}
 	if !indexed {
 		setMayValueType(values, key, typeName, *types)
 	}
@@ -10996,6 +11032,43 @@ func assignmentValueKey(expression ast.Expr) string {
 	default:
 		return ""
 	}
+}
+
+func preciseAssignmentValueKey(expression ast.Expr, types compositionTypeIndex) string {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		if value.Name == "_" {
+			return ""
+		}
+		return bindingKey(value)
+	case *ast.SelectorExpr:
+		prefix := preciseAssignmentValueKey(value.X, types)
+		if prefix == "" {
+			return ""
+		}
+		return prefix + "." + value.Sel.Name
+	case *ast.IndexExpr:
+		prefix := preciseAssignmentValueKey(value.X, types)
+		if prefix == "" {
+			return ""
+		}
+		return prefix + appReceiverIndexSuffix(value.Index, types, true)
+	case *ast.SliceExpr:
+		return preciseAssignmentValueKey(value.X, types)
+	case *ast.ParenExpr:
+		return preciseAssignmentValueKey(value.X, types)
+	case *ast.StarExpr:
+		return preciseAssignmentValueKey(value.X, types)
+	default:
+		return ""
+	}
+}
+
+func assignmentValueType(values map[string]string, expression ast.Expr, types compositionTypeIndex) string {
+	if typeName := values[preciseAssignmentValueKey(expression, types)]; typeName != "" {
+		return typeName
+	}
+	return values[assignmentValueKey(expression)]
 }
 
 func assignedExpression(expressions []ast.Expr, index int) ast.Expr {
@@ -12261,7 +12334,7 @@ func assignedToolExpressionType(expressions []ast.Expr, index int, imports map[s
 }
 
 func calledFunctionKey(expression ast.Expr, imports map[string]string, values map[string]string, types compositionTypeIndex) string {
-	if typeName := values[assignmentValueKey(expression)]; strings.HasPrefix(typeName, localFunctionTypePrefix) {
+	if typeName := assignmentValueType(values, expression, types); strings.HasPrefix(typeName, localFunctionTypePrefix) {
 		return strings.TrimPrefix(typeName, localFunctionTypePrefix)
 	}
 	switch function := expression.(type) {
@@ -12324,7 +12397,7 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 	case *ast.CompositeLit:
 		return canonicalType(value.Type, imports)
 	case *ast.SelectorExpr:
-		if typeName := values[assignmentValueKey(value)]; typeName != "" {
+		if typeName := assignmentValueType(values, value, types); typeName != "" {
 			return typeName
 		}
 		receiverType := expressionType(value.X, imports, values, types)
