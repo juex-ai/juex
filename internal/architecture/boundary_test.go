@@ -413,8 +413,9 @@ func delegateAppFields(target *App, resource any, registryValue any) {
 	setAppFields(target, resource, registryValue)
 }
 var appFieldSetter = delegateAppFields
+func preserveAppFieldSetter(setter func(*App, any, any)) func(*App, any, any) { return setter }
 func (application *App) bindNamedHelper(manager *mcp.Manager, registry *tools.Registry) {
-	var erasedSetter any = appFieldSetter
+	var erasedSetter any = preserveAppFieldSetter(appFieldSetter)
 	setter := erasedSetter.(func(*App, any, any))
 	setter(application, manager, registry)
 }
@@ -12139,6 +12140,11 @@ func expressionResultTypes(expression ast.Expr, imports map[string]string, value
 
 func assignedExpressionType(expressions []ast.Expr, index int, imports map[string]string, values map[string]string, types compositionTypeIndex) string {
 	if len(expressions) == 1 {
+		if index == 0 {
+			if typeName := expressionType(expressions[0], imports, values, types); strings.HasPrefix(typeName, localFunctionTypePrefix) {
+				return typeName
+			}
+		}
 		results := expressionResultTypes(expressions[0], imports, values, types)
 		if index < len(results) {
 			return results[index]
@@ -12294,6 +12300,14 @@ func expressionType(expression ast.Expr, imports map[string]string, values map[s
 			return canonicalType(value.Args[0], imports)
 		}
 		callee := calledFunctionKey(value.Fun, imports, values, types)
+		for parameterIndex := range types.resultParams[callee][0] {
+			for _, argument := range callArgumentsForParameter(value, callee, parameterIndex, imports, types) {
+				typeName := expressionType(argument, imports, values, types)
+				if strings.HasPrefix(typeName, localFunctionTypePrefix) {
+					return typeName
+				}
+			}
+		}
 		if types.toolResults[callee][0] {
 			return modulePath + "/internal/tools.Registry"
 		}
