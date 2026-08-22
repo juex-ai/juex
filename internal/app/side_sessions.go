@@ -816,7 +816,8 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 		return
 	}
 	if err := m.parent.waitPendingInputRecoveryContext(ctx); err != nil {
-		m.recordNotificationFailure(managed, status, err)
+		dropErr := m.dropPersistedNotification(record.ID)
+		m.recordNotificationFailure(managed, status, errors.Join(err, dropErr))
 		return
 	}
 
