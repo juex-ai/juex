@@ -171,7 +171,10 @@ domain boundary.
 4. Successful transcript processing is recorded so cancellation, a later Turn
    boundary, or restart cannot execute the same input twice. An admitted but
    unprocessed record is recovered from the durable queue, not from a live
-   transport or observer.
+   transport or observer. Restart reconciles the queue with committed
+   `turn.admitted` Events and transcript message ids: a committed admission can
+   finish an interrupted `accepting -> admitted` transition, while an
+   uncommitted acceptance intent remains inert.
 5. Expired input becomes inert. Queue overflow is rejected loudly without
    changing an already accepted record.
 6. Turn failure does not silently discard accepted input: retryable Provider
@@ -252,9 +255,11 @@ domain boundary.
    AgentStateDir.
 3. Each accepted signal is normalized and durably recorded as an Observation
    before asynchronous delivery.
-4. Delivery either queues it as pending input, delivers it to the active
-   Primary Session, or records an explicit terminal state. Source deletion
-   cannot erase the historical fact that an Observation existed.
+4. Delivery projects Framework-owned `queued` or `delivered` state. A delivery
+   callback error cannot declare the Observation dropped; expiry, source
+   deletion, or another explicit cancellation boundary owns any terminal
+   discard. Source deletion cannot erase the historical fact that an
+   Observation existed.
 
 ### Compaction
 

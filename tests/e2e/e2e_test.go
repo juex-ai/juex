@@ -1377,6 +1377,19 @@ type recordingProvider struct {
 	history [][]llm.Message
 }
 
+type restartReplayProvider struct {
+	called  chan struct{}
+	history []llm.Message
+}
+
+func (*restartReplayProvider) Name() string { return "restart-replay" }
+
+func (p *restartReplayProvider) Complete(_ context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
+	p.history = append([]llm.Message(nil), history...)
+	close(p.called)
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "recovered pending input"), StopReason: llm.StopEndTurn}, nil
+}
+
 func (p *recordingProvider) Name() string { return "recording" }
 
 func (p *recordingProvider) Complete(ctx context.Context, sys string, hist []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
@@ -1471,6 +1484,74 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 		}
 		if prov2.history[0][2].FirstText() != "who am I?" {
 			t.Errorf("third (new user) message = %q", prov2.history[0][2].FirstText())
+		}
+	}
+}
+
+func TestEndToEnd_AppRestartAutomaticallyReplaysDurablePendingInputOnce(t *testing.T) {
+	work := t.TempDir()
+	cfg := config.Config{ProviderProtocol: "openai/chat", WorkDir: work}
+	first, err := app.New(app.Options{
+		Config:     cfg,
+		Provider:   &recordingProvider{},
+		WorkDir:    work,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldest, err := first.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "oldest accepted input"),
+		runtime.PendingInputOptions{ID: "e2e-restart-oldest", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later, err := first.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "later accepted input"),
+		runtime.PendingInputOptions{ID: "e2e-restart-later", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := first.Session.Dir
+	if err := first.CloseAndWait(); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &restartReplayProvider{called: make(chan struct{})}
+	resumed, err := app.New(app.Options{
+		Config:     cfg,
+		Provider:   provider,
+		WorkDir:    work,
+		ResumeDir:  sessionDir,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := resumed.CloseAndWait(); err != nil {
+			t.Errorf("close resumed app: %v", err)
+		}
+	})
+	select {
+	case <-provider.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("restart did not resume durable pending input")
+	}
+	if len(provider.history) < 2 || provider.history[0].ID != oldest.MessageID || provider.history[1].ID != later.MessageID {
+		t.Fatalf("recovery provider history = %+v, want %q then %q", provider.history, oldest.MessageID, later.MessageID)
+	}
+	for _, record := range []runtime.PendingInputRecord{oldest, later} {
+		current, ok, err := resumed.Engine.PersistedPendingMessage(record.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || current.State != runtime.PendingInputStateProcessed {
+			t.Fatalf("recovered record %q = %+v ok=%v", record.ID, current, ok)
 		}
 	}
 }

@@ -146,7 +146,8 @@ type App struct {
 	hookRunner             hooks.PolicyRunner
 	hookBaseRequest        hooks.Request
 
-	turnAdmission turnAdmission
+	turnAdmission   turnAdmission
+	pendingRecovery sync.WaitGroup
 
 	sessionLock       *session.Lock
 	sessionResource   *session.Session
@@ -518,7 +519,7 @@ func New(opts Options) (*App, error) {
 			return nil
 		}
 		return a.runtimeModules.QuiesceRuntime(context.Background())
-	}, func() error {
+	}, a.waitPendingInputRecovery, func() error {
 		if err := a.detachObservability(); err != nil {
 			return err
 		}
@@ -674,6 +675,11 @@ func New(opts Options) (*App, error) {
 		_ = a.Close()
 		return nil, err
 	}
+	replayablePendingInput, err := eng.RecoverPendingInputRecords()
+	if err != nil {
+		_ = a.Close()
+		return nil, err
+	}
 	status.RecoverAfterRestart()
 	chunkedWrites.RestoreActiveFromHistory(sess.History)
 	if err := eng.RunSessionStartPolicies(startupCtx); err != nil {
@@ -687,6 +693,9 @@ func New(opts Options) (*App, error) {
 	appContextTransferred = true
 	if notificationGate != nil {
 		notificationGate.Activate()
+	}
+	if len(replayablePendingInput) > 0 {
+		a.startPendingInputRecovery(replayablePendingInput[0])
 	}
 	return a, nil
 }
@@ -1171,15 +1180,10 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	if err != nil {
 		return err
 	}
-	if _, err := a.Engine.EnqueuePendingMessageWithOptions(ctx, msg, runtime.PendingInputOptions{
+	_, err = a.deliverExternalInputLocked(ctx, msg, runtime.PendingInputOptions{
 		ID:  mcpNotificationPendingInputID(n, eventType),
 		TTL: a.Engine.ExternalEventTTL,
-	}); err == nil {
-		return nil
-	} else if !errors.Is(err, runtime.ErrNoActiveTurn) {
-		return err
-	}
-	_, err = a.Engine.TurnMessage(ctx, msg)
+	})
 	return err
 }
 
@@ -1211,24 +1215,23 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 		a.markObservationAttachmentError(record, attachmentErrors)
 	}
 	pendingID := observationPendingInputID(record)
-	if _, err := a.Engine.EnqueuePendingMessageWithOptions(ctx, msg, runtime.PendingInputOptions{
+	delivery, err := a.deliverExternalInputLocked(ctx, msg, runtime.PendingInputOptions{
 		ID:  pendingID,
 		TTL: a.Engine.ExternalEventTTL,
-	}); err == nil {
+	})
+	if delivery.Queued {
 		return observable.DeliveryOutcome{
 			State:          observable.ObservationStateQueued,
 			PendingInputID: pendingID,
 			TargetSession:  targetSession,
-		}, nil
-	} else if !errors.Is(err, runtime.ErrNoActiveTurn) {
-		return observable.DeliveryOutcome{}, err
+		}, err
 	}
-	_, err = a.Engine.TurnMessage(ctx, msg)
-	if err == nil {
+	if delivery.Delivered {
 		return observable.DeliveryOutcome{
-			State:         observable.ObservationStateDelivered,
-			TargetSession: targetSession,
-		}, nil
+			State:          observable.ObservationStateDelivered,
+			PendingInputID: pendingID,
+			TargetSession:  targetSession,
+		}, err
 	}
 	return observable.DeliveryOutcome{}, err
 }

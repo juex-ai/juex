@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
@@ -122,6 +123,65 @@ func TestReplaceSessionRuntimeRecoversUnconsumedPolicyContext(t *testing.T) {
 	pending := engine.pendingPolicyRuntimeContextSnapshot()
 	if len(pending) != 1 || pending[0].ID != second.ID {
 		t.Fatalf("recovered policy context = %+v", pending)
+	}
+}
+
+func TestRecoverPendingInputRecordsUsesAdmissionEventsAndTranscriptFacts(t *testing.T) {
+	root := t.TempDir()
+	sess := newSessionRuntimeTestSession(t, root)
+	queue := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{})
+	committed, err := queue.StageTurnInput(
+		"turn-committed",
+		llm.TextMessage(llm.RoleUser, "committed admission"),
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncommitted, err := queue.StageTurnInput(
+		"turn-uncommitted",
+		llm.TextMessage(llm.RoleUser, "uncommitted intent"),
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcribed, err := queue.Enqueue(
+		llm.TextMessage(llm.RoleUser, "already consumed"),
+		PendingInputOptions{ID: "already-consumed", TTL: time.Hour},
+		"turn-old",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Append(transcribed.Message); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendEvent(events.Normalize(events.Event{
+		Type:    TurnAdmittedType,
+		TurnID:  "turn-committed",
+		Payload: TurnAdmittedPayload{},
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := &Engine{Session: sess, PendingInputQueue: queue, Prompt: &prompt.Builder{}}
+	replayable, err := engine.RecoverPendingInputRecords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayable) != 1 || replayable[0].ID != committed.ID {
+		t.Fatalf("replayable records = %+v, want committed admission %q", replayable, committed.ID)
+	}
+	records, err := queue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[uncommitted.ID].State != PendingInputStateAccepting {
+		t.Fatalf("uncommitted state = %q, want accepting", records[uncommitted.ID].State)
+	}
+	if records[transcribed.ID].State != PendingInputStateProcessed {
+		t.Fatalf("transcribed state = %q, want processed", records[transcribed.ID].State)
 	}
 }
 

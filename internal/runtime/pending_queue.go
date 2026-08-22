@@ -48,6 +48,15 @@ type PendingInputQueueOptions struct {
 	Now func() time.Time
 }
 
+// PendingInputRecoveryFacts are durable facts that can close a journal update
+// interrupted by process termination. Admission events prove that an
+// accepting Turn input crossed the Framework boundary; transcript message IDs
+// prove that accepted input was already consumed.
+type PendingInputRecoveryFacts struct {
+	AdmittedTurnIDs      map[string]struct{}
+	TranscriptMessageIDs map[string]struct{}
+}
+
 type pendingInputFileOps struct {
 	write func(*os.File, []byte) (int, error)
 }
@@ -396,6 +405,62 @@ func (q *PendingInputQueue) Records() (map[string]PendingInputRecord, error) {
 		return nil, err
 	}
 	return clonePendingInputRecords(q.records), nil
+}
+
+// ReconcileRecoveryFacts advances only states proven by more authoritative
+// durable facts. An accepting intent without a committed admission event stays
+// inert, while explicit expired or dropped states are never resurrected.
+func (q *PendingInputQueue) ReconcileRecoveryFacts(facts PendingInputRecoveryFacts) error {
+	if q == nil {
+		return nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := q.ensureLoadedLocked(); err != nil {
+		return err
+	}
+
+	now := q.now().UTC()
+	ordered := make([]PendingInputRecord, 0, len(q.records))
+	for _, record := range q.records {
+		ordered = append(ordered, record)
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left := q.acceptanceOrder[ordered[i].ID]
+		right := q.acceptanceOrder[ordered[j].ID]
+		if left != right {
+			return left < right
+		}
+		return ordered[i].ID < ordered[j].ID
+	})
+
+	updates := make([]PendingInputRecord, 0)
+	for _, record := range ordered {
+		if _, ok := facts.TranscriptMessageIDs[record.MessageID]; ok &&
+			(record.State == PendingInputStateAccepting || isReplayablePendingState(record.State)) {
+			record.State = PendingInputStateProcessed
+			record.ProcessedAt = &now
+			updates = append(updates, record)
+			continue
+		}
+		if record.State != PendingInputStateAccepting || record.TurnID == "" {
+			continue
+		}
+		if _, ok := facts.AdmittedTurnIDs[record.TurnID]; !ok {
+			continue
+		}
+		record.Origin = PendingInputOriginTurn
+		record.State = PendingInputStateAdmitted
+		record.ExpiresAt = time.Time{}
+		updates = append(updates, record)
+	}
+	if err := q.appendManyLocked(updates); err != nil {
+		return err
+	}
+	for _, record := range updates {
+		q.indexRecordLocked(record)
+	}
+	return nil
 }
 
 func (q *PendingInputQueue) updateStates(ids []string, update func(PendingInputRecord, time.Time) (PendingInputRecord, bool)) error {

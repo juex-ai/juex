@@ -1168,14 +1168,11 @@ func (m *Manager) deliverObservation(ctx context.Context, record ObservationReco
 		m.withDeliveryCallback(func() {
 			outcome, err = m.opts.Deliver(ctx, current)
 		})
-		if err != nil {
-			outcome = DeliveryOutcome{
-				State: ObservationStateDropped,
-				Error: err.Error(),
-			}
-		}
 		if outcome.State == "" {
 			return err
+		}
+		if err != nil && outcome.Error == "" {
+			outcome.Error = err.Error()
 		}
 		outcome, outcomeErr := outcome.normalized(m.now)
 		if outcomeErr != nil {

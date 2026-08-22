@@ -38,10 +38,6 @@ func (o DeliveryOutcome) normalized(now func() time.Time) (DeliveryOutcome, erro
 			}
 			o.DeliveredAt = now().UTC()
 		}
-	case ObservationStateDropped:
-		if o.Error == "" {
-			o.Error = "observation delivery dropped"
-		}
 	default:
 		return DeliveryOutcome{}, fmt.Errorf("observable: invalid delivery outcome state %q", o.State)
 	}
