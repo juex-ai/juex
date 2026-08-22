@@ -2417,6 +2417,10 @@ SHA-256. Conditional requests refresh a `304` entry; transient network,
 days and mark it stale. Other HTTP failures, expired or tampered cache, and an
 invalid new `200` response fail without replacing the previous LKG. Import
 resolution happens once during startup; there is no watcher or live reload.
+Workspace candidate validation leaves remote cache records pending and a
+read-only validation discards them; `WriteWorkspaceConfig` publishes them only
+after the sibling temporary-file replacement and final permission update both
+succeed.
 The narrow Fleet-only home reader may consume an existing runtime LKG but never
 publishes fresh content because it deliberately skips unrelated runtime fields
 and cannot perform the complete validation required to protect that cache.

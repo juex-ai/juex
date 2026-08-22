@@ -1548,6 +1548,7 @@ def load_source_config(path: pathlib.Path) -> dict[str, Any]:
         sources = [default_config, effective_config, config_path]
     merged: dict[str, Any] = {}
     seen: set[pathlib.Path] = set()
+    remote_memo: dict[str, tuple[str, str]] = {}
     for source in sources:
         source = selection.resolved_path(source)
         if source in seen:
@@ -1555,16 +1556,21 @@ def load_source_config(path: pathlib.Path) -> dict[str, Any]:
         seen.add(source)
         if source != config_path and not source.is_file():
             continue
-        merged = _merge_source_config(merged, _load_config_document(source))
+        merged = _merge_source_config(merged, _load_config_document(source, remote_memo))
     return merged
 
 
-def _load_config_document(path: pathlib.Path) -> dict[str, Any]:
+def _load_config_document(
+    path: pathlib.Path,
+    remote_memo: dict[str, tuple[str, str]] | None = None,
+) -> dict[str, Any]:
+    if remote_memo is None:
+        remote_memo = {}
     main = load_yaml_file(path)
     imported = _config_imports(main, str(path))
     merged: dict[str, Any] = {}
     for index, raw_source in enumerate(imported):
-        source, label = _read_config_import(path, raw_source)
+        source, label = _read_config_import(path, raw_source, remote_memo)
         value = _load_yaml_text(source, label)
         if "imports" in value:
             raise ValueError(f"{path} imports[{index}] {label}: nested imports are not supported")
@@ -1593,7 +1599,11 @@ def _config_imports(value: dict[str, Any], label: str) -> list[str]:
     return sources
 
 
-def _read_config_import(declaring: pathlib.Path, raw_source: str) -> tuple[str, str]:
+def _read_config_import(
+    declaring: pathlib.Path,
+    raw_source: str,
+    remote_memo: dict[str, tuple[str, str]],
+) -> tuple[str, str]:
     local_candidate = pathlib.Path(raw_source)
     if local_candidate.is_absolute():
         source = local_candidate.resolve()
@@ -1608,7 +1618,11 @@ def _read_config_import(declaring: pathlib.Path, raw_source: str) -> tuple[str, 
         raise ValueError("invalid remote config import source")
     if any(ord(character) < 0x20 for character in raw_source):
         raise ValueError("invalid remote config import source")
-    return _read_remote_config_import(raw_source, parsed), _safe_remote_import_label(parsed)
+    if raw_source in remote_memo:
+        return remote_memo[raw_source]
+    result = _read_remote_config_import(raw_source, parsed), _safe_remote_import_label(parsed)
+    remote_memo[raw_source] = result
+    return result
 
 
 class _ConfigImportRedirectHandler(urllib.request.HTTPRedirectHandler):

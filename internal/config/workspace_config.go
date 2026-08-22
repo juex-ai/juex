@@ -7,6 +7,15 @@ import (
 )
 
 func ValidateWorkspaceConfig(content []byte, workDir string) (Config, error) {
+	cfg, err := validateWorkspaceConfig(content, workDir)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.pendingImportCache = nil
+	return cfg, nil
+}
+
+func validateWorkspaceConfig(content []byte, workDir string) (Config, error) {
 	cfg, err := loadUserConfigForWorkDir(workDir)
 	if err != nil {
 		return cfg, err
@@ -20,14 +29,14 @@ func ValidateWorkspaceConfig(content []byte, workDir string) (Config, error) {
 	); err != nil {
 		return cfg, err
 	}
-	if err := finalizeConfigLoadForValidation(&cfg, nil, true); err != nil {
+	if err := finalizeConfigLoadForValidationWithoutImportCache(&cfg, nil, true); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
 }
 
 func WriteWorkspaceConfig(content []byte, workDir string) (string, error) {
-	cfg, err := ValidateWorkspaceConfig(content, workDir)
+	cfg, err := validateWorkspaceConfig(content, workDir)
 	if err != nil {
 		return "", err
 	}
@@ -64,6 +73,9 @@ func WriteWorkspaceConfig(content []byte, workDir string) (string, error) {
 		return "", fmt.Errorf("config: replace workspace config %s: %w", path, err)
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
+		return "", err
+	}
+	if err := commitConfigImportCaches(&cfg); err != nil {
 		return "", err
 	}
 	return path, nil

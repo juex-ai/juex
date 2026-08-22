@@ -567,6 +567,24 @@ func finalizeConfigLoadWithAgentState(
 	modelRefs []string,
 	resolveAuth bool,
 	agentStateMode AgentStateMode,
+) error {
+	return finalizeConfigLoadWithAgentStateAndImportCache(cfg, modelRefs, resolveAuth, agentStateMode, true)
+}
+
+func finalizeConfigLoadForValidationWithoutImportCache(
+	cfg *Config,
+	modelRefs []string,
+	resolveAuth bool,
+) error {
+	return finalizeConfigLoadWithAgentStateAndImportCache(cfg, modelRefs, resolveAuth, AgentStateNone, false)
+}
+
+func finalizeConfigLoadWithAgentStateAndImportCache(
+	cfg *Config,
+	modelRefs []string,
+	resolveAuth bool,
+	agentStateMode AgentStateMode,
+	publishImportCache bool,
 ) (loadErr error) {
 	if err := resolveRuntimeEnvironment(cfg); err != nil {
 		cfg.pendingImportCache = nil
@@ -601,7 +619,7 @@ func finalizeConfigLoadWithAgentState(
 		}); err != nil {
 			return err
 		}
-		return finalizeLoadedConfig(cfg, resolveAuth, agentStateMode)
+		return finalizeLoadedConfig(cfg, resolveAuth, agentStateMode, publishImportCache)
 	}
 	if err := resolveSelectedProvider(cfg); err != nil {
 		return err
@@ -609,7 +627,7 @@ func finalizeConfigLoadWithAgentState(
 	if err := applyOSEnv(cfg); err != nil {
 		return err
 	}
-	return finalizeLoadedConfig(cfg, resolveAuth, agentStateMode)
+	return finalizeLoadedConfig(cfg, resolveAuth, agentStateMode, publishImportCache)
 }
 
 type configuredEnvironmentError struct {
@@ -640,7 +658,7 @@ func redactConfiguredEnvironmentError(snapshot environment.Snapshot, err error) 
 	}
 }
 
-func finalizeLoadedConfig(cfg *Config, resolveAuth bool, agentStateMode AgentStateMode) error {
+func finalizeLoadedConfig(cfg *Config, resolveAuth bool, agentStateMode AgentStateMode, publishImportCache bool) error {
 	if err := resolveShellProfileForConfig(cfg); err != nil {
 		return err
 	}
@@ -649,8 +667,10 @@ func finalizeLoadedConfig(cfg *Config, resolveAuth bool, agentStateMode AgentSta
 			return err
 		}
 	}
-	if err := commitConfigImportCaches(cfg); err != nil {
-		return err
+	if publishImportCache {
+		if err := commitConfigImportCaches(cfg); err != nil {
+			return err
+		}
 	}
 	cfg.agentStateLoaded = true
 	if agentStateMode == AgentStateNone {

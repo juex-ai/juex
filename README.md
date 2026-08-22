@@ -84,9 +84,10 @@ fresh/stale state, and digest without URL query values or configuration
 contents. One full configuration load resolves each remote identity once and
 publishes fresh LKG content only after runtime validation succeeds. Fleet-only
 loading may consume an existing runtime LKG but does not replace it without
-those full checks. Configuration is still loaded only at process startup, so
-restart a resident Agent after changing either the declaring or imported
-source.
+those full checks. Workspace candidate validation is read-only; an update
+publishes its fresh LKG content only after the workspace file replacement
+succeeds. Configuration is still loaded only at process startup, so restart a
+resident Agent after changing either the declaring or imported source.
 
 Juex loads a runtime environment once for `run`, `repl`, `listen`, and manual
 session compaction. `environment.load_dotenv` defaults to `true` and reads

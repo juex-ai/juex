@@ -521,6 +521,56 @@ func TestProviderConfigLoaderLayersHomeAndPreservesStringMapLexemes(t *testing.T
 	runUV(t, root, "python", "-c", program)
 }
 
+func TestProviderConfigLoaderMemoizesRemoteImportsAcrossLayers(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import os",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper, selection",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    root = Path(tmp)",
+		"    home = root / 'home'",
+		"    instance = root / 'instance'",
+		"    default_config = home / '.juex' / 'juex.yaml'",
+		"    effective_config = instance / 'juex.yaml'",
+		"    explicit_config = root / 'explicit.yaml'",
+		"    default_config.parent.mkdir(parents=True)",
+		"    instance.mkdir(parents=True)",
+		"    declaration = 'imports:\\n  - source: https://config.example/shared.yaml\\n'",
+		"    default_config.write_text(declaration, encoding='utf-8')",
+		"    effective_config.write_text(declaration, encoding='utf-8')",
+		"    explicit_config.write_text(declaration, encoding='utf-8')",
+		"    original_env = {name: os.environ.get(name) for name in ['HOME', 'USERPROFILE', 'JUEX_HOME']}",
+		"    original_remote = helper._read_remote_config_import",
+		"    remote_reads = []",
+		"    def fake_remote(identity, _parsed):",
+		"        remote_reads.append(identity)",
+		"        return 'models: [remote:model]\\nproviders:\\n  - id: remote\\n    protocol: openai/chat\\n    models: [{id: model}]\\n'",
+		"    os.environ.update({'HOME': str(home), 'USERPROFILE': str(home), 'JUEX_HOME': str(instance)})",
+		"    helper._read_remote_config_import = fake_remote",
+		"    try:",
+		"        cfg = helper.load_source_config(explicit_config)",
+		"        assert remote_reads == ['https://config.example/shared.yaml'], remote_reads",
+		"        assert [item.ref for item in selection.enumerate_candidates(cfg)] == ['remote:model']",
+		"    finally:",
+		"        helper._read_remote_config_import = original_remote",
+		"        for name, value in original_env.items():",
+		"            if value is None:",
+		"                os.environ.pop(name, None)",
+		"            else:",
+		"                os.environ[name] = value",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func TestProviderConfigSelectionMergesRepeatedProviderDeclarations(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")

@@ -106,7 +106,7 @@ func (c Config) configForModelRef(ref string) (Config, error) {
 	}); err != nil {
 		return Config{}, err
 	}
-	if err := finalizeLoadedConfig(&cfg, true, AgentStateNone); err != nil {
+	if err := finalizeLoadedConfig(&cfg, true, AgentStateNone, true); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
