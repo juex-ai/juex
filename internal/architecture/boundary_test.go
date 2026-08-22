@@ -338,6 +338,8 @@ type App struct {
 	compositeClosureRegistry registrar
 	collectionResource closer
 	collectionRegistry registrar
+	variadicReceiverResource closer
+	variadicReceiverRegistry registrar
 }
 type appFieldBinder struct { bind func(*App, any, any) }
 type AppAlias = App
@@ -433,6 +435,12 @@ func (application *App) bindCollection(manager *mcp.Manager, registry *tools.Reg
 	targets[1].correlatedResource = manager
 	targets[1].correlatedRegistry = registry
 }
+func (application *App) bindVariadicReceiver(manager *mcp.Manager, registry *tools.Registry) {
+	func(targets ...*App) {
+		targets[0].variadicReceiverResource = manager
+		targets[0].variadicReceiverRegistry = registry
+	}(application)
+}
 func (application *App) bypass() {
 	_ = application.resource.Close()
 	application.registry.Register(nil)
@@ -456,6 +464,8 @@ func (application *App) bypass() {
 	application.compositeClosureRegistry.Register(nil)
 	_ = application.collectionResource.Close()
 	application.collectionRegistry.Register(nil)
+	_ = application.variadicReceiverResource.Close()
+	application.variadicReceiverRegistry.Register(nil)
 }
 `
 	dir := t.TempDir()
@@ -475,14 +485,14 @@ func (application *App) bypass() {
 	inspectAppFeatureCleanup(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		cleanupCalls = append(cleanupCalls, chain)
 	})
-	if len(cleanupCalls) != 10 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" || cleanupCalls[2] != "application.closureResource.Close" || cleanupCalls[3] != "application.iifeResource.Close" || cleanupCalls[4] != "application.variadicResource.Close" || cleanupCalls[5] != "application.namedClosureResource.Close" || cleanupCalls[6] != "application.nestedClosureResource.Close" || cleanupCalls[7] != "application.namedHelperResource.Close" || cleanupCalls[8] != "application.compositeClosureResource.Close" || cleanupCalls[9] != "application.collectionResource.Close" {
+	if len(cleanupCalls) != 11 || cleanupCalls[0] != "application.resource.Close" || cleanupCalls[1] != "application.literalResource.Close" || cleanupCalls[2] != "application.closureResource.Close" || cleanupCalls[3] != "application.iifeResource.Close" || cleanupCalls[4] != "application.variadicResource.Close" || cleanupCalls[5] != "application.namedClosureResource.Close" || cleanupCalls[6] != "application.nestedClosureResource.Close" || cleanupCalls[7] != "application.namedHelperResource.Close" || cleanupCalls[8] != "application.compositeClosureResource.Close" || cleanupCalls[9] != "application.collectionResource.Close" || cleanupCalls[10] != "application.variadicReceiverResource.Close" {
 		t.Fatalf("cleanup calls = %v, want receiver field cleanup", cleanupCalls)
 	}
 	var registrationCalls []string
 	inspectAppToolRegistration(parsed, importPaths(parsed), types, func(_ *ast.CallExpr, chain string) {
 		registrationCalls = append(registrationCalls, chain)
 	})
-	if len(registrationCalls) != 10 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" || registrationCalls[2] != "application.closureRegistry.Register" || registrationCalls[3] != "application.iifeRegistry.Register" || registrationCalls[4] != "application.variadicRegistry.Register" || registrationCalls[5] != "application.namedClosureRegistry.Register" || registrationCalls[6] != "application.nestedClosureRegistry.Register" || registrationCalls[7] != "application.namedHelperRegistry.Register" || registrationCalls[8] != "application.compositeClosureRegistry.Register" || registrationCalls[9] != "application.collectionRegistry.Register" {
+	if len(registrationCalls) != 11 || registrationCalls[0] != "application.registry.Register" || registrationCalls[1] != "application.literalRegistry.Register" || registrationCalls[2] != "application.closureRegistry.Register" || registrationCalls[3] != "application.iifeRegistry.Register" || registrationCalls[4] != "application.variadicRegistry.Register" || registrationCalls[5] != "application.namedClosureRegistry.Register" || registrationCalls[6] != "application.nestedClosureRegistry.Register" || registrationCalls[7] != "application.namedHelperRegistry.Register" || registrationCalls[8] != "application.compositeClosureRegistry.Register" || registrationCalls[9] != "application.collectionRegistry.Register" || registrationCalls[10] != "application.variadicReceiverRegistry.Register" {
 		t.Fatalf("Tool registration calls = %v, want receiver field registration", registrationCalls)
 	}
 }
@@ -10355,7 +10365,24 @@ func seedAppFieldArguments(call *ast.CallExpr, parameters *ast.FieldList, import
 		for _, name := range field.Names {
 			key := bindingKey(name)
 			arguments := callArgumentsForParameterAt(call, parameterIndex, variadicIndex, variadic, imports)
-			if !variadic || parameterIndex != variadicIndex {
+			if variadic && parameterIndex == variadicIndex {
+				if call.Ellipsis == token.NoPos {
+					for argumentIndex, argument := range arguments {
+						if isAppReceiverAliasExpression(argument, receivers, imports, values, types) {
+							receivers[key+fmt.Sprintf("[Int:%d]", argumentIndex)] = true
+						}
+					}
+				} else {
+					for _, argument := range arguments {
+						source := appReceiverExpressionKey(argument, imports, types)
+						for receiver := range cloneBoolMap(receivers) {
+							if isNestedAssignmentValueKey(receiver, source) {
+								receivers[key+strings.TrimPrefix(receiver, source)] = true
+							}
+						}
+					}
+				}
+			} else {
 				for _, argument := range arguments {
 					if isAppReceiverAliasExpression(argument, receivers, imports, values, types) {
 						receivers[key] = true
