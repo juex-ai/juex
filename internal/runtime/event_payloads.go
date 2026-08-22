@@ -22,6 +22,7 @@ const (
 type TurnAdmittedPayload struct {
 	NonInterruptible bool   `json:"non_interruptible,omitempty"`
 	Operation        string `json:"operation,omitempty"`
+	MessageID        string `json:"message_id,omitempty"`
 }
 
 type TurnPhasePayload struct {

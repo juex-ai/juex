@@ -94,6 +94,9 @@ func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmis
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		return errorResult(err, nil)
+	}
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if req.Prompt == "" && len(req.Attachments) == 0 {
 		return rejectedResult("bad_request", "expected non-empty prompt or attachment", "", false, nil, runtime.PendingInputStatus{})
@@ -136,7 +139,10 @@ func (a *App) CompleteAdmittedTurn(turnID string) {
 	a.admissionQueue().complete(turnID)
 }
 
-func (a *App) BeginCompactAdmission(turnID string) error {
+func (a *App) BeginCompactAdmission(ctx context.Context, turnID string) error {
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		return err
+	}
 	return a.beginCompactAdmission(turnID)
 }
 

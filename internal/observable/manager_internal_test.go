@@ -435,6 +435,87 @@ func TestDeliverObservationAppliesOutcomeWithoutStore(t *testing.T) {
 	}
 }
 
+func TestDeliverObservationPersistsAuthoritativeOutcomeBeforeReturningDeliveryError(t *testing.T) {
+	now := time.Date(2026, 8, 22, 1, 30, 0, 0, time.UTC)
+	store := NewStore(t.TempDir(), StoreOptions{Now: func() time.Time { return now }})
+	record, err := store.RecordObservation(ObservationRecord{
+		ObservableID: "delivery-error",
+		RunID:        "run-1",
+		Kind:         "notice",
+		Severity:     "info",
+		WindowStart:  now,
+		WindowEnd:    now,
+		Content:      "accepted before transport error",
+		State:        ObservationStateRecorded,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("turn failed after durable admission")
+	mgr := &Manager{
+		store: store,
+		opts: ManagerOptions{
+			Now: func() time.Time { return now },
+			Deliver: func(context.Context, ObservationRecord) (DeliveryOutcome, error) {
+				return DeliveryOutcome{State: ObservationStateQueued, PendingInputID: "pending-1"}, wantErr
+			},
+		},
+	}
+	if err := mgr.deliverObservation(context.Background(), record); !errors.Is(err, wantErr) {
+		t.Fatalf("deliverObservation error = %v, want %v", err, wantErr)
+	}
+	updated, ok, err := store.Observation(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || updated.State != ObservationStateQueued || updated.PendingInputID != "pending-1" {
+		t.Fatalf("updated observation = %+v ok=%v, want queued authoritative outcome", updated, ok)
+	}
+}
+
+func TestDeliverObservationErrorWithoutOutcomeDoesNotDropRecordedObservation(t *testing.T) {
+	now := time.Date(2026, 8, 22, 1, 45, 0, 0, time.UTC)
+	store := NewStore(t.TempDir(), StoreOptions{Now: func() time.Time { return now }})
+	record, err := store.RecordObservation(ObservationRecord{
+		ObservableID: "delivery-error-no-outcome",
+		RunID:        "run-1",
+		Kind:         "notice",
+		Severity:     "info",
+		WindowStart:  now,
+		WindowEnd:    now,
+		Content:      "ownership remains with framework",
+		State:        ObservationStateRecorded,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("delivery state unavailable")
+	mgr := &Manager{
+		store: store,
+		opts: ManagerOptions{
+			Deliver: func(context.Context, ObservationRecord) (DeliveryOutcome, error) {
+				return DeliveryOutcome{}, wantErr
+			},
+		},
+	}
+	if err := mgr.deliverObservation(context.Background(), record); !errors.Is(err, wantErr) {
+		t.Fatalf("deliverObservation error = %v, want %v", err, wantErr)
+	}
+	updated, ok, err := store.Observation(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || updated.State != ObservationStateRecorded || updated.Error != "" {
+		t.Fatalf("updated observation = %+v ok=%v, want unchanged recorded state", updated, ok)
+	}
+}
+
+func TestDeliveryOutcomeRejectsDroppedProjection(t *testing.T) {
+	if _, err := (DeliveryOutcome{State: ObservationStateDropped}).normalized(time.Now); err == nil {
+		t.Fatal("normalized dropped delivery outcome succeeded")
+	}
+}
+
 func mustScheduleSpec(id string, config ScheduleSourceSpec) Spec {
 	spec, err := NewScheduleSpec(id, "", config)
 	if err != nil {

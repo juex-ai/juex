@@ -146,7 +146,16 @@ type App struct {
 	hookRunner             hooks.PolicyRunner
 	hookBaseRequest        hooks.Request
 
-	turnAdmission turnAdmission
+	turnAdmission   turnAdmission
+	pendingRecovery sync.WaitGroup
+	// pendingRecoveryDone is non-nil only when startup found durable input to
+	// replay. It closes after that recovery Turn releases the Engine.
+	pendingRecoveryDone  <-chan struct{}
+	pendingHandoffMu     sync.Mutex
+	pendingHandoffs      sync.WaitGroup
+	pendingHandoffClosed bool
+	pendingHandoffIDs    map[string]struct{}
+	sessionHandoffMu     sync.RWMutex
 
 	sessionLock       *session.Lock
 	sessionResource   *session.Session
@@ -518,7 +527,7 @@ func New(opts Options) (*App, error) {
 			return nil
 		}
 		return a.runtimeModules.QuiesceRuntime(context.Background())
-	}, func() error {
+	}, a.closeAndWaitPendingInputWork, func() error {
 		if err := a.detachObservability(); err != nil {
 			return err
 		}
@@ -591,7 +600,7 @@ func New(opts Options) (*App, error) {
 						SandboxRunner:         sandboxRunner,
 						Bus:                   bus,
 						Deliver:               a.DeliverObservation,
-					}, sess.Kind == session.KindPrimary)
+					})
 				}
 				return observableRuntimeModule, nil
 			},
@@ -674,6 +683,11 @@ func New(opts Options) (*App, error) {
 		_ = a.Close()
 		return nil, err
 	}
+	replayablePendingInput, err := eng.RecoverPendingInputRecords()
+	if err != nil {
+		_ = a.Close()
+		return nil, err
+	}
 	status.RecoverAfterRestart()
 	chunkedWrites.RestoreActiveFromHistory(sess.History)
 	if err := eng.RunSessionStartPolicies(startupCtx); err != nil {
@@ -685,9 +699,11 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 	appContextTransferred = true
-	if notificationGate != nil {
-		notificationGate.Activate()
+	var activateObservables func()
+	if observableRuntimeModule != nil && opts.sharedObservables == nil && sess.Kind == session.KindPrimary {
+		activateObservables = func() { _ = observableRuntimeModule.StartAll(startupCtx) }
 	}
+	a.activateExternalInputAfterPendingRecovery(notificationGate, replayablePendingInput, activateObservables)
 	return a, nil
 }
 
@@ -724,6 +740,14 @@ func (a *App) SwitchToNewPrimarySessionContext(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		return err
+	}
+	a.sessionHandoffMu.Lock()
+	defer a.sessionHandoffMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1027,6 +1051,9 @@ func (a *App) detachObservability() error {
 
 // Run drives a single turn synchronously.
 func (a *App) Run(ctx context.Context, prompt string) (string, error) {
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		return "", err
+	}
 	if cmd, handled, err := ParseSlashCommand(prompt); handled || err != nil {
 		if err != nil {
 			return "", err
@@ -1054,6 +1081,9 @@ func (a *App) RunWithAttachments(ctx context.Context, prompt string, attachments
 	}
 	if len(attachments) == 0 {
 		return a.Run(ctx, prompt)
+	}
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		return "", err
 	}
 	if _, handled, err := ParseSlashCommand(prompt); handled || err != nil {
 		if err != nil {
@@ -1099,6 +1129,9 @@ func (a *App) runEngineTurnMessage(ctx context.Context, message llm.Message) (st
 func (a *App) CompactWithInstructions(ctx context.Context, reason string, auto bool, instructions string) (runtime.CompactionResult, error) {
 	if a == nil || a.Engine == nil {
 		return runtime.CompactionResult{}, fmt.Errorf("app: nil engine")
+	}
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		return runtime.CompactionResult{}, err
 	}
 	admitted := events.Normalize(events.Event{Type: runtime.TurnAdmittedType, Payload: runtime.TurnAdmittedPayload{}})
 	turnID := "compact-" + admitted.ID
@@ -1153,6 +1186,8 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	if a == nil || a.Engine == nil {
 		return nil
 	}
+	sessionLease := a.acquireExternalInputSessionLease()
+	defer sessionLease.Release()
 	a.sessionMu.RLock()
 	defer a.sessionMu.RUnlock()
 	if a.Session == nil {
@@ -1171,15 +1206,10 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	if err != nil {
 		return err
 	}
-	if _, err := a.Engine.EnqueuePendingMessageWithOptions(ctx, msg, runtime.PendingInputOptions{
+	_, err = a.deliverExternalInputLocked(ctx, msg, runtime.PendingInputOptions{
 		ID:  mcpNotificationPendingInputID(n, eventType),
 		TTL: a.Engine.ExternalEventTTL,
-	}); err == nil {
-		return nil
-	} else if !errors.Is(err, runtime.ErrNoActiveTurn) {
-		return err
-	}
-	_, err = a.Engine.TurnMessage(ctx, msg)
+	}, sessionLease)
 	return err
 }
 
@@ -1192,6 +1222,8 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 	if a == nil || a.Engine == nil {
 		return observable.DeliveryOutcome{}, nil
 	}
+	sessionLease := a.acquireExternalInputSessionLease()
+	defer sessionLease.Release()
 	a.sessionMu.RLock()
 	defer a.sessionMu.RUnlock()
 	targetSession := ""
@@ -1211,24 +1243,23 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 		a.markObservationAttachmentError(record, attachmentErrors)
 	}
 	pendingID := observationPendingInputID(record)
-	if _, err := a.Engine.EnqueuePendingMessageWithOptions(ctx, msg, runtime.PendingInputOptions{
+	delivery, err := a.deliverExternalInputLocked(ctx, msg, runtime.PendingInputOptions{
 		ID:  pendingID,
 		TTL: a.Engine.ExternalEventTTL,
-	}); err == nil {
+	}, sessionLease)
+	if delivery.Queued {
 		return observable.DeliveryOutcome{
 			State:          observable.ObservationStateQueued,
 			PendingInputID: pendingID,
 			TargetSession:  targetSession,
-		}, nil
-	} else if !errors.Is(err, runtime.ErrNoActiveTurn) {
-		return observable.DeliveryOutcome{}, err
+		}, err
 	}
-	_, err = a.Engine.TurnMessage(ctx, msg)
-	if err == nil {
+	if delivery.Delivered {
 		return observable.DeliveryOutcome{
-			State:         observable.ObservationStateDelivered,
-			TargetSession: targetSession,
-		}, nil
+			State:          observable.ObservationStateDelivered,
+			PendingInputID: pendingID,
+			TargetSession:  targetSession,
+		}, err
 	}
 	return observable.DeliveryOutcome{}, err
 }
