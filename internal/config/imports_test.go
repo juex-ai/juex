@@ -382,6 +382,26 @@ func TestConfigRemoteImportCachesAreScopedToDeclaringConfig(t *testing.T) {
 	if secondOffline.ToolTimeout != 42*time.Second {
 		t.Fatalf("second offline timeout = %s, want its validated 42s LKG", secondOffline.ToolTimeout)
 	}
+	if err := secondOfflineLoader.closeConfigImportCacheLock(); err != nil {
+		t.Fatal(err)
+	}
+
+	sharedOfflineLoader := newConfigImportLoaderForTest(t, home)
+	sharedFirst := Config{HomeJuexDir: home}
+	if err := applyYAMLFileWithImportLoader(&sharedFirst, explicitYAMLSource(firstPath), sharedOfflineLoader); err != nil {
+		t.Fatal(err)
+	}
+	sharedSecond := Config{HomeJuexDir: home}
+	if err := applyYAMLFileWithImportLoader(&sharedSecond, explicitYAMLSource(secondPath), sharedOfflineLoader); err != nil {
+		t.Fatal(err)
+	}
+	if sharedFirst.ToolTimeout != 41*time.Second || sharedSecond.ToolTimeout != 42*time.Second {
+		t.Fatalf(
+			"shared-loader offline timeouts = (%s, %s), want each declaring config's (41s, 42s) LKG",
+			sharedFirst.ToolTimeout,
+			sharedSecond.ToolTimeout,
+		)
+	}
 }
 
 func TestConfigRemoteImportUsesCacheOnlyForRetryableFailures(t *testing.T) {

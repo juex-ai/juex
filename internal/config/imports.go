@@ -207,7 +207,9 @@ func (l *configImportLoader) load(declaring yamlConfigSource, rawSource string) 
 	if err != nil {
 		return configImportDocument{}, err
 	}
-	l.remoteMemo[identity] = document
+	if document.status.State == "fresh" {
+		l.remoteMemo[identity] = document
+	}
 	return document, nil
 }
 
