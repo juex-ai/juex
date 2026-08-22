@@ -249,17 +249,13 @@ func serializeMessageForSummary(msg llm.Message, toolResultMaxChars int) string 
 	for _, block := range msg.Blocks {
 		switch block.Type {
 		case llm.BlockText:
-			maxChars := toolResultMaxChars
-			if msg.Role == llm.RoleUser {
-				maxChars = 0
-			}
-			writeSummaryField(&sb, "text", block.Text, maxChars)
+			writeSummaryField(&sb, "text", block.Text, 0)
 		case llm.BlockImage:
 			writeMediaReferenceForSummary(&sb, block.Media)
 		case llm.BlockReasoning:
 			if block.Redacted {
 				if block.Text != "" {
-					writeSummaryField(&sb, "reasoning", block.Text, toolResultMaxChars)
+					writeSummaryField(&sb, "reasoning", block.Text, 0)
 				}
 				writeRedactedReasoningMetadata(&sb, block)
 				continue
@@ -268,7 +264,7 @@ func serializeMessageForSummary(msg llm.Message, toolResultMaxChars int) string 
 			if text == "" {
 				text = block.Content
 			}
-			writeSummaryField(&sb, "reasoning", text, toolResultMaxChars)
+			writeSummaryField(&sb, "reasoning", text, 0)
 		case llm.BlockToolUse:
 			input := "{}"
 			if len(block.Input) > 0 {
