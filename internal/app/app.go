@@ -148,6 +148,9 @@ type App struct {
 
 	turnAdmission   turnAdmission
 	pendingRecovery sync.WaitGroup
+	// pendingRecoveryDone is non-nil only when startup found durable input to
+	// replay. It closes after that recovery Turn releases the Engine.
+	pendingRecoveryDone <-chan struct{}
 
 	sessionLock       *session.Lock
 	sessionResource   *session.Session
@@ -1036,6 +1039,9 @@ func (a *App) detachObservability() error {
 
 // Run drives a single turn synchronously.
 func (a *App) Run(ctx context.Context, prompt string) (string, error) {
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		return "", err
+	}
 	if cmd, handled, err := ParseSlashCommand(prompt); handled || err != nil {
 		if err != nil {
 			return "", err
@@ -1063,6 +1069,9 @@ func (a *App) RunWithAttachments(ctx context.Context, prompt string, attachments
 	}
 	if len(attachments) == 0 {
 		return a.Run(ctx, prompt)
+	}
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		return "", err
 	}
 	if _, handled, err := ParseSlashCommand(prompt); handled || err != nil {
 		if err != nil {

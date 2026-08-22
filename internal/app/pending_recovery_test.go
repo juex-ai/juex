@@ -142,6 +142,133 @@ func TestAppStartupReplaysDurablePendingInputWithoutNewUserTurn(t *testing.T) {
 	}
 }
 
+func TestAppRunWaitsForStartupPendingInputRecovery(t *testing.T) {
+	dir := t.TempDir()
+	first, err := New(recoveryAppOptions(dir, &recoveryProvider{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "recover before synchronous input"),
+		runtime.PendingInputOptions{ID: "restart-before-run", TTL: time.Hour},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.CloseAndWait(); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := newBlockingAppProvider()
+	restarted, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.CloseAndWait() })
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup recovery did not reach provider")
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := restarted.Run(canceled, "canceled while recovery runs"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run with canceled context error = %v, want context.Canceled", err)
+	}
+
+	type runResult struct {
+		out string
+		err error
+	}
+	done := make(chan runResult, 1)
+	go func() {
+		out, err := restarted.Run(context.Background(), "run after recovery")
+		done <- runResult{out: out, err: err}
+	}()
+	select {
+	case result := <-done:
+		t.Fatalf("synchronous Run completed during startup recovery: %+v", result)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(provider.release)
+	select {
+	case result := <-done:
+		if result.err != nil || result.out != "handled queued event" {
+			t.Fatalf("Run after startup recovery = %q, %v", result.out, result.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("synchronous Run did not continue after startup recovery")
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if provider.calls != 2 {
+		t.Fatalf("provider calls = %d, want recovery then synchronous Run", provider.calls)
+	}
+	if got := provider.histories[1][len(provider.histories[1])-1].FirstText(); got != "run after recovery" {
+		t.Fatalf("second provider history ended with %q, want synchronous input", got)
+	}
+}
+
+func TestAppExternalDeliveryWaitsForStartupPendingInputRecovery(t *testing.T) {
+	dir := t.TempDir()
+	first, err := New(recoveryAppOptions(dir, &recoveryProvider{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "recover before external delivery"),
+		runtime.PendingInputOptions{ID: "restart-before-observation", TTL: time.Hour},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.CloseAndWait(); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := newBlockingAppProvider()
+	restarted, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.CloseAndWait() })
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup recovery did not reach provider")
+	}
+
+	type deliveryResult struct {
+		outcome observable.DeliveryOutcome
+		err     error
+	}
+	done := make(chan deliveryResult, 1)
+	go func() {
+		outcome, err := restarted.DeliverObservation(context.Background(), testObservationRecord("obs-during-recovery"))
+		done <- deliveryResult{outcome: outcome, err: err}
+	}()
+	select {
+	case result := <-done:
+		t.Fatalf("external delivery completed during startup recovery: %+v", result)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(provider.release)
+	select {
+	case result := <-done:
+		if result.err != nil || result.outcome.State != observable.ObservationStateDelivered {
+			t.Fatalf("external delivery after startup recovery = %+v, %v", result.outcome, result.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("external delivery did not continue after startup recovery")
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if provider.calls != 2 {
+		t.Fatalf("provider calls = %d, want recovery then external delivery", provider.calls)
+	}
+}
+
 func TestAppDeliverObservationReportsTranscriptConsumptionDespiteTurnError(t *testing.T) {
 	dir := t.TempDir()
 	wantErr := errors.New("provider unavailable")

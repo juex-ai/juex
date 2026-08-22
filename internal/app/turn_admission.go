@@ -94,6 +94,9 @@ func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmis
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		return errorResult(err, nil)
+	}
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if req.Prompt == "" && len(req.Attachments) == 0 {
 		return rejectedResult("bad_request", "expected non-empty prompt or attachment", "", false, nil, runtime.PendingInputStatus{})

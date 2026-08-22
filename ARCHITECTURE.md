@@ -1579,8 +1579,10 @@ records whose stable message id is already present in conversation history,
 and marks processed
 records so the same user input or external event is not executed twice. App
 starts the oldest replayable record after Session startup; the Turn restore
-path drains the remaining records in acceptance order. That keeps assistant
-`tool_use` and user `tool_result` adjacency intact
+path drains the remaining records in acceptance order. Synchronous App turns,
+transport admission, and newly persisted external delivery wait on the startup
+recovery completion signal before reserving or running another Turn. That keeps
+assistant `tool_use` and user `tool_result` adjacency intact
 while still allowing steering messages to join the active turn without
 mid-stream interrupts or rollback. If a provider request fails with a general
 transport or timeout error while pending input exists, the runtime drains that

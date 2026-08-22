@@ -24,6 +24,9 @@ func (a *App) deliverExternalInputLocked(ctx context.Context, message llm.Messag
 	if err != nil {
 		return externalInputDelivery{}, err
 	}
+	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
+		return externalInputDelivery{Record: record, Queued: true}, err
+	}
 	return a.resumePersistedInputLocked(ctx, record)
 }
 
@@ -103,9 +106,12 @@ func (a *App) startPendingInputRecovery(record runtime.PendingInputRecord) {
 	if a == nil || a.Engine == nil || record.ID == "" {
 		return
 	}
+	done := make(chan struct{})
+	a.pendingRecoveryDone = done
 	a.pendingRecovery.Add(1)
 	go func() {
 		defer a.pendingRecovery.Done()
+		defer close(done)
 		a.sessionMu.RLock()
 		_, err := a.resumePersistedInputLocked(a.ctx, record)
 		a.sessionMu.RUnlock()
@@ -113,6 +119,21 @@ func (a *App) startPendingInputRecovery(record runtime.PendingInputRecord) {
 			fmt.Fprintf(a.stderr, "juex: warning: resume pending input %q: %v\n", record.ID, err)
 		}
 	}()
+}
+
+func (a *App) waitPendingInputRecoveryContext(ctx context.Context) error {
+	if a == nil || a.pendingRecoveryDone == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-a.pendingRecoveryDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (a *App) waitPendingInputRecovery() error {

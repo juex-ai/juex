@@ -815,6 +815,10 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 	if record.State == runtime.PendingInputStateProcessed || record.State == runtime.PendingInputStateExpired || record.State == runtime.PendingInputStateDropped {
 		return
 	}
+	if err := m.parent.waitPendingInputRecoveryContext(ctx); err != nil {
+		m.recordNotificationFailure(managed, status, err)
+		return
+	}
 
 	admissionErrorAttempts := 0
 	admissionErrorDelay := 50 * time.Millisecond

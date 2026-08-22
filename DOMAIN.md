@@ -173,9 +173,11 @@ domain boundary.
    unprocessed record is recovered from the durable queue, not from a live
    transport or observer. Restart reconciles the queue with committed
    `turn.admitted` Events carrying the accepted message id and transcript
-   message ids: a committed admission can
-   finish an interrupted `accepting -> admitted` transition, while an
+   message ids: a committed admission can finish an interrupted
+   `accepting -> admitted` transition, while an
    uncommitted acceptance intent remains inert.
+   App-level synchronous input and newly delivered external input serialize
+   behind startup recovery, so they cannot overtake the oldest durable record.
 5. Expired input becomes inert. Queue overflow is rejected loudly without
    changing an already accepted record.
 6. Turn failure does not silently discard accepted input: retryable Provider
