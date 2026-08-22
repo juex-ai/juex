@@ -11,9 +11,10 @@
 # keeps this file's home/workspace/explicit scope and the ordinary field merge
 # rules. Imported documents cannot contain imports, including `imports: []`.
 # Remote content has bounded requests and a permission-restricted seven-day
-# Last-Known-Good cache under $JUEX_HOME/cache/config-imports. A full runtime
-# load resolves each remote identity once and publishes only after validation;
-# Fleet-only loading may consume but does not replace this cache. Juex loads
+# Last-Known-Good cache under $JUEX_HOME/cache/config-imports, scoped by remote
+# and declaring-config identity. A full runtime load resolves each remote
+# identity once and publishes only after validation; Fleet-only loading may
+# consume but does not replace this cache. Juex loads
 # all configuration only at startup; restart resident Agents after a change.
 # imports:
 #   - source: ./shared/providers.yaml

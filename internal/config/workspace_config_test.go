@@ -132,7 +132,8 @@ func TestValidateWorkspaceConfigDoesNotPublishRemoteImportCache(t *testing.T) {
 
 	source := server.URL + "/shared.yaml"
 	candidate := []byte("imports:\n  - source: " + source + "\n")
-	cfg, err := ValidateWorkspaceConfig(candidate, t.TempDir())
+	workDir := t.TempDir()
+	cfg, err := ValidateWorkspaceConfig(candidate, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,9 +144,8 @@ func TestValidateWorkspaceConfigDoesNotPublishRemoteImportCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cachePath := filepath.Join(homeDir, "cache", "config-imports", sourceDigest(source)+".json")
-	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
-		t.Fatalf("validation published remote cache: %v", err)
+	if _, err := os.Stat(filepath.Join(homeDir, "cache", "config-imports")); !os.IsNotExist(err) {
+		t.Fatalf("validation published remote cache directory: %v", err)
 	}
 }
 
@@ -170,9 +170,8 @@ func TestWriteWorkspaceConfigPublishesRemoteImportCacheOnlyAfterWriteSucceeds(t 
 		if err != nil {
 			t.Fatal(err)
 		}
-		cachePath := filepath.Join(homeDir, "cache", "config-imports", sourceDigest(source)+".json")
-		if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
-			t.Fatalf("failed workspace write published remote cache: %v", err)
+		if _, err := os.Stat(filepath.Join(homeDir, "cache", "config-imports")); !os.IsNotExist(err) {
+			t.Fatalf("failed workspace write published remote cache directory: %v", err)
 		}
 	})
 
@@ -185,7 +184,8 @@ func TestWriteWorkspaceConfigPublishesRemoteImportCacheOnlyAfterWriteSucceeds(t 
 
 		source := server.URL + "/shared.yaml"
 		candidate := []byte("imports:\n  - source: " + source + "\n")
-		path, err := WriteWorkspaceConfig(candidate, t.TempDir())
+		workDir := t.TempDir()
+		path, err := WriteWorkspaceConfig(candidate, workDir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -196,9 +196,12 @@ func TestWriteWorkspaceConfigPublishesRemoteImportCacheOnlyAfterWriteSucceeds(t 
 		if err != nil {
 			t.Fatal(err)
 		}
-		cachePath := filepath.Join(homeDir, "cache", "config-imports", sourceDigest(source)+".json")
-		if _, err := os.Stat(cachePath); err != nil {
+		entries, err := os.ReadDir(filepath.Join(homeDir, "cache", "config-imports"))
+		if err != nil {
 			t.Fatalf("successful workspace write did not publish remote cache: %v", err)
+		}
+		if len(entries) != 1 || entries[0].IsDir() {
+			t.Fatalf("remote cache entries = %+v, want one file", entries)
 		}
 	})
 }

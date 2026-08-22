@@ -82,12 +82,14 @@ Last-Known-Good copy under `$JUEX_HOME/cache/config-imports`; a temporary
 network failure may use an unexpired cache and `juex doctor` reports the source,
 fresh/stale state, and digest without URL query values or configuration
 contents. One full configuration load resolves each remote identity once and
-publishes fresh LKG content only after runtime validation succeeds. Fleet-only
-loading may consume an existing runtime LKG but does not replace it without
-those full checks. Workspace candidate validation is read-only; an update
-publishes its fresh LKG content only after the workspace file replacement
-succeeds. Configuration is still loaded only at process startup, so restart a
-resident Agent after changing either the declaring or imported source.
+publishes fresh LKG content only after runtime validation succeeds. LKG entries
+are scoped by both remote identity and declaring configuration so separate
+workspaces do not replace one another's validated version. Fleet-only loading
+may consume an existing runtime LKG but does not replace it without those full
+checks. Workspace candidate validation is read-only; an update publishes its
+fresh LKG content only after the workspace file replacement succeeds.
+Configuration is still loaded only at process startup, so restart a resident
+Agent after changing either the declaring or imported source.
 
 Juex loads a runtime environment once for `run`, `repl`, `listen`, and manual
 session compaction. `environment.load_dotenv` defaults to `true` and reads

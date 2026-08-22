@@ -1620,7 +1620,7 @@ def _read_config_import(
         raise ValueError("invalid remote config import source")
     if raw_source in remote_memo:
         return remote_memo[raw_source]
-    result = _read_remote_config_import(raw_source, parsed), _safe_remote_import_label(parsed)
+    result = _read_remote_config_import(raw_source, parsed, declaring), _safe_remote_import_label(parsed)
     remote_memo[raw_source] = result
     return result
 
@@ -1641,8 +1641,12 @@ class _ConfigImportRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _read_remote_config_import(identity: str, parsed: urllib.parse.SplitResult) -> str:
-    cache = _read_config_import_cache(identity, parsed)
+def _read_remote_config_import(
+    identity: str,
+    parsed: urllib.parse.SplitResult,
+    declaring: pathlib.Path,
+) -> str:
+    cache = _read_config_import_cache(identity, parsed, declaring)
     headers: dict[str, str] = {}
     if cache is not None:
         if cache.get("etag"):
@@ -1671,17 +1675,28 @@ def _read_remote_config_import(identity: str, parsed: urllib.parse.SplitResult) 
         raise ValueError("remote config import is unavailable and has no current Last-Known-Good cache") from None
 
 
-def _read_config_import_cache(identity: str, parsed: urllib.parse.SplitResult) -> dict[str, Any] | None:
+def _read_config_import_cache(
+    identity: str,
+    parsed: urllib.parse.SplitResult,
+    declaring: pathlib.Path,
+) -> dict[str, Any] | None:
     _, effective_home = provider_home_dirs()
-    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-    path = effective_home / "cache" / "config-imports" / f"{digest}.json"
+    source_digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    declaring_identity = declaring.parent.resolve() / declaring.name
+    declaring_digest = hashlib.sha256(str(declaring_identity).encode("utf-8")).hexdigest()
+    path = effective_home / "cache" / "config-imports" / f"{source_digest}-{declaring_digest}.json"
     try:
         if os.name != "nt" and (path.stat().st_mode & 0o777) != 0o600:
             return None
         record = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         return None
-    if not isinstance(record, dict) or record.get("version") != 1 or record.get("source_sha256") != digest:
+    if (
+        not isinstance(record, dict)
+        or record.get("version") != 2
+        or record.get("source_sha256") != source_digest
+        or record.get("declaring_sha256") != declaring_digest
+    ):
         return None
     safe_source = _safe_remote_import_label(parsed)
     content = record.get("content")
@@ -1735,7 +1750,10 @@ def provider_home_dirs() -> tuple[pathlib.Path, pathlib.Path]:
 def _merge_source_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = copy.deepcopy(base)
     for name, value in override.items():
-        if name == "providers":
+        if name == "models":
+            if value is not None:
+                merged[name] = copy.deepcopy(value)
+        elif name == "providers":
             if value is None:
                 continue
             if isinstance(value, list):

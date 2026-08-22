@@ -327,6 +327,49 @@ func TestConfigHTTPSImportCachesValidatedContentAndRevalidatesWithETag(t *testin
 	}
 }
 
+func TestConfigRemoteImportCachesAreScopedToDeclaringConfig(t *testing.T) {
+	var body atomic.Value
+	body.Store("runtime:\n  tool_timeout: 41s\n")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body.Load().(string)))
+	}))
+
+	home := t.TempDir()
+	firstPath := filepath.Join(t.TempDir(), "juex.yaml")
+	secondPath := filepath.Join(t.TempDir(), "juex.yaml")
+	declaration := "imports:\n  - source: " + server.URL + "/config.yaml\n"
+	writeTextFile(t, firstPath, declaration)
+	writeTextFile(t, secondPath, declaration)
+
+	first := Config{HomeJuexDir: home}
+	if err := applyYAMLFileWithImportLoader(&first, explicitYAMLSource(firstPath), newConfigImportLoader(home)); err != nil {
+		t.Fatal(err)
+	}
+	commitImportCacheForTest(t, &first)
+	body.Store("runtime:\n  tool_timeout: 42s\n")
+	second := Config{HomeJuexDir: home}
+	if err := applyYAMLFileWithImportLoader(&second, explicitYAMLSource(secondPath), newConfigImportLoader(home)); err != nil {
+		t.Fatal(err)
+	}
+	commitImportCacheForTest(t, &second)
+	server.Close()
+
+	firstOffline := Config{HomeJuexDir: home}
+	if err := applyYAMLFileWithImportLoader(&firstOffline, explicitYAMLSource(firstPath), newConfigImportLoader(home)); err != nil {
+		t.Fatal(err)
+	}
+	if firstOffline.ToolTimeout != 41*time.Second {
+		t.Fatalf("first offline timeout = %s, want its validated 41s LKG", firstOffline.ToolTimeout)
+	}
+	secondOffline := Config{HomeJuexDir: home}
+	if err := applyYAMLFileWithImportLoader(&secondOffline, explicitYAMLSource(secondPath), newConfigImportLoader(home)); err != nil {
+		t.Fatal(err)
+	}
+	if secondOffline.ToolTimeout != 42*time.Second {
+		t.Fatalf("second offline timeout = %s, want its validated 42s LKG", secondOffline.ToolTimeout)
+	}
+}
+
 func TestConfigRemoteImportUsesCacheOnlyForRetryableFailures(t *testing.T) {
 	var status atomic.Int32
 	status.Store(http.StatusOK)

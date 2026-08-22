@@ -27,7 +27,7 @@ const (
 	configImportMaxBytes     = 1 << 20
 	configImportMaxRedirects = 3
 	configImportMaxCacheAge  = 7 * 24 * time.Hour
-	configImportCacheVersion = 1
+	configImportCacheVersion = 2
 )
 
 type importConfig struct {
@@ -68,15 +68,16 @@ type configImportDocument struct {
 }
 
 type configImportCacheRecord struct {
-	Version       int       `json:"version"`
-	Source        string    `json:"source"`
-	SourceSHA256  string    `json:"source_sha256"`
-	ETag          string    `json:"etag,omitempty"`
-	LastModified  string    `json:"last_modified,omitempty"`
-	FetchedAt     time.Time `json:"fetched_at"`
-	ContentSHA256 string    `json:"content_sha256"`
-	Content       string    `json:"content"`
-	cachePath     string
+	Version         int       `json:"version"`
+	Source          string    `json:"source"`
+	SourceSHA256    string    `json:"source_sha256"`
+	DeclaringSHA256 string    `json:"declaring_sha256"`
+	ETag            string    `json:"etag,omitempty"`
+	LastModified    string    `json:"last_modified,omitempty"`
+	FetchedAt       time.Time `json:"fetched_at"`
+	ContentSHA256   string    `json:"content_sha256"`
+	Content         string    `json:"content"`
+	cachePath       string
 }
 
 func newConfigImportLoader(homeDir string) *configImportLoader {
@@ -187,7 +188,12 @@ func (l *configImportLoader) load(declaring yamlConfigSource, rawSource string) 
 	identity := parsed.String()
 	if document, ok := l.remoteMemo[identity]; ok {
 		document.source.Scope = declaring.Scope
-		document.cacheWrite = nil
+		if document.cacheWrite != nil {
+			record := *document.cacheWrite
+			record.DeclaringSHA256 = declaringConfigDigest(declaring.Path)
+			record.cachePath = l.cachePath(identity, declaring.Path)
+			document.cacheWrite = &record
+		}
 		return document, nil
 	}
 	document, err := l.loadRemote(declaring, parsed)
@@ -232,7 +238,7 @@ func (l *configImportLoader) loadRemote(declaring yamlConfigSource, parsed *url.
 	}
 	identity := parsed.String()
 	safeSource := sanitizedRemoteSource(parsed)
-	cache, cacheErr := l.readCache(identity)
+	cache, cacheErr := l.readCache(identity, declaring.Path)
 
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
@@ -302,15 +308,16 @@ func (l *configImportLoader) loadRemote(declaring yamlConfigSource, parsed *url.
 		return configImportDocument{}, fmt.Errorf("response exceeds %d byte limit", l.maxBytes)
 	}
 	record := configImportCacheRecord{
-		Version:       configImportCacheVersion,
-		Source:        safeSource,
-		SourceSHA256:  sourceDigest(identity),
-		ETag:          boundedCacheValidator(resp.Header.Get("ETag")),
-		LastModified:  boundedCacheValidator(resp.Header.Get("Last-Modified")),
-		FetchedAt:     l.now().UTC(),
-		ContentSHA256: contentDigest(data),
-		Content:       string(data),
-		cachePath:     l.cachePath(identity),
+		Version:         configImportCacheVersion,
+		Source:          safeSource,
+		SourceSHA256:    sourceDigest(identity),
+		DeclaringSHA256: declaringConfigDigest(declaring.Path),
+		ETag:            boundedCacheValidator(resp.Header.Get("ETag")),
+		LastModified:    boundedCacheValidator(resp.Header.Get("Last-Modified")),
+		FetchedAt:       l.now().UTC(),
+		ContentSHA256:   contentDigest(data),
+		Content:         string(data),
+		cachePath:       l.cachePath(identity, declaring.Path),
 	}
 	return l.remoteDocument(declaring, safeSource, record, "fresh", true), nil
 }
@@ -335,7 +342,6 @@ func (l *configImportLoader) remoteDocument(declaring yamlConfigSource, safeSour
 		status: ConfigImportStatus{Source: safeSource, State: state, Digest: record.ContentSHA256, FetchedAt: record.FetchedAt},
 	}
 	if write {
-		record.cachePath = l.cachePathFromDigest(record.SourceSHA256)
 		document.cacheWrite = &record
 	}
 	return document
@@ -346,8 +352,8 @@ func (l *configImportLoader) cacheUsable(record configImportCacheRecord) bool {
 	return !record.FetchedAt.IsZero() && !record.FetchedAt.After(now) && now.Sub(record.FetchedAt) <= l.maxCacheAge
 }
 
-func (l *configImportLoader) readCache(identity string) (configImportCacheRecord, error) {
-	path := l.cachePath(identity)
+func (l *configImportLoader) readCache(identity, declaringPath string) (configImportCacheRecord, error) {
+	path := l.cachePath(identity, declaringPath)
 	info, err := os.Stat(path)
 	if err != nil {
 		return configImportCacheRecord{}, err
@@ -376,7 +382,9 @@ func (l *configImportLoader) readCache(identity string) (configImportCacheRecord
 	if err := requireJSONEOF(dec); err != nil {
 		return configImportCacheRecord{}, err
 	}
-	if record.Version != configImportCacheVersion || record.SourceSHA256 != sourceDigest(identity) {
+	if record.Version != configImportCacheVersion ||
+		record.SourceSHA256 != sourceDigest(identity) ||
+		record.DeclaringSHA256 != declaringConfigDigest(declaringPath) {
 		return configImportCacheRecord{}, errors.New("cache identity does not match source")
 	}
 	parsed, err := url.Parse(identity)
@@ -426,12 +434,25 @@ func commitConfigImportCaches(cfg *Config) error {
 	return nil
 }
 
-func (l *configImportLoader) cachePath(identity string) string {
-	return l.cachePathFromDigest(sourceDigest(identity))
+func (l *configImportLoader) cachePath(identity, declaringPath string) string {
+	filename := sourceDigest(identity) + "-" + declaringConfigDigest(declaringPath) + ".json"
+	return filepath.Join(l.homeDir, "cache", "config-imports", filename)
 }
 
-func (l *configImportLoader) cachePathFromDigest(digest string) string {
-	return filepath.Join(l.homeDir, "cache", "config-imports", digest+".json")
+func declaringConfigDigest(path string) string {
+	return sourceDigest(declaringConfigIdentity(path))
+}
+
+func declaringConfigIdentity(path string) string {
+	abs, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	parent, base := filepath.Dir(abs), filepath.Base(abs)
+	if resolved, resolveErr := filepath.EvalSymlinks(parent); resolveErr == nil {
+		return filepath.Join(resolved, base)
+	}
+	return abs
 }
 
 func sourceDigest(value string) string {

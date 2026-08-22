@@ -242,6 +242,49 @@ providers:
 	}
 }
 
+func TestWriteModelConfigPreservesTopLevelNullImportSemantics(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "base.yaml"), []byte(`models: [local:imported]
+providers:
+  - id: local
+    protocol: openai/chat
+    models: [{id: imported}]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "null.yaml"), []byte("models: null\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(dir, "juex.yaml")
+	if err := os.WriteFile(source, []byte(`imports:
+  - source: base.yaml
+  - source: null.yaml
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(dir, "selected.yaml")
+	runUV(t, root,
+		"python", "-m", "tests.eval.juex_eval", "write-model-config",
+		"--source", source,
+		"--output", output,
+	)
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "local:imported") {
+		t.Fatalf("selected config lost the earlier model chain:\n%s", body)
+	}
+}
+
 func TestWriteModelConfigResolvesColonNamedLocalImport(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows filenames cannot contain colons")
@@ -551,7 +594,7 @@ func TestProviderConfigLoaderMemoizesRemoteImportsAcrossLayers(t *testing.T) {
 		"    original_env = {name: os.environ.get(name) for name in ['HOME', 'USERPROFILE', 'JUEX_HOME']}",
 		"    original_remote = helper._read_remote_config_import",
 		"    remote_reads = []",
-		"    def fake_remote(identity, _parsed):",
+		"    def fake_remote(identity, _parsed, _declaring):",
 		"        remote_reads.append(identity)",
 		"        return 'models: [remote:model]\\nproviders:\\n  - id: remote\\n    protocol: openai/chat\\n    models: [{id: model}]\\n'",
 		"    os.environ.update({'HOME': str(home), 'USERPROFILE': str(home), 'JUEX_HOME': str(instance)})",
@@ -743,7 +786,7 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        if 'protcol:' in materialized:",
 		"            raise ValueError('provider config is not loadable by Juex')",
 		"    helper.validate_source_config = fake_validate",
-		"    def fake_remote(identity, _parsed):",
+		"    def fake_remote(identity, _parsed, _declaring):",
 		"        remote_reads.append(identity)",
 		"        return 'models: [remote:model]\\nproviders:\\n  - id: remote\\n    api_key: remote-secret\\n    models: [{id: model}]\\n'",
 		"    helper._read_remote_config_import = fake_remote",
