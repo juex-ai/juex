@@ -242,6 +242,50 @@ providers:
 	}
 }
 
+func TestWriteModelConfigResolvesColonNamedLocalImport(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filenames cannot contain colons")
+	}
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	importedName := "providers:v2.yaml"
+	if err := os.WriteFile(filepath.Join(dir, importedName), []byte(`models: [local:colon]
+providers:
+  - id: local
+    protocol: openai/chat
+    api_key: colon-secret
+    models: [{id: colon}]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(dir, "juex.yaml")
+	if err := os.WriteFile(source, []byte("imports:\n  - source: "+importedName+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(dir, "selected.yaml")
+	runUV(t, root,
+		"python", "-m", "tests.eval.juex_eval", "write-model-config",
+		"--source", source,
+		"--output", output,
+	)
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"local:colon", "colon-secret"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("selected config missing %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestWriteModelConfigResolvesHTTPConfigImport(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")

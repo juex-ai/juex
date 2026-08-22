@@ -57,6 +57,7 @@ type configImportLoader struct {
 	maxBytes     int64
 	maxCacheAge  time.Duration
 	maxRedirects int
+	pendingCache []configImportCacheRecord
 }
 
 type configImportDocument struct {
@@ -149,11 +150,8 @@ func applyYAMLContentWithImportLoader(cfg *Config, data []byte, source yamlConfi
 		return err
 	}
 	for _, document := range documents {
-		if document.cacheWrite == nil {
-			continue
-		}
-		if err := loader.writeCache(*document.cacheWrite); err != nil {
-			return fmt.Errorf("config: cache import %s: %w", document.status.Source, err)
+		if document.cacheWrite != nil {
+			staged.pendingImportCache = append(staged.pendingImportCache, *document.cacheWrite)
 		}
 	}
 	*cfg = staged
@@ -397,12 +395,38 @@ func requireJSONEOF(dec *json.Decoder) error {
 }
 
 func (l *configImportLoader) writeCache(record configImportCacheRecord) error {
+	return writeConfigImportCache(record)
+}
+
+func writeConfigImportCache(record configImportCacheRecord) error {
 	data, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
 	return homestore.WriteFileAtomic(record.cachePath, data, 0o600, 0o700)
+}
+
+func commitConfigImportCaches(cfg *Config) error {
+	writes := cfg.pendingImportCache
+	cfg.pendingImportCache = nil
+	for _, record := range writes {
+		if err := writeConfigImportCache(record); err != nil {
+			return fmt.Errorf("config: cache import %s: %w", record.Source, err)
+		}
+	}
+	return nil
+}
+
+func (l *configImportLoader) commitPendingCache() error {
+	writes := l.pendingCache
+	l.pendingCache = nil
+	for _, record := range writes {
+		if err := l.writeCache(record); err != nil {
+			return fmt.Errorf("config: cache import %s: %w", record.Source, err)
+		}
+	}
+	return nil
 }
 
 func (l *configImportLoader) cachePath(identity string) string {
@@ -493,6 +517,7 @@ func cloneConfigForImport(cfg *Config) Config {
 	out.providerConfigs = cloneProviderConfigs(cfg.providerConfigs)
 	out.environmentLayers = cloneEnvironmentLayers(cfg.environmentLayers)
 	out.importStatuses = append([]ConfigImportStatus(nil), cfg.importStatuses...)
+	out.pendingImportCache = append([]configImportCacheRecord(nil), cfg.pendingImportCache...)
 	return out
 }
 

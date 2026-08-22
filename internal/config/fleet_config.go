@@ -37,6 +37,9 @@ func LoadHomeFleetConfig() (FleetConfig, error) {
 			return cfg, err
 		}
 	}
+	if err := loader.commitPendingCache(); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 
@@ -87,9 +90,7 @@ func applyHomeFleetConfig(cfg *FleetConfig, source yamlConfigSource, loader *con
 	}
 	for _, document := range documents {
 		if document.cacheWrite != nil {
-			if err := loader.writeCache(*document.cacheWrite); err != nil {
-				return fmt.Errorf("config: cache import %s: %w", document.status.Source, err)
-			}
+			loader.pendingCache = append(loader.pendingCache, *document.cacheWrite)
 		}
 	}
 	*cfg = staged

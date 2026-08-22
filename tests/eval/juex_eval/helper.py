@@ -1598,17 +1598,17 @@ def _read_config_import(declaring: pathlib.Path, raw_source: str) -> tuple[str, 
     if local_candidate.is_absolute():
         source = local_candidate.resolve()
         return source.read_text(encoding="utf-8"), str(source)
+    if "://" not in raw_source:
+        source = (declaring.parent / raw_source).resolve()
+        return source.read_text(encoding="utf-8"), str(source)
     parsed = urllib.parse.urlsplit(raw_source)
-    if parsed.scheme:
-        if parsed.scheme.lower() not in {"http", "https"}:
-            raise ValueError(f"unsupported config import URL scheme {parsed.scheme!r}")
-        if not parsed.netloc or parsed.username is not None or parsed.password is not None or parsed.fragment:
-            raise ValueError("invalid remote config import source")
-        if any(ord(character) < 0x20 for character in raw_source):
-            raise ValueError("invalid remote config import source")
-        return _read_remote_config_import(raw_source, parsed), _safe_remote_import_label(parsed)
-    source = (declaring.parent / raw_source).resolve()
-    return source.read_text(encoding="utf-8"), str(source)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError(f"unsupported config import URL scheme {parsed.scheme!r}")
+    if not parsed.netloc or parsed.username is not None or parsed.password is not None or parsed.fragment:
+        raise ValueError("invalid remote config import source")
+    if any(ord(character) < 0x20 for character in raw_source):
+        raise ValueError("invalid remote config import source")
+    return _read_remote_config_import(raw_source, parsed), _safe_remote_import_label(parsed)
 
 
 class _ConfigImportRedirectHandler(urllib.request.HTTPRedirectHandler):

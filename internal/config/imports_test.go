@@ -284,6 +284,7 @@ func TestConfigHTTPSImportCachesValidatedContentAndRevalidatesWithETag(t *testin
 	if err := applyYAMLFileWithImportLoader(&first, explicitYAMLSource(mainPath), loader); err != nil {
 		t.Fatal(err)
 	}
+	commitImportCacheForTest(t, &first)
 	if first.ToolTimeout != 41*time.Second {
 		t.Fatalf("tool timeout = %s, want imported 41s", first.ToolTimeout)
 	}
@@ -315,6 +316,7 @@ func TestConfigHTTPSImportCachesValidatedContentAndRevalidatesWithETag(t *testin
 	if err := applyYAMLFileWithImportLoader(&second, explicitYAMLSource(mainPath), loader); err != nil {
 		t.Fatal(err)
 	}
+	commitImportCacheForTest(t, &second)
 	if second.ToolTimeout != 41*time.Second {
 		t.Fatalf("tool timeout after 304 = %s, want cached 41s", second.ToolTimeout)
 	}
@@ -348,6 +350,7 @@ func TestConfigRemoteImportUsesCacheOnlyForRetryableFailures(t *testing.T) {
 	if err := applyYAMLFileWithImportLoader(&first, explicitYAMLSource(mainPath), loader); err != nil {
 		t.Fatal(err)
 	}
+	commitImportCacheForTest(t, &first)
 	status.Store(http.StatusInternalServerError)
 	now = now.Add(time.Hour)
 	stale := Config{HomeJuexDir: home}
@@ -399,6 +402,7 @@ func TestConfigRemoteImportDoesNotReplaceLKGWithInvalidContent(t *testing.T) {
 	if err := applyYAMLFileWithImportLoader(&first, explicitYAMLSource(mainPath), loader); err != nil {
 		t.Fatal(err)
 	}
+	commitImportCacheForTest(t, &first)
 
 	body.Store("unknown_field: invalid\n")
 	invalid := Config{HomeJuexDir: home}
@@ -413,6 +417,53 @@ func TestConfigRemoteImportDoesNotReplaceLKGWithInvalidContent(t *testing.T) {
 	}
 	if stale.ToolTimeout != 61*time.Second || stale.ImportStatuses()[0].State != "stale" {
 		t.Fatalf("fallback after invalid update = timeout:%s statuses:%+v", stale.ToolTimeout, stale.ImportStatuses())
+	}
+}
+
+func TestConfigRemoteImportDoesNotReplaceLKGWhenFinalValidationFails(t *testing.T) {
+	prepareConfigTest(t)
+	var body atomic.Value
+	body.Store(`models: [remote:ok]
+providers:
+  - id: remote
+    protocol: openai/chat
+    base_url: https://example.invalid
+    api_key: test-key
+    models: [{id: ok}]
+`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		value := body.Load().(string)
+		if value == "retry" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(value))
+	}))
+	defer server.Close()
+
+	mainPath := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", server.URL))
+	workDir := t.TempDir()
+	first, err := LoadFromFileForWorkDirForValidation(mainPath, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first.Models, []string{"remote:ok"}) {
+		t.Fatalf("first models = %v, want valid remote selection", first.Models)
+	}
+
+	body.Store("models: [missing:model]\n")
+	if _, err := LoadFromFileForWorkDirForValidation(mainPath, workDir); err == nil {
+		t.Fatal("semantically invalid remote update error = nil")
+	}
+
+	body.Store("retry")
+	stale, err := LoadFromFileForWorkDirForValidation(mainPath, workDir)
+	if err != nil {
+		t.Fatalf("stale load after rejected update: %v", err)
+	}
+	if !reflect.DeepEqual(stale.Models, []string{"remote:ok"}) || len(stale.ImportStatuses()) != 1 || stale.ImportStatuses()[0].State != "stale" {
+		t.Fatalf("stale fallback = models:%v statuses:%+v", stale.Models, stale.ImportStatuses())
 	}
 }
 
@@ -495,9 +546,11 @@ func TestConfigRemoteImportRejectsTamperedCacheAndRedactsInvalidSource(t *testin
 		mainPath := filepath.Join(t.TempDir(), "juex.yaml")
 		writeTextFile(t, mainPath, fmt.Sprintf("imports:\n  - source: %s/config.yaml\n", server.URL))
 		loader := newConfigImportLoader(home)
-		if err := applyYAMLFileWithImportLoader(&Config{HomeJuexDir: home}, explicitYAMLSource(mainPath), loader); err != nil {
+		cfg := Config{HomeJuexDir: home}
+		if err := applyYAMLFileWithImportLoader(&cfg, explicitYAMLSource(mainPath), loader); err != nil {
 			t.Fatal(err)
 		}
+		commitImportCacheForTest(t, &cfg)
 		server.Close()
 		entries, err := os.ReadDir(filepath.Join(home, "cache", "config-imports"))
 		if err != nil {
@@ -524,6 +577,13 @@ func TestConfigRemoteImportRejectsTamperedCacheAndRedactsInvalidSource(t *testin
 			t.Fatalf("invalid URL error leaked query secret: %q", err)
 		}
 	})
+}
+
+func commitImportCacheForTest(t *testing.T, cfg *Config) {
+	t.Helper()
+	if err := commitConfigImportCaches(cfg); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestConfigImportFailureDoesNotCreateAgentStateOrPublishRemoteCache(t *testing.T) {

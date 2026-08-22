@@ -1,6 +1,8 @@
 package config
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -129,6 +131,47 @@ func TestLoadHomeFleetConfigRejectsNestedImportedDocumentAtomically(t *testing.T
 	}
 	if err == nil || !hasExpectedPaths || !strings.Contains(err.Error(), "imports[0]") || !strings.Contains(err.Error(), "nested imports") {
 		t.Fatalf("nested fleet import error = %v", err)
+	}
+}
+
+func TestLoadHomeFleetConfigCommitsRemoteCacheAfterAllSourcesSucceed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("fleet:\n  addr: 127.0.0.1:5888\n"))
+	}))
+	defer server.Close()
+
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	defaultHome := filepath.Join(userHome, ".juex")
+	writeTextFile(t, filepath.Join(defaultHome, "juex.yaml"), "imports:\n  - source: "+server.URL+"/fleet.yaml\n")
+	instanceHome := t.TempDir()
+	t.Setenv("JUEX_HOME", instanceHome)
+	instancePath := filepath.Join(instanceHome, "juex.yaml")
+	writeTextFile(t, instancePath, "fleet: [invalid]\n")
+
+	if _, err := LoadHomeFleetConfig(); err == nil {
+		t.Fatal("LoadHomeFleetConfig() error = nil, want later source failure")
+	}
+	cacheDir := filepath.Join(instanceHome, "cache", "config-imports")
+	if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
+		t.Fatalf("failed fleet load published remote cache: %v", err)
+	}
+
+	writeTextFile(t, instancePath, "fleet:\n  unsafe_bind_any: false\n")
+	got, err := LoadHomeFleetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Addr != "127.0.0.1:5888" {
+		t.Fatalf("fleet addr = %q, want imported address", got.Addr)
+	}
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("fleet cache entries = %d, want 1", len(entries))
 	}
 }
 

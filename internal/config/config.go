@@ -78,6 +78,7 @@ type Config struct {
 	runtimeEnvStatus   EnvironmentStatus
 	sandboxConfigured  bool
 	importStatuses     []ConfigImportStatus
+	pendingImportCache []configImportCacheRecord
 }
 
 type AgentStateMode uint8
@@ -567,9 +568,13 @@ func finalizeConfigLoadWithAgentState(
 	agentStateMode AgentStateMode,
 ) (loadErr error) {
 	if err := resolveRuntimeEnvironment(cfg); err != nil {
+		cfg.pendingImportCache = nil
 		return err
 	}
 	defer func() {
+		if loadErr != nil {
+			cfg.pendingImportCache = nil
+		}
 		loadErr = redactConfiguredEnvironmentError(cfg.EnvironmentSnapshot(), loadErr)
 	}()
 	hasModelsOverride := len(modelRefs) > 0
@@ -640,6 +645,9 @@ func finalizeLoadedConfig(cfg *Config, resolveAuth bool, agentStateMode AgentSta
 		if err := resolveCodexAuth(cfg); err != nil {
 			return err
 		}
+	}
+	if err := commitConfigImportCaches(cfg); err != nil {
+		return err
 	}
 	cfg.agentStateLoaded = true
 	if agentStateMode == AgentStateNone {
