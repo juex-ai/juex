@@ -1582,7 +1582,7 @@ func TestJuexSourceConfigValidationUsesCompleteConfigDoctor(t *testing.T) {
 		"        helper.validate_source_layers('/path/to/juex', layers)",
 		"        command, kwargs = captured[-1]",
 		"        assert command[-4:] == ['doctor', '--offline', '--format', 'json'], command",
-		"        assert command[3] == '--config' and command[4].endswith('/explicit/juex.yaml'), command",
+		"        assert command[3] == '--config' and Path(command[4]).parts[-2:] == ('explicit', 'juex.yaml'), command",
 		"        source_root = Path(command[2]).parent",
 		"        assert kwargs['env']['HOME'] == str(source_root / 'home'), kwargs['env']",
 		"        assert kwargs['env']['JUEX_HOME'] == str(source_root / 'juex-home'), kwargs['env']",
