@@ -280,6 +280,13 @@ implementation decisions live.
     Provider transport/API/stream operation; runtime owns model-chain fallback,
     pending-input continuation, and other Turn-level retry decisions.
 
+Architecture enforcement stays deliberately lightweight. Import-only tests
+check the stable Foundation and Framework dependency direction. Composition
+ownership is expressed through explicit constructors, narrow interfaces,
+unexported state, and sealed Module sets; the owning Module and Feature tests
+exercise real registration, publication, replacement, and cleanup behavior.
+Juex does not maintain a parallel whole-source analyzer for those rules.
+
 ### 2.2 Module Sets And Lifecycle
 
 A Module is a trusted in-process Feature value compiled into JueX. It has one
@@ -3233,7 +3240,7 @@ and `tests/eval/` covers the local evaluation harness.
 
 | Package | Coverage highlights |
 |---|---|
-| `architecture` | Foundation/Framework import direction; App composition cannot directly register serving Tools or own concrete Feature cleanup |
+| `architecture` | Lightweight Foundation/Framework import-direction checks |
 | `events` | exact + glob match, auto-fill ID/timestamp, ordering |
 | `frontmatter` | round-trip, embedded quotes, embedded colons, blank lines, comments, malformed handling |
 | `version` | default + ldflags override |
