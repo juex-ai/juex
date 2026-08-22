@@ -329,10 +329,10 @@ export const BROWSER_EVENT_TYPES = [
   "tool.output_delta",
   "tool.errored",
   "tool.outcome_unknown",
-  "hook.started",
-  "hook.completed",
-  "hook.errored",
-  "hook.trace",
+  "policy.started",
+  "policy.completed",
+  "policy.errored",
+  "policy.trace",
   "pending_input.queued",
   "pending_input.draining",
   "pending_input.promoted",
@@ -522,7 +522,7 @@ export interface ProviderRequestEpochPayload {
       tail_start_message_id?: string;
       retained_message_ids?: string[];
     };
-    hook_context_message_ids?: string[];
+    policy_context_message_ids?: string[];
     request_digest: string;
   };
 }
@@ -641,14 +641,15 @@ export interface TranscriptRepairedPayload {
   repairs: TranscriptRepair[];
 }
 
-export interface HookStartedPayload {
-  name: string;
+export interface PolicyStartedPayload {
+  module_id: string;
+  policy_point: string;
+  name?: string;
   source?: string;
-  event_name: string;
   tool_name?: string;
 }
 
-export interface HookCompletedPayload extends HookStartedPayload {
+export interface PolicyCompletedPayload extends PolicyStartedPayload {
   duration_ms: number;
   exit_code: number;
   stdout_len?: number;
@@ -657,7 +658,7 @@ export interface HookCompletedPayload extends HookStartedPayload {
   stderr_preview?: string;
 }
 
-export interface HookErroredPayload extends HookStartedPayload {
+export interface PolicyErroredPayload extends PolicyStartedPayload {
   duration_ms: number;
   exit_code?: number;
   error: string;
@@ -667,7 +668,7 @@ export interface HookErroredPayload extends HookStartedPayload {
   stderr_preview?: string;
 }
 
-export interface HookTracePayload {
+export interface PolicyTracePayload {
   text: string;
   message_id?: string;
 }
@@ -891,10 +892,10 @@ export type BrowserEvent =
   | (BrowserEventBase<"tool.output_delta"> & { payload: ToolOutputDeltaPayload })
   | (BrowserEventBase<"tool.errored"> & { payload: ToolErroredPayload })
   | (BrowserEventBase<"tool.outcome_unknown"> & { payload: ToolOutcomeUnknownPayload })
-  | (BrowserEventBase<"hook.started"> & { payload: HookStartedPayload })
-  | (BrowserEventBase<"hook.completed"> & { payload: HookCompletedPayload })
-  | (BrowserEventBase<"hook.errored"> & { payload: HookErroredPayload })
-  | (BrowserEventBase<"hook.trace"> & { payload: HookTracePayload })
+  | (BrowserEventBase<"policy.started"> & { payload: PolicyStartedPayload })
+  | (BrowserEventBase<"policy.completed"> & { payload: PolicyCompletedPayload })
+  | (BrowserEventBase<"policy.errored"> & { payload: PolicyErroredPayload })
+  | (BrowserEventBase<"policy.trace"> & { payload: PolicyTracePayload })
   | (BrowserEventBase<"pending_input.queued"> & { payload: PendingInputQueuedPayload })
   | (BrowserEventBase<"pending_input.draining"> & { payload: PendingInputDrainedPayload })
   | (BrowserEventBase<"pending_input.promoted"> & { payload: PendingInputPromotedPayload })

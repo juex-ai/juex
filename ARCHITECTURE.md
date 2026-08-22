@@ -454,7 +454,7 @@ type Message struct {
     ID         string
     Role       Role
     Blocks     []Block
-    Kind       string // direct | continuation | tool_result | mcp_event | observation | model_change | system_notice | compact | runtime_context | hook_event
+    Kind       string // direct | continuation | tool_result | mcp_event | observation | model_change | system_notice | compact | runtime_context | policy_event
     Model      string
     Compaction *CompactionMetadata
 }
@@ -896,9 +896,9 @@ from visible text and replaced with a deterministic placeholder carrying the
 full logical window's byte count, SHA-256, and first-bytes hex metadata. Normal
 UTF-8 logs, ANSI-colored output, and localized text remain unchanged, and
 head/tail and live fragment boundaries do not split UTF-8 runes.
-After pre/post Tool hook context is appended, the runtime preserves the
+After pre/post Tool Policy context is appended, the runtime preserves the
 already-bounded Shell base and applies a separate 128 KiB head/tail and
-binary-hygiene bound to the appended hook/error suffix. Finalized provider and
+binary-hygiene bound to the appended policy/error suffix. Finalized provider and
 terminal event content therefore stays bounded without replacing the original
 Shell stream's exact omitted-byte marker.
 
@@ -957,10 +957,11 @@ use, but their envelope must explicitly declare a positive schema version and
 required-or-ignorable replay policy.
 
 Standard cataloged families include `turn.started/completed/errored`,
-`provider.request_epoch`, `provider.hook_context.queued`,
+`provider.request_epoch`, `provider.policy_context.queued`,
 `llm.requested/output_delta/responded/errored`,
 `tool.requested/running/output_delta/completed/errored/outcome_unknown`,
-`transcript.repaired`, `pending_input.*`, `context.compact.*`, and
+`policy.requested/started/completed/errored/trace`, `transcript.repaired`,
+`pending_input.*`, `context.compact.*`, and
 `context.projection.applied`.
 Payload structs and producer constructors may remain next to the domain module
 that emits them; only the Catalog assigns their stable wire interpretation.
@@ -969,7 +970,7 @@ Events. BrowserEvent is a separate transport projection DTO: the Catalog
 selects browser-visible stable facts and supplies their normalized payload,
 while Web owns status attachment and SSE framing.
 
-`provider.hook_context.queued` durably records an ordered, bounded batch before
+`provider.policy_context.queued` durably records an ordered, bounded batch before
 it enters provider-visible memory. Policy-produced queued context is bounded
 across all contributing Modules against the final serialized payload, which
 must not exceed 1 MiB. `provider.request_epoch` records the final
@@ -981,8 +982,8 @@ composition, so stable guidance is reused by digest while a changing Operating
 Context contributes only its small section body. Provider-visible context
 synthesized outside the transcript, including Goal, Notes, model-change notices,
 and synthesized compaction input, carries a bounded full-message snapshot;
-one-shot hook context instead resolves through its queued Event. Committing the
-epoch consumes its included one-shot hook-context IDs and releases their in-memory
+one-shot policy context instead resolves through its queued Event. Committing
+the epoch consumes its included one-shot policy-context IDs and releases their in-memory
 bodies while retaining compact duplicate-validation IDs. Session attachment
 streams the journal through the provenance reducer, which ignores unrelated Events
 and derives queued batches minus committed epoch consumption without materializing
@@ -1419,12 +1420,13 @@ func (e *Engine) Turn(ctx, userInput) (string, error)
 
 Session switching publishes one `SessionRuntimeSnapshot` in
 `internal/runtime`. The snapshot keeps the active `Session`, scratchpad-aware
-prompt builder, persistent pending-input queue, Notes store, Goal store, and
-session-specific hook paths coherent. `ReplaceSessionRuntime` serializes with
-turns and compaction and rejects an active reservation or in-memory pending
-input. The exported session-scoped `Engine` fields remain a constructor and
-test compatibility surface; production readers use snapshot methods such as
-`ActiveContext`, `PromptSections`, and `SessionStateStatus`.
+prompt builder, persistent pending-input queue, sealed Session Module set, Tool
+registry, and session-specific hook paths coherent. Goal and Notes stores are
+owned by their Session Modules inside that set; they are not fields on the
+Framework Engine or its snapshot. `ReplaceSessionRuntime` serializes with turns
+and compaction and rejects an active reservation or in-memory pending input.
+Production readers use snapshot methods such as `ActiveContext`,
+`PromptSections`, and `SessionStateStatus`.
 
 `internal/app` owns the wider lifecycle boundary. It builds, validates, and
 starts the candidate Module set and complete Tool registry after attachment has
@@ -1650,7 +1652,7 @@ run/dry-run output carries structured `warnings`, and REPL warnings use the
 REPL stderr writer.
 
 Root persistent flags are published on non-Fleet subcommands. Fleet help omits
-workspace-scoped `--config`, `--cwd`, and `--model`; the runtime guard still
+workspace-scoped `--config`, `--cwd`, and `--models`; the runtime guard still
 rejects those flags if they are supplied before the Fleet command. Fleet
 continues to publish the operational flags that it accepts:
 
@@ -1658,7 +1660,7 @@ continues to publish the operational flags that it accepts:
 |---|---|---|---|
 | `--config` |  | unset (path to `juex.yaml` override) | unavailable |
 | `--cwd` | `-C` | `$PWD` (mirrors `git -C`) | unavailable |
-| `--model` |  | unset (`provider:model` override) | unavailable |
+| `--models` |  | unset (comma-separated ordered `provider:model` chain) | unavailable |
 | `--enable-user-agents-resources` |  | config value (true/false or 1/0) | available |
 | `--debug` |  | false (write detailed runtime diagnostics) | available |
 | `--log-level` |  | `info` | available |
@@ -1929,7 +1931,7 @@ can request older windows with `before=<message_id>` and can lower or raise the
 window with `limit`, capped by the server. The limit is a target: when its
 boundary would begin inside a contiguous Tool Result sequence, the Session read
 model minimally extends the page backward to include the matching assistant
-Tool Call, crossing only intervening UI-only Hook Event traces. Pagination
+Tool Call, crossing only intervening UI-only Policy Event traces. Pagination
 metadata reflects that expanded start, so clients can
 prepend older pages without duplicating the added tool context. Truly orphaned
 results remain output-only transcript facts rather than being attached to an
@@ -2251,8 +2253,8 @@ directory, where Juex reads `<WorkDir>/juex.yaml`. The repository root ships
 `juex.yaml.example` as a copyable template:
 
 ```yaml
-model: openai:gpt-4.1
-fallback_models:
+models:
+  - openai:gpt-4.1
   - anthropic:claude-sonnet-5
 enable_user_agents_resources: true
 environment:
@@ -2303,30 +2305,21 @@ runtime:
   external_event_ttl: 24h
   tool_timeout: 60s
   max_output_tokens: 8192
-  show_builtin_hook_traces: false
+  show_builtin_policy_traces: false
   notify_model_changes: false
 compaction:
   enabled: true
   instructions: ""
-  reserve_tokens: 16384
-  keep_recent_tokens: 20000
   summary_model: ""
-  summary_max_tokens: 2048
-  tool_result_max_chars: 2000
   user_input_inline_max_bytes: 65536
   user_input_preview_head_bytes: 8192
   user_input_preview_tail_bytes: 8192
   max_auto_failures: 3
-tool_output:
-  inline_max_bytes: 32768
-  preview_head_bytes: 8192
-  preview_tail_bytes: 8192
 ```
 
 | Field | Description |
 |---|---|
-| `model` | active model reference in `provider:model` form |
-| `fallback_models` | optional ordered `provider:model` list used after eligible request failures; an explicit empty list clears an inherited list |
+| `models` | ordered `provider:model` chain; the first entry is primary, later entries are fallbacks, and a nearer YAML layer replaces the complete list, including with an explicit empty list |
 | `enable_user_agents_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores only `~/.agents/AGENTS.md`, `~/.agents/skills`, and `~/.agents/mcp.json`; the Extension allowlist is unchanged |
 | `environment.load_dotenv` | optional boolean; defaults to `true`; reads exactly `<WorkDir>/.env` once during runtime config loading; a missing file is allowed and malformed input fails startup |
 | `environment.variables` | optional string map merged into the immutable runtime environment; portable names are required and Juex-owned identity/path names are rejected |
@@ -2357,7 +2350,7 @@ tool_output:
 | `providers[].models[].compat.reasoning_replay_fields` | optional model-level compatibility overrides |
 | `providers[].models[].compat.codex_transport` | optional model-level override for `providers[].compat.codex_transport` |
 | `hooks.trusted` | required for project-local or explicit config command hooks; default-home and instance-home hooks are trusted by location |
-| `hooks.commands[].name` | stable hook name used in `hook.*` events |
+| `hooks.commands[].name` | stable Hook name combined with its Hook event name in the generic `policy.*` lifecycle fact `name` |
 | `hooks.commands[].events` | lifecycle events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop` |
 | `hooks.commands[].tools` | optional tool-name filter for tool hook events |
 | `hooks.commands[].command` | command argv executed with hook input JSON on stdin |
@@ -2367,37 +2360,36 @@ tool_output:
 | `runtime.external_event_ttl` | duration for queued MCP/external event messages while a turn is running; defaults to 24h |
 | `runtime.tool_timeout` | default hard timeout for generic non-shell tool execution; defaults to 60s, is capped at 300s, and is not exposed in model-visible tool schemas |
 | `runtime.max_output_tokens` | optional normal-turn provider output cap; omit it to use the provider default |
-| `runtime.show_builtin_hook_traces` | mirrors built-in runtime hook/gate completions and failures into conversation-visible UI-only hook traces; defaults to false |
+| `runtime.show_builtin_policy_traces` | mirrors built-in runtime Policy/gate completions and failures into conversation-visible UI-only policy traces; defaults to false |
 | `runtime.notify_model_changes` | adds provider-visible and durable `model_change` reminders for successful fallback and recovery transitions; defaults to false and does not change model selection or runtime events |
 | `compaction.enabled` | enables automatic and manual context compaction |
 | `compaction.instructions` | persistent summary focus applied before per-request instructions and successful `PreCompact` hook stdout |
-| `compaction.reserve_tokens` | token budget held back from the provider window |
-| `compaction.keep_recent_tokens` | approximate token budget for retaining recent direct, MCP, and Observable inputs verbatim; a single larger input becomes a bounded artifact reference at compaction |
-| `compaction.summary_model` | optional `provider:model` used only for compaction summary calls; if omitted or if the summary provider fails, compaction uses the active model |
-| `compaction.summary_max_tokens` | maximum output tokens for summary generation |
-| `compaction.tool_result_max_chars` | per-tool-result truncation limit in summary input |
+| `compaction.reserve_tokens` | optional absolute reserve that can trigger compaction earlier than the default 70% context-window threshold |
+| `compaction.keep_recent_tokens` | optional stricter ceiling on the default 5/64 context-window budget for retaining recent direct, MCP, and Observable inputs verbatim; a single larger input becomes a bounded artifact reference at compaction |
+| `compaction.summary_model` | optional first `provider:model` candidate used only for compaction summary calls; after failure, compaction continues through the ordered `models` chain without a provider-visible model-change notice |
+| `compaction.summary_max_tokens` | optional stricter ceiling on the default 0.5% context-window summary output budget |
+| `compaction.tool_result_max_chars` | optional stricter ceiling on the default 0.5% context-window per-Tool Result serialization limit in summary input |
 | `compaction.user_input_inline_max_bytes` | user text larger than this is stored under `artifacts/sessions/<session-id>/user-inputs/` in Agent state and replaced by a stable preview before provider calls |
 | `compaction.user_input_preview_head_bytes` | leading bytes kept inline for externalized user input |
 | `compaction.user_input_preview_tail_bytes` | trailing bytes kept inline for externalized user input |
 | `compaction.max_auto_failures` | consecutive automatic compaction failures before the session pauses proactive compaction with a clear error |
-| `tool_output.inline_max_bytes` | tool output larger than this is stored under `artifacts/sessions/<session-id>/tool-results/` in Agent state and replaced by a stable preview before provider calls, independently of compaction |
-| `tool_output.preview_head_bytes` | leading bytes kept inline for externalized tool output |
-| `tool_output.preview_tail_bytes` | trailing bytes kept inline for externalized tool output |
+| `tool_output.inline_max_bytes` | optional stricter ceiling on the default 0.5% context-window threshold; larger tool output is stored under `artifacts/sessions/<session-id>/tool-results/` in Agent state and replaced by a stable preview before provider calls, independently of compaction |
+| `tool_output.preview_head_bytes` | optional leading-byte preview ceiling; omitted head and tail limits split the effective inline budget evenly |
+| `tool_output.preview_tail_bytes` | optional trailing-byte preview ceiling; the combined preview never exceeds the effective inline budget |
 
 YAML resolution order (later wins) is `defaults` <
 `~/.juex/juex.yaml` < a canonically distinct `$JUEX_HOME/juex.yaml` <
 `<WorkDir>/.juex/juex.yaml` (or `<WorkDir>/juex.yaml` when `WorkDir` is a
 `.juex` directory) <
 `--config <path>` (if supplied) < supported environment overrides < explicit
-CLI flags. `--model provider:model` selects a configured
-provider:model after YAML merge and wins over `PROVIDER_API_ID`,
+CLI flags. A root `--models provider:model,...` replaces the complete YAML
+model chain after YAML merge and wins over `PROVIDER_API_ID`,
 `PROVIDER_API_PROTOCOL`, and `PROVIDER_API_MODEL`; non-conflicting env overrides
 such as `PROVIDER_API_BASE`, `PROVIDER_API_KEY`, `PROVIDER_THINKING_EFFORT`,
 and `PROVIDER_CONTEXT_WINDOW` still apply.
 `PROVIDER_API_MODEL` remains a model-id-only override under the selected
-provider. Primary overrides preserve `fallback_models`; any fallback selected
-as the primary by YAML layering, environment, or CLI override is removed from
-the effective chain.
+provider and preserves the configured tail. Every configured reference must be
+unique and resolve to a declared provider model.
 
 The runtime child-process environment is a separate immutable snapshot with
 this precedence (later wins): selected Extension manifest defaults <
@@ -2424,8 +2416,9 @@ workspace YAML, `.env`, and Extension defaults. A process may activate only one
 workspace snapshot at a time.
 Provider definitions merge by `providers[].id` and
 `providers[].models[].id`, so an instance or workspace config can set only
-`model: provider:model` or override a few fields while inheriting missing
-values from the preceding home layer. `shell` is an object-level override rather than a
+the top-level `models` list or override a few provider fields while inheriting
+missing values from the preceding home layer. The `models` list itself is not
+merged: a nearer layer replaces it completely. `shell` is an object-level override rather than a
 deep merge: workspace `shell: {}` resets any user-global shell config back to
 auto.
 
@@ -2481,17 +2474,22 @@ is used as the text only when stdout is empty; otherwise stderr is diagnostic.
 JSON-looking stdout is still plain text. Hook requests may include the current
 goal as read-only context, but hook output cannot mutate Goal or Notes.
 
-The runtime emits `hook.started`, `hook.completed`, `hook.errored`, and
-conversation-visible `hook.trace` events; the existing session bus persists
-those events to `events.jsonl`. Command hooks always produce UI-only hook trace
-rows. Built-in runtime hook/gate completions and failures only produce those
-rows when `runtime.show_builtin_hook_traces` is true.
+The Framework emits `policy.requested`, `policy.started`, `policy.completed`,
+`policy.errored`, and conversation-visible `policy.trace` Events; the existing
+Session bus persists those Events to `events.jsonl`. Lifecycle payloads carry
+the Framework-assigned `module_id` and canonical `policy_point`, plus generic
+`name`, `source`, and optional `tool_name` metadata. They never translate a
+Policy Point into a Hook-specific `event_name`. The Hooks Module combines its
+own Hook event and command names for display while retaining the configured
+source, including `ext:<name>` provenance. Command Hooks always produce UI-only
+policy trace rows. Built-in runtime Policy/gate completions and failures only produce those
+rows when `runtime.show_builtin_policy_traces` is true.
 `SessionStart` exit `2` rejects startup. `UserPromptSubmit` stdout can extend
 the user message, while exit `2` rejects the turn. `PreToolUse` exit `2`
 produces an error tool result so the model can recover. `PostToolUse` exit `2`
 adds corrective context without changing whether the completed tool itself
 failed. `PreCompact` stdout extends the summary instructions; compact hooks
-cannot veto compaction, so exit `2` is reported as `hook.errored`.
+cannot veto compaction, so exit `2` is reported as `policy.errored`.
 `SessionStart`, `PostCompact`, and `Stop` exit `0` stdout is queued in memory as
 runtime context for exactly the next model request; it is never persisted as a
 transcript message. `PostCompact` therefore cannot affect the summary request
@@ -2518,8 +2516,9 @@ provider-visible continuation prompts. Stop authority belongs to configured
 Stop hooks and the goal completion gate.
 
 Finish attempts also pass through the Goal Session Module's typed
-`goal-completion-gate` before the Hooks Module policies. The runtime stores a session-local
-`goal_state.json` owned by model-facing goal tools. Its public contract is
+`goal-completion-gate` before the Hooks Module policies. The Goal Module owns
+the session-local `goal_state.json` store used by model-facing goal tools. Its
+public contract is
 `description`, `acceptance`, `status`, optional `status_reason`,
 `continuation_count`, and `updated_at`; statuses are `in_progress`,
 `wait_for_user`, `success`, and `failure`. `acceptance` is one free-text field
@@ -2563,26 +2562,43 @@ messages after the compact marker. Large user inputs and tool results are
 materialized to `sessions/<session-id>/user-inputs/` and
 `sessions/<session-id>/tool-results/` relative to that root; provider-visible messages keep a
 stable replacement with path, byte count, SHA-256, and head/tail preview.
+For each selected model candidate, the configured context window determines the
+effective budgets: automatic compaction triggers at 70%, the complete summary
+request envelope fits within 80%, summary output and Tool Result limits each use
+0.5%, and recent-tail retention uses 5/64. Positive absolute compaction and tool
+output values are stricter ceilings; `reserve_tokens` may only move the trigger
+earlier. Candidate fallback recomputes every derived budget for the fallback
+model's context window.
 Compaction summary input keeps readable reasoning summaries when providers
 expose them, but encrypted/redacted reasoning payloads are represented only as
 small metadata placeholders; those blobs are replay material for compatible
 providers, not useful content for the summary model.
-If a successful summary response contains no text, the runtime retries that
-provider once with up to twice the summary output budget and rebuilds the
-bounded summary request. The retry budget is capped so the fixed summary prompt
-and requested output remain within the compaction trigger budget. If the retry
-still has no summary, or the retry fails, an independently configured summary
-provider falls back once to the active provider. Compaction fails only after
-those bounded recovery steps are exhausted; generic provider failures are not
-treated as empty-summary retries. A canceled or expired parent context stops
-before fallback and does not emit a misleading fallback event. Manual and
-automatic compaction share the active Turn cancellation boundary. Cancellation
-reports `Compaction canceled` and returns before the compact marker append, so
-future active context is unchanged. The active-operation lock linearizes Web
-cancellation against marker commit; a standalone compaction retires its cancel
-function at a successful commit and publishes completion before observational
-post-compact hooks. Successful response attempts remain included in session
-token usage.
+Compaction summary candidates are the optional dedicated `summary_model`, then
+the effective top-level `models` chain, in order and deduplicated by ref.
+Selection shares the runtime model-health state, so a
+candidate in cooldown or reserved for another half-open probe is skipped. Each
+actual attempt refits the bounded summary request to that candidate's context
+window and checkpoints a fresh Request Epoch. Request fitting lowers the
+existing block serialization cap and removes the oldest complete assistant Tool
+Call plus matching user-role Tool Result batches atomically until the estimate
+fits. It preserves every user-authored message and never changes the durable
+transcript or compact selection metadata. If the irreducible request still
+exceeds a candidate's summary-request envelope, the runtime skips that candidate
+without dispatching a Provider request. Generic provider failures advance
+directly through the chain. The first candidate anywhere in the chain that
+returns no text or a max-token-truncated summary receives one semantic retry
+with up to twice its summary output budget; the retry budget remains capped so
+the fixed prompt and requested output fit the summary-request budget. The
+runtime fails compaction only after the available chain and that bounded retry
+are exhausted, without adding a provider-visible `model_change` message.
+A canceled or expired parent context stops before fallback and does not emit a
+misleading fallback event. Manual and automatic compaction share the active Turn
+cancellation boundary. Cancellation reports `Compaction canceled` and returns
+before the compact marker append, so future active context is unchanged. The
+active-operation lock linearizes Web cancellation against marker commit; a
+standalone compaction retires its cancel function at a successful commit and
+publishes completion before observational post-compact hooks. Successful
+response attempts remain included in session token usage.
 The runtime also maintains model-owned Markdown in the session-local
 `notes.md`. The model rewrites the entire document through the `update_notes`
 tool; there is deliberately no `get_notes` tool. The store validates UTF-8 and
@@ -2597,10 +2613,11 @@ the sidecar, so Notes survive compaction without being copied into
 session UI renders the Markdown plus progress derived from `- [ ]` and `- [x]`
 task items.
 
-Each Engine owns one session NotesStore shared by status snapshots, context
-recitation, tools, and compaction. Application session attachment installs the
-store eagerly; partially composed Engines initialize it once from `Session.Dir`
-on first use.
+Each Notes Session Module owns one `NotesStore` shared by its status snapshot,
+context recitation, tool, and compaction capabilities. Application composition
+constructs the default store from the Session directory or explicitly injects
+the Primary Module's store into a managed Side Session. Framework code discovers
+these capabilities through narrow Module interfaces instead of owning the store.
 
 If `notes.md` exists but fails read or validation, the runtime keeps the Notes
 context position and replaces its content with a recovery message containing
@@ -2645,8 +2662,14 @@ Notes items. Configured `compaction.instructions`, per-request instructions,
 and successful `PreCompact` stdout are merged in that order.
 Successful compaction records summary-call token usage and updates the session
 context usage snapshot to the estimated active context after the compact marker.
-`context.compact.summary_retry` records the empty-summary retry, stop reason,
-reasoning-only classification, and previous and increased output budgets.
+`context.compact.summary_retry` records the first incomplete candidate's one
+semantic retry, stop reason, reasoning-only classification, previous and
+increased output budgets, and failed Request Epoch link.
+`context.compact.summary_model_fallback` records every attempted-candidate
+transition with the failed ref, next selected ref (or empty when exhausted),
+error, and failed Request Epoch link. Model-health cooldown and half-open skips
+reuse `llm.fallback` diagnostics and never add a conversation `model_change`
+message during compaction.
 OpenAI-compatible providers receive a stable `prompt_cache_key` per session
 when called through `CompleteWithOptions`; Anthropic providers add ephemeral
 `cache_control` breakpoints to stable system/tool sections. Provider-reported
@@ -3014,17 +3037,23 @@ automatic activation; the model loads a selected guide explicitly.
 
 | Target | Effect |
 |---|---|
+| `make verify-plan [TIER=focused|candidate|final] [BASE=<sha>] [EXPLAIN=1]` | derive the deterministic validation plan from Git changes, write `plan.json` and `plan.md`, and optionally print the gate causes |
+| `make verify-focused PKGS="..."` or `make verify-focused PLANNED=1 [BASE=<sha>]` | prepare a non-overwriting embedded-web stub, provision ripgrep, isolate writable user/Juex/tool state, and run either the required explicit Go package patterns or the explicitly requested dirty-worktree plan |
+| `make verify-candidate [RACE=1] [WEB=1] [BASE=<sha>]` | require a clean worktree before and after the gate, derive race/web gates from the Git plan, apply explicit flags additively, run one deterministic full Go suite, then build one executable |
+| `make verify-final [RACE=1] [WEB=1] [COMPACTION=1] [BASE=<sha>]` | require a clean worktree before and after the gate, consume the same candidate plan, always run live integration and one provider-config-selected smoke, and run compaction when selected by the plan or additive override |
 | `make test` | provision ripgrep on `PATH` with disposable bootstrap Go telemetry, isolate writable user/Juex/Codex/XDG/Windows-app-data/global-Git/Go-telemetry state under a temporary `HOME`, then run `go test ./... -count=1` |
 | `make race` | provision ripgrep on `PATH` with disposable bootstrap Go telemetry, isolate writable user/Juex/Codex/XDG/Windows-app-data/global-Git/Go-telemetry state under a temporary `HOME`, then run `go test ./... -race -count=1` |
 | `make ripgrep` | resolve system ripgrep or cache the verified pinned binary for local tests |
 | `make lint` | `golangci-lint run` |
 | `make build` | `dist/juex` with `git describe`-derived version, commit, build time embedded via `-ldflags -X internal/version.*` |
+| `make build-go` | compile `dist/juex` from the existing synchronized `internal/web/dist` without rebuilding the frontend |
+| `make web-stub` | create a lightweight `internal/web/dist/index.html` only when embedded assets are missing, without overwriting a real frontend build |
 | `make cross` | build the frontend, then produce all 7 managed archives without GoReleaser |
 | `make snapshot` | build the frontend through the GoReleaser before hook, then produce 7 snapshot archives in `dist/` |
 | `make release-dry` | build the frontend through the GoReleaser before hook, then run a non-publishing release |
 | `make integration` | resolve live provider/Codex source paths from the original environment, isolate writable runtime/user-tool state under a temporary `HOME`, then run verbose credential-backed `go test -tags=integration ./tests/e2e/...` |
 | `make provider-smoke` | build-dependent live capability and Schedule-routing smoke for one seeded eligible ref from resolved provider config |
-| `make development-eval` | deterministic tests, build, seeded provider-config live smoke, and a redacted validation record |
+| `make development-eval` | shared candidate deterministic plan, build, seeded provider-config live smoke, and a redacted validation record; the full Go suite already includes `tests/e2e` and is run once |
 | `make clean` | `rm -rf dist` |
 
 The test-home wrapper resolves active mise runtime directories before replacing
@@ -3144,8 +3173,10 @@ and `tests/eval/` covers the local evaluation harness.
 | `tests/e2e` | sealed-catalog full-stack tempdir scenario, all-disabled Module composition, Primary Session Module-set replacement, model-driven Builtin/Skill/model-state/Observable/Extension-MCP catalog flow, installed Extension enable/disable and `ext:<name>` data isolation, apply_patch builtin flow, resume round-trip, canonical session journals and debug logs, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
 | `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracles for conversation/event/tool and Schedule persistence artifacts; retry-isolated live Schedule routing; provider-config candidate selection; eval shell wrappers; development step flags; report directory defaults |
 
-Run the deterministic suite with `make test`.
-Provider-quality smoke tests remain explicit because they use credentials.
+Agents use `make verify-focused`, `make verify-candidate`, and `make
+verify-final` as the stable orchestration surface. Lower-level deterministic
+and live commands remain available for harness development and exact reruns.
+Provider-quality smoke tests remain credential-backed.
 There are two live layers:
 
 - `make integration` resolves `JUEX_PROVIDER_CONFIG` (or the original native
@@ -3182,8 +3213,9 @@ There are two live layers:
   `tests/eval/provider_model_smoke.sh` only for provider matrix migrations or
   full local config audits.
 
-Every feature validation should leave a development record with
-`make development-eval` or `bash tests/eval/development_eval.sh`.
+`make verify-final` is the complete local merge-candidate gate. When a
+standalone development record is required, use `make development-eval` or
+`bash tests/eval/development_eval.sh`.
 The record captures the commit, command exits, provider:model smoke summary,
 Schedule routing coverage, and any quality evaluation results. The live
 compaction quality evaluation is documented in

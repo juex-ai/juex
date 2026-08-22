@@ -172,11 +172,16 @@ func (m *Module) runAt(ctx context.Context, event EventName, point runtimemodule
 	}); ok && len(matcher.Matching(event, req.ToolName)) == 0 {
 		return nil, nil
 	}
-	execution := runtimemodule.PolicyExecution{Point: point, Source: "runtime", ToolName: req.ToolName}
+	execution := runtimemodule.PolicyExecution{
+		Point:    point,
+		Name:     string(event),
+		Source:   string(ModuleID),
+		ToolName: req.ToolName,
+	}
 	if err := runtimemodule.CheckpointPolicy(observer, execution); err != nil {
 		return nil, err
 	}
-	req.Observer = policyObserver{next: observer, point: point}
+	req.Observer = policyObserver{next: observer, event: event, point: point}
 	return m.runner.Run(ctx, req)
 }
 
@@ -194,16 +199,29 @@ func (m *Module) request(event EventName) Request {
 
 type policyObserver struct {
 	next  runtimemodule.PolicyObserver
+	event EventName
 	point runtimemodule.PolicyPoint
 }
 
 func (o policyObserver) execution(hook CommandHook, toolName string) runtimemodule.PolicyExecution {
 	return runtimemodule.PolicyExecution{
 		Point:    o.point,
-		Name:     hook.Name,
+		Name:     policyDisplayName(o.event, hook.Name),
 		Source:   hook.Source,
 		ToolName: toolName,
 	}
+}
+
+func policyDisplayName(event EventName, hookName string) string {
+	eventName := strings.TrimSpace(string(event))
+	hookName = strings.TrimSpace(hookName)
+	if hookName == "" {
+		return eventName
+	}
+	if eventName == "" {
+		return hookName
+	}
+	return eventName + "/" + hookName
 }
 
 func (o policyObserver) HookStarted(hook CommandHook, request Request) {

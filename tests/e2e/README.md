@@ -29,7 +29,7 @@ go test ./tests/e2e -count=1
 | Binary loading | `TestLiveBinary_LoadsSkillsAndMCP` | The compiled `juex` binary loads project skills and a realistic Python MCP server through `juex run --dry-run --json`. |
 | Extension binary loading | `TestLiveBinary_LoadsExtensionSkillsAndMCP` | The compiled `juex` binary validates `juex.extension.json`, then loads `.juex/extensions/<name>/skills` and extension `mcp.json` through `juex run --dry-run --json`. |
 | External Memory Extension | `TestExternalMemoryExtensionEnabledAndDisabled` | An installed Memory bundle contributes MCP tools, a Skill, optional lifecycle Hooks, private Extension data, and `ext:memory` provenance only while enabled. |
-| CLI model override | `TestLiveBinary_ModelFlagUsesUserGlobalProvider` | The compiled binary can select a model from user-global provider config with root `--model` from an empty workdir. |
+| CLI model override | `TestLiveBinary_ModelsFlagUsesUserGlobalProvider` | The compiled binary can replace the model chain from user-global provider config with root `--models` from an empty workdir. |
 | Multi-home config and state | `TestLiveBinary_NonDefaultHomesShareConfigAndIsolateWritableState` | Two compiled-binary instances inherit the default-home provider and sandbox policy, serve different instance Fleet addresses, override their models independently, and write registries, histories, Sessions, and debug logs only below their effective homes. |
 | Provider protocols | `TestLiveBinary_ProviderProtocolAndThinkingMatrix` | The compiled binary routes config to OpenAI Responses, custom OpenAI Chat, and DeepSeek-compatible Chat, including thinking-effort capability gates. |
 | CLI image attachment | `TestLiveBinary_CLIRunAttachmentSendsImageAndPersistsArtifact` | The compiled binary ingests an absolute local image path, sends mixed text and image content through OpenAI Chat, persists a canonical session media reference, and remains replayable after the source file is removed. |
@@ -59,7 +59,7 @@ Build-tagged live integration tests are opt-in because they use credentials
 and real providers:
 
 ```bash
-go test -tags=integration ./tests/e2e/... -run Live -count=1 -v
+go test -tags=integration ./tests/e2e/... -run '^TestLiveConfigs_' -count=1 -v
 ```
 
 They read the top-level model from `JUEX_PROVIDER_CONFIG` or
@@ -103,7 +103,7 @@ Use the smallest run set that still covers the changed behavior:
 | Go unit/package tests | `make test` | Every production code change. |
 | Race suite | `make race` | Concurrency, shutdown, runtime, MCP, tool, event, session, or web changes. |
 | Non-live e2e | `go test ./tests/e2e -count=1` | CLI/runtime/session/provider/web behavior that crosses package boundaries. |
-| Live integration build tag | `make integration` | Verbose credential-backed checks using `JUEX_PROVIDER_CONFIG` or `~/.juex/juex.yaml`. |
+| Integration build tag | `make integration` | Deterministic tagged contracts, then credential-backed `TestLiveConfigs_*` checks using `JUEX_PROVIDER_CONFIG` or `~/.juex/juex.yaml`. |
 
 Run evaluation-layer checks from `tests/eval` when the change affects the eval
 harness, provider smoke, compaction quality, or development validation records.

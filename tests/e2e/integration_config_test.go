@@ -98,7 +98,7 @@ func TestLoadLiveConfigUsesProviderSmokeOnlyOverride(t *testing.T) {
 
 func TestLoadLiveConfigsPreservesNonSelectorProviderEnvironmentOverrides(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "juex.yaml")
-	body := `model: alpha:model-a
+	body := `models: [alpha:model-a]
 providers:
   - id: alpha
     protocol: openai/chat
@@ -139,7 +139,7 @@ providers:
 
 func TestLoadLiveConfigsPreservesYAMLProviderEnvironmentOverrides(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "juex.yaml")
-	body := `model: alpha:model-a
+	body := `models: [alpha:model-a]
 environment:
   variables:
     PROVIDER_API_ID: must-not-replace-alpha
@@ -201,7 +201,7 @@ func TestLoadLiveConfigRequiresCompleteProviderModelOverride(t *testing.T) {
 
 func TestLoadLiveConfigRejectsUnusableExistingConfig(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "juex.yaml")
-	if err := os.WriteFile(configPath, []byte("model: missing:model\nproviders: []\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("models: [missing:model]\nproviders: []\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	isolateLiveConfigTest(t)
@@ -230,7 +230,7 @@ func TestLoadLiveConfigRejectsMissingExplicitConfig(t *testing.T) {
 
 func TestLoadLiveConfigRejectsEmptyCredentials(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "juex.yaml")
-	body := `model: alpha:model-a
+	body := `models: [alpha:model-a]
 providers:
   - id: alpha
     protocol: openai/chat
@@ -255,7 +255,7 @@ providers:
 func writeLiveProviderTestConfig(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "juex.yaml")
-	body := `model: alpha:model-a
+	body := `models: [alpha:model-a]
 providers:
   - id: alpha
     protocol: openai/chat

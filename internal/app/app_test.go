@@ -256,7 +256,7 @@ func TestCompactWithInstructionsWithoutEligibleContextLeavesRuntimeIdle(t *testi
 
 func TestCompactWithInstructionsPromptFailureTerminatesAdmittedTurn(t *testing.T) {
 	a, provider := newStubApp(t)
-	a.Engine.Prompt.ModulePromptContext = func() ([]runtimemodule.PromptSection, error) {
+	a.Engine.Prompt.ModulePromptContext = func() ([]runtimemodule.ContextSection, error) {
 		return nil, errors.New("memory unavailable")
 	}
 
@@ -286,7 +286,7 @@ func TestAppNewModelCandidatePrecedenceAndHealthInjection(t *testing.T) {
 	injectedSingle := &stubProvider{}
 	health := llm.NewModelHealth(llm.ModelHealthOptions{})
 	a, err := New(Options{
-		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, FallbackModels: []string{"missing:model"}, NotifyModelChanges: true},
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, Models: []string{"openai:m", "missing:model"}, NotifyModelChanges: true},
 		Provider: injectedSingle,
 		ModelCandidates: []runtime.ModelCandidate{
 			{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
@@ -309,7 +309,7 @@ func TestAppNewInjectedSingleProviderDisablesConfigFallback(t *testing.T) {
 	dir := t.TempDir()
 	provider := &stubProvider{}
 	a, err := New(Options{
-		Config:     config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, FallbackModels: []string{"missing:model"}},
+		Config:     config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, Models: []string{"openai:m", "missing:model"}},
 		Provider:   provider,
 		WorkDir:    dir,
 		DisableMCP: true,
@@ -855,6 +855,45 @@ func TestApp_NewInjectedProviderDoesNotConstructSummaryProvider(t *testing.T) {
 	}
 }
 
+func TestApp_NewPreservesConfiguredSummaryModelContextWindow(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+	t.Setenv("JUEX_HOME", filepath.Join(dir, "juex-home"))
+	configPath := filepath.Join(dir, "juex.yaml")
+	mustWriteAppTestFile(t, configPath, `models: [main:gpt-large]
+providers:
+  - id: main
+    protocol: openai/chat
+    base_url: https://main.example.com
+    api_key: sk-main
+    models:
+      - id: gpt-large
+        context_window: 256000
+  - id: compact
+    protocol: openai/chat
+    base_url: https://compact.example.com
+    api_key: sk-compact
+    models:
+      - id: gpt-small
+        context_window: 30000
+compaction:
+  summary_model: compact:gpt-small
+`)
+	cfg, err := config.LoadFromFileForWorkDirForValidation(configPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AgentStateDir = filepath.Join(dir, "state")
+	a, err := New(Options{Config: cfg, WorkDir: dir, DisableMCP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if a.Engine.ContextWindow != 256000 || a.Engine.SummaryContextWindow != 30000 {
+		t.Fatalf("context windows = serving:%d summary:%d", a.Engine.ContextWindow, a.Engine.SummaryContextWindow)
+	}
+}
+
 func TestApp_HandleObservationStartsTurnWhenNoActiveTurn(t *testing.T) {
 	reply := llm.TextMessage(llm.RoleAssistant, "ack")
 	a, prov := newStubApp(t, llm.Response{Message: reply, StopReason: llm.StopEndTurn})
@@ -1306,7 +1345,10 @@ func TestApp_NewAndReplacementRunSessionStartHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(data)
-	if !strings.Contains(body, `"type":"hook.completed"`) || !strings.Contains(body, `"event_name":"SessionStart"`) {
+	if !strings.Contains(body, `"type":"policy.completed"`) ||
+		!strings.Contains(body, `"module_id":"hooks"`) ||
+		!strings.Contains(body, `"policy_point":"session_start"`) ||
+		!strings.Contains(body, `"name":"SessionStart/startup"`) {
 		t.Fatalf("events missing SessionStart hook:\n%s", body)
 	}
 
@@ -1321,7 +1363,10 @@ func TestApp_NewAndReplacementRunSessionStartHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	body = string(data)
-	if !strings.Contains(body, `"type":"hook.completed"`) || !strings.Contains(body, `"event_name":"SessionStart"`) {
+	if !strings.Contains(body, `"type":"policy.completed"`) ||
+		!strings.Contains(body, `"module_id":"hooks"`) ||
+		!strings.Contains(body, `"policy_point":"session_start"`) ||
+		!strings.Contains(body, `"name":"SessionStart/startup"`) {
 		t.Fatalf("replacement events missing SessionStart hook:\n%s", body)
 	}
 	oldDebug, err := os.ReadFile(filepath.Join(oldSessionDir, "logs", "debug.log"))
@@ -1332,10 +1377,10 @@ func TestApp_NewAndReplacementRunSessionStartHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(string(oldDebug), "event=hook.completed"); got != 1 {
+	if got := strings.Count(string(oldDebug), "event=policy.completed"); got != 1 {
 		t.Fatalf("old session completed hook logs = %d, want only its initial SessionStart", got)
 	}
-	if got := strings.Count(string(newDebug), "event=hook.completed"); got != 1 {
+	if got := strings.Count(string(newDebug), "event=policy.completed"); got != 1 {
 		t.Fatalf("replacement session completed hook logs = %d, want its SessionStart", got)
 	}
 }
@@ -1368,7 +1413,9 @@ commands:
 		t.Fatal(err)
 	}
 	body := string(data)
-	if !strings.Contains(body, `"name":"ext-startup"`) || !strings.Contains(body, `"source":"ext:demo"`) {
+	if !strings.Contains(body, `"module_id":"hooks"`) ||
+		!strings.Contains(body, `"name":"SessionStart/ext-startup"`) ||
+		!strings.Contains(body, `"source":"ext:demo"`) {
 		t.Fatalf("events missing extension SessionStart hook source:\n%s", body)
 	}
 }
@@ -1699,9 +1746,6 @@ func TestAppHookHelperProcess(t *testing.T) {
 	case "deny":
 		_, _ = os.Stdout.WriteString("startup blocked")
 		os.Exit(2)
-	case "wait":
-		time.Sleep(time.Minute)
-		os.Exit(0)
 	}
 	os.Exit(0)
 }

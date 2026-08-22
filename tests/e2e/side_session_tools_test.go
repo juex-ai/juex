@@ -13,6 +13,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -34,7 +35,7 @@ func (p *sideSessionToolProvider) Complete(ctx context.Context, _ string, histor
 				ToolUseID: "finish-goal",
 				ToolName:  juexruntime.GoalToolUpdate,
 				Input: map[string]any{
-					"status":        string(juexruntime.GoalStatusSuccess),
+					"status":        string(workmem.GoalStatusSuccess),
 					"status_reason": "subscribed worker result received",
 				},
 			}}}, StopReason: llm.StopToolUse}, nil
@@ -125,11 +126,15 @@ func TestEndToEnd_SideSessionToolDelegation(t *testing.T) {
 	case <-time.After(sideSessionE2ETimeout):
 		t.Fatal("side worker did not start")
 	}
-	goal, err := a.Engine.GoalState.Snapshot()
+	goalState, _ := juexruntime.SessionStateStoresFromModules(a.Engine.SessionRuntimeSnapshot().Modules)
+	if goalState == nil {
+		t.Fatal("active Goal Module did not provide a store")
+	}
+	goal, err := goalState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goal.Status != juexruntime.GoalStatusInProgress || goal.ContinuationCount != 0 {
+	if goal.Status != workmem.GoalStatusInProgress || goal.ContinuationCount != 0 {
 		t.Fatalf("waiting Goal = %+v", goal)
 	}
 	close(provider.releaseChild)
@@ -142,11 +147,11 @@ func TestEndToEnd_SideSessionToolDelegation(t *testing.T) {
 					t.Fatalf("unexpected Goal continuation in history: %+v", message)
 				}
 			}
-			goal, err := a.Engine.GoalState.Snapshot()
+			goal, err := goalState.Snapshot()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if goal.Status != juexruntime.GoalStatusSuccess || goal.ContinuationCount != 0 {
+			if goal.Status != workmem.GoalStatusSuccess || goal.ContinuationCount != 0 {
 				t.Fatalf("completed Goal = %+v", goal)
 			}
 			infos, err := session.List(filepath.Join(stateDir, "sessions"))

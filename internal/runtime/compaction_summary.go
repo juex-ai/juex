@@ -5,9 +5,21 @@ import (
 
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime/contextbudget"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 )
 
-type compactionSummaryState = contextbudget.SummaryState
+type CompactionSummaryState = contextbudget.SummaryState
+type CompactionSummaryGoal = contextbudget.SummaryGoal
+
+type compactionSummaryState = CompactionSummaryState
+
+type GoalCompactionStateProvider interface {
+	GoalCompactionState() (*CompactionSummaryGoal, error)
+}
+
+type NotesCompactionStateProvider interface {
+	NotesCompactionState() (string, error)
+}
 
 func buildCompactionSummaryRequest(base string, previous llm.Message, input []llm.Message, state compactionSummaryState, policy compactionPolicy, instructions string) (string, []llm.Message) {
 	system, history := contextbudget.BuildCompactionSummaryRequest(base, previous, input, state, policy, instructions)
@@ -37,27 +49,33 @@ func compactionSummaryFits(sys string, previous llm.Message, input []llm.Message
 
 func (e *Engine) compactionSummaryStateLocked() (compactionSummaryState, error) {
 	var summaryState compactionSummaryState
-	if store := e.goalStateStoreLocked(); store != nil {
-		state, err := store.Snapshot()
-		if err != nil {
-			return compactionSummaryState{}, fmt.Errorf("compaction goal state: %w", err)
-		}
-		if snapshot := state.StatusSnapshot(); snapshot != nil {
-			summaryState.Goal = &contextbudget.SummaryGoal{
-				Description:  snapshot.Description,
-				Acceptance:   snapshot.Acceptance,
-				Status:       string(snapshot.Status),
-				StatusReason: snapshot.StatusReason,
-			}
-		}
+	var goalProvider, notesProvider runtimemodule.ID
+	modules := e.SessionRuntimeSnapshot().Modules
+	if modules == nil {
+		return summaryState, nil
 	}
-	if store := e.notesStoreLocked(); store != nil {
-		snapshot, err := store.Snapshot()
-		if err != nil {
-			e.recordNotesContextError(store, err)
-		} else {
-			e.clearNotesContextError()
-			summaryState.Notes = snapshot.Content
+	for _, module := range modules.Modules() {
+		if provider, ok := module.(GoalCompactionStateProvider); ok {
+			if goalProvider != "" {
+				return compactionSummaryState{}, fmt.Errorf("compaction state: goal provided by modules %q and %q", goalProvider, module.ID())
+			}
+			goalProvider = module.ID()
+			goal, err := provider.GoalCompactionState()
+			if err != nil {
+				return compactionSummaryState{}, fmt.Errorf("compaction goal state from module %q: %w", module.ID(), err)
+			}
+			summaryState.Goal = goal
+		}
+		if provider, ok := module.(NotesCompactionStateProvider); ok {
+			if notesProvider != "" {
+				return compactionSummaryState{}, fmt.Errorf("compaction state: notes provided by modules %q and %q", notesProvider, module.ID())
+			}
+			notesProvider = module.ID()
+			notes, err := provider.NotesCompactionState()
+			if err != nil {
+				return compactionSummaryState{}, fmt.Errorf("compaction notes state from module %q: %w", module.ID(), err)
+			}
+			summaryState.Notes = notes
 		}
 	}
 	return summaryState, nil

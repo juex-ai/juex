@@ -18,12 +18,12 @@ import (
 )
 
 const (
-	RequestEpochType         = "provider.request_epoch"
-	HookContextQueuedType    = "provider.hook_context.queued"
-	SchemaVersion            = 1
-	MaxInlineSnapshotBytes   = 256 * 1024
-	MaxHookContextBatchBytes = 1 * 1024 * 1024
-	MaxRequestEpochBytes     = 2 * 1024 * 1024
+	RequestEpochType           = "provider.request_epoch"
+	PolicyContextQueuedType    = "provider.policy_context.queued"
+	SchemaVersion              = 1
+	MaxInlineSnapshotBytes     = 256 * 1024
+	MaxPolicyContextBatchBytes = 1 * 1024 * 1024
+	MaxRequestEpochBytes       = 2 * 1024 * 1024
 )
 
 type SafeProvider struct {
@@ -123,61 +123,61 @@ type MessageRef struct {
 }
 
 type RequestInput struct {
-	Purpose               string              `json:"purpose,omitempty"`
-	Provider              SafeProvider        `json:"provider"`
-	ContextWindow         int                 `json:"context_window,omitempty"`
-	MaxOutputTokens       int                 `json:"max_output_tokens,omitempty"`
-	CachePolicy           SafeCachePolicy     `json:"cache_policy,omitempty"`
-	SystemPrompt          string              `json:"system_prompt,omitempty"`
-	SystemPromptParts     []string            `json:"system_prompt_parts,omitempty"`
-	SystemPromptJoiner    string              `json:"system_prompt_joiner,omitempty"`
-	Tools                 []llm.ToolSpec      `json:"tools,omitempty"`
-	History               []llm.Message       `json:"history"`
-	Compaction            CompactionSelection `json:"compaction,omitempty"`
-	HookContextMessageIDs []string            `json:"hook_context_message_ids,omitempty"`
+	Purpose                 string              `json:"purpose,omitempty"`
+	Provider                SafeProvider        `json:"provider"`
+	ContextWindow           int                 `json:"context_window,omitempty"`
+	MaxOutputTokens         int                 `json:"max_output_tokens,omitempty"`
+	CachePolicy             SafeCachePolicy     `json:"cache_policy,omitempty"`
+	SystemPrompt            string              `json:"system_prompt,omitempty"`
+	SystemPromptParts       []string            `json:"system_prompt_parts,omitempty"`
+	SystemPromptJoiner      string              `json:"system_prompt_joiner,omitempty"`
+	Tools                   []llm.ToolSpec      `json:"tools,omitempty"`
+	History                 []llm.Message       `json:"history"`
+	Compaction              CompactionSelection `json:"compaction,omitempty"`
+	PolicyContextMessageIDs []string            `json:"policy_context_message_ids,omitempty"`
 }
 
 type RequestEpoch struct {
-	EpochID               string              `json:"epoch_id"`
-	Purpose               string              `json:"purpose"`
-	Iter                  int                 `json:"iter"`
-	Attempt               int                 `json:"attempt"`
-	Provider              SafeProvider        `json:"provider"`
-	ContextWindow         int                 `json:"context_window,omitempty"`
-	MaxOutputTokens       int                 `json:"max_output_tokens,omitempty"`
-	CachePolicy           SafeCachePolicy     `json:"cache_policy,omitempty"`
-	SystemPromptSnapshot  Snapshot            `json:"system_prompt"`
-	ToolCatalogSnapshot   Snapshot            `json:"tool_catalog"`
-	HistoryDigest         string              `json:"history_digest"`
-	HistoryMessageIDs     []string            `json:"history_message_ids"`
-	Messages              []MessageRef        `json:"messages"`
-	Compaction            CompactionSelection `json:"compaction,omitempty"`
-	HookContextMessageIDs []string            `json:"hook_context_message_ids,omitempty"`
-	RequestDigest         string              `json:"request_digest"`
+	EpochID                 string              `json:"epoch_id"`
+	Purpose                 string              `json:"purpose"`
+	Iter                    int                 `json:"iter"`
+	Attempt                 int                 `json:"attempt"`
+	Provider                SafeProvider        `json:"provider"`
+	ContextWindow           int                 `json:"context_window,omitempty"`
+	MaxOutputTokens         int                 `json:"max_output_tokens,omitempty"`
+	CachePolicy             SafeCachePolicy     `json:"cache_policy,omitempty"`
+	SystemPromptSnapshot    Snapshot            `json:"system_prompt"`
+	ToolCatalogSnapshot     Snapshot            `json:"tool_catalog"`
+	HistoryDigest           string              `json:"history_digest"`
+	HistoryMessageIDs       []string            `json:"history_message_ids"`
+	Messages                []MessageRef        `json:"messages"`
+	Compaction              CompactionSelection `json:"compaction,omitempty"`
+	PolicyContextMessageIDs []string            `json:"policy_context_message_ids,omitempty"`
+	RequestDigest           string              `json:"request_digest"`
 }
 
 type RequestEpochPayload struct {
 	Epoch RequestEpoch `json:"epoch"`
 }
 
-type HookContextQueuedPayload struct {
+type PolicyContextQueuedPayload struct {
 	Messages []llm.Message `json:"messages"`
 }
 
 type digestEnvelope struct {
-	SchemaVersion         int                 `json:"schema_version"`
-	Purpose               string              `json:"purpose"`
-	Provider              SafeProvider        `json:"provider"`
-	ContextWindow         int                 `json:"context_window,omitempty"`
-	MaxOutputTokens       int                 `json:"max_output_tokens,omitempty"`
-	CachePolicy           SafeCachePolicy     `json:"cache_policy,omitempty"`
-	SystemPromptDigest    string              `json:"system_prompt_digest"`
-	ToolCatalogDigest     string              `json:"tool_catalog_digest"`
-	HistoryDigest         string              `json:"history_digest"`
-	HistoryMessageIDs     []string            `json:"history_message_ids"`
-	Messages              []messageDigestRef  `json:"messages"`
-	Compaction            CompactionSelection `json:"compaction,omitempty"`
-	HookContextMessageIDs []string            `json:"hook_context_message_ids,omitempty"`
+	SchemaVersion           int                 `json:"schema_version"`
+	Purpose                 string              `json:"purpose"`
+	Provider                SafeProvider        `json:"provider"`
+	ContextWindow           int                 `json:"context_window,omitempty"`
+	MaxOutputTokens         int                 `json:"max_output_tokens,omitempty"`
+	CachePolicy             SafeCachePolicy     `json:"cache_policy,omitempty"`
+	SystemPromptDigest      string              `json:"system_prompt_digest"`
+	ToolCatalogDigest       string              `json:"tool_catalog_digest"`
+	HistoryDigest           string              `json:"history_digest"`
+	HistoryMessageIDs       []string            `json:"history_message_ids"`
+	Messages                []messageDigestRef  `json:"messages"`
+	Compaction              CompactionSelection `json:"compaction,omitempty"`
+	PolicyContextMessageIDs []string            `json:"policy_context_message_ids,omitempty"`
 }
 
 type messageDigestRef struct {
@@ -196,9 +196,9 @@ func BuildRequestEpoch(input RequestInput) (RequestEpoch, error) {
 	}
 	historyIDs := make([]string, len(input.History))
 	messageRefs := make([]MessageRef, len(input.History))
-	hookIDs := make(map[string]struct{}, len(input.HookContextMessageIDs))
-	for _, id := range input.HookContextMessageIDs {
-		hookIDs[id] = struct{}{}
+	policyIDs := make(map[string]struct{}, len(input.PolicyContextMessageIDs))
+	for _, id := range input.PolicyContextMessageIDs {
+		policyIDs[id] = struct{}{}
 	}
 	for index, message := range input.History {
 		if message.ID == "" {
@@ -209,7 +209,7 @@ func BuildRequestEpoch(input RequestInput) (RequestEpoch, error) {
 		if err != nil {
 			return RequestEpoch{}, fmt.Errorf("provenance: history message digest at index %d: %w", index, err)
 		}
-		source := messageSource(message, hookIDs, purpose)
+		source := messageSource(message, policyIDs, purpose)
 		messageRefs[index] = MessageRef{ID: message.ID, Source: source, ContentDigest: messageSnapshot.Digest}
 		if messageSnapshotRequired(source) {
 			if messageSnapshot.Omitted != "" {
@@ -232,33 +232,33 @@ func BuildRequestEpoch(input RequestInput) (RequestEpoch, error) {
 	}
 	historyDigest := digest(historyRaw)
 	envelope := digestEnvelope{
-		SchemaVersion:         SchemaVersion,
-		Purpose:               purpose,
-		Provider:              cloneSafeProvider(input.Provider),
-		ContextWindow:         input.ContextWindow,
-		MaxOutputTokens:       input.MaxOutputTokens,
-		CachePolicy:           input.CachePolicy,
-		SystemPromptDigest:    systemSnapshot.Digest,
-		ToolCatalogDigest:     toolSnapshot.Digest,
-		HistoryDigest:         historyDigest,
-		HistoryMessageIDs:     append([]string(nil), historyIDs...),
-		Messages:              messageDigestRefs(messageRefs),
-		Compaction:            cloneCompaction(input.Compaction),
-		HookContextMessageIDs: append([]string(nil), input.HookContextMessageIDs...),
+		SchemaVersion:           SchemaVersion,
+		Purpose:                 purpose,
+		Provider:                cloneSafeProvider(input.Provider),
+		ContextWindow:           input.ContextWindow,
+		MaxOutputTokens:         input.MaxOutputTokens,
+		CachePolicy:             input.CachePolicy,
+		SystemPromptDigest:      systemSnapshot.Digest,
+		ToolCatalogDigest:       toolSnapshot.Digest,
+		HistoryDigest:           historyDigest,
+		HistoryMessageIDs:       append([]string(nil), historyIDs...),
+		Messages:                messageDigestRefs(messageRefs),
+		Compaction:              cloneCompaction(input.Compaction),
+		PolicyContextMessageIDs: append([]string(nil), input.PolicyContextMessageIDs...),
 	}
 	epoch := RequestEpoch{
-		Purpose:               purpose,
-		Provider:              envelope.Provider,
-		ContextWindow:         input.ContextWindow,
-		MaxOutputTokens:       input.MaxOutputTokens,
-		CachePolicy:           input.CachePolicy,
-		SystemPromptSnapshot:  systemSnapshot,
-		ToolCatalogSnapshot:   toolSnapshot,
-		HistoryDigest:         historyDigest,
-		HistoryMessageIDs:     historyIDs,
-		Messages:              messageRefs,
-		Compaction:            envelope.Compaction,
-		HookContextMessageIDs: envelope.HookContextMessageIDs,
+		Purpose:                 purpose,
+		Provider:                envelope.Provider,
+		ContextWindow:           input.ContextWindow,
+		MaxOutputTokens:         input.MaxOutputTokens,
+		CachePolicy:             input.CachePolicy,
+		SystemPromptSnapshot:    systemSnapshot,
+		ToolCatalogSnapshot:     toolSnapshot,
+		HistoryDigest:           historyDigest,
+		HistoryMessageIDs:       historyIDs,
+		Messages:                messageRefs,
+		Compaction:              envelope.Compaction,
+		PolicyContextMessageIDs: envelope.PolicyContextMessageIDs,
 	}
 	epoch.RequestDigest, err = requestDigest(epoch)
 	if err != nil {
@@ -269,19 +269,19 @@ func BuildRequestEpoch(input RequestInput) (RequestEpoch, error) {
 
 func requestDigest(epoch RequestEpoch) (string, error) {
 	envelope := digestEnvelope{
-		SchemaVersion:         SchemaVersion,
-		Purpose:               epoch.Purpose,
-		Provider:              cloneSafeProvider(epoch.Provider),
-		ContextWindow:         epoch.ContextWindow,
-		MaxOutputTokens:       epoch.MaxOutputTokens,
-		CachePolicy:           epoch.CachePolicy,
-		SystemPromptDigest:    epoch.SystemPromptSnapshot.Digest,
-		ToolCatalogDigest:     epoch.ToolCatalogSnapshot.Digest,
-		HistoryDigest:         epoch.HistoryDigest,
-		HistoryMessageIDs:     append([]string(nil), epoch.HistoryMessageIDs...),
-		Messages:              messageDigestRefs(epoch.Messages),
-		Compaction:            cloneCompaction(epoch.Compaction),
-		HookContextMessageIDs: append([]string(nil), epoch.HookContextMessageIDs...),
+		SchemaVersion:           SchemaVersion,
+		Purpose:                 epoch.Purpose,
+		Provider:                cloneSafeProvider(epoch.Provider),
+		ContextWindow:           epoch.ContextWindow,
+		MaxOutputTokens:         epoch.MaxOutputTokens,
+		CachePolicy:             epoch.CachePolicy,
+		SystemPromptDigest:      epoch.SystemPromptSnapshot.Digest,
+		ToolCatalogDigest:       epoch.ToolCatalogSnapshot.Digest,
+		HistoryDigest:           epoch.HistoryDigest,
+		HistoryMessageIDs:       append([]string(nil), epoch.HistoryMessageIDs...),
+		Messages:                messageDigestRefs(epoch.Messages),
+		Compaction:              cloneCompaction(epoch.Compaction),
+		PolicyContextMessageIDs: append([]string(nil), epoch.PolicyContextMessageIDs...),
 	}
 	canonical, err := json.Marshal(envelope)
 	if err != nil {
@@ -302,9 +302,9 @@ func messageDigestRefs(messages []MessageRef) []messageDigestRef {
 	return refs
 }
 
-func messageSource(message llm.Message, hookIDs map[string]struct{}, purpose string) string {
-	if _, ok := hookIDs[message.ID]; ok {
-		return "hook_context"
+func messageSource(message llm.Message, policyIDs map[string]struct{}, purpose string) string {
+	if _, ok := policyIDs[message.ID]; ok {
+		return "policy_context"
 	}
 	if purpose == "compaction" {
 		return "compaction_input"
@@ -409,7 +409,7 @@ func cloneCompaction(selection CompactionSelection) CompactionSelection {
 type Tracker struct {
 	mu        sync.Mutex
 	queued    []llm.Message
-	hookIDs   map[string]struct{}
+	policyIDs map[string]struct{}
 	known     map[string]struct{}
 	epochs    map[string]string
 	purposes  map[string]string
@@ -419,7 +419,7 @@ type Tracker struct {
 
 func NewTracker() *Tracker {
 	return &Tracker{
-		hookIDs:   make(map[string]struct{}),
+		policyIDs: make(map[string]struct{}),
 		known:     make(map[string]struct{}),
 		epochs:    make(map[string]string),
 		purposes:  make(map[string]string),
@@ -445,19 +445,19 @@ func (t *Tracker) ReplayEvent(event events.Event) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	switch event.Type {
-	case HookContextQueuedType:
-		var payload HookContextQueuedPayload
+	case PolicyContextQueuedType:
+		var payload PolicyContextQueuedPayload
 		if err := decodePayload(event.Payload, &payload); err != nil {
-			return fmt.Errorf("provenance: recover queued hook context: %w", err)
+			return fmt.Errorf("provenance: recover queued policy context: %w", err)
 		}
-		if err := ValidateHookContextQueued(payload); err != nil {
+		if err := ValidatePolicyContextQueued(payload); err != nil {
 			return err
 		}
 		for _, message := range payload.Messages {
-			if _, duplicate := t.hookIDs[message.ID]; duplicate {
-				return fmt.Errorf("provenance: duplicate queued hook context id %q", message.ID)
+			if _, duplicate := t.policyIDs[message.ID]; duplicate {
+				return fmt.Errorf("provenance: duplicate queued policy context id %q", message.ID)
 			}
-			t.hookIDs[message.ID] = struct{}{}
+			t.policyIDs[message.ID] = struct{}{}
 			t.queued = append(t.queued, message)
 		}
 	case RequestEpochType:
@@ -512,21 +512,21 @@ func (t *Tracker) AddQueued(message llm.Message) {
 		return
 	}
 	t.mu.Lock()
-	t.hookIDs[message.ID] = struct{}{}
+	t.policyIDs[message.ID] = struct{}{}
 	t.queued = append(t.queued, message)
 	t.mu.Unlock()
 }
 
-func (t *Tracker) PendingHookContext() []llm.Message {
+func (t *Tracker) PendingPolicyContext() []llm.Message {
 	if t == nil {
 		return nil
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.pendingHookContextLocked()
+	return t.pendingPolicyContextLocked()
 }
 
-func (t *Tracker) pendingHookContextLocked() []llm.Message {
+func (t *Tracker) pendingPolicyContextLocked() []llm.Message {
 	pending := make([]llm.Message, 0, len(t.queued))
 	pending = append(pending, t.queued...)
 	return pending
@@ -587,10 +587,10 @@ func (t *Tracker) recordEpochLocked(epoch RequestEpoch) {
 			recordKnownSnapshot(*message.Snapshot, t.known)
 		}
 	}
-	t.releaseConsumedHookContextLocked(epoch.HookContextMessageIDs)
+	t.releaseConsumedPolicyContextLocked(epoch.PolicyContextMessageIDs)
 }
 
-func (t *Tracker) releaseConsumedHookContextLocked(ids []string) {
+func (t *Tracker) releaseConsumedPolicyContextLocked(ids []string) {
 	if len(ids) == 0 || len(t.queued) == 0 {
 		return
 	}
@@ -802,24 +802,24 @@ func compositeSnapshotDigest(parts []Snapshot, joiner string) (string, error) {
 	return digest(composition), nil
 }
 
-func ValidateHookContextQueued(payload HookContextQueuedPayload) error {
+func ValidatePolicyContextQueued(payload PolicyContextQueuedPayload) error {
 	if len(payload.Messages) == 0 {
-		return fmt.Errorf("provenance: queued hook context requires messages")
+		return fmt.Errorf("provenance: queued policy context requires messages")
 	}
 	seen := make(map[string]struct{}, len(payload.Messages))
 	for _, message := range payload.Messages {
 		if message.ID == "" || message.Kind != llm.MessageKindRuntimeContext || message.Role != llm.RoleUser {
-			return fmt.Errorf("provenance: queued hook context requires stable user runtime-context messages")
+			return fmt.Errorf("provenance: queued policy context requires stable user runtime-context messages")
 		}
 		if _, duplicate := seen[message.ID]; duplicate {
-			return fmt.Errorf("provenance: queued hook context id %q is duplicated", message.ID)
+			return fmt.Errorf("provenance: queued policy context id %q is duplicated", message.ID)
 		}
 		seen[message.ID] = struct{}{}
 	}
 	if raw, err := json.Marshal(payload); err != nil {
-		return fmt.Errorf("provenance: encode queued hook context: %w", err)
-	} else if len(raw) > MaxHookContextBatchBytes {
-		return fmt.Errorf("provenance: queued hook context exceeds %d bytes", MaxHookContextBatchBytes)
+		return fmt.Errorf("provenance: encode queued policy context: %w", err)
+	} else if len(raw) > MaxPolicyContextBatchBytes {
+		return fmt.Errorf("provenance: queued policy context exceeds %d bytes", MaxPolicyContextBatchBytes)
 	}
 	return nil
 }

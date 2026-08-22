@@ -5,11 +5,65 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 )
+
+func TestCIWorkflowSerializesWindowsRacePackages(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs struct {
+			Test struct {
+				Steps []struct {
+					Name string `yaml:"name"`
+					If   string `yaml:"if"`
+					Run  string `yaml:"run"`
+				} `yaml:"steps"`
+			} `yaml:"test"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatalf("parse CI workflow: %v", err)
+	}
+
+	want := map[string]struct {
+		condition string
+		command   string
+	}{
+		"Run Go race tests": {
+			condition: "matrix.os != 'windows-latest'",
+			command:   "go test ./... -race -count=1",
+		},
+		"Run Go race tests serially on Windows": {
+			condition: "matrix.os == 'windows-latest'",
+			command:   "go test ./... -race -count=1 -p=1",
+		},
+	}
+	for _, step := range workflow.Jobs.Test.Steps {
+		expectation, ok := want[step.Name]
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(step.If) != expectation.condition || strings.TrimSpace(step.Run) != expectation.command {
+			t.Errorf("CI step %q = if %q run %q, want if %q run %q", step.Name, step.If, step.Run, expectation.condition, expectation.command)
+		}
+		delete(want, step.Name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing CI race steps: %#v", want)
+	}
+}
 
 func TestWriteModelConfigSelectsTopLevelAndExplicitRef(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
@@ -21,7 +75,7 @@ func TestWriteModelConfigSelectsTopLevelAndExplicitRef(t *testing.T) {
 	}
 
 	source := filepath.Join(t.TempDir(), "juex.yaml")
-	body := `model: alpha:model-a
+	body := `models: [alpha:model-a]
 environment:
   variables:
     PROVIDER_API_ID: must-not-replace-alpha
@@ -73,7 +127,7 @@ fleet:
 				t.Fatal(err)
 			}
 			var selected struct {
-				Model       string `yaml:"model"`
+				Models      []string `yaml:"models"`
 				Environment struct {
 					Variables map[string]string `yaml:"variables"`
 				} `yaml:"environment"`
@@ -87,8 +141,8 @@ fleet:
 			if err := yaml.Unmarshal(data, &selected); err != nil {
 				t.Fatalf("parse selected config: %v\n%s", err, data)
 			}
-			if selected.Model != tt.want {
-				t.Fatalf("model = %q, want %q", selected.Model, tt.want)
+			if len(selected.Models) != 1 || selected.Models[0] != tt.want {
+				t.Fatalf("models = %q, want [%q]", selected.Models, tt.want)
 			}
 			if len(selected.Providers) != 1 || len(selected.Providers[0].Models) != 1 {
 				t.Fatalf("selected provider shape = %#v", selected.Providers)
@@ -501,17 +555,20 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        assert status == 0 and refs == ['provider-on:alpha', 'provider-on:beta'], refs",
 		"        status, refs, summary, _ = run('blocked', '--only', 'provider-off:blocked')",
 		"        assert status == 1 and refs == [] and summary['failure_category'] == 'provider_unavailable', summary",
+		"        assert summary['outcome'] == 'provider_unavailable' and summary['blocks_merge'] is True and summary['recommended_action'] == 'stop', summary",
 		"        assert summary['selected_provider_models'] == [] and summary['eligible_candidate_count'] == 2, summary",
 		"        status, refs, summary, _ = run('missing-config', source=work / 'missing.yaml')",
-		"        assert status == 1 and refs == [] and summary['failure_category'] == 'provider_unavailable', summary",
+		"        assert status == 1 and refs == [] and summary['failure_category'] == 'environment_failure', summary",
+		"        assert summary['outcome'] == 'environment_failure' and summary['matched_rule'] == 'environment-invalid-config' and summary['recommended_action'] == 'fix_environment', summary",
 		"        empty_config = work / 'empty.yaml'",
 		"        empty_config.write_text('providers: []\\n', encoding='utf-8')",
 		"        status, refs, summary, _ = run('zero-candidates', source=empty_config)",
 		"        assert status == 1 and refs == [] and summary['eligible_candidate_count'] == 0, summary",
+		"        assert summary['outcome'] == 'provider_unavailable' and summary['matched_rule'] == 'provider-selection-unavailable', summary",
 		"        invalid_container = work / 'invalid-container.yaml'",
 		"        invalid_container.write_text('providers:\\n  provider-on:\\n    id: provider-on\\n    models: [{id: alpha}]\\n', encoding='utf-8')",
 		"        status, refs, summary, _ = run('invalid-container', source=invalid_container)",
-		"        assert status == 1 and refs == [] and summary['failure_category'] == 'provider_unavailable', summary",
+		"        assert status == 1 and refs == [] and summary['failure_category'] == 'environment_failure', summary",
 		"        assert \"'providers' must be a YAML sequence\" in summary['error'], summary",
 		"        invalid_full_schema = work / 'invalid-full-schema.yaml'",
 		"        invalid_full_schema.write_text('providers:\\n  - id: provider-on\\n    models: [{id: alpha}]\\n  - id: unselected\\n    protcol: openai/chat\\n    models: [{id: unused}]\\n', encoding='utf-8')",
@@ -520,7 +577,7 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        invalid_context = work / 'invalid-context.yaml'",
 		"        invalid_context.write_text('providers:\\n  - id: provider-on\\n    models: [{id: alpha, context_window: [32000]}]\\n', encoding='utf-8')",
 		"        status, refs, summary, _ = run('invalid-context', source=invalid_context)",
-		"        assert status == 1 and refs == [] and summary['failure_category'] == 'provider_unavailable', summary",
+		"        assert status == 1 and refs == [] and summary['failure_category'] == 'environment_failure', summary",
 		"        assert 'context_window must be a YAML integer' in summary['error'], summary",
 		"        malformed = work / 'malformed.yaml'",
 		"        malformed.write_text('providers:\\n  - id: bad\\n    api_key: never-report-malformed-key: [\\n', encoding='utf-8')",
@@ -528,11 +585,13 @@ func TestProviderSmokeDynamicScopesReportsAndPreservesSelectedFailure(t *testing
 		"        with contextlib.redirect_stdout(terminal), contextlib.redirect_stderr(terminal):",
 		"            status, refs, summary, _ = run('malformed', source=malformed)",
 		"        assert status == 1 and refs == [] and summary['error'] == 'provider config YAML is invalid', summary",
+		"        assert summary['outcome'] == 'environment_failure' and summary['matched_rule'] == 'environment-invalid-config', summary",
 		"        assert 'never-report-malformed-key' not in terminal.getvalue(), terminal.getvalue()",
 		"        fail_selected = True",
 		"        status, refs, summary, _ = run('selected-failure', '--only', 'provider-on:beta')",
 		"        assert status == 1 and refs == ['provider-on:beta'], refs",
 		"        assert summary['selected_provider_model'] == 'provider-on:beta' and summary['failed'] == 1, summary",
+		"        assert summary['outcome'] == 'product_failure' and summary['recommended_action'] == 'fix_code', summary",
 		"        report_text = ''.join(path.read_text(encoding='utf-8', errors='replace') for path in work.glob('report-*/*') if path.is_file())",
 		"        for secret in ['never-report-env-token', 'never-report-disabled-key', 'never-report-live-key', 'never-report-header', 'never-report-malformed-key']:",
 		"            assert secret not in report_text, secret",
@@ -624,6 +683,7 @@ func TestCompactionDynamicSelectionWritesSummaryAndFiltersWindow(t *testing.T) {
 		"        with contextlib.redirect_stdout(terminal), contextlib.redirect_stderr(terminal):",
 		"            status, refs, summary, _ = run('malformed', source=malformed)",
 		"        assert status == 1 and refs == [] and summary['error'] == 'provider config YAML is invalid', summary",
+		"        assert summary['outcome'] == 'environment_failure' and summary['matched_rule'] == 'environment-invalid-config', summary",
 		"        assert 'never-report-malformed-header' not in terminal.getvalue(), terminal.getvalue()",
 		"        combined = (work / 'all' / 'summary.json').read_text() + (work / 'all' / 'summary.md').read_text()",
 		"        combined += (work / 'malformed' / 'summary.json').read_text() + (work / 'malformed' / 'summary.md').read_text()",
@@ -754,6 +814,258 @@ func TestJuexSourceConfigValidationUsesCompleteConfigDoctor(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
+func TestEvalValidationPlanRulesAreDeterministicAndConservative(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from tests.eval.juex_eval import validation_plan",
+		"ChangedFile = validation_plan.ChangedFile",
+		"cases = [",
+		"    ('frontend/src/App.tsx', set(), {'web'}, {'integration', 'provider-smoke'}, 'frontend'),",
+		"    ('internal/web/dist/index.html', {'./internal/web', './tests/e2e'}, {'web', 'race'}, {'integration', 'provider-smoke'}, 'embedded-web'),",
+		"    ('internal/app/app.go', {'./internal/app', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/agentstate/store.go', {'./internal/agentstate', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/endpoint/endpoint.go', {'./internal/endpoint', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/eventcatalog/catalog.go', {'./internal/eventcatalog', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/session/session.go', {'./internal/session', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/fleet/fleet.go', {'./internal/fleet', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/fleetweb/server.go', {'./internal/fleetweb', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/hooks/hooks.go', {'./internal/hooks', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/mcp/client.go', {'./internal/mcp', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/observable/observable.go', {'./internal/observable', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/sandbox/sandbox.go', {'./internal/sandbox', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/tools/builtin.go', {'./internal/tools', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/config/config.go', {'./internal/config', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/cli/run.go', {'./internal/cli', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/providerreadiness/readiness.go', {'./internal/providerreadiness', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/events/bus.go', {'./internal/events', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/llm/openai_responses.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'live-runtime'),",
+		"    ('internal/llm/openai_codex_websocket.go', {'./internal/llm', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke'}, 'race-sensitive'),",
+		"    ('internal/provenance/request_epoch.go', {'./internal/provenance', './tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/runtime/compaction_policy.go', {'./internal/runtime', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/runtime/context_projection.go', {'./internal/runtime', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/runtime/policy/policy.go', {'./internal/runtime/policy', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/runtime/module/policy.go', {'./internal/runtime/module', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/llm/provider_projection.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/llm/provider_projection_chunked_write.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/llm/history.go', {'./internal/llm', './tests/e2e'}, set(), {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/session/transcript_index.go', {'./internal/session', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/session/transcript_checkpoint.go', {'./internal/session', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('internal/session/transcript_reverse.go', {'./internal/session', './tests/e2e'}, {'race'}, {'integration', 'provider-smoke', 'compaction'}, 'compaction'),",
+		"    ('tests/e2e/testdata/fake-mcp/server.py', {'./tests/e2e'}, set(), {'integration', 'provider-smoke'}, 'cross-boundary'),",
+		"    ('internal/version/version.go', {'./internal/version'}, set(), set(), 'go-package'),",
+		"    ('Makefile', {'./...'}, {'web', 'race'}, {'integration', 'provider-smoke', 'compaction'}, 'conservative'),",
+		"    ('scripts/unknown-new-tool.py', {'./...'}, {'web', 'race'}, {'integration', 'provider-smoke', 'compaction'}, 'conservative'),",
+		"    ('.agents/skills/example/SKILL.md', {'./...'}, {'web', 'race'}, {'integration', 'provider-smoke', 'compaction'}, 'conservative'),",
+		"]",
+		"for path, packages, candidate, final, rule in cases:",
+		"    plan = validation_plan.plan_for_changes('focused', [ChangedFile('M', path)], base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
+		"    assert packages <= set(plan.focused_packages), (path, plan.as_dict())",
+		"    assert candidate <= set(plan.candidate_flags), (path, plan.as_dict())",
+		"    assert final <= set(plan.final_flags), (path, plan.as_dict())",
+		"    assert any(rule in row.rule_id for row in plan.matched_rules), (path, plan.as_dict())",
+		"docs = validation_plan.plan_for_changes('focused', [ChangedFile('M', 'docs/guide.md')], base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
+		"assert not docs.focused_packages and not docs.candidate_flags",
+		"assert set(docs.final_flags) == {'integration', 'provider-smoke'}",
+		"assert [row.rule_id for row in docs.matched_rules] == ['documentation-only', 'final-baseline']",
+		"compaction_docs = validation_plan.plan_for_changes('focused', [ChangedFile('M', 'docs/compaction.md')], base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
+		"assert 'compaction' not in compaction_docs.final_flags and [row.rule_id for row in compaction_docs.matched_rules] == ['documentation-only', 'final-baseline']",
+		"literal_backslash = validation_plan.plan_for_changes('focused', [ChangedFile('M', r'odd\\name.go')], base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
+		"assert literal_backslash.changed_files[0].path == r'odd\\name.go' and literal_backslash.focused_packages == ('./',), literal_backslash.as_dict()",
+		"changes = [ChangedFile('M', 'internal/app/app.go'), ChangedFile('A', 'frontend/src/App.tsx')]",
+		"first = validation_plan.plan_for_changes('focused', changes, base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
+		"second = validation_plan.plan_for_changes('focused', list(reversed(changes)), base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
+		"final_mode = validation_plan.plan_for_changes('final', changes, base_sha='a' * 40, head_sha='b' * 40, dirty=False)",
+		"assert first.fingerprint == second.fingerprint == final_mode.fingerprint",
+		"assert first.as_dict()['changed_files'] == second.as_dict()['changed_files']",
+		"explanation = validation_plan.render_markdown(first)",
+		"assert 'internal/app/app.go' in explanation and 'race' in explanation and 'cross-boundary' in explanation",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalValidationPlanCollectsCleanAndDirtyGitChanges(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"import subprocess",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import validation_plan",
+		"def git(repo, *args):",
+		"    return subprocess.run(['git', *args], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    repo = Path(tmp) / 'repo'",
+		"    (repo / 'internal' / 'app').mkdir(parents=True)",
+		"    for name in ('app.go', 'old.go', 'deleted.go'):",
+		"        (repo / 'internal' / 'app' / name).write_text('package app\\n', encoding='utf-8')",
+		"    (repo / 'internal' / 'removed').mkdir(parents=True)",
+		"    (repo / 'internal' / 'removed' / 'only.go').write_text('package removed\\n', encoding='utf-8')",
+		"    (repo / 'internal' / 'legacy').mkdir(parents=True)",
+		"    (repo / 'internal' / 'legacy' / 'only.go').write_text('package legacy\\n', encoding='utf-8')",
+		"    git(repo, 'init', '--quiet')",
+		"    git(repo, 'add', '.')",
+		"    git(repo, '-c', 'user.name=Eval', '-c', 'user.email=eval@example.com', 'commit', '--quiet', '-m', 'base')",
+		"    base = git(repo, 'rev-parse', 'HEAD')",
+		"    git(repo, 'update-ref', 'refs/remotes/origin/main', base)",
+		"    (repo / 'internal' / 'app' / 'app.go').write_text('package app\\n// committed\\n', encoding='utf-8')",
+		"    git(repo, 'add', 'internal/app/app.go')",
+		"    git(repo, '-c', 'user.name=Eval', '-c', 'user.email=eval@example.com', 'commit', '--quiet', '-m', 'change')",
+		"    clean = validation_plan.collect_plan(repo, 'candidate')",
+		"    explicit = validation_plan.collect_plan(repo, 'candidate', base=base)",
+		"    assert clean.base_sha == base and clean.fingerprint == explicit.fingerprint",
+		"    assert [row.path for row in clean.changed_files] == ['internal/app/app.go'], clean.as_dict()",
+		"    git(repo, 'update-ref', '-d', 'refs/remotes/origin/main')",
+		"    try:",
+		"        validation_plan.collect_plan(repo, 'candidate')",
+		"    except ValueError as exc:",
+		"        assert 'merge-base origin/main HEAD failed' in str(exc)",
+		"    else:",
+		"        raise AssertionError('candidate plan guessed a base without origin/main')",
+		"    git(repo, 'update-ref', 'refs/remotes/origin/main', base)",
+		"    out = Path(tmp) / 'plan-output'",
+		"    json_path, md_path = validation_plan.write_plan(out, clean)",
+		"    assert json.loads(json_path.read_text(encoding='utf-8'))['fingerprint'] == clean.fingerprint",
+		"    assert 'internal/app/app.go' in md_path.read_text(encoding='utf-8')",
+		"    app = repo / 'internal' / 'app' / 'app.go'",
+		"    app.write_text(app.read_text(encoding='utf-8') + '// staged\\n', encoding='utf-8')",
+		"    git(repo, 'add', 'internal/app/app.go')",
+		"    app.write_text(app.read_text(encoding='utf-8') + '// unstaged\\n', encoding='utf-8')",
+		"    git(repo, 'mv', 'internal/app/old.go', 'internal/app/renamed.go')",
+		"    (repo / 'internal' / 'newpkg').mkdir()",
+		"    git(repo, 'mv', 'internal/legacy/only.go', 'internal/newpkg/only.go')",
+		"    (repo / 'internal' / 'app' / 'deleted.go').unlink()",
+		"    (repo / 'internal' / 'removed' / 'only.go').unlink()",
+		"    (repo / 'internal' / 'app' / 'untracked.go').write_text('package app\\n', encoding='utf-8')",
+		"    moved = validation_plan.plan_for_changes('focused', [validation_plan.ChangedFile('R', 'internal/newpkg/only.go', 'internal/legacy/only.go')], base_sha=base, head_sha=git(repo, 'rev-parse', 'HEAD'), dirty=True, repo_root=repo)",
+		"    assert moved.focused_packages == ('./...',), moved.as_dict()",
+		"    cross_package = validation_plan.plan_for_changes('focused', [validation_plan.ChangedFile('R', 'internal/newpkg/only.go', 'internal/app/old.go')], base_sha=base, head_sha=git(repo, 'rev-parse', 'HEAD'), dirty=True, repo_root=repo)",
+		"    assert {'./internal/app', './internal/newpkg'} <= set(cross_package.focused_packages), cross_package.as_dict()",
+		"    removed = validation_plan.plan_for_changes('focused', [validation_plan.ChangedFile('D', 'internal/removed/only.go')], base_sha=base, head_sha=git(repo, 'rev-parse', 'HEAD'), dirty=True, repo_root=repo)",
+		"    assert removed.focused_packages == ('./...',), removed.as_dict()",
+		"    dirty = validation_plan.collect_plan(repo, 'focused')",
+		"    by_path = {row.path: row for row in dirty.changed_files}",
+		"    assert {'internal/app/app.go', 'internal/app/renamed.go', 'internal/app/deleted.go', 'internal/app/untracked.go', 'internal/newpkg/only.go', 'internal/removed/only.go'} <= set(by_path), dirty.as_dict()",
+		"    bad_bytes = b'bad_\\xff.txt'",
+		"    bad_path = bad_bytes.decode('utf-8', 'surrogateescape')",
+		"    bad_plan = validation_plan.plan_for_changes('focused', [validation_plan.ChangedFile('M', bad_path)], base_sha=base, head_sha=git(repo, 'rev-parse', 'HEAD'), dirty=True, repo_root=repo)",
+		"    bad_json, bad_md = validation_plan.write_plan(Path(tmp) / 'non-utf8-plan', bad_plan)",
+		"    payload = json.loads(bad_json.read_text(encoding='utf-8'))",
+		"    assert any(row['path'].encode('utf-8', 'surrogateescape') == bad_bytes for row in payload['changed_files'])",
+		"    assert r'bad_\\xff.txt' in bad_md.read_text(encoding='utf-8')",
+		"    assert by_path['internal/app/renamed.go'].old_path == 'internal/app/old.go'",
+		"    assert 'D' in by_path['internal/app/deleted.go'].status",
+		"    assert 'U' in by_path['internal/app/untracked.go'].status",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalValidationPlanChecksWorktreeStatusAsBytes(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import validation_plan",
+		"original_text = validation_plan._git_text",
+		"original_bytes = validation_plan._git_bytes",
+		"calls = []",
+		"def fake_text(repo, args, error):",
+		"    calls.append(('text', tuple(args)))",
+		"    if args == ['rev-parse', 'HEAD']:",
+		"        return 'a' * 40",
+		"    if args and args[0] == 'status':",
+		"        raise AssertionError('status must not use text decoding')",
+		"    raise AssertionError(args)",
+		"def fake_bytes(repo, args, error):",
+		"    calls.append(('bytes', tuple(args)))",
+		"    if args and args[0] == 'status':",
+		"        return b'M bad_\\xff.txt\\0'",
+		"    if args and args[0] in {'diff', 'ls-files'}:",
+		"        return b''",
+		"    raise AssertionError(args)",
+		"try:",
+		"    validation_plan._git_text = fake_text",
+		"    validation_plan._git_bytes = fake_bytes",
+		"    plan = validation_plan.collect_plan(Path('.'), 'focused')",
+		"    assert plan.dirty is True",
+		"    assert any(kind == 'bytes' and args[0] == 'status' for kind, args in calls), calls",
+		"finally:",
+		"    validation_plan._git_text = original_text",
+		"    validation_plan._git_bytes = original_bytes",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalVerificationTiersConsumeOneValidationPlan(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from argparse import Namespace",
+		"from tests.eval.juex_eval import cli, validation_plan",
+		"changes = [validation_plan.ChangedFile('M', 'frontend/src/App.tsx'), validation_plan.ChangedFile('M', 'internal/runtime/compact.go')]",
+		"plan = validation_plan.plan_for_changes('focused', changes, base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
+		"focused = Namespace(tier='focused', packages=[], planned=True)",
+		"cli.apply_validation_plan(focused, plan)",
+		"focused_steps = cli.verification_steps(focused)",
+		"assert [step.label for step in focused_steps] == ['web-stub', 'go-test-focused', 'web-check', 'make-build-go']",
+		"assert '-race' in focused_steps[1].command and './internal/runtime' in focused_steps[1].command and './tests/e2e' in focused_steps[1].command",
+		"manual = Namespace(tier='focused', packages=['./internal/version'])",
+		"manual_plan = cli.plan_with_cli_overrides(manual, plan)",
+		"assert manual_plan.focused_packages == ('./internal/version',)",
+		"assert any(row.rule_id == 'explicit-cli-override' for row in manual_plan.matched_rules)",
+		"cli.apply_validation_plan(manual, manual_plan)",
+		"manual_steps = cli.verification_steps(manual)",
+		"assert [step.label for step in manual_steps] == ['web-stub', 'go-test-focused'] and '-race' not in manual_steps[1].command",
+		"frontend_plan = validation_plan.plan_for_changes('focused', [validation_plan.ChangedFile('M', 'frontend/src/App.tsx')], base_sha='a' * 40, head_sha='b' * 40, dirty=True)",
+		"frontend = Namespace(tier='focused', packages=[], planned=True)",
+		"cli.apply_validation_plan(frontend, frontend_plan)",
+		"assert [step.label for step in cli.verification_steps(frontend)] == ['web-check', 'make-build-go']",
+		"candidate = Namespace(tier='candidate', race=False, web=False)",
+		"cli.apply_validation_plan(candidate, plan)",
+		"candidate_steps = cli.verification_steps(candidate)",
+		"assert [step.label for step in candidate_steps] == ['web-stub', 'go-test-all-race', 'web-check', 'make-build-go']",
+		"final = Namespace(tier='final', race=False, web=False, compaction=False, config='/tmp/provider.yaml', selection_seed='seed', run_id='unit', provider_timeout=7)",
+		"cli.apply_validation_plan(final, plan)",
+		"final_steps = cli.verification_steps(final)",
+		"assert [step.label for step in final_steps] == ['web-stub', 'go-test-all-race', 'web-check', 'make-build-go', 'integration-contracts', 'live-integration', 'provider-model-smoke', 'compaction-eval']",
+		"docs_plan = validation_plan.plan_for_changes('final', [validation_plan.ChangedFile('M', 'docs/guide.md')], base_sha='a' * 40, head_sha='b' * 40, dirty=False)",
+		"docs_final = Namespace(tier='final', race=False, web=False, compaction=False, config='/tmp/provider.yaml', selection_seed='seed', run_id='unit', provider_timeout=7)",
+		"cli.apply_validation_plan(docs_final, docs_plan)",
+		"assert [step.label for step in cli.verification_steps(docs_final)] == ['web-stub', 'go-test-all', 'make-build', 'integration-contracts', 'live-integration', 'provider-model-smoke']",
+		"forced_final = Namespace(tier='final', race=False, web=False, compaction=True)",
+		"forced_plan = cli.plan_with_cli_overrides(forced_final, docs_plan)",
+		"assert set(forced_plan.final_flags) == {'compaction', 'integration', 'provider-smoke'}",
+		"assert forced_plan.fingerprint != docs_plan.fingerprint",
+		"assert validation_plan.candidate_fingerprint(forced_plan) == validation_plan.candidate_fingerprint(docs_plan)",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func TestEvalPythonModuleAndShellWrappersExposeHelp(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
@@ -764,9 +1076,20 @@ func TestEvalPythonModuleAndShellWrappersExposeHelp(t *testing.T) {
 	}
 
 	moduleHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "--help")
-	for _, want := range []string{"development", "provider-smoke", "compaction"} {
+	for _, want := range []string{"plan", "verify", "development", "provider-smoke", "compaction"} {
 		assertHelpContains(t, moduleHelp, want)
 	}
+	planHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "plan", "--help")
+	assertHelpContains(t, planHelp, "--tier", "--base", "--output-dir", "--explain")
+
+	verifyHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "--help")
+	assertHelpContains(t, verifyHelp, "focused", "candidate", "final")
+	focusedHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "focused", "--help")
+	assertHelpContains(t, focusedHelp, "packages", "--planned", "--base", "--explain")
+	candidateHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "candidate", "--help")
+	assertHelpContains(t, candidateHelp, "--race", "--web", "--base", "--explain", "--run-id", "--report-dir")
+	finalHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "final", "--help")
+	assertHelpContains(t, finalHelp, "--race", "--web", "--compaction", "--base", "--explain", "--config", "--selection-seed", "--run-id", "--report-dir")
 
 	providerHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "provider-smoke", "--help")
 	assertHelpContains(t, providerHelp, "--only", "--all-models", "--config", "--selection-seed", "--report-dir")
@@ -827,7 +1150,8 @@ func TestEvalDevelopmentStepBuilderUsesConsistentFlags(t *testing.T) {
 		"    compaction_only=['openai:model', 'ark:other'],",
 		")",
 		"steps, _, _ = cli.development_steps(args, Path('reports'))",
-		"print(json.dumps([{'label': label, 'command': command} for label, command in steps]))",
+		"assert next(step.test_environment for step in steps if step.label == 'provider-model-smoke')",
+		"print(json.dumps([{'label': step.label, 'command': step.command} for step in steps]))",
 	}, "\n")
 	out := runUV(t, root, "python", "-c", program)
 
@@ -853,6 +1177,1089 @@ func TestEvalDevelopmentStepBuilderUsesConsistentFlags(t *testing.T) {
 	assertCommandFlagValue(t, compactionCmd, "--selection-seed", "repeatable")
 	assertCommandHasFlag(t, compactionCmd, "--report-dir")
 	assertCommandLacks(t, compactionCmd, "--out-root")
+}
+
+func TestEvalDevelopmentUsesSingleCandidateGoSuite(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"from argparse import Namespace",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli",
+		"args = Namespace(skip_tests=False, no_provider_smoke=True, compaction_eval=False, run_id='unit', config='/tmp/provider.yaml', selection_seed='repeatable', provider_timeout=7, provider_only='', provider_all_models=False, compaction_all_models=False, compaction_only=[])",
+		"steps, _, _ = cli.development_steps(args, Path('reports'))",
+		"print(json.dumps([step.label for step in steps]))",
+	}, "\n")
+	out := runUV(t, root, "python", "-c", program)
+	var labels []string
+	if err := json.Unmarshal([]byte(out), &labels); err != nil {
+		t.Fatalf("decode labels: %v\n%s", err, out)
+	}
+	if !reflect.DeepEqual(labels, []string{"web-stub", "go-test-all", "make-build"}) {
+		t.Fatalf("development labels = %q, want one full Go suite and one build", labels)
+	}
+}
+
+func TestEvalVerifyFocusedPlansOnlyExplicitIsolatedPackages(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"from argparse import Namespace",
+		"from tests.eval.juex_eval import cli",
+		"steps = cli.verification_steps(Namespace(tier='focused', packages=['./internal/app', './internal/runtime']))",
+		"print(json.dumps([{'label': step.label, 'command': step.command, 'test_environment': step.test_environment} for step in steps]))",
+	}, "\n")
+	out := runUV(t, root, "python", "-c", program)
+
+	var steps []struct {
+		Label           string   `json:"label"`
+		Command         []string `json:"command"`
+		TestEnvironment bool     `json:"test_environment"`
+	}
+	if err := json.Unmarshal([]byte(out), &steps); err != nil {
+		t.Fatalf("decode steps: %v\n%s", err, out)
+	}
+	if len(steps) != 2 || steps[0].Label != "web-stub" || steps[1].Label != "go-test-focused" {
+		t.Fatalf("steps = %+v, want web stub followed by one focused test step", steps)
+	}
+	if !reflect.DeepEqual(steps[0].Command, []string{"make", "web-stub"}) {
+		t.Fatalf("web stub command = %q", steps[0].Command)
+	}
+	want := []string{
+		steps[1].Command[0],
+		filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")),
+		"go", "test", "./internal/app", "./internal/runtime", "-count=1",
+	}
+	assertEvalBashExecutable(t, want[0])
+	if !reflect.DeepEqual(steps[1].Command, want) {
+		t.Fatalf("command = %q, want %q", steps[1].Command, want)
+	}
+	if !steps[1].TestEnvironment {
+		t.Fatal("focused test step must provision ripgrep and isolated test Home")
+	}
+}
+
+func TestEvalWindowsBashDiscoveryWalksGitExecutableAncestors(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    install = Path(tmp) / 'PortableGit'",
+		"    git = install / 'mingw64' / 'bin' / 'git.exe'",
+		"    bash = install / 'bin' / 'bash.exe'",
+		"    git.parent.mkdir(parents=True)",
+		"    bash.parent.mkdir(parents=True)",
+		"    git.touch()",
+		"    bash.touch()",
+		"    resolved = cli.windows_bash_from_git(str(git))",
+		"    assert resolved == str(bash.resolve()), (resolved, bash)",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalIsolatedEnvironmentRunsShellProvisionerThroughBash(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import os",
+		"from types import SimpleNamespace",
+		"from tests.eval.juex_eval import cli",
+		"calls = []",
+		"original_run = cli.subprocess.run",
+		"original_which = cli.shutil.which",
+		"try:",
+		"    cli.shutil.which = lambda name: None",
+		"    def fake_run(command, **kwargs):",
+		"        calls.append(command)",
+		"        return SimpleNamespace(returncode=0, stdout='/tmp/rg\\n')",
+		"    cli.subprocess.run = fake_run",
+		"    env = cli.isolated_test_environment()",
+		"    assert calls == [[cli.BASH_EXECUTABLE, cli.ENSURE_RIPGREP]], calls",
+		"    expected = str(cli.REPO_ROOT / '.tmp' / 'dev-ripgrep' / 'juex-path') if os.name == 'nt' else '/tmp/rg'",
+		"    assert env['PATH'].split(os.pathsep)[0] == expected, env['PATH']",
+		"finally:",
+		"    cli.subprocess.run = original_run",
+		"    cli.shutil.which = original_which",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalIsolatedEnvironmentReusesRipgrepFromPath(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import os",
+		"from tests.eval.juex_eval import cli",
+		"original_run = cli.subprocess.run",
+		"original_which = cli.shutil.which",
+		"try:",
+		"    cli.shutil.which = lambda name: '/tmp/rg-bin/rg'",
+		"    cli.subprocess.run = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('unexpected provisioner'))",
+		"    env = cli.isolated_test_environment()",
+		"    expected = os.path.dirname(os.path.abspath('/tmp/rg-bin/rg'))",
+		"    assert env['PATH'].split(os.pathsep)[0] == expected, env['PATH']",
+		"finally:",
+		"    cli.subprocess.run = original_run",
+		"    cli.shutil.which = original_which",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalVerifyCandidateRaceReplacesNormalSuite(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"from argparse import Namespace",
+		"from tests.eval.juex_eval import cli",
+		"def plan(race):",
+		"    return [{'label': step.label, 'command': step.command, 'test_environment': step.test_environment} for step in cli.verification_steps(Namespace(tier='candidate', race=race, web=False))]",
+		"print(json.dumps({'normal': plan(False), 'race': plan(True)}))",
+	}, "\n")
+	out := runUV(t, root, "python", "-c", program)
+
+	var plans map[string][]struct {
+		Label           string   `json:"label"`
+		Command         []string `json:"command"`
+		TestEnvironment bool     `json:"test_environment"`
+	}
+	if err := json.Unmarshal([]byte(out), &plans); err != nil {
+		t.Fatalf("decode plans: %v\n%s", err, out)
+	}
+	if got := []string{plans["normal"][0].Label, plans["normal"][1].Label, plans["normal"][2].Label}; !reflect.DeepEqual(got, []string{"web-stub", "go-test-all", "make-build"}) {
+		t.Fatalf("normal labels = %q", got)
+	}
+	if got := plans["normal"][0].Command; !reflect.DeepEqual(got, []string{"make", "web-stub"}) {
+		t.Fatalf("normal web stub command = %q", got)
+	}
+	bashExecutable := plans["normal"][1].Command[0]
+	assertEvalBashExecutable(t, bashExecutable)
+	if got := plans["normal"][1].Command; !reflect.DeepEqual(got, []string{bashExecutable, filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")), "go", "test", "./...", "-count=1"}) {
+		t.Fatalf("normal test command = %q", got)
+	}
+	if got := []string{plans["race"][0].Label, plans["race"][1].Label, plans["race"][2].Label}; !reflect.DeepEqual(got, []string{"web-stub", "go-test-all-race", "make-build"}) {
+		t.Fatalf("race labels = %q", got)
+	}
+	if got := plans["race"][1].Command; !reflect.DeepEqual(got, []string{bashExecutable, filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")), "go", "test", "./...", "-race", "-count=1"}) {
+		t.Fatalf("race test command = %q", got)
+	}
+	if !plans["normal"][1].TestEnvironment || !plans["race"][1].TestEnvironment {
+		t.Fatal("candidate Go suites must provision ripgrep and isolated test Home")
+	}
+}
+
+func TestEvalVerifyCandidateWebCheckDoesNotRebuildFrontend(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"from argparse import Namespace",
+		"from tests.eval.juex_eval import cli",
+		"steps = cli.verification_steps(Namespace(tier='candidate', race=False, web=True))",
+		"print(json.dumps([{'label': step.label, 'command': step.command} for step in steps]))",
+	}, "\n")
+	out := runUV(t, root, "python", "-c", program)
+
+	var steps []struct {
+		Label   string   `json:"label"`
+		Command []string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(out), &steps); err != nil {
+		t.Fatalf("decode steps: %v\n%s", err, out)
+	}
+	labels := make([]string, 0, len(steps))
+	for _, step := range steps {
+		labels = append(labels, step.Label)
+	}
+	if !reflect.DeepEqual(labels, []string{"web-stub", "go-test-all", "web-check", "make-build-go"}) {
+		t.Fatalf("labels = %q", labels)
+	}
+	if !reflect.DeepEqual(steps[2].Command, []string{"make", "web-check"}) {
+		t.Fatalf("web command = %q", steps[2].Command)
+	}
+	if !reflect.DeepEqual(steps[3].Command, []string{"make", "build-go"}) {
+		t.Fatalf("binary command = %q", steps[3].Command)
+	}
+	for _, step := range steps {
+		if reflect.DeepEqual(step.Command, []string{"make", "build"}) {
+			t.Fatalf("WEB=1 plan retained duplicate frontend build: %+v", steps)
+		}
+	}
+}
+
+func TestEvalVerifyFinalExtendsCandidateWithConditionalLiveGates(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"from argparse import Namespace",
+		"from tests.eval.juex_eval import cli",
+		"def plan(compaction):",
+		"    args = Namespace(tier='final', race=False, web=False, compaction=compaction, config='/tmp/provider config.yaml', selection_seed='repeatable', run_id='unit', provider_timeout=7)",
+		"    return [{'label': step.label, 'command': step.command, 'environment': step.environment, 'test_environment': step.test_environment, 'retry_transient': step.retry_transient} for step in cli.verification_steps(args)]",
+		"print(json.dumps({'default': plan(False), 'compaction': plan(True)}))",
+	}, "\n")
+	out := runUV(t, root, "python", "-c", program)
+
+	var plans map[string][]struct {
+		Label           string            `json:"label"`
+		Command         []string          `json:"command"`
+		Environment     map[string]string `json:"environment"`
+		TestEnvironment bool              `json:"test_environment"`
+		RetryTransient  bool              `json:"retry_transient"`
+	}
+	if err := json.Unmarshal([]byte(out), &plans); err != nil {
+		t.Fatalf("decode plans: %v\n%s", err, out)
+	}
+	labels := func(steps []struct {
+		Label           string            `json:"label"`
+		Command         []string          `json:"command"`
+		Environment     map[string]string `json:"environment"`
+		TestEnvironment bool              `json:"test_environment"`
+		RetryTransient  bool              `json:"retry_transient"`
+	}) []string {
+		out := make([]string, 0, len(steps))
+		for _, step := range steps {
+			out = append(out, step.Label)
+		}
+		return out
+	}
+	if got := labels(plans["default"]); !reflect.DeepEqual(got, []string{"web-stub", "go-test-all", "make-build", "integration-contracts", "live-integration", "provider-model-smoke"}) {
+		t.Fatalf("default labels = %q", got)
+	}
+	if got := labels(plans["compaction"]); !reflect.DeepEqual(got, []string{"web-stub", "go-test-all", "make-build", "integration-contracts", "live-integration", "provider-model-smoke", "compaction-eval"}) {
+		t.Fatalf("compaction labels = %q", got)
+	}
+	if !reflect.DeepEqual(plans["default"][3].Command, []string{"make", "integration-contracts"}) || plans["default"][3].RetryTransient {
+		t.Fatalf("integration contracts = %+v", plans["default"][3])
+	}
+	if !reflect.DeepEqual(plans["default"][4].Command, []string{"make", "integration-live"}) || !plans["default"][4].RetryTransient {
+		t.Fatalf("live integration = %+v", plans["default"][4])
+	}
+	if got := plans["default"][4].Environment["JUEX_PROVIDER_CONFIG"]; got != "/tmp/provider config.yaml" {
+		t.Fatalf("integration provider config = %q", got)
+	}
+	provider := plans["default"][5].Command
+	if !plans["default"][5].TestEnvironment {
+		t.Fatal("provider smoke must inherit the provisioned ripgrep PATH")
+	}
+	assertCommandFlagValue(t, provider, "--juex", "./dist/juex")
+	assertCommandFlagValue(t, provider, "--config", "/tmp/provider config.yaml")
+	assertCommandFlagValue(t, provider, "--selection-seed", "repeatable")
+	assertCommandFlagValue(t, provider, "--run-id", "unit")
+	assertCommandFlagValue(t, provider, "--timeout", "7")
+	compaction := plans["compaction"][6].Command
+	assertCommandFlagValue(t, compaction, "--juex", "./dist/juex")
+	assertCommandFlagValue(t, compaction, "--config", "/tmp/provider config.yaml")
+	assertCommandFlagValue(t, compaction, "--selection-seed", "repeatable")
+	assertCommandFlagValue(t, compaction, "--run-id", "unit")
+}
+
+func TestEvalVerificationExecutorStopsAtFirstFailure(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from tests.eval.juex_eval import cli",
+		"steps = [cli.VerificationStep('first', ['first']), cli.VerificationStep('fail', ['fail']), cli.VerificationStep('never', ['never'])]",
+		"calls = []",
+		"def run(step):",
+		"    calls.append(step.label)",
+		"    return 1 if step.label == 'fail' else 0",
+		"status = cli.execute_verification_steps(steps, run)",
+		"assert status == 1, status",
+		"assert calls == ['first', 'fail'], calls",
+		"calls.clear()",
+		"status = cli.execute_development_steps(steps, run)",
+		"assert status == 1, status",
+		"assert calls == ['first', 'fail', 'never'], calls",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalValidationOutcomeFixtures(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from tests.eval.juex_eval import outcomes",
+		"passed = outcomes.success(attempt_count=1)",
+		"flaky = outcomes.success(attempt_count=2)",
+		"product = outcomes.classify_failure('AssertionError: want 2, got 1', deterministic=True, exit_status=1)",
+		"environment = outcomes.classify_failure('/bin/sh: go: command not found', deterministic=True, exit_status=127)",
+		"provider = outcomes.classify_failure('JUEX_VALIDATION_OUTCOME {\"outcome\":\"provider_unavailable\",\"reason\":\"requested provider:model is not eligible\",\"matched_rule\":\"provider-selection-unavailable\"}', deterministic=False, exit_status=1)",
+		"transient = outcomes.classify_failure('{\"error\":{\"retryable\":true,\"message\":\"upstream reset\"}}', deterministic=False, exit_status=1)",
+		"plain_status = outcomes.classify_failure('codex websocket error: status 503: unavailable', deterministic=False, exit_status=1)",
+		"missing_live_config = outcomes.classify_failure('JUEX_PROVIDER_CONFIG points to missing live provider config /tmp/missing.yaml', deterministic=False, exit_status=1)",
+		"rows = [passed, flaky, product, environment, provider, transient]",
+		"assert [row.outcome for row in rows] == ['passed', 'flaky_pass', 'product_failure', 'environment_failure', 'provider_unavailable', 'transient_failure'], rows",
+		"assert set(outcomes.OUTCOME_VALUES) == {row.outcome for row in rows}",
+		"assert product.matched_rule == 'deterministic-step-nonzero' and product.recommended_action == 'fix_code'",
+		"assert environment.matched_rule == 'environment-command-missing' and environment.recommended_action == 'fix_environment'",
+		"assert provider.matched_rule == 'provider-selection-unavailable' and provider.recommended_action == 'stop'",
+		"assert transient.matched_rule == 'transient-structured-retryable' and transient.retryable is True",
+		"assert plain_status.matched_rule == 'transient-http-status' and plain_status.retryable is True",
+		"assert missing_live_config.outcome == 'environment_failure' and missing_live_config.matched_rule == 'environment-invalid-config' and missing_live_config.recommended_action == 'fix_environment'",
+		"for diagnostic in ('AssertionError: permission denied', 'sandbox expected operation not permitted', 'want unauthorized provider error'):",
+		"    deterministic_result = outcomes.classify_failure(diagnostic, deterministic=True, exit_status=1)",
+		"    assert deterministic_result.outcome == 'product_failure' and deterministic_result.matched_rule == 'deterministic-step-nonzero', deterministic_result",
+		"assert outcomes.classify_failure('provider request failed: unauthorized', deterministic=False, exit_status=1).matched_rule == 'environment-provider-credentials'",
+		"assert outcomes.classify_failure(outcomes.marker(outcomes.invalid_config_failure('missing config')), deterministic=True, exit_status=1).outcome == 'product_failure'",
+		"assert outcomes.classify_failure('{\"retryable\":true}', deterministic=True, exit_status=1).outcome == 'product_failure'",
+		"assert outcomes.classify_failure(outcomes.marker(passed), deterministic=False, exit_status=1).outcome == 'product_failure'",
+		"assert all(row.blocks_merge is (row.outcome not in {'passed', 'flaky_pass'}) for row in rows)",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalMissingProviderConfigIsEnvironmentFailure(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import argparse, json, sys, tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import compaction, helper",
+		"with tempfile.TemporaryDirectory() as work:",
+		"    root = Path(work)",
+		"    missing = root / 'missing.yaml'",
+		"    smoke_report = root / 'provider-smoke'",
+		"    status = helper.provider_smoke(['--juex', sys.executable, '--config', str(missing), '--report-dir', str(smoke_report), '--work-root', str(root / 'smoke-work'), '--run-id', 'missing-config'])",
+		"    smoke = json.loads((smoke_report / 'summary.json').read_text(encoding='utf-8'))",
+		"    assert status == 1 and smoke['outcome'] == 'environment_failure' and smoke['matched_rule'] == 'environment-invalid-config' and smoke['recommended_action'] == 'fix_environment', smoke",
+		"    compaction_report = root / 'compaction'",
+		"    args = argparse.Namespace(only=[], all_models=False, selection_seed='unit', juex=sys.executable, config=str(missing), out_root=str(compaction_report), run_id='missing-config', context_window=32000, turn_timeout=1, keep_workdir=False)",
+		"    status = compaction.run(args)",
+		"    summary = json.loads((compaction_report / 'summary.json').read_text(encoding='utf-8'))",
+		"    assert status == 1 and summary['outcome'] == 'environment_failure' and summary['matched_rule'] == 'environment-invalid-config' and summary['recommended_action'] == 'fix_environment', summary",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalRecordedStepRetriesOnlyAllowlistedTransientFailureOnce(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import tempfile",
+		"from pathlib import Path",
+		"from types import SimpleNamespace",
+		"from tests.eval.juex_eval import cli",
+		"original_run = cli.subprocess.run",
+		"def exercise(step, attempts):",
+		"    calls = []",
+		"    def fake_run(command, **kwargs):",
+		"        index = len(calls)",
+		"        status, body = attempts[index]",
+		"        calls.append(command)",
+		"        kwargs['stdout'].write(body.encode('utf-8'))",
+		"        return SimpleNamespace(returncode=status)",
+		"    cli.subprocess.run = fake_run",
+		"    with tempfile.TemporaryDirectory() as tmp:",
+		"        result = cli.run_recorded_verification_step(step, Path(tmp), None)",
+		"        logs = [Path(row['log']).read_text(encoding='utf-8') for row in result['attempts']]",
+		"        assert len(logs) == len(calls)",
+		"        return result, calls, logs",
+		"try:",
+		"    assertion, calls, logs = exercise(cli.VerificationStep('go-test-all', ['go', 'test', './...']), [(1, 'AssertionError: failed\\n'), (0, 'must not run\\n')])",
+		"    assert assertion['outcome'] == 'product_failure' and len(calls) == 1 and logs == ['AssertionError: failed\\n'], assertion",
+		"    transient_step = cli.VerificationStep('provider-model-smoke', ['provider-smoke'], retry_transient=True)",
+		"    flaky, calls, logs = exercise(transient_step, [(1, '{\"retryable\":true}\\n'), (0, 'ok\\n')])",
+		"    assert flaky['outcome'] == 'flaky_pass' and len(calls) == 2 and len(logs) == 2, flaky",
+		"    assert flaky['initial_outcome'] == 'transient_failure' and [row['outcome'] for row in flaky['attempts']] == ['transient_failure', 'passed']",
+		"    exhausted, calls, logs = exercise(transient_step, [(1, '{\"retryable\":true,\"attempt\":1}\\n'), (1, '{\"retryable\":true,\"attempt\":2}\\n'), (0, 'must not run\\n')])",
+		"    assert exhausted['outcome'] == 'transient_failure' and exhausted['initial_outcome'] == 'transient_failure'",
+		"    assert len(calls) == 2 and len(logs) == 2 and logs[0] != logs[1], exhausted",
+		"    assert exhausted['blocks_merge'] is True and exhausted['recommended_action'] == 'stop'",
+		"    with tempfile.TemporaryDirectory() as tmp:",
+		"        root = Path(tmp)",
+		"        (root / 'logs').mkdir()",
+		"        report = root / 'provider-report'",
+		"        report.mkdir()",
+		"        archive_calls = []",
+		"        def archive_run(command, **kwargs):",
+		"            index = len(archive_calls)",
+		"            archive_calls.append(command)",
+		"            (report / 'raw-error.log').write_text(f'attempt={index + 1}\\n', encoding='utf-8')",
+		"            kwargs['stdout'].write((('{\"retryable\":true}' if index == 0 else 'ok') + '\\n').encode('utf-8'))",
+		"            return SimpleNamespace(returncode=1 if index == 0 else 0)",
+		"        cli.subprocess.run = archive_run",
+		"        archived = cli.run_recorded_verification_step(cli.VerificationStep('provider-model-smoke', ['provider-smoke', '--report-dir', str(report)], retry_transient=True), root / 'logs', None)",
+		"        first_report = Path(archived['attempts'][0]['report'])",
+		"        assert (first_report / 'raw-error.log').read_text(encoding='utf-8') == 'attempt=1\\n'",
+		"        assert (report / 'raw-error.log').read_text(encoding='utf-8') == 'attempt=2\\n'",
+		"finally:",
+		"    cli.subprocess.run = original_run",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalProviderRetryBudgetExcludesContractFailures(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import tempfile",
+		"from pathlib import Path",
+		"from types import SimpleNamespace",
+		"from tests.eval.juex_eval import contract_oracle, helper, outcomes, schedule_routing, selection",
+		"row = selection.Candidate('provider', 'model', 'openai/chat', 'default', 'true', 'unset', 'provider:model')",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    root = Path(tmp)",
+		"    ctx = helper.ProviderSmokeContext(row, '/bin/true', {}, root, root / 'report', 'unit', 1, 1, str(root / 'codex'))",
+		"    case = root / 'turn-case'",
+		"    case.mkdir()",
+		"    calls = []",
+		"    original_turn = helper.run_turn",
+		"    original_write = helper.write_selected_config",
+		"    original_json = helper.json_file_value",
+		"    original_sessions = helper.agent_sessions_dir",
+		"    original_validate = schedule_routing.validate_outcome",
+		"    try:",
+		"        invalid_ctx = helper.ProviderSmokeContext(row, '/bin/true', {}, root, root / 'report', 'unit', 1, 2, str(root / 'codex'))",
+		"        try:",
+		"            helper.run_turn_with_retries(invalid_ctx, case, root / 'config.yaml', 'turn1', [])",
+		"        except ValueError as exc:",
+		"            assert str(exc) == 'provider smoke retries must be 0 or 1'",
+		"        else:",
+		"            raise AssertionError('retry budget above one was accepted')",
+		"        def transient_turn(ctx, case_dir, config, label, args):",
+		"            calls.append(label)",
+		"            (case_dir / f'{label}.stderr.log').write_text('{\"retryable\":true,\"attempt\":%d}\\n' % len(calls), encoding='utf-8')",
+		"            (case_dir / f'{label}.stdout.json').write_text('{}\\n', encoding='utf-8')",
+		"            return 1",
+		"        helper.run_turn = transient_turn",
+		"        status, result, attempts = helper.run_turn_with_retries(ctx, case, root / 'config.yaml', 'turn1', [])",
+		"        assert status == 1 and result.outcome == outcomes.TRANSIENT_FAILURE and attempts == 2 and len(calls) == 2",
+		"        assert (case / 'turn1.attempt-1.stderr.log').is_file() and (case / 'turn1.attempt-2.stderr.log').is_file()",
+		"        calls.clear()",
+		"        def passing_turn(ctx, case_dir, config, label, args):",
+		"            calls.append(label)",
+		"            (case_dir / f'{label}.stdout.json').write_text('{\"session_id\":\"session\"}\\n', encoding='utf-8')",
+		"            (case_dir / f'{label}.stderr.log').write_text('', encoding='utf-8')",
+		"            return 0",
+		"        helper.run_turn = passing_turn",
+		"        helper.write_selected_config = lambda *args, **kwargs: None",
+		"        helper.json_file_value = lambda *args: 'session'",
+		"        helper.agent_sessions_dir = lambda *args: root / 'sessions'",
+		"        failed_report = contract_oracle.ContractReport(False, ['contract assertion failed'])",
+		"        schedule_routing.validate_outcome = lambda *args: SimpleNamespace(kind=helper.SCENARIO_CAPABILITY_FAILED, report=failed_report)",
+		"        expectation = schedule_routing.ScheduleRoutingExpectation('id', 21600, 'content', 'token')",
+		"        scenario = helper.run_schedule_routing_case(ctx, root / 'artifacts', expectation)",
+		"        assert scenario.validation_outcome.outcome == outcomes.PRODUCT_FAILURE, scenario",
+		"        assert scenario.attempt_count == 1 and calls == ['turn1'], calls",
+		"    finally:",
+		"        helper.run_turn = original_turn",
+		"        helper.write_selected_config = original_write",
+		"        helper.json_file_value = original_json",
+		"        helper.agent_sessions_dir = original_sessions",
+		"        schedule_routing.validate_outcome = original_validate",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalCompactionPropagatesTransientTurnOutcome(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import tempfile",
+		"from argparse import Namespace",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import compaction, outcomes",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    root = Path(tmp)",
+		"    out = root / 'reports'",
+		"    args = Namespace(config=str(root / 'config.yaml'), keep_workdir=True, context_window=32000, turn_timeout=1, juex='/bin/true')",
+		"    original_write = compaction.helper.write_selected_config",
+		"    original_turn = compaction.run_eval_turn",
+		"    try:",
+		"        compaction.helper.write_selected_config = lambda *args, **kwargs: None",
+		"        def timed_out(args, work, prompt, output):",
+		"            output.write_text('', encoding='utf-8')",
+		"            return 124",
+		"        compaction.run_eval_turn = timed_out",
+		"        status = compaction.run_model(args, {}, 'provider:model', out, [])",
+		"        assert status == 1",
+		"        result = compaction.load_model_outcome(out / compaction.helper.safe_ref('provider:model'), status)",
+		"        assert result.outcome == 'transient_failure' and result.retryable is True and result.matched_rule == 'transient-provider-timeout', result",
+		"        aggregate = compaction.aggregate_compaction_outcome([{'provider_model': 'provider:model', 'status': 'fail', **result.as_dict()}])",
+		"        propagated = outcomes.classify_failure(outcomes.marker(aggregate), deterministic=False, exit_status=1)",
+		"        assert propagated == aggregate and propagated.retryable is True, (propagated, aggregate)",
+		"        product = compaction.aggregate_compaction_outcome([{'provider_model': 'provider:model', 'status': 'fail', **outcomes.ValidationOutcome('product_failure', 'score contract failed', 'compaction-quality-contract', True, 'fix_code').as_dict()}])",
+		"        assert product.outcome == 'product_failure' and product.retryable is False",
+		"    finally:",
+		"        compaction.helper.write_selected_config = original_write",
+		"        compaction.run_eval_turn = original_turn",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalOutcomeSummaryDistinguishesCodeEnvironmentAndStopActions(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from tests.eval.juex_eval import outcomes, verification",
+		"def row(label, result):",
+		"    return {'label': label, 'execution_state': 'executed', **result.as_dict()}",
+		"product = verification.summarize_outcomes([row('test', outcomes.classify_failure('assertion failed', deterministic=True, exit_status=1))])",
+		"environment = verification.summarize_outcomes([row('build', outcomes.classify_failure('go: command not found', deterministic=True, exit_status=127))])",
+		"provider = verification.summarize_outcomes([row('live', outcomes.classify_failure('provider_unavailable: no eligible provider:model', deterministic=False, exit_status=1))])",
+		"passed = verification.summarize_outcomes([row('test', outcomes.success(attempt_count=1)), row('live', outcomes.success(attempt_count=2))])",
+		"assert (product['failure_type'], product['recommended_action']) == ('code_failure', 'fix_code')",
+		"assert (environment['failure_type'], environment['recommended_action']) == ('validation_incomplete', 'fix_environment')",
+		"assert (provider['failure_type'], provider['recommended_action']) == ('validation_incomplete', 'stop')",
+		"assert passed['blocks_merge'] is False and passed['failure_type'] is None and passed['recommended_action'] == 'continue'",
+		"rendered = verification.render_terminal_summary(provider)",
+		"assert 'blocks_merge=true' in rendered and 'validation_incomplete' in rendered and 'action=stop' in rendered, rendered",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalVerificationCleanWorktreePolicy(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import tempfile",
+		"from argparse import Namespace",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli, validation_plan, verification",
+		"calls = []",
+		"snapshot = verification.RepositorySnapshot('a' * 40, 'feature/test', False)",
+		"original_clean = cli.require_clean_worktree",
+		"original_steps = cli.verification_steps",
+		"original_resolved_path = cli.selection.resolved_path",
+		"original_snapshot = verification.repository_snapshot",
+		"original_environment = verification.environment_fingerprint",
+		"original_find = verification.find_reusable_candidate",
+		"original_write = verification.write_record",
+		"original_provider_summary = cli.provider_record_summary",
+		"original_plan = validation_plan.collect_plan",
+		"try:",
+		"    cli.require_clean_worktree = lambda: (calls.append('pre-clean') or snapshot)",
+		"    cli.verification_steps = lambda args: []",
+		"    cli.selection.resolved_path = lambda path: path",
+		"    verification.repository_snapshot = lambda root: (calls.append('post-clean') or snapshot)",
+		"    verification.environment_fingerprint = lambda **kwargs: 'sha256:environment'",
+		"    verification.find_reusable_candidate = lambda *args: verification.ReuseDecision(None, {}, [])",
+		"    verification.write_record = lambda *args: None",
+		"    cli.provider_record_summary = lambda args: {}",
+		"    validation_plan.collect_plan = lambda root, mode, base=None: validation_plan.plan_for_changes(mode, [], base_sha='b' * 40, head_sha=snapshot.head_sha, dirty=(mode == 'focused'))",
+		"    assert cli.run_verify(Namespace(tier='focused', packages=[], planned=True)) == 0",
+		"    assert calls == [], calls",
+		"    with tempfile.TemporaryDirectory() as tmp:",
+		"        common = dict(run_id='unit', race=False, web=False, report_dir=str(Path(tmp) / 'candidate'))",
+		"        assert cli.run_verify(Namespace(tier='candidate', **common)) == 0",
+		"        assert calls == ['pre-clean', 'post-clean'], calls",
+		"        final = dict(common, report_dir=str(Path(tmp) / 'final'), config='/tmp/config', compaction=False, selection_seed='seed', provider_timeout=7)",
+		"        assert cli.run_verify(Namespace(tier='final', **final)) == 0",
+		"        assert calls == ['pre-clean', 'post-clean', 'pre-clean', 'post-clean'], calls",
+		"finally:",
+		"    cli.require_clean_worktree = original_clean",
+		"    cli.verification_steps = original_steps",
+		"    cli.selection.resolved_path = original_resolved_path",
+		"    verification.repository_snapshot = original_snapshot",
+		"    verification.environment_fingerprint = original_environment",
+		"    verification.find_reusable_candidate = original_find",
+		"    verification.write_record = original_write",
+		"    cli.provider_record_summary = original_provider_summary",
+		"    validation_plan.collect_plan = original_plan",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalRequireCleanWorktreeRejectsDirtyRepository(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import subprocess",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli",
+		"original_root = cli.REPO_ROOT",
+		"try:",
+		"    with tempfile.TemporaryDirectory() as tmp:",
+		"        repo = Path(tmp)",
+		"        subprocess.run(['git', 'init', '--quiet'], cwd=repo, check=True)",
+		"        subprocess.run(['git', '-c', 'user.name=Eval', '-c', 'user.email=eval@example.com', 'commit', '--quiet', '--allow-empty', '-m', 'initial'], cwd=repo, check=True)",
+		"        subprocess.run(['git', 'config', 'status.showUntrackedFiles', 'no'], cwd=repo, check=True)",
+		"        cli.REPO_ROOT = repo",
+		"        cli.require_clean_worktree()",
+		"        (repo / 'dirty.txt').write_text('dirty\\n', encoding='utf-8')",
+		"        try:",
+		"            cli.require_clean_worktree()",
+		"        except ValueError as exc:",
+		"            assert str(exc) == 'candidate and final verification require a clean worktree'",
+		"        else:",
+		"            raise AssertionError('dirty repository was accepted')",
+		"finally:",
+		"    cli.REPO_ROOT = original_root",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalCommitVerificationRejectsDirtyBeforePlanningOrPreparation(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from argparse import Namespace",
+		"from tests.eval.juex_eval import cli, validation_plan, verification",
+		"calls = []",
+		"original_snapshot = verification.repository_snapshot",
+		"original_steps = cli.verification_steps",
+		"original_environment = cli.isolated_test_environment",
+		"try:",
+		"    verification.repository_snapshot = lambda root: (calls.append('snapshot') or verification.RepositorySnapshot('a' * 40, 'feature/test', True))",
+		"    cli.verification_steps = lambda args: (_ for _ in ()).throw(AssertionError('planned dirty verification'))",
+		"    cli.isolated_test_environment = lambda: (_ for _ in ()).throw(AssertionError('prepared dirty verification'))",
+		"    for tier in ('candidate', 'final'):",
+		"        args = Namespace(tier=tier, run_id='dirty', report_dir='', race=False, web=False, compaction=False, config='/tmp/config.yaml', selection_seed='seed', provider_timeout=7)",
+		"        try:",
+		"            cli.run_verify(args)",
+		"        except ValueError as exc:",
+		"            assert str(exc) == 'candidate and final verification require a clean worktree', exc",
+		"        else:",
+		"            raise AssertionError(f'{tier} accepted a dirty worktree')",
+		"    assert calls == ['snapshot', 'snapshot'], calls",
+		"finally:",
+		"    verification.repository_snapshot = original_snapshot",
+		"    cli.verification_steps = original_steps",
+		"    cli.isolated_test_environment = original_environment",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalCommitVerificationRecordSchemaAndReuseInvalidation(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"import os",
+		"import subprocess",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli, outcomes, verification",
+		"snapshot = verification.RepositorySnapshot('a' * 40, 'feature/test', False)",
+		"steps = [cli.VerificationStep('go-test-all', ['go', 'test', './...']), cli.VerificationStep('make-build', ['make', 'build'])]",
+		"assert {'GOFLAGS', 'GOWORK', 'GOEXPERIMENT'} <= set(verification.GO_ENV_FINGERPRINT_KEYS), verification.GO_ENV_FINGERPRINT_KEYS",
+		"for invalid_run_id in ('.', '..'):",
+		"    try:",
+		"        verification.validate_run_id(invalid_run_id)",
+		"    except ValueError:",
+		"        pass",
+		"    else:",
+		"        raise AssertionError(f'unsafe run ID accepted: {invalid_run_id}')",
+		"original_goflags = os.environ.get('GOFLAGS')",
+		"try:",
+		"    os.environ.pop('GOFLAGS', None)",
+		"    base_environment = verification.environment_fingerprint(web=False)",
+		"    os.environ['GOFLAGS'] = '-tags=verification_unit'",
+		"    assert verification.environment_fingerprint(web=False) != base_environment",
+		"finally:",
+		"    if original_goflags is None:",
+		"        os.environ.pop('GOFLAGS', None)",
+		"    else:",
+		"        os.environ['GOFLAGS'] = original_goflags",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    repo = Path(tmp) / 'repo'",
+		"    repo.mkdir()",
+		"    subprocess.run(['git', 'init', '--quiet'], cwd=repo, check=True)",
+		"    subprocess.run(['git', '-c', 'user.name=Eval', '-c', 'user.email=eval@example.com', 'commit', '--quiet', '--allow-empty', '-m', 'initial'], cwd=repo, check=True)",
+		"    untagged_environment = verification.environment_fingerprint(web=False, repo_root=repo)",
+		"    subprocess.run(['git', 'tag', 'verification-v1'], cwd=repo, check=True)",
+		"    assert verification.environment_fingerprint(web=False, repo_root=repo) != untagged_environment",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    first_rg = Path(tmp) / 'rg-first'",
+		"    second_rg = Path(tmp) / 'rg-second'",
+		"    first_rg.write_bytes(b'first ripgrep')",
+		"    second_rg.write_bytes(b'second ripgrep')",
+		"    original_which = verification.shutil.which",
+		"    try:",
+		"        verification.shutil.which = lambda name, path=None: str(first_rg) if name == 'rg' else original_which(name, path=path)",
+		"        first_environment = verification.environment_fingerprint(web=False)",
+		"        verification.shutil.which = lambda name, path=None: str(second_rg) if name == 'rg' else original_which(name, path=path)",
+		"        assert verification.environment_fingerprint(web=False) != first_environment",
+		"    finally:",
+		"        verification.shutil.which = original_which",
+		"plan = verification.plan_fingerprint(steps)",
+		"environment = verification.stable_fingerprint({'platform': 'test', 'go': 'go1.test'})",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    reports = Path(tmp) / 'reports'",
+		"    report_dir = verification.default_report_dir(reports, snapshot, 'candidate-unit')",
+		"    assert report_dir == reports / 'development-validation' / snapshot.head_sha / 'candidate-unit', report_dir",
+		"    rows = []",
+		"    for index, step in enumerate(steps):",
+		"        row = verification.planned_step_record(step)",
+		"        row.update({'execution_state': 'executed', 'started_at': f'2026-08-21T00:00:0{index}Z', 'duration': 0.25, 'exit_status': 0, 'log': str(report_dir / 'command-logs' / f'{step.label}.log'), 'attempts': [], **outcomes.success(attempt_count=1).as_dict()})",
+		"        rows.append(row)",
+		"    record = verification.build_record(",
+		"        tier='candidate', run_id='candidate-unit', snapshot=snapshot, plan_fingerprint=plan,",
+		"        environment_fingerprint=environment, steps=rows, status='pass',",
+		"        reused=[], executed=[step.label for step in steps], invalidated=[],",
+		"        provider_summary={'selected_provider_model': 'provider:model', 'redacted_config_hash': 'sha256:redacted', 'api_key': 'must-not-appear'},",
+		"    )",
+		"    verification.write_record(report_dir, record)",
+		"    parsed = json.loads((report_dir / 'record.json').read_text(encoding='utf-8'))",
+		"    assert parsed['schema_version'] == verification.SCHEMA_VERSION",
+		"    assert parsed['tier'] == 'candidate' and parsed['head_sha'] == snapshot.head_sha and parsed['dirty'] is False",
+		"    assert parsed['provider_model_ref'] == 'provider:model' and parsed['redacted_config_hash'] == 'sha256:redacted'",
+		"    assert all({'command', 'started_at', 'duration', 'exit_status', 'log'} <= row.keys() for row in parsed['steps']), parsed['steps']",
+		"    assert 'must-not-appear' not in (report_dir / 'record.json').read_text(encoding='utf-8')",
+		"    assert 'must-not-appear' not in (report_dir / 'record.md').read_text(encoding='utf-8')",
+		"    matched = verification.find_reusable_candidate(reports, snapshot, plan, environment, steps)",
+		"    assert matched.source == report_dir / 'record.json', matched",
+		"    assert set(matched.reusable) == {'go-test-all', 'make-build'} and not matched.invalidated, matched",
+		"    changed_sha = verification.find_reusable_candidate(reports, verification.RepositorySnapshot('b' * 40, 'feature/test', False), plan, environment, steps)",
+		"    assert not changed_sha.reusable and any(item['reason'] == 'head_sha mismatch' for item in changed_sha.invalidated), changed_sha",
+		"    changed_plan = verification.find_reusable_candidate(reports, snapshot, verification.stable_fingerprint({'plan': 'changed'}), environment, steps)",
+		"    assert not changed_plan.reusable and any(item['reason'] == 'plan_fingerprint mismatch' for item in changed_plan.invalidated), changed_plan",
+		"    changed_environment = verification.find_reusable_candidate(reports, snapshot, plan, verification.stable_fingerprint({'environment': 'changed'}), steps)",
+		"    assert not changed_environment.reusable and any(item['reason'] == 'environment_fingerprint mismatch' for item in changed_environment.invalidated), changed_environment",
+		"    changed_artifact = verification.find_reusable_candidate(reports, snapshot, plan, environment, steps, {'dist/juex': {'sha256': 'sha256:changed', 'size': 1}})",
+		"    assert not changed_artifact.reusable and any(item['reason'] == 'build artifact mismatch' for item in changed_artifact.invalidated), changed_artifact",
+		"    preserved = verification.preserve_candidate_record(report_dir)",
+		"    assert preserved == report_dir / 'candidate-record.json' and preserved.is_file(), preserved",
+		"    assert (report_dir / 'candidate-record.md').is_file() and not (report_dir / 'record.json').exists()",
+		"    final_record = dict(record, tier='final', status='fail')",
+		"    verification.write_record(report_dir, final_record)",
+		"    retry = verification.find_reusable_candidate(reports, snapshot, plan, environment, steps)",
+		"    assert retry.source == preserved and set(retry.reusable) == {'go-test-all', 'make-build'}, retry",
+		"    refreshed_record = dict(record, started_at='2026-08-21T01:00:00Z', completed_at='2026-08-21T01:00:01Z')",
+		"    verification.write_record(report_dir, refreshed_record)",
+		"    refreshed_preserved = verification.preserve_candidate_record(report_dir)",
+		"    assert refreshed_preserved == preserved",
+		"    assert json.loads(preserved.read_text(encoding='utf-8')) == refreshed_record",
+		"    final_steps = [*steps, cli.VerificationStep('live-integration', ['make', 'integration']), cli.VerificationStep('provider-model-smoke', ['provider-smoke'])]",
+		"    assert [step.label for step in final_steps if step.label not in matched.reusable] == ['live-integration', 'provider-model-smoke']",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalFinalExecutesOnlyLiveStepsWhenCandidateIsReusable(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import tempfile",
+		"from argparse import Namespace",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli, outcomes, validation_plan, verification",
+		"snapshot = verification.RepositorySnapshot('a' * 40, 'feature/test', False)",
+		"candidate = cli.candidate_verification_steps(race=False, web=False)",
+		"reusable = {step.label: {'execution_state': 'executed', 'started_at': '2026-08-21T00:00:00Z', 'duration': 1.0, 'exit_status': 0, 'log': f'/candidate/{step.label}.log', 'attempts': [], 'initial_outcome': 'passed', **outcomes.success(attempt_count=1).as_dict()} for step in candidate}",
+		"calls = []",
+		"records = []",
+		"original_clean = cli.require_clean_worktree",
+		"original_snapshot = verification.repository_snapshot",
+		"original_environment = verification.environment_fingerprint",
+		"original_find = verification.find_reusable_candidate",
+		"original_run = cli.run_recorded_verification_step",
+		"original_test_environment = cli.isolated_test_environment",
+		"original_resolved_path = cli.selection.resolved_path",
+		"original_provider_summary = cli.provider_record_summary",
+		"original_write = verification.write_record",
+		"original_plan = validation_plan.collect_plan",
+		"try:",
+		"    cli.require_clean_worktree = lambda: snapshot",
+		"    verification.repository_snapshot = lambda root: snapshot",
+		"    verification.environment_fingerprint = lambda **kwargs: 'sha256:environment'",
+		"    verification.find_reusable_candidate = lambda *args: verification.ReuseDecision(Path('/candidate/record.json'), reusable, [])",
+		"    cli.isolated_test_environment = lambda: {}",
+		"    cli.selection.resolved_path = lambda path: Path(path)",
+		"    cli.provider_record_summary = lambda args: {'selected_provider_model': 'provider:model', 'redacted_config_hash': 'sha256:redacted'}",
+		"    validation_plan.collect_plan = lambda root, mode, base=None: validation_plan.plan_for_changes(mode, [validation_plan.ChangedFile('M', 'internal/providerreadiness/readiness.go')], base_sha='b' * 40, head_sha=snapshot.head_sha, dirty=False)",
+		"    def fake_run(step, log_dir, test_env):",
+		"        calls.append(step.label)",
+		"        return {'execution_state': 'executed', 'started_at': '2026-08-21T00:00:01Z', 'duration': 2.0, 'exit_status': 0, 'log': str(log_dir / f'{step.label}.log'), 'attempts': [], 'initial_outcome': 'passed', **outcomes.success(attempt_count=1).as_dict()}",
+		"    cli.run_recorded_verification_step = fake_run",
+		"    verification.write_record = lambda report_dir, record: records.append((report_dir, record))",
+		"    with tempfile.TemporaryDirectory() as tmp:",
+		"        args = Namespace(tier='final', run_id='final-unit', report_dir=tmp, race=False, web=False, compaction=False, config='/tmp/config.yaml', selection_seed='seed', provider_timeout=7)",
+		"        assert cli.run_verify(args) == 0",
+		"        assert calls == ['integration-contracts', 'live-integration', 'provider-model-smoke'], calls",
+		"        report_dir, record = records[-1]",
+		"        assert report_dir == Path(tmp) / 'development-validation' / snapshot.head_sha / 'final-unit', report_dir",
+		"        assert record['reused'] == ['web-stub', 'go-test-all', 'make-build'], record",
+		"        assert record['executed'] == calls and record['status'] == 'pass', record",
+		"        assert [row['execution_state'] for row in record['steps']] == ['reused', 'reused', 'reused', 'executed', 'executed', 'executed'], record['steps']",
+		"        assert [row['outcome'] for row in record['steps']] == ['passed'] * 6 and record['blocks_merge'] is False, record",
+		"finally:",
+		"    cli.require_clean_worktree = original_clean",
+		"    verification.repository_snapshot = original_snapshot",
+		"    verification.environment_fingerprint = original_environment",
+		"    verification.find_reusable_candidate = original_find",
+		"    cli.run_recorded_verification_step = original_run",
+		"    cli.isolated_test_environment = original_test_environment",
+		"    cli.selection.resolved_path = original_resolved_path",
+		"    cli.provider_record_summary = original_provider_summary",
+		"    verification.write_record = original_write",
+		"    validation_plan.collect_plan = original_plan",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalVerifyFocusedRunsThroughPublicCLI(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "verify", "focused", "./internal/version")
+	if !strings.Contains(out, "ok  go-test-focused") {
+		t.Fatalf("focused verification did not report success:\n%s", out)
+	}
+}
+
+func TestMakeBuildGoDoesNotBuildFrontend(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("make", "-n", "build-go")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("make -n build-go failed: %v\n%s", err, out)
+	}
+	rendered := string(out)
+	if !strings.Contains(rendered, "go build") {
+		t.Fatalf("build-go does not compile the binary:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "pnpm") {
+		t.Fatalf("build-go rebuilt the frontend:\n%s", rendered)
+	}
+}
+
+func TestMakeWebStubPreparesMissingAssetsWithoutOverwriting(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	run := func() {
+		cmd := exec.Command("make", "--no-print-directory", "-f", filepath.Join(root, "Makefile"), "web-stub")
+		cmd.Dir = work
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("make web-stub failed: %v\n%s", err, out)
+		}
+	}
+
+	run()
+	index := filepath.Join(work, "internal", "web", "dist", "index.html")
+	data, err := os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "<!doctype html><html><body></body></html>\n"; got != want {
+		t.Fatalf("stub index = %q, want %q", got, want)
+	}
+	if err := os.WriteFile(index, []byte("real frontend\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run()
+	data, err = os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got != "real frontend\n" {
+		t.Fatalf("web-stub overwrote existing frontend assets: %q", got)
+	}
+}
+
+func TestMakeWebCheckBuildsAndSynchronizesFrontendOnce(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("make", "-n", "web-check")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("make -n web-check failed: %v\n%s", err, out)
+	}
+	rendered := string(out)
+	if count := strings.Count(rendered, "pnpm build"); count != 1 {
+		t.Fatalf("web-check pnpm build count = %d, want 1:\n%s", count, rendered)
+	}
+	if !strings.Contains(rendered, "cp -R frontend/dist/. internal/web/dist/") {
+		t.Fatalf("web-check did not synchronize the built embed assets:\n%s", rendered)
+	}
+}
+
+func TestMakeVerificationTargetsAreThinPythonAdapters(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "plan", args: []string{"-n", "verify-plan", "TIER=final", "BASE=abc123", "EXPLAIN=1"}, want: "plan --tier final --base abc123 --explain"},
+		{name: "planned-focused", args: []string{"-n", "verify-focused", "PLANNED=1"}, want: "verify focused --planned"},
+		{name: "focused", args: []string{"-n", "verify-focused", "PKGS=./internal/app ./internal/runtime"}, want: "verify focused ./internal/app ./internal/runtime"},
+		{name: "candidate", args: []string{"-n", "verify-candidate", "RACE=1", "WEB=1"}, want: "verify candidate --race --web"},
+		{name: "final", args: []string{"-n", "verify-final", "RACE=1", "WEB=1", "COMPACTION=1"}, want: "verify final --race --web --compaction"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("make", tc.args...)
+			cmd.Dir = root
+			cmd.Env = commandEnv(nil, "BASE", "COMPACTION", "EXPLAIN", "MAKEFLAGS", "MAKELEVEL", "MFLAGS", "PKGS", "PLANNED", "RACE", "TIER", "WEB")
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("make %v failed: %v\n%s", tc.args, err, out)
+			}
+			rendered := string(out)
+			if !strings.Contains(rendered, tc.want) {
+				t.Fatalf("make output missing %q:\n%s", tc.want, rendered)
+			}
+			if strings.Contains(rendered, "go test") {
+				t.Fatalf("Make target contains orchestration instead of a thin CLI adapter:\n%s", rendered)
+			}
+		})
+	}
+}
+
+func TestMakeVerifyFocusedRejectsUnscopedDefault(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("make", "verify-focused", "PKGS=")
+	cmd.Dir = root
+	cmd.Env = commandEnv(nil, "MAKEFLAGS", "MAKELEVEL", "MFLAGS", "PLANNED")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("unscoped focused verification succeeded:\n%s", out)
+	}
+	if !strings.Contains(string(out), "packages or --planned") {
+		t.Fatalf("unscoped focused verification did not explain opt-in:\n%s", out)
+	}
 }
 
 func TestEvalDevelopmentGoTestsUseIsolatedJuexHome(t *testing.T) {
@@ -883,7 +2290,7 @@ func TestEvalDevelopmentGoTestsUseIsolatedJuexHome(t *testing.T) {
 		"    compaction_only=[],",
 		")",
 		"steps, _, _ = cli.development_steps(args, Path('reports'))",
-		"print(json.dumps([{'label': label, 'command': command} for label, command in steps]))",
+		"print(json.dumps([{'label': step.label, 'command': step.command} for step in steps]))",
 	}, "\n")
 	out := runUV(t, root, "python", "-c", program)
 
@@ -894,10 +2301,14 @@ func TestEvalDevelopmentGoTestsUseIsolatedJuexHome(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &steps); err != nil {
 		t.Fatalf("decode steps: %v\n%s", err, out)
 	}
-	for _, label := range []string{"go-test-e2e", "go-test-all"} {
-		command := findEvalCommand(t, steps, label)
-		if len(command) == 0 || command[0] != filepath.Join(root, "scripts", "with-test-juex-home.sh") {
-			t.Fatalf("%s command = %q, want isolated HOME/JUEX_HOME wrapper", label, command)
+	command := findEvalCommand(t, steps, "go-test-all")
+	if len(command) < 2 || command[1] != filepath.ToSlash(filepath.Join(root, "scripts", "with-test-juex-home.sh")) {
+		t.Fatalf("go-test-all command = %q, want isolated HOME/JUEX_HOME wrapper", command)
+	}
+	assertEvalBashExecutable(t, command[0])
+	for _, step := range steps {
+		if step.Label == "go-test-e2e" {
+			t.Fatalf("development eval retained duplicate e2e step: %+v", steps)
 		}
 	}
 }
@@ -924,7 +2335,7 @@ func TestTestJuexHomeWrapperIsolatesDeterministicEnvironment(t *testing.T) {
 	telemetryMarker := filepath.Join(productionHome, "go-telemetry", "marker")
 	globalGitConfig := filepath.Join(productionHome, "global.gitconfig")
 	for path, body := range map[string]string{
-		providerConfig:     "model: private:model\n",
+		providerConfig:     "models: [private:model]\n",
 		fleetMarker:        "fleet-unchanged\n",
 		agentMarker:        "agent-unchanged\n",
 		xdgMarker:          "xdg-unchanged\n",
@@ -1061,7 +2472,7 @@ func TestTestJuexHomeWrapperLiveModePreservesExplicitSources(t *testing.T) {
 	goModCache := filepath.Join(cacheRoot, "go-mod")
 	uvCache := filepath.Join(cacheRoot, "uv")
 	for path, body := range map[string]string{
-		providerConfig:                              "model: fake:model\n",
+		providerConfig:                              "models: [fake:model]\n",
 		filepath.Join(codexHome, "auth.json"):       "{}\n",
 		filepath.Join(productionJuexHome, "marker"): "runtime-unchanged\n",
 	} {
@@ -1085,7 +2496,7 @@ func TestTestJuexHomeWrapperLiveModePreservesExplicitSources(t *testing.T) {
 			`test "$JUEX_PROVIDER_CONFIG" = "$1"`,
 			`test -z "${JUEX_TEST_PROVIDER_CONFIG_DEFAULT:-}"`,
 			`test "$CODEX_HOME" = "$2"`,
-			`grep -q 'model: fake:model' "$JUEX_PROVIDER_CONFIG"`,
+			`grep -Fq 'models: [fake:model]' "$JUEX_PROVIDER_CONFIG"`,
 			`test -r "$CODEX_HOME/auth.json"`,
 			`test "$GOCACHE" = "$3"`,
 			`test "$GOMODCACHE" = "$4"`,
@@ -1201,7 +2612,7 @@ func TestTestJuexHomeWrapperLiveModeResolvesOriginalHomeDefaults(t *testing.T) {
 	providerConfig := filepath.Join(productionHome, ".juex", "juex.yaml")
 	codexHome := filepath.Join(productionHome, ".codex")
 	for path, body := range map[string]string{
-		providerConfig:                        "model: default:model\n",
+		providerConfig:                        "models: [default:model]\n",
 		filepath.Join(codexHome, "auth.json"): "{}\n",
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -1221,7 +2632,7 @@ func TestTestJuexHomeWrapperLiveModeResolvesOriginalHomeDefaults(t *testing.T) {
 			`test "$JUEX_TEST_PROVIDER_CONFIG_DEFAULT" = 1`,
 			`test "$JUEX_PROVIDER_CONFIG" != "$HOME/.juex/juex.yaml"`,
 			`test "$CODEX_HOME" != "$HOME/.codex"`,
-			`grep -q 'model: default:model' "$JUEX_PROVIDER_CONFIG"`,
+			`grep -Fq 'models: [default:model]' "$JUEX_PROVIDER_CONFIG"`,
 			`test -r "$CODEX_HOME/auth.json"`,
 		}, "; "),
 	)
@@ -1250,7 +2661,7 @@ func TestTestJuexHomeWrapperLiveModeUsesWindowsUserProfileSources(t *testing.T) 
 	providerConfig := filepath.Join(productionHome, ".juex", "juex.yaml")
 	codexHome := filepath.Join(productionHome, ".codex")
 	for path, body := range map[string]string{
-		providerConfig:                        "model: windows-default:model\n",
+		providerConfig:                        "models: [windows-default:model]\n",
 		filepath.Join(codexHome, "auth.json"): "{}\n",
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -1271,7 +2682,7 @@ func TestTestJuexHomeWrapperLiveModeUsesWindowsUserProfileSources(t *testing.T) 
 			`test "$JUEX_TEST_PROVIDER_CONFIG_DEFAULT" = 1`,
 			`test "$JUEX_PROVIDER_CONFIG" = "$1"`,
 			`test "$CODEX_HOME" = "$2"`,
-			`grep -q 'model: windows-default:model' "$JUEX_PROVIDER_CONFIG"`,
+			`grep -Fq 'models: [windows-default:model]' "$JUEX_PROVIDER_CONFIG"`,
 			`test -r "$CODEX_HOME/auth.json"`,
 		}, "; "),
 		"wrapper-probe",
@@ -1297,7 +2708,7 @@ func TestTestJuexHomeWrapperLiveModeUsesWindowsUserProfileSources(t *testing.T) 
 			`test -z "${JUEX_TEST_PROVIDER_CONFIG_DEFAULT:-}"`,
 			`test "$JUEX_PROVIDER_CONFIG" = "$1"`,
 			`test "$CODEX_HOME" = "$2"`,
-			`grep -q 'model: windows-default:model' "$JUEX_PROVIDER_CONFIG"`,
+			`grep -Fq 'models: [windows-default:model]' "$JUEX_PROVIDER_CONFIG"`,
 			`test -r "$CODEX_HOME/auth.json"`,
 		}, "; "),
 		"wrapper-probe",
@@ -1778,7 +3189,7 @@ func TestEvalWriteSelectedConfigUsesColonModelRef(t *testing.T) {
 		"    out = Path(tmp) / 'juex.yaml'",
 		"    helper.write_selected_config(cfg, 'openrouter', 'meta-llama/llama-3', out)",
 		"    text = out.read_text(encoding='utf-8')",
-		"    assert 'model: openrouter:meta-llama/llama-3' in text, text",
+		"    assert 'openrouter:meta-llama/llama-3' in text and 'models:' in text, text",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
@@ -2433,7 +3844,7 @@ func TestScheduleRoutingEvalReportingIncludesSelectionEvidence(t *testing.T) {
 		"import json",
 		"import tempfile",
 		"from pathlib import Path",
-		"from tests.eval.juex_eval import helper",
+		"from tests.eval.juex_eval import helper, outcomes",
 		"with tempfile.TemporaryDirectory() as tmp:",
 		"    work = Path(tmp)",
 		"    result = helper.SmokeResult(",
@@ -2452,6 +3863,8 @@ func TestScheduleRoutingEvalReportingIncludesSelectionEvidence(t *testing.T) {
 		"        'resolved_config_path': '/resolved/config.yaml', 'redacted_config_hash': 'sha256:abc',",
 		"        'reproduction_command': 'juex-eval provider-smoke --config /resolved/config.yaml --selection-seed seed-1',",
 		"        'selection_mode': 'seeded', 'failure_category': None, 'error': None,",
+		"        'outcome': 'product_failure', 'reason': 'schedule contract failed', 'matched_rule': 'schedule-routing-contract',",
+		"        'blocks_merge': True, 'recommended_action': 'fix_code', 'retryable': False,",
 		"        'total': 1, 'passed': 0, 'failed': 1, 'tool_use_recorded': 1, 'exec_command_tool_use_recorded': 1,",
 		"        'tty_recorded': 1, 'stdin_recorded': 1, 'filesystem_verified': 1, 'terminal_event_verified': 1,",
 		"        'thinking_observed': 0, 'schedule_routing_verified': 0, 'schedule_routing_failures': 1,",
@@ -2469,12 +3882,15 @@ func TestScheduleRoutingEvalReportingIncludesSelectionEvidence(t *testing.T) {
 		"    assert 'failed (optional' not in markdown, markdown",
 		"    assert 'Selection seed: `seed-1`' in markdown, markdown",
 		"    assert 'Schedule routing variant: `seeded-equivalent`' in markdown, markdown",
+		"    assert 'Outcome: `product_failure`' in markdown and 'Blocks merge: true' in markdown, markdown",
 		"    assert '| not_observed | failed | seeded-equivalent | schedule-routing |' in markdown, markdown",
 		"    commands = work / 'commands.jsonl'",
-		"    commands.write_text(json.dumps({'label': 'provider-model-smoke', 'exit_status': 1, 'log': 'provider.log'}) + '\\n', encoding='utf-8')",
+		"    commands.write_text(json.dumps({'label': 'provider-model-smoke', 'execution_state': 'executed', 'exit_status': 1, 'log': 'provider.log', 'attempts': [], **outcomes.ValidationOutcome('product_failure', 'schedule contract failed', 'schedule-routing-contract', True, 'fix_code').as_dict()}) + '\\n', encoding='utf-8')",
 		"    record_json = work / 'record.json'",
 		"    record_md = work / 'record.md'",
 		"    helper.write_development_record(work, 'unit', commands, summary_json, '', 1, record_json, record_md)",
+		"    record_data = json.loads(record_json.read_text(encoding='utf-8'))",
+		"    assert record_data['blocks_merge'] is True and record_data['failure_type'] == 'code_failure' and record_data['recommended_action'] == 'fix_code', record_data",
 		"    record = record_md.read_text(encoding='utf-8')",
 		"    assert 'Schedule routing failures: 1' in record, record",
 		"    assert 'Selection source: provider_config' in record, record",
@@ -2511,12 +3927,12 @@ func TestScheduleRoutingEvalRetriesUseFreshAttempts(t *testing.T) {
 		"with tempfile.TemporaryDirectory() as tmp:",
 		"    work = Path(tmp)",
 		"    row = helper.MatrixRow('provider', 'model', 'openai', 'default', 'default', 'unset', 'provider:model')",
-		"    ctx = helper.ProviderSmokeContext(row, '/fake/juex', {'providers': []}, work / 'work', work / 'report', 'unit', 5, 2, str(work / 'codex'))",
+		"    ctx = helper.ProviderSmokeContext(row, '/fake/juex', {'providers': []}, work / 'work', work / 'report', 'unit', 5, 1, str(work / 'codex'))",
 		"    attempts = []",
 		"    attempt_seeds = []",
 		"    def fake_write_config(cfg, provider_id, model_id, output_path):",
 		"        output_path.parent.mkdir(parents=True, exist_ok=True)",
-		"        output_path.write_text('model: provider:model\\n', encoding='utf-8')",
+		"        output_path.write_text('models: [provider:model]\\n', encoding='utf-8')",
 		"    def fake_run_turn(ctx, case_dir, case_config, label, args):",
 		"        attempts.append(case_dir)",
 		"        attempt_seeds.append(json.loads((case_dir / '.juex' / 'observables.json').read_text(encoding='utf-8')))",
@@ -2551,11 +3967,12 @@ func TestScheduleRoutingEvalRetriesUseFreshAttempts(t *testing.T) {
 		"    finally:",
 		"        helper.write_selected_config = original_write_config",
 		"        helper.run_turn = original_run_turn",
-		"    assert outcome.kind == 'passed' and outcome.report.passed, outcome.report.message()",
-		"    assert outcome.session_id == 'session-attempt-3', outcome.session_id",
-		"    assert len(attempts) == 3 and len(set(attempts)) == 3, attempts",
-		"    assert [path.name for path in attempts] == ['attempt-1', 'attempt-2', 'attempt-3'], attempts",
-		"    assert [item['observables'][0]['id'] for item in attempt_seeds] == [expect.existing_schedule_id] * 3, attempt_seeds",
+		"    assert outcome.kind == 'capability_failed' and not outcome.report.passed, outcome.report.message()",
+		"    assert outcome.validation_outcome.outcome == 'product_failure', outcome.validation_outcome",
+		"    assert outcome.session_id == 'session-attempt-2', outcome.session_id",
+		"    assert len(attempts) == 2 and len(set(attempts)) == 2, attempts",
+		"    assert [path.name for path in attempts] == ['attempt-1', 'attempt-2'], attempts",
+		"    assert [item['observables'][0]['id'] for item in attempt_seeds] == [expect.existing_schedule_id] * 2, attempt_seeds",
 		"    artifacts = work / 'report' / 'cases' / 'provider_model' / 'schedule-routing'",
 		"    assert (artifacts / 'attempt-1' / 'turn1.stderr.log').is_file(), artifacts",
 		"    dirty = json.loads((artifacts / 'attempt-1' / 'observables.json').read_text(encoding='utf-8'))",
@@ -2563,16 +3980,7 @@ func TestScheduleRoutingEvalRetriesUseFreshAttempts(t *testing.T) {
 		"    failed_contract = json.loads((artifacts / 'attempt-2' / 'contract.json').read_text(encoding='utf-8'))",
 		"    assert failed_contract['outcome'] == 'capability_failed', failed_contract",
 		"    assert failed_contract['passed'] is False and any('exactly one entry' in issue for issue in failed_contract['issues']), failed_contract",
-		"    assert (artifacts / 'attempt-3' / 'conversation.jsonl').is_file(), artifacts",
-		"    assert (artifacts / 'attempt-3' / 'events.jsonl').is_file(), artifacts",
-		"    assert (artifacts / 'attempt-3' / 'observables.json').is_file(), artifacts",
-		"    assert (artifacts / 'attempt-3' / 'seed-observables.json').is_file(), artifacts",
-		"    assert (artifacts / 'attempt-3' / 'prompt.txt').is_file(), artifacts",
-		"    initial = json.loads((artifacts / 'attempt-3' / 'seed-observables.json').read_text(encoding='utf-8'))",
-		"    final = json.loads((artifacts / 'attempt-3' / 'observables.json').read_text(encoding='utf-8'))",
-		"    assert initial == final == seed, (initial, final, seed)",
-		"    contract = json.loads((artifacts / 'attempt-3' / 'contract.json').read_text(encoding='utf-8'))",
-		"    assert contract == {'outcome': 'passed', 'passed': True, 'issues': []}, contract",
+		"    assert not (artifacts / 'attempt-3').exists(), artifacts",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
@@ -2587,6 +3995,19 @@ func runUV(t *testing.T, root string, args ...string) string {
 		t.Fatalf("uv command failed: %v\n%s", err, out)
 	}
 	return string(out)
+}
+
+func assertEvalBashExecutable(t *testing.T, executable string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		if !strings.EqualFold(filepath.Base(executable), "bash.exe") || !strings.Contains(strings.ToLower(executable), `\git\`) {
+			t.Fatalf("Windows bash executable = %q, want Git Bash", executable)
+		}
+		return
+	}
+	if executable != "bash" {
+		t.Fatalf("bash executable = %q, want bash", executable)
+	}
 }
 
 func assertHelpContains(t *testing.T, help string, wants ...string) {

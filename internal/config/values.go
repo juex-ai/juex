@@ -68,11 +68,30 @@ func (c Config) ProviderSelection() ProviderSelection {
 }
 
 func (c Config) ProviderSelectionForModelRef(ref string) (ProviderSelection, error) {
-	cfg, err := c.configForModelRef(ref)
+	resolved, err := c.ResolvedModelForRef(ref)
 	if err != nil {
 		return ProviderSelection{}, err
 	}
-	return cfg.ProviderSelection(), nil
+	return resolved.Selection, nil
+}
+
+// ResolvedModelForRef returns the effective provider selection and model
+// limits for a model ref that is not necessarily part of the serving chain.
+func (c Config) ResolvedModelForRef(ref string) (ResolvedModel, error) {
+	canonical, err := ParseModelRef(ref)
+	if err != nil {
+		return ResolvedModel{}, err
+	}
+	cfg, err := c.configForModelRef(canonical.String())
+	if err != nil {
+		return ResolvedModel{}, err
+	}
+	return ResolvedModel{
+		Ref:             canonical.String(),
+		Selection:       cfg.ProviderSelection(),
+		ContextWindow:   cfg.ContextWindow,
+		MaxOutputTokens: cfg.MaxOutputTokens,
+	}, nil
 }
 
 func (c Config) configForModelRef(ref string) (Config, error) {
@@ -105,7 +124,11 @@ func (c Config) ModelChain() ([]ResolvedModel, error) {
 		MaxOutputTokens: c.MaxOutputTokens,
 	}}
 	seen := map[string]struct{}{primaryRef: {}}
-	for _, ref := range c.FallbackModels {
+	configuredTail := c.Models
+	if len(configuredTail) > 0 {
+		configuredTail = configuredTail[1:]
+	}
+	for _, ref := range configuredTail {
 		canonical, err := ParseModelRef(ref)
 		if err != nil {
 			return nil, err
@@ -288,28 +311,28 @@ func (c Config) ExtensionPolicy() ExtensionPolicy {
 
 // RuntimeLimits contains runtime policy values after config resolution.
 type RuntimeLimits struct {
-	ContextWindow         int
-	MaxOutputTokens       int
-	Compaction            CompactionConfig
-	ToolOutput            ToolOutputConfig
-	PendingInputTTL       time.Duration
-	ExternalEventTTL      time.Duration
-	ToolTimeout           time.Duration
-	ShowBuiltinHookTraces bool
-	NotifyModelChanges    bool
+	ContextWindow           int
+	MaxOutputTokens         int
+	Compaction              CompactionConfig
+	ToolOutput              ToolOutputConfig
+	PendingInputTTL         time.Duration
+	ExternalEventTTL        time.Duration
+	ToolTimeout             time.Duration
+	ShowBuiltinPolicyTraces bool
+	NotifyModelChanges      bool
 }
 
 func (c Config) RuntimeLimits() RuntimeLimits {
 	return RuntimeLimits{
-		ContextWindow:         c.ContextWindow,
-		MaxOutputTokens:       c.MaxOutputTokens,
-		Compaction:            c.Compaction,
-		ToolOutput:            c.ToolOutput,
-		PendingInputTTL:       c.PendingInputTTL,
-		ExternalEventTTL:      c.ExternalEventTTL,
-		ToolTimeout:           c.ToolTimeout,
-		ShowBuiltinHookTraces: c.ShowBuiltinHookTraces,
-		NotifyModelChanges:    c.NotifyModelChanges,
+		ContextWindow:           c.ContextWindow,
+		MaxOutputTokens:         c.MaxOutputTokens,
+		Compaction:              c.Compaction,
+		ToolOutput:              c.ToolOutput,
+		PendingInputTTL:         c.PendingInputTTL,
+		ExternalEventTTL:        c.ExternalEventTTL,
+		ToolTimeout:             c.ToolTimeout,
+		ShowBuiltinPolicyTraces: c.ShowBuiltinPolicyTraces,
+		NotifyModelChanges:      c.NotifyModelChanges,
 	}
 }
 

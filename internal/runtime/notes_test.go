@@ -11,13 +11,13 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestNotesToolDefinitionsBindSessionStateGroup(t *testing.T) {
 	reg := tools.NewRegistry()
-	eng := &Engine{Tools: reg}
-	installModuleTools(t, reg, NewNotesModule(eng))
+	installModuleTools(t, reg, NewNotesModule(workmem.NewNotesStore(t.TempDir())))
 	definitions := NotesToolDefinitions()
 	if len(definitions) != 1 {
 		t.Fatalf("definition count = %d, want 1", len(definitions))
@@ -37,8 +37,7 @@ func TestNotesToolDefinitionsBindSessionStateGroup(t *testing.T) {
 
 func TestNotesToolRewritesSessionNotesAndEmitsEvent(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
-	eng.Notes = NewNotesStore(eng.Session.Dir)
-	installSessionStateModules(t, eng)
+	_, notesStore := installSessionStateModules(t, eng)
 	tool, ok := eng.Tools.Get(NotesToolUpdate)
 	if !ok {
 		t.Fatal("update_notes is not registered")
@@ -72,47 +71,48 @@ func TestNotesToolRewritesSessionNotesAndEmitsEvent(t *testing.T) {
 	if updated.Content != "- [x] inspect\n- [ ] verify" || updated.UpdatedAt.IsZero() {
 		t.Fatalf("notes.updated payload = %+v", updated)
 	}
-	snapshot, err := eng.Notes.Snapshot()
+	snapshot, err := notesStore.Snapshot()
 	if err != nil || snapshot.Content != updated.Content {
 		t.Fatalf("notes snapshot = %+v, err = %v", snapshot, err)
 	}
 
 	_, err = eng.Tools.Call(context.Background(), NotesToolUpdate, map[string]any{
-		"content": strings.Repeat("x", MaxNotesCharacters+1),
+		"content": strings.Repeat("x", workmem.MaxNotesCharacters+1),
 	})
 	if err == nil || !strings.Contains(err.Error(), "maximum is 2048") {
 		t.Fatalf("oversize tool error = %v", err)
 	}
 }
 
-func TestNotesSnapshotEntrypointsUseEngineStore(t *testing.T) {
+func TestNotesSnapshotEntrypointsUseModuleStore(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	if _, err := NewNotesStore(eng.Session.Dir).Update("session directory store"); err != nil {
+	if _, err := workmem.NewNotesStore(eng.Session.Dir).Update("session directory store"); err != nil {
 		t.Fatal(err)
 	}
-	injected := NewNotesStore(t.TempDir())
-	if _, err := injected.Update("engine-owned store"); err != nil {
+	injected := workmem.NewNotesStore(t.TempDir())
+	if _, err := injected.Update("module-owned store"); err != nil {
 		t.Fatal(err)
 	}
-	eng.SetNotesStore(injected)
+	_, _ = installSessionStateModulesWithStores(t, eng, nil, injected)
 
 	status, err := eng.NotesStatusSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status == nil || status.Content != "engine-owned store" {
-		t.Fatalf("NotesStatusSnapshot() = %+v, want engine-owned store", status)
+	if status == nil || status.Content != "module-owned store" {
+		t.Fatalf("NotesStatusSnapshot() = %+v, want module-owned store", status)
 	}
-	contextText, ok := eng.notesContextSnapshot()
-	if !ok || !strings.Contains(contextText, "engine-owned store") || strings.Contains(contextText, "session directory store") {
-		t.Fatalf("notesContextSnapshot() = %q, %v", contextText, ok)
+	contextMessage := runtimeContextMessage(eng.ActiveContext().Messages, "runtime-notes")
+	if contextMessage == nil || !strings.Contains(contextMessage.FirstText(), "module-owned store") || strings.Contains(contextMessage.FirstText(), "session directory store") {
+		t.Fatalf("module notes context = %+v", contextMessage)
 	}
 }
 
-func TestNotesStoreLazyInitializationReturnsOneEngineInstance(t *testing.T) {
-	eng, _ := newEngine(t, &mockProvider{}, false)
+func TestNotesModuleReturnsOneOwnedStoreInstance(t *testing.T) {
+	store := workmem.NewNotesStore(t.TempDir())
+	module := NewNotesModule(store)
 	const callers = 32
-	stores := make([]*NotesStore, callers)
+	stores := make([]*workmem.NotesStore, callers)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 
@@ -121,23 +121,20 @@ func TestNotesStoreLazyInitializationReturnsOneEngineInstance(t *testing.T) {
 		go func(index int) {
 			defer wg.Done()
 			<-start
-			stores[index] = eng.notesStoreLocked()
+			stores[index] = module.NotesStore()
 		}(i)
 	}
 	close(start)
 	wg.Wait()
 
 	first := stores[0]
-	if first == nil || first.SessionDir != eng.Session.Dir {
-		t.Fatalf("lazy store = %+v, want session dir %q", first, eng.Session.Dir)
+	if first != store {
+		t.Fatalf("module store = %p, want %p", first, store)
 	}
 	for i, store := range stores[1:] {
 		if store != first {
 			t.Fatalf("store %d = %p, want singleton %p", i+1, store, first)
 		}
-	}
-	if eng.Notes != first {
-		t.Fatalf("Engine.Notes = %p, want lazy singleton %p", eng.Notes, first)
 	}
 }
 
@@ -152,7 +149,6 @@ func TestNotesToolRecitesRewriteOnNextProviderRequest(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Notes = NewNotesStore(eng.Session.Dir)
 	installSessionStateModules(t, eng)
 
 	if out, err := eng.Turn(context.Background(), "work"); err != nil || out != "done" {
@@ -169,15 +165,15 @@ func TestNotesToolRecitesRewriteOnNextProviderRequest(t *testing.T) {
 
 func TestActiveContextAppendsGoalThenNotes(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	eng.Notes = NewNotesStore(eng.Session.Dir)
-	if _, err := eng.GoalState.Create("ship notes", "tests pass"); err != nil {
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	notesStore := workmem.NewNotesStore(eng.Session.Dir)
+	if _, err := goalState.Create("ship notes", "tests pass"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.Notes.Update("- [ ] run tests"); err != nil {
+	if _, err := notesStore.Update("- [ ] run tests"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModules(t, eng)
+	installSessionStateModulesWithStores(t, eng, goalState, notesStore)
 
 	snapshot := eng.ActiveContext(llm.TextMessage(llm.RoleUser, "continue"))
 	if len(snapshot.Messages) < 3 {
@@ -192,7 +188,7 @@ func TestActiveContextAppendsGoalThenNotes(t *testing.T) {
 		t.Fatalf("notes context = %+v", notes)
 	}
 
-	if _, err := eng.Notes.Update(""); err != nil {
+	if _, err := notesStore.Update(""); err != nil {
 		t.Fatal(err)
 	}
 	snapshot = eng.ActiveContext(llm.TextMessage(llm.RoleUser, "continue"))
@@ -211,7 +207,7 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 	}{
 		{
 			name:      "oversized",
-			corrupt:   []byte(strings.Repeat("x", MaxNotesCharacters+1)),
+			corrupt:   []byte(strings.Repeat("x", workmem.MaxNotesCharacters+1)),
 			wantError: "maximum is 2048",
 		},
 		{
@@ -224,9 +220,8 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			eng, bus := newEngine(t, &mockProvider{}, false)
-			eng.Notes = NewNotesStore(eng.Session.Dir)
 			installSessionStateModules(t, eng)
-			notesPath := filepath.Join(eng.Session.Dir, NotesFileName)
+			notesPath := filepath.Join(eng.Session.Dir, workmem.NotesFileName)
 			if err := os.WriteFile(notesPath, tt.corrupt, 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -244,7 +239,7 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 					t.Fatalf("active context missing Notes error placeholder: %+v", snapshot.Messages)
 				}
 				text := message.FirstText()
-				relativePath := filepath.ToSlash(filepath.Join(".juex", "sessions", filepath.Base(eng.Session.Dir), NotesFileName))
+				relativePath := filepath.ToSlash(filepath.Join(".juex", "sessions", filepath.Base(eng.Session.Dir), workmem.NotesFileName))
 				for _, want := range []string{"Working notes unavailable", tt.wantError, relativePath, "update_notes"} {
 					if !strings.Contains(text, want) {
 						t.Fatalf("Notes placeholder missing %q: %q", want, text)
@@ -280,13 +275,13 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 }
 
 func TestNotesContextFromStoreHandlesNil(t *testing.T) {
-	var nilEngine *Engine
-	if text, ok := nilEngine.notesContextFromStore(NewNotesStore(t.TempDir())); ok || text != "" {
-		t.Fatalf("nil engine notes context = %q, %v", text, ok)
+	var nilModule *NotesModule
+	if text, ok := nilModule.notesContextFromStore(workmem.NewNotesStore(t.TempDir())); ok || text != "" {
+		t.Fatalf("nil module notes context = %q, %v", text, ok)
 	}
 
-	eng := &Engine{}
-	if text, ok := eng.notesContextFromStore(nil); ok || text != "" {
+	module := NewNotesModule(nil)
+	if text, ok := module.notesContextFromStore(nil); ok || text != "" {
 		t.Fatalf("nil store notes context = %q, %v", text, ok)
 	}
 }
@@ -297,14 +292,14 @@ func TestTurnRecitesNotesReadFailurePlaceholderAfterAutoCompaction(t *testing.T)
 		{Message: llm.TextMessage(llm.RoleAssistant, "acknowledged"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
-	eng.Notes = NewNotesStore(eng.Session.Dir)
+	eng.Compaction.ReserveTokens = 1930
 	installSessionStateModules(t, eng)
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(eng.Session.Dir, NotesFileName), []byte{0xff}, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(eng.Session.Dir, workmem.NotesFileName), []byte{0xff}, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -339,9 +334,8 @@ func TestTurnRecitesNotesReadFailurePlaceholder(t *testing.T) {
 		StopReason: llm.StopEndTurn,
 	}}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Notes = NewNotesStore(eng.Session.Dir)
 	installSessionStateModules(t, eng)
-	notesPath := filepath.Join(eng.Session.Dir, NotesFileName)
+	notesPath := filepath.Join(eng.Session.Dir, workmem.NotesFileName)
 	if err := os.WriteFile(notesPath, []byte{0xff}, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -379,8 +373,7 @@ func runtimeContextMessage(messages []llm.Message, id string) *llm.Message {
 
 func TestNotesModuleRejectsMissingStore(t *testing.T) {
 	reg := tools.NewRegistry()
-	eng := &Engine{Tools: reg}
-	installModuleTools(t, reg, NewNotesModule(eng))
+	installModuleTools(t, reg, NewNotesModule(nil))
 	if _, err := reg.Call(context.Background(), NotesToolUpdate, map[string]any{"content": "hi"}); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("missing store error = %v", err)
 	}

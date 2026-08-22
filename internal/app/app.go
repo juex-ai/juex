@@ -37,6 +37,7 @@ import (
 	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
@@ -54,13 +55,14 @@ type Options struct {
 	ModelHealth     *llm.ModelHealth
 	// SummaryProvider, when set, overrides compaction.summary_model provider
 	// construction. It is primarily useful for tests and embedded callers.
-	SummaryProvider   llm.Provider
-	SummaryProvenance provenance.SafeProvider
-	Verbose           bool
-	Debug             bool
-	LogLevel          string
-	Stderr            io.Writer
-	WorkDir           string // if set, overrides Config.WorkDir
+	SummaryProvider      llm.Provider
+	SummaryProvenance    provenance.SafeProvider
+	SummaryContextWindow int
+	Verbose              bool
+	Debug                bool
+	LogLevel             string
+	Stderr               io.Writer
+	WorkDir              string // if set, overrides Config.WorkDir
 	// MCPManager, when set, provides process-scoped MCP clients owned by
 	// the caller. App registers proxy tools into its per-session registry
 	// but does not close the manager.
@@ -88,8 +90,8 @@ type Options struct {
 	// Internal child-runtime seams for managed Side Sessions.
 	disableSideSessionTools bool
 	disableObservables      bool
-	sharedGoalState         *runtime.GoalStateStore
-	sharedNotes             *runtime.NotesStore
+	sharedGoalState         *workmem.GoalStateStore
+	sharedNotes             *workmem.NotesStore
 	sharedObservables       *observable.Manager
 	sideSessionFactory      sideSessionFactory
 	sessionModuleFactories  []runtimemodule.SessionFactorySpec
@@ -292,11 +294,13 @@ func New(opts Options) (*App, error) {
 	}
 	summaryProvider := opts.SummaryProvider
 	summaryProvenance := opts.SummaryProvenance
+	summaryContextWindow := opts.SummaryContextWindow
 	if summaryProvider == nil && !providerInjected && strings.TrimSpace(runtimeLimits.Compaction.SummaryModel) != "" {
-		selection, err := cfg.ProviderSelectionForModelRef(runtimeLimits.Compaction.SummaryModel)
+		resolved, err := cfg.ResolvedModelForRef(runtimeLimits.Compaction.SummaryModel)
 		if err != nil {
 			return nil, fmt.Errorf("app: compaction.summary_model: %w", err)
 		}
+		selection := resolved.Selection
 		selection.ArtifactDir = runtimePaths.ArtifactDir
 		profile, err := selection.ProviderProfile()
 		if err != nil {
@@ -308,6 +312,7 @@ func New(opts Options) (*App, error) {
 		}
 		summaryProvider = p
 		summaryProvenance = provenance.SafeProviderFromProfile(profile)
+		summaryContextWindow = resolved.ContextWindow
 	}
 
 	bus := events.NewBus()
@@ -406,7 +411,7 @@ func New(opts Options) (*App, error) {
 	}
 	var eng *runtime.Engine
 	pb := &prompt.Builder{
-		ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+		ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 			request := runtimemodule.ContextRequest{
 				Purpose: runtimemodule.ContextPurposeProviderIteration,
 				Runtime: runtimeModules.runtimeContext,
@@ -447,29 +452,28 @@ func New(opts Options) (*App, error) {
 	}
 
 	eng = &runtime.Engine{
-		Provider:              provider,
-		SummaryProvider:       summaryProvider,
-		SummaryProvenance:     summaryProvenance,
-		ModelCandidates:       modelCandidates,
-		ModelHealth:           modelHealth,
-		Tools:                 reg,
-		RuntimeContext:        runtimeModules.runtimeContext,
-		Bus:                   bus,
-		Session:               sess,
-		Prompt:                pb,
-		WorkDir:               runtimePaths.WorkDir,
-		ArtifactDir:           runtimePaths.ArtifactDir,
-		PendingInputQueue:     runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{}),
-		Notes:                 notesStore(sess),
-		PendingInputTTL:       pendingInputTTL,
-		ExternalEventTTL:      externalEventTTL,
-		GoalState:             goalStateStore(sess),
-		ShowBuiltinHookTraces: runtimeLimits.ShowBuiltinHookTraces,
-		NotifyModelChanges:    runtimeLimits.NotifyModelChanges,
-		ContextWindow:         runtimeLimits.ContextWindow,
-		MaxOutputTokens:       runtimeLimits.MaxOutputTokens,
-		Compaction:            runtimeLimits.Compaction,
-		ToolOutput:            runtimeLimits.ToolOutput,
+		Provider:                provider,
+		SummaryProvider:         summaryProvider,
+		SummaryProvenance:       summaryProvenance,
+		SummaryContextWindow:    summaryContextWindow,
+		ModelCandidates:         modelCandidates,
+		ModelHealth:             modelHealth,
+		Tools:                   reg,
+		RuntimeContext:          runtimeModules.runtimeContext,
+		Bus:                     bus,
+		Session:                 sess,
+		Prompt:                  pb,
+		WorkDir:                 runtimePaths.WorkDir,
+		ArtifactDir:             runtimePaths.ArtifactDir,
+		PendingInputQueue:       runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{}),
+		PendingInputTTL:         pendingInputTTL,
+		ExternalEventTTL:        externalEventTTL,
+		ShowBuiltinPolicyTraces: runtimeLimits.ShowBuiltinPolicyTraces,
+		NotifyModelChanges:      runtimeLimits.NotifyModelChanges,
+		ContextWindow:           runtimeLimits.ContextWindow,
+		MaxOutputTokens:         runtimeLimits.MaxOutputTokens,
+		Compaction:              runtimeLimits.Compaction,
+		ToolOutput:              runtimeLimits.ToolOutput,
 	}
 	a := &App{
 		Engine:                 eng,
@@ -640,6 +644,8 @@ func New(opts Options) (*App, error) {
 		sessionModuleOptions{
 			hookRunner:               hookRunner,
 			hookBaseRequest:          hookBaseRequest,
+			goalState:                opts.sharedGoalState,
+			notes:                    opts.sharedNotes,
 			goalContinuation:         opts.sharedGoalState == nil,
 			goalContinuationDeferrer: a.sideSessions,
 		},
@@ -664,9 +670,6 @@ func New(opts Options) (*App, error) {
 		_ = a.Close()
 		return nil, err
 	}
-	if opts.sharedGoalState != nil || opts.sharedNotes != nil {
-		eng.ShareSessionState(opts.sharedGoalState, opts.sharedNotes)
-	}
 	if err := eng.RecoverTranscript("load"); err != nil {
 		_ = a.Close()
 		return nil, err
@@ -688,18 +691,18 @@ func New(opts Options) (*App, error) {
 	return a, nil
 }
 
-func goalStateStore(sess *session.Session) *runtime.GoalStateStore {
+func goalStateStore(sess *session.Session) *workmem.GoalStateStore {
 	if sess == nil || sess.Dir == "" {
 		return nil
 	}
-	return runtime.NewGoalStateStore(sess.Dir, runtime.GoalStateOptions{})
+	return workmem.NewGoalStateStore(sess.Dir, workmem.GoalStateOptions{})
 }
 
-func notesStore(sess *session.Session) *runtime.NotesStore {
+func notesStore(sess *session.Session) *workmem.NotesStore {
 	if sess == nil || sess.Dir == "" {
 		return nil
 	}
-	return runtime.NewNotesStore(sess.Dir)
+	return workmem.NewNotesStore(sess.Dir)
 }
 
 func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {

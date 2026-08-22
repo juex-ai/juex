@@ -55,9 +55,9 @@ test("frontend projects backend browser event fixture stream", () => {
   assert.ok(
     state.messages.some(
       (message) =>
-        message.kind === "hook_event" &&
+        message.kind === "policy_event" &&
         message.blocks?.[0]?.type === "text" &&
-        message.blocks[0].text.includes("hook extract-state"),
+        message.blocks[0].text.includes("policy hooks/UserPromptSubmit/extract-state"),
     ),
   );
   assert.ok(

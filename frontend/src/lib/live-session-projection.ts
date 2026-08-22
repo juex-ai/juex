@@ -335,14 +335,14 @@ export function projectLiveSessionEvent(
     case "tool.outcome_unknown":
       next = appendToolResult(next, event, true);
       break;
-    case "hook.started":
-    case "hook.completed":
-    case "hook.errored":
+    case "policy.started":
+    case "policy.completed":
+    case "policy.errored":
       break;
-    case "hook.trace":
+    case "policy.trace":
       next = {
         ...next,
-        messages: appendHookTraceMessage(next.messages, event),
+        messages: appendPolicyTraceMessage(next.messages, event),
       };
       break;
     case "pending_input.queued":
@@ -846,20 +846,20 @@ function appendToolResult(
   };
 }
 
-function appendHookTraceMessage(
+function appendPolicyTraceMessage(
   messages: Message[],
-  event: Extract<BrowserEvent, { type: "hook.trace" }>,
+  event: Extract<BrowserEvent, { type: "policy.trace" }>,
 ): Message[] {
   const text = event.payload.text;
   if (!text) return messages;
-  const id = event.payload.message_id ?? (event.id ? `hook-${event.id}` : undefined);
+  const id = event.payload.message_id ?? (event.id ? `policy-${event.id}` : undefined);
   if (id && messages.some((message) => message.id === id)) return messages;
   return [
     ...messages,
     {
       id,
       role: "system",
-      kind: "hook_event",
+      kind: "policy_event",
       turn_id: event.turn_id,
       blocks: [{ type: "text", text }],
     },

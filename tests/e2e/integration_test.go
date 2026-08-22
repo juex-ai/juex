@@ -4,7 +4,7 @@
 // explicitly opted in (no API key in normal CI). Reads provider configuration
 // from JUEX_PROVIDER_CONFIG or ~/.juex/juex.yaml.
 //
-//	go test -tags=integration ./tests/e2e/... -count=1 -v -run Live
+//	go test -tags=integration ./tests/e2e/... -count=1 -v -run '^TestLiveConfigs_'
 package e2e
 
 import (

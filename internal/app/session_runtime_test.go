@@ -922,26 +922,27 @@ func TestReplaceSessionPublishesOnlyRestartRecoveredStatus(t *testing.T) {
 
 func assertAtomicAppSessionRead(a *App) error {
 	return a.ReadSession(func(sess *session.Session) error {
-		runtime := a.Engine.SessionRuntimeSnapshot()
-		if runtime.Session != sess {
-			return fmt.Errorf("app session %q and engine session %q differ", sess.ID, sessionRuntimeID(runtime.Session))
+		runtimeSnapshot := a.Engine.SessionRuntimeSnapshot()
+		if runtimeSnapshot.Session != sess {
+			return fmt.Errorf("app session %q and engine session %q differ", sess.ID, sessionRuntimeID(runtimeSnapshot.Session))
 		}
-		if runtime.ScratchpadDir != sess.ScratchpadDir() {
-			return fmt.Errorf("session %q scratchpad = %q, want %q", sess.ID, runtime.ScratchpadDir, sess.ScratchpadDir())
+		if runtimeSnapshot.ScratchpadDir != sess.ScratchpadDir() {
+			return fmt.Errorf("session %q scratchpad = %q, want %q", sess.ID, runtimeSnapshot.ScratchpadDir, sess.ScratchpadDir())
 		}
-		if runtime.Notes == nil {
+		goalState, notes := runtime.SessionStateStoresFromModules(runtimeSnapshot.Modules)
+		if notes == nil {
 			return fmt.Errorf("session %q has no notes store", sess.ID)
 		}
-		if runtime.Notes.SessionDir != sess.Dir {
-			return fmt.Errorf("session %q notes belong to %q", sess.ID, runtime.Notes.SessionDir)
+		if notes.SessionDir != sess.Dir {
+			return fmt.Errorf("session %q notes belong to %q", sess.ID, notes.SessionDir)
 		}
-		if runtime.GoalState == nil {
+		if goalState == nil {
 			return fmt.Errorf("session %q has no goal state store", sess.ID)
 		}
-		if runtime.GoalState.SessionDir != sess.Dir {
-			return fmt.Errorf("session %q goal state belongs to %q", sess.ID, runtime.GoalState.SessionDir)
+		if goalState.SessionDir != sess.Dir {
+			return fmt.Errorf("session %q goal state belongs to %q", sess.ID, goalState.SessionDir)
 		}
-		if runtime.Modules == nil {
+		if runtimeSnapshot.Modules == nil {
 			return fmt.Errorf("session %q has no sealed Module set", sess.ID)
 		}
 		return nil

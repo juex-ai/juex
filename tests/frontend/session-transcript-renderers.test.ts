@@ -30,7 +30,7 @@ test("every backend message kind resolves through the renderer registry", () => 
     mcp_event: "mcp_event",
     observation: "observation",
     side_session: "side_session",
-    hook_event: "hook_event",
+    policy_event: "policy_event",
     compact: "compact",
     runtime_context: "default",
     model_change: "model_fallback",
@@ -58,8 +58,8 @@ test("automated user renderers retain their role guards", () => {
   }
 
   assert.equal(
-    messageGroupRendererKey({ kind: "hook_event", role: "assistant" }),
-    "hook_event",
+    messageGroupRendererKey({ kind: "policy_event", role: "assistant" }),
+    "policy_event",
   );
   assert.equal(
     messageGroupRendererKey({ kind: "compact", role: "assistant" }),

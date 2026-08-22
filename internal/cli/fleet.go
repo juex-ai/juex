@@ -33,7 +33,7 @@ func newFleetCmd(flags *persistentFlags) *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	declareUnavailableInheritedFlags(cmd, "config", "cwd", "model")
+	declareUnavailableInheritedFlags(cmd, "config", "cwd", "models")
 	cmd.AddCommand(newFleetServeCmd(flags))
 	cmd.AddCommand(newFleetStatusCmd(flags))
 	cmd.AddCommand(newFleetAddCmd(flags))

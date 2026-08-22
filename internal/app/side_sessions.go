@@ -18,6 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -103,8 +104,8 @@ type sideSessionChildOptions struct {
 	Config            config.Config
 	Model             string
 	UseParentProvider bool
-	GoalState         *runtime.GoalStateStore
-	Notes             *runtime.NotesStore
+	GoalState         *workmem.GoalStateStore
+	Notes             *workmem.NotesStore
 	Observables       *observable.Manager
 }
 
@@ -126,8 +127,9 @@ type managedSideSession struct {
 }
 
 type sideSessionManager struct {
-	parent  *App
-	factory sideSessionFactory
+	parent                      *App
+	factory                     sideSessionFactory
+	childSessionModuleFactories []runtimemodule.SessionFactorySpec
 
 	lifecycleMu     sync.RWMutex
 	transitionMu    sync.Mutex
@@ -180,6 +182,7 @@ func (m *sideSessionManager) newChildApp(child sideSessionChildOptions) (*App, e
 		ModelHealth:             parent.Engine.ModelHealth,
 		SummaryProvider:         parent.Engine.SummaryProvider,
 		SummaryProvenance:       parent.Engine.SummaryProvenance,
+		SummaryContextWindow:    parent.Engine.SummaryContextWindow,
 		Verbose:                 false,
 		Debug:                   parent.debug,
 		LogLevel:                parent.logLevel,
@@ -194,6 +197,7 @@ func (m *sideSessionManager) newChildApp(child sideSessionChildOptions) (*App, e
 		sharedGoalState:         child.GoalState,
 		sharedNotes:             child.Notes,
 		sharedObservables:       child.Observables,
+		sessionModuleFactories:  append([]runtimemodule.SessionFactorySpec(nil), m.childSessionModuleFactories...),
 		startupContext:          child.Context,
 	}
 	if child.UseParentProvider {
@@ -229,6 +233,7 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 		model = config.ModelRef{ProviderID: cfg.ProviderID, ModelID: cfg.Model}.String()
 	}
 	state := m.parent.Engine.SessionRuntimeSnapshot()
+	goalState, notes := runtime.SessionStateStoresFromModules(state.Modules)
 	type factoryResult struct {
 		child *App
 		err   error
@@ -240,8 +245,8 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 			Config:            cfg,
 			Model:             model,
 			UseParentProvider: useParentProvider,
-			GoalState:         state.GoalState,
-			Notes:             state.Notes,
+			GoalState:         goalState,
+			Notes:             notes,
 			Observables:       m.parent.obsv,
 		})
 		resultCh <- factoryResult{child: child, err: err}

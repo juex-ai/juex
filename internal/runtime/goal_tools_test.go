@@ -6,13 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
 func TestGoalToolDefinitionsBindSessionStateGroup(t *testing.T) {
 	reg := tools.NewRegistry()
-	eng := &Engine{Tools: reg, GoalState: NewGoalStateStore(t.TempDir(), GoalStateOptions{})}
-	installModuleTools(t, reg, NewGoalModule(eng))
+	store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
+	installModuleTools(t, reg, NewGoalModule(store))
 	definitions := GoalToolDefinitions()
 	if len(definitions) != 3 {
 		t.Fatalf("definition count = %d, want 3", len(definitions))
@@ -34,8 +35,8 @@ func TestGoalToolDefinitionsBindSessionStateGroup(t *testing.T) {
 
 func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 	reg := tools.NewRegistry()
-	eng := &Engine{Tools: reg, GoalState: NewGoalStateStore(t.TempDir(), GoalStateOptions{})}
-	installModuleTools(t, reg, NewGoalModule(eng))
+	store := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
+	installModuleTools(t, reg, NewGoalModule(store))
 	createTool, ok := reg.Get(GoalToolCreate)
 	if !ok {
 		t.Fatal("create_goal is not registered")
@@ -63,7 +64,7 @@ func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 		t.Fatalf("update_goal properties = %#v", updateProperties)
 	}
 	if !strings.Contains(strings.ToLower(updateTool.Description), "success requires acceptance") ||
-		!strings.Contains(updateTool.Description, string(GoalStatusWaitForUser)) ||
+		!strings.Contains(updateTool.Description, string(workmem.GoalStatusWaitForUser)) ||
 		!strings.Contains(updateTool.Description, `Guide available via skill_load("juex-session-state").`) {
 		t.Fatalf("update_goal description should retain routing and guide pointer: %q", updateTool.Description)
 	}
@@ -84,7 +85,7 @@ func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := reg.Call(context.Background(), GoalToolUpdate, map[string]any{
-		"status":        string(GoalStatusSuccess),
+		"status":        string(workmem.GoalStatusSuccess),
 		"status_reason": "validated by tests",
 	}); err != nil {
 		t.Fatal(err)
@@ -106,12 +107,12 @@ func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 	}
 
 	if _, err := reg.Call(context.Background(), GoalToolUpdate, map[string]any{
-		"status": string(GoalStatusFailure),
+		"status": string(workmem.GoalStatusFailure),
 	}); err != nil {
 		t.Fatalf("failure without status_reason should remain valid: %v", err)
 	}
 
-	other := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
+	other := workmem.NewGoalStateStore(t.TempDir(), workmem.GoalStateOptions{})
 	snapshot, err := other.StatusSnapshot()
 	if err != nil {
 		t.Fatal(err)

@@ -10,6 +10,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/provenance"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
@@ -162,6 +163,38 @@ func TestDefaultCatalogValidatesProviderRequestProvenance(t *testing.T) {
 	}
 }
 
+func TestDefaultCatalogOwnsPolicyLifecycleFacts(t *testing.T) {
+	payload := juexruntime.PolicyCompletedPayload{
+		ModuleID:    "quota",
+		PolicyPoint: runtimemodule.PolicyPointToolBefore,
+		Name:        "budget-check",
+		Source:      "project",
+		ToolName:    "exec_command",
+		DurationMS:  4,
+	}
+	prepared, err := Default().Prepare(events.Event{Type: "policy.completed", Payload: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.SchemaVersion != 1 || prepared.ReplayPolicy != events.ReplayIgnorable {
+		t.Fatalf("policy completed schema = v%d/%q", prepared.SchemaVersion, prepared.ReplayPolicy)
+	}
+	raw, err := json.Marshal(prepared.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(raw), `{"module_id":"quota","policy_point":"tool_before","name":"budget-check","source":"project","tool_name":"exec_command","duration_ms":4,"exit_code":0}`; got != want {
+		t.Fatalf("policy completed payload = %s, want %s", got, want)
+	}
+	if _, err := Default().Prepare(events.Event{Type: "policy.completed", Payload: juexruntime.PolicyCompletedPayload{}}); err == nil {
+		t.Fatal("policy.completed without Framework ownership was accepted")
+	}
+	payload.PolicyPoint = runtimemodule.PolicyPoint("forged-point")
+	if _, err := Default().Prepare(events.Event{Type: "policy.completed", Payload: payload}); err == nil {
+		t.Fatal("policy.completed with noncanonical policy point was accepted")
+	}
+}
+
 func TestDefaultCatalogRequiresUncatalogedDurableEventsToDeclareReplayContract(t *testing.T) {
 	_, err := Default().Prepare(events.Event{
 		Type:    "plugin.notice",
@@ -212,7 +245,7 @@ func TestDefaultCatalogReplayPolicyForUnknownSchemas(t *testing.T) {
 		{
 			name: "unsupported ignorable version stays opaque",
 			event: events.Event{
-				Type: "hook.trace", SchemaVersion: 2,
+				Type: "policy.trace", SchemaVersion: 2,
 				ReplayPolicy: events.ReplayIgnorable, Payload: json.RawMessage(`{"text":"old"}`),
 			},
 			wantOpaque: true,
@@ -220,7 +253,7 @@ func TestDefaultCatalogReplayPolicyForUnknownSchemas(t *testing.T) {
 		{
 			name: "unsupported required version fails closed",
 			event: events.Event{
-				Type: "hook.trace", SchemaVersion: 2,
+				Type: "policy.trace", SchemaVersion: 2,
 				ReplayPolicy: events.ReplayRequired, Payload: json.RawMessage(`{"text":"old"}`),
 			},
 			wantError: true,

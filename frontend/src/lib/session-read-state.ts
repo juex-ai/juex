@@ -471,7 +471,7 @@ function eventTranscriptAlreadyLoaded(
   switch (event.type) {
     case "turn.started":
     case "llm.responded":
-    case "hook.trace":
+    case "policy.trace":
       return Boolean(
         event.payload.message_id &&
           messages.some((message) => message.id === event.payload.message_id),

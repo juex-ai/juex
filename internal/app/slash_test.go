@@ -13,6 +13,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
@@ -406,12 +407,12 @@ func TestApp_REPLProcessesStatusSlash(t *testing.T) {
 
 func TestAppStatusIncludesGoalState(t *testing.T) {
 	a, _ := newStubApp(t)
-	if _, err := a.Engine.GoalState.Create("finish goal tools", "tests pass"); err != nil {
+	if _, err := appGoalStateStore(t, a).Create("finish goal tools", "tests pass"); err != nil {
 		t.Fatal(err)
 	}
 
 	status := a.StatusSnapshot()
-	if status.Goal == nil || status.Goal.Description != "finish goal tools" || status.Goal.Status != runtime.GoalStatusInProgress {
+	if status.Goal == nil || status.Goal.Description != "finish goal tools" || status.Goal.Status != workmem.GoalStatusInProgress {
 		t.Fatalf("goal status = %+v", status.Goal)
 	}
 	text := status.Text()

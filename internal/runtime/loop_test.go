@@ -26,6 +26,7 @@ import (
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/provenance"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
@@ -333,7 +334,7 @@ func TestAppendHookAdditionalContextDoesNotMutateInputBlocks(t *testing.T) {
 	blocks[0] = llm.Block{Type: llm.BlockText, Text: "original"}
 	msg := llm.Message{Role: llm.RoleUser, Blocks: blocks}
 
-	out := appendHookAdditionalContext(msg, []hooks.Result{{
+	out := appendPolicyAdditionalContext(msg, []hooks.Result{{
 		Hook:   hooks.CommandHook{Name: "context"},
 		Stdout: "extra",
 	}})
@@ -364,7 +365,7 @@ func TestRunSessionStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(eng.Session.History) != 0 {
-		t.Fatalf("session hook context persisted in history: %+v", eng.Session.History)
+		t.Fatalf("session policy context persisted in history: %+v", eng.Session.History)
 	}
 	if _, err := eng.Turn(context.Background(), "first turn"); err != nil {
 		t.Fatal(err)
@@ -373,10 +374,10 @@ func TestRunSessionStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := messagesText(prov.histories[0]); !strings.Contains(got, "load project policy") {
-		t.Fatalf("first provider request missing session hook context:\n%s", got)
+		t.Fatalf("first provider request missing session policy context:\n%s", got)
 	}
 	if got := messagesText(prov.histories[1]); strings.Contains(got, "load project policy") {
-		t.Fatalf("session hook context repeated in second provider request:\n%s", got)
+		t.Fatalf("session policy context repeated in second provider request:\n%s", got)
 	}
 	for _, msg := range eng.Session.History {
 		if msg.Kind == llm.MessageKindRuntimeContext {
@@ -436,7 +437,7 @@ func TestTurnStopsBeforeProviderWhenModulePromptContextFails(t *testing.T) {
 		Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn,
 	}}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Prompt.ModulePromptContext = func() ([]runtimemodule.PromptSection, error) {
+	eng.Prompt.ModulePromptContext = func() ([]runtimemodule.ContextSection, error) {
 		return nil, errors.New("memory unavailable")
 	}
 
@@ -813,7 +814,7 @@ func TestTurn_DurableRequestEpochFailurePreventsProviderCallAndHookConsumption(t
 		Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn,
 	}}}
 	eng, bus := newEngine(t, prov, false)
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
 		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
 	}}); err != nil {
 		t.Fatal(err)
@@ -826,8 +827,8 @@ func TestTurn_DurableRequestEpochFailurePreventsProviderCallAndHookConsumption(t
 	if prov.called != 0 {
 		t.Fatalf("provider calls = %d, want 0", prov.called)
 	}
-	if pending := eng.pendingHookRuntimeContextSnapshot(); len(pending) != 1 || pending[0].ID == "" {
-		t.Fatalf("pending hook context = %+v", pending)
+	if pending := eng.pendingPolicyRuntimeContextSnapshot(); len(pending) != 1 || pending[0].ID == "" {
+		t.Fatalf("pending policy context = %+v", pending)
 	}
 	journal, err := session.ReadEvents(eng.Session.Dir)
 	if err != nil {
@@ -837,22 +838,22 @@ func TestTurn_DurableRequestEpochFailurePreventsProviderCallAndHookConsumption(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pending := recovered.PendingHookContext(); len(pending) != 1 {
-		t.Fatalf("recovered hook context before epoch checkpoint = %+v", pending)
+	if pending := recovered.PendingPolicyContext(); len(pending) != 1 {
+		t.Fatalf("recovered policy context before epoch checkpoint = %+v", pending)
 	}
 }
 
-func TestTurn_RequestEpochCheckpointConsumesHookContextAndLinksResponse(t *testing.T) {
+func TestTurn_RequestEpochCheckpointConsumesPolicyContextAndLinksResponse(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
 	}}}
 	eng, bus := newEngine(t, prov, false)
-	eng.Notes = NewNotesStore(eng.Session.Dir)
-	if _, err := eng.Notes.Update("- [ ] retain the exact runtime note"); err != nil {
+	notesStore := workmem.NewNotesStore(eng.Session.Dir)
+	if _, err := notesStore.Update("- [ ] retain the exact runtime note"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModules(t, eng)
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+	installSessionStateModulesWithStores(t, eng, nil, notesStore)
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
 		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
 	}}); err != nil {
 		t.Fatal(err)
@@ -903,14 +904,14 @@ func TestTurn_RequestEpochCheckpointConsumesHookContextAndLinksResponse(t *testi
 	if responded.EpochID != epoch.Epoch.EpochID || responded.RequestDigest != epoch.Epoch.RequestDigest {
 		t.Fatalf("responded = %+v, epoch = %+v", responded, epoch.Epoch)
 	}
-	if pending := eng.pendingHookRuntimeContextSnapshot(); len(pending) != 0 {
-		t.Fatalf("hook context after checkpoint = %+v", pending)
+	if pending := eng.pendingPolicyRuntimeContextSnapshot(); len(pending) != 0 {
+		t.Fatalf("policy context after checkpoint = %+v", pending)
 	}
 }
 
-func TestTurn_FailedProviderDoesNotReplayCheckpointedHookContext(t *testing.T) {
+func TestTurn_FailedProviderDoesNotReplayCheckpointedPolicyContext(t *testing.T) {
 	eng, _ := newEngine(t, errorProvider{}, false)
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
 		Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context",
 	}}); err != nil {
 		t.Fatal(err)
@@ -918,15 +919,15 @@ func TestTurn_FailedProviderDoesNotReplayCheckpointedHookContext(t *testing.T) {
 	if _, err := eng.Turn(context.Background(), "hello"); err == nil {
 		t.Fatal("Turn() error = nil")
 	}
-	if pending := eng.pendingHookRuntimeContextSnapshot(); len(pending) != 0 {
-		t.Fatalf("hook context after provider attempt = %+v", pending)
+	if pending := eng.pendingPolicyRuntimeContextSnapshot(); len(pending) != 0 {
+		t.Fatalf("policy context after provider attempt = %+v", pending)
 	}
 }
 
 func TestTurn_DispatchCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn}}}
 	eng, bus := newEngine(t, prov, false)
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context"}}); err != nil {
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context"}}); err != nil {
 		t.Fatal(err)
 	}
 	want := errors.New("dispatch sync failed")
@@ -937,13 +938,13 @@ func TestTurn_DispatchCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing
 	if prov.called != 0 {
 		t.Fatalf("provider calls = %d, want 0", prov.called)
 	}
-	assertRecoveredHookContextCount(t, eng.Session, 0)
+	assertRecoveredPolicyContextCount(t, eng.Session, 0)
 }
 
 func TestTurn_ResponseCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "returned"), StopReason: llm.StopEndTurn}}}
 	eng, bus := newEngine(t, prov, false)
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context"}}); err != nil {
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{Hook: hooks.CommandHook{Name: "policy"}, Stdout: "one-shot context"}}); err != nil {
 		t.Fatal(err)
 	}
 	want := errors.New("response sync failed")
@@ -954,10 +955,10 @@ func TestTurn_ResponseCommitFailureKeepsEpochConsumptionAfterRecovery(t *testing
 	if prov.called != 1 {
 		t.Fatalf("provider calls = %d, want 1", prov.called)
 	}
-	assertRecoveredHookContextCount(t, eng.Session, 0)
+	assertRecoveredPolicyContextCount(t, eng.Session, 0)
 }
 
-func assertRecoveredHookContextCount(t *testing.T, sess *session.Session, want int) {
+func assertRecoveredPolicyContextCount(t *testing.T, sess *session.Session, want int) {
 	t.Helper()
 	journal, err := session.ReadEvents(sess.Dir)
 	if err != nil {
@@ -967,8 +968,8 @@ func assertRecoveredHookContextCount(t *testing.T, sess *session.Session, want i
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pending := recovered.PendingHookContext(); len(pending) != want {
-		t.Fatalf("recovered hook context = %+v, want %d", pending, want)
+	if pending := recovered.PendingPolicyContext(); len(pending) != want {
+		t.Fatalf("recovered policy context = %+v, want %d", pending, want)
 	}
 }
 
@@ -1350,7 +1351,7 @@ func TestTurn_DurableHookRequestFailurePreventsHookRun(t *testing.T) {
 	runner := &fakeHookRunner{}
 	installHookRunner(t, eng, runner)
 	want := errors.New("journal sync failed")
-	bus.SetCommitter(selectiveFailCommitter{eventType: "hook.requested", err: want})
+	bus.SetCommitter(selectiveFailCommitter{eventType: "policy.requested", err: want})
 	if _, err := eng.Turn(context.Background(), "hello"); !errors.Is(err, want) {
 		t.Fatalf("Turn() error = %v, want %v", err, want)
 	}
@@ -1499,10 +1500,10 @@ func TestTurn_CompactionKeepsRecentRealInputInProviderContext(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn, Usage: llm.Usage{InputTokens: 20, OutputTokens: 3}},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.ContextWindow = 200
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 80
-	eng.Compaction.ReserveTokens = 50
+	eng.Compaction.ReserveTokens = 1850
 	for _, item := range []struct {
 		role llm.Role
 		text string
@@ -2082,8 +2083,9 @@ func TestTurn_AutoCompactionCircuitBreakerStopsRepeatedSummaryAttempts(t *testin
 		},
 	}
 	eng, _ := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1930
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2108,7 +2110,7 @@ func TestCompactWithInstructionsResetsAutoCompactionFailures(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "manual summary"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.autoCompactFailures = 3
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
@@ -2156,7 +2158,7 @@ func TestCancelActiveTurnCancelsRuntimeOwnedProviderRequest(t *testing.T) {
 func TestCancelActiveTurnCancelsCompactionWithoutAppendingMarker(t *testing.T) {
 	prov := &cancellableProvider{started: make(chan struct{}, 1)}
 	eng, bus := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
@@ -2211,7 +2213,7 @@ func TestCancelActiveTurnRejectsCancellationAfterCompactionCommit(t *testing.T) 
 		StopReason: llm.StopEndTurn,
 	}}}
 	eng, bus := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
@@ -2285,8 +2287,9 @@ func TestCancelActiveTurnRejectsCancellationAfterCompactionCommit(t *testing.T) 
 func TestTurn_CompactionFailureDoesNotAppendMarker(t *testing.T) {
 	prov := &mockProviderWithErrors{errs: []error{fmt.Errorf("summary failed")}}
 	eng, _ := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1930
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2309,8 +2312,9 @@ func TestTurnMessage_MCPEventContinuesAfterAutoCompactionFailure(t *testing.T) {
 		},
 	}
 	eng, bus := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1930
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2356,8 +2360,9 @@ func TestTurnMessage_SideSessionContinuesAfterAutoCompactionFailure(t *testing.T
 		},
 	}
 	eng, bus := newEngine(t, prov, false)
-	eng.ContextWindow = 100
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1930
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -2395,8 +2400,9 @@ func TestTurnMessage_MCPEventStripsRedactedReasoningWhenAutoCompactionPaused(t *
 		{Message: llm.TextMessage(llm.RoleAssistant, "handled event"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.ContextWindow = 120
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1900
 	eng.autoCompactFailures = effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow).MaxAutoFailures
 	secret := "enc_" + strings.Repeat("secret ", 200)
 	if err := eng.Session.Append(llm.Message{
@@ -2508,7 +2514,7 @@ func TestTurn_SecondOverflowDoesNotRetryForPendingInput(t *testing.T) {
 	}
 }
 
-func TestTurn_CompactRetryFailureConsumesHookContext(t *testing.T) {
+func TestTurn_CompactRetryFailureConsumesPolicyContext(t *testing.T) {
 	prov := &scriptedCompactionProvider{
 		name: "compact-failure",
 		attempts: []scriptedCompactionAttempt{
@@ -2520,7 +2526,7 @@ func TestTurn_CompactRetryFailureConsumesHookContext(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 10000
 	eng.Compaction = DefaultCompactionPolicy()
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
 		Hook:   hooks.CommandHook{Name: "one-shot"},
 		Stdout: "one-shot compact context",
 	}}); err != nil {
@@ -2540,13 +2546,13 @@ func TestTurn_CompactRetryFailureConsumesHookContext(t *testing.T) {
 		t.Fatalf("provider calls = %d, want failed turn + compact + next turn", prov.calls)
 	}
 	if got := messagesText(prov.histories[0]); !strings.Contains(got, "one-shot compact context") {
-		t.Fatalf("failed provider request missing hook context:\n%s", got)
+		t.Fatalf("failed provider request missing policy context:\n%s", got)
 	}
 	if got := messagesText(prov.histories[2]); strings.Contains(got, "one-shot compact context") {
-		t.Fatalf("next provider request repeated stale hook context:\n%s", got)
+		t.Fatalf("next provider request repeated stale policy context:\n%s", got)
 	}
-	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
-		t.Fatalf("hook context remaining after compact retry failure = %+v", remaining)
+	if remaining := eng.pendingPolicyRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("policy context remaining after compact retry failure = %+v", remaining)
 	}
 }
 
@@ -2884,8 +2890,9 @@ func TestTurn_CompactsWhenProjectedContextExceedsThreshold(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "answered latest"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.ContextWindow = 120
+	eng.ContextWindow = 2000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1900
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -3007,17 +3014,18 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
 	eng.Compaction.Instructions = "Preserve configured release criteria."
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	if _, err := eng.GoalState.CreateWithContract(GoalStateCreate{
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	if _, err := goalState.CreateWithContract(workmem.GoalStateCreate{
 		Description: "Ship authoritative compaction state",
 		Acceptance:  "The persisted goal remains exact:\n- [ ] preserve acceptance line one\n- [ ] preserve acceptance line two",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	eng.Notes = NewNotesStore(eng.Session.Dir)
-	if _, err := eng.Notes.Update("- [x] map the runtime\n- [ ] run the live compaction evaluation"); err != nil {
+	notesStore := workmem.NewNotesStore(eng.Session.Dir)
+	if _, err := notesStore.Update("- [x] map the runtime\n- [ ] run the live compaction evaluation"); err != nil {
 		t.Fatal(err)
 	}
+	installSessionStateModulesWithStores(t, eng, goalState, notesStore)
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact: {{Stdout: "Preserve hook deployment evidence."}},
 	}})
@@ -3072,7 +3080,7 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	}
 	if goal.Description != "Ship authoritative compaction state" ||
 		goal.Acceptance != "The persisted goal remains exact:\n- [ ] preserve acceptance line one\n- [ ] preserve acceptance line two" ||
-		goal.Status != string(GoalStatusInProgress) {
+		goal.Status != string(workmem.GoalStatusInProgress) {
 		t.Fatalf("summary goal contract = %+v", goal)
 	}
 }
@@ -3093,10 +3101,10 @@ func TestCompactExitTwoEmitsHookErrorWithoutVeto(t *testing.T) {
 		t.Fatal(err)
 	}
 	installHookRunner(t, eng, runner)
-	var hookError HookErroredPayload
-	bus.Subscribe("hook.errored", func(event events.Event) {
-		payload, _ := event.Payload.(HookErroredPayload)
-		if payload.Name == "compact-guard" {
+	var hookError PolicyErroredPayload
+	bus.Subscribe("policy.errored", func(event events.Event) {
+		payload, _ := event.Payload.(PolicyErroredPayload)
+		if payload.Name == "PreCompact/compact-guard" {
 			hookError = payload
 		}
 	})
@@ -3210,6 +3218,7 @@ func TestCompactUsesSummaryProviderWhenConfigured(t *testing.T) {
 	eng, bus := newEngine(t, main, false)
 	eng.SummaryProvider = summary
 	eng.SummaryProvenance = provenance.SafeProvider{ID: "summary", Model: "summary:model", EndpointDigest: "summary-endpoint"}
+	eng.SummaryContextWindow = 30000
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
@@ -3235,6 +3244,9 @@ func TestCompactUsesSummaryProviderWhenConfigured(t *testing.T) {
 	}
 	if epoch.Provider.ID != "summary" || epoch.Provider.EndpointDigest != "summary-endpoint" {
 		t.Fatalf("summary provider provenance = %+v", epoch.Provider)
+	}
+	if epoch.ContextWindow != 30000 {
+		t.Fatalf("summary request context window = %d, want 30000", epoch.ContextWindow)
 	}
 }
 
@@ -3320,6 +3332,395 @@ func TestCompactFallsBackToMainProviderWhenSummaryProviderFails(t *testing.T) {
 	}
 }
 
+func TestCompactFallbackEventFailureReleasesSelectedHalfOpenProbe(t *testing.T) {
+	now := time.Unix(40_000, 0)
+	health := llm.NewModelHealth(llm.ModelHealthOptions{Now: func() time.Time { return now }})
+	backupOnly := []string{"backup:model"}
+	backupFailure, ok := health.Acquire(backupOnly, nil)
+	if !ok {
+		t.Fatal("acquire backup health ticket")
+	}
+	health.Complete(backupFailure.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	now = now.Add(30 * time.Second)
+
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &namedCompactionProvider{name: "backup:model", text: "backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = health
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("fallback event sync failed")
+	bus.SetCommitter(selectiveFailCommitter{eventType: "context.compact.summary_model_fallback", err: want})
+
+	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); !errors.Is(err, want) {
+		t.Fatalf("Compact() error = %v, want %v", err, want)
+	}
+	if primary.calls != 1 || backup.calls != 0 {
+		t.Fatalf("provider calls primary/backup = %d/%d, want 1/0", primary.calls, backup.calls)
+	}
+	retry, ok := health.Acquire(backupOnly, nil)
+	if !ok || retry.Ticket.Ref != "backup:model" || !retry.Ticket.Probe {
+		t.Fatalf("backup probe after journal failure = %+v, %v", retry, ok)
+	}
+	health.Complete(retry.Ticket, llm.ModelHealthNeutral, "")
+}
+
+func TestCompactFallsBackThroughConfiguredModelChainWithoutModelChangeNotice(t *testing.T) {
+	summary := &namedCompactionProvider{name: "summary:model", err: errors.New("status 503: summary unavailable")}
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 401: token expired")}
+	backup := &namedCompactionProvider{name: "backup:model", text: "backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.SummaryProvider = summary
+	eng.SummaryProvenance = provenance.SafeProvider{ID: "summary", Model: "summary:model"}
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.NotifyModelChanges = true
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.SummaryModel = "summary:model"
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	var epochs []provenance.RequestEpoch
+	var fallbacks []ContextCompactSummaryFallbackPayload
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+	bus.Subscribe("context.compact.summary_model_fallback", func(event events.Event) {
+		fallbacks = append(fallbacks, event.Payload.(ContextCompactSummaryFallbackPayload))
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.calls != 1 || primary.calls != 1 || backup.calls != 1 {
+		t.Fatalf("summary/primary/backup calls = %d/%d/%d, want 1/1/1", summary.calls, primary.calls, backup.calls)
+	}
+	if result.SummaryModel != "backup:model" {
+		t.Fatalf("summary model = %q, want backup:model", result.SummaryModel)
+	}
+	if len(epochs) != 3 {
+		t.Fatalf("epochs = %+v, want one per provider attempt", epochs)
+	}
+	for i, wantModel := range []string{"summary:model", "primary:model", "backup:model"} {
+		if epochs[i].Attempt != i+1 || epochs[i].Purpose != "compaction" || epochs[i].Provider.Model != wantModel {
+			t.Fatalf("epoch[%d] = %+v, want attempt %d model %s", i, epochs[i], i+1, wantModel)
+		}
+	}
+	if len(fallbacks) != 2 || fallbacks[0].ConfiguredModel != "summary:model" || fallbacks[0].FallbackModel != "primary:model" || fallbacks[1].ConfiguredModel != "primary:model" || fallbacks[1].FallbackModel != "backup:model" {
+		t.Fatalf("fallbacks = %+v", fallbacks)
+	}
+	for _, message := range eng.Session.History {
+		if message.Kind == llm.MessageKindModelChange {
+			t.Fatalf("compaction persisted model-change notice: %+v", message)
+		}
+	}
+}
+
+func TestCompactUsesConfiguredModelChainWithoutDedicatedSummaryModel(t *testing.T) {
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &namedCompactionProvider{name: "backup:model", text: "backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	var fallback ContextCompactSummaryFallbackPayload
+	bus.Subscribe("context.compact.summary_model_fallback", func(event events.Event) {
+		fallback = event.Payload.(ContextCompactSummaryFallbackPayload)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primary.calls != 1 || backup.calls != 1 || result.SummaryModel != "backup:model" {
+		t.Fatalf("primary/backup/result = %d/%d/%+v", primary.calls, backup.calls, result)
+	}
+	if fallback.ConfiguredModel != "primary:model" || fallback.FallbackModel != "backup:model" {
+		t.Fatalf("fallback = %+v", fallback)
+	}
+}
+
+func TestCompactRefitsSummaryRequestForFallbackContextWindow(t *testing.T) {
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &limitedCompactionProvider{name: "backup:model", maxInputTokens: 8000}
+	eng, bus := newEngine(t, primary, false)
+	eng.ContextWindow = 256000
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 256000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 10000},
+	}
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "preserve the original user request")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		callID := fmt.Sprintf("call-%03d", i)
+		if err := eng.Session.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: callID, ToolName: "read", Input: map[string]any{"path": strings.Repeat("x", 1000)},
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := eng.Session.Append(llm.Message{Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{
+			Type: llm.BlockToolResult, ToolUseID: callID, Content: strings.Repeat("result ", 200),
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "preserve the follow-up user request")); err != nil {
+		t.Fatal(err)
+	}
+
+	var epochs []provenance.RequestEpoch
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SummaryModel != "backup:model" || backup.inputTokens > backup.maxInputTokens {
+		t.Fatalf("result/input tokens = %+v/%d, want backup summary within %d", result, backup.inputTokens, backup.maxInputTokens)
+	}
+	backupBody := backup.history[0].FirstText()
+	for _, want := range []string{"preserve the original user request", "User input stored outside context.", "messages omitted"} {
+		if !strings.Contains(backupBody, want) {
+			t.Fatalf("fallback summary request missing %q:\n%s", want, backupBody)
+		}
+	}
+	if strings.Contains(backupBody, "call-000") {
+		t.Fatalf("fallback summary request kept the oldest tool exchange:\n%s", backupBody)
+	}
+	if len(epochs) != 2 || epochs[1].Provider.Model != "backup:model" || epochs[1].ContextWindow != 10000 {
+		t.Fatalf("epochs = %+v, want fallback context window 10000", epochs)
+	}
+}
+
+func TestCompactSkipsSummaryCandidateWhenPreservedUserMessagesCannotFit(t *testing.T) {
+	small := &namedCompactionProvider{name: "small:model", text: "unexpected small summary"}
+	large := &namedCompactionProvider{name: "large:model", text: "large summary"}
+	eng, bus := newEngine(t, small, false)
+	eng.ContextWindow = 1_000
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "small:model", Provider: small, ContextWindow: 1_000},
+		{Ref: "large:model", Provider: large, ContextWindow: 10_000},
+	}
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("preserved older user detail ", 300))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("newest oversized input ", 300))); err != nil {
+		t.Fatal(err)
+	}
+	var fallback ContextCompactSummaryFallbackPayload
+	bus.Subscribe("context.compact.summary_model_fallback", func(event events.Event) {
+		fallback = event.Payload.(ContextCompactSummaryFallbackPayload)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if small.calls != 0 || large.calls != 1 || result.SummaryModel != "large:model" {
+		t.Fatalf("small/large/result = %d/%d/%+v, want unfittable small candidate skipped", small.calls, large.calls, result)
+	}
+	if fallback.ConfiguredModel != "small:model" || fallback.FallbackModel != "large:model" || !strings.Contains(fallback.Error, "cannot fit") {
+		t.Fatalf("fallback = %+v, want explicit candidate-fit failure", fallback)
+	}
+}
+
+func TestCompactClampsSummaryOutputForFallbackContextWindow(t *testing.T) {
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &scriptedCompactionProvider{
+		name: "backup:model",
+		attempts: []scriptedCompactionAttempt{{response: llm.Response{
+			Message:    llm.TextMessage(llm.RoleAssistant, "bounded fallback summary"),
+			StopReason: llm.StopEndTurn,
+		}}},
+	}
+	eng, bus := newEngine(t, primary, false)
+	eng.ContextWindow = 256000
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 256000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 2000},
+	}
+	configureCompactionRetryTest(t, eng, 20, 500)
+	eng.Compaction.SummaryMaxTokens = 2048
+	var epochs []provenance.RequestEpoch
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SummaryModel != "backup:model" || len(backup.options) != 1 || len(backup.histories) != 1 {
+		t.Fatalf("result/options/histories = %+v/%+v/%d", result, backup.options, len(backup.histories))
+	}
+	policy := effectiveCompactionPolicy(eng.Compaction, 2000)
+	inputTokens := estimateContextTokens(backup.systems[0], nil, backup.histories[0])
+	if got := backup.options[0].MaxOutputTokens; got <= 0 || got >= eng.Compaction.SummaryMaxTokens || inputTokens+got > policy.SummaryRequestTokens {
+		t.Fatalf("fallback request/output = %d/%d tokens, want positive clamped total <= summary request budget %d", inputTokens, got, policy.SummaryRequestTokens)
+	}
+	if len(epochs) != 2 || epochs[1].Provider.Model != "backup:model" || epochs[1].ContextWindow != 2000 || epochs[1].MaxOutputTokens != backup.options[0].MaxOutputTokens {
+		t.Fatalf("epochs = %+v, want clamped fallback provenance", epochs)
+	}
+}
+
+func TestCompactSkipsModelAlreadyInSharedHealthCooldown(t *testing.T) {
+	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	primaryFailure, ok := health.Acquire([]string{"primary:model"}, nil)
+	if !ok {
+		t.Fatal("acquire primary health ticket")
+	}
+	health.Complete(primaryFailure.Ticket, llm.ModelHealthEligibleFailure, "transient")
+
+	primary := &namedCompactionProvider{name: "primary:model", text: "unexpected primary summary"}
+	backup := &namedCompactionProvider{name: "backup:model", text: "backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = health
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var epochs []provenance.RequestEpoch
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primary.calls != 0 || backup.calls != 1 || result.SummaryModel != "backup:model" {
+		t.Fatalf("primary/backup/result = %d/%d/%+v, want cooldown skip to backup", primary.calls, backup.calls, result)
+	}
+	if len(epochs) != 1 || epochs[0].Provider.Model != "backup:model" {
+		t.Fatalf("epochs = %+v, want only attempted backup", epochs)
+	}
+}
+
+func TestCompactReportsHealthSkipsWhenNoCandidateCanBeAcquired(t *testing.T) {
+	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	for _, ref := range []string{"primary:model", "backup:model"} {
+		selection, ok := health.Acquire([]string{ref}, nil)
+		if !ok {
+			t.Fatalf("acquire %s health ticket", ref)
+		}
+		health.Complete(selection.Ticket, llm.ModelHealthEligibleFailure, "transient")
+	}
+
+	primary := &namedCompactionProvider{name: "primary:model", text: "unexpected primary summary"}
+	backup := &namedCompactionProvider{name: "backup:model", text: "unexpected backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = health
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var fallbacks []LLMFallbackPayload
+	bus.Subscribe("llm.fallback", func(event events.Event) {
+		fallbacks = append(fallbacks, event.Payload.(LLMFallbackPayload))
+	})
+
+	_, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err == nil || !strings.Contains(err.Error(), "primary:model: unavailable") || !strings.Contains(err.Error(), "backup:model: unavailable") {
+		t.Fatalf("Compact error = %v, want exhausted cooldown candidates", err)
+	}
+	if primary.calls != 0 || backup.calls != 0 {
+		t.Fatalf("primary/backup calls = %d/%d, want no provider calls", primary.calls, backup.calls)
+	}
+	want := []LLMFallbackPayload{
+		{From: "primary:model", Reason: "transient"},
+		{From: "backup:model", Reason: "transient"},
+	}
+	if len(fallbacks) != len(want) {
+		t.Fatalf("fallbacks = %+v, want %+v", fallbacks, want)
+	}
+	for index := range want {
+		if fallbacks[index].From != want[index].From || fallbacks[index].To != "" || fallbacks[index].Reason != want[index].Reason || fallbacks[index].CooldownMS <= 0 {
+			t.Fatalf("fallback[%d] = %+v, want terminal health skip for %s", index, fallbacks[index], want[index].From)
+		}
+	}
+}
+
+func TestCompactReportsRemainingHealthSkipsAfterAttemptFailure(t *testing.T) {
+	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	backupSelection, ok := health.Acquire([]string{"backup:model"}, nil)
+	if !ok {
+		t.Fatal("acquire backup health ticket")
+	}
+	health.Complete(backupSelection.Ticket, llm.ModelHealthEligibleFailure, "transient")
+
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &namedCompactionProvider{name: "backup:model", text: "unexpected backup summary"}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary},
+		{Ref: "backup:model", Provider: backup},
+	}
+	eng.ModelHealth = health
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var fallbacks []LLMFallbackPayload
+	bus.Subscribe("llm.fallback", func(event events.Event) {
+		fallbacks = append(fallbacks, event.Payload.(LLMFallbackPayload))
+	})
+
+	_, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err == nil || !strings.Contains(err.Error(), "primary:model: status 503") || !strings.Contains(err.Error(), "backup:model: unavailable") {
+		t.Fatalf("Compact error = %v, want attempt failure plus cooldown skip", err)
+	}
+	if primary.calls != 1 || backup.calls != 0 {
+		t.Fatalf("primary/backup calls = %d/%d, want 1/0", primary.calls, backup.calls)
+	}
+	if len(fallbacks) != 1 || fallbacks[0].From != "backup:model" || fallbacks[0].To != "" || fallbacks[0].Reason != "transient" || fallbacks[0].CooldownMS <= 0 {
+		t.Fatalf("fallbacks = %+v, want terminal backup health skip", fallbacks)
+	}
+}
+
 func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	provider := &scriptedCompactionProvider{
 		name: "thinking:model",
@@ -3357,18 +3758,74 @@ func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	if result.SummaryChars != len("recovered summary") || provider.calls != 2 {
 		t.Fatalf("result/calls = %+v, %d", result, provider.calls)
 	}
-	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 1000 || provider.options[1].MaxOutputTokens != 2000 {
-		t.Fatalf("max output tokens = %+v, want [1000 2000]", compactionOptionBudgets(provider.options))
+	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 25 || provider.options[1].MaxOutputTokens != 50 {
+		t.Fatalf("max output tokens = %+v, want [25 50]", compactionOptionBudgets(provider.options))
 	}
-	if retry.Attempt != 2 || retry.Reason != "empty_summary" || retry.StopReason != llm.StopMaxTokens || !retry.ReasoningOnly || retry.PreviousMaxOutputTokens != 1000 || retry.MaxOutputTokens != 2000 {
+	if retry.Attempt != 2 || retry.Reason != "empty_summary" || retry.StopReason != llm.StopMaxTokens || !retry.ReasoningOnly || retry.PreviousMaxOutputTokens != 25 || retry.MaxOutputTokens != 50 {
 		t.Fatalf("retry payload = %+v", retry)
 	}
-	if len(provider.histories) != 2 || provider.histories[0][0].FirstText() == provider.histories[1][0].FirstText() {
-		t.Fatalf("retry summary request was not rebuilt for the larger budget")
+	if len(provider.histories) != 2 || provider.histories[0][0].FirstText() == "" || provider.histories[1][0].FirstText() == "" {
+		t.Fatalf("retry summary requests were not built")
 	}
 	usage := eng.Session.TokenUsageSnapshot()
 	if usage != (llm.Usage{InputTokens: 21, OutputTokens: 5}) {
 		t.Fatalf("token usage = %+v, want aggregate retry usage", usage)
+	}
+}
+
+func TestCompactRetriesFirstIncompleteFallbackWithLargerBudget(t *testing.T) {
+	primary := &namedCompactionProvider{name: "primary:model", err: errors.New("status 503: primary unavailable")}
+	backup := &scriptedCompactionProvider{
+		name: "backup:model",
+		attempts: []scriptedCompactionAttempt{
+			{response: llm.Response{
+				Message:    llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockReasoning, Text: "spent the first fallback budget"}}},
+				StopReason: llm.StopMaxTokens,
+				Usage:      llm.Usage{InputTokens: 10, OutputTokens: 2},
+			}},
+			{response: llm.Response{
+				Message:    llm.TextMessage(llm.RoleAssistant, "recovered fallback summary"),
+				StopReason: llm.StopEndTurn,
+				Usage:      llm.Usage{InputTokens: 11, OutputTokens: 3},
+			}},
+		},
+	}
+	eng, bus := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 5000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 5000},
+	}
+	configureCompactionRetryTest(t, eng, 30, 2000)
+	eng.ContextWindow = 5000
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 1000
+	var retry ContextCompactSummaryRetryPayload
+	var epochs []provenance.RequestEpoch
+	bus.Subscribe("context.compact.summary_retry", func(event events.Event) {
+		retry = event.Payload.(ContextCompactSummaryRetryPayload)
+	})
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SummaryModel != "backup:model" || primary.calls != 1 || backup.calls != 2 {
+		t.Fatalf("result/primary/backup = %+v/%d/%d, want recovered backup after retry", result, primary.calls, backup.calls)
+	}
+	if len(backup.options) != 2 || backup.options[0].MaxOutputTokens != 25 || backup.options[1].MaxOutputTokens != 50 {
+		t.Fatalf("fallback max output tokens = %+v, want [25 50]", compactionOptionBudgets(backup.options))
+	}
+	if len(epochs) != 3 || retry.EpochID != epochs[1].EpochID || retry.RequestDigest != epochs[1].RequestDigest {
+		t.Fatalf("epochs/retry = %+v/%+v, want retry linked to first fallback attempt", epochs, retry)
+	}
+	if retry.Attempt != 2 || retry.Reason != "empty_summary" || !retry.ReasoningOnly {
+		t.Fatalf("retry payload = %+v", retry)
+	}
+	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 21, OutputTokens: 5}) {
+		t.Fatalf("token usage = %+v, want aggregate fallback retry usage", usage)
 	}
 }
 
@@ -3425,12 +3882,19 @@ func TestCompactCheckpointsEachSummaryAttemptAndLinksOutcomes(t *testing.T) {
 		if len(epoch.Messages) != 1 || epoch.Messages[0].Source != "compaction_input" || epoch.Messages[0].Snapshot == nil {
 			t.Fatalf("epoch %d synthesized summary history = %+v", index, epoch.Messages)
 		}
-		var reconstructed llm.Message
-		if err := json.Unmarshal(epoch.Messages[0].Snapshot.Content, &reconstructed); err != nil {
-			t.Fatal(err)
-		}
-		if reconstructed.FirstText() != provider.histories[index][0].FirstText() {
-			t.Fatalf("epoch %d summary history body was not reconstructable", index)
+		snapshot := epoch.Messages[0].Snapshot
+		if snapshot.Reused {
+			if index == 0 || snapshot.Digest != epochs[index-1].Messages[0].Snapshot.Digest || provider.histories[index][0].FirstText() != provider.histories[index-1][0].FirstText() {
+				t.Fatalf("epoch %d reused snapshot does not match the prior request", index)
+			}
+		} else {
+			var reconstructed llm.Message
+			if err := json.Unmarshal(snapshot.Content, &reconstructed); err != nil {
+				t.Fatal(err)
+			}
+			if reconstructed.FirstText() != provider.histories[index][0].FirstText() {
+				t.Fatalf("epoch %d summary history body was not reconstructable", index)
+			}
 		}
 	}
 	if epochs[0].EpochID == epochs[1].EpochID || epochs[0].RequestDigest == epochs[1].RequestDigest {
@@ -3506,8 +3970,8 @@ func TestCompactRetriesPartialSummaryStoppedAtMaxTokens(t *testing.T) {
 	if retry.Reason != "max_tokens" || retry.StopReason != llm.StopMaxTokens || retry.ReasoningOnly {
 		t.Fatalf("retry payload = %+v", retry)
 	}
-	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 1000 || provider.options[1].MaxOutputTokens != 2000 {
-		t.Fatalf("max output tokens = %+v, want [1000 2000]", compactionOptionBudgets(provider.options))
+	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 25 || provider.options[1].MaxOutputTokens != 50 {
+		t.Fatalf("max output tokens = %+v, want [25 50]", compactionOptionBudgets(provider.options))
 	}
 	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 21, OutputTokens: 1003}) {
 		t.Fatalf("token usage = %+v, want aggregate retry usage", usage)
@@ -3516,6 +3980,8 @@ func TestCompactRetriesPartialSummaryStoppedAtMaxTokens(t *testing.T) {
 
 func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 	var eng *Engine
+	var goalState *workmem.GoalStateStore
+	var notesStore *workmem.NotesStore
 	provider := &scriptedCompactionProvider{
 		name: "thinking:model",
 		attempts: []scriptedCompactionAttempt{
@@ -3523,10 +3989,10 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 				response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant}},
 				beforeReturn: func() {
 					updated := "Mutated after the first summary request"
-					if _, err := eng.GoalState.Update(GoalStateUpdate{Description: &updated}); err != nil {
+					if _, err := goalState.Update(workmem.GoalStateUpdate{Description: &updated}); err != nil {
 						t.Fatal(err)
 					}
-					if _, err := eng.Notes.Update("- [ ] mutated after first request"); err != nil {
+					if _, err := notesStore.Update("- [ ] mutated after first request"); err != nil {
 						t.Fatal(err)
 					}
 				},
@@ -3540,14 +4006,15 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 	eng.ContextWindow = 5000
 	eng.Compaction.ReserveTokens = 1000
 	eng.Compaction.SummaryMaxTokens = 1000
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	if _, err := eng.GoalState.Create("Original compact goal", "Original acceptance"); err != nil {
+	goalState = workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	if _, err := goalState.Create("Original compact goal", "Original acceptance"); err != nil {
 		t.Fatal(err)
 	}
-	eng.Notes = NewNotesStore(eng.Session.Dir)
-	if _, err := eng.Notes.Update("- [ ] original compact note"); err != nil {
+	notesStore = workmem.NewNotesStore(eng.Session.Dir)
+	if _, err := notesStore.Update("- [ ] original compact note"); err != nil {
 		t.Fatal(err)
 	}
+	installSessionStateModulesWithStores(t, eng, goalState, notesStore)
 	var epochs []provenance.RequestEpoch
 	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
 		epochs = append(epochs, event.Payload.(provenance.RequestEpochPayload).Epoch)
@@ -3575,12 +4042,19 @@ func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
 		if len(epochs[i].Messages) != 1 || epochs[i].Messages[0].Snapshot == nil {
 			t.Fatalf("request %d epoch message = %+v", i+1, epochs[i].Messages)
 		}
-		var reconstructed llm.Message
-		if err := json.Unmarshal(epochs[i].Messages[0].Snapshot.Content, &reconstructed); err != nil {
-			t.Fatal(err)
-		}
-		if reconstructed.FirstText() != body {
-			t.Fatalf("request %d epoch did not preserve authoritative summary state", i+1)
+		snapshot := epochs[i].Messages[0].Snapshot
+		if snapshot.Reused {
+			if i == 0 || snapshot.Digest != epochs[i-1].Messages[0].Snapshot.Digest || provider.histories[i-1][0].FirstText() != body {
+				t.Fatalf("request %d reused snapshot does not preserve authoritative summary state", i+1)
+			}
+		} else {
+			var reconstructed llm.Message
+			if err := json.Unmarshal(snapshot.Content, &reconstructed); err != nil {
+				t.Fatal(err)
+			}
+			if reconstructed.FirstText() != body {
+				t.Fatalf("request %d epoch did not preserve authoritative summary state", i+1)
+			}
 		}
 	}
 }
@@ -3609,16 +4083,21 @@ func TestCompactCapsSummaryRetryToBoundedRequest(t *testing.T) {
 	if provider.calls != 2 || len(provider.options) != 2 || len(provider.systems) != 2 || len(provider.histories) != 2 {
 		t.Fatalf("calls/options/systems/histories = %d/%d/%d/%d", provider.calls, len(provider.options), len(provider.systems), len(provider.histories))
 	}
-	retryBudget := provider.options[1].MaxOutputTokens
-	if retryBudget >= 1200 {
-		t.Fatalf("retry budget = %d, want less than uncapped double 1200", retryBudget)
-	}
 	policy := effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow)
-	retryInputTokens := estimateContextTokens(provider.systems[1], nil, provider.histories[1])
-	if retryInputTokens+retryBudget > policy.TriggerTokens {
-		t.Fatalf("retry input + output = %d + %d, want <= trigger %d", retryInputTokens, retryBudget, policy.TriggerTokens)
+	initialBudget := provider.options[0].MaxOutputTokens
+	initialInputTokens := estimateContextTokens(provider.systems[0], nil, provider.histories[0])
+	if initialBudget != 6 || initialInputTokens+initialBudget > policy.SummaryRequestTokens {
+		t.Fatalf("initial input + output = %d + %d, want 0.5%% output budget and total <= summary request budget %d", initialInputTokens, initialBudget, policy.SummaryRequestTokens)
 	}
-	if retry.PreviousMaxOutputTokens != 600 || retry.MaxOutputTokens != retryBudget {
+	retryBudget := provider.options[1].MaxOutputTokens
+	if retryBudget != 12 {
+		t.Fatalf("retry budget = %d, want bounded semantic retry budget 12", retryBudget)
+	}
+	retryInputTokens := estimateContextTokens(provider.systems[1], nil, provider.histories[1])
+	if retryInputTokens+retryBudget > policy.SummaryRequestTokens {
+		t.Fatalf("retry input + output = %d + %d, want <= summary request budget %d", retryInputTokens, retryBudget, policy.SummaryRequestTokens)
+	}
+	if retry.PreviousMaxOutputTokens != initialBudget || retry.MaxOutputTokens != retryBudget {
 		t.Fatalf("retry payload = %+v, want bounded budget %d", retry, retryBudget)
 	}
 }
@@ -3853,7 +4332,7 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 			if !sawCompleted {
 				t.Fatalf("events = %+v, want completed after committed compaction", eventTypes)
 			}
-			queued := eng.pendingHookRuntimeContextSnapshot()
+			queued := eng.pendingPolicyRuntimeContextSnapshot()
 			if tc.wantQueuedContext == "" {
 				if len(queued) != 0 {
 					t.Fatalf("queued context = %+v, want none", queued)
@@ -3865,7 +4344,7 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 	}
 }
 
-func TestCompactPreservesCommittedResultWhenPostHookContextCannotBeQueued(t *testing.T) {
+func TestCompactPreservesCommittedResultWhenPostPolicyContextCannotBeQueued(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn},
 	}}
@@ -3879,7 +4358,7 @@ func TestCompactPreservesCommittedResultWhenPostHookContextCannotBeQueued(t *tes
 	eng.Compaction.KeepRecentTokens = 1
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact:  {{}},
-		hooks.EventPostCompact: {{Stdout: strings.Repeat("x", provenance.MaxHookContextBatchBytes)}},
+		hooks.EventPostCompact: {{Stdout: strings.Repeat("x", provenance.MaxPolicyContextBatchBytes)}},
 	}})
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
@@ -3889,8 +4368,8 @@ func TestCompactPreservesCommittedResultWhenPostHookContextCannotBeQueued(t *tes
 	}
 
 	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
-	if err == nil || !strings.Contains(err.Error(), "queued hook context exceeds") {
-		t.Fatalf("error = %v, want hook context queue size failure", err)
+	if err == nil || !strings.Contains(err.Error(), "queued policy context exceeds") {
+		t.Fatalf("error = %v, want policy context queue size failure", err)
 	}
 	if result.MessageID == "" {
 		t.Fatalf("result = %+v, want committed compaction result", result)
@@ -3904,18 +4383,13 @@ func TestCompactPreservesCommittedResultWhenPostHookContextCannotBeQueued(t *tes
 }
 
 func TestTurn_AutoCompactionBoundsOversizedSummaryRequest(t *testing.T) {
-	prov := &budgetedCompactionProvider{compactionLimit: 800}
+	prov := &budgetedCompactionProvider{compactionLimit: 960}
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 1200
-	eng.Compaction = DefaultCompactionPolicy()
+	configureCompactionRetryTest(t, eng, 80, 2000)
 	eng.Compaction.ReserveTokens = 300
 	eng.Compaction.SummaryMaxTokens = 100
 	eng.Compaction.ToolResultMaxChars = 2000
-	for i := 0; i < 80; i++ {
-		if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", 2000)))); err != nil {
-			t.Fatal(err)
-		}
-	}
 
 	out, err := eng.Turn(context.Background(), "latest question")
 	if err != nil {
@@ -3930,8 +4404,11 @@ func TestTurn_AutoCompactionBoundsOversizedSummaryRequest(t *testing.T) {
 	if !strings.Contains(prov.compactionBody, "messages omitted") {
 		t.Fatalf("compaction body did not record omitted transcript:\n%s", prov.compactionBody)
 	}
-	if strings.Contains(prov.compactionBody, "message-00") {
-		t.Fatalf("oldest transcript should be omitted when over budget:\n%s", prov.compactionBody)
+	if strings.Contains(prov.compactionBody, "call-00") {
+		t.Fatalf("oldest tool exchange should be omitted when over budget:\n%s", prov.compactionBody)
+	}
+	if !strings.Contains(prov.compactionBody, "User input stored outside context.") {
+		t.Fatalf("user request reference should remain in the bounded summary:\n%s", prov.compactionBody)
 	}
 }
 
@@ -3989,6 +4466,28 @@ type namedCompactionProvider struct {
 	calls int
 }
 
+type limitedCompactionProvider struct {
+	name           string
+	maxInputTokens int
+	inputTokens    int
+	history        []llm.Message
+}
+
+func (p *limitedCompactionProvider) Name() string { return p.name }
+
+func (p *limitedCompactionProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, llm.CompleteOptions{})
+}
+
+func (p *limitedCompactionProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (llm.Response, error) {
+	p.inputTokens = estimateContextTokens(sys, nil, history)
+	p.history = append([]llm.Message(nil), history...)
+	if p.inputTokens > p.maxInputTokens {
+		return llm.Response{}, fmt.Errorf("context_length_exceeded: compaction request has %d tokens", p.inputTokens)
+	}
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "bounded fallback summary"), StopReason: llm.StopEndTurn}, nil
+}
+
 type scriptedCompactionAttempt struct {
 	response     llm.Response
 	err          error
@@ -4029,11 +4528,24 @@ func configureCompactionRetryTest(t *testing.T, eng *Engine, messageCount, messa
 	t.Helper()
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "preserve retry user request")); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < messageCount; i++ {
-		msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", messageChars)))
-		if err := eng.Session.Append(msg); err != nil {
+		callID := fmt.Sprintf("call-%02d", i)
+		if err := eng.Session.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: callID, ToolName: "read", Input: map[string]any{"path": strings.Repeat("x", messageChars)},
+		}}}); err != nil {
 			t.Fatal(err)
 		}
+		if err := eng.Session.Append(llm.Message{Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{
+			Type: llm.BlockToolResult, ToolUseID: callID, Content: strings.Repeat("y", messageChars),
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, "completed tool exchanges")); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -4312,11 +4824,11 @@ func TestTurn_UserPromptSubmitHookInjectsContext(t *testing.T) {
 		t.Fatalf("out = %q", out)
 	}
 	if got := messagesText(prov.histories[0]); !strings.Contains(got, "ticket: ABC-123") {
-		t.Fatalf("provider history missing hook context:\n%s", got)
+		t.Fatalf("provider history missing policy context:\n%s", got)
 	}
 	first := eng.Session.History[0]
 	if len(first.Blocks) != 2 || !strings.Contains(first.Blocks[1].Text, "ticket: ABC-123") {
-		t.Fatalf("session user message missing hook context: %+v", first)
+		t.Fatalf("session user message missing policy context: %+v", first)
 	}
 }
 
@@ -4691,13 +5203,13 @@ func TestTurn_StopHookStdoutQueuesRuntimeContextForNextProviderRequest(t *testin
 		t.Fatal(err)
 	}
 	if got := messagesText(prov.histories[0]); strings.Contains(got, "verify the release branch") {
-		t.Fatalf("stop hook context appeared before the hook ran:\n%s", got)
+		t.Fatalf("stop policy context appeared before the hook ran:\n%s", got)
 	}
 	if got := messagesText(prov.histories[1]); !strings.Contains(got, "verify the release branch") {
-		t.Fatalf("next provider request missing stop hook context:\n%s", got)
+		t.Fatalf("next provider request missing stop policy context:\n%s", got)
 	}
 	if got := messagesText(prov.histories[2]); strings.Contains(got, "verify the release branch") {
-		t.Fatalf("stop hook context repeated in later provider request:\n%s", got)
+		t.Fatalf("stop policy context repeated in later provider request:\n%s", got)
 	}
 	for _, msg := range eng.Session.History {
 		if msg.Kind == llm.MessageKindRuntimeContext {
@@ -4717,15 +5229,14 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "goal_update_1", ToolName: GoalToolUpdate, Input: map[string]any{
-				"status":        string(GoalStatusSuccess),
+				"status":        string(workmem.GoalStatusSuccess),
 				"status_reason": "tests passed",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	installSessionStateModules(t, eng)
+	goalState, _ := installSessionStateModules(t, eng)
 	var continued int32
 	bus.Subscribe("goal.continued", func(e events.Event) { atomic.AddInt32(&continued, 1) })
 
@@ -4755,11 +5266,11 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	if atomic.LoadInt32(&continued) != 1 {
 		t.Fatalf("goal.continued events = %d", continued)
 	}
-	state, err := eng.GoalState.Snapshot()
+	state, err := goalState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusSuccess || state.StatusReason != "tests passed" || state.ContinuationCount != 1 || !strings.Contains(state.Acceptance, "artifact.txt") {
+	if state.Status != workmem.GoalStatusSuccess || state.StatusReason != "tests passed" || state.ContinuationCount != 1 || !strings.Contains(state.Acceptance, "artifact.txt") {
 		t.Fatalf("goal state = %+v", state)
 	}
 }
@@ -4769,19 +5280,19 @@ func TestTurn_GoalCompletionGateAcceptsMaximumGoalContract(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "goal_update_max", ToolName: GoalToolUpdate, Input: map[string]any{
-				"status":        string(GoalStatusSuccess),
+				"status":        string(workmem.GoalStatusSuccess),
 				"status_reason": "maximum contract preserved",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
 	acceptance := strings.Repeat("a", 32*1024)
-	if _, err := eng.GoalState.Create("ship the maximum contract", acceptance); err != nil {
+	if _, err := goalState.Create("ship the maximum contract", acceptance); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModules(t, eng)
+	installSessionStateModulesWithStores(t, eng, goalState, nil)
 
 	out, err := eng.Turn(context.Background(), "finish the goal")
 	if err != nil {
@@ -4800,11 +5311,11 @@ func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "waiting for delegated work"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	if _, err := eng.GoalState.Create("finish delegated work", "all delegated results are incorporated"); err != nil {
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	if _, err := goalState.Create("finish delegated work", "all delegated results are incorporated"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModulesWithGoalOptions(t, eng, GoalModuleOptions{
+	installSessionStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
 		EnableContinuation:   true,
 		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
 	})
@@ -4821,11 +5332,11 @@ func TestTurn_GoalCompletionGateDefersWhileExternalWorkIsRunning(t *testing.T) {
 	if atomic.LoadInt32(&continued) != 0 {
 		t.Fatalf("goal.continued events = %d", continued)
 	}
-	state, err := eng.GoalState.Snapshot()
+	state, err := goalState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusInProgress || state.ContinuationCount != 0 {
+	if state.Status != workmem.GoalStatusInProgress || state.ContinuationCount != 0 {
 		t.Fatalf("goal state = %+v", state)
 	}
 }
@@ -4836,11 +5347,11 @@ func TestTurn_DeferredGoalStillHonorsStopHookContinuation(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	if _, err := eng.GoalState.Create("finish delegated work", "all checks pass"); err != nil {
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	if _, err := goalState.Create("finish delegated work", "all checks pass"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModulesWithGoalOptions(t, eng, GoalModuleOptions{
+	installSessionStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
 		EnableContinuation:   true,
 		ContinuationDeferrer: fixedGoalContinuationDeferrer(true),
 	})
@@ -4867,18 +5378,18 @@ func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "goal_wait_1", ToolName: GoalToolUpdate, Input: map[string]any{
-				"status":        string(GoalStatusWaitForUser),
+				"status":        string(workmem.GoalStatusWaitForUser),
 				"status_reason": "waiting for the deployment choice",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "Which deployment should I use?"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	if _, err := eng.GoalState.Create("deploy the service", "the chosen deployment is healthy"); err != nil {
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	if _, err := goalState.Create("deploy the service", "the chosen deployment is healthy"); err != nil {
 		t.Fatal(err)
 	}
-	installSessionStateModulesWithGoalOptions(t, eng, GoalModuleOptions{
+	installSessionStateModulesWithStoresAndGoalOptions(t, eng, goalState, nil, GoalModuleOptions{
 		EnableContinuation:   true,
 		ContinuationDeferrer: panicGoalContinuationDeferrer{t: t},
 	})
@@ -4895,11 +5406,11 @@ func TestTurn_GoalWaitForUserAllowsFinish(t *testing.T) {
 	if atomic.LoadInt32(&continued) != 0 {
 		t.Fatalf("goal.continued events = %d", continued)
 	}
-	state, err := eng.GoalState.Snapshot()
+	state, err := goalState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusWaitForUser || state.ContinuationCount != 0 {
+	if state.Status != workmem.GoalStatusWaitForUser || state.ContinuationCount != 0 {
 		t.Fatalf("goal state = %+v", state)
 	}
 }
@@ -4909,7 +5420,8 @@ func TestTurn_UserMessageDoesNotCreateGoalState(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	installSessionStateModulesWithStores(t, eng, goalState, nil)
 
 	out, err := eng.Turn(context.Background(), "this is normal context, not a goal")
 	if err != nil {
@@ -4918,7 +5430,7 @@ func TestTurn_UserMessageDoesNotCreateGoalState(t *testing.T) {
 	if out != "ok" {
 		t.Fatalf("out = %q", out)
 	}
-	snapshot, err := eng.GoalState.StatusSnapshot()
+	snapshot, err := goalState.StatusSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4932,7 +5444,8 @@ func TestTurn_HookGoalStateOutputDoesNotModifyGoal(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	installSessionStateModulesWithStores(t, eng, goalState, nil)
 	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
 		Name:    "ignored-goal-output",
 		Events:  []hooks.EventName{hooks.EventStop},
@@ -4950,7 +5463,7 @@ func TestTurn_HookGoalStateOutputDoesNotModifyGoal(t *testing.T) {
 	if out != "ok" {
 		t.Fatalf("out = %q", out)
 	}
-	snapshot, err := eng.GoalState.StatusSnapshot()
+	snapshot, err := goalState.StatusSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5064,7 +5577,7 @@ func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
 		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}
 	eng, bus := newEngine(t, prov, false)
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
 		Hook:   hooks.CommandHook{Name: "provider-retry"},
 		Stdout: "preserve retry context",
 	}}); err != nil {
@@ -5107,10 +5620,10 @@ func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
 		t.Fatalf("continued provider history missing pending input:\n%s", continuedHistory)
 	}
 	if strings.Contains(continuedHistory, "preserve retry context") {
-		t.Fatalf("continued provider history repeated checkpointed hook context:\n%s", continuedHistory)
+		t.Fatalf("continued provider history repeated checkpointed policy context:\n%s", continuedHistory)
 	}
-	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
-		t.Fatalf("hook context remaining after successful provider request = %+v", remaining)
+	if remaining := eng.pendingPolicyRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("policy context remaining after successful provider request = %+v", remaining)
 	}
 	if len(retries) != 1 || retries[0].RetryReason != "pending_input_after_provider_error" || !retries[0].WillRetry {
 		t.Fatalf("retry diagnostics = %+v", retries)
@@ -5127,7 +5640,7 @@ func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
 	}
 }
 
-func TestTurn_TerminalProviderFailureConsumesHookContext(t *testing.T) {
+func TestTurn_TerminalProviderFailureConsumesPolicyContext(t *testing.T) {
 	release := make(chan struct{})
 	close(release)
 	prov := &queuedFailureProvider{
@@ -5137,7 +5650,7 @@ func TestTurn_TerminalProviderFailureConsumesHookContext(t *testing.T) {
 		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "recovered later"), StopReason: llm.StopEndTurn},
 	}
 	eng, _ := newEngine(t, prov, false)
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{
 		Hook:   hooks.CommandHook{Name: "one-shot"},
 		Stdout: "one-shot provider context",
 	}}); err != nil {
@@ -5154,13 +5667,13 @@ func TestTurn_TerminalProviderFailureConsumesHookContext(t *testing.T) {
 		t.Fatalf("provider histories = %d, want 2", len(prov.histories))
 	}
 	if got := messagesText(prov.histories[0]); !strings.Contains(got, "one-shot provider context") {
-		t.Fatalf("failed provider request missing hook context:\n%s", got)
+		t.Fatalf("failed provider request missing policy context:\n%s", got)
 	}
 	if got := messagesText(prov.histories[1]); strings.Contains(got, "one-shot provider context") {
-		t.Fatalf("next provider request repeated stale hook context:\n%s", got)
+		t.Fatalf("next provider request repeated stale policy context:\n%s", got)
 	}
-	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
-		t.Fatalf("hook context remaining after terminal provider failure = %+v", remaining)
+	if remaining := eng.pendingPolicyRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("policy context remaining after terminal provider failure = %+v", remaining)
 	}
 }
 
@@ -6739,7 +7252,7 @@ func TestRunToolCallEmitsRequestedRunningCompleted(t *testing.T) {
 		ToolName:  "echo_status_test",
 		Input:     map[string]any{"text": "hello"},
 	}}
-	if err := eng.recordToolBatchLocked(context.Background(), "turn-1", compactionPolicy{}, recordedProviderResponse{
+	if err := eng.recordToolBatchLocked(context.Background(), "turn-1", recordedProviderResponse{
 		toolCalls: calls,
 		iter:      0,
 		messageID: "assistant-test",
@@ -6754,6 +7267,35 @@ func TestRunToolCallEmitsRequestedRunningCompleted(t *testing.T) {
 		if got := <-sequence; got != want {
 			t.Fatalf("event = %q, want %q", got, want)
 		}
+	}
+}
+
+func TestRecordToolBatchUsesServingCandidateContextWindowForProjection(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.ContextWindow = 30_000
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "large_candidate_output",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return strings.Repeat("x", 200), nil
+		},
+	})
+	calls := []llm.Block{{
+		Type:      llm.BlockToolUse,
+		ToolUseID: "candidate-tool-1",
+		ToolName:  "large_candidate_output",
+	}}
+
+	if err := eng.recordToolBatchLocked(context.Background(), "turn-1", recordedProviderResponse{
+		toolCalls:     calls,
+		iter:          0,
+		messageID:     "assistant-candidate",
+		contextWindow: 1_000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result := eng.Session.History[len(eng.Session.History)-1].Blocks[0]
+	if result.Artifact == nil || result.Artifact.OriginalBytes != 200 {
+		t.Fatalf("tool result artifact = %+v, want projection at the serving candidate's 5-byte limit", result.Artifact)
 	}
 }
 
@@ -6966,8 +7508,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}, false)
-	eng.Notes = NewNotesStore(eng.Session.Dir)
-	installSessionStateModules(t, eng)
+	_, notesStore := installSessionStateModules(t, eng)
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName == hooks.EventPreToolUse && req.ToolName == NotesToolUpdate && req.ToolInput["content"] == "first" {
 			select {
@@ -6982,7 +7523,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 	if out, err := eng.Turn(context.Background(), "rewrite notes twice"); err != nil || out != "done" {
 		t.Fatalf("Turn() = %q, %v", out, err)
 	}
-	snapshot, err := eng.Notes.Snapshot()
+	snapshot, err := notesStore.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6993,8 +7534,7 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 
 func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	installSessionStateModules(t, eng)
+	goalState, _ := installSessionStateModules(t, eng)
 	installHookRunner(t, eng, hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 		if req.EventName == hooks.EventPreToolUse && req.ToolName == GoalToolCreate {
 			select {
@@ -7021,7 +7561,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 			ToolUseID: "goal-update",
 			ToolName:  GoalToolUpdate,
 			Input: map[string]any{
-				"status":        string(GoalStatusSuccess),
+				"status":        string(workmem.GoalStatusSuccess),
 				"status_reason": "ordered update applied",
 			},
 		},
@@ -7034,11 +7574,11 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 			t.Fatalf("result %d unexpectedly failed: %s", i, result.Block.Content)
 		}
 	}
-	snapshot, err := eng.GoalState.Snapshot()
+	snapshot, err := goalState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Status != GoalStatusSuccess || snapshot.StatusReason != "ordered update applied" {
+	if snapshot.Status != workmem.GoalStatusSuccess || snapshot.StatusReason != "ordered update applied" {
 		t.Fatalf("goal state = %+v, want provider-ordered success update", snapshot)
 	}
 }
@@ -8006,8 +8546,8 @@ func TestTurn_FinishPolicyAllowsCleanFinishWithoutFailureGate(t *testing.T) {
 	eng, bus := newEngine(t, prov, false)
 
 	var failureGateHooks int32
-	bus.Subscribe("hook.completed", func(e events.Event) {
-		payload, _ := e.Payload.(HookCompletedPayload)
+	bus.Subscribe("policy.completed", func(e events.Event) {
+		payload, _ := e.Payload.(PolicyCompletedPayload)
 		if payload.Name == "unresolved-failure-gate" {
 			atomic.AddInt32(&failureGateHooks, 1)
 		}
@@ -8030,7 +8570,6 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
 	installSessionStateModules(t, eng)
 	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
 		Name:    "stop-ok",
@@ -8046,12 +8585,12 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 	bus.Subscribe("finish.attempted", func(e events.Event) {
 		order = append(order, "finish.attempted")
 	})
-	bus.Subscribe("hook.started", func(e events.Event) {
-		payload, _ := e.Payload.(HookStartedPayload)
+	bus.Subscribe("policy.started", func(e events.Event) {
+		payload, _ := e.Payload.(PolicyStartedPayload)
 		order = append(order, "start:"+payload.Name)
 	})
-	bus.Subscribe("hook.completed", func(e events.Event) {
-		payload, _ := e.Payload.(HookCompletedPayload)
+	bus.Subscribe("policy.completed", func(e events.Event) {
+		payload, _ := e.Payload.(PolicyCompletedPayload)
 		order = append(order, "done:"+payload.Name)
 	})
 
@@ -8066,8 +8605,8 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 		"finish.attempted",
 		"start:goal-completion-gate",
 		"done:goal-completion-gate",
-		"start:stop-ok",
-		"done:stop-ok",
+		"start:Stop/stop-ok",
+		"done:Stop/stop-ok",
 	}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("finish policy order = %#v, want %#v", order, want)
@@ -8135,14 +8674,14 @@ func TestTurn_FailureLedgerRecordsUnresolvedBlockingToolFailureWithoutContinuati
 		atomic.AddInt32(&continued, 1)
 	})
 	var failureGateHooks int32
-	bus.Subscribe("hook.started", func(e events.Event) {
-		payload, _ := e.Payload.(HookStartedPayload)
+	bus.Subscribe("policy.started", func(e events.Event) {
+		payload, _ := e.Payload.(PolicyStartedPayload)
 		if payload.Name == "unresolved-failure-gate" {
 			atomic.AddInt32(&failureGateHooks, 1)
 		}
 	})
-	bus.Subscribe("hook.completed", func(e events.Event) {
-		payload, _ := e.Payload.(HookCompletedPayload)
+	bus.Subscribe("policy.completed", func(e events.Event) {
+		payload, _ := e.Payload.(PolicyCompletedPayload)
 		if payload.Name == "unresolved-failure-gate" {
 			atomic.AddInt32(&failureGateHooks, 1)
 		}
@@ -8165,7 +8704,7 @@ func TestTurn_FailureLedgerRecordsUnresolvedBlockingToolFailureWithoutContinuati
 		t.Fatalf("failure ledger should not continue finish")
 	}
 	if atomic.LoadInt32(&failureGateHooks) != 0 {
-		t.Fatalf("unresolved-failure-gate should not emit hook events")
+		t.Fatalf("unresolved-failure-gate should not emit policy facts")
 	}
 }
 
@@ -8281,10 +8820,10 @@ func TestTurn_StopHookOtherExitDoesNotBlockAndEmitsHookErrored(t *testing.T) {
 	}
 	installHookRunner(t, eng, runner)
 
-	var errored HookErroredPayload
-	bus.Subscribe("hook.errored", func(e events.Event) {
-		payload, _ := e.Payload.(HookErroredPayload)
-		if payload.Name == "stop-fails" {
+	var errored PolicyErroredPayload
+	bus.Subscribe("policy.errored", func(e events.Event) {
+		payload, _ := e.Payload.(PolicyErroredPayload)
+		if payload.Name == "Stop/stop-fails" {
 			errored = payload
 		}
 	})
@@ -8299,7 +8838,7 @@ func TestTurn_StopHookOtherExitDoesNotBlockAndEmitsHookErrored(t *testing.T) {
 	if prov.called != 1 {
 		t.Fatalf("provider calls = %d, want no retry loop", prov.called)
 	}
-	if errored.EventName != string(hooks.EventStop) || errored.ExitCode != 1 || !strings.Contains(errored.Error, "stop hook failed") {
+	if errored.ModuleID != hooks.ModuleID || errored.PolicyPoint != runtimemodule.PolicyPointFinish || errored.ExitCode != 1 || !strings.Contains(errored.Error, "stop hook failed") {
 		t.Fatalf("hook errored payload = %+v", errored)
 	}
 }

@@ -103,7 +103,7 @@ func reverseTranscriptMessagePageFromFile(
 			break
 		}
 		switch {
-		case message.Kind == llm.MessageKindHookEvent:
+		case message.Kind == llm.MessageKindPolicyEvent:
 			reversed = append(reversed, message)
 		case message.Kind == llm.MessageKindToolResult:
 			reversed = append(reversed, message)
@@ -147,7 +147,7 @@ func pageStartToolResultIDs(reversed []llm.Message) map[string]struct{} {
 	required := make(map[string]struct{})
 	for i := len(reversed) - 1; i >= 0; i-- {
 		message := reversed[i]
-		if message.Kind == llm.MessageKindHookEvent {
+		if message.Kind == llm.MessageKindPolicyEvent {
 			continue
 		}
 		if message.Kind != llm.MessageKindToolResult {

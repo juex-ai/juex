@@ -7,9 +7,11 @@ type CompactionPolicy = runtimepolicy.CompactionPolicy
 type Policy struct {
 	Enabled                   bool
 	Instructions              string
+	ContextWindow             int
 	ReserveTokens             int
 	KeepRecentTokens          int
 	SummaryModel              string
+	SummaryRequestTokens      int
 	SummaryMaxTokens          int
 	ToolResultMaxChars        int
 	UserInputInlineMaxBytes   int
@@ -28,37 +30,19 @@ func EffectivePolicy(policy CompactionPolicy, contextWindow int, defaultContextW
 		contextWindow = defaultContextWindow
 	}
 	defaults := DefaultCompactionPolicy()
-	if policy.ReserveTokens <= 0 && policy.KeepRecentTokens <= 0 && policy.SummaryMaxTokens <= 0 && policy.ToolResultMaxChars <= 0 {
-		enabled := policy.Enabled
-		instructions := policy.Instructions
-		policy = defaults
-		policy.Enabled = enabled
-		policy.Instructions = instructions
+	trigger := scaledContextBudget(contextWindow, 70, 100)
+	if policy.ReserveTokens > 0 {
+		configuredTrigger := contextWindow - policy.ReserveTokens
+		if configuredTrigger < 1 {
+			configuredTrigger = 1
+		}
+		trigger = minPositiveBudget(trigger, configuredTrigger)
 	}
-	reserve := policy.ReserveTokens
-	if reserve <= 0 {
-		reserve = defaults.ReserveTokens
-	}
-	maxReserve := maxInt(1024, contextWindow/4)
-	if reserve > maxReserve {
-		reserve = maxReserve
-	}
-	keep := policy.KeepRecentTokens
-	if keep <= 0 {
-		keep = defaults.KeepRecentTokens
-	}
-	maxKeep := maxInt(512, contextWindow/3)
-	if keep > maxKeep {
-		keep = maxKeep
-	}
-	summaryMax := policy.SummaryMaxTokens
-	if summaryMax <= 0 {
-		summaryMax = defaults.SummaryMaxTokens
-	}
-	toolMax := policy.ToolResultMaxChars
-	if toolMax <= 0 {
-		toolMax = defaults.ToolResultMaxChars
-	}
+	reserve := contextWindow - trigger
+	keep := cappedContextBudget(scaledContextBudget(contextWindow, 5, 64), policy.KeepRecentTokens)
+	summaryRequest := scaledContextBudget(contextWindow, 80, 100)
+	summaryMax := cappedContextBudget(scaledContextBudget(contextWindow, 1, 200), policy.SummaryMaxTokens)
+	toolMax := cappedContextBudget(scaledContextBudget(contextWindow, 1, 200), policy.ToolResultMaxChars)
 	userInlineMax := policy.UserInputInlineMaxBytes
 	if userInlineMax <= 0 {
 		userInlineMax = defaults.UserInputInlineMaxBytes
@@ -75,16 +59,14 @@ func EffectivePolicy(policy CompactionPolicy, contextWindow int, defaultContextW
 	if maxFailures <= 0 {
 		maxFailures = defaults.MaxAutoFailures
 	}
-	trigger := contextWindow - reserve
-	if trigger <= 0 {
-		trigger = maxInt(1, contextWindow/2)
-	}
 	return Policy{
 		Enabled:                   policy.Enabled,
 		Instructions:              policy.Instructions,
+		ContextWindow:             contextWindow,
 		ReserveTokens:             reserve,
 		KeepRecentTokens:          keep,
 		SummaryModel:              policy.SummaryModel,
+		SummaryRequestTokens:      summaryRequest,
 		SummaryMaxTokens:          summaryMax,
 		ToolResultMaxChars:        toolMax,
 		UserInputInlineMaxBytes:   userInlineMax,
@@ -95,8 +77,26 @@ func EffectivePolicy(policy CompactionPolicy, contextWindow int, defaultContextW
 	}
 }
 
-func maxInt(a, b int) int {
-	if a > b {
+func scaledContextBudget(contextWindow, numerator, denominator int) int {
+	if contextWindow <= 0 || numerator <= 0 || denominator <= 0 {
+		return 1
+	}
+	budget := int(int64(contextWindow) * int64(numerator) / int64(denominator))
+	if budget < 1 {
+		return 1
+	}
+	return budget
+}
+
+func cappedContextBudget(derived, configured int) int {
+	if configured > 0 {
+		return minPositiveBudget(derived, configured)
+	}
+	return derived
+}
+
+func minPositiveBudget(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b

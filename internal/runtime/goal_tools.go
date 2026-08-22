@@ -9,6 +9,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -30,38 +31,43 @@ type GoalContinuationDeferrer interface {
 type GoalModuleOptions struct {
 	EnableContinuation   bool
 	ContinuationDeferrer GoalContinuationDeferrer
+	EventSink            func(events.Event) error
+	CurrentTurnID        func() string
 }
 
 type GoalModule struct {
-	engine               *Engine
+	store                *workmem.GoalStateStore
 	enableContinuation   bool
 	continuationDeferrer GoalContinuationDeferrer
+	eventSink            func(events.Event) error
+	currentTurnID        func() string
 }
 
-func NewGoalModule(engine *Engine) *GoalModule {
-	return NewGoalModuleWithOptions(engine, GoalModuleOptions{EnableContinuation: true})
+func NewGoalModule(store *workmem.GoalStateStore) *GoalModule {
+	return NewGoalModuleWithOptions(store, GoalModuleOptions{EnableContinuation: true})
 }
 
-func NewGoalModuleWithOptions(engine *Engine, opts GoalModuleOptions) *GoalModule {
+func NewGoalModuleWithOptions(store *workmem.GoalStateStore, opts GoalModuleOptions) *GoalModule {
 	return &GoalModule{
-		engine:               engine,
+		store:                store,
 		enableContinuation:   opts.EnableContinuation,
 		continuationDeferrer: opts.ContinuationDeferrer,
+		eventSink:            opts.EventSink,
+		currentTurnID:        opts.CurrentTurnID,
 	}
 }
 
 func (*GoalModule) ID() runtimemodule.ID { return GoalModuleID }
 
 func (m *GoalModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
-	return GoalTools(m.engine), nil
+	return GoalTools(m), nil
 }
 
 func (m *GoalModule) Context(_ context.Context, request runtimemodule.ContextRequest) ([]runtimemodule.ContextSection, error) {
-	if m == nil || m.engine == nil || request.Purpose != runtimemodule.ContextPurposeProviderIteration {
+	if m == nil || request.Purpose != runtimemodule.ContextPurposeProviderIteration {
 		return nil, nil
 	}
-	runtime := m.engine.SessionRuntimeSnapshot()
-	text, ok := goalStateContextFromStore(runtime.GoalState)
+	text, ok := goalStateContextFromStore(m.store)
 	if !ok {
 		return nil, nil
 	}
@@ -76,10 +82,10 @@ func (m *GoalModule) Context(_ context.Context, request runtimemodule.ContextReq
 }
 
 func (m *GoalModule) EvaluateFinish(_ context.Context, request runtimemodule.FinishRequest) (runtimemodule.FinishDecision, error) {
-	if m == nil || m.engine == nil || !m.enableContinuation {
+	if m == nil || !m.enableContinuation {
 		return runtimemodule.FinishDecision{Action: runtimemodule.FinishComplete}, nil
 	}
-	store := m.engine.goalStateStoreLocked()
+	store := m.store
 	if store == nil {
 		return runtimemodule.FinishDecision{Action: runtimemodule.FinishComplete}, nil
 	}
@@ -127,14 +133,14 @@ func (m *GoalModule) EvaluateFinish(_ context.Context, request runtimemodule.Fin
 }
 
 func (m *GoalModule) CommitFinishDecision(_ context.Context, request runtimemodule.FinishRequest, selected runtimemodule.FinishDecision) (bool, error) {
-	if m == nil || m.engine == nil || !m.enableContinuation || m.shouldDeferContinuation() {
+	if m == nil || !m.enableContinuation || m.shouldDeferContinuation() {
 		return false, nil
 	}
-	decision, ok := selected.OwnerData.(GoalGateDecision)
+	decision, ok := selected.OwnerData.(workmem.GoalGateDecision)
 	if !ok || !decision.BlockStop {
 		return false, nil
 	}
-	store := m.engine.goalStateStoreLocked()
+	store := m.store
 	if store == nil {
 		return false, nil
 	}
@@ -148,25 +154,25 @@ func (m *GoalModule) CommitFinishDecision(_ context.Context, request runtimemodu
 		return false, err
 	}
 	if recorded {
-		m.engine.emitGoalUpdated(request.TurnID)
+		m.emitGoalUpdated(request.TurnID)
 	}
 	return recorded, nil
 }
 
 func (m *GoalModule) FinishContinuationCommitted(_ context.Context, request runtimemodule.FinishRequest, selected runtimemodule.FinishDecision) {
-	if m == nil || m.engine == nil {
+	if m == nil {
 		return
 	}
-	decision, ok := selected.OwnerData.(GoalGateDecision)
+	decision, ok := selected.OwnerData.(workmem.GoalGateDecision)
 	if !ok {
 		return
 	}
-	store := m.engine.goalStateStoreLocked()
+	store := m.store
 	if store == nil {
 		return
 	}
 	snapshot, _ := store.StatusSnapshot()
-	_ = m.engine.emit(events.Event{
+	_ = m.emit(events.Event{
 		Type:    "goal.continued",
 		TurnID:  request.TurnID,
 		Payload: goalContinuedPayload(decision, snapshot),
@@ -219,23 +225,23 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 	}
 }
 
-func GoalTools(engine *Engine) []tools.Tool {
+func GoalTools(module *GoalModule) []tools.Tool {
 	definitions := GoalToolDefinitions()
 	unavailable := func(context.Context, map[string]any) (string, error) {
 		return "", fmt.Errorf("goal state is not configured")
 	}
-	if engine == nil {
+	if module == nil || module.store == nil {
 		return []tools.Tool{definitions[0].Bind(unavailable), definitions[1].Bind(unavailable), definitions[2].Bind(unavailable)}
 	}
 	return []tools.Tool{
-		definitions[0].Bind(func(context.Context, map[string]any) (string, error) { return engine.handleGetGoal() }),
-		definitions[1].Bind(func(_ context.Context, in map[string]any) (string, error) { return engine.handleCreateGoal(in) }),
-		definitions[2].Bind(func(_ context.Context, in map[string]any) (string, error) { return engine.handleUpdateGoal(in) }),
+		definitions[0].Bind(func(context.Context, map[string]any) (string, error) { return module.handleGetGoal() }),
+		definitions[1].Bind(func(_ context.Context, in map[string]any) (string, error) { return module.handleCreateGoal(in) }),
+		definitions[2].Bind(func(_ context.Context, in map[string]any) (string, error) { return module.handleUpdateGoal(in) }),
 	}
 }
 
-func (e *Engine) handleGetGoal() (string, error) {
-	store := e.goalStateStoreLocked()
+func (m *GoalModule) handleGetGoal() (string, error) {
+	store := m.store
 	if store == nil {
 		return "", fmt.Errorf("goal state is not configured")
 	}
@@ -249,13 +255,13 @@ func (e *Engine) handleGetGoal() (string, error) {
 	return marshalGoalToolResponse(map[string]any{"present": true, "goal": snapshot})
 }
 
-func (e *Engine) handleCreateGoal(in map[string]any) (string, error) {
-	store := e.goalStateStoreLocked()
+func (m *GoalModule) handleCreateGoal(in map[string]any) (string, error) {
+	store := m.store
 	if store == nil {
 		return "", fmt.Errorf("goal state is not configured")
 	}
 	description := goalToolString(in, "description")
-	state, err := store.CreateWithContract(GoalStateCreate{
+	state, err := store.CreateWithContract(workmem.GoalStateCreate{
 		Description:  description,
 		Acceptance:   goalToolString(in, "acceptance"),
 		StatusReason: goalToolString(in, "status_reason"),
@@ -263,16 +269,16 @@ func (e *Engine) handleCreateGoal(in map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	e.emitGoalUpdated(e.activeTurnID)
+	m.emitGoalUpdated(m.activeTurnID())
 	return marshalGoalToolResponse(map[string]any{"present": true, "goal": state.StatusSnapshot()})
 }
 
-func (e *Engine) handleUpdateGoal(in map[string]any) (string, error) {
-	store := e.goalStateStoreLocked()
+func (m *GoalModule) handleUpdateGoal(in map[string]any) (string, error) {
+	store := m.store
 	if store == nil {
 		return "", fmt.Errorf("goal state is not configured")
 	}
-	var update GoalStateUpdate
+	var update workmem.GoalStateUpdate
 	changed := false
 	if _, ok := in["description"]; ok {
 		value := goalToolString(in, "description")
@@ -285,7 +291,7 @@ func (e *Engine) handleUpdateGoal(in map[string]any) (string, error) {
 		changed = true
 	}
 	if raw := goalToolString(in, "status"); raw != "" {
-		update.Status = GoalStatus(raw)
+		update.Status = workmem.GoalStatus(raw)
 		changed = true
 	}
 	if _, ok := in["status_reason"]; ok {
@@ -300,7 +306,7 @@ func (e *Engine) handleUpdateGoal(in map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	e.emitGoalUpdated(e.activeTurnID)
+	m.emitGoalUpdated(m.activeTurnID())
 	return marshalGoalToolResponse(map[string]any{"present": true, "goal": state.StatusSnapshot()})
 }
 

@@ -1,20 +1,61 @@
 package runtime
 
-import "github.com/juex-ai/juex/internal/events"
+import (
+	"fmt"
 
-func (e *Engine) goalStateStoreLocked() *GoalStateStore {
-	return e.currentGoalStateStore()
+	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
+)
+
+func (m *GoalModule) GoalStateStore() *workmem.GoalStateStore {
+	if m == nil {
+		return nil
+	}
+	return m.store
 }
 
-func (e *Engine) GoalStatusSnapshot() (*GoalStatusSnapshot, error) {
-	store := e.goalStateStoreLocked()
+func (m *GoalModule) GoalStatusSnapshot() (*workmem.GoalStatusSnapshot, error) {
+	store := m.GoalStateStore()
 	if store == nil {
 		return nil, nil
 	}
 	return store.StatusSnapshot()
 }
 
-func goalStateContextFromStore(store *GoalStateStore) (string, bool) {
+func (m *GoalModule) HookGoalState() []byte {
+	store := m.GoalStateStore()
+	if store == nil {
+		return nil
+	}
+	state, err := store.Snapshot()
+	if err != nil {
+		return nil
+	}
+	return state.RawMessage()
+}
+
+func (m *GoalModule) GoalCompactionState() (*CompactionSummaryGoal, error) {
+	store := m.GoalStateStore()
+	if store == nil {
+		return nil, nil
+	}
+	state, err := store.Snapshot()
+	if err != nil {
+		return nil, fmt.Errorf("goal state: %w", err)
+	}
+	snapshot := state.StatusSnapshot()
+	if snapshot == nil {
+		return nil, nil
+	}
+	return &CompactionSummaryGoal{
+		Description:  snapshot.Description,
+		Acceptance:   snapshot.Acceptance,
+		Status:       string(snapshot.Status),
+		StatusReason: snapshot.StatusReason,
+	}, nil
+}
+
+func goalStateContextFromStore(store *workmem.GoalStateStore) (string, bool) {
 	if store == nil {
 		return "", false
 	}
@@ -25,11 +66,11 @@ func goalStateContextFromStore(store *GoalStateStore) (string, bool) {
 	return state.RenderProviderContext()
 }
 
-func (e *Engine) emitGoalUpdated(turnID string) {
-	if e == nil {
+func (m *GoalModule) emitGoalUpdated(turnID string) {
+	if m == nil {
 		return
 	}
-	store := e.goalStateStoreLocked()
+	store := m.store
 	if store == nil {
 		return
 	}
@@ -37,10 +78,24 @@ func (e *Engine) emitGoalUpdated(turnID string) {
 	if err != nil || snapshot == nil {
 		return
 	}
-	_ = e.emit(events.Event{Type: "goal.updated", TurnID: turnID, Payload: goalUpdatedPayload(snapshot)})
+	_ = m.emit(events.Event{Type: "goal.updated", TurnID: turnID, Payload: goalUpdatedPayload(snapshot)})
 }
 
-func goalUpdatedPayload(snapshot *GoalStatusSnapshot) GoalUpdatedPayload {
+func (m *GoalModule) activeTurnID() string {
+	if m == nil || m.currentTurnID == nil {
+		return ""
+	}
+	return m.currentTurnID()
+}
+
+func (m *GoalModule) emit(event events.Event) error {
+	if m == nil || m.eventSink == nil {
+		return nil
+	}
+	return m.eventSink(event)
+}
+
+func goalUpdatedPayload(snapshot *workmem.GoalStatusSnapshot) GoalUpdatedPayload {
 	if snapshot == nil {
 		return GoalUpdatedPayload{}
 	}
@@ -54,7 +109,7 @@ func goalUpdatedPayload(snapshot *GoalStatusSnapshot) GoalUpdatedPayload {
 	}
 }
 
-func goalContinuedPayload(decision GoalGateDecision, snapshot *GoalStatusSnapshot) GoalContinuedPayload {
+func goalContinuedPayload(decision workmem.GoalGateDecision, snapshot *workmem.GoalStatusSnapshot) GoalContinuedPayload {
 	count := decision.ContinuationCount
 	if snapshot != nil {
 		count = snapshot.ContinuationCount

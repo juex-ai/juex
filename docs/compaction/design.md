@@ -26,6 +26,13 @@ Implemented:
   breakpoints on stable prompt sections. Provider-reported cached input tokens
   are recorded in usage/context events.
 - Automatic compaction has a consecutive-failure circuit breaker.
+- Summary generation traverses the optional dedicated summary model, effective
+  primary, and ordered fallback models. It deduplicates refs, honors shared
+  model-health cooldown and half-open reservations, and refits each request to
+  the selected candidate's context window. Candidate-specific fitting removes
+  only the oldest complete Tool Call/Tool Result batches and preserves all
+  user-authored messages; an irreducible oversized request skips that candidate
+  before Provider dispatch.
 
 Still future work:
 
@@ -131,11 +138,13 @@ compaction:
   user_input_inline_max_bytes: 65536
   user_input_preview_head_bytes: 8192
   user_input_preview_tail_bytes: 8192
-tool_output:
-  inline_max_bytes: 32768
-  preview_head_bytes: 8192
-  preview_tail_bytes: 8192
 ```
+
+The context-window-derived defaults are a 70% automatic-compaction trigger, an
+80% complete summary request envelope, 0.5% each for summary output, summary
+Tool Result serialization, and ordinary Tool Result projection, plus 5/64 for
+the retained recent tail. Positive absolute values are stricter ceilings, while
+`reserve_tokens` may only move the trigger earlier.
 
 Rationale:
 
@@ -157,8 +166,10 @@ V2 extends this with a projection pass:
 // internal/runtime/compaction_policy.go and tool_output_policy.go
 type compactionPolicy struct {
     Enabled                   bool
+    ContextWindow             int
     ReserveTokens             int
     KeepRecentTokens          int
+    SummaryRequestTokens      int
     SummaryMaxTokens          int
     ToolResultMaxChars        int
     UserInputInlineMaxBytes   int
@@ -302,7 +313,8 @@ type CompactWindow struct {
 Trigger points:
 
 - Pre-turn: projected active context plus incoming message would exceed
-  `context_window - reserve_tokens`.
+  70% of the selected candidate's configured context window, or the earlier
+  threshold implied by an explicit `reserve_tokens` value.
 - Mid-turn: before each provider call, after draining pending input and tool
   results, if growth after baseline exceeds the trigger.
 - Overflow retry: if the provider returns a context overflow error.
@@ -361,10 +373,18 @@ Currently emitted events:
   - `tail_start_message_id`, `context_window`, `reserve_tokens`,
     `keep_recent_tokens`
 - `context.compact.summary_retry`
-  - empty-summary reason, stop reason, reasoning-only classification, and the
-    previous and bounded retry output-token budgets
+  - the first incomplete candidate anywhere in the summary chain receives the
+    one bounded semantic retry; the event records empty-summary reason, stop
+    reason, reasoning-only classification, previous and retry output-token
+    budgets, and the failed attempt's Request Epoch link
 - `context.compact.summary_model_fallback`
-  - configured summary model, fallback model, and the summary-provider error
+  - one event per attempted-candidate transition, recording the failed model,
+    next selected model (or empty when exhausted), candidate error, and failed
+    attempt's Request Epoch link
+- `llm.fallback`
+  - shared-health cooldown and `probe_in_flight` skips encountered while
+    selecting a compaction summary candidate; these diagnostics do not create a
+    conversation `model_change` message
 - `context.compact.errored` and `context.compact.skipped`
   - compact errors and automatic failure-circuit-breaker state
 - `llm.responded`

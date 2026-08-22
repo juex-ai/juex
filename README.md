@@ -161,7 +161,7 @@ Then run:
 ```bash
 juex run "summarize this repository"
 juex run --attach screenshot.png "describe this image"
-juex --model openai:gpt-4.1 run "summarize this repository"
+juex --models openai:gpt-4.1,anthropic:claude-sonnet-5 run "summarize this repository"
 juex --debug run --json "summarize this repository"
 juex repl
 juex listen
@@ -170,13 +170,15 @@ juex fleet serve
 juex fleet status
 ```
 
-`--model` uses the same `provider:model` format as config and can select
-any model declared in the merged provider config, including providers inherited
-from `~/.juex/juex.yaml` and overridden by `$JUEX_HOME/juex.yaml` when the
-effective home is distinct.
-Configure an ordered top-level `fallback_models` list to continue a provider
-request on another declared model after exhausted transient, authentication,
-permission, or model-not-found failures. Juex skips unhealthy models during a
+The top-level `models` list is the complete ordered model chain: the first
+`provider:model` reference is primary and later entries are fallbacks. A nearer
+YAML layer replaces the whole list. Root `--models` accepts the same references
+as a comma-separated list and replaces the effective YAML chain for one
+invocation. Every reference must resolve to a model declared in the merged
+provider config.
+
+Juex continues on the next model after exhausted transient, authentication,
+permission, or model-not-found failures. It skips unhealthy models during a
 process-local cooldown and returns to higher-priority models through real
 request probes. Context overflow, cancellation, and failures after streamed
 output never trigger fallback. Model transitions do not notify the Agent by
@@ -256,7 +258,7 @@ default config when `JUEX_HOME` is unset) or the current workspace config.
 | `juex run "<prompt>"` | Run one prompt in the active primary session and exit. |
 | `juex run --ephemeral "<prompt>"` | Run with isolated temporary agent state; add `--keep` to retain and print the state path. |
 | `juex run --attach <path> ["<prompt>"]` | Attach one or more local images to a text, image-only, or mixed-content turn; repeat `--attach` for multiple images. |
-| `juex --model <provider>:<model> run "<prompt>"` | Override the configured model for this invocation. |
+| `juex --models <provider>:<model>[,...] run "<prompt>"` | Replace the configured model chain for this invocation. |
 | `juex --debug run --json "<prompt>"` | Write detailed session logs while emitting the normal run result. |
 | `juex run --new "<prompt>"` | Create a new active primary session for the prompt. |
 | `juex run --side "<prompt>"` | Create a side session without changing the active primary session. |
@@ -736,7 +738,9 @@ instead of reconstructing it from transcript history, while unfinished Notes
 items constrain `Next Steps`. Set `compaction.instructions` for persistent
 summary focus. Instructions from configuration, a manual `/compact <focus>` or
 `juex sessions compact --instructions`, and successful `PreCompact` hook stdout
-are applied in that order.
+are applied in that order. If summary generation fails, Juex retries through
+the ordered `models` chain without adding a model-change
+message to the Agent conversation.
 
 Each persisted session also has a `scratchpad/` directory for long drafts,
 intermediate files, and working material that exceeds the Notes budget. The
@@ -773,8 +777,10 @@ and nonzero-exit failures are observable and non-blocking by default; set
 `required: true` on a command to propagate those failures into the owning
 runtime action. Parent cancellation always propagates. JSON-looking stdout is
 treated as text.
-Set `runtime.show_builtin_hook_traces: true` to mirror built-in hook/gate
-completions and failures into the conversation as UI-only hook trace rows.
+Set `runtime.show_builtin_policy_traces: true` to mirror built-in hook/gate
+completions and failures into the conversation as UI-only policy trace rows.
+Framework lifecycle facts use `policy.*`; the Hooks Module supplies Hook event
+and command names plus its original resource source, including `ext:<name>`.
 
 `juex bundle --session <id> --out <file.tar.gz>` creates a local archive for
 debugging one session. The archive includes a manifest, runtime snapshot,
@@ -793,31 +799,60 @@ compatibility contract of `conversation.jsonl` or `events.jsonl`.
 
 ## Development
 
-From the repository root, run the project Make targets and Go tests directly:
+From the repository root, use the verification tier that matches the current
+development stage:
 
 ```bash
-make test
-make integration
-make provider-smoke
-make development-eval
-make build
-make race
+make verify-plan EXPLAIN=1
+make verify-focused PLANNED=1
+make verify-focused PKGS="./internal/app ./internal/runtime"
+make verify-candidate
+make verify-candidate RACE=1 WEB=1
+make verify-final
+make verify-final RACE=1 WEB=1 COMPACTION=1
 ```
 
-`make test` and `make race` run with temporary `HOME`, `JUEX_HOME`, XDG
+Validation planning uses the Git diff to select focused packages, web/race
+candidate flags, and live/compaction final flags. Focused verification permits
+a dirty worktree; `PLANNED=1` explicitly opts in to the union of staged,
+unstaged, and untracked paths, while `PKGS=...` preserves a required targeted
+scope. Candidate and final
+default to `merge-base origin/main HEAD`, accept `BASE=<sha>`, and bind their
+reports to the full pre-run `HEAD` SHA. They require that snapshot to be clean
+before and after their
+steps. Reports live under
+`.tmp/reports/development-validation/<full-head-sha>/<run-id>/`. Final reuses a
+passing candidate's deterministic/build prefix only when the record schema,
+SHA, plan, and stable environment fingerprints all match; the stable inputs
+include effective Go settings, the build's Git description, and the resolved
+ripgrep binary. Final always runs the build-tagged deterministic integration
+contracts without retries, then live integration and provider smoke; the plan
+adds compaction when required. `RACE=1`
+replaces the ordinary deterministic suite, `WEB=1` adds the frontend gate
+without rebuilding it during the binary build, and `COMPACTION=1` adds the
+live compaction evaluator to final verification; explicit flags are additive
+and never remove planned gates. Every Go tier also prepares a lightweight
+embedded-web stub
+before Go-only checks, so focused web packages and full suites work in a fresh
+checkout without a prior frontend build.
+
+The lower-level `make test` and `make race` targets run with temporary `HOME`, `JUEX_HOME`, XDG
 config/cache, Windows application-data, global Git config, Go telemetry, and
 Codex directories, so personal default-home provider config, Fleet, Agent, and
 tool state cannot affect deterministic results. Fresh-checkout ripgrep
 provisioning redirects its bootstrap Go telemetry to a disposable path, and
 mise runtime discovery keeps installations available while redirecting mise
 state/cache writes.
-`make integration` uses the same writable-state isolation but resolves
+`make integration` composes `integration-contracts` and `integration-live`.
+The first runs build-tagged deterministic e2e contracts without credentials;
+the second uses the same writable-state isolation but resolves
 `JUEX_PROVIDER_CONFIG` and `CODEX_HOME` from the original native user home
 (`HOME` on Unix, `USERPROFILE` on Windows) first and passes those paths to the
-live tests as read-only inputs.
+credential-backed tests as read-only inputs.
 
 The frontend lives in `frontend/`; `make build` runs the frontend build,
-copies it into `internal/web/dist`, and embeds it into `dist/juex`.
+copies it into `internal/web/dist`, and embeds it into `dist/juex`. `make
+build-go` compiles only the binary from the already synchronized embed assets.
 
 ## Documentation
 

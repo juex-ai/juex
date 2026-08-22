@@ -4,7 +4,18 @@ This directory contains local evaluation tooling that exercises real providers
 or longer multi-turn behavior. Keep deterministic cross-platform e2e tests in
 `tests/e2e`; put provider-config selection and quality-evaluation helpers here.
 
-The stable command entrypoints live next to the evaluation code:
+The stable agent-facing entrypoints are:
+
+```bash
+make verify-plan EXPLAIN=1
+make verify-focused PLANNED=1
+make verify-focused PKGS="./internal/app ./internal/runtime"
+make verify-candidate RACE=1 WEB=1
+make verify-final RACE=1 WEB=1 COMPACTION=1
+```
+
+They delegate to `python -m tests.eval.juex_eval plan` and `verify`.
+Lower-level harness entrypoints live next to the evaluation code:
 
 - `tests/eval/eval_scripts_test.go`
 - `tests/eval/provider_model_smoke.sh`
@@ -25,6 +36,59 @@ The shell scripts are thin wrappers around the Python module:
 ```bash
 uv run --project . python -m tests.eval.juex_eval --help
 ```
+
+## Verification Tiers
+
+`plan` and every verification tier use the same deterministic rule table in
+`juex_eval/validation_plan.py`. Candidate/final default to the changes from
+`git merge-base origin/main HEAD` through `HEAD`; `--base <sha>` uses exactly
+that commit. Focused planning permits a dirty worktree and unions staged,
+unstaged, and untracked paths. Rename entries retain both paths and deleted
+entries retain the deleted path. Each run writes `plan.json` and `plan.md` with
+sorted changed files, matched rule IDs, selected gates, per-gate causes, and a
+stable behavioral fingerprint. Use `--explain` or `EXPLAIN=1` to print the
+human-readable explanation. Non-UTF-8 Git path bytes remain round-trippable in
+JSON and render as `\\xNN` escapes in the valid UTF-8 Markdown report.
+
+`verify focused --planned` consumes the dirty plan after explicit opt-in; an
+unscoped invocation remains an error. Go paths select their package,
+cross-boundary paths add `./tests/e2e`, and
+frontend paths run `web-check` plus the binary build. Race-sensitive paths add
+`-race`. `PKGS=...` remains a required targeted alternative for development
+loops and does not inherit broader diff-selected gates. Documentation-only or
+empty diffs may select no focused code gates. Unknown non-documentation paths
+use the full conservative plan instead of producing an empty scope.
+
+`verify candidate` captures the full `HEAD` SHA, branch, and porcelain status
+before it plans or prepares any gate, then requires the worktree to remain on
+that clean SHA after the gate. It runs exactly one full
+deterministic Go suite followed by one executable build. Before the Go suite it
+uses the shared non-overwriting `web-stub` target so fresh checkouts satisfy
+the Go embed contract without a frontend build. Planned race/web flags are
+applied automatically; `RACE=1` and `WEB=1` are additive overrides. `WEB=1`
+runs `web-check`, synchronizes
+the resulting frontend assets into `internal/web/dist`, and invokes the
+Go-only `build-go` target instead of rebuilding the frontend.
+
+`verify final` applies the same commit-bound clean-worktree contract. It first
+looks for a passing candidate record with the same SHA, record schema,
+candidate-plan fingerprint, and stable toolchain/environment fingerprint. When
+one exists, final reuses its successful deterministic, build, web, and race
+steps, then always runs build-tagged deterministic integration contracts
+without retries, followed by retry-eligible live integration and provider
+smoke. The plan adds the optional compaction gate. It never reuses final-only
+results. A missing or
+incompatible candidate makes final execute the complete plan and records the
+exact invalidation reason. Set
+`COMPACTION=1` only when compaction, context projection, provider replay, or
+long-session behavior needs the live compaction quality gate as an additive
+override. All tiers stop after the first failing step. `--config`,
+`--selection-seed`, and
+`--provider-timeout` are available on the underlying final CLI when an exact
+live rerun is required. Candidate and final also accept `--run-id`; their
+`--report-dir` override is a report root, not a single run directory. Run IDs
+must be safe basenames containing only letters, digits, `_`, `-`, and `.` and
+cannot begin with `.`.
 
 ## Deterministic Capability Harness
 
@@ -101,8 +165,32 @@ Common selection and output flags are intentionally consistent across commands:
 - `--all-models` runs every eligible ref from the resolved config.
 - `--report-dir` overrides the output directory for each command.
 
-By default, local run artifacts are written under
-`.tmp/reports/<report-kind>/<run-id>/` and the directory is created on demand.
+By default, provider smoke, development, and compaction artifacts are written
+under `.tmp/reports/<report-kind>/<run-id>/`. Commit-bound candidate and final
+records instead use
+`.tmp/reports/development-validation/<full-head-sha>/<run-id>/`. Their
+`record.json` and `record.md` list the schema, clean source snapshot, plan and
+environment fingerprints, candidate binary fingerprint, redacted provider
+selection identity, and every reused, executed, invalidated, or
+fail-fast-not-run step. Execution state is separate from the terminal outcome:
+`passed`, `flaky_pass`, `product_failure`, `environment_failure`,
+`provider_unavailable`, or `transient_failure`. Every completed step records a
+reason, named matching rule, merge-blocking decision, recommended action, and
+one complete log per attempt. The record's plan fingerprint combines the
+candidate-relevant Git-diff projection with the concrete candidate step plan,
+so final-only overrides do not invalidate reusable deterministic evidence. The
+corresponding `plan.json` and `plan.md` live beside the record. A missing or
+changed candidate binary invalidates reuse so final can rebuild the artifact
+required by live smoke. The environment
+fingerprint includes effective Go build flags, workspaces, experiments,
+toolchain, architecture, CGO/compiler settings, the build's `git describe`
+value, and the resolved ripgrep executable fingerprint, preventing reuse across
+different effective build or test inputs. Directories are created on demand. If
+candidate and final explicitly share one run ID, final
+preserves the reusable source as `candidate-record.json` and
+`candidate-record.md` beside its own `record.json` and `record.md`, so a failed
+live-gate retry does not rerun the deterministic plan. A refreshed candidate
+for that run ID atomically replaces the older preserved candidate snapshot.
 Report kinds are:
 
 - `provider-model-smoke`
@@ -188,16 +276,27 @@ Each Schedule retry uses a new workspace and session. Its transcript, events,
 stdout, stderr, prompt, final `observables.json`, and contract report are
 retained under `cases/<provider_model>/schedule-routing/attempt-N/`. Seeded
 attempts also retain `seed-observables.json` so the initial fixture cannot be
-confused with final state. Retryable turn failures and Schedule contract
-failures consume the same bounded `--retries` budget in fresh attempts.
+confused with final state. Only an allowlisted transient turn failure may
+consume the single `--retries 1` budget in a fresh attempt. Schedule contract
+failures are product failures and never retry.
 Persistent failures still fail the selected provider:model result; the command
 never silently switches to a different target.
 The contract report classifies failures as model capability failures or hard
 runtime failures, and every failure fails the strict live gate.
 
-A failed provider:model is not a skip; keep the report and explain whether the
-problem is configuration, provider capability, prompt-following, or a JueX
-regression.
+A failed provider:model is not a skip. Explicit selection of an absent model,
+an empty eligible default rotation, an unreachable endpoint, and a provider
+that explicitly reports unavailability fail as `provider_unavailable`, not as
+a product regression. Keep the report and explain whether the problem is
+configuration, provider capability, prompt-following, or a JueX regression.
+
+Live provider/network commands may retry exactly once only after a named
+allowlist rule matches structured `retryable: true`, an allowlisted transient
+HTTP status, an allowlisted network signature, or the bounded provider timeout.
+Provider smoke invoked from candidate/final validation disables its internal
+retry so the outer step owns that one retry. Standalone provider smoke accepts
+only `--retries 0` or `--retries 1`. Deterministic tests, builds, lint, race,
+and contract assertions never retry.
 
 Use `--all-models` only for broader changes where every eligible configured
 model must be covered. Reports record selected refs, candidate refs, the seed,
@@ -212,7 +311,9 @@ the original URI, user information, path, or query. A second opaque profile
 identity covers effective capabilities, compat, headers, and query settings.
 Unknown provider/model fields remain in the isolated config so Juex's strict
 loader rejects the same invalid source shape instead of silently normalizing it.
-Malformed provider/model container types and missing IDs fail selection as
+Missing, unreadable, or malformed local provider configuration fails as
+`environment_failure` with action `fix_environment`. A well-formed config with
+missing provider/model IDs or no eligible provider fails as
 `provider_unavailable` before any live request.
 
 ## Compaction Quality
@@ -241,7 +342,12 @@ Every completed development task should leave a validation record:
 bash tests/eval/development_eval.sh
 ```
 
-Use `--compaction-eval` for compaction, context projection, reasoning replay,
+The deterministic phase reuses the candidate planner, so one `go test ./...`
+run includes `tests/e2e` without a duplicate standalone e2e run. The existing
+live selection evidence remains, and the JSON/Markdown record also includes the
+outcome, rule, reason, retry attempts, `blocks_merge`, and recommended action.
+
+Use `--compaction-eval` for compaction, context projection, provider replay,
 or long-session changes. The record links command logs, provider:model smoke
 summary, Schedule routing coverage, and any scorecards so a later worker can
 tell whether behavior got better, stayed flat, or regressed.

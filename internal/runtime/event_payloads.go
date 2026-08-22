@@ -6,6 +6,8 @@ import (
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
@@ -69,41 +71,44 @@ func NewTurnErroredPayload(err error) TurnErroredPayload {
 	return payload
 }
 
-type HookStartedPayload struct {
-	Name      string `json:"name"`
-	Source    string `json:"source,omitempty"`
-	EventName string `json:"event_name"`
-	ToolName  string `json:"tool_name,omitempty"`
+type PolicyStartedPayload struct {
+	ModuleID    runtimemodule.ID          `json:"module_id"`
+	PolicyPoint runtimemodule.PolicyPoint `json:"policy_point"`
+	Name        string                    `json:"name,omitempty"`
+	Source      string                    `json:"source,omitempty"`
+	ToolName    string                    `json:"tool_name,omitempty"`
 }
 
-type HookCompletedPayload struct {
-	Name          string `json:"name"`
-	Source        string `json:"source,omitempty"`
-	EventName     string `json:"event_name"`
-	ToolName      string `json:"tool_name,omitempty"`
-	DurationMS    int64  `json:"duration_ms"`
-	ExitCode      int    `json:"exit_code"`
-	StdoutLen     int    `json:"stdout_len,omitempty"`
-	StderrLen     int    `json:"stderr_len,omitempty"`
-	StdoutPreview string `json:"stdout_preview,omitempty"`
-	StderrPreview string `json:"stderr_preview,omitempty"`
+type PolicyCompletedPayload struct {
+	ModuleID      runtimemodule.ID          `json:"module_id"`
+	PolicyPoint   runtimemodule.PolicyPoint `json:"policy_point"`
+	Name          string                    `json:"name,omitempty"`
+	Source        string                    `json:"source,omitempty"`
+	ToolName      string                    `json:"tool_name,omitempty"`
+	DurationMS    int64                     `json:"duration_ms"`
+	ExitCode      int                       `json:"exit_code"`
+	StdoutLen     int                       `json:"stdout_len,omitempty"`
+	StderrLen     int                       `json:"stderr_len,omitempty"`
+	StdoutPreview string                    `json:"stdout_preview,omitempty"`
+	StderrPreview string                    `json:"stderr_preview,omitempty"`
 }
 
-type HookErroredPayload struct {
-	Name          string `json:"name"`
-	Source        string `json:"source,omitempty"`
-	EventName     string `json:"event_name"`
-	ToolName      string `json:"tool_name,omitempty"`
-	DurationMS    int64  `json:"duration_ms"`
-	ExitCode      int    `json:"exit_code,omitempty"`
-	Error         string `json:"error"`
-	StdoutLen     int    `json:"stdout_len,omitempty"`
-	StderrLen     int    `json:"stderr_len,omitempty"`
-	StdoutPreview string `json:"stdout_preview,omitempty"`
-	StderrPreview string `json:"stderr_preview,omitempty"`
+type PolicyErroredPayload struct {
+	ModuleID      runtimemodule.ID          `json:"module_id"`
+	PolicyPoint   runtimemodule.PolicyPoint `json:"policy_point"`
+	Name          string                    `json:"name,omitempty"`
+	Source        string                    `json:"source,omitempty"`
+	ToolName      string                    `json:"tool_name,omitempty"`
+	DurationMS    int64                     `json:"duration_ms"`
+	ExitCode      int                       `json:"exit_code,omitempty"`
+	Error         string                    `json:"error"`
+	StdoutLen     int                       `json:"stdout_len,omitempty"`
+	StderrLen     int                       `json:"stderr_len,omitempty"`
+	StdoutPreview string                    `json:"stdout_preview,omitempty"`
+	StderrPreview string                    `json:"stderr_preview,omitempty"`
 }
 
-type HookTracePayload struct {
+type PolicyTracePayload struct {
 	Text      string `json:"text"`
 	MessageID string `json:"message_id,omitempty"`
 }
@@ -231,12 +236,12 @@ type ToolFailureStalePayload struct {
 }
 
 type GoalUpdatedPayload struct {
-	Description       string     `json:"description,omitempty"`
-	Acceptance        string     `json:"acceptance,omitempty"`
-	ContinuationCount int        `json:"continuation_count,omitempty"`
-	Status            GoalStatus `json:"status,omitempty"`
-	StatusReason      string     `json:"status_reason,omitempty"`
-	UpdatedAt         time.Time  `json:"updated_at,omitempty"`
+	Description       string             `json:"description,omitempty"`
+	Acceptance        string             `json:"acceptance,omitempty"`
+	ContinuationCount int                `json:"continuation_count,omitempty"`
+	Status            workmem.GoalStatus `json:"status,omitempty"`
+	StatusReason      string             `json:"status_reason,omitempty"`
+	UpdatedAt         time.Time          `json:"updated_at,omitempty"`
 }
 
 type NotesUpdatedPayload struct {
@@ -250,10 +255,10 @@ type NotesErroredPayload struct {
 }
 
 type GoalContinuedPayload struct {
-	Status                GoalStatus `json:"status"`
-	Reason                string     `json:"reason,omitempty"`
-	ContinuationCount     int        `json:"continuation_count"`
-	ContinuationPromptLen int        `json:"continuation_prompt_len"`
+	Status                workmem.GoalStatus `json:"status"`
+	Reason                string             `json:"reason,omitempty"`
+	ContinuationCount     int                `json:"continuation_count"`
+	ContinuationPromptLen int                `json:"continuation_prompt_len"`
 }
 
 type PendingInputQueuedPayload struct {

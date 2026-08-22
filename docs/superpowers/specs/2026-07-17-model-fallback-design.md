@@ -11,26 +11,24 @@ and recovers to higher-priority models through real-request half-open probes.
 
 ### Configuration
 
-Add a top-level `fallback_models` array. Entries use the same
-`provider:model` grammar as `model`:
+Configure one ordered top-level `models` list. Every entry uses the
+`provider:model` grammar; the first entry is primary and the rest are fallbacks:
 
 ```yaml
-model: anthropic:claude-sonnet-5
-fallback_models:
+models:
+  - anthropic:claude-sonnet-5
   - openai:gpt-5
   - local:qwen3
 ```
 
 - Resolve every entry to a configured provider profile at load time.
-- Reject unresolved entries and duplicate fallback entries.
-- `--model provider:model` replaces the complete effective primary reference.
+- Reject unresolved and duplicate entries.
+- Root `--models provider:model,...` replaces the complete effective chain.
   `PROVIDER_API_MODEL` keeps its existing compatibility behavior: it is a
   model ID only and replaces the model under the already selected provider;
-  it is not parsed as a complete reference. Both preserve the configured
-  fallback list. If either override makes the effective primary equal to a
-  fallback entry, skip the duplicate at runtime.
-- An explicitly configured empty list clears an inherited fallback list.
-- With no fallback list, behavior remains unchanged.
+  it is not parsed as a complete reference and preserves the configured tail.
+- A nearer YAML layer replaces the complete inherited list, including with an
+  explicit empty list.
 
 ### Failure and Recovery
 

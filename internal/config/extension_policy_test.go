@@ -169,7 +169,7 @@ func TestLoadExtensionPolicyAcceptsExplicitReferenceToLoadedHomeConfig(t *testin
 		userHome := prepareConfigTest(t)
 		defaultPath := filepath.Join(userHome, ".juex", "juex.yaml")
 		workDir := t.TempDir()
-		writeTextFile(t, defaultPath, `model: local:default
+		writeTextFile(t, defaultPath, `models: [local:default]
 providers:
   - id: local
     protocol: openai/chat
@@ -184,7 +184,7 @@ extensions:
 		writeTextFile(
 			t,
 			filepath.Join(workDir, ".juex", "juex.yaml"),
-			"model: local:workspace\nextensions:\n  allow: [workspace]\n",
+			"models: [local:workspace]\nextensions:\n  allow: [workspace]\n",
 		)
 
 		cfg, err := LoadWithOptions(LoadOptions{

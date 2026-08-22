@@ -6,11 +6,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/prompt"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -61,7 +63,7 @@ func (e *Engine) RunSessionStartHooks(ctx context.Context) error {
 	return e.RunSessionStartPolicies(ctx)
 }
 
-func (e *Engine) queueHookRuntimeContext(results []hooks.Result) error {
+func (e *Engine) queuePolicyRuntimeContextFromHookResults(results []hooks.Result) error {
 	contexts := make([]runtimemodule.PolicyContext, 0, len(results))
 	for _, result := range results {
 		if result.ExitCode != 0 || result.Stdout == "" {
@@ -79,7 +81,7 @@ func (e *Engine) queueHookRuntimeContext(results []hooks.Result) error {
 	return e.queuePolicyRuntimeContext(contexts)
 }
 
-func appendHookAdditionalContext(msg llm.Message, results []hooks.Result) llm.Message {
+func appendPolicyAdditionalContext(msg llm.Message, results []hooks.Result) llm.Message {
 	msg.Blocks = append([]llm.Block(nil), msg.Blocks...)
 	for _, result := range results {
 		if result.ExitCode != 0 || result.Stdout == "" {
@@ -99,7 +101,7 @@ func appendHookAdditionalContext(msg llm.Message, results []hooks.Result) llm.Me
 
 func newTestPromptBuilder(workDir string, now func() time.Time) *prompt.Builder {
 	provider := &promptcontext.SessionContextModule{WorkDir: workDir, Now: now}
-	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		return provider.Context(context.Background(), runtimemodule.ContextRequest{Purpose: runtimemodule.ContextPurposeProviderIteration})
 	}}
 }
@@ -119,15 +121,51 @@ func installModuleTools(t *testing.T, registry *tools.Registry, providers ...run
 	}
 }
 
-func installSessionStateModules(t *testing.T, engine *Engine) {
-	installSessionStateModulesWithGoalOptions(t, engine, GoalModuleOptions{EnableContinuation: true})
+func installSessionStateModules(t *testing.T, engine *Engine) (*workmem.GoalStateStore, *workmem.NotesStore) {
+	return installSessionStateModulesWithGoalOptions(t, engine, GoalModuleOptions{EnableContinuation: true})
 }
 
-func installSessionStateModulesWithGoalOptions(t *testing.T, engine *Engine, goalOptions GoalModuleOptions) {
+func installSessionStateModulesWithGoalOptions(t *testing.T, engine *Engine, goalOptions GoalModuleOptions) (*workmem.GoalStateStore, *workmem.NotesStore) {
+	t.Helper()
+	return installSessionStateModulesWithStoresAndGoalOptions(t, engine, nil, nil, goalOptions)
+}
+
+func installSessionStateModulesWithStores(
+	t *testing.T,
+	engine *Engine,
+	goalState *workmem.GoalStateStore,
+	notes *workmem.NotesStore,
+) (*workmem.GoalStateStore, *workmem.NotesStore) {
+	t.Helper()
+	return installSessionStateModulesWithStoresAndGoalOptions(t, engine, goalState, notes, GoalModuleOptions{EnableContinuation: true})
+}
+
+func installSessionStateModulesWithStoresAndGoalOptions(
+	t *testing.T,
+	engine *Engine,
+	goalState *workmem.GoalStateStore,
+	notes *workmem.NotesStore,
+	goalOptions GoalModuleOptions,
+) (*workmem.GoalStateStore, *workmem.NotesStore) {
 	t.Helper()
 	if engine == nil || engine.Session == nil {
 		t.Fatal("session state modules require an attached session")
 	}
+	if goalState == nil {
+		goalState = workmem.NewGoalStateStore(engine.Session.Dir, workmem.GoalStateOptions{})
+	}
+	if notes == nil {
+		notes = workmem.NewNotesStore(engine.Session.Dir)
+	}
+	eventSink := func(event events.Event) error {
+		if engine.Bus == nil {
+			return nil
+		}
+		return engine.Bus.Emit(event)
+	}
+	currentTurnID := func() string { return engine.PendingInputStatus().TurnID }
+	goalOptions.EventSink = eventSink
+	goalOptions.CurrentTurnID = currentTurnID
 	sessionContext := runtimemodule.SessionContext{
 		ID:            engine.Session.ID,
 		Dir:           engine.Session.Dir,
@@ -135,10 +173,10 @@ func installSessionStateModulesWithGoalOptions(t *testing.T, engine *Engine, goa
 	}
 	set, err := runtimemodule.BuildSessionSet(context.Background(), []runtimemodule.SessionFactorySpec{
 		{ID: GoalModuleID, Enabled: true, New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
-			return NewGoalModuleWithOptions(engine, goalOptions), nil
+			return NewGoalModuleWithOptions(goalState, goalOptions), nil
 		}},
 		{ID: NotesModuleID, Enabled: true, New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
-			return NewNotesModule(engine), nil
+			return NewNotesModuleWithOptions(notes, NotesModuleOptions{EventSink: eventSink, CurrentTurnID: currentTurnID}), nil
 		}},
 	}, sessionContext, runtimemodule.ToolContext{Session: &sessionContext})
 	if err != nil {
@@ -153,6 +191,7 @@ func installSessionStateModulesWithGoalOptions(t *testing.T, engine *Engine, goa
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = set.CloseSession(context.Background()) })
+	return goalState, notes
 }
 
 type fixedGoalContinuationDeferrer bool

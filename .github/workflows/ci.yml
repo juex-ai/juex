@@ -29,9 +29,7 @@ jobs:
           go-version: stable
           cache: true
       - name: Prepare embedded web dist
-        run: |
-          mkdir -p internal/web/dist
-          printf '<!doctype html><html><body></body></html>' > internal/web/dist/index.html
+        run: make web-stub
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13.1
@@ -68,9 +66,7 @@ jobs:
           fi
           bwrap --die-with-parent --ro-bind / / --dev /dev -- /bin/true
       - name: Prepare embedded web dist
-        run: |
-          mkdir -p internal/web/dist
-          printf '<!doctype html><html><body></body></html>' > internal/web/dist/index.html
+        run: make web-stub
         shell: bash
       - name: Prepare pinned ripgrep
         shell: bash
@@ -88,7 +84,13 @@ jobs:
             rg_dir="$(cygpath -w "$rg_dir")"
           fi
           printf '%s\n' "$rg_dir" >> "$GITHUB_PATH"
-      - run: go test ./... -race -count=1
+      - name: Run Go race tests
+        if: matrix.os != 'windows-latest'
+        run: go test ./... -race -count=1
+        shell: bash
+      - name: Run Go race tests serially on Windows
+        if: matrix.os == 'windows-latest'
+        run: go test ./... -race -count=1 -p=1
         shell: bash
       - name: Test release installer
         if: matrix.os != 'windows-latest'

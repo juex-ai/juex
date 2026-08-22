@@ -40,24 +40,62 @@ func (e *Engine) generateCompactionSummaryLocked(
 	state compactionSummaryState,
 	policy compactionPolicy,
 	instructions string,
+	defaultContextWindow int,
+	reservedModelRef string,
 ) (compactionSummaryGeneration, error) {
-	provider := e.compactionSummaryProviderLocked()
-	maxOutputTokens := policy.SummaryMaxTokens
-	summarySystem, summaryHistory := buildCompactionSummaryRequest(baseSystem, previous, input, state, policy, instructions)
+	candidates := e.compactionSummaryCandidatesLocked(policy)
+	if len(candidates) == 0 {
+		return compactionSummaryGeneration{}, fmt.Errorf("no compaction summary model candidates configured")
+	}
+	health := e.ModelHealth
+	if health == nil {
+		health = llm.NewModelHealth(llm.ModelHealthOptions{})
+		e.ModelHealth = health
+	}
+	refs := make([]string, len(candidates))
+	for index := range candidates {
+		refs[index] = compactionSummaryCandidateRef(candidates[index])
+	}
+	attempted := map[string]struct{}{}
+	selection, ok := acquireCompactionSummaryCandidate(health, refs, attempted, reservedModelRef)
+	var skipped []llm.ModelHealthSkip
+	recordCompactionSummaryHealthSkips(attempted, &skipped, selection.Skipped)
+	if !ok {
+		e.emitCompactionSummaryHealthSkips(turnID, "", selection.Skipped)
+		return compactionSummaryGeneration{}, modelChainError(nil, skipped)
+	}
+	candidate := candidates[selection.Index]
+	attempted[compactionSummaryCandidateRef(candidate)] = struct{}{}
+	e.emitCompactionSummaryHealthSkips(turnID, compactionSummaryCandidateRef(candidate), selection.Skipped)
+	ticket := selection.Ticket
+	provider := candidate.Provider
+	var failures []modelAttemptFailure
+	useRetryBudget := false
+	candidatePolicy, contextWindow := e.compactionSummaryPolicyForCandidateLocked(candidate, defaultContextWindow)
+	candidatePolicy.SummaryMaxTokens = e.compactionSummaryInitialMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
+	maxOutputTokens := candidatePolicy.SummaryMaxTokens
+	summarySystem, summaryHistory := buildCompactionSummaryRequest(baseSystem, previous, input, state, candidatePolicy, instructions)
 	attempt := 1
-	resp, epoch, err := e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, maxOutputTokens, attempt)
+	var resp llm.Response
+	var epoch provenance.RequestEpoch
+	err := compactionSummaryRequestFitError(summarySystem, summaryHistory, candidatePolicy, maxOutputTokens)
+	if err == nil {
+		resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+	}
 	var usage llm.Usage
 	usage.Add(resp.Usage)
 	if isCompactionSummaryJournalError(err) {
+		health.Complete(ticket, llm.ModelHealthNeutral, "")
 		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
 	}
 	if err == nil {
 		if summary, ok := completeCompactionSummaryText(resp); ok {
+			health.Complete(ticket, llm.ModelHealthSuccess, "")
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
 		}
 
 		retryReason := compactionSummaryRetryReason(resp)
-		retryMaxOutputTokens := e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, policy, instructions)
+		retryMaxOutputTokens := e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
 		if emitErr := e.emit(events.Event{Type: "context.compact.summary_retry", TurnID: turnID, Payload: ContextCompactSummaryRetryPayload{
 			Attempt:                 2,
 			Reason:                  retryReason,
@@ -68,59 +106,234 @@ func (e *Engine) generateCompactionSummaryLocked(
 			EpochID:                 epoch.EpochID,
 			RequestDigest:           epoch.RequestDigest,
 		}}); emitErr != nil {
+			health.Complete(ticket, llm.ModelHealthNeutral, "")
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, fmt.Errorf("commit compaction summary retry: %w", emitErr)
 		}
-		retryPolicy := policy
+		retryPolicy := candidatePolicy
 		retryPolicy.SummaryMaxTokens = retryMaxOutputTokens
+		useRetryBudget = true
 		summarySystem, summaryHistory = buildCompactionSummaryRequest(baseSystem, previous, input, state, retryPolicy, instructions)
 		maxOutputTokens = retryMaxOutputTokens
 		attempt++
-		resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, maxOutputTokens, attempt)
+		err = compactionSummaryRequestFitError(summarySystem, summaryHistory, retryPolicy, maxOutputTokens)
+		if err == nil {
+			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+		}
 		usage.Add(resp.Usage)
 		if isCompactionSummaryJournalError(err) {
+			health.Complete(ticket, llm.ModelHealthNeutral, "")
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
 		}
 		if err == nil {
 			if summary, ok := completeCompactionSummaryText(resp); ok {
+				health.Complete(ticket, llm.ModelHealthSuccess, "")
 				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
 			}
 		}
 	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
+		health.Complete(ticket, llm.ModelHealthNeutral, "")
 		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, ctxErr
 	}
-	if e.Provider != nil && provider != e.Provider {
+	for {
+		failedCandidate := candidate
+		failureErr := compactionSummaryAttemptError(resp, err)
+		completeCompactionSummaryModelHealth(health, ticket)
+		failures = append(failures, modelAttemptFailure{
+			ref: compactionSummaryCandidateRef(failedCandidate),
+			err: failureErr,
+		})
+		selection, ok = acquireCompactionSummaryCandidate(health, refs, attempted, reservedModelRef)
+		recordCompactionSummaryHealthSkips(attempted, &skipped, selection.Skipped)
+		fallbackRef := ""
+		if ok {
+			fallbackRef = refs[selection.Index]
+		}
 		if emitErr := e.emit(events.Event{Type: "context.compact.summary_model_fallback", TurnID: turnID, Payload: ContextCompactSummaryFallbackPayload{
-			ConfiguredModel: policy.SummaryModel,
-			FallbackModel:   e.Provider.Name(),
+			ConfiguredModel: compactionSummaryCandidateRef(failedCandidate),
+			FallbackModel:   fallbackRef,
 			Error:           compactionSummaryFailure(resp, err),
 			EpochID:         epoch.EpochID,
 			RequestDigest:   epoch.RequestDigest,
 		}}); emitErr != nil {
+			if ok {
+				health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			}
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, fmt.Errorf("commit compaction summary model fallback: %w", emitErr)
 		}
-		provider = e.Provider
+		e.emitCompactionSummaryHealthSkips(turnID, fallbackRef, selection.Skipped)
+		if !ok {
+			if len(failures) == 1 && len(skipped) == 0 {
+				return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, failureErr
+			}
+			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, modelChainError(failures, skipped)
+		}
+		nextCandidate := candidates[selection.Index]
+		attempted[fallbackRef] = struct{}{}
+		candidatePolicy, contextWindow = e.compactionSummaryPolicyForCandidateLocked(nextCandidate, defaultContextWindow)
+		candidatePolicy.SummaryMaxTokens = e.compactionSummaryInitialMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
+		if useRetryBudget {
+			candidatePolicy.SummaryMaxTokens = e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
+		}
+		maxOutputTokens = candidatePolicy.SummaryMaxTokens
+		summarySystem, summaryHistory = buildCompactionSummaryRequest(baseSystem, previous, input, state, candidatePolicy, instructions)
+		candidate = nextCandidate
+		ticket = selection.Ticket
+		provider = nextCandidate.Provider
 		attempt++
-		resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, maxOutputTokens, attempt)
+		resp = llm.Response{}
+		epoch = provenance.RequestEpoch{}
+		err = compactionSummaryRequestFitError(summarySystem, summaryHistory, candidatePolicy, maxOutputTokens)
+		if err == nil {
+			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+		}
 		usage.Add(resp.Usage)
 		if isCompactionSummaryJournalError(err) {
+			health.Complete(ticket, llm.ModelHealthNeutral, "")
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
 		}
 		if err == nil {
 			if summary, ok := completeCompactionSummaryText(resp); ok {
+				health.Complete(ticket, llm.ModelHealthSuccess, "")
 				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
 			}
+			if !useRetryBudget {
+				retryReason := compactionSummaryRetryReason(resp)
+				retryMaxOutputTokens := e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
+				if emitErr := e.emit(events.Event{Type: "context.compact.summary_retry", TurnID: turnID, Payload: ContextCompactSummaryRetryPayload{
+					Attempt:                 2,
+					Reason:                  retryReason,
+					StopReason:              resp.StopReason,
+					ReasoningOnly:           compactionResponseReasoningOnly(resp.Message),
+					PreviousMaxOutputTokens: maxOutputTokens,
+					MaxOutputTokens:         retryMaxOutputTokens,
+					EpochID:                 epoch.EpochID,
+					RequestDigest:           epoch.RequestDigest,
+				}}); emitErr != nil {
+					health.Complete(ticket, llm.ModelHealthNeutral, "")
+					return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, fmt.Errorf("commit compaction summary retry: %w", emitErr)
+				}
+				retryPolicy := candidatePolicy
+				retryPolicy.SummaryMaxTokens = retryMaxOutputTokens
+				useRetryBudget = true
+				summarySystem, summaryHistory = buildCompactionSummaryRequest(baseSystem, previous, input, state, retryPolicy, instructions)
+				maxOutputTokens = retryMaxOutputTokens
+				attempt++
+				err = compactionSummaryRequestFitError(summarySystem, summaryHistory, retryPolicy, maxOutputTokens)
+				if err == nil {
+					resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
+				}
+				usage.Add(resp.Usage)
+				if isCompactionSummaryJournalError(err) {
+					health.Complete(ticket, llm.ModelHealthNeutral, "")
+					return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
+				}
+				if err == nil {
+					if summary, ok := completeCompactionSummaryText(resp); ok {
+						health.Complete(ticket, llm.ModelHealthSuccess, "")
+						return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage, Epoch: epoch}, nil
+					}
+				}
+			}
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			health.Complete(ticket, llm.ModelHealthNeutral, "")
+			return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, ctxErr
 		}
 	}
+}
 
+func compactionSummaryRequestFitError(system string, history []llm.Message, policy compactionPolicy, maxOutputTokens int) error {
+	requestBudget := policy.SummaryRequestTokens
+	if requestBudget <= 0 {
+		requestBudget = policy.TriggerTokens
+	}
+	if requestBudget <= 0 {
+		return nil
+	}
+	inputTokens := estimateContextTokens(system, nil, history)
+	if inputTokens+maxOutputTokens <= requestBudget {
+		return nil
+	}
+	return fmt.Errorf(
+		"compaction summary request cannot fit candidate context budget: input=%d output=%d budget=%d context_window=%d",
+		inputTokens,
+		maxOutputTokens,
+		requestBudget,
+		policy.ContextWindow,
+	)
+}
+
+func acquireCompactionSummaryCandidate(health *llm.ModelHealth, refs []string, attempted map[string]struct{}, reservedRef string) (llm.ModelSelection, bool) {
+	selection, ok := health.Acquire(refs, attempted)
+	if reservedRef == "" {
+		return selection, ok
+	}
+	if _, used := attempted[reservedRef]; used {
+		return selection, ok
+	}
+	reservedIndex := -1
+	for index, ref := range refs {
+		if ref == reservedRef {
+			reservedIndex = index
+			break
+		}
+	}
+	if reservedIndex < 0 || (ok && selection.Index < reservedIndex) {
+		return selection, ok
+	}
+	if ok {
+		health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+	}
+	earlierSkips := make([]llm.ModelHealthSkip, 0, len(selection.Skipped))
+	for _, skip := range selection.Skipped {
+		index := modelRefIndex(refs, skip.Ref)
+		if index >= 0 && index < reservedIndex {
+			earlierSkips = append(earlierSkips, skip)
+		}
+	}
+	return llm.ModelSelection{Index: reservedIndex, Skipped: earlierSkips}, true
+}
+
+func recordCompactionSummaryHealthSkips(attempted map[string]struct{}, all *[]llm.ModelHealthSkip, skips []llm.ModelHealthSkip) {
+	for _, skip := range skips {
+		attempted[skip.Ref] = struct{}{}
+		*all = append(*all, skip)
+	}
+}
+
+func (e *Engine) emitCompactionSummaryHealthSkips(turnID, selected string, skips []llm.ModelHealthSkip) {
+	for _, skip := range skips {
+		e.emitModelFallback(turnID, modelFallbackTransition{
+			from:     skip.Ref,
+			reason:   skip.Reason,
+			cooldown: skip.CooldownRemaining,
+		}, selected)
+	}
+}
+
+func completeCompactionSummaryModelHealth(health *llm.ModelHealth, ticket llm.ModelAttemptTicket) {
+	// Summary generation shares the serving health selector so it avoids models
+	// that a normal turn has already put in cooldown. A summary-only failure must
+	// not poison that serving health, though: callers may deliberately continue
+	// the accepted turn after automatic compaction fails.
+	health.Complete(ticket, llm.ModelHealthNeutral, "")
+}
+
+func (e *Engine) compactionSummaryPolicyForCandidateLocked(candidate ModelCandidate, defaultContextWindow int) (compactionPolicy, int) {
+	contextWindow := candidateContextWindow(candidate, defaultContextWindow)
+	return effectiveCompactionPolicy(e.Compaction, contextWindow), contextWindow
+}
+
+func compactionSummaryAttemptError(resp llm.Response, err error) error {
 	if err != nil {
-		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, err
+		return err
 	}
 	if resp.StopReason == llm.StopMaxTokens && compactionSummaryText(resp) != "" {
-		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, fmt.Errorf("truncated summary (stop_reason=%s)", resp.StopReason)
+		return fmt.Errorf("truncated summary (stop_reason=%s)", resp.StopReason)
 	}
-	return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage, Epoch: epoch}, errEmptyCompactionSummary
+	return errEmptyCompactionSummary
 }
 
 func (e *Engine) completeCompactionSummary(
@@ -129,6 +342,7 @@ func (e *Engine) completeCompactionSummary(
 	provider llm.Provider,
 	system string,
 	history []llm.Message,
+	contextWindow int,
 	maxOutputTokens int,
 	attempt int,
 ) (llm.Response, provenance.RequestEpoch, error) {
@@ -137,7 +351,7 @@ func (e *Engine) completeCompactionSummary(
 	epoch, err := e.checkpointProviderRequestEpochLocked(turnID, 0, attempt, provenance.RequestInput{
 		Purpose:           "compaction",
 		Provider:          descriptor,
-		ContextWindow:     e.ContextWindow,
+		ContextWindow:     contextWindow,
 		MaxOutputTokens:   maxOutputTokens,
 		CachePolicy:       provenance.SafeCachePolicyFrom(cachePolicy),
 		SystemPrompt:      system,
@@ -247,15 +461,45 @@ func (e *Engine) compactionSummaryRetryMaxOutputTokens(
 	policy compactionPolicy,
 	instructions string,
 ) int {
-	desired := doubledSummaryMaxTokens(policy.SummaryMaxTokens)
-	if desired <= 0 || policy.TriggerTokens <= 1 {
+	return e.compactionSummaryMaxOutputTokens(baseSystem, previous, input, state, policy, instructions, doubledSummaryMaxTokens(policy.SummaryMaxTokens))
+}
+
+func (e *Engine) compactionSummaryInitialMaxOutputTokens(
+	baseSystem string,
+	previous llm.Message,
+	input []llm.Message,
+	state compactionSummaryState,
+	policy compactionPolicy,
+	instructions string,
+) int {
+	return e.compactionSummaryMaxOutputTokens(baseSystem, previous, input, state, policy, instructions, policy.SummaryMaxTokens)
+}
+
+func (e *Engine) compactionSummaryMaxOutputTokens(
+	baseSystem string,
+	previous llm.Message,
+	input []llm.Message,
+	state compactionSummaryState,
+	policy compactionPolicy,
+	instructions string,
+	desired int,
+) int {
+	if desired <= 0 {
 		return desired
+	}
+	requestBudget := policy.SummaryRequestTokens
+	if requestBudget <= 0 {
+		requestBudget = policy.TriggerTokens
+	}
+	if requestBudget <= 1 {
+		return 1
 	}
 
 	minimumSystem, _ := buildCompactionSummaryRequest(baseSystem, previous, nil, state, policy, instructions)
-	minimumBody := buildCompactionSummaryBody(previous, nil, state, policy.ToolResultMaxChars, len(input))
+	minimumInput, omitted, minChars := fitCompactionSummaryInput(minimumSystem, previous, input, state, policy, 1)
+	minimumBody := buildCompactionSummaryBody(previous, minimumInput, state, minChars, omitted)
 	minimumHistory := []llm.Message{llm.TextMessage(llm.RoleUser, minimumBody)}
-	maxOutputTokens := policy.TriggerTokens - estimateContextTokens(minimumSystem, nil, minimumHistory)
+	maxOutputTokens := requestBudget - estimateContextTokens(minimumSystem, nil, minimumHistory)
 	if maxOutputTokens < 1 {
 		maxOutputTokens = 1
 	}

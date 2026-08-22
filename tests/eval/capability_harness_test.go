@@ -128,7 +128,7 @@ func TestCapabilityHarnessRunsDeterministicCases(t *testing.T) {
 		},
 		{
 			Name:   "hook-injection-and-stop-gate",
-			Prompt: "exercise hook context and stop continuation",
+			Prompt: "exercise policy context and stop continuation",
 			Hooks: func(workDir string) hooks.Config {
 				statePath := filepath.Join(workDir, "hook-state.json")
 				return hooks.Config{Commands: []hooks.CommandHook{
@@ -146,8 +146,8 @@ func TestCapabilityHarnessRunsDeterministicCases(t *testing.T) {
 			},
 			Script: []CapabilityStep{
 				func(state CapabilityState) llm.Response {
-					if !strings.Contains(messagesText(state.History), "hook context token") {
-						return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "missing hook context"), StopReason: llm.StopEndTurn}
+					if !strings.Contains(messagesText(state.History), "policy context token") {
+						return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "missing policy context"), StopReason: llm.StopEndTurn}
 					}
 					return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn}
 				},
@@ -163,8 +163,8 @@ func TestCapabilityHarnessRunsDeterministicCases(t *testing.T) {
 				if result.ProviderCalls != 2 {
 					t.Fatalf("provider calls = %d, want hook-gated continuation", result.ProviderCalls)
 				}
-				if result.Events["hook.started"] == 0 || result.Events["hook.completed"] == 0 {
-					t.Fatalf("hook events missing: %+v", result.Events)
+				if result.Events["policy.started"] == 0 || result.Events["policy.completed"] == 0 {
+					t.Fatalf("policy facts missing: %+v", result.Events)
 				}
 				if !strings.Contains(result.TranscriptText, "TASK COMPLETE: hook gate passed") {
 					t.Fatalf("final transcript missing hook success:\n%s", result.TranscriptText)
@@ -256,7 +256,7 @@ func runCapabilityHookHelper(args []string) int {
 	}
 	switch args[0] {
 	case "inject":
-		fmt.Fprint(os.Stdout, "hook context token")
+		fmt.Fprint(os.Stdout, "policy context token")
 	case "stop-once":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "missing stop-once state path")

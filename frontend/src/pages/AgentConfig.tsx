@@ -202,7 +202,7 @@ export function AgentConfig() {
           aria-invalid={error ? true : undefined}
           spellCheck={false}
           className="min-h-[20rem] max-h-[calc(100svh-12rem)] resize-y overflow-auto rounded-md bg-card font-mono text-xs leading-5 shadow-[var(--shadow-xs)] sm:min-h-[32rem]"
-          placeholder={loading ? "Loading config..." : "model: provider:model"}
+          placeholder={loading ? "Loading config..." : "models:\n  - provider:model"}
         />
       </div>
     </div>

@@ -384,10 +384,11 @@ func summaryFor(event string, p map[string]any) map[string]any {
 		add("error")
 		add("tokens_before")
 		add("tokens_after")
-	case "hook.started", "hook.completed", "hook.errored":
+	case "policy.requested", "policy.started", "policy.completed", "policy.errored":
+		add("module_id")
+		add("policy_point")
 		add("name")
 		add("source")
-		add("event_name")
 		add("tool_name")
 		add("duration_ms")
 		add("error")

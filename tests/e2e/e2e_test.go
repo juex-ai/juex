@@ -43,6 +43,7 @@ import (
 	"github.com/juex-ai/juex/internal/provenance"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
@@ -854,8 +855,9 @@ func TestEndToEnd_NotesSurviveCompaction(t *testing.T) {
 	}
 	defer a.Close()
 
-	if a.Engine.Notes == nil {
-		t.Fatal("app did not initialize notes store")
+	_, notes := runtime.SessionStateStoresFromModules(a.Engine.SessionRuntimeSnapshot().Modules)
+	if notes == nil {
+		t.Fatal("app did not initialize the Notes Module store")
 	}
 	if _, err := a.Engine.Tools.Call(context.Background(), runtime.NotesToolUpdate, map[string]any{
 		"content": "- [x] bind local services to 0.0.0.0\n- [ ] confirm CI status",
@@ -1158,7 +1160,7 @@ func e2ePromptBuilder(
 	}
 	t.Cleanup(func() { _ = sessionSet.CloseSession(context.Background()) })
 
-	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		return runtimemodule.CollectContext(context.Background(), runtimemodule.ContextRequest{
 			Purpose: runtimemodule.ContextPurposeProviderIteration,
 			Runtime: runtimeContext,
@@ -1752,7 +1754,7 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventsBody := string(eventsData)
-	for _, want := range []string{`"type":"hook.completed"`, `"type":"tool.errored"`} {
+	for _, want := range []string{`"type":"policy.completed"`, `"type":"tool.errored"`} {
 		if !strings.Contains(eventsBody, want) {
 			t.Fatalf("events missing %s:\n%s", want, eventsBody)
 		}
@@ -1835,7 +1837,7 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-success", ToolName: runtime.GoalToolUpdate, Input: map[string]any{
-						"status":        string(runtime.GoalStatusSuccess),
+						"status":        string(workmem.GoalStatusSuccess),
 						"status_reason": "continuation gate fired and final answer was verified",
 					}},
 				}},
@@ -1930,7 +1932,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-wait", ToolName: runtime.GoalToolUpdate, Input: map[string]any{
-						"status":        string(runtime.GoalStatusWaitForUser),
+						"status":        string(workmem.GoalStatusWaitForUser),
 						"status_reason": "waiting for deployment approval",
 					}},
 				}},
@@ -1943,7 +1945,7 @@ func TestEndToEnd_GoalWaitForUserFinishesUntilModelUpdatesIt(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-success-after-input", ToolName: runtime.GoalToolUpdate, Input: map[string]any{
-						"status":        string(runtime.GoalStatusSuccess),
+						"status":        string(workmem.GoalStatusSuccess),
 						"status_reason": "user approved the healthy deployment",
 					}},
 				}},

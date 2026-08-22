@@ -449,10 +449,14 @@ func TestRuntimeStatusOmitsActiveSessionState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := as.app.Engine.GoalState.Create("ship runtime goal status", "waiting on e2e"); err != nil {
+	goalState, notes := runtime.SessionStateStoresFromModules(as.app.Engine.SessionRuntimeSnapshot().Modules)
+	if goalState == nil || notes == nil {
+		t.Fatal("active Session Modules did not provide Goal and Notes stores")
+	}
+	if _, err := goalState.Create("ship runtime goal status", "waiting on e2e"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := as.app.Engine.Notes.Update("- [ ] show runtime state in the UI"); err != nil {
+	if _, err := notes.Update("- [ ] show runtime state in the UI"); err != nil {
 		t.Fatal(err)
 	}
 

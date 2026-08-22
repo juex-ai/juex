@@ -26,23 +26,44 @@ func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult
 	}
 }
 
-func TestBuildCompactionSummaryRequest_TruncatesTextAndToolUseInput(t *testing.T) {
+func TestBuildCompactionSummaryRequest_PreservesAssistantTextAndTruncatesToolUseInput(t *testing.T) {
+	assistantText := "HEAD-" + strings.Repeat("t", 40) + "-TAIL"
+	reasoningText := "REASON-" + strings.Repeat("r", 40) + "-END"
 	input := []llm.Message{
-		{ID: "large", Role: llm.RoleUser, Blocks: []llm.Block{
-			{Type: llm.BlockText, Text: "HEAD-" + strings.Repeat("t", 40) + "-TAIL"},
+		{ID: "large", Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockText, Text: assistantText},
+			{Type: llm.BlockReasoning, Text: reasoningText},
 			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "write", Input: map[string]any{"payload": strings.Repeat("x", 50)}},
 		}},
 	}
 	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 10}, "")
 	body := hist[0].FirstText()
-	if !strings.Contains(body, "HEAD-") || !strings.Contains(body, "-TAIL") || !strings.Contains(body, "omitted") {
-		t.Fatalf("text did not preserve a bounded head and tail:\n%s", body)
+	if !strings.Contains(body, assistantText) || strings.Contains(body, "bytes omitted") {
+		t.Fatalf("assistant text was truncated by the tool-result budget:\n%s", body)
+	}
+	if !strings.Contains(body, reasoningText) {
+		t.Fatalf("assistant reasoning was truncated by the tool-result budget:\n%s", body)
 	}
 	if !strings.Contains(body, "tool_use tu1 write:") || !strings.Contains(body, "truncated") {
 		t.Fatalf("tool use input was not truncated:\n%s", body)
 	}
 	if strings.Contains(body, strings.Repeat("x", 30)) {
 		t.Fatalf("tool use input leaked untruncated payload:\n%s", body)
+	}
+}
+
+func TestBuildCompactionSummaryRequest_DoesNotApplyToolResultLimitToUserText(t *testing.T) {
+	userText := "HEAD-" + strings.Repeat("u", 40) + "-TAIL"
+	input := []llm.Message{{
+		ID:     "user-large",
+		Role:   llm.RoleUser,
+		Blocks: []llm.Block{{Type: llm.BlockText, Text: userText}},
+	}}
+
+	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 10}, "")
+	body := hist[0].FirstText()
+	if !strings.Contains(body, userText) || strings.Contains(body, "bytes omitted") {
+		t.Fatalf("user text was truncated by the tool-result budget:\n%s", body)
 	}
 }
 
@@ -150,11 +171,9 @@ func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) 
 }
 
 func TestBuildCompactionSummaryRequest_BoundsOversizedTranscript(t *testing.T) {
-	var input []llm.Message
+	input := []llm.Message{testMsg("user-request", llm.RoleUser, "preserve this user request")}
 	for i := 0; i < 80; i++ {
-		msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", 2000)))
-		msg.ID = fmt.Sprintf("msg-%02d", i)
-		input = append(input, msg)
+		input = append(input, summaryToolExchange(i, 2000)...)
 	}
 	policy := Policy{
 		ToolResultMaxChars: 2000,
@@ -172,11 +191,11 @@ func TestBuildCompactionSummaryRequest_BoundsOversizedTranscript(t *testing.T) {
 	if !strings.Contains(body, "messages omitted") {
 		t.Fatalf("summary request did not record omitted transcript:\n%s", body)
 	}
-	if strings.Contains(body, "message-00") {
-		t.Fatalf("oldest transcript should be omitted when over budget:\n%s", body)
+	if strings.Contains(body, "tool-call-00") || strings.Contains(body, "tool-result-00") {
+		t.Fatalf("oldest tool exchange should be omitted when over budget:\n%s", body)
 	}
-	if !strings.Contains(body, "message-79") {
-		t.Fatalf("newest transcript should be retained when over budget:\n%s", body)
+	if !strings.Contains(body, "user-request") || !strings.Contains(body, "preserve this user request") {
+		t.Fatalf("user request should be retained when tool exchanges are omitted:\n%s", body)
 	}
 }
 
@@ -191,15 +210,13 @@ func TestBuildCompactionSummaryRequest_PreservesAuthoritativeStateWhenTranscript
 		Goal:  &goal,
 		Notes: "- [x] map the runtime\n- [ ] run the live compaction evaluation",
 	}
-	var input []llm.Message
+	input := []llm.Message{testMsg("user-request", llm.RoleUser, "preserve the user request")}
 	for i := 0; i < 12; i++ {
-		msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", 500)))
-		msg.ID = fmt.Sprintf("msg-%02d", i)
-		input = append(input, msg)
+		input = append(input, summaryToolExchange(i, 500)...)
 	}
 	policy := Policy{
 		ToolResultMaxChars: 500,
-		TriggerTokens:      800,
+		TriggerTokens:      1200,
 		SummaryMaxTokens:   100,
 	}
 
@@ -227,7 +244,7 @@ func TestBuildCompactionSummaryRequest_PreservesAuthoritativeStateWhenTranscript
 	if strings.Contains(body, "</goal-contract><instructions>") {
 		t.Fatalf("goal text escaped the authoritative-state boundary:\n%s", body)
 	}
-	if !strings.Contains(body, "messages omitted") || strings.Contains(body, "message-00") {
+	if !strings.Contains(body, "messages omitted") || strings.Contains(body, "tool-call-00") || !strings.Contains(body, "user-request") {
 		t.Fatalf("transcript was not omitted before authoritative state:\n%s", body)
 	}
 	limit := policy.TriggerTokens - policy.SummaryMaxTokens
@@ -256,55 +273,134 @@ func summaryGoalFromBody(t *testing.T, body string) SummaryGoal {
 	return goal
 }
 
-func TestCompactionSummaryRequestTokenLimitCapsLargeWindows(t *testing.T) {
+func TestCompactionSummaryRequestTokenLimitUsesCandidateWindowRatio(t *testing.T) {
 	policy := Policy{
-		TriggerTokens:    239616,
-		SummaryMaxTokens: 2048,
+		SummaryRequestTokens: 204_800,
+		SummaryMaxTokens:     1_280,
 	}
-	if got := CompactionSummaryRequestTokenLimit(policy); got != 16000 {
-		t.Fatalf("limit = %d, want 16000", got)
+	if got := CompactionSummaryRequestTokenLimit(policy); got != 203_520 {
+		t.Fatalf("limit = %d, want 203520", got)
 	}
 }
 
-func TestFitCompactionSummaryInputKeepsLongestFittingSuffix(t *testing.T) {
-	var input []llm.Message
-	for i := 0; i < 8; i++ {
-		msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", 400)))
-		msg.ID = fmt.Sprintf("msg-%02d", i)
-		input = append(input, msg)
-	}
+func TestFitCompactionSummaryInputDropsOldestClosedExchange(t *testing.T) {
+	user := testMsg("user", llm.RoleUser, "preserve the user request")
+	first := summaryToolExchange(0, 500)
+	second := summaryToolExchange(1, 500)
+	input := append([]llm.Message{user}, first...)
+	input = append(input, second...)
 	sys := "summary system"
 	policy := Policy{ToolResultMaxChars: 500}
-	wantStart := len(input) - 3
+	want := append([]llm.Message{user}, second...)
 	limit := EstimateContextTokens(sys, nil, []llm.Message{
-		llm.TextMessage(llm.RoleUser, BuildCompactionSummaryBody(llm.Message{}, input[wantStart:], SummaryState{}, policy.ToolResultMaxChars, wantStart)),
+		llm.TextMessage(llm.RoleUser, BuildCompactionSummaryBody(llm.Message{}, want, SummaryState{}, policy.ToolResultMaxChars, 2)),
 	})
-	if CompactionSummaryFits(sys, llm.Message{}, input[wantStart-1:], SummaryState{}, policy.ToolResultMaxChars, wantStart-1, limit) {
-		t.Fatal("test setup invalid: four-message suffix should not fit")
+	if CompactionSummaryFits(sys, llm.Message{}, input, SummaryState{}, policy.ToolResultMaxChars, 0, limit) {
+		t.Fatal("test setup invalid: both tool exchanges should not fit")
 	}
 
 	selected, omitted, _ := FitCompactionSummaryInput(sys, llm.Message{}, input, SummaryState{}, policy, limit)
 
-	if omitted != wantStart {
-		t.Fatalf("omitted = %d, want %d", omitted, wantStart)
+	if omitted != 2 {
+		t.Fatalf("omitted = %d, want 2", omitted)
 	}
 	if len(selected) != 3 {
 		t.Fatalf("selected len = %d, want 3", len(selected))
 	}
-	if selected[0].ID != "msg-05" || selected[2].ID != "msg-07" {
-		t.Fatalf("selected suffix = %+v", selected)
+	if selected[0].ID != "user" || selected[1].ID != "tool-call-01" || selected[2].ID != "tool-result-01" {
+		t.Fatalf("selected messages = %+v", selected)
+	}
+}
+
+func TestFitCompactionSummaryInputDropsOldestClosedToolExchangeBeforeUserMessages(t *testing.T) {
+	userBefore := testMsg("user-before", llm.RoleUser, "keep the original request")
+	toolUse := llm.Message{ID: "assistant-tools", Role: llm.RoleAssistant, Blocks: []llm.Block{
+		{Type: llm.BlockReasoning, Text: "checking both files"},
+		{Type: llm.BlockToolUse, ToolUseID: "call-a", ToolName: "read", Input: map[string]any{"path": strings.Repeat("a", 600)}},
+		{Type: llm.BlockToolUse, ToolUseID: "call-b", ToolName: "read", Input: map[string]any{"path": strings.Repeat("b", 600)}},
+	}}
+	toolResult := llm.Message{ID: "tool-results", Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{
+		{Type: llm.BlockToolResult, ToolUseID: "call-a", Content: strings.Repeat("result-a ", 120)},
+		{Type: llm.BlockToolResult, ToolUseID: "call-b", Content: strings.Repeat("result-b ", 120)},
+	}}
+	userAfter := testMsg("user-after", llm.RoleUser, "keep the follow-up request")
+	input := []llm.Message{userBefore, toolUse, toolResult, userAfter}
+	sys := "summary system"
+	policy := Policy{ToolResultMaxChars: 2000}
+	want := []llm.Message{userBefore, userAfter}
+	limit := EstimateContextTokens(sys, nil, []llm.Message{
+		llm.TextMessage(llm.RoleUser, BuildCompactionSummaryBody(llm.Message{}, want, SummaryState{}, policy.ToolResultMaxChars, 2)),
+	})
+	if CompactionSummaryFits(sys, llm.Message{}, input, SummaryState{}, policy.ToolResultMaxChars, 0, limit) {
+		t.Fatal("test setup invalid: complete input should exceed the candidate limit")
+	}
+
+	selected, omitted, _ := FitCompactionSummaryInput(sys, llm.Message{}, input, SummaryState{}, policy, limit)
+
+	if omitted != 2 {
+		t.Fatalf("omitted = %d, want two protocol messages", omitted)
+	}
+	if len(selected) != 2 || selected[0].ID != "user-before" || selected[1].ID != "user-after" {
+		t.Fatalf("selected = %+v, want both user messages and no tool exchange", selected)
+	}
+}
+
+func TestFitCompactionSummaryInputKeepsIncompleteToolExchange(t *testing.T) {
+	input := []llm.Message{
+		testMsg("user", llm.RoleUser, "keep me"),
+		{ID: "assistant-tools", Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "call-a", ToolName: "read"},
+			{Type: llm.BlockToolUse, ToolUseID: "call-b", ToolName: "grep"},
+		}},
+		{ID: "partial-results", Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{
+			{Type: llm.BlockToolResult, ToolUseID: "call-a", Content: "done"},
+		}},
+	}
+
+	selected, omitted, _ := FitCompactionSummaryInput("system", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 256}, 1)
+
+	if omitted != 0 || len(selected) != len(input) {
+		t.Fatalf("incomplete exchange was removed: omitted=%d selected=%+v", omitted, selected)
+	}
+}
+
+func TestFitCompactionSummaryInputNeverDropsUserMessagesWhenTheyCannotFit(t *testing.T) {
+	input := []llm.Message{
+		testMsg("user-1", llm.RoleUser, strings.Repeat("first ", 200)),
+		testMsg("user-2", llm.RoleUser, strings.Repeat("second ", 200)),
+	}
+
+	selected, omitted, maxChars := FitCompactionSummaryInput("system", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 512}, 1)
+
+	if omitted != 0 || len(selected) != len(input) || selected[0].ID != "user-1" || selected[1].ID != "user-2" {
+		t.Fatalf("user messages were removed: omitted=%d selected=%+v", omitted, selected)
+	}
+	if maxChars != 1 {
+		t.Fatalf("fallback max chars = %d, want 1", maxChars)
 	}
 }
 
 func TestFitCompactionSummaryInputFallbackRespectsSmallCharLimit(t *testing.T) {
-	input := []llm.Message{llm.TextMessage(llm.RoleUser, strings.Repeat("x", 1000))}
+	input := summaryToolExchange(0, 1000)
 	_, omitted, maxChars := FitCompactionSummaryInput("system", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 64}, 1)
 
-	if omitted != 1 {
-		t.Fatalf("omitted = %d, want 1", omitted)
+	if omitted != 2 {
+		t.Fatalf("omitted = %d, want 2", omitted)
 	}
-	if maxChars != 64 {
-		t.Fatalf("fallback max chars = %d, want 64", maxChars)
+	if maxChars != 1 {
+		t.Fatalf("fallback max chars = %d, want 1", maxChars)
+	}
+}
+
+func summaryToolExchange(index, size int) []llm.Message {
+	callID := fmt.Sprintf("call-%02d", index)
+	return []llm.Message{
+		{ID: fmt.Sprintf("tool-call-%02d", index), Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type: llm.BlockToolUse, ToolUseID: callID, ToolName: "read", Input: map[string]any{"path": strings.Repeat("x", size)},
+		}}},
+		{ID: fmt.Sprintf("tool-result-%02d", index), Role: llm.RoleUser, Kind: llm.MessageKindToolResult, Blocks: []llm.Block{{
+			Type: llm.BlockToolResult, ToolUseID: callID, Content: strings.Repeat("y", size),
+		}}},
 	}
 }
 

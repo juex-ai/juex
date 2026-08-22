@@ -15,6 +15,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/statusapi"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
@@ -31,7 +32,7 @@ func TestMessageKindsMatchGolden(t *testing.T) {
 		llm.MessageKindMCPEvent,
 		llm.MessageKindObservation,
 		llm.MessageKindSideSession,
-		llm.MessageKindHookEvent,
+		llm.MessageKindPolicyEvent,
 		llm.MessageKindCompact,
 		llm.MessageKindRuntimeContext,
 		llm.MessageKindModelChange,
@@ -163,8 +164,8 @@ func TestBrowserEventFromRuntimeValidatesKnownPayload(t *testing.T) {
 
 func TestBrowserEventAcceptsTypedPayload(t *testing.T) {
 	event, visible, err := browserEventFromRuntime(events.Event{
-		Type:    "hook.trace",
-		Payload: juexruntime.HookTracePayload{Text: "visible"},
+		Type:    "policy.trace",
+		Payload: juexruntime.PolicyTracePayload{Text: "visible"},
 	}, statusapi.Snapshot{})
 	if err != nil {
 		t.Fatal(err)
@@ -661,13 +662,13 @@ func browserEventFixtureEvents() []events.Event {
 			},
 		},
 		{
-			ID:        "evt-hook-trace",
-			Type:      "hook.trace",
+			ID:        "evt-policy-trace",
+			Type:      "policy.trace",
 			Timestamp: ts.Add(5 * time.Second),
 			TurnID:    "turn-1",
-			Payload: juexruntime.HookTracePayload{
-				Text:      "hook extract-state allow UserPromptSubmit in 12ms",
-				MessageID: "msg-hook-1",
+			Payload: juexruntime.PolicyTracePayload{
+				Text:      "policy hooks/UserPromptSubmit/extract-state completed turn_input in 12ms",
+				MessageID: "msg-policy-1",
 			},
 		},
 		{
@@ -714,7 +715,7 @@ func browserEventFixtureEvents() []events.Event {
 				Description:       "ship the fix",
 				Acceptance:        "tests pass",
 				ContinuationCount: 2,
-				Status:            juexruntime.GoalStatusInProgress,
+				Status:            workmem.GoalStatusInProgress,
 				UpdatedAt:         ts.Add(7200 * time.Millisecond),
 			},
 		},
@@ -820,12 +821,12 @@ func browserEventFixtureEvents() []events.Event {
 				Attempt:                 2,
 				Reason:                  "empty_summary",
 				StopReason:              llm.StopMaxTokens,
-					ReasoningOnly:           true,
-					PreviousMaxOutputTokens: 2048,
-					MaxOutputTokens:         4096,
-					EpochID:                 "epoch-compact-1",
-					RequestDigest:           "request-digest-compact-1",
-				},
+				ReasoningOnly:           true,
+				PreviousMaxOutputTokens: 2048,
+				MaxOutputTokens:         4096,
+				EpochID:                 "epoch-compact-1",
+				RequestDigest:           "request-digest-compact-1",
+			},
 		},
 		{
 			ID:        "evt-compact-completed",

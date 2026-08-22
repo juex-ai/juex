@@ -19,6 +19,7 @@ import (
 	"github.com/juex-ai/juex/internal/modules/promptcontext"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -77,6 +78,23 @@ type barrierSideProvider struct {
 type stubbornSideProvider struct {
 	started chan struct{}
 	release chan struct{}
+}
+
+type sideSessionStartupBarrier struct {
+	entered  chan<- context.Context
+	canceled chan<- error
+	release  <-chan struct{}
+}
+
+func (*sideSessionStartupBarrier) ID() runtimemodule.ID { return "side-session-startup-barrier" }
+
+func (b *sideSessionStartupBarrier) ApplySessionStart(ctx context.Context, _ runtimemodule.SessionStartRequest) (runtimemodule.SessionStartDecision, error) {
+	b.entered <- ctx
+	<-ctx.Done()
+	err := ctx.Err()
+	b.canceled <- err
+	<-b.release
+	return runtimemodule.SessionStartDecision{}, err
 }
 
 type sideHookRunnerFunc func(context.Context, hooks.Request) ([]hooks.Result, error)
@@ -196,8 +214,12 @@ func (p *goalSideQueueProvider) Complete(ctx context.Context, _ string, history 
 			continue
 		}
 		reason := "subscribed result incorporated"
-		if _, err := p.app.Engine.GoalState.Update(runtime.GoalStateUpdate{
-			Status:       runtime.GoalStatusSuccess,
+		goalState, _ := runtime.SessionStateStoresFromModules(p.app.Engine.SessionRuntimeSnapshot().Modules)
+		if goalState == nil {
+			return llm.Response{}, errors.New("goal module store is unavailable")
+		}
+		if _, err := goalState.Update(workmem.GoalStateUpdate{
+			Status:       workmem.GoalStatusSuccess,
 			StatusReason: &reason,
 		}); err != nil {
 			return llm.Response{}, err
@@ -468,7 +490,8 @@ func TestSideSessionCreateRunsThreeChildrenConcurrently(t *testing.T) {
 func TestManagedSideSessionSharesPrimaryGoalAndNotes(t *testing.T) {
 	child := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
 	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, child)
-	if _, err := parent.Engine.Notes.Update("primary notes"); err != nil {
+	parentGoal, parentNotes := appSessionStateStores(t, parent)
+	if _, err := parentNotes.Update("primary notes"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -488,16 +511,17 @@ func TestManagedSideSessionSharesPrimaryGoalAndNotes(t *testing.T) {
 	}
 	childRuntime := managed.app.Engine.SessionRuntimeSnapshot()
 	parentRuntime := parent.Engine.SessionRuntimeSnapshot()
-	if childRuntime.GoalState != parentRuntime.GoalState || childRuntime.Notes != parentRuntime.Notes {
-		t.Fatalf("shared stores differ: child=%p/%p parent=%p/%p", childRuntime.GoalState, childRuntime.Notes, parentRuntime.GoalState, parentRuntime.Notes)
+	childGoal, childNotes := runtime.SessionStateStoresFromModules(childRuntime.Modules)
+	if childGoal != parentGoal || childNotes != parentNotes {
+		t.Fatalf("shared stores differ: child=%p/%p parent=%p/%p", childGoal, childNotes, parentGoal, parentNotes)
 	}
 	if childRuntime.Session.Dir == parentRuntime.Session.Dir {
 		t.Fatal("side session reused primary transcript directory")
 	}
-	if _, err := childRuntime.Notes.Update("updated by side"); err != nil {
+	if _, err := childNotes.Update("updated by side"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := parentRuntime.Notes.Snapshot()
+	got, err := parentNotes.Snapshot()
 	if err != nil || got.Content != "updated by side" {
 		t.Fatalf("primary notes = %+v, err=%v", got, err)
 	}
@@ -1114,7 +1138,7 @@ func TestSideSessionDoesNotDeliverAfterPrimaryLosesWorkspaceOwnership(t *testing
 func TestManagedSideSessionSkipsSharedGoalCompletionGate(t *testing.T) {
 	child := &scriptedSideProvider{}
 	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, child)
-	if _, err := parent.Engine.GoalState.Create("primary owns this goal", "primary completes it"); err != nil {
+	if _, err := appGoalStateStore(t, parent).Create("primary owns this goal", "primary completes it"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1206,7 +1230,8 @@ func TestPrimaryGoalContinuationDefersWhileSubscribedResultIsQueued(t *testing.T
 	primaryProvider := &goalSideQueueProvider{started: make(chan struct{}), release: make(chan struct{})}
 	parent := newSideSessionTestApp(t, primaryProvider, &scriptedSideProvider{})
 	primaryProvider.app = parent
-	if _, err := parent.Engine.GoalState.Create("finish delegated work", "incorporate the subscribed result"); err != nil {
+	goalState := appGoalStateStore(t, parent)
+	if _, err := goalState.Create("finish delegated work", "incorporate the subscribed result"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1238,11 +1263,11 @@ func TestPrimaryGoalContinuationDefersWhileSubscribedResultIsQueued(t *testing.T
 			if err := <-primaryDone; err != nil {
 				t.Fatal(err)
 			}
-			goal, err := parent.Engine.GoalState.Snapshot()
+			goal, err := goalState.Snapshot()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if goal.Status != runtime.GoalStatusSuccess || goal.ContinuationCount != 0 {
+			if goal.Status != workmem.GoalStatusSuccess || goal.ContinuationCount != 0 {
 				t.Fatalf("goal state = %+v, want success without synthetic continuation", goal)
 			}
 			if parent.sideSessions.shouldDeferGoalContinuation() {
@@ -1260,7 +1285,8 @@ func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testin
 	firstChild := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
 	secondChild := &scriptedSideProvider{started: make(chan string, 1), release: make(chan struct{})}
 	parent := newSideSessionTestApp(t, primaryProvider, firstChild, secondChild)
-	if _, err := parent.Engine.GoalState.Create("finish delegated work", "both worker results are incorporated"); err != nil {
+	goalState := appGoalStateStore(t, parent)
+	if _, err := goalState.Create("finish delegated work", "both worker results are incorporated"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1296,11 +1322,11 @@ func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testin
 	if primaryCalls != 1 {
 		t.Fatalf("primary provider calls = %d, want 1 without Goal continuation", primaryCalls)
 	}
-	goal, err := parent.Engine.GoalState.Snapshot()
+	goal, err := goalState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goal.Status != runtime.GoalStatusInProgress || goal.ContinuationCount != 0 {
+	if goal.Status != workmem.GoalStatusInProgress || goal.ContinuationCount != 0 {
 		t.Fatalf("goal state = %+v", goal)
 	}
 
@@ -1336,11 +1362,14 @@ func TestSideSessionCreateRejectsUnknownModel(t *testing.T) {
 }
 
 func TestSideSessionCreateAppliesConfiguredModelOverride(t *testing.T) {
-	testHome := t.TempDir()
+	userHome := t.TempDir()
+	testHome := filepath.Join(userHome, ".juex")
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
 	t.Setenv("JUEX_HOME", testHome)
 	workDir := t.TempDir()
 	configPath := filepath.Join(t.TempDir(), "juex.yaml")
-	if err := os.WriteFile(configPath, []byte(`model: openai:primary
+	if err := os.WriteFile(configPath, []byte(`models: [openai:primary]
 providers:
   - id: openai
     base_url: https://openai.example
@@ -1553,67 +1582,82 @@ func TestSideSessionStopHonorsToolCancellation(t *testing.T) {
 }
 
 func TestSideSessionCreateHonorsToolCancellationDuringStartup(t *testing.T) {
-	workDir := t.TempDir()
-	stateDir := filepath.Join(workDir, ".juex")
 	childProvider := &scriptedSideProvider{}
-	factoryDone := make(chan struct{})
-	parent, err := New(Options{
-		Config: config.Config{
-			ProviderID:    "openai",
-			APIKey:        "test",
-			Model:         "primary",
-			WorkDir:       workDir,
-			AgentStateDir: stateDir,
+	parent := newSideSessionTestApp(t, childProvider)
+	startupEntered := make(chan context.Context, 1)
+	startupCanceled := make(chan error, 1)
+	releaseStartup := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseStartup) }) }
+	t.Cleanup(release)
+	parent.sideSessions.factory = parent.sideSessions.newChildApp
+	parent.sideSessions.childSessionModuleFactories = []runtimemodule.SessionFactorySpec{{
+		ID:      "side-session-startup-barrier",
+		Enabled: true,
+		New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+			return &sideSessionStartupBarrier{
+				entered:  startupEntered,
+				canceled: startupCanceled,
+				release:  releaseStartup,
+			}, nil
 		},
-		Provider:   &scriptedSideProvider{},
-		WorkDir:    workDir,
-		DisableMCP: true,
-		sideSessionFactory: func(opts sideSessionChildOptions) (*App, error) {
-			defer close(factoryDone)
-			cfg := opts.Config
-			cfg.Hooks = hooks.Config{Commands: []hooks.CommandHook{{
-				Name:    "wait-for-cancellation",
-				Events:  []hooks.EventName{hooks.EventSessionStart},
-				Command: appHookCommand("wait"),
-			}}}
-			return New(Options{
-				Config:                  cfg,
-				Provider:                childProvider,
-				WorkDir:                 cfg.WorkDir,
-				DisableMCP:              true,
-				SessionMode:             SessionModeNewSide,
-				disableSideSessionTools: true,
-				sharedGoalState:         opts.GoalState,
-				sharedNotes:             opts.Notes,
-				startupContext:          opts.Context,
-			})
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := parent.CloseAndWait(); err != nil {
-			t.Errorf("close parent app: %v", err)
-		}
-	})
+	}}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
-	defer cancel()
-	started := time.Now()
-	_, err = parent.Engine.Tools.Call(ctx, SideSessionToolCreate, map[string]any{
-		"query": "must not outlive create timeout",
-	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("create error = %v, want context deadline exceeded", err)
+	ctx := newControlledDeadlineContext()
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := parent.Engine.Tools.Call(ctx, SideSessionToolCreate, map[string]any{
+			"query": "must not outlive create timeout",
+		})
+		createDone <- err
+	}()
+
+	var startupCtx context.Context
+	select {
+	case startupCtx = <-startupEntered:
+	case err := <-createDone:
+		t.Fatalf("create returned before child factory entered: %v", err)
+	case <-time.After(sideSessionTestTimeout):
+		t.Fatal("child factory did not enter")
 	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("create returned after %s, want prompt context cancellation", elapsed)
+	ctx.expire()
+
+	select {
+	case <-startupCtx.Done():
+	case <-time.After(sideSessionTestTimeout):
+		t.Fatal("child factory context did not observe cancellation")
 	}
 	select {
-	case <-factoryDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("cancelled child factory did not finish")
+	case err := <-startupCanceled:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("child startup context error = %v, want context deadline exceeded", err)
+		}
+	case <-time.After(sideSessionTestTimeout):
+		t.Fatal("child startup did not observe cancellation")
+	}
+	select {
+	case err := <-createDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("create error = %v, want context deadline exceeded", err)
+		}
+	case <-time.After(sideSessionTestTimeout):
+		t.Fatal("create waited for canceled child startup cleanup")
+	}
+	cleanupDone := make(chan struct{})
+	go func() {
+		parent.sideSessions.deferred.Wait()
+		close(cleanupDone)
+	}()
+	select {
+	case <-cleanupDone:
+		t.Fatal("production child factory finished before startup cleanup was released")
+	default:
+	}
+	release()
+	select {
+	case <-cleanupDone:
+	case <-time.After(sideSessionTestTimeout):
+		t.Fatal("production child factory did not finish after startup cleanup was released")
 	}
 	parent.sideSessions.mu.Lock()
 	active := len(parent.sideSessions.sessions)
@@ -1950,7 +1994,7 @@ func TestSideSessionDefaultChildInheritsSummaryProvider(t *testing.T) {
 			ProviderID: "openai", APIKey: "test", Model: "primary",
 			WorkDir: workDir, AgentStateDir: filepath.Join(workDir, ".juex"),
 		},
-		Provider: provider, SummaryProvider: summary, WorkDir: workDir, DisableMCP: true,
+		Provider: provider, SummaryProvider: summary, SummaryContextWindow: 30000, WorkDir: workDir, DisableMCP: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1960,10 +2004,10 @@ func TestSideSessionDefaultChildInheritsSummaryProvider(t *testing.T) {
 			t.Errorf("close parent app: %v", err)
 		}
 	})
-	state := parent.Engine.SessionRuntimeSnapshot()
+	goalState, notes := appSessionStateStores(t, parent)
 	child, err := parent.sideSessions.newChildApp(sideSessionChildOptions{
 		Config: parent.cfg, Model: "openai:primary", UseParentProvider: true,
-		GoalState: state.GoalState, Notes: state.Notes, Observables: parent.obsv,
+		GoalState: goalState, Notes: notes, Observables: parent.obsv,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1975,6 +2019,9 @@ func TestSideSessionDefaultChildInheritsSummaryProvider(t *testing.T) {
 	})
 	if child.Engine.SummaryProvider != summary {
 		t.Fatalf("child SummaryProvider = %T %p, want parent provider %p", child.Engine.SummaryProvider, child.Engine.SummaryProvider, summary)
+	}
+	if child.Engine.SummaryContextWindow != 30000 {
+		t.Fatalf("child SummaryContextWindow = %d, want 30000", child.Engine.SummaryContextWindow)
 	}
 }
 

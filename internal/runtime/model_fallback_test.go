@@ -454,27 +454,30 @@ func TestTurnFallbackAfterToolResultDoesNotRerunTool(t *testing.T) {
 func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 	primary := &fallbackProvider{name: "primary:model", results: []fallbackProviderResult{
 		{err: errors.New("status 503")},
+	}}
+	backup := &fallbackProvider{name: "backup:model", results: []fallbackProviderResult{
 		{response: llm.Response{
 			Message:    llm.TextMessage(llm.RoleAssistant, "short fallback summary"),
 			StopReason: llm.StopEndTurn,
 		}},
+		{response: llm.Response{
+			Message:    llm.TextMessage(llm.RoleAssistant, "served in small window"),
+			StopReason: llm.StopEndTurn,
+		}},
 	}}
-	backup := &fallbackProvider{name: "backup:model", results: []fallbackProviderResult{{response: llm.Response{
-		Message:    llm.TextMessage(llm.RoleAssistant, "served in small window"),
-		StopReason: llm.StopEndTurn,
-	}}}}
 	eng, _ := newEngine(t, primary, false)
 	eng.ContextWindow = 10_000
 	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.ReserveTokens = 1900
 	eng.ModelCandidates = []ModelCandidate{
 		{Ref: "primary:model", Provider: primary, ContextWindow: 10_000},
-		{Ref: "backup:model", Provider: backup, ContextWindow: 120},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 2_000},
 	}
 	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
 	installHookRunner(t, eng, &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPostCompact: {{Stdout: "Use the refreshed fallback context now."}},
 	}})
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("large history ", 300))); err != nil {
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("large history ", 200))); err != nil {
 		t.Fatal(err)
 	}
 	previous := llm.TextMessage(llm.RoleAssistant, "primary before failure")
@@ -486,8 +489,11 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 	if out, err := eng.Turn(context.Background(), "continue"); err != nil || out != "served in small window" {
 		t.Fatalf("Turn() = %q, %v", out, err)
 	}
-	if primary.calls != 2 || backup.calls != 1 {
+	if primary.calls != 1 || backup.calls != 2 {
 		t.Fatalf("calls primary=%d backup=%d", primary.calls, backup.calls)
+	}
+	if len(backup.opts) != 2 || backup.opts[0].Purpose != "compaction" || backup.opts[0].MaxOutputTokens != 10 {
+		t.Fatalf("backup compaction options = %+v, want 0.5%% of 2000-token context", backup.opts)
 	}
 	foundCompact := false
 	for _, message := range eng.Session.History {
@@ -498,14 +504,14 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 	if !foundCompact {
 		t.Fatalf("history missing fallback preflight compaction: %+v", eng.Session.History)
 	}
-	if strings.Contains(messagesText(backup.histories[0]), strings.Repeat("large history ", 20)) {
+	if strings.Contains(messagesText(backup.histories[1]), strings.Repeat("large history ", 20)) {
 		t.Fatal("backup received unbounded pre-compaction history")
 	}
-	if got := messagesText(backup.histories[0]); !strings.Contains(got, "Use the refreshed fallback context now.") {
-		t.Fatalf("backup history missing post-compact hook context:\n%s", got)
+	if got := messagesText(backup.histories[1]); !strings.Contains(got, "Use the refreshed fallback context now.") {
+		t.Fatalf("backup history missing post-compact policy context:\n%s", got)
 	}
-	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
-		t.Fatalf("post-compact hook context leaked after fallback request: %+v", remaining)
+	if remaining := eng.pendingPolicyRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("post-compact policy context leaked after fallback request: %+v", remaining)
 	}
 }
 
@@ -537,8 +543,8 @@ func TestTurnPreflightFailureNeutrallyReleasesHalfOpenCandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := eng.Turn(context.Background(), "continue"); err == nil || !strings.Contains(err.Error(), "summary unavailable") {
-		t.Fatalf("Turn err = %v", err)
+	if _, err := eng.Turn(context.Background(), "continue"); err == nil || !strings.Contains(err.Error(), "primary:model") || !strings.Contains(err.Error(), "backup:model") {
+		t.Fatalf("Turn err = %v, want exhausted compaction candidates", err)
 	}
 	retry, ok := health.Acquire(backupOnly, nil)
 	if !ok || retry.Ticket.Ref != "backup:model" || !retry.Ticket.Probe {
@@ -588,7 +594,7 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 		{Ref: "backup:model", Provider: backup, ContextWindow: 64000, MaxOutputTokens: 2048},
 	}
 	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
-	if err := eng.queueHookRuntimeContext([]hooks.Result{{Hook: hooks.CommandHook{Name: "fallback"}, Stdout: "one-shot fallback context"}}); err != nil {
+	if err := eng.queuePolicyRuntimeContextFromHookResults([]hooks.Result{{Hook: hooks.CommandHook{Name: "fallback"}, Stdout: "one-shot fallback context"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "earlier")); err != nil {
@@ -632,10 +638,10 @@ func TestTurnFallsBackAndPersistsNoticeWithActualModel(t *testing.T) {
 		t.Fatalf("errored events = %+v, failed epoch = %+v", erroredEvents, epochs[0])
 	}
 	if got := messagesText(primary.histories[0]); !strings.Contains(got, "one-shot fallback context") {
-		t.Fatalf("primary request missing hook context:\n%s", got)
+		t.Fatalf("primary request missing policy context:\n%s", got)
 	}
 	if got := messagesText(backup.histories[0]); strings.Contains(got, "one-shot fallback context") {
-		t.Fatalf("backup request repeated checkpointed hook context:\n%s", got)
+		t.Fatalf("backup request repeated checkpointed policy context:\n%s", got)
 	}
 	if len(backup.opts) != 1 || backup.opts[0].MaxOutputTokens != 2048 {
 		t.Fatalf("backup options = %+v", backup.opts)

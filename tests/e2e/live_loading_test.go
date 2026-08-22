@@ -56,7 +56,7 @@ func TestLiveBinary_LoadsSkillsAndMCP(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configBody := "model: openai:m\n" +
+	configBody := "models: [openai:m]\n" +
 		"providers:\n" +
 		"  - id: openai\n" +
 		"    base_url: https://example\n" +
@@ -196,7 +196,7 @@ func TestLiveBinary_LoadsExtensionSkillsAndMCP(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configBody := "model: openai:m\n" +
+	configBody := "models: [openai:m]\n" +
 		"extensions:\n" +
 		"  allow: [demo]\n" +
 		"providers:\n" +
@@ -285,7 +285,7 @@ func TestLiveBinary_UserAgentsGateDoesNotDisableHomeExtensions(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configBody := `model: openai:m
+	configBody := `models: [openai:m]
 enable_user_agents_resources: false
 extensions:
   allow: [home-bundle]
@@ -341,7 +341,7 @@ providers:
 	}
 }
 
-func TestLiveBinary_ModelFlagUsesUserGlobalProvider(t *testing.T) {
+func TestLiveBinary_ModelsFlagUsesUserGlobalProvider(t *testing.T) {
 	bin := buildJuex(t)
 	work := t.TempDir()
 	home := t.TempDir()
@@ -350,7 +350,7 @@ func TestLiveBinary_ModelFlagUsesUserGlobalProvider(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configBody := `model: openai:gpt-default
+	configBody := `models: [openai:gpt-default]
 providers:
   - id: openai
     base_url: https://global.example
@@ -365,7 +365,7 @@ providers:
 
 	cmd := exec.Command(bin,
 		"--cwd", work,
-		"--model", "openai:gpt-global",
+		"--models", "openai:gpt-global",
 		"run", "--dry-run", "--json", "x")
 	cmd.Env = append(os.Environ(),
 		"HOME="+home,
@@ -407,7 +407,7 @@ func TestLiveBinary_NonDefaultHomesShareConfigAndIsolateWritableState(t *testing
 		t.Fatal(err)
 	}
 	defaultPath := filepath.Join(defaultHome, "juex.yaml")
-	defaultBody := []byte("model: local:base\n" +
+	defaultBody := []byte("models: [local:base]\n" +
 		"providers:\n" +
 		"  - id: local\n" +
 		"    protocol: openai/chat\n" +
@@ -444,7 +444,7 @@ func TestLiveBinary_NonDefaultHomesShareConfigAndIsolateWritableState(t *testing
 	for _, tc := range cases {
 		if err := os.WriteFile(
 			filepath.Join(tc.home, "juex.yaml"),
-			[]byte("model: local:"+tc.model+"\nfleet:\n  addr: "+tc.fleetAddr+"\n"),
+			[]byte("models: [local:"+tc.model+"]\nfleet:\n  addr: "+tc.fleetAddr+"\n"),
 			0o600,
 		); err != nil {
 			t.Fatal(err)
@@ -647,7 +647,7 @@ func TestLiveBinary_IgnoresWorkspaceStateAndRebindsAgent(t *testing.T) {
 		"history.json":                                     `{"sessions":[{"id":"20260717T120000-stale001"}]}` + "\n",
 		filepath.Join("logs", "listen.log"):                "workspace log\n",
 		filepath.Join("observables", "observations.jsonl"): `{"id":"workspace-observation"}` + "\n",
-		"juex.yaml": strings.ReplaceAll(`model: local-chat:chat-test
+		"juex.yaml": strings.ReplaceAll(`models: [local-chat:chat-test]
 providers:
   - id: local-chat
     protocol: openai/chat
@@ -888,7 +888,7 @@ func startLiveListen(t *testing.T, bin string, listenArgs ...string) *liveListen
 		t.Fatal(err)
 	}
 	configFile := filepath.Join(work, "juex.yaml")
-	configBody := "model: openai:test-model\n" +
+	configBody := "models: [openai:test-model]\n" +
 		"providers:\n" +
 		"  - id: openai\n" +
 		"    base_url: https://example.invalid\n" +

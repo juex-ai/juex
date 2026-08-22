@@ -160,6 +160,7 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 		Session:        sess,
 		Prompt:         capabilityPromptBuilder(workDir, sess),
 		WorkDir:        workDir,
+		ArtifactDir:    filepath.Join(workDir, ".juex", "artifacts"),
 		RuntimeContext: runtimemodule.RuntimeContext{WorkDir: workDir},
 	}
 	if hookRunner != nil {
@@ -203,7 +204,7 @@ func capabilityPromptBuilder(workDir string, sess *session.Session) *prompt.Buil
 		Purpose: runtimemodule.ContextPurposeProviderIteration,
 		Session: &runtimemodule.SessionContext{ID: sess.ID, Dir: sess.Dir, ScratchpadDir: sess.ScratchpadDir()},
 	}
-	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.PromptSection, error) {
+	return &prompt.Builder{ModulePromptContext: func() ([]runtimemodule.ContextSection, error) {
 		sections, err := guidance.Context(context.Background(), request)
 		if err != nil {
 			return nil, err

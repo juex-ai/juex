@@ -44,9 +44,9 @@ const (
 	// MessageKindSideSession marks a managed Side Session turn result delivered
 	// to its owning Primary Session.
 	MessageKindSideSession = "side_session"
-	// MessageKindHookEvent marks user-visible command hook traces. These are
+	// MessageKindPolicyEvent marks user-visible typed-policy traces. These are
 	// UI-only runtime diagnostics and must not be sent back to providers.
-	MessageKindHookEvent = "hook_event"
+	MessageKindPolicyEvent = "policy_event"
 	// MessageKindCompact marks an automatic context compaction summary. The
 	// persisted transcript keeps the original messages; provider calls only
 	// include the latest compact summary plus later messages.

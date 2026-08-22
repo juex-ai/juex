@@ -61,10 +61,12 @@ func (o modulePolicyObserver) Requested(execution runtimemodule.PolicyExecution)
 	if o.engine == nil {
 		return nil
 	}
-	if err := o.engine.emit(events.Event{Type: "hook.requested", TurnID: o.turnID, Payload: HookStartedPayload{
-		Source:    "runtime",
-		EventName: policyEventName(execution.Point),
-		ToolName:  execution.ToolName,
+	if err := o.engine.emit(events.Event{Type: "policy.requested", TurnID: o.turnID, Payload: PolicyStartedPayload{
+		ModuleID:    execution.ModuleID,
+		PolicyPoint: execution.Point,
+		Name:        execution.Name,
+		Source:      execution.Source,
+		ToolName:    execution.ToolName,
 	}}); err != nil {
 		return err
 	}
@@ -75,11 +77,12 @@ func (o modulePolicyObserver) Started(execution runtimemodule.PolicyExecution) {
 	if o.engine == nil {
 		return
 	}
-	_ = o.engine.emit(events.Event{Type: "hook.started", TurnID: o.turnID, Payload: HookStartedPayload{
-		Name:      execution.Name,
-		Source:    execution.Source,
-		EventName: policyEventName(execution.Point),
-		ToolName:  execution.ToolName,
+	_ = o.engine.emit(events.Event{Type: "policy.started", TurnID: o.turnID, Payload: PolicyStartedPayload{
+		ModuleID:    execution.ModuleID,
+		PolicyPoint: execution.Point,
+		Name:        execution.Name,
+		Source:      execution.Source,
+		ToolName:    execution.ToolName,
 	}})
 }
 
@@ -87,10 +90,11 @@ func (o modulePolicyObserver) Completed(execution runtimemodule.PolicyExecution,
 	if o.engine == nil {
 		return
 	}
-	o.engine.emitHookCompleted(o.turnID, HookCompletedPayload{
+	o.engine.emitPolicyCompleted(o.turnID, PolicyCompletedPayload{
+		ModuleID:      execution.ModuleID,
+		PolicyPoint:   execution.Point,
 		Name:          execution.Name,
 		Source:        execution.Source,
-		EventName:     policyEventName(execution.Point),
 		ToolName:      execution.ToolName,
 		DurationMS:    result.Duration.Milliseconds(),
 		ExitCode:      result.ExitCode,
@@ -105,10 +109,11 @@ func (o modulePolicyObserver) Errored(execution runtimemodule.PolicyExecution, r
 	if o.engine == nil {
 		return
 	}
-	o.engine.emitHookErrored(o.turnID, HookErroredPayload{
+	o.engine.emitPolicyErrored(o.turnID, PolicyErroredPayload{
+		ModuleID:      execution.ModuleID,
+		PolicyPoint:   execution.Point,
 		Name:          execution.Name,
 		Source:        execution.Source,
-		EventName:     policyEventName(execution.Point),
 		ToolName:      execution.ToolName,
 		DurationMS:    result.Duration.Milliseconds(),
 		ExitCode:      result.ExitCode,
@@ -118,27 +123,6 @@ func (o modulePolicyObserver) Errored(execution runtimemodule.PolicyExecution, r
 		StdoutPreview: truncate(result.Stdout, 200),
 		StderrPreview: truncate(result.Stderr, 200),
 	})
-}
-
-func policyEventName(point runtimemodule.PolicyPoint) string {
-	switch point {
-	case runtimemodule.PolicyPointSessionStart:
-		return "SessionStart"
-	case runtimemodule.PolicyPointTurnInput:
-		return "UserPromptSubmit"
-	case runtimemodule.PolicyPointToolBefore:
-		return "PreToolUse"
-	case runtimemodule.PolicyPointToolAfter:
-		return "PostToolUse"
-	case runtimemodule.PolicyPointFinish:
-		return "Stop"
-	case runtimemodule.PolicyPointCompactionBefore:
-		return "PreCompact"
-	case runtimemodule.PolicyPointCompactionAfter:
-		return "PostCompact"
-	default:
-		return string(point)
-	}
 }
 
 func (e *Engine) queuePolicyRuntimeContext(contexts []runtimemodule.PolicyContext) error {
@@ -152,7 +136,7 @@ func (e *Engine) queuePolicyRuntimeContext(contexts []runtimemodule.PolicyContex
 			continue
 		}
 		msg := llm.TextMessage(llm.RoleUser, item.Label+text)
-		msg.ID = randomProvenanceID("hook-context-")
+		msg.ID = randomProvenanceID("policy-context-")
 		msg.Kind = llm.MessageKindRuntimeContext
 		messages = append(messages, msg)
 	}
@@ -160,20 +144,20 @@ func (e *Engine) queuePolicyRuntimeContext(contexts []runtimemodule.PolicyContex
 		return nil
 	}
 	turnID := e.PendingInputStatus().TurnID
-	payload := provenance.HookContextQueuedPayload{Messages: messages}
-	if err := provenance.ValidateHookContextQueued(payload); err != nil {
+	payload := provenance.PolicyContextQueuedPayload{Messages: messages}
+	if err := provenance.ValidatePolicyContextQueued(payload); err != nil {
 		return err
 	}
-	if err := e.emit(events.Event{Type: provenance.HookContextQueuedType, TurnID: turnID, Payload: payload}); err != nil {
+	if err := e.emit(events.Event{Type: provenance.PolicyContextQueuedType, TurnID: turnID, Payload: payload}); err != nil {
 		return fmt.Errorf("commit policy runtime context: %w", err)
 	}
 	tracker := e.requestProvenanceTracker()
 	for _, message := range messages {
 		tracker.AddQueued(message)
 	}
-	e.hookRuntimeContextMu.Lock()
-	e.pendingHookRuntimeContext = append(e.pendingHookRuntimeContext, messages...)
-	e.hookRuntimeContextMu.Unlock()
+	e.policyRuntimeContextMu.Lock()
+	e.pendingPolicyRuntimeContext = append(e.pendingPolicyRuntimeContext, messages...)
+	e.policyRuntimeContextMu.Unlock()
 	return nil
 }
 

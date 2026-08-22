@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/llm"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
@@ -31,20 +32,22 @@ func TestEventPayloadJSONShapePreservesConditionalFields(t *testing.T) {
 			},
 		},
 		{
-			name: "hook completed keeps zero exit code",
-			payload: HookCompletedPayload{
-				Name:       "policy",
-				EventName:  "UserPromptSubmit",
-				DurationMS: 4,
-				ExitCode:   0,
-				StdoutLen:  7,
+			name: "policy completed keeps zero exit code",
+			payload: PolicyCompletedPayload{
+				ModuleID:    "quota",
+				PolicyPoint: runtimemodule.PolicyPointTurnInput,
+				Name:        "policy",
+				DurationMS:  4,
+				ExitCode:    0,
+				StdoutLen:   7,
 			},
 			want: map[string]any{
-				"name":        "policy",
-				"event_name":  "UserPromptSubmit",
-				"duration_ms": float64(4),
-				"exit_code":   float64(0),
-				"stdout_len":  float64(7),
+				"module_id":    "quota",
+				"policy_point": "turn_input",
+				"name":         "policy",
+				"duration_ms":  float64(4),
+				"exit_code":    float64(0),
+				"stdout_len":   float64(7),
 			},
 		},
 		{

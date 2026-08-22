@@ -50,7 +50,7 @@ const (
 	DefaultPendingInputTTL  = 15 * time.Minute
 	DefaultExternalEventTTL = 24 * time.Hour
 	maxToolErrorOutput      = 32 * 1024
-	maxShellHookContent     = 128 * 1024
+	maxShellPolicyContent   = 128 * 1024
 	maxShellEventDiagnostic = 4 * 1024
 )
 
@@ -58,16 +58,19 @@ type Engine struct {
 	Provider          llm.Provider
 	SummaryProvider   llm.Provider
 	SummaryProvenance provenance.SafeProvider
-	ModelCandidates   []ModelCandidate
-	ModelHealth       *llm.ModelHealth
-	Tools             *tools.Registry
-	RuntimeModules    *runtimemodule.Set
-	RuntimeContext    runtimemodule.RuntimeContext
-	Bus               *events.Bus
-	// Session, Prompt, PendingInputQueue, Notes, and GoalState
-	// are constructor/test compatibility fields. Concurrent production code
-	// must use the synchronized session-runtime methods instead of reading or
-	// replacing these fields directly.
+	// SummaryContextWindow is the dedicated compaction summary model's context
+	// window. Zero keeps the serving candidate window as the fallback.
+	SummaryContextWindow int
+	ModelCandidates      []ModelCandidate
+	ModelHealth          *llm.ModelHealth
+	Tools                *tools.Registry
+	RuntimeModules       *runtimemodule.Set
+	RuntimeContext       runtimemodule.RuntimeContext
+	Bus                  *events.Bus
+	// Session, Prompt, and PendingInputQueue seed the first session runtime
+	// bundle during bootstrap. Concurrent production code must use the
+	// synchronized session-runtime methods after publication instead of reading
+	// or replacing these fields directly.
 	Session *session.Session
 	Prompt  *prompt.Builder
 	// WorkDir is the workspace root. Runtime state may live outside it, so
@@ -83,13 +86,9 @@ type Engine struct {
 	// directory. When omitted, the engine creates a session-local queue on
 	// first use.
 	PendingInputQueue *PendingInputQueue
-	// Notes persists model-owned session working notes.
-	Notes *NotesStore
-	// GoalState persists the current session goal and latest completion check.
-	GoalState *GoalStateStore
-	// ShowBuiltinHookTraces includes built-in runtime gates in UI-only hook
-	// trace messages. Command hook traces are always shown.
-	ShowBuiltinHookTraces bool
+	// ShowBuiltinPolicyTraces includes built-in runtime gates in UI-only policy
+	// trace messages. Module-provided policy traces are always shown.
+	ShowBuiltinPolicyTraces bool
 	// NotifyModelChanges adds provider-visible notices when the serving model
 	// degrades or recovers. Fallback events and model attribution are unchanged.
 	NotifyModelChanges bool
@@ -127,18 +126,15 @@ type Engine struct {
 	activeOperationCancel     context.CancelCauseFunc
 	activeOperationGeneration uint64
 
-	hookRuntimeContextMu      sync.Mutex
-	pendingHookRuntimeContext []llm.Message
-	provenanceTracker         *provenance.Tracker
+	policyRuntimeContextMu      sync.Mutex
+	pendingPolicyRuntimeContext []llm.Message
+	provenanceTracker           *provenance.Tracker
 
 	autoCompactFailures int
 	toolFailures        *toolFailureLedger
 
 	tokenCalibrationMu sync.RWMutex
 	tokenCalibration   tokenEstimateCalibration
-
-	notesContextErrorMu  sync.Mutex
-	notesContextErrorKey string
 }
 
 var (
@@ -641,7 +637,7 @@ type providerTurnRequest struct {
 	iter                 int
 	history              []llm.Message
 	estimatedInputTokens int
-	hookContext          []llm.Message
+	policyContext        []llm.Message
 	epochID              string
 	requestDigest        string
 }
@@ -662,11 +658,12 @@ type providerTurnResult struct {
 }
 
 type recordedProviderResponse struct {
-	finalText  string
-	stopReason llm.StopReason
-	toolCalls  []llm.Block
-	iter       int
-	messageID  string
+	finalText     string
+	stopReason    llm.StopReason
+	toolCalls     []llm.Block
+	iter          int
+	messageID     string
+	contextWindow int
 }
 
 func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, userMsg llm.Message) (preparedTurnContext, error) {
@@ -790,16 +787,16 @@ func (e *Engine) RecoverTranscript(reason string) error {
 }
 
 func (e *Engine) prepareProviderRequestLocked(ctx context.Context, turnID string, iter int, prepared preparedTurnContext) (providerTurnRequest, error) {
-	hookContext := e.pendingHookRuntimeContextSnapshot()
-	active, err := e.activeContextLockedWithHookContextError(ctx, hookContext)
+	policyContext := e.pendingPolicyRuntimeContextSnapshot()
+	active, err := e.activeContextLockedWithPolicyContextError(ctx, policyContext)
 	if err != nil {
 		return providerTurnRequest{}, fmt.Errorf("runtime: build provider context: %w", err)
 	}
 	requestHistory := active.Messages
 	return providerTurnRequest{
-		iter:        iter,
-		history:     requestHistory,
-		hookContext: hookContext,
+		iter:          iter,
+		history:       requestHistory,
+		policyContext: policyContext,
 	}, nil
 }
 
@@ -858,8 +855,8 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
 			return providerTurnResult{request: request}, err
 		}
-		base.hookContext = request.hookContext
-		active, contextErr := e.activeContextLockedWithHookContextError(ctx, base.hookContext)
+		base.policyContext = request.policyContext
+		active, contextErr := e.activeContextLockedWithPolicyContextError(ctx, base.policyContext)
 		if contextErr != nil {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
 			return providerTurnResult{request: base}, fmt.Errorf("runtime: build provider context: %w", contextErr)
@@ -947,8 +944,8 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 			cooldown: transition.Cooldown,
 			probe:    selection.Ticket.Probe,
 		}
-		base.hookContext = e.pendingHookRuntimeContextSnapshot()
-		active, contextErr = e.activeContextLockedWithHookContextError(ctx, base.hookContext)
+		base.policyContext = e.pendingPolicyRuntimeContextSnapshot()
+		active, contextErr = e.activeContextLockedWithPolicyContextError(ctx, base.policyContext)
 		if contextErr != nil {
 			return providerTurnResult{request: base}, fmt.Errorf("runtime: build provider context: %w", contextErr)
 		}
@@ -1072,15 +1069,16 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 
 	toolCalls := msg.ToolCalls()
 	return recordedProviderResponse{
-		finalText:  llm.FormatBlocksForTerminal(msg.Blocks),
-		stopReason: resp.StopReason,
-		toolCalls:  toolCalls,
-		iter:       request.iter,
-		messageID:  msg.ID,
+		finalText:     llm.FormatBlocksForTerminal(msg.Blocks),
+		stopReason:    resp.StopReason,
+		toolCalls:     toolCalls,
+		iter:          request.iter,
+		messageID:     msg.ID,
+		contextWindow: candidateContextWindow(result.candidate, e.ContextWindow),
 	}, nil
 }
 
-func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, policy compactionPolicy, recorded recordedProviderResponse) error {
+func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, recorded recordedProviderResponse) error {
 	if err := e.emit(events.Event{Type: TurnPhaseType, TurnID: turnID, Payload: TurnPhasePayload{Phase: TurnPhaseToolBatch}}); err != nil {
 		return fmt.Errorf("commit tool batch phase: %w", err)
 	}
@@ -1110,6 +1108,11 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, polic
 		Kind:   llm.MessageKindToolResult,
 		Blocks: results,
 	}
+	contextWindow := recorded.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = e.ContextWindow
+	}
+	policy := effectiveCompactionPolicy(e.Compaction, contextWindow)
 	projectedToolResultMsg, projection, err := e.projectMessageLocked(toolResultMsg, policy)
 	if err != nil {
 		return errors.Join(fatalErr, err)
@@ -2184,9 +2187,9 @@ func finalizedShellContent(base, finalized string) string {
 	}
 	suffix, ok := strings.CutPrefix(finalized, base)
 	if !ok {
-		return tools.BoundShellContent(finalized, maxShellHookContent)
+		return tools.BoundShellContent(finalized, maxShellPolicyContent)
 	}
-	return base + tools.BoundShellContent(suffix, maxShellHookContent)
+	return base + tools.BoundShellContent(suffix, maxShellPolicyContent)
 }
 
 func boundedRuntimeDiagnostic(value string, maxBytes int) string {

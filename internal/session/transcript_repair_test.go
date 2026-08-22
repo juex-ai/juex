@@ -213,7 +213,7 @@ func TestIncrementalRepairStateMatchesFullRepairScan(t *testing.T) {
 			name: "hook between call and result",
 			messages: []llm.Message{
 				toolUseMessage("m1", "call-1", "read"),
-				hookTraceMessage("m2", "hook"),
+				policyTraceMessage("m2", "hook"),
 				toolResultMessage("m3", "call-1", "done"),
 			},
 		},

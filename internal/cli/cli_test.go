@@ -416,7 +416,7 @@ func TestLoadConfig_ModelFlagOverridesConfig(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := `model: openai:gpt-default
+	body := `models: [openai:gpt-default]
 providers:
   - id: openai
     base_url: https://openai.example
@@ -433,7 +433,7 @@ providers:
 		t.Fatal(err)
 	}
 
-	cfg, err := loadConfig(&persistentFlags{cwd: work, model: "anthropic:claude-sonnet"})
+	cfg, err := loadConfig(&persistentFlags{cwd: work, models: "anthropic:claude-sonnet"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -575,10 +575,10 @@ func TestDoctorAgentCheckExplainsCopiedWorkspaceMarker(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_ModelFlagUsesUserGlobalProviderFromEmptyWorkdir(t *testing.T) {
+func TestLoadConfig_ModelsFlagUsesUserGlobalProvidersFromEmptyWorkdir(t *testing.T) {
 	home := setHomeForCLITest(t)
 	work := t.TempDir()
-	body := `model: openai:gpt-default
+	body := `models: [openai:gpt-default]
 providers:
   - id: openai
     base_url: https://global.example
@@ -586,58 +586,71 @@ providers:
     models:
       - id: gpt-default
       - id: gpt-global
+  - id: anthropic
+    api_key: sk-anthropic
+    models:
+      - id: claude-global
 `
 	if err := writeTextFile(filepath.Join(home, ".juex", "juex.yaml"), body); err != nil {
 		t.Fatal(err)
 	}
 
-	cfg, err := loadConfig(&persistentFlags{cwd: work, model: "openai:gpt-global"})
+	cfg, err := loadConfig(&persistentFlags{cwd: work, models: "openai:gpt-global, anthropic:claude-global"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.ProviderID != "openai" || cfg.BaseURL != "https://global.example" || cfg.APIKey != "sk-global" || cfg.Model != "gpt-global" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
+	chain, err := cfg.ModelChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chain) != 2 || chain[0].Ref != "openai:gpt-global" || chain[1].Ref != "anthropic:claude-global" {
+		t.Fatalf("model chain = %+v", chain)
+	}
 }
 
-func TestLoadConfig_ModelFlagRejectsUnknownModelAsUsageError(t *testing.T) {
+func TestLoadConfig_ModelsFlagRejectsUnknownModelAsUsageError(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
 	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := loadConfig(&persistentFlags{cwd: work, model: "openai:missing"})
+	_, err := loadConfig(&persistentFlags{cwd: work, models: "openai:m,openai:missing"})
 	var usageErr *usageError
-	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--model:") {
-		t.Fatalf("err = %T %v, want usage error for --model", err, err)
+	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--models:") || !strings.Contains(err.Error(), "models[1]") {
+		t.Fatalf("err = %T %v, want indexed usage error for --models", err, err)
 	}
 }
 
-func TestLoadConfig_ModelFlagRejectsSlashRefAsUsageError(t *testing.T) {
+func TestLoadConfig_ModelsFlagRejectsMalformedOrDuplicateRefsAsUsageError(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
 	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := loadConfig(&persistentFlags{cwd: work, model: "openai/missing"})
-	var usageErr *usageError
-	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "provider:model") {
-		t.Fatalf("err = %T %v, want provider:model usage error", err, err)
+	for _, raw := range []string{"openai/missing", "openai:m,,openai:m", "openai:m,openai:m"} {
+		_, err := loadConfig(&persistentFlags{cwd: work, models: raw})
+		var usageErr *usageError
+		if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--models:") {
+			t.Fatalf("models %q error = %T %v, want usage error", raw, err, err)
+		}
 	}
 }
 
-func TestRunCmd_ModelFlagRejectsEmptyValue(t *testing.T) {
+func TestRunCmd_ModelsFlagRejectsEmptyValue(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
-	root.SetArgs([]string{"--model", "", "run", "--dry-run", "--json", "hello"})
+	root.SetArgs([]string{"--models", "", "run", "--dry-run", "--json", "hello"})
 	err := root.Execute()
 	var usageErr *usageError
-	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--model:") {
-		t.Fatalf("err = %T %v, want usage error for empty --model", err, err)
+	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--models:") {
+		t.Fatalf("err = %T %v, want usage error for empty --models", err, err)
 	}
 }
 
@@ -777,7 +790,7 @@ body`); err != nil {
 	}
 }
 
-func TestRunCmd_DryRunModelFlagOverridesConfig(t *testing.T) {
+func TestRunCmd_DryRunModelsFlagOverridesCompleteChain(t *testing.T) {
 	setHomeForCLITest(t)
 	root := newRootCmd()
 	var out bytes.Buffer
@@ -785,7 +798,7 @@ func TestRunCmd_DryRunModelFlagOverridesConfig(t *testing.T) {
 	root.SetErr(&out)
 	dir := t.TempDir()
 	configFile := dir + "/juex.yaml"
-	body := `model: openai:gpt-default
+	body := `models: [openai:gpt-default]
 providers:
   - id: openai
     base_url: https://openai.example
@@ -801,7 +814,7 @@ providers:
 	if err := writeTextFile(configFile, body); err != nil {
 		t.Fatal(err)
 	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "--model", "anthropic:claude-sonnet", "run", "--dry-run", "--json", "hello"})
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "--models", "anthropic:claude-sonnet,openai:gpt-default", "run", "--dry-run", "--json", "hello"})
 	err := root.Execute()
 	if _, ok := err.(*dryRunOK); !ok {
 		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
@@ -1195,7 +1208,7 @@ func TestInitCmd_NonInteractiveWorkspaceWritesConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"model: openai:gpt-4.1", "id: openai", "base_url: https://openai.example", "api_key: sk-test", "id: gpt-4.1"} {
+	for _, want := range []string{"models:", "openai:gpt-4.1", "id: openai", "base_url: https://openai.example", "api_key: sk-test", "id: gpt-4.1"} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("config missing %q:\n%s", want, body)
 		}
@@ -1272,7 +1285,7 @@ func TestInitCmd_MergesExistingProviderWithoutOverwriting(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(bodyBytes)
-	for _, want := range []string{"model: openai:gpt-old", "base_url: https://old.example", "api_key: sk-old", "id: gpt-new"} {
+	for _, want := range []string{"models:", "openai:gpt-old", "base_url: https://old.example", "api_key: sk-old", "id: gpt-new"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("merged config missing %q:\n%s", want, body)
 		}
@@ -1282,7 +1295,7 @@ func TestInitCmd_MergesExistingProviderWithoutOverwriting(t *testing.T) {
 			t.Fatalf("merge should not overwrite existing provider with %q:\n%s", forbidden, body)
 		}
 	}
-	cfg, err := loadConfig(&persistentFlags{cwd: work, model: "openai:gpt-new"})
+	cfg, err := loadConfig(&persistentFlags{cwd: work, models: "openai:gpt-new"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1293,7 +1306,7 @@ func TestInitCmd_MergesExistingProviderWithoutOverwriting(t *testing.T) {
 
 func TestMergeInitConfigFileFillsMissingProviderFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "juex.yaml")
-	if err := writeTextFile(path, `model: openai:gpt-4.1
+	if err := writeTextFile(path, `models: [openai:gpt-4.1]
 providers:
   - id: openai
     models:
@@ -1360,7 +1373,7 @@ func TestInitCmd_UserScopeIgnoresBrokenWorkspaceConfig(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer
 	work := t.TempDir()
-	if err := writeTextFile(filepath.Join(work, ".juex", "juex.yaml"), "model: [broken\n"); err != nil {
+	if err := writeTextFile(filepath.Join(work, ".juex", "juex.yaml"), "models: [broken\n"); err != nil {
 		t.Fatal(err)
 	}
 	root.SetOut(&out)
@@ -1386,7 +1399,7 @@ func TestInitCmd_UserScopeIgnoresBrokenWorkspaceConfig(t *testing.T) {
 func TestLoadInitConfigForCheckIgnoresBrokenWorkspaceConfig(t *testing.T) {
 	home := setHomeForCLITest(t)
 	work := t.TempDir()
-	if err := writeTextFile(filepath.Join(work, ".juex", "juex.yaml"), "model: [broken\n"); err != nil {
+	if err := writeTextFile(filepath.Join(work, ".juex", "juex.yaml"), "models: [broken\n"); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(home, ".juex", "juex.yaml")
@@ -1407,7 +1420,7 @@ func TestValidateInitConfigTreatsUserTargetAsUserConfig(t *testing.T) {
 	home := setHomeForCLITest(t)
 	work := t.TempDir()
 	target := filepath.Join(home, ".juex", "juex.yaml")
-	if err := writeTextFile(target, `model: openai:gpt-4.1
+	if err := writeTextFile(target, `models: [openai:gpt-4.1]
 providers:
   - id: openai
     base_url: https://example.invalid
@@ -1442,7 +1455,7 @@ func TestInitCmdUserScopeWritesOnlyEffectiveInstanceHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	defaultPath := filepath.Join(defaultHome, "juex.yaml")
-	defaultBody := []byte("model: shared:base\nproviders:\n  - id: shared\n    protocol: openai/chat\n    api_key: shared-key\n    models:\n      - id: base\n")
+	defaultBody := []byte("models: [shared:base]\nproviders:\n  - id: shared\n    protocol: openai/chat\n    api_key: shared-key\n    models:\n      - id: base\n")
 	if err := os.WriteFile(defaultPath, defaultBody, 0o640); err != nil {
 		t.Fatal(err)
 	}
@@ -1490,7 +1503,7 @@ func TestValidateInitConfigTreatsJUEXHomeTargetAsUserConfig(t *testing.T) {
 	juexHome := filepath.Join(home, "custom-juex")
 	t.Setenv("JUEX_HOME", juexHome)
 	target := filepath.Join(juexHome, "juex.yaml")
-	if err := writeTextFile(target, `model: openai:gpt-4.1
+	if err := writeTextFile(target, `models: [openai:gpt-4.1]
 providers:
   - id: openai
     base_url: https://example.invalid
@@ -1685,7 +1698,7 @@ func TestDoctorConfigCheckDistinguishesDefaultAndInstanceHomePaths(t *testing.T)
 		t.Fatal(err)
 	}
 	instancePath := filepath.Join(instanceHome, "juex.yaml")
-	if err := writeTextFile(instancePath, "model: openai:gpt-4.1\n"); err != nil {
+	if err := writeTextFile(instancePath, "models: [openai:gpt-4.1]\n"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("JUEX_HOME", instanceHome)
@@ -2234,7 +2247,7 @@ func writeJuexConfigFile(path, id, base, key, model string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	body := "model: " + id + ":" + model + "\n" +
+	body := "models: [" + id + ":" + model + "]\n" +
 		"providers:\n" +
 		"  - id: " + id + "\n" +
 		"    base_url: " + base + "\n" +

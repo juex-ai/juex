@@ -327,7 +327,7 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 	}
 	configState := fleet.AgentConfig{
 		Path:    "/workspace/.juex/juex.yaml",
-		Content: "model: local:test\n",
+		Content: "models: [local:test]\n",
 		Exists:  true,
 	}
 	backend := &fakeBackend{
@@ -525,7 +525,7 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 			name:       "config put",
 			method:     http.MethodPut,
 			path:       "/api/agents/aaaaaa/config",
-			body:       `{"content":"model: local:test\n"}`,
+			body:       `{"content":"models: [local:test]\n"}`,
 			wantStatus: http.StatusOK,
 			assert: func(t *testing.T, body []byte) {
 				var got struct {
