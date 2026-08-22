@@ -1907,7 +1907,9 @@ def _load_yaml_text(text: str, label: str) -> dict[str, Any]:
     node = yaml.compose(text)
     if node is not None:
         _reject_duplicate_yaml_keys(node, label, set())
-    value = yaml.safe_load(text) or {}
+    value = yaml.safe_load(text)
+    if value is None:
+        value = {}
     if not isinstance(value, dict):
         raise ValueError(f"{label} must contain a YAML mapping")
     if isinstance(node, yaml.nodes.MappingNode):
