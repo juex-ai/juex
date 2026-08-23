@@ -200,7 +200,7 @@ implementation decisions live.
 | `internal/fleet` | Registry-wide binding and health projection, per-Agent lifecycle locking, reconciliation, detached Agent start/stop/restart, logs, config replacement orchestration, intentional removal and GC policy | Browser routes/DTOs, native service registration, endpoint schemes, arbitrary user-authored Workspace content |
 | `internal/fleetservice` | Per-user launchd/systemd/Termux supervisor definitions and service-manager transactions | Individual Agent lifecycle, Fleet address policy, CLI presentation |
 | `internal/fleetweb` | Fleet HTTP/SSE transport, roster DTOs, directory-browser endpoints, verified Agent reverse proxy, embedded SPA fallback | Registry/process policy, single-Agent routes, frontend domain policy |
-| `internal/processidentity` | Cross-platform operating-system process start-time inspection by PID | Process liveness, Runtime identity schema, Fleet health or cleanup policy, process metrics |
+| `internal/processidentity` | Cross-platform operating-system process-incarnation fingerprint and start-time inspection by PID | Process liveness, Runtime identity schema, Fleet health or cleanup policy, process metrics |
 | `internal/processmetrics` | Cross-platform per-process RSS and cumulative CPU-time sampling, interval CPU derivation, process-identity baseline reset | Polling cadence, Agent health policy, HTTP DTOs, UI formatting, persistence |
 | `internal/extensions` | Ordered extension-root discovery, allowed-name filtering, same-name winner selection, source identity, resource references, trust requirement projection | Extension allowlist inheritance, Skill/MCP/hook/Observable parsing, runtime registration, Extension execution |
 | `internal/config` | YAML and user/Workspace config layering, direct local/HTTP(S) import resolution and Last-Known-Good cache, extension allowlist inheritance, runtime-environment layer ordering, Provider selection inputs, path and policy projection | Extension directory scanning, Dotenv syntax, mutable process-global environment ownership, canonical Provider Profile semantics, Turn behavior, Provider requests, general HTTP routing |
@@ -1734,9 +1734,11 @@ be used. The resulting `Binding` publishes `runtime.json` explicitly after the
 HTTP server starts and conditionally removes only its own runtime record on
 close. Runtime ownership includes agent id, a cryptographically random process
 instance id, PID, endpoint, runtime start time, an optional operating-system
-process start time, and the serving binary version. Endpoint obtains the
-process start time through `internal/processidentity` and omits it when the
-platform cannot provide one. The process start time and version participate in
+process fingerprint, and the serving binary version. Endpoint obtains the
+opaque fingerprint through `internal/processidentity` and omits it when the
+platform cannot provide one. Linux fingerprints combine the kernel boot ID
+with raw process start ticks, so wall-clock adjustments cannot change a live
+process identity. The process fingerprint and version participate in
 identity comparison only when both sides provide them, preserving
 interoperability with older runtime records.
 

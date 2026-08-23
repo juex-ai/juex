@@ -38,13 +38,13 @@ type addressSnapshot struct {
 }
 
 type Runtime struct {
-	AgentID          string     `json:"agent_id"`
-	InstanceID       string     `json:"instance_id"`
-	PID              int        `json:"pid"`
-	Endpoint         string     `json:"endpoint"`
-	StartedAt        time.Time  `json:"started_at"`
-	ProcessStartedAt *time.Time `json:"process_started_at,omitempty"`
-	BinaryVersion    string     `json:"binary_version,omitempty"`
+	AgentID         string    `json:"agent_id"`
+	InstanceID      string    `json:"instance_id"`
+	PID             int       `json:"pid"`
+	Endpoint        string    `json:"endpoint"`
+	StartedAt       time.Time `json:"started_at"`
+	ProcessIdentity string    `json:"process_identity,omitempty"`
+	BinaryVersion   string    `json:"binary_version,omitempty"`
 }
 
 func (r Runtime) Matches(other Runtime) bool {
@@ -80,16 +80,16 @@ type Maintenance struct {
 }
 
 type listenDependencies struct {
-	listen           func(network, address string) (net.Listener, error)
-	dial             func(ctx context.Context, network, address string) (net.Conn, error)
-	lstat            func(string) (os.FileInfo, error)
-	remove           func(string) error
-	chmod            func(string, os.FileMode) error
-	now              func() time.Time
-	pid              func() int
-	processStartedAt func(int) (time.Time, error)
-	instanceID       func() (string, error)
-	lock             func(string) (*homestore.Lock, error)
+	listen          func(network, address string) (net.Listener, error)
+	dial            func(ctx context.Context, network, address string) (net.Conn, error)
+	lstat           func(string) (os.FileInfo, error)
+	remove          func(string) error
+	chmod           func(string, os.FileMode) error
+	now             func() time.Time
+	pid             func() int
+	processIdentity func(int) (string, error)
+	instanceID      func() (string, error)
+	lock            func(string) (*homestore.Lock, error)
 }
 
 func defaultListenDependencies() listenDependencies {
@@ -99,12 +99,12 @@ func defaultListenDependencies() listenDependencies {
 			var dialer net.Dialer
 			return dialer.DialContext(ctx, network, address)
 		},
-		lstat:            os.Lstat,
-		remove:           os.Remove,
-		chmod:            os.Chmod,
-		now:              time.Now,
-		pid:              os.Getpid,
-		processStartedAt: processidentity.StartedAt,
+		lstat:           os.Lstat,
+		remove:          os.Remove,
+		chmod:           os.Chmod,
+		now:             time.Now,
+		pid:             os.Getpid,
+		processIdentity: processidentity.Fingerprint,
 		instanceID: func() (string, error) {
 			var value [16]byte
 			if _, err := rand.Read(value[:]); err != nil {
@@ -167,7 +167,7 @@ func listenWithDependencies(ctx context.Context, address AddressView, deps liste
 		return nil, fmt.Errorf("endpoint: generate runtime instance identity: %w", err)
 	}
 	pid := deps.pid()
-	processStartedAt, processStartErr := deps.processStartedAt(pid)
+	processFingerprint, processIdentityErr := deps.processIdentity(pid)
 	runtimeState := Runtime{
 		AgentID:    resolved.id,
 		InstanceID: instanceID,
@@ -175,9 +175,8 @@ func listenWithDependencies(ctx context.Context, address AddressView, deps liste
 		Endpoint:   target.URI(),
 		StartedAt:  deps.now().UTC().Round(0),
 	}
-	if processStartErr == nil && !processStartedAt.IsZero() {
-		processStartedAt = processStartedAt.UTC().Round(0)
-		runtimeState.ProcessStartedAt = &processStartedAt
+	if processIdentityErr == nil {
+		runtimeState.ProcessIdentity = strings.TrimSpace(processFingerprint)
 	}
 	return &Binding{
 		listener:       listener,
@@ -446,8 +445,7 @@ func readRuntime(address addressSnapshot) (Runtime, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return Runtime{}, fmt.Errorf("endpoint: decode %s: %w", path, err)
 	}
-	if state.AgentID == "" || state.InstanceID == "" || state.PID <= 0 || state.StartedAt.IsZero() ||
-		(state.ProcessStartedAt != nil && state.ProcessStartedAt.IsZero()) {
+	if state.AgentID == "" || state.InstanceID == "" || state.PID <= 0 || state.StartedAt.IsZero() {
 		return Runtime{}, fmt.Errorf("endpoint: %s contains invalid process metadata", path)
 	}
 	if state.AgentID != address.id {
@@ -502,9 +500,9 @@ func sameRuntime(left, right Runtime) bool {
 		left.PID == right.PID &&
 		left.Endpoint == right.Endpoint &&
 		left.StartedAt.Equal(right.StartedAt) &&
-		(left.ProcessStartedAt == nil ||
-			right.ProcessStartedAt == nil ||
-			left.ProcessStartedAt.Equal(*right.ProcessStartedAt)) &&
+		(left.ProcessIdentity == "" ||
+			right.ProcessIdentity == "" ||
+			left.ProcessIdentity == right.ProcessIdentity) &&
 		(left.BinaryVersion == "" ||
 			right.BinaryVersion == "" ||
 			left.BinaryVersion == right.BinaryVersion)

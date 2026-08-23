@@ -118,7 +118,7 @@ func (m *Manager) inspectStatus(ctx context.Context, entry agentstate.RegistryEn
 		status.RuntimeHealth = RuntimeHealthy
 	case processReplaced && status.EndpointMatched:
 		status.RuntimeHealth = RuntimeAmbiguous
-		status.Problem = appendProblem(status.Problem, "process start identity conflicts with exact endpoint identity")
+		status.Problem = appendProblem(status.Problem, "process identity conflicts with exact endpoint identity")
 	case processReplaced && !status.EndpointMatched:
 		status.RuntimeHealth = RuntimeUnhealthy
 		status.Problem = appendProblem(status.Problem, "recorded PID is now owned by a different process")

@@ -20,38 +20,69 @@ func StartedAt(pid int) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
+	startTicks, err := parseLinuxProcessStartTicks(pid, stat)
+	if err != nil {
+		return time.Time{}, err
+	}
 	procStat, err := os.ReadFile("/proc/stat")
 	if err != nil {
 		return time.Time{}, err
 	}
-	return parseLinuxProcessStartedAt(pid, stat, procStat)
+	return linuxProcessStartedAt(startTicks, procStat)
 }
 
-func parseLinuxProcessStartedAt(pid int, stat, procStat []byte) (time.Time, error) {
+// Fingerprint returns a stable process-incarnation identity for pid. It uses
+// kernel-relative start ticks and the boot ID, so wall-clock adjustments cannot
+// change the identity of a running process.
+func Fingerprint(pid int) (string, error) {
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return "", err
+	}
+	startTicks, err := parseLinuxProcessStartTicks(pid, stat)
+	if err != nil {
+		return "", err
+	}
+	bootID, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return "", err
+	}
+	identity := strings.TrimSpace(string(bootID))
+	if identity == "" {
+		return "", fmt.Errorf("parse Linux boot ID: empty value")
+	}
+	return formatLinuxFingerprint(identity, startTicks), nil
+}
+
+func parseLinuxProcessStartTicks(pid int, stat []byte) (uint64, error) {
 	closingParen := strings.LastIndexByte(string(stat), ')')
 	if closingParen < 0 {
-		return time.Time{}, fmt.Errorf("parse /proc/%d/stat: missing command terminator", pid)
+		return 0, fmt.Errorf("parse /proc/%d/stat: missing command terminator", pid)
 	}
 	fields := strings.Fields(string(stat[closingParen+1:]))
 	// fields starts at proc field 3 (state), so field 22 (starttime) is index 19.
 	if len(fields) <= 19 {
-		return time.Time{}, fmt.Errorf("parse /proc/%d/stat: missing start time", pid)
+		return 0, fmt.Errorf("parse /proc/%d/stat: missing start time", pid)
 	}
 	startTicks, err := strconv.ParseUint(fields[19], 10, 64)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("parse /proc/%d/stat start time: %w", pid, err)
+		return 0, fmt.Errorf("parse /proc/%d/stat start time: %w", pid, err)
 	}
+	return startTicks, nil
+}
 
+func linuxProcessStartedAt(startTicks uint64, procStat []byte) (time.Time, error) {
 	var bootSeconds int64
 	for _, line := range strings.Split(string(procStat), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 2 || fields[0] != "btime" {
 			continue
 		}
-		bootSeconds, err = strconv.ParseInt(fields[1], 10, 64)
+		parsedBootSeconds, err := strconv.ParseInt(fields[1], 10, 64)
 		if err != nil {
 			return time.Time{}, fmt.Errorf("parse /proc/stat boot time: %w", err)
 		}
+		bootSeconds = parsedBootSeconds
 		break
 	}
 	if bootSeconds == 0 {
@@ -59,4 +90,8 @@ func parseLinuxProcessStartedAt(pid int, stat, procStat []byte) (time.Time, erro
 	}
 	startDuration := time.Duration(startTicks) * time.Second / linuxUserHZ
 	return time.Unix(bootSeconds, 0).Add(startDuration).UTC(), nil
+}
+
+func formatLinuxFingerprint(bootID string, startTicks uint64) string {
+	return fmt.Sprintf("linux:%s:%d", bootID, startTicks)
 }

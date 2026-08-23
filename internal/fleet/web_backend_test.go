@@ -88,12 +88,12 @@ func TestEndpointRejectsPIDReuseAfterHealthyStatusSnapshot(t *testing.T) {
 	entry := registryEntry("aaaaaa", "agent")
 	recordedProcessStart := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
 	runtimeState := endpoint.Runtime{
-		AgentID:          entry.ID,
-		InstanceID:       "instance-one",
-		PID:              42,
-		Endpoint:         "tcp://127.0.0.1:43123",
-		StartedAt:        recordedProcessStart.Add(time.Second),
-		ProcessStartedAt: &recordedProcessStart,
+		AgentID:         entry.ID,
+		InstanceID:      "instance-one",
+		PID:             42,
+		Endpoint:        "tcp://127.0.0.1:43123",
+		StartedAt:       recordedProcessStart.Add(time.Second),
+		ProcessIdentity: "recorded-process",
 	}
 	deps := defaultDependencies()
 	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
@@ -107,11 +107,11 @@ func TestEndpointRejectsPIDReuseAfterHealthyStatusSnapshot(t *testing.T) {
 	}
 	deps.processAlive = func(int) (bool, error) { return true, nil }
 	var processReads atomic.Int32
-	deps.processStartedAt = func(int) (time.Time, error) {
+	deps.processIdentity = func(int) (string, error) {
 		if processReads.Add(1) == 1 {
-			return recordedProcessStart, nil
+			return "recorded-process", nil
 		}
-		return recordedProcessStart.Add(time.Minute), nil
+		return "reused-process", nil
 	}
 	deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
 	manager := &Manager{homeDir: t.TempDir(), probeTimeout: time.Second, deps: deps}

@@ -6,9 +6,9 @@ This package owns registry-wide resident-agent health and lifecycle policy.
   projects the serving binary version from runtime metadata, and adds
   best-effort RSS and interval CPU usage only after the process and endpoint
   identity are verified healthy. When a PID is alive but its operating-system
-  start time differs from the runtime record, Fleet classifies the record as
-  stale only when the endpoint is not the exact recorded Runtime Instance;
-  missing or unreadable process identity remains ambiguous.
+  process fingerprint differs from the runtime record, Fleet classifies the
+  record as stale only when the endpoint is not the exact recorded Runtime
+  Instance; missing or unreadable process identity remains ambiguous.
 - `Add` registers an existing absolute workspace through the standard marker
   rules, applies optional name/autostart metadata, and can start it immediately.
 - `SetEnabled` makes disable reversible: disable stops before persisting the

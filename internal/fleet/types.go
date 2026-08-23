@@ -237,7 +237,7 @@ type dependencies struct {
 	removeRuntime       func(agentstate.AgentAddress, endpoint.Runtime) error
 	acquireMaintenance  func(agentstate.AgentAddress) (maintenanceGuard, error)
 	processAlive        func(int) (bool, error)
-	processStartedAt    func(int) (time.Time, error)
+	processIdentity     func(int) (string, error)
 	probe               func(context.Context, endpoint.Runtime) error
 	requestShutdown     func(context.Context, endpoint.Runtime) error
 	requestRestart      func(context.Context, endpoint.Runtime) (bool, error)
@@ -270,7 +270,7 @@ func defaultDependencies() dependencies {
 			return endpoint.AcquireMaintenance(address)
 		},
 		processAlive:        processExists,
-		processStartedAt:    processidentity.StartedAt,
+		processIdentity:     processidentity.Fingerprint,
 		probe:               endpoint.Probe,
 		requestShutdown:     endpoint.RequestShutdown,
 		requestRestart:      endpoint.RequestRestart,

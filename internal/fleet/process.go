@@ -27,15 +27,15 @@ func (m *Manager) inspectRecordedProcess(runtimeState endpoint.Runtime) recorded
 		return recordedProcessInspection{Err: fmt.Errorf("check process %d: %w", runtimeState.PID, err)}
 	}
 	result := recordedProcessInspection{Alive: alive, ExistenceKnown: true}
-	if !alive || runtimeState.ProcessStartedAt == nil {
+	if !alive || runtimeState.ProcessIdentity == "" {
 		return result
 	}
-	startedAt, err := m.deps.processStartedAt(runtimeState.PID)
+	identity, err := m.deps.processIdentity(runtimeState.PID)
 	if err != nil {
-		result.Err = fmt.Errorf("check process %d start time: %w", runtimeState.PID, err)
+		result.Err = fmt.Errorf("check process %d identity: %w", runtimeState.PID, err)
 		return result
 	}
-	if startedAt.Equal(*runtimeState.ProcessStartedAt) {
+	if identity == runtimeState.ProcessIdentity {
 		result.Identity = processIdentityMatched
 	} else {
 		result.Identity = processIdentityReplaced

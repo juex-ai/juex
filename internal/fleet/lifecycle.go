@@ -458,7 +458,7 @@ func (m *Manager) cleanStaleRuntimeUnderMaintenance(
 	}
 	processReplaced := process.Identity == processIdentityReplaced
 	if process.Alive && !processReplaced {
-		reason := "recorded process is alive and has no matching process start identity"
+		reason := "recorded process is alive and has no matching process identity"
 		if process.Identity == processIdentityMatched {
 			reason = "recorded process is still alive"
 		} else if process.Err != nil {

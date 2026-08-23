@@ -23,3 +23,17 @@ func TestStartedAtCurrentProcessIsStable(t *testing.T) {
 		t.Fatalf("process start time = %v, want within the last 24 hours", first)
 	}
 }
+
+func TestFingerprintCurrentProcessIsStable(t *testing.T) {
+	first, err := Fingerprint(os.Getpid())
+	if err != nil {
+		t.Skipf("process identity unavailable: %v", err)
+	}
+	second, err := Fingerprint(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == "" || first != second {
+		t.Fatalf("process fingerprints = %q and %q, want one stable non-empty identity", first, second)
+	}
+}

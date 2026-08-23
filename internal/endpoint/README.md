@@ -25,7 +25,7 @@ listener, including the identity and shutdown routes. `internal/fleet`
 consumes `Probe`, `RequestShutdown`, `AcquireMaintenance`, and `Target`
 instead of branching on endpoint schemes or signaling recorded PIDs.
 
-New runtime records include the operating-system process start time when
-`internal/processidentity` can provide it. Missing process-start metadata stays
-compatible with older records, and a collection failure never prevents an
-Agent from starting.
+New runtime records include an opaque operating-system process-incarnation
+fingerprint when `internal/processidentity` can provide it. Missing process
+identity stays compatible with older records, and a collection failure never
+prevents an Agent from starting.

@@ -250,13 +250,13 @@ func TestFleetStartRecoversRuntimeWhosePIDWasReused(t *testing.T) {
 	}
 	oldProcessStart := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	staleRuntime := endpoint.Runtime{
-		AgentID:          agentID,
-		InstanceID:       "stale-instance",
-		PID:              os.Getpid(),
-		Endpoint:         staleEndpoint,
-		StartedAt:        oldProcessStart.Add(time.Second),
-		ProcessStartedAt: &oldProcessStart,
-		BinaryVersion:    "stale",
+		AgentID:         agentID,
+		InstanceID:      "stale-instance",
+		PID:             os.Getpid(),
+		Endpoint:        staleEndpoint,
+		StartedAt:       oldProcessStart.Add(time.Second),
+		ProcessIdentity: "stale-process",
+		BinaryVersion:   "stale",
 	}
 	data, err := json.MarshalIndent(staleRuntime, "", "  ")
 	if err != nil {
@@ -286,8 +286,8 @@ func TestFleetStartRecoversRuntimeWhosePIDWasReused(t *testing.T) {
 	if recovered.InstanceID == staleRuntime.InstanceID || recovered.PID == staleRuntime.PID {
 		t.Fatalf("runtime was not replaced: stale=%+v recovered=%+v", staleRuntime, recovered)
 	}
-	if recovered.ProcessStartedAt == nil || recovered.ProcessStartedAt.IsZero() {
-		t.Fatalf("recovered runtime omitted process start identity: %+v", recovered)
+	if recovered.ProcessIdentity == "" {
+		t.Fatalf("recovered runtime omitted process identity: %+v", recovered)
 	}
 	probeFleetRuntime(t, recovered)
 	waitFleetHealth(t, binary, environment, agentID, fleet.RuntimeHealthy)

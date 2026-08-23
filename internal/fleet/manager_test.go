@@ -140,12 +140,12 @@ func TestStatusClassifiesReusedRuntimePIDAsStale(t *testing.T) {
 	entry := registryEntry("aaaaaa", "agent")
 	recordedProcessStart := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
 	runtimeState := endpoint.Runtime{
-		AgentID:          entry.ID,
-		InstanceID:       "instance-one",
-		PID:              42,
-		Endpoint:         "tcp://127.0.0.1:43123",
-		StartedAt:        recordedProcessStart.Add(time.Second),
-		ProcessStartedAt: &recordedProcessStart,
+		AgentID:         entry.ID,
+		InstanceID:      "instance-one",
+		PID:             42,
+		Endpoint:        "tcp://127.0.0.1:43123",
+		StartedAt:       recordedProcessStart.Add(time.Second),
+		ProcessIdentity: "recorded-process",
 	}
 	deps := defaultDependencies()
 	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
@@ -158,8 +158,8 @@ func TestStatusClassifiesReusedRuntimePIDAsStale(t *testing.T) {
 		return runtimeState, nil
 	}
 	deps.processAlive = func(int) (bool, error) { return true, nil }
-	deps.processStartedAt = func(int) (time.Time, error) {
-		return recordedProcessStart.Add(time.Minute), nil
+	deps.processIdentity = func(int) (string, error) {
+		return "reused-process", nil
 	}
 	deps.probe = func(context.Context, endpoint.Runtime) error {
 		return &endpoint.IdentityMismatchError{
@@ -189,12 +189,12 @@ func TestStartCleansReusedPIDRuntimeBeforeSpawning(t *testing.T) {
 	entry := registryEntry("aaaaaa", "agent")
 	recordedProcessStart := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
 	runtimeState := endpoint.Runtime{
-		AgentID:          entry.ID,
-		InstanceID:       "instance-one",
-		PID:              42,
-		Endpoint:         "tcp://127.0.0.1:43123",
-		StartedAt:        recordedProcessStart.Add(time.Second),
-		ProcessStartedAt: &recordedProcessStart,
+		AgentID:         entry.ID,
+		InstanceID:      "instance-one",
+		PID:             42,
+		Endpoint:        "tcp://127.0.0.1:43123",
+		StartedAt:       recordedProcessStart.Add(time.Second),
+		ProcessIdentity: "recorded-process",
 	}
 	deps := defaultDependencies()
 	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
@@ -204,8 +204,8 @@ func TestStartCleansReusedPIDRuntimeBeforeSpawning(t *testing.T) {
 		return runtimeState, nil
 	}
 	deps.processAlive = func(int) (bool, error) { return true, nil }
-	deps.processStartedAt = func(int) (time.Time, error) {
-		return recordedProcessStart.Add(time.Minute), nil
+	deps.processIdentity = func(int) (string, error) {
+		return "reused-process", nil
 	}
 	deps.probe = func(context.Context, endpoint.Runtime) error {
 		return &endpoint.IdentityMismatchError{
@@ -255,20 +255,20 @@ func TestCleanupReusedPIDRequiresNonExactEndpoint(t *testing.T) {
 	entry := registryEntry("aaaaaa", "agent")
 	recordedProcessStart := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
 	runtimeState := endpoint.Runtime{
-		AgentID:          entry.ID,
-		InstanceID:       "instance-one",
-		PID:              42,
-		Endpoint:         "tcp://127.0.0.1:43123",
-		StartedAt:        recordedProcessStart.Add(time.Second),
-		ProcessStartedAt: &recordedProcessStart,
+		AgentID:         entry.ID,
+		InstanceID:      "instance-one",
+		PID:             42,
+		Endpoint:        "tcp://127.0.0.1:43123",
+		StartedAt:       recordedProcessStart.Add(time.Second),
+		ProcessIdentity: "recorded-process",
 	}
 	deps := defaultDependencies()
 	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
 		return runtimeState, nil
 	}
 	deps.processAlive = func(int) (bool, error) { return true, nil }
-	deps.processStartedAt = func(int) (time.Time, error) {
-		return recordedProcessStart.Add(time.Minute), nil
+	deps.processIdentity = func(int) (string, error) {
+		return "reused-process", nil
 	}
 	deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
 	deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
@@ -293,12 +293,12 @@ func TestStatusKeepsConflictingExactEndpointEvidenceAmbiguous(t *testing.T) {
 	entry := registryEntry("aaaaaa", "agent")
 	recordedProcessStart := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
 	runtimeState := endpoint.Runtime{
-		AgentID:          entry.ID,
-		InstanceID:       "instance-one",
-		PID:              42,
-		Endpoint:         "tcp://127.0.0.1:43123",
-		StartedAt:        recordedProcessStart.Add(time.Second),
-		ProcessStartedAt: &recordedProcessStart,
+		AgentID:         entry.ID,
+		InstanceID:      "instance-one",
+		PID:             42,
+		Endpoint:        "tcp://127.0.0.1:43123",
+		StartedAt:       recordedProcessStart.Add(time.Second),
+		ProcessIdentity: "recorded-process",
 	}
 	deps := defaultDependencies()
 	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
@@ -311,8 +311,8 @@ func TestStatusKeepsConflictingExactEndpointEvidenceAmbiguous(t *testing.T) {
 		return runtimeState, nil
 	}
 	deps.processAlive = func(int) (bool, error) { return true, nil }
-	deps.processStartedAt = func(int) (time.Time, error) {
-		return recordedProcessStart.Add(time.Minute), nil
+	deps.processIdentity = func(int) (string, error) {
+		return "reused-process", nil
 	}
 	deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
 	manager := &Manager{homeDir: t.TempDir(), probeTimeout: time.Second, deps: deps}
@@ -483,12 +483,12 @@ func TestStopCompletesWhenPIDIsReusedAfterShutdown(t *testing.T) {
 	entry := registryEntry("aaaaaa", "agent")
 	recordedProcessStart := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
 	runtimeState := endpoint.Runtime{
-		AgentID:          entry.ID,
-		InstanceID:       "instance-one",
-		PID:              42,
-		Endpoint:         "tcp://127.0.0.1:43123",
-		StartedAt:        recordedProcessStart.Add(time.Second),
-		ProcessStartedAt: &recordedProcessStart,
+		AgentID:         entry.ID,
+		InstanceID:      "instance-one",
+		PID:             42,
+		Endpoint:        "tcp://127.0.0.1:43123",
+		StartedAt:       recordedProcessStart.Add(time.Second),
+		ProcessIdentity: "recorded-process",
 	}
 	var shutdownRequested atomic.Bool
 	deps := defaultDependencies()
@@ -505,11 +505,11 @@ func TestStopCompletesWhenPIDIsReusedAfterShutdown(t *testing.T) {
 		return runtimeState, nil
 	}
 	deps.processAlive = func(int) (bool, error) { return true, nil }
-	deps.processStartedAt = func(int) (time.Time, error) {
+	deps.processIdentity = func(int) (string, error) {
 		if shutdownRequested.Load() {
-			return recordedProcessStart.Add(time.Minute), nil
+			return "reused-process", nil
 		}
-		return recordedProcessStart, nil
+		return "recorded-process", nil
 	}
 	deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
 	deps.requestShutdown = func(context.Context, endpoint.Runtime) error {
@@ -640,21 +640,21 @@ func TestServeRecoversReusedPIDRuntimeAndAutostartsAgent(t *testing.T) {
 	entry := registryEntryAtHome(home, "aaaaaa", "agent")
 	recordedProcessStart := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
 	staleRuntime := endpoint.Runtime{
-		AgentID:          entry.ID,
-		InstanceID:       "stale-instance",
-		PID:              42,
-		Endpoint:         "tcp://127.0.0.1:43123",
-		StartedAt:        recordedProcessStart.Add(time.Second),
-		ProcessStartedAt: &recordedProcessStart,
+		AgentID:         entry.ID,
+		InstanceID:      "stale-instance",
+		PID:             42,
+		Endpoint:        "tcp://127.0.0.1:43123",
+		StartedAt:       recordedProcessStart.Add(time.Second),
+		ProcessIdentity: "stale-process",
 	}
 	newProcessStart := recordedProcessStart.Add(2 * time.Minute)
 	newRuntime := endpoint.Runtime{
-		AgentID:          entry.ID,
-		InstanceID:       "new-instance",
-		PID:              84,
-		Endpoint:         "tcp://127.0.0.1:43124",
-		StartedAt:        newProcessStart.Add(time.Second),
-		ProcessStartedAt: &newProcessStart,
+		AgentID:         entry.ID,
+		InstanceID:      "new-instance",
+		PID:             84,
+		Endpoint:        "tcp://127.0.0.1:43124",
+		StartedAt:       newProcessStart.Add(time.Second),
+		ProcessIdentity: "new-process",
 	}
 	var removed atomic.Bool
 	var spawned atomic.Bool
@@ -676,11 +676,11 @@ func TestServeRecoversReusedPIDRuntimeAndAutostartsAgent(t *testing.T) {
 		}
 	}
 	deps.processAlive = func(pid int) (bool, error) { return pid == 42 || pid == 84, nil }
-	deps.processStartedAt = func(pid int) (time.Time, error) {
+	deps.processIdentity = func(pid int) (string, error) {
 		if pid == 84 {
-			return newProcessStart, nil
+			return "new-process", nil
 		}
-		return recordedProcessStart.Add(time.Minute), nil
+		return "reused-process", nil
 	}
 	deps.probe = func(_ context.Context, got endpoint.Runtime) error {
 		if got.Matches(newRuntime) {

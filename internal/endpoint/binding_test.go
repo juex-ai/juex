@@ -141,7 +141,7 @@ func TestReadRuntimeChecksExplicitAddressIdentity(t *testing.T) {
 	}
 }
 
-func TestReadRuntimeRejectsZeroProcessStartIdentity(t *testing.T) {
+func TestReadRuntimeAcceptsLegacyRecordWithoutProcessIdentity(t *testing.T) {
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
@@ -152,20 +152,22 @@ func TestReadRuntimeRejectsZeroProcessStartIdentity(t *testing.T) {
 		stateDir: stateDir,
 		lockPath: filepath.Join(root, "guard"),
 	}
-	zero := time.Time{}
 	runtimeState := Runtime{
-		AgentID:          address.id,
-		InstanceID:       "instance",
-		PID:              42,
-		Endpoint:         "tcp://127.0.0.1:43123",
-		StartedAt:        time.Now().UTC(),
-		ProcessStartedAt: &zero,
+		AgentID:    address.id,
+		InstanceID: "instance",
+		PID:        42,
+		Endpoint:   "tcp://127.0.0.1:43123",
+		StartedAt:  time.Now().UTC(),
 	}
 	if err := writeRuntime(filepath.Join(stateDir, runtimeFileName), runtimeState); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadRuntime(address); err == nil || !strings.Contains(err.Error(), "invalid process metadata") {
-		t.Fatalf("ReadRuntime() error = %v, want invalid process metadata", err)
+	got, err := ReadRuntime(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Matches(runtimeState) || got.ProcessIdentity != "" {
+		t.Fatalf("runtime = %+v, want legacy runtime %+v", got, runtimeState)
 	}
 }
 
@@ -238,15 +240,13 @@ func TestListenPublishesReachableRuntime(t *testing.T) {
 		runtimeState.StartedAt.Location() != time.UTC {
 		t.Fatalf("runtime metadata = %+v", runtimeState)
 	}
-	expectedProcessStart, processStartErr := processidentity.StartedAt(os.Getpid())
-	if processStartErr != nil {
-		if runtimeState.ProcessStartedAt != nil {
-			t.Fatalf("runtime process start identity = %+v, want omitted: %v", runtimeState.ProcessStartedAt, processStartErr)
+	expectedProcessIdentity, processIdentityErr := processidentity.Fingerprint(os.Getpid())
+	if processIdentityErr != nil {
+		if runtimeState.ProcessIdentity != "" {
+			t.Fatalf("runtime process identity = %q, want omitted: %v", runtimeState.ProcessIdentity, processIdentityErr)
 		}
-	} else if runtimeState.ProcessStartedAt == nil ||
-		!runtimeState.ProcessStartedAt.Equal(expectedProcessStart) ||
-		runtimeState.ProcessStartedAt.Location() != time.UTC {
-		t.Fatalf("runtime process start identity = %+v, want %v", runtimeState.ProcessStartedAt, expectedProcessStart)
+	} else if runtimeState.ProcessIdentity != expectedProcessIdentity {
+		t.Fatalf("runtime process identity = %q, want %q", runtimeState.ProcessIdentity, expectedProcessIdentity)
 	}
 	if runtimeState.AgentID != filepath.Base(agentDir) || runtimeState.InstanceID == "" {
 		t.Fatalf("runtime identity = %+v", runtimeState)
@@ -296,7 +296,7 @@ func TestRuntimeMatchesTreatsMissingVersionAsCompatible(t *testing.T) {
 	}
 }
 
-func TestRuntimeMatchesTreatsProcessStartIdentityAsOptionalCompatibilityMetadata(t *testing.T) {
+func TestRuntimeMatchesTreatsProcessIdentityAsOptionalCompatibilityMetadata(t *testing.T) {
 	base := Runtime{
 		AgentID:    "aaaaaa",
 		InstanceID: "instance",
@@ -304,30 +304,28 @@ func TestRuntimeMatchesTreatsProcessStartIdentityAsOptionalCompatibilityMetadata
 		Endpoint:   "tcp://127.0.0.1:1234",
 		StartedAt:  time.Date(2026, 7, 18, 4, 0, 1, 0, time.UTC),
 	}
-	firstStart := time.Date(2026, 7, 18, 4, 0, 0, 0, time.UTC)
-	secondStart := firstStart.Add(time.Minute)
 	first := base
-	first.ProcessStartedAt = &firstStart
+	first.ProcessIdentity = "boot-a:100"
 	same := base
-	same.ProcessStartedAt = &firstStart
+	same.ProcessIdentity = "boot-a:100"
 	second := base
-	second.ProcessStartedAt = &secondStart
+	second.ProcessIdentity = "boot-a:200"
 
 	if !base.Matches(first) || !first.Matches(base) {
-		t.Fatal("missing process start identity must remain compatible")
+		t.Fatal("missing process identity must remain compatible")
 	}
 	if !first.Matches(same) {
-		t.Fatal("equal process start identities must match")
+		t.Fatal("equal process identities must match")
 	}
 	if first.Matches(second) {
-		t.Fatal("different non-empty process start identities must not match")
+		t.Fatal("different non-empty process identities must not match")
 	}
 }
 
-func TestListenOmitsUnavailableProcessStartIdentity(t *testing.T) {
+func TestListenOmitsUnavailableProcessIdentity(t *testing.T) {
 	deps := defaultListenDependencies()
-	deps.processStartedAt = func(int) (time.Time, error) {
-		return time.Time{}, errors.New("unavailable")
+	deps.processIdentity = func(int) (string, error) {
+		return "", errors.New("unavailable")
 	}
 	binding, err := listenWithDependencies(
 		context.Background(),
@@ -338,8 +336,8 @@ func TestListenOmitsUnavailableProcessStartIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = binding.Close() })
-	if binding.Runtime().ProcessStartedAt != nil {
-		t.Fatalf("process start identity = %v, want omitted", binding.Runtime().ProcessStartedAt)
+	if binding.Runtime().ProcessIdentity != "" {
+		t.Fatalf("process identity = %q, want omitted", binding.Runtime().ProcessIdentity)
 	}
 }
 
