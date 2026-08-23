@@ -1,12 +1,14 @@
 //go:build freebsd || netbsd || openbsd || dragonfly || solaris
 
-package session
+package processidentity
 
 import (
 	"fmt"
 	"time"
 )
 
-func processStartedAt(pid int) (time.Time, error) {
+// StartedAt reports that this platform does not expose a supported process
+// start identity.
+func StartedAt(pid int) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("process start time is unavailable for pid %d on this platform", pid)
 }

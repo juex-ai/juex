@@ -12,6 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/homestore"
+	"github.com/juex-ai/juex/internal/processidentity"
 	"github.com/juex-ai/juex/internal/processmetrics"
 	"github.com/juex-ai/juex/internal/statusapi"
 )
@@ -236,6 +237,7 @@ type dependencies struct {
 	removeRuntime       func(agentstate.AgentAddress, endpoint.Runtime) error
 	acquireMaintenance  func(agentstate.AgentAddress) (maintenanceGuard, error)
 	processAlive        func(int) (bool, error)
+	processStartedAt    func(int) (time.Time, error)
 	probe               func(context.Context, endpoint.Runtime) error
 	requestShutdown     func(context.Context, endpoint.Runtime) error
 	requestRestart      func(context.Context, endpoint.Runtime) (bool, error)
@@ -268,6 +270,7 @@ func defaultDependencies() dependencies {
 			return endpoint.AcquireMaintenance(address)
 		},
 		processAlive:        processExists,
+		processStartedAt:    processidentity.StartedAt,
 		probe:               endpoint.Probe,
 		requestShutdown:     endpoint.RequestShutdown,
 		requestRestart:      endpoint.RequestRestart,

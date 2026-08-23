@@ -1,6 +1,6 @@
 //go:build linux
 
-package session
+package processidentity
 
 import (
 	"fmt"
@@ -14,11 +14,20 @@ import (
 // fixed at 100 ticks per second regardless of the kernel timer frequency.
 const linuxUserHZ = 100
 
-func processStartedAt(pid int) (time.Time, error) {
+// StartedAt returns the operating system's start time for pid.
+func StartedAt(pid int) (time.Time, error) {
 	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
 		return time.Time{}, err
 	}
+	procStat, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parseLinuxProcessStartedAt(pid, stat, procStat)
+}
+
+func parseLinuxProcessStartedAt(pid int, stat, procStat []byte) (time.Time, error) {
 	closingParen := strings.LastIndexByte(string(stat), ')')
 	if closingParen < 0 {
 		return time.Time{}, fmt.Errorf("parse /proc/%d/stat: missing command terminator", pid)
@@ -33,10 +42,6 @@ func processStartedAt(pid int) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("parse /proc/%d/stat start time: %w", pid, err)
 	}
 
-	procStat, err := os.ReadFile("/proc/stat")
-	if err != nil {
-		return time.Time{}, err
-	}
 	var bootSeconds int64
 	for _, line := range strings.Split(string(procStat), "\n") {
 		fields := strings.Fields(line)

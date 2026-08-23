@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/juex-ai/juex/internal/processidentity"
 )
 
 const sessionLockFile = "session.lock"
@@ -174,7 +176,7 @@ func clearDeadProcessLock(path string) (bool, error) {
 	if info.StartedAt.IsZero() {
 		return false, nil
 	}
-	startedAt, err := processStartedAt(info.PID)
+	startedAt, err := processidentity.StartedAt(info.PID)
 	if err != nil {
 		return false, nil
 	}

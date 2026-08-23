@@ -1,6 +1,6 @@
 //go:build windows
 
-package session
+package processidentity
 
 import (
 	"fmt"
@@ -9,7 +9,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func processStartedAt(pid int) (time.Time, error) {
+// StartedAt returns the operating system's start time for pid.
+func StartedAt(pid int) (time.Time, error) {
 	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("open process %d: %w", pid, err)

@@ -1,6 +1,6 @@
 //go:build darwin
 
-package session
+package processidentity
 
 import (
 	"fmt"
@@ -9,7 +9,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func processStartedAt(pid int) (time.Time, error) {
+// StartedAt returns the operating system's start time for pid.
+func StartedAt(pid int) (time.Time, error) {
 	proc, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("read process %d start time: %w", pid, err)

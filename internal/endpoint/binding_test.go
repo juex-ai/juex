@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/juex-ai/juex/internal/processidentity"
 )
 
 type testAddress struct {
@@ -139,6 +141,34 @@ func TestReadRuntimeChecksExplicitAddressIdentity(t *testing.T) {
 	}
 }
 
+func TestReadRuntimeRejectsZeroProcessStartIdentity(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	address := testAddress{
+		id:       "abcdef",
+		stateDir: stateDir,
+		lockPath: filepath.Join(root, "guard"),
+	}
+	zero := time.Time{}
+	runtimeState := Runtime{
+		AgentID:          address.id,
+		InstanceID:       "instance",
+		PID:              42,
+		Endpoint:         "tcp://127.0.0.1:43123",
+		StartedAt:        time.Now().UTC(),
+		ProcessStartedAt: &zero,
+	}
+	if err := writeRuntime(filepath.Join(stateDir, runtimeFileName), runtimeState); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadRuntime(address); err == nil || !strings.Contains(err.Error(), "invalid process metadata") {
+		t.Fatalf("ReadRuntime() error = %v, want invalid process metadata", err)
+	}
+}
+
 func TestListenPublishesReachableRuntime(t *testing.T) {
 	agentDir := newEndpointAgentDir(t)
 	address := addressForAgentDir(agentDir)
@@ -201,12 +231,22 @@ func TestListenPublishesReachableRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtimeState != binding.Runtime() {
+	if !runtimeState.Matches(binding.Runtime()) {
 		t.Fatalf("runtime = %+v, want %+v", runtimeState, binding.Runtime())
 	}
 	if runtimeState.PID != os.Getpid() || runtimeState.StartedAt.IsZero() ||
 		runtimeState.StartedAt.Location() != time.UTC {
 		t.Fatalf("runtime metadata = %+v", runtimeState)
+	}
+	expectedProcessStart, processStartErr := processidentity.StartedAt(os.Getpid())
+	if processStartErr != nil {
+		if runtimeState.ProcessStartedAt != nil {
+			t.Fatalf("runtime process start identity = %+v, want omitted: %v", runtimeState.ProcessStartedAt, processStartErr)
+		}
+	} else if runtimeState.ProcessStartedAt == nil ||
+		!runtimeState.ProcessStartedAt.Equal(expectedProcessStart) ||
+		runtimeState.ProcessStartedAt.Location() != time.UTC {
+		t.Fatalf("runtime process start identity = %+v, want %v", runtimeState.ProcessStartedAt, expectedProcessStart)
 	}
 	if runtimeState.AgentID != filepath.Base(agentDir) || runtimeState.InstanceID == "" {
 		t.Fatalf("runtime identity = %+v", runtimeState)
@@ -253,6 +293,53 @@ func TestRuntimeMatchesTreatsMissingVersionAsCompatible(t *testing.T) {
 	}
 	if current.Matches(other) {
 		t.Fatal("different non-empty binary versions must not match")
+	}
+}
+
+func TestRuntimeMatchesTreatsProcessStartIdentityAsOptionalCompatibilityMetadata(t *testing.T) {
+	base := Runtime{
+		AgentID:    "aaaaaa",
+		InstanceID: "instance",
+		PID:        42,
+		Endpoint:   "tcp://127.0.0.1:1234",
+		StartedAt:  time.Date(2026, 7, 18, 4, 0, 1, 0, time.UTC),
+	}
+	firstStart := time.Date(2026, 7, 18, 4, 0, 0, 0, time.UTC)
+	secondStart := firstStart.Add(time.Minute)
+	first := base
+	first.ProcessStartedAt = &firstStart
+	same := base
+	same.ProcessStartedAt = &firstStart
+	second := base
+	second.ProcessStartedAt = &secondStart
+
+	if !base.Matches(first) || !first.Matches(base) {
+		t.Fatal("missing process start identity must remain compatible")
+	}
+	if !first.Matches(same) {
+		t.Fatal("equal process start identities must match")
+	}
+	if first.Matches(second) {
+		t.Fatal("different non-empty process start identities must not match")
+	}
+}
+
+func TestListenOmitsUnavailableProcessStartIdentity(t *testing.T) {
+	deps := defaultListenDependencies()
+	deps.processStartedAt = func(int) (time.Time, error) {
+		return time.Time{}, errors.New("unavailable")
+	}
+	binding, err := listenWithDependencies(
+		context.Background(),
+		addressForAgentDir(newEndpointAgentDir(t)),
+		deps,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = binding.Close() })
+	if binding.Runtime().ProcessStartedAt != nil {
+		t.Fatalf("process start identity = %v, want omitted", binding.Runtime().ProcessStartedAt)
 	}
 }
 
@@ -436,7 +523,7 @@ func TestCloseDoesNotRemoveReplacedRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != replacement {
+	if !got.Matches(replacement) {
 		t.Fatalf("runtime = %+v, want replacement %+v", got, replacement)
 	}
 }

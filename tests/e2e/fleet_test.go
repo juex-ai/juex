@@ -229,6 +229,70 @@ func TestFleetStatusReportsRunningBinaryVersionSkew(t *testing.T) {
 	}
 }
 
+func TestFleetStartRecoversRuntimeWhosePIDWasReused(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiled-binary Fleet stale-runtime recovery is slow")
+	}
+	binary := buildJuex(t)
+	home := t.TempDir()
+	workspace := t.TempDir()
+	agentID := "aaaaaa"
+	agentAddress := writeFleetE2EAgent(t, home, workspace, agentID)
+	environment := fleetE2EEnvironment(home)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleEndpoint := "tcp://" + listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	oldProcessStart := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	staleRuntime := endpoint.Runtime{
+		AgentID:          agentID,
+		InstanceID:       "stale-instance",
+		PID:              os.Getpid(),
+		Endpoint:         staleEndpoint,
+		StartedAt:        oldProcessStart.Add(time.Second),
+		ProcessStartedAt: &oldProcessStart,
+		BinaryVersion:    "stale",
+	}
+	data, err := json.MarshalIndent(staleRuntime, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(filepath.Join(agentAddress.StateDir(), "runtime.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		runtimeState, err := endpoint.ReadRuntime(agentAddress)
+		if err != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_ = endpoint.RequestShutdown(ctx, runtimeState)
+		cancel()
+		process, _ := os.FindProcess(runtimeState.PID)
+		_ = process.Kill()
+	})
+
+	if stdout, stderr, err := runFleetE2E(binary, environment, "", "start", agentID); err != nil {
+		t.Fatalf("fleet start: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	recovered := waitFleetRuntime(t, agentAddress)
+	if recovered.InstanceID == staleRuntime.InstanceID || recovered.PID == staleRuntime.PID {
+		t.Fatalf("runtime was not replaced: stale=%+v recovered=%+v", staleRuntime, recovered)
+	}
+	if recovered.ProcessStartedAt == nil || recovered.ProcessStartedAt.IsZero() {
+		t.Fatalf("recovered runtime omitted process start identity: %+v", recovered)
+	}
+	probeFleetRuntime(t, recovered)
+	waitFleetHealth(t, binary, environment, agentID, fleet.RuntimeHealthy)
+}
+
 func TestFleetServeUsesHomeAddressAndExplicitFlagWins(t *testing.T) {
 	if testing.Short() {
 		t.Skip("compiled-binary fleet serve is slow")

@@ -85,18 +85,8 @@ func (m *Manager) deleteOrphan(ctx context.Context, id string) error {
 	case err != nil:
 		return &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("runtime metadata is malformed: %v", err)}
 	default:
-		alive, aliveErr := m.deps.processAlive(runtimeState.PID)
-		if aliveErr != nil || alive {
-			return &ConflictError{AgentID: entry.ID, Reason: "recorded process is alive or cannot be classified safely"}
-		}
-		probeCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
-		probeErr := m.deps.probe(probeCtx, runtimeState)
-		cancel()
-		if probeErr == nil || probeErrorProvesReachable(probeErr) {
-			return &ConflictError{AgentID: entry.ID, Reason: "recorded endpoint remains reachable"}
-		}
-		if err := m.deps.removeRuntime(entry.Address, runtimeState); err != nil {
-			return &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("remove stale runtime: %v", err)}
+		if err := m.cleanStaleRuntimeUnderMaintenance(ctx, entry, runtimeState); err != nil {
+			return err
 		}
 	}
 	if err := agentstate.DeleteOrphan(m.homeDir, entry.ID); err != nil {

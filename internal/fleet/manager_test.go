@@ -136,6 +136,196 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 	}
 }
 
+func TestStatusClassifiesReusedRuntimePIDAsStale(t *testing.T) {
+	entry := registryEntry("aaaaaa", "agent")
+	recordedProcessStart := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
+	runtimeState := endpoint.Runtime{
+		AgentID:          entry.ID,
+		InstanceID:       "instance-one",
+		PID:              42,
+		Endpoint:         "tcp://127.0.0.1:43123",
+		StartedAt:        recordedProcessStart.Add(time.Second),
+		ProcessStartedAt: &recordedProcessStart,
+	}
+	deps := defaultDependencies()
+	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
+		return []agentstate.RegistryEntry{entry}, nil
+	}
+	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
+		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
+	}
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
+		return runtimeState, nil
+	}
+	deps.processAlive = func(int) (bool, error) { return true, nil }
+	deps.processStartedAt = func(int) (time.Time, error) {
+		return recordedProcessStart.Add(time.Minute), nil
+	}
+	deps.probe = func(context.Context, endpoint.Runtime) error {
+		return &endpoint.IdentityMismatchError{
+			Expected: runtimeState,
+			Actual:   endpoint.Runtime{AgentID: entry.ID, InstanceID: "other"},
+		}
+	}
+	manager := &Manager{homeDir: t.TempDir(), probeTimeout: time.Second, deps: deps}
+
+	statuses, err := manager.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("statuses = %d, want 1", len(statuses))
+	}
+	status := statuses[0]
+	if status.RuntimeHealth != RuntimeUnhealthy {
+		t.Fatalf("runtime health = %s, want %s; status=%+v", status.RuntimeHealth, RuntimeUnhealthy, status)
+	}
+	if !status.ProcessAlive || status.EndpointMatched {
+		t.Fatalf("status = %+v, want live reused PID without exact endpoint identity", status)
+	}
+}
+
+func TestStartCleansReusedPIDRuntimeBeforeSpawning(t *testing.T) {
+	entry := registryEntry("aaaaaa", "agent")
+	recordedProcessStart := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
+	runtimeState := endpoint.Runtime{
+		AgentID:          entry.ID,
+		InstanceID:       "instance-one",
+		PID:              42,
+		Endpoint:         "tcp://127.0.0.1:43123",
+		StartedAt:        recordedProcessStart.Add(time.Second),
+		ProcessStartedAt: &recordedProcessStart,
+	}
+	deps := defaultDependencies()
+	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
+		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
+	}
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
+		return runtimeState, nil
+	}
+	deps.processAlive = func(int) (bool, error) { return true, nil }
+	deps.processStartedAt = func(int) (time.Time, error) {
+		return recordedProcessStart.Add(time.Minute), nil
+	}
+	deps.probe = func(context.Context, endpoint.Runtime) error {
+		return &endpoint.IdentityMismatchError{
+			Expected: runtimeState,
+			Actual:   endpoint.Runtime{AgentID: entry.ID, InstanceID: "other"},
+		}
+	}
+	deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
+		return noopGuard{}, nil
+	}
+	removed := false
+	shutdownRequests := 0
+	deps.removeRuntime = func(_ agentstate.AgentAddress, got endpoint.Runtime) error {
+		if !got.Matches(runtimeState) {
+			t.Fatalf("removed runtime = %+v, want %+v", got, runtimeState)
+		}
+		removed = true
+		return nil
+	}
+	deps.requestShutdown = func(context.Context, endpoint.Runtime) error {
+		shutdownRequests++
+		return nil
+	}
+	spawnErr := errors.New("spawn reached")
+	deps.spawn = func(string, string, agentstate.RegistryEntry) (spawnedProcess, error) {
+		return spawnedProcess{}, spawnErr
+	}
+	manager := &Manager{
+		homeDir:      t.TempDir(),
+		probeTimeout: time.Second,
+		deps:         deps,
+	}
+
+	_, err := manager.startEntry(context.Background(), entry)
+	if !errors.Is(err, spawnErr) {
+		t.Fatalf("start error = %v, want %v", err, spawnErr)
+	}
+	if !removed {
+		t.Fatal("reused-PID runtime metadata was not removed before spawn")
+	}
+	if shutdownRequests != 0 {
+		t.Fatalf("shutdown requests = %d, want zero for reused PID", shutdownRequests)
+	}
+}
+
+func TestCleanupReusedPIDRequiresNonExactEndpoint(t *testing.T) {
+	entry := registryEntry("aaaaaa", "agent")
+	recordedProcessStart := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
+	runtimeState := endpoint.Runtime{
+		AgentID:          entry.ID,
+		InstanceID:       "instance-one",
+		PID:              42,
+		Endpoint:         "tcp://127.0.0.1:43123",
+		StartedAt:        recordedProcessStart.Add(time.Second),
+		ProcessStartedAt: &recordedProcessStart,
+	}
+	deps := defaultDependencies()
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
+		return runtimeState, nil
+	}
+	deps.processAlive = func(int) (bool, error) { return true, nil }
+	deps.processStartedAt = func(int) (time.Time, error) {
+		return recordedProcessStart.Add(time.Minute), nil
+	}
+	deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
+	deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
+		return noopGuard{}, nil
+	}
+	removed := false
+	deps.removeRuntime = func(agentstate.AgentAddress, endpoint.Runtime) error {
+		removed = true
+		return nil
+	}
+	manager := &Manager{probeTimeout: time.Second, deps: deps}
+
+	if err := manager.cleanStaleRuntime(context.Background(), entry, runtimeState); err == nil {
+		t.Fatal("cleanup accepted conflicting exact endpoint evidence")
+	}
+	if removed {
+		t.Fatal("runtime metadata was removed despite exact endpoint identity")
+	}
+}
+
+func TestStatusKeepsConflictingExactEndpointEvidenceAmbiguous(t *testing.T) {
+	entry := registryEntry("aaaaaa", "agent")
+	recordedProcessStart := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
+	runtimeState := endpoint.Runtime{
+		AgentID:          entry.ID,
+		InstanceID:       "instance-one",
+		PID:              42,
+		Endpoint:         "tcp://127.0.0.1:43123",
+		StartedAt:        recordedProcessStart.Add(time.Second),
+		ProcessStartedAt: &recordedProcessStart,
+	}
+	deps := defaultDependencies()
+	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
+		return []agentstate.RegistryEntry{entry}, nil
+	}
+	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
+		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
+	}
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
+		return runtimeState, nil
+	}
+	deps.processAlive = func(int) (bool, error) { return true, nil }
+	deps.processStartedAt = func(int) (time.Time, error) {
+		return recordedProcessStart.Add(time.Minute), nil
+	}
+	deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
+	manager := &Manager{homeDir: t.TempDir(), probeTimeout: time.Second, deps: deps}
+
+	statuses, err := manager.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := statuses[0].RuntimeHealth; got != RuntimeAmbiguous {
+		t.Fatalf("runtime health = %s, want %s; status=%+v", got, RuntimeAmbiguous, statuses[0])
+	}
+}
+
 func TestStartRetriesTransientRuntimeReadErrors(t *testing.T) {
 	entry := registryEntry("aaaaaa", "agent")
 	runtimeState := endpoint.Runtime{
@@ -289,6 +479,62 @@ func TestStopRequestsExactIdentityAndWaitsForExit(t *testing.T) {
 	}
 }
 
+func TestStopCompletesWhenPIDIsReusedAfterShutdown(t *testing.T) {
+	entry := registryEntry("aaaaaa", "agent")
+	recordedProcessStart := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
+	runtimeState := endpoint.Runtime{
+		AgentID:          entry.ID,
+		InstanceID:       "instance-one",
+		PID:              42,
+		Endpoint:         "tcp://127.0.0.1:43123",
+		StartedAt:        recordedProcessStart.Add(time.Second),
+		ProcessStartedAt: &recordedProcessStart,
+	}
+	var shutdownRequested atomic.Bool
+	deps := defaultDependencies()
+	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
+		return []agentstate.RegistryEntry{entry}, nil
+	}
+	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
+		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
+	}
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
+		if shutdownRequested.Load() {
+			return endpoint.Runtime{}, os.ErrNotExist
+		}
+		return runtimeState, nil
+	}
+	deps.processAlive = func(int) (bool, error) { return true, nil }
+	deps.processStartedAt = func(int) (time.Time, error) {
+		if shutdownRequested.Load() {
+			return recordedProcessStart.Add(time.Minute), nil
+		}
+		return recordedProcessStart, nil
+	}
+	deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
+	deps.requestShutdown = func(context.Context, endpoint.Runtime) error {
+		shutdownRequested.Store(true)
+		return nil
+	}
+	deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
+		return noopGuard{}, nil
+	}
+	manager := &Manager{
+		homeDir:      t.TempDir(),
+		probeTimeout: time.Second,
+		stopTimeout:  200 * time.Millisecond,
+		deps:         deps,
+	}
+
+	status, err := manager.Stop(context.Background(), entry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.RuntimeHealth != RuntimeStopped {
+		t.Fatalf("status = %+v, want stopped", status)
+	}
+}
+
 func TestStartAndRestartRejectHealthyAgentsThatCannotBeStarted(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -386,6 +632,120 @@ func TestServeHoldsOneSupervisorLockAndDoesNotStopAgentsOnCancel(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("first supervisor did not stop")
+	}
+}
+
+func TestServeRecoversReusedPIDRuntimeAndAutostartsAgent(t *testing.T) {
+	home := t.TempDir()
+	entry := registryEntryAtHome(home, "aaaaaa", "agent")
+	recordedProcessStart := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
+	staleRuntime := endpoint.Runtime{
+		AgentID:          entry.ID,
+		InstanceID:       "stale-instance",
+		PID:              42,
+		Endpoint:         "tcp://127.0.0.1:43123",
+		StartedAt:        recordedProcessStart.Add(time.Second),
+		ProcessStartedAt: &recordedProcessStart,
+	}
+	newProcessStart := recordedProcessStart.Add(2 * time.Minute)
+	newRuntime := endpoint.Runtime{
+		AgentID:          entry.ID,
+		InstanceID:       "new-instance",
+		PID:              84,
+		Endpoint:         "tcp://127.0.0.1:43124",
+		StartedAt:        newProcessStart.Add(time.Second),
+		ProcessStartedAt: &newProcessStart,
+	}
+	var removed atomic.Bool
+	var spawned atomic.Bool
+	deps := defaultDependencies()
+	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
+		return []agentstate.RegistryEntry{entry}, nil
+	}
+	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
+		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
+	}
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
+		switch {
+		case spawned.Load():
+			return newRuntime, nil
+		case removed.Load():
+			return endpoint.Runtime{}, os.ErrNotExist
+		default:
+			return staleRuntime, nil
+		}
+	}
+	deps.processAlive = func(pid int) (bool, error) { return pid == 42 || pid == 84, nil }
+	deps.processStartedAt = func(pid int) (time.Time, error) {
+		if pid == 84 {
+			return newProcessStart, nil
+		}
+		return recordedProcessStart.Add(time.Minute), nil
+	}
+	deps.probe = func(_ context.Context, got endpoint.Runtime) error {
+		if got.Matches(newRuntime) {
+			return nil
+		}
+		return &endpoint.IdentityMismatchError{
+			Expected: got,
+			Actual:   endpoint.Runtime{AgentID: entry.ID, InstanceID: "other"},
+		}
+	}
+	deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
+		return noopGuard{}, nil
+	}
+	deps.removeRuntime = func(agentstate.AgentAddress, endpoint.Runtime) error {
+		removed.Store(true)
+		return nil
+	}
+	deps.spawn = func(string, string, agentstate.RegistryEntry) (spawnedProcess, error) {
+		spawned.Store(true)
+		return spawnedProcess{PID: newRuntime.PID, Done: make(chan error), LogPath: "fleet.log"}, nil
+	}
+	manager := &Manager{
+		homeDir:      home,
+		startTimeout: time.Second,
+		probeTimeout: time.Second,
+		deps:         deps,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	ready := make(chan struct{})
+	var actions []Action
+	go func() {
+		done <- manager.Serve(ctx, func(action Action) {
+			actions = append(actions, action)
+			if action.Kind == "ready" {
+				close(ready)
+			}
+		})
+	}()
+	select {
+	case <-ready:
+		cancel()
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("supervisor did not finish startup reconciliation")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !removed.Load() || !spawned.Load() {
+		t.Fatalf("removed = %v, spawned = %v", removed.Load(), spawned.Load())
+	}
+	wantKinds := []string{"cleaned", "started", "ready"}
+	for _, want := range wantKinds {
+		found := false
+		for _, action := range actions {
+			if action.Kind == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("actions = %+v, missing %q", actions, want)
+		}
 	}
 }
 
