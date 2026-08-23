@@ -51,12 +51,25 @@ func (m *Manager) Endpoint(ctx context.Context, selector string) (endpoint.Runti
 			Reason:  fmt.Sprintf("re-read runtime before proxying: %v", err),
 		}
 	}
-	alive, err := m.deps.processAlive(runtimeState.PID)
-	if err != nil || !alive {
+	process := m.inspectRecordedProcess(runtimeState)
+	if !process.ExistenceKnown || !process.Alive {
 		return endpoint.Runtime{}, &ConflictError{
 			AgentID: entry.ID,
 			Reason:  "runtime process is no longer alive",
 		}
+	}
+	if process.Identity == processIdentityReplaced {
+		return endpoint.Runtime{}, &ConflictError{
+			AgentID: entry.ID,
+			Reason:  "runtime PID is now owned by a different process",
+		}
+	}
+	if !acceptsRecordedProcessIdentity(runtimeState, process) {
+		reason := "runtime process identity is no longer verified"
+		if process.Err != nil {
+			reason = fmt.Sprintf("verify runtime process identity: %v", process.Err)
+		}
+		return endpoint.Runtime{}, &ConflictError{AgentID: entry.ID, Reason: reason}
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
 	probeErr := m.deps.probe(probeCtx, runtimeState)

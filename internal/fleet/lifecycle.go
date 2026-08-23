@@ -198,11 +198,12 @@ func (m *Manager) stopEntryMode(
 			}
 		case <-ticker.C:
 			current, readErr := m.deps.readRuntime(entry.Address)
-			alive, aliveErr := m.deps.processAlive(runtimeState.PID)
-			if aliveErr != nil {
-				return status, restartAcknowledged, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("check stopping process: %v", aliveErr)}
+			process := m.inspectRecordedProcess(runtimeState)
+			if !process.ExistenceKnown {
+				return status, restartAcknowledged, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("check stopping process: %v", process.Err)}
 			}
-			if errors.Is(readErr, os.ErrNotExist) && !alive {
+			stopped := !process.Alive || process.Identity == processIdentityReplaced
+			if errors.Is(readErr, os.ErrNotExist) && stopped {
 				return m.inspectStatus(ctx, entry), restartAcknowledged, nil
 			}
 			if readErr == nil && !current.Matches(runtimeState) {
@@ -211,11 +212,12 @@ func (m *Manager) stopEntryMode(
 			if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 				return status, restartAcknowledged, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("runtime became invalid while stopping: %v", readErr)}
 			}
-			if !alive && readErr == nil {
+			if stopped && readErr == nil {
 				probeCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
 				probeErr := m.deps.probe(probeCtx, runtimeState)
 				cancel()
-				if probeErr != nil && !probeErrorProvesReachable(probeErr) {
+				processReplaced := process.Identity == processIdentityReplaced
+				if probeErr != nil && (processReplaced || !probeErrorProvesReachable(probeErr)) {
 					if err := m.cleanStaleRuntime(ctx, entry, runtimeState); err != nil {
 						return status, restartAcknowledged, err
 					}
@@ -432,6 +434,14 @@ func (m *Manager) cleanStaleRuntime(
 		return &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("acquire endpoint maintenance guard: %v", err)}
 	}
 	defer func() { _ = maintenance.Close() }()
+	return m.cleanStaleRuntimeUnderMaintenance(ctx, entry, expected)
+}
+
+func (m *Manager) cleanStaleRuntimeUnderMaintenance(
+	ctx context.Context,
+	entry agentstate.RegistryEntry,
+	expected endpoint.Runtime,
+) error {
 	current, err := m.deps.readRuntime(entry.Address)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -442,14 +452,24 @@ func (m *Manager) cleanStaleRuntime(
 	if !current.Matches(expected) {
 		return &ConflictError{AgentID: entry.ID, Reason: "runtime identity changed before stale cleanup"}
 	}
-	alive, err := m.deps.processAlive(current.PID)
-	if err != nil || alive {
-		return &ConflictError{AgentID: entry.ID, Reason: "recorded process is alive or could not be classified safely"}
+	process := m.inspectRecordedProcess(current)
+	if !process.ExistenceKnown {
+		return &ConflictError{AgentID: entry.ID, Reason: "recorded process could not be classified safely"}
+	}
+	processReplaced := process.Identity == processIdentityReplaced
+	if process.Alive && !processReplaced {
+		reason := "recorded process is alive and has no matching process identity"
+		if process.Identity == processIdentityMatched {
+			reason = "recorded process is still alive"
+		} else if process.Err != nil {
+			reason = process.Err.Error()
+		}
+		return &ConflictError{AgentID: entry.ID, Reason: reason}
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
 	probeErr := m.deps.probe(probeCtx, current)
 	cancel()
-	if probeErr == nil || probeErrorProvesReachable(probeErr) {
+	if probeErr == nil || (!processReplaced && probeErrorProvesReachable(probeErr)) {
 		return &ConflictError{AgentID: entry.ID, Reason: "recorded endpoint remains reachable"}
 	}
 	if err := m.deps.removeRuntime(entry.Address, current); err != nil {

@@ -84,6 +84,83 @@ func TestEndpointReturnsOnlyBoundHealthyRuntime(t *testing.T) {
 	}
 }
 
+func TestEndpointRejectsPIDReuseAfterHealthyStatusSnapshot(t *testing.T) {
+	entry := registryEntry("aaaaaa", "agent")
+	recordedProcessStart := time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)
+	runtimeState := endpoint.Runtime{
+		AgentID:         entry.ID,
+		InstanceID:      "instance-one",
+		PID:             42,
+		Endpoint:        "tcp://127.0.0.1:43123",
+		StartedAt:       recordedProcessStart.Add(time.Second),
+		ProcessIdentity: "recorded-process",
+	}
+	deps := defaultDependencies()
+	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
+		return []agentstate.RegistryEntry{entry}, nil
+	}
+	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
+		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
+	}
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
+		return runtimeState, nil
+	}
+	deps.processAlive = func(int) (bool, error) { return true, nil }
+	var processReads atomic.Int32
+	deps.processIdentity = func(int) (string, error) {
+		if processReads.Add(1) == 1 {
+			return "recorded-process", nil
+		}
+		return "reused-process", nil
+	}
+	deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
+	manager := &Manager{homeDir: t.TempDir(), probeTimeout: time.Second, deps: deps}
+
+	_, err := manager.Endpoint(context.Background(), entry.ID)
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("Endpoint error = %T %v, want ConflictError", err, err)
+	}
+}
+
+func TestEndpointRejectsUnreadableIdentityAfterHealthyStatusSnapshot(t *testing.T) {
+	entry := registryEntry("aaaaaa", "agent")
+	runtimeState := endpoint.Runtime{
+		AgentID:         entry.ID,
+		InstanceID:      "instance-one",
+		PID:             42,
+		Endpoint:        "tcp://127.0.0.1:43123",
+		StartedAt:       time.Date(2026, 8, 23, 8, 0, 1, 0, time.UTC),
+		ProcessIdentity: "recorded-process",
+	}
+	deps := defaultDependencies()
+	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
+		return []agentstate.RegistryEntry{entry}, nil
+	}
+	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
+		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
+	}
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
+		return runtimeState, nil
+	}
+	deps.processAlive = func(int) (bool, error) { return true, nil }
+	var processReads atomic.Int32
+	deps.processIdentity = func(int) (string, error) {
+		if processReads.Add(1) == 1 {
+			return "recorded-process", nil
+		}
+		return "", errors.New("identity unavailable")
+	}
+	deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
+	manager := &Manager{homeDir: t.TempDir(), probeTimeout: time.Second, deps: deps}
+
+	_, err := manager.Endpoint(context.Background(), entry.ID)
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("Endpoint error = %T %v, want ConflictError", err, err)
+	}
+}
+
 func TestReadOnlyStateRequiresBoundWorkspace(t *testing.T) {
 	entry := registryEntry("aaaaaa", "agent")
 	tests := []struct {

@@ -91,13 +91,14 @@ func (m *Manager) inspectStatus(ctx context.Context, entry agentstate.RegistryEn
 	status.Endpoint = runtimeState.Endpoint
 	status.StartedAt = runtimeState.StartedAt
 	status.BinaryVersion = runtimeState.BinaryVersion
-	alive, aliveErr := m.deps.processAlive(runtimeState.PID)
-	if aliveErr != nil {
+	process := m.inspectRecordedProcess(runtimeState)
+	if !process.ExistenceKnown {
 		status.RuntimeHealth = RuntimeAmbiguous
-		status.Problem = appendProblem(status.Problem, fmt.Sprintf("check process %d: %v", runtimeState.PID, aliveErr))
+		status.Problem = appendProblem(status.Problem, process.Err.Error())
 		return status
 	}
-	status.ProcessAlive = alive
+	status.ProcessAlive = process.Alive
+	processReplaced := process.Identity == processIdentityReplaced
 
 	probeCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
 	probeErr := m.deps.probe(probeCtx, runtimeState)
@@ -113,13 +114,22 @@ func (m *Manager) inspectStatus(ctx context.Context, entry agentstate.RegistryEn
 	}
 
 	switch {
-	case status.ProcessAlive && status.EndpointMatched:
+	case status.ProcessAlive && status.EndpointMatched && acceptsRecordedProcessIdentity(runtimeState, process):
 		status.RuntimeHealth = RuntimeHealthy
+	case processReplaced && status.EndpointMatched:
+		status.RuntimeHealth = RuntimeAmbiguous
+		status.Problem = appendProblem(status.Problem, "process identity conflicts with exact endpoint identity")
+	case processReplaced && !status.EndpointMatched:
+		status.RuntimeHealth = RuntimeUnhealthy
+		status.Problem = appendProblem(status.Problem, "recorded PID is now owned by a different process")
 	case !status.ProcessAlive && !status.EndpointReachable:
 		status.RuntimeHealth = RuntimeUnhealthy
 		status.Problem = appendProblem(status.Problem, "recorded process and endpoint are not alive")
 	default:
 		status.RuntimeHealth = RuntimeAmbiguous
+		if process.Err != nil {
+			status.Problem = appendProblem(status.Problem, process.Err.Error())
+		}
 	}
 	if m.processMetrics != nil {
 		if status.RuntimeHealth == RuntimeHealthy {

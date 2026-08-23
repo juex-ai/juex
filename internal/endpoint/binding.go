@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/homestore"
+	"github.com/juex-ai/juex/internal/processidentity"
 )
 
 const (
@@ -37,12 +38,13 @@ type addressSnapshot struct {
 }
 
 type Runtime struct {
-	AgentID       string    `json:"agent_id"`
-	InstanceID    string    `json:"instance_id"`
-	PID           int       `json:"pid"`
-	Endpoint      string    `json:"endpoint"`
-	StartedAt     time.Time `json:"started_at"`
-	BinaryVersion string    `json:"binary_version,omitempty"`
+	AgentID         string    `json:"agent_id"`
+	InstanceID      string    `json:"instance_id"`
+	PID             int       `json:"pid"`
+	Endpoint        string    `json:"endpoint"`
+	StartedAt       time.Time `json:"started_at"`
+	ProcessIdentity string    `json:"process_identity,omitempty"`
+	BinaryVersion   string    `json:"binary_version,omitempty"`
 }
 
 func (r Runtime) Matches(other Runtime) bool {
@@ -78,15 +80,16 @@ type Maintenance struct {
 }
 
 type listenDependencies struct {
-	listen     func(network, address string) (net.Listener, error)
-	dial       func(ctx context.Context, network, address string) (net.Conn, error)
-	lstat      func(string) (os.FileInfo, error)
-	remove     func(string) error
-	chmod      func(string, os.FileMode) error
-	now        func() time.Time
-	pid        func() int
-	instanceID func() (string, error)
-	lock       func(string) (*homestore.Lock, error)
+	listen          func(network, address string) (net.Listener, error)
+	dial            func(ctx context.Context, network, address string) (net.Conn, error)
+	lstat           func(string) (os.FileInfo, error)
+	remove          func(string) error
+	chmod           func(string, os.FileMode) error
+	now             func() time.Time
+	pid             func() int
+	processIdentity func(int) (string, error)
+	instanceID      func() (string, error)
+	lock            func(string) (*homestore.Lock, error)
 }
 
 func defaultListenDependencies() listenDependencies {
@@ -96,11 +99,12 @@ func defaultListenDependencies() listenDependencies {
 			var dialer net.Dialer
 			return dialer.DialContext(ctx, network, address)
 		},
-		lstat:  os.Lstat,
-		remove: os.Remove,
-		chmod:  os.Chmod,
-		now:    time.Now,
-		pid:    os.Getpid,
+		lstat:           os.Lstat,
+		remove:          os.Remove,
+		chmod:           os.Chmod,
+		now:             time.Now,
+		pid:             os.Getpid,
+		processIdentity: processidentity.Fingerprint,
 		instanceID: func() (string, error) {
 			var value [16]byte
 			if _, err := rand.Read(value[:]); err != nil {
@@ -162,16 +166,22 @@ func listenWithDependencies(ctx context.Context, address AddressView, deps liste
 		_ = lock.Close()
 		return nil, fmt.Errorf("endpoint: generate runtime instance identity: %w", err)
 	}
+	pid := deps.pid()
+	processFingerprint, processIdentityErr := deps.processIdentity(pid)
+	runtimeState := Runtime{
+		AgentID:    resolved.id,
+		InstanceID: instanceID,
+		PID:        pid,
+		Endpoint:   target.URI(),
+		StartedAt:  deps.now().UTC().Round(0),
+	}
+	if processIdentityErr == nil {
+		runtimeState.ProcessIdentity = strings.TrimSpace(processFingerprint)
+	}
 	return &Binding{
-		listener: listener,
-		lock:     lock,
-		runtime: Runtime{
-			AgentID:    resolved.id,
-			InstanceID: instanceID,
-			PID:        deps.pid(),
-			Endpoint:   target.URI(),
-			StartedAt:  deps.now().UTC().Round(0),
-		},
+		listener:       listener,
+		lock:           lock,
+		runtime:        runtimeState,
 		address:        resolved,
 		socketPath:     socketPath,
 		fallbackReason: fallbackReason,
@@ -490,6 +500,9 @@ func sameRuntime(left, right Runtime) bool {
 		left.PID == right.PID &&
 		left.Endpoint == right.Endpoint &&
 		left.StartedAt.Equal(right.StartedAt) &&
+		(left.ProcessIdentity == "" ||
+			right.ProcessIdentity == "" ||
+			left.ProcessIdentity == right.ProcessIdentity) &&
 		(left.BinaryVersion == "" ||
 			right.BinaryVersion == "" ||
 			left.BinaryVersion == right.BinaryVersion)

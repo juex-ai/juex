@@ -5,7 +5,10 @@ This package owns registry-wide resident-agent health and lifecycle policy.
 - `Status` preserves workspace binding and runtime health as separate axes,
   projects the serving binary version from runtime metadata, and adds
   best-effort RSS and interval CPU usage only after the process and endpoint
-  identity are verified healthy.
+  identity are verified healthy. When a PID is alive but its operating-system
+  process fingerprint differs from the runtime record, Fleet classifies the
+  record as stale only when the endpoint is not the exact recorded Runtime
+  Instance; missing or unreadable process identity remains ambiguous.
 - `Add` registers an existing absolute workspace through the standard marker
   rules, applies optional name/autostart metadata, and can start it immediately.
 - `SetEnabled` makes disable reversible: disable stops before persisting the
@@ -29,7 +32,10 @@ This package owns registry-wide resident-agent health and lifecycle policy.
   entries from one status snapshot, reports skips and failures, and continues
   after individual restart errors.
 - `Serve` reconciles once, adopts verified runtimes, starts enabled autostart
-  agents, and remains resident without owning child lifetime.
+  agents, and remains resident without owning child lifetime. Reconciliation
+  removes a reused-PID runtime record only after the endpoint maintenance guard,
+  an exact runtime re-read, a repeated process-start mismatch, and a non-exact
+  endpoint probe; it never signals the process currently holding that PID.
 - `Logs` tails only the fleet-owned output created by `Start`; adopted
   externally started processes retain their original terminal, service, or
   redirection destination.

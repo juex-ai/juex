@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/juex-ai/juex/internal/processidentity"
 )
 
 type testAddress struct {
@@ -139,6 +141,36 @@ func TestReadRuntimeChecksExplicitAddressIdentity(t *testing.T) {
 	}
 }
 
+func TestReadRuntimeAcceptsLegacyRecordWithoutProcessIdentity(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	address := testAddress{
+		id:       "abcdef",
+		stateDir: stateDir,
+		lockPath: filepath.Join(root, "guard"),
+	}
+	runtimeState := Runtime{
+		AgentID:    address.id,
+		InstanceID: "instance",
+		PID:        42,
+		Endpoint:   "tcp://127.0.0.1:43123",
+		StartedAt:  time.Now().UTC(),
+	}
+	if err := writeRuntime(filepath.Join(stateDir, runtimeFileName), runtimeState); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadRuntime(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Matches(runtimeState) || got.ProcessIdentity != "" {
+		t.Fatalf("runtime = %+v, want legacy runtime %+v", got, runtimeState)
+	}
+}
+
 func TestListenPublishesReachableRuntime(t *testing.T) {
 	agentDir := newEndpointAgentDir(t)
 	address := addressForAgentDir(agentDir)
@@ -201,12 +233,20 @@ func TestListenPublishesReachableRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtimeState != binding.Runtime() {
+	if !runtimeState.Matches(binding.Runtime()) {
 		t.Fatalf("runtime = %+v, want %+v", runtimeState, binding.Runtime())
 	}
 	if runtimeState.PID != os.Getpid() || runtimeState.StartedAt.IsZero() ||
 		runtimeState.StartedAt.Location() != time.UTC {
 		t.Fatalf("runtime metadata = %+v", runtimeState)
+	}
+	expectedProcessIdentity, processIdentityErr := processidentity.Fingerprint(os.Getpid())
+	if processIdentityErr != nil {
+		if runtimeState.ProcessIdentity != "" {
+			t.Fatalf("runtime process identity = %q, want omitted: %v", runtimeState.ProcessIdentity, processIdentityErr)
+		}
+	} else if runtimeState.ProcessIdentity != expectedProcessIdentity {
+		t.Fatalf("runtime process identity = %q, want %q", runtimeState.ProcessIdentity, expectedProcessIdentity)
 	}
 	if runtimeState.AgentID != filepath.Base(agentDir) || runtimeState.InstanceID == "" {
 		t.Fatalf("runtime identity = %+v", runtimeState)
@@ -253,6 +293,51 @@ func TestRuntimeMatchesTreatsMissingVersionAsCompatible(t *testing.T) {
 	}
 	if current.Matches(other) {
 		t.Fatal("different non-empty binary versions must not match")
+	}
+}
+
+func TestRuntimeMatchesTreatsProcessIdentityAsOptionalCompatibilityMetadata(t *testing.T) {
+	base := Runtime{
+		AgentID:    "aaaaaa",
+		InstanceID: "instance",
+		PID:        42,
+		Endpoint:   "tcp://127.0.0.1:1234",
+		StartedAt:  time.Date(2026, 7, 18, 4, 0, 1, 0, time.UTC),
+	}
+	first := base
+	first.ProcessIdentity = "boot-a:100"
+	same := base
+	same.ProcessIdentity = "boot-a:100"
+	second := base
+	second.ProcessIdentity = "boot-a:200"
+
+	if !base.Matches(first) || !first.Matches(base) {
+		t.Fatal("missing process identity must remain compatible")
+	}
+	if !first.Matches(same) {
+		t.Fatal("equal process identities must match")
+	}
+	if first.Matches(second) {
+		t.Fatal("different non-empty process identities must not match")
+	}
+}
+
+func TestListenOmitsUnavailableProcessIdentity(t *testing.T) {
+	deps := defaultListenDependencies()
+	deps.processIdentity = func(int) (string, error) {
+		return "", errors.New("unavailable")
+	}
+	binding, err := listenWithDependencies(
+		context.Background(),
+		addressForAgentDir(newEndpointAgentDir(t)),
+		deps,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = binding.Close() })
+	if binding.Runtime().ProcessIdentity != "" {
+		t.Fatalf("process identity = %q, want omitted", binding.Runtime().ProcessIdentity)
 	}
 }
 
@@ -436,7 +521,7 @@ func TestCloseDoesNotRemoveReplacedRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != replacement {
+	if !got.Matches(replacement) {
 		t.Fatalf("runtime = %+v, want replacement %+v", got, replacement)
 	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/processidentity"
 )
 
 func TestSession_AppendsToConversationJSONL(t *testing.T) {
@@ -1366,7 +1367,7 @@ func TestAcquireSessionLockRemovesDeadPIDLock(t *testing.T) {
 }
 
 func TestProcessStartedAtCurrentProcessIsPlausible(t *testing.T) {
-	startedAt, err := processStartedAt(os.Getpid())
+	startedAt, err := processidentity.StartedAt(os.Getpid())
 	if err != nil {
 		t.Skipf("process start time unavailable: %v", err)
 	}
@@ -1377,7 +1378,7 @@ func TestProcessStartedAtCurrentProcessIsPlausible(t *testing.T) {
 }
 
 func TestAcquireSessionLockRemovesReusedPIDLock(t *testing.T) {
-	startedAt, err := processStartedAt(os.Getpid())
+	startedAt, err := processidentity.StartedAt(os.Getpid())
 	if err != nil {
 		t.Skipf("process start time unavailable: %v", err)
 	}
