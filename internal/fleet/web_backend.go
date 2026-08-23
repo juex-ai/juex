@@ -64,6 +64,13 @@ func (m *Manager) Endpoint(ctx context.Context, selector string) (endpoint.Runti
 			Reason:  "runtime PID is now owned by a different process",
 		}
 	}
+	if !acceptsRecordedProcessIdentity(runtimeState, process) {
+		reason := "runtime process identity is no longer verified"
+		if process.Err != nil {
+			reason = fmt.Sprintf("verify runtime process identity: %v", process.Err)
+		}
+		return endpoint.Runtime{}, &ConflictError{AgentID: entry.ID, Reason: reason}
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
 	probeErr := m.deps.probe(probeCtx, runtimeState)
 	cancel()

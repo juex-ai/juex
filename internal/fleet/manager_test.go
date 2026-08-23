@@ -46,13 +46,14 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 		BinaryVersion: "1.2.3",
 	}
 	tests := []struct {
-		name           string
-		readRuntime    func(agentstate.AgentAddress) (endpoint.Runtime, error)
-		processAlive   func(int) (bool, error)
-		probe          func(context.Context, endpoint.Runtime) error
-		maintenanceErr error
-		want           RuntimeHealth
-		wantVersion    string
+		name            string
+		readRuntime     func(agentstate.AgentAddress) (endpoint.Runtime, error)
+		processAlive    func(int) (bool, error)
+		processIdentity func(int) (string, error)
+		probe           func(context.Context, endpoint.Runtime) error
+		maintenanceErr  error
+		want            RuntimeHealth
+		wantVersion     string
 	}{
 		{
 			name:        "missing runtime and free endpoint guard",
@@ -73,6 +74,21 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 			},
 			probe:       func(context.Context, endpoint.Runtime) error { return nil },
 			want:        RuntimeHealthy,
+			wantVersion: "1.2.3",
+		},
+		{
+			name: "unreadable process identity with exact endpoint",
+			readRuntime: func(agentstate.AgentAddress) (endpoint.Runtime, error) {
+				withIdentity := runtimeState
+				withIdentity.ProcessIdentity = "recorded-process"
+				return withIdentity, nil
+			},
+			processAlive: func(int) (bool, error) { return true, nil },
+			processIdentity: func(int) (string, error) {
+				return "", errors.New("identity unavailable")
+			},
+			probe:       func(context.Context, endpoint.Runtime) error { return nil },
+			want:        RuntimeAmbiguous,
 			wantVersion: "1.2.3",
 		},
 		{
@@ -114,6 +130,9 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 			deps.readRuntime = test.readRuntime
 			if test.processAlive != nil {
 				deps.processAlive = test.processAlive
+			}
+			if test.processIdentity != nil {
+				deps.processIdentity = test.processIdentity
 			}
 			if test.probe != nil {
 				deps.probe = test.probe

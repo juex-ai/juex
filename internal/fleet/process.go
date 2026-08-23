@@ -42,3 +42,7 @@ func (m *Manager) inspectRecordedProcess(runtimeState endpoint.Runtime) recorded
 	}
 	return result
 }
+
+func acceptsRecordedProcessIdentity(runtimeState endpoint.Runtime, process recordedProcessInspection) bool {
+	return runtimeState.ProcessIdentity == "" || process.Identity == processIdentityMatched
+}

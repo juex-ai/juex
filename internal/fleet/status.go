@@ -114,7 +114,7 @@ func (m *Manager) inspectStatus(ctx context.Context, entry agentstate.RegistryEn
 	}
 
 	switch {
-	case status.ProcessAlive && status.EndpointMatched && !processReplaced:
+	case status.ProcessAlive && status.EndpointMatched && acceptsRecordedProcessIdentity(runtimeState, process):
 		status.RuntimeHealth = RuntimeHealthy
 	case processReplaced && status.EndpointMatched:
 		status.RuntimeHealth = RuntimeAmbiguous
