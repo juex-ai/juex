@@ -45,8 +45,7 @@ jobs:
             fi
           done
           umask 077
-          export JUEX_HOME="$RUNNER_TEMP/juex-integration-home"
-          mkdir -p "$JUEX_HOME"
+          export JUEX_PROVIDER_CONFIG="$RUNNER_TEMP/juex-integration-${LIVE_PROVIDER}.yaml"
           python3 <<'PY'
           import json
           import os
@@ -71,8 +70,8 @@ jobs:
           selected = os.environ["LIVE_PROVIDER"]
           model = os.environ[f"{selected.upper()}_MODEL"]
           config = {"model": f"ci-{selected}:{model}", "providers": providers}
-          path = Path(os.environ["JUEX_HOME"]) / "juex.yaml"
+          path = Path(os.environ["JUEX_PROVIDER_CONFIG"])
           path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
           PY
-          printf 'JUEX_PROVIDER_CONFIG=%s\n' "$JUEX_HOME/juex.yaml" >> "$GITHUB_ENV"
+          printf 'JUEX_PROVIDER_CONFIG=%s\n' "$JUEX_PROVIDER_CONFIG" >> "$GITHUB_ENV"
       - run: make integration

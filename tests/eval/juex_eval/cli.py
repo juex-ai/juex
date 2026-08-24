@@ -18,7 +18,6 @@ from . import compaction, helper, outcomes, selection, validation_plan, verifica
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-TEST_HOME_RUNNER = (REPO_ROOT / "scripts" / "with-test-juex-home.sh").as_posix()
 ENSURE_RIPGREP = (REPO_ROOT / "scripts" / "ensure-ripgrep.sh").as_posix()
 
 
@@ -214,7 +213,7 @@ def verification_steps(args: argparse.Namespace) -> list[VerificationStep]:
         if packages:
             if "./..." in packages:
                 packages = ["./..."]
-            command = bash_script_command(TEST_HOME_RUNNER, "go", "test", *packages)
+            command = ["go", "test", *packages]
             if getattr(args, "race", False):
                 command.append("-race")
             command.append("-count=1")
@@ -268,7 +267,7 @@ def verification_steps(args: argparse.Namespace) -> list[VerificationStep]:
 
 
 def candidate_verification_steps(*, race: bool, web: bool) -> list[VerificationStep]:
-    test_command = bash_script_command(TEST_HOME_RUNNER, "go", "test", "./...")
+    test_command = ["go", "test", "./..."]
     if race:
         test_command.append("-race")
     test_command.append("-count=1")
@@ -343,7 +342,7 @@ def run_verify(args: argparse.Namespace) -> int:
         if not steps:
             print("no code gates selected")
             return 0
-        test_env = isolated_test_environment() if any(step.test_environment for step in steps) else None
+        test_env = go_test_environment() if any(step.test_environment for step in steps) else None
         return execute_verification_steps(steps, lambda step: run_visible(step, test_env))
 
     snapshot = require_clean_worktree()
@@ -362,7 +361,7 @@ def run_verify(args: argparse.Namespace) -> int:
         }
     )
     candidate_test_env = (
-        isolated_test_environment() if any(step.test_environment for step in candidate_steps) else None
+        go_test_environment() if any(step.test_environment for step in candidate_steps) else None
     )
     environment_fingerprint = verification.environment_fingerprint(
         web=args.web,
@@ -502,7 +501,7 @@ def require_clean_worktree() -> verification.RepositorySnapshot:
     return snapshot
 
 
-def isolated_test_environment() -> dict[str, str]:
+def go_test_environment() -> dict[str, str]:
     existing_ripgrep = shutil.which("rg")
     if existing_ripgrep:
         ripgrep_dir = os.path.dirname(os.path.abspath(existing_ripgrep))
@@ -525,7 +524,7 @@ def provisioned_ripgrep_directory() -> str:
     if completed.returncode != 0 or not ripgrep_dir:
         detail = completed.stderr.strip()
         suffix = f": {detail}" if detail else ""
-        raise ValueError(f"failed to provision ripgrep for isolated Go tests{suffix}")
+        raise ValueError(f"failed to provision ripgrep for Go tests{suffix}")
     if os.name == "nt":
         return str(REPO_ROOT / ".tmp" / "dev-ripgrep" / "juex-path")
     return ripgrep_dir
@@ -819,7 +818,7 @@ def run_development(args: argparse.Namespace) -> int:
 
     steps, provider_report_dir, compaction_report_dir = development_steps(args, report_dir)
 
-    test_env = isolated_test_environment() if any(step.test_environment for step in steps) else None
+    test_env = go_test_environment() if any(step.test_environment for step in steps) else None
     overall = execute_development_steps(
         steps,
         lambda step: run_logged(

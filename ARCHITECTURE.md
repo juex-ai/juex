@@ -3132,11 +3132,11 @@ automatic activation; the model loads a selected guide explicitly.
 | Target | Effect |
 |---|---|
 | `make verify-plan [TIER=focused|candidate|final] [BASE=<sha>] [EXPLAIN=1]` | derive the deterministic validation plan from Git changes, write `plan.json` and `plan.md`, and optionally print the gate causes |
-| `make verify-focused PKGS="..."` or `make verify-focused PLANNED=1 [BASE=<sha>]` | prepare a non-overwriting embedded-web stub, provision ripgrep, isolate writable user/Juex/tool state, and run either the required explicit Go package patterns or the explicitly requested dirty-worktree plan |
+| `make verify-focused PKGS="..."` or `make verify-focused PLANNED=1 [BASE=<sha>]` | prepare a non-overwriting embedded-web stub, provision ripgrep on `PATH`, and run either the required explicit Go package patterns or the explicitly requested dirty-worktree plan in the caller's environment |
 | `make verify-candidate [RACE=1] [WEB=1] [BASE=<sha>]` | require a clean worktree before and after the gate, derive race/web gates from the Git plan, apply explicit flags additively, run one deterministic full Go suite, then build one executable |
 | `make verify-final [RACE=1] [WEB=1] [COMPACTION=1] [BASE=<sha>]` | require a clean worktree before and after the gate, consume the same candidate plan, always run live integration and one provider-config-selected smoke, and run compaction when selected by the plan or additive override |
-| `make test` | provision ripgrep on `PATH` with disposable bootstrap Go telemetry, isolate writable user/Juex/Codex/XDG/Windows-app-data/global-Git/Go-telemetry state under a temporary `HOME`, then run `go test ./... -count=1` |
-| `make race` | provision ripgrep on `PATH` with disposable bootstrap Go telemetry, isolate writable user/Juex/Codex/XDG/Windows-app-data/global-Git/Go-telemetry state under a temporary `HOME`, then run `go test ./... -race -count=1` |
+| `make test` | provision ripgrep on `PATH` with disposable bootstrap Go telemetry, inherit the caller's environment, then run cacheable `go test ./...` |
+| `make race` | provision ripgrep on `PATH` with disposable bootstrap Go telemetry, inherit the caller's environment, then run `go test ./... -race -count=1` |
 | `make ripgrep` | resolve system ripgrep or cache the verified pinned binary for local tests |
 | `make lint` | `golangci-lint run` |
 | `make build` | `dist/juex` with `git describe`-derived version, commit, build time embedded via `-ldflags -X internal/version.*` |
@@ -3145,15 +3145,10 @@ automatic activation; the model loads a selected guide explicitly.
 | `make cross` | build the frontend, then produce all 7 managed archives without GoReleaser |
 | `make snapshot` | build the frontend through the GoReleaser before hook, then produce 7 snapshot archives in `dist/` |
 | `make release-dry` | build the frontend through the GoReleaser before hook, then run a non-publishing release |
-| `make integration` | resolve live provider/Codex source paths from the original environment, isolate writable runtime/user-tool state under a temporary `HOME`, then run verbose credential-backed `go test -tags=integration ./tests/e2e/...` |
+| `make integration` | inherit the caller's environment and run verbose build-tagged contract and credential-backed `go test -tags=integration ./tests/e2e/...`; `JUEX_PROVIDER_CONFIG` explicitly selects a provider file when needed |
 | `make provider-smoke` | build-dependent live capability and Schedule-routing smoke for one seeded eligible ref from resolved provider config |
 | `make development-eval` | shared candidate deterministic plan, build, seeded provider-config live smoke, and a redacted validation record; the full Go suite already includes `tests/e2e` and is run once |
 | `make clean` | `rm -rf dist` |
-
-The test-home wrapper resolves active mise runtime directories before replacing
-`HOME`, using the repository `mise.toml` and the caller's installation data but
-disposable bootstrap state/cache directories. Child processes receive isolated
-mise config/state/cache paths and direct runtime directories ahead of shims.
 
 ### `goreleaser`
 
@@ -3265,7 +3260,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flags including model, debug, and log-level |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
 | `tests/e2e` | sealed-catalog full-stack tempdir scenario, all-disabled Module composition, Primary Session Module-set replacement, model-driven Builtin/Skill/model-state/Observable/Extension-MCP catalog flow, installed Extension enable/disable and `ext:<name>` data isolation, apply_patch builtin flow, resume round-trip, canonical session journals and debug logs, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
-| `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracles for conversation/event/tool and Schedule persistence artifacts; retry-isolated live Schedule routing; provider-config candidate selection; eval shell wrappers; development step flags; report directory defaults |
+| `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracles for conversation/event/tool and Schedule persistence artifacts; retry-isolated live Schedule routing; provider-config candidate selection; verification command orchestration; development step flags; report directory defaults |
 
 Agents use `make verify-focused`, `make verify-candidate`, and `make
 verify-final` as the stable orchestration surface. Lower-level deterministic
@@ -3273,16 +3268,13 @@ and live commands remain available for harness development and exact reruns.
 Provider-quality smoke tests remain credential-backed.
 There are two live layers:
 
-- `make integration` resolves `JUEX_PROVIDER_CONFIG` (or the original native
-  user home's `.juex/juex.yaml`) and `CODEX_HOME` before switching `HOME`; on
-  Windows, the source user home is `USERPROFILE`. The live tests receive those
-  absolute source paths while Juex, user config/cache, Windows
-  application-data, global Git, and Go telemetry writes remain under the
-  temporary `HOME`; ordinary `make test` and `make race`
-  receive neither real source. `JUEX_PROVIDER_SMOKE_ONLY=provider:model` selects one
+- `make integration` inherits `HOME`, `CODEX_HOME`, `JUEX_HOME`, and tool state
+  from the caller. Live tests read `JUEX_PROVIDER_CONFIG` when set or the
+  caller's `.juex/juex.yaml` otherwise, then use case-local temporary runtime
+  state after selecting the provider input. `JUEX_PROVIDER_SMOKE_ONLY=provider:model` selects one
   configured override. The harness calls the eval layer's
   `write-model-config` command, so integration and provider smoke share the
-  same provider/model extraction and isolated minimal-config writer. It clears
+  same provider/model extraction and minimal-config writer. It clears
   the `PROVIDER_API_ID`, `PROVIDER_API_PROTOCOL`, and `PROVIDER_API_MODEL`
   selectors to keep that selection stable. Endpoint, credential,
   thinking-effort, and context-window overrides from the process environment
