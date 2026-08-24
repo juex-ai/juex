@@ -117,9 +117,11 @@ domain boundary.
 3. Each Provider iteration receives canonical context and may return ordered
    Tool Calls. Every call is identified by Turn, Provider iteration, assistant
    message, call position, and Tool Use ID.
-4. Runtime durably declares the complete ordered Tool Call batch before any
-   call starts. It durably marks each call started before a Tool Policy or
-   handler can cross an external side-effect boundary. The Tool implementation
+4. Runtime treats the complete ordered Tool Call set from one Provider response
+   as one batch, including a set of length one, and durably declares that batch
+   before any call starts. It durably marks each call started before a Tool
+   Policy or handler can cross an external side-effect boundary. The Tool
+   implementation
    owns its raw output and structured diagnostics; ordered Tool Policies and
    context projection produce the effective Tool Result. Runtime durably
    records that exact Provider-visible success, failure, timeout, or

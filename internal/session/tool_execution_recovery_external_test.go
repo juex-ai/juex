@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -151,6 +152,93 @@ func TestToolExecutionRecoveryDistinguishesCrashBoundaries(t *testing.T) {
 				t.Fatalf("unknown events = %d, want 0", unknown)
 			}
 		})
+	}
+}
+
+func TestToolExecutionRecoveryUsesSameCrashSemanticsForSizeOneAndMulti(t *testing.T) {
+	tests := []struct {
+		name        string
+		phase       string
+		wantCode    string
+		wantContent string
+	}{
+		{name: "before declaration", phase: "uncheckpointed", wantCode: "TOOL_NOT_STARTED"},
+		{name: "after declaration", phase: "declared", wantCode: "TOOL_NOT_STARTED"},
+		{name: "after start", phase: "started", wantCode: "TOOL_OUTCOME_UNKNOWN"},
+		{name: "after outcome before transcript append", phase: "outcome", wantContent: "recorded once"},
+	}
+	for _, callCount := range []int{1, 3} {
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("size_%d/%s", callCount, tt.name), func(t *testing.T) {
+				root := t.TempDir()
+				sess, err := session.NewWithOptions(root, session.Options{EventCatalog: eventcatalog.Default()})
+				if err != nil {
+					t.Fatal(err)
+				}
+				blocks := make([]llm.Block, callCount)
+				calls := make([]toolevents.ToolCallPayload, callCount)
+				for i := range blocks {
+					id := fmt.Sprintf("call-%d", i)
+					name := fmt.Sprintf("effect_%d", i)
+					blocks[i] = llm.Block{Type: llm.BlockToolUse, ToolUseID: id, ToolName: name}
+					calls[i] = toolevents.ToolCallPayload{Name: name, ToolUseID: id, Iter: 5, CallIndex: i, MessageID: "assistant-matrix"}
+				}
+				assistant, err := sess.AppendAssigned(llm.Message{ID: "assistant-matrix", Role: llm.RoleAssistant, Blocks: blocks})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tt.phase != "uncheckpointed" {
+					appendExecutionEvent(t, sess, events.Event{Type: "llm.responded", TurnID: "turn-matrix", Payload: runtime.LLMRespondedPayload{
+						Iter: 5, MessageID: assistant.ID, EpochID: "epoch-matrix", RequestDigest: strings.Repeat("a", 64),
+						Blocks: assistant.Blocks, ToolCalls: calls,
+					}})
+					for _, call := range calls {
+						appendExecutionEvent(t, sess, toolEvent(toolevents.RequestedType, toolevents.Requested(call)))
+					}
+				}
+				if tt.phase == "started" || tt.phase == "outcome" {
+					for _, call := range calls {
+						appendExecutionEvent(t, sess, toolEvent(toolevents.RunningType, toolevents.Running(call)))
+					}
+				}
+				if tt.phase == "outcome" {
+					for _, call := range calls {
+						appendExecutionEvent(t, sess, toolEvent(toolevents.CompletedType, toolevents.CompletedPayload{
+							Name: call.Name, ToolUseID: call.ToolUseID, Iter: call.Iter, CallIndex: call.CallIndex, MessageID: call.MessageID,
+							Outcome: &toolevents.RecordedOutcome{MessageID: "result-matrix", Block: llm.Block{
+								Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.Name, Content: tt.wantContent,
+							}},
+						}))
+					}
+				}
+				dir := sess.Dir
+				if err := sess.Close(); err != nil {
+					t.Fatal(err)
+				}
+
+				recovered, err := session.LoadWithOptions(dir, session.Options{RepairTranscript: true, EventCatalog: eventcatalog.Default()})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer recovered.Close()
+				result := recovered.History[len(recovered.History)-1]
+				if len(result.Blocks) != callCount {
+					t.Fatalf("result blocks = %+v", result.Blocks)
+				}
+				for i, block := range result.Blocks {
+					if block.ToolUseID != calls[i].ToolUseID {
+						t.Fatalf("result order = %+v", result.Blocks)
+					}
+					if tt.wantContent != "" {
+						if block.Content != tt.wantContent || block.IsError || result.ID != "result-matrix" {
+							t.Fatalf("recorded result = message=%+v block=%+v", result, block)
+						}
+					} else if !block.IsError || !strings.Contains(block.Content, tt.wantCode) {
+						t.Fatalf("recovery result = %+v, want %s", block, tt.wantCode)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -318,6 +406,43 @@ func TestToolExecutionRecoveryDoesNotReclassifyNormalRecordedOutcomeAsRepair(t *
 		if event.Type == "transcript.repaired" {
 			t.Fatalf("normal recorded outcome was reclassified as transcript repair: %+v", event)
 		}
+	}
+}
+
+func TestProjectTranscriptRepairEventsUnifiesSessionAndRuntimeFacts(t *testing.T) {
+	if projected := session.ProjectTranscriptRepairEvents("recovery-turn", "turn_start", nil); len(projected) != 0 {
+		t.Fatalf("empty repairs projected events = %+v", projected)
+	}
+	repairs := []session.TranscriptRepair{
+		{
+			ToolUseID: "unknown", ToolName: "mcp__remote__send", TurnID: "tool-turn",
+			ProviderIteration: 3, CallIndex: 1, AssistantMessageID: "assistant-1",
+			EffectiveInput: map[string]any{"value": "effective"}, RecoveryCode: "TOOL_OUTCOME_UNKNOWN",
+		},
+		{ToolUseID: "already-recorded", RecoveryCode: "TOOL_OUTCOME_UNKNOWN", OutcomeUnknownRecorded: true},
+		{ToolUseID: "not-started", RecoveryCode: "TOOL_NOT_STARTED"},
+	}
+
+	projected := session.ProjectTranscriptRepairEvents("recovery-turn", "turn_start", repairs)
+	if len(projected) != 2 {
+		t.Fatalf("projected events = %+v", projected)
+	}
+	unknown := projected[0]
+	if unknown.Type != toolevents.OutcomeUnknownType || unknown.TurnID != "tool-turn" {
+		t.Fatalf("outcome unknown event = %+v", unknown)
+	}
+	payload, ok := unknown.Payload.(toolevents.OutcomeUnknownPayload)
+	if !ok || payload.MessageID != "assistant-1" || payload.ToolUseID != "unknown" || payload.CallIndex != 1 ||
+		payload.Error != "TOOL_OUTCOME_UNKNOWN: JueX recorded that this tool call started, but no durable outcome was recorded. It may already have produced external side effects. Do not retry it until the external state has been checked." {
+		t.Fatalf("outcome unknown payload = %+v", unknown.Payload)
+	}
+	final := projected[1]
+	if final.Type != "transcript.repaired" || final.TurnID != "recovery-turn" {
+		t.Fatalf("transcript repaired event = %+v", final)
+	}
+	finalPayload, ok := final.Payload.(session.TranscriptRepairedPayload)
+	if !ok || finalPayload.Reason != "turn_start" || !reflect.DeepEqual(finalPayload.Repairs, repairs) {
+		t.Fatalf("transcript repaired payload = %+v", final.Payload)
 	}
 }
 

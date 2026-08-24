@@ -16,6 +16,9 @@ owns the transcript, Event journal, and single-writer Session lock.
 `internal/events` and `internal/eventcatalog` provide the commit-before-project
 boundary. `internal/tools` owns raw handler execution, while
 `internal/toolevents` owns stable Tool Event payload constructors.
+`internal/session` owns the per-call recovery-state projection and the pure
+projection from transcript repairs to recovery Events; Runtime and Session load
+commit that same repair projection through their own durable Event paths.
 
 The required order is:
 
@@ -31,9 +34,10 @@ The required order is:
    only at a Provider-iteration boundary; mark `admitted`, project and append in
    queue order, then mark `processed`. `pending_input.jsonl` remains authoritative
    across cancellation, Turn boundaries, and restart.
-3. **Tool batch:** commit `llm.responded` and every ordered `tool.requested`
-   before any call starts. Commit `tool.running` before the first pre-Tool policy
-   or handler action. Checkpoint each transformed input before a later policy can
+3. **Tool batch:** treat one or more Tool Calls from one Provider response as
+   the same ordered batch. Commit `llm.responded` and every ordered
+   `tool.requested` before any call starts. Commit `tool.running` before the
+   first pre-Tool policy or handler action. Checkpoint each transformed input before a later policy can
    observe it. After raw handler output and post-Tool policy, project the complete
    ordered result batch; commit one terminal Tool outcome containing each exact
    Provider-visible block; append that same batch before the next Provider call.

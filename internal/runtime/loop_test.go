@@ -1206,51 +1206,61 @@ func TestTurn_DurableTransformedToolInputFailurePreventsHandlerExecution(t *test
 }
 
 func TestTurn_DeclaresWholeToolBatchBeforeAnyToolStarts(t *testing.T) {
-	prov := &mockProvider{script: []llm.Response{
-		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "call-1", ToolName: "effect_one"},
-			{Type: llm.BlockToolUse, ToolUseID: "call-2", ToolName: "effect_two"},
-		}}, StopReason: llm.StopToolUse},
-		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
-	}}
-	eng, bus := newEngine(t, prov, false)
-	for _, name := range []string{"effect_one", "effect_two"} {
-		eng.Tools.MustRegister(tools.Tool{Name: name, Handler: func(context.Context, map[string]any) (string, error) {
-			return "ok", nil
-		}})
-	}
-	type observedToolEvent struct {
-		typeName  string
-		toolUseID string
-	}
-	var observedMu sync.Mutex
-	var observed []observedToolEvent
-	for _, eventType := range []string{toolevents.RequestedType, toolevents.RunningType} {
-		bus.Subscribe(eventType, func(event events.Event) {
+	for _, callCount := range []int{1, 3} {
+		t.Run(fmt.Sprintf("size_%d", callCount), func(t *testing.T) {
+			calls := make([]llm.Block, callCount)
+			toolNames := make([]string, callCount)
+			for i := range calls {
+				toolNames[i] = fmt.Sprintf("effect_%d", i)
+				calls[i] = llm.Block{Type: llm.BlockToolUse, ToolUseID: fmt.Sprintf("call-%d", i), ToolName: toolNames[i]}
+			}
+			prov := &mockProvider{script: []llm.Response{
+				{Message: llm.Message{Role: llm.RoleAssistant, Blocks: calls}, StopReason: llm.StopToolUse},
+				{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+			}}
+			eng, bus := newEngine(t, prov, false)
+			for _, name := range toolNames {
+				eng.Tools.MustRegister(tools.Tool{Name: name, Handler: func(context.Context, map[string]any) (string, error) {
+					return "ok", nil
+				}})
+			}
+
+			type observedToolEvent struct {
+				typeName  string
+				toolUseID string
+			}
+			var observedMu sync.Mutex
+			var observed []observedToolEvent
+			for _, eventType := range []string{toolevents.RequestedType, toolevents.RunningType} {
+				bus.Subscribe(eventType, func(event events.Event) {
+					observedMu.Lock()
+					defer observedMu.Unlock()
+					toolUseID := ""
+					switch payload := event.Payload.(type) {
+					case toolevents.RequestedPayload:
+						toolUseID = payload.ToolUseID
+					case toolevents.RunningPayload:
+						toolUseID = payload.ToolUseID
+					}
+					observed = append(observed, observedToolEvent{typeName: event.Type, toolUseID: toolUseID})
+				})
+			}
+
+			if out, err := eng.Turn(context.Background(), "run batch"); err != nil || out != "done" {
+				t.Fatalf("Turn() = %q, %v", out, err)
+			}
 			observedMu.Lock()
 			defer observedMu.Unlock()
-			toolUseID := ""
-			switch payload := event.Payload.(type) {
-			case toolevents.RequestedPayload:
-				toolUseID = payload.ToolUseID
-			case toolevents.RunningPayload:
-				toolUseID = payload.ToolUseID
+			if len(observed) != callCount*2 {
+				t.Fatalf("observed events = %+v", observed)
 			}
-			observed = append(observed, observedToolEvent{typeName: event.Type, toolUseID: toolUseID})
+			for i := range calls {
+				want := observedToolEvent{typeName: toolevents.RequestedType, toolUseID: calls[i].ToolUseID}
+				if observed[i] != want {
+					t.Fatalf("tool batch was not fully declared before execution: %+v", observed)
+				}
+			}
 		})
-	}
-
-	if out, err := eng.Turn(context.Background(), "run both"); err != nil || out != "done" {
-		t.Fatalf("Turn() = %q, %v", out, err)
-	}
-	observedMu.Lock()
-	defer observedMu.Unlock()
-	if len(observed) != 4 {
-		t.Fatalf("observed events = %+v", observed)
-	}
-	if observed[0] != (observedToolEvent{typeName: toolevents.RequestedType, toolUseID: "call-1"}) ||
-		observed[1] != (observedToolEvent{typeName: toolevents.RequestedType, toolUseID: "call-2"}) {
-		t.Fatalf("tool batch was not fully declared before execution: %+v", observed)
 	}
 }
 

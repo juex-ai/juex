@@ -1124,9 +1124,10 @@ In the app runtime path, the event sink is the Bus commit boundary: a durable
 event must reach `events.jsonl` before projections or live deliveries see it.
 Provider, Hook, and Tool side effects are gated by their required request event,
 so a journal failure stops the effect instead of publishing an uncommitted
-fact. For Tool batches, `llm.responded` plus every `tool.requested` records the
-ordered declared set first. `tool.running` commits immediately before the first
-pre-Tool Hook or handler action that may have a side effect. A terminal
+fact. For Tool batches, including a size-one batch, `llm.responded` plus every
+`tool.requested` records the ordered declared set first. `tool.running` commits
+immediately before the first pre-Tool Hook or handler action that may have a
+side effect. A terminal
 `tool.completed` or `tool.errored` commits the exact projected Tool Result
 before the result message is appended and before another Provider request.
 `Close` rejects new commits, drains queued live deliveries, synchronizes
@@ -1149,6 +1150,11 @@ restart interrupts repair-event commits, the next repair pass recognizes those
 persisted blocks and appends only the missing evidence. App runtime
 initialization performs these writes through the Catalog-backed Bus only after
 acquiring the Session lifetime lock.
+`internal/session` owns the per-call journal fold and a pure projection from
+`TranscriptRepair` records to recovery Events. Session loading and Runtime turn
+startup commit that same projection through their respective Catalog-backed
+paths, so recovery codes, messages, original Tool Turn identity, and repair
+operation identity cannot drift while Runtime remains free of recovery state.
 The latest `token_usage` and
 `context_usage` are restored from
 `llm.responded` events and exposed through session `Info`, not through
@@ -2261,12 +2267,12 @@ exposes this capability.
                                   |
                           tool_use blocks?
                           +-------+--------+
-                          no               yes ---> parallel:
-                          v                          for each:
-                  Session.Append                     | Registry.Call
+                          no               yes ---> one ordered batch:
+                          v                          independent calls may run concurrently;
+                  Session.Append                     | Session-state and Side Session calls preserve Provider order
                   emit turn.completed                | emit toolevents requested/delta/completed/errored
                   return text                        v
-                                               history.append(tool_result)
+                                               history.append(ordered tool_result batch)
                                                     |
                                                     +---> loop back to LLM
 ```
