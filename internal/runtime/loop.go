@@ -748,27 +748,13 @@ func (e *Engine) repairTranscriptLocked(turnID, reason string) error {
 		return fmt.Errorf("session repair transcript: %w", err)
 	}
 	if len(repairs) > 0 {
-		for _, repair := range repairs {
-			if repair.RecoveryCode != "TOOL_OUTCOME_UNKNOWN" || repair.OutcomeUnknownRecorded {
-				continue
+		for _, event := range session.ProjectTranscriptRepairEvents(turnID, reason, repairs) {
+			if err := e.emit(event); err != nil {
+				if event.Type != "transcript.repaired" {
+					return fmt.Errorf("commit unknown tool outcome: %w", err)
+				}
+				return fmt.Errorf("commit transcript repair: %w", err)
 			}
-			call := toolevents.ToolCallPayload{
-				Name: repair.ToolName, ToolUseID: repair.ToolUseID,
-				Iter: repair.ProviderIteration, CallIndex: repair.CallIndex,
-				MessageID: repair.AssistantMessageID, Input: repair.EffectiveInput,
-			}
-			if err := e.emit(events.Event{
-				Type: toolevents.OutcomeUnknownType, TurnID: repair.TurnID,
-				Payload: toolevents.OutcomeUnknown(call, "TOOL_OUTCOME_UNKNOWN: tool execution may have produced external side effects; verify external state before retrying"),
-			}); err != nil {
-				return fmt.Errorf("commit unknown tool outcome: %w", err)
-			}
-		}
-		if err := e.emit(events.Event{Type: "transcript.repaired", TurnID: turnID, Payload: session.TranscriptRepairedPayload{
-			Reason:  reason,
-			Repairs: repairs,
-		}}); err != nil {
-			return fmt.Errorf("commit transcript repair: %w", err)
 		}
 	}
 	return nil

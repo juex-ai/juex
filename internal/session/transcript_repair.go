@@ -42,7 +42,7 @@ type pendingTranscriptToolUse struct {
 	name      string
 	messageID string
 	input     map[string]any
-	execution toolExecutionRecovery
+	execution toolCallRecoveryState
 }
 
 // RepairTranscript inserts explicit error tool_result messages for assistant
@@ -59,7 +59,7 @@ func (s *Session) RepairTranscript(reason string) ([]TranscriptRepair, error) {
 }
 
 func (s *Session) repairTranscriptWithEvents(reason string, journal []events.Event) ([]TranscriptRepair, error) {
-	executions, err := projectToolExecutionRecovery(journal)
+	executions, err := projectToolCallRecovery(journal)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +98,7 @@ func (s *Session) repairTranscriptWithEvents(reason string, journal []events.Eve
 func recoverPersistedTranscriptRepairs(
 	history []llm.Message,
 	reason string,
-	executions toolExecutionRecoveryIndex,
+	executions toolCallRecoveryProjection,
 	journal []events.Event,
 ) []TranscriptRepair {
 	finalized := make(map[string]struct{})
@@ -118,7 +118,7 @@ func recoverPersistedTranscriptRepairs(
 			if decodeRecoveryPayload(event.Payload, &payload) != nil {
 				continue
 			}
-			unknownRecorded[toolExecutionRecoveryKey(payload.MessageID, payload.ToolUseID)] = struct{}{}
+			unknownRecorded[toolCallRecoveryKey(payload.MessageID, payload.ToolUseID)] = struct{}{}
 		}
 	}
 
@@ -154,7 +154,7 @@ func recoverPersistedTranscriptRepairs(
 				beforeID = history[messageIndex+1].ID
 			}
 			_, recoveryCode := recoveryToolResult(toolUse)
-			_, recorded := unknownRecorded[toolExecutionRecoveryKey(toolUse.messageID, toolUse.id)]
+			_, recorded := unknownRecorded[toolCallRecoveryKey(toolUse.messageID, toolUse.id)]
 			repairs = append(repairs, TranscriptRepair{
 				ToolUseID:               toolUse.id,
 				ToolName:                toolUse.name,
@@ -176,7 +176,7 @@ func recoverPersistedTranscriptRepairs(
 }
 
 func persistedRepairBlockMatches(block llm.Block, toolUse pendingTranscriptToolUse) bool {
-	if toolUse.execution.phase != toolExecutionDeclared && toolUse.execution.phase != toolExecutionStarted {
+	if toolUse.execution.phase != toolCallRecoveryDeclared && toolUse.execution.phase != toolCallRecoveryStarted {
 		return false
 	}
 	expected, _ := recoveryToolResult(toolUse)
@@ -191,7 +191,7 @@ func repairTranscriptMessages(history []llm.Message, reason string) ([]llm.Messa
 	return repairTranscriptMessagesWithExecutions(history, reason, nil)
 }
 
-func repairTranscriptMessagesWithExecutions(history []llm.Message, reason string, executions toolExecutionRecoveryIndex) ([]llm.Message, []TranscriptRepair) {
+func repairTranscriptMessagesWithExecutions(history []llm.Message, reason string, executions toolCallRecoveryProjection) ([]llm.Message, []TranscriptRepair) {
 	out := make([]llm.Message, 0, len(history))
 	var repairs []TranscriptRepair
 	var pending []pendingTranscriptToolUse
@@ -251,7 +251,7 @@ func providerVisibleRepairBoundary(block llm.Block) bool {
 	}
 }
 
-func messageToolUses(msg llm.Message, executions toolExecutionRecoveryIndex) []pendingTranscriptToolUse {
+func messageToolUses(msg llm.Message, executions toolCallRecoveryProjection) []pendingTranscriptToolUse {
 	var out []pendingTranscriptToolUse
 	for _, block := range msg.Blocks {
 		if block.Type == llm.BlockToolUse && block.ToolUseID != "" {
@@ -318,11 +318,11 @@ func recoveryToolResult(item pendingTranscriptToolUse) (llm.Block, string) {
 		block.Type = llm.BlockToolResult
 		block.ToolUseID = item.id
 		block.ToolName = item.name
-		return block, string(toolExecutionOutcomeRecorded)
+		return block, string(toolCallRecoveryOutcomeRecorded)
 	}
 	content := toolNotStartedContent
 	recoveryCode := "TOOL_NOT_STARTED"
-	if item.execution.phase == toolExecutionStarted {
+	if item.execution.phase == toolCallRecoveryStarted {
 		content = toolOutcomeUnknownContent
 		if !reflect.DeepEqual(item.input, item.execution.input) {
 			if encoded, err := json.Marshal(item.execution.input); err == nil {
