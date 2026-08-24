@@ -162,37 +162,51 @@ func (s *DurableSink) AddDelivery(delivery Delivery) func() {
 }
 
 func (s *DurableSink) Commit(e Event) (Event, error) {
+	committed, complete, err := s.commitForPublication(e)
+	if err != nil {
+		return Event{}, err
+	}
+	complete()
+	return committed, nil
+}
+
+func (s *DurableSink) commitForPublication(e Event) (Event, func(), error) {
 	if s == nil {
-		return Event{}, ErrDurableSinkClosed
+		return Event{}, nil, ErrDurableSinkClosed
 	}
 	e = Normalize(e)
 
 	s.commitMu.Lock()
-	defer s.commitMu.Unlock()
+	releaseOnReturn := true
+	defer func() {
+		if releaseOnReturn {
+			s.commitMu.Unlock()
+		}
+	}()
 
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return Event{}, ErrDurableSinkClosed
+		return Event{}, nil, ErrDurableSinkClosed
 	}
 	journal := s.journal
 	catalog := s.catalog
 	if journal == nil && !e.Transient {
 		s.mu.Unlock()
-		return Event{}, ErrDurableJournalMissing
+		return Event{}, nil, ErrDurableJournalMissing
 	}
 	s.mu.Unlock()
 	if catalog != nil {
 		var err error
 		e, err = catalog.Prepare(e)
 		if err != nil {
-			return Event{}, err
+			return Event{}, nil, err
 		}
 	}
 
 	if !e.Transient {
 		if err := journal.AppendEvent(e); err != nil {
-			return Event{}, err
+			return Event{}, nil, err
 		}
 	}
 
@@ -207,18 +221,24 @@ func (s *DurableSink) Commit(e Event) (Event, error) {
 	}
 	s.mu.Unlock()
 
-	for _, projection := range projections {
-		projection.Publish(e)
-	}
+	var completeOnce sync.Once
+	complete := func() {
+		completeOnce.Do(func() {
+			defer s.commitMu.Unlock()
+			for _, projection := range projections {
+				projection.Publish(e)
+			}
 
-	s.mu.Lock()
-	if len(deliveries) > 0 {
-		s.queue = append(s.queue, deliveryBatch{event: e, deliveries: deliveries})
-		s.cond.Signal()
+			s.mu.Lock()
+			if len(deliveries) > 0 {
+				s.queue = append(s.queue, deliveryBatch{event: e, deliveries: deliveries})
+				s.cond.Signal()
+			}
+			s.mu.Unlock()
+		})
 	}
-	s.mu.Unlock()
-
-	return e, nil
+	releaseOnReturn = false
+	return e, complete, nil
 }
 
 // ReadCommitted runs read after every earlier commit has finished its

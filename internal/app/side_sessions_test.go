@@ -175,6 +175,12 @@ type goalSideQueueProvider struct {
 	calls   int
 }
 
+type goalSideIdleProvider struct {
+	mu    sync.Mutex
+	app   *App
+	calls int
+}
+
 func (p *sideToolDuringDeliveryProvider) Name() string { return "side-delivery-tool" }
 
 func (p *sideToolDuringDeliveryProvider) Complete(_ context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
@@ -227,6 +233,37 @@ func (p *goalSideQueueProvider) Complete(ctx context.Context, _ string, history 
 		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "subscribed result incorporated"), StopReason: llm.StopEndTurn}, nil
 	}
 	return llm.Response{}, errors.New("queued Side Session result missing from provider history")
+}
+
+func (p *goalSideIdleProvider) Name() string { return "goal-side-idle" }
+
+func (p *goalSideIdleProvider) Complete(_ context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
+	p.mu.Lock()
+	p.calls++
+	p.mu.Unlock()
+	for _, message := range history {
+		if message.Kind != llm.MessageKindContinuation {
+			continue
+		}
+		reason := "subscribed idle result incorporated"
+		goalState, _ := runtime.SessionStateStoresFromModules(p.app.Engine.SessionRuntimeSnapshot().Modules)
+		if goalState == nil {
+			return llm.Response{}, errors.New("goal module store is unavailable")
+		}
+		if _, err := goalState.Update(workmem.GoalStateUpdate{
+			Status:       workmem.GoalStatusSuccess,
+			StatusReason: &reason,
+		}); err != nil {
+			return llm.Response{}, err
+		}
+		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "idle result incorporated")}, nil
+	}
+	for _, message := range history {
+		if message.Kind == llm.MessageKindSideSession {
+			return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "received subscribed idle result")}, nil
+		}
+	}
+	return llm.Response{}, errors.New("subscribed Side Session result missing from provider history")
 }
 
 func (p *barrierSideProvider) Name() string { return "side-barrier" }
@@ -935,6 +972,75 @@ func TestSideSessionDropsPersistedNotificationWhenRecoveryWaitIsCanceled(t *test
 	}
 }
 
+func TestSideSessionDropsPersistedNotificationWhenResumeIsCanceled(t *testing.T) {
+	primary := &scriptedSideProvider{}
+	parent := newSideSessionTestApp(t, primary)
+	status := SideSessionStatus{
+		SessionID:  "side-canceled-before-resume",
+		LastTurnID: "side-turn-canceled-before-resume",
+		Model:      "child-model",
+		State:      SideSessionStateIdle,
+		LastResult: "stale result",
+	}
+	managed := &managedSideSession{status: status}
+	handoffID := "side-session-result:" + status.SessionID + ":" + status.LastTurnID
+	parent.sideSessions.mu.Lock()
+	parent.sideSessions.sessions[status.SessionID] = managed
+	parent.sideSessions.resultHandoffs[handoffID] = managed
+	managed.resultHandoffs = 1
+	parent.sideSessions.mu.Unlock()
+
+	parent.turnAdmission.transitionMu.Lock()
+	transitionLocked := true
+	defer func() {
+		if transitionLocked {
+			parent.turnAdmission.transitionMu.Unlock()
+		}
+	}()
+	deliveryCtx, cancelDelivery := context.WithCancel(context.Background())
+	delivered := make(chan struct{})
+	go func() {
+		parent.sideSessions.deliverResult(deliveryCtx, managed, status, handoffID)
+		close(delivered)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		records, err := parent.Engine.PendingInputQueue.Records()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record, ok := records[handoffID]; ok && record.State == runtime.PendingInputStatePending {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("side result %q was not persisted before resume cancellation", handoffID)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancelDelivery()
+	parent.turnAdmission.transitionMu.Unlock()
+	transitionLocked = false
+	select {
+	case <-delivered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("side result delivery did not stop after resume cancellation")
+	}
+	records, err := parent.Engine.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[handoffID].State; got != runtime.PendingInputStateDropped {
+		t.Fatalf("canceled side result state = %q, want %q", got, runtime.PendingInputStateDropped)
+	}
+	primary.mu.Lock()
+	calls := primary.calls
+	primary.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("primary provider calls = %d, want canceled result to remain inert", calls)
+	}
+}
+
 func TestSideSessionRetriesTransientStaleNotificationDropFailure(t *testing.T) {
 	parent := newSideSessionTestApp(t, &scriptedSideProvider{})
 	identity, ok := parent.SessionIdentity()
@@ -1079,6 +1185,54 @@ func TestSideSessionPermanentNotificationFailureIsObservableAndBounded(t *testin
 	}
 	if status.NotificationError == "" {
 		t.Fatalf("notification failure missing from status: %+v", status)
+	}
+}
+
+func TestSideSessionAdmissionRetryExhaustionIsObservableAndReleasesHandoff(t *testing.T) {
+	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, &scriptedSideProvider{})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	wantErr := errors.New("persistent side notification admission failure")
+	parent.Bus.SetCommitter(&retryUntilReleasedEventCommitter{
+		delegate:  parent.eventSink,
+		eventType: runtime.TurnAdmittedType,
+		err:       wantErr,
+		release:   release,
+		failed:    make(chan struct{}),
+	})
+	failed := make(chan events.Event, 1)
+	unsubscribe := parent.Bus.Subscribe("side_session.notification_failed", func(event events.Event) { failed <- event })
+	defer unsubscribe()
+
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{"query": "exhaust admission retries", "subscribe": true})
+	id := created["session_id"].(string)
+	status := waitForSideState(t, parent, id, SideSessionStateIdle)
+	handoffID := "side-session-result:" + id + ":" + status.LastTurnID
+	select {
+	case event := <-failed:
+		if !strings.Contains(fmt.Sprint(event.Payload), wantErr.Error()) {
+			t.Fatalf("notification failure event = %+v", event)
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("exhausted admission retries did not report notification failure")
+	}
+	status, err := parent.sideSessions.Status(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status.NotificationError, wantErr.Error()) {
+		t.Fatalf("notification error = %q, want exhausted admission failure", status.NotificationError)
+	}
+	parent.sideSessions.mu.Lock()
+	_, retained := parent.sideSessions.resultHandoffs[handoffID]
+	managed := parent.sideSessions.sessions[id]
+	retainedCount := 0
+	if managed != nil {
+		retainedCount = managed.resultHandoffs
+	}
+	parent.sideSessions.mu.Unlock()
+	if retained || retainedCount != 0 || parent.sideSessions.shouldDeferGoalContinuation() {
+		t.Fatalf("exhausted handoff retained: registered=%v count=%d", retained, retainedCount)
 	}
 }
 
@@ -1332,6 +1486,52 @@ func TestPrimaryGoalContinuationDefersWhileSubscribedResultIsQueued(t *testing.T
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("side-session result was not queued while the primary provider was active")
+}
+
+func TestSubscribedIdleResultReleasesHandoffBeforeGoalFinishPolicy(t *testing.T) {
+	primaryProvider := &goalSideIdleProvider{}
+	parent := newSideSessionTestApp(t, primaryProvider, &scriptedSideProvider{})
+	primaryProvider.app = parent
+	goalState := appGoalStateStore(t, parent)
+	if _, err := goalState.Create("finish delegated work", "incorporate the subscribed idle result"); err != nil {
+		t.Fatal(err)
+	}
+
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{
+		"query":     "finish while primary is idle",
+		"subscribe": true,
+	})
+	id := created["session_id"].(string)
+	waitForSideState(t, parent, id, SideSessionStateIdle)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		goal, err := goalState.Snapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if goal.Status == workmem.GoalStatusSuccess {
+			if goal.ContinuationCount != 1 {
+				t.Fatalf("goal continuation count = %d, want 1", goal.ContinuationCount)
+			}
+			if parent.sideSessions.shouldDeferGoalContinuation() {
+				t.Fatal("started subscribed result retained Goal continuation deferral")
+			}
+			primaryProvider.mu.Lock()
+			calls := primaryProvider.calls
+			primaryProvider.mu.Unlock()
+			if calls != 2 {
+				t.Fatalf("primary provider calls = %d, want result plus Goal continuation", calls)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	goal, err := goalState.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("goal state = %+v, want subscribed result to admit its continuation", goal)
 }
 
 func TestPrimaryGoalContinuationDefersForSubscribedRunningSideSessions(t *testing.T) {

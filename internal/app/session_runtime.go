@@ -181,13 +181,17 @@ func (a *App) RunAdmittedTurn(ctx context.Context, turnID string, message llm.Me
 		return "", ErrSessionUnavailable
 	}
 	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
-		unwindCtx, cancel := context.WithCancel(context.Background())
-		cancel()
+		cause := cancellation.ContextError(ctx)
+		if cause == nil {
+			cause = err
+		}
+		unwindCtx, cancel := context.WithCancelCause(context.Background())
+		cancel(cause)
 		_, unwindErr := a.Engine.TurnMessageWithID(unwindCtx, message, turnID)
-		if unwindErr != nil && !cancellation.IsUserCancelled(unwindErr) {
+		if unwindErr != nil && !errors.Is(unwindErr, cause) && !cancellation.IsUserCancelled(unwindErr) {
 			return "", errors.Join(err, fmt.Errorf("release canceled admitted turn %q: %w", turnID, unwindErr))
 		}
-		return "", err
+		return "", cause
 	}
 	return a.Engine.TurnMessageWithID(ctx, message, turnID)
 }

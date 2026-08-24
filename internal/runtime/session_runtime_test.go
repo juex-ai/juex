@@ -126,7 +126,7 @@ func TestReplaceSessionRuntimeRecoversUnconsumedPolicyContext(t *testing.T) {
 	}
 }
 
-func TestRecoverPendingInputRecordsUsesAdmissionEventsAndTranscriptFacts(t *testing.T) {
+func TestRecoverPendingInputsUsesAdmissionEventsAndTranscriptFacts(t *testing.T) {
 	root := t.TempDir()
 	sess := newSessionRuntimeTestSession(t, root)
 	queue := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{})
@@ -173,11 +173,11 @@ func TestRecoverPendingInputRecordsUsesAdmissionEventsAndTranscriptFacts(t *test
 	}
 
 	engine := &Engine{Session: sess, PendingInputQueue: queue, Prompt: &prompt.Builder{}}
-	replayable, err := engine.RecoverPendingInputRecords()
+	replayable, err := engine.RecoverPendingInputs()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(replayable) != 1 || replayable[0].ID != committed.ID {
+	if len(replayable) != 1 || replayable[0].RecordID != committed.ID {
 		t.Fatalf("replayable records = %+v, want committed admission %q", replayable, committed.ID)
 	}
 	records, err := queue.Records()

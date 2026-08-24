@@ -2725,7 +2725,7 @@ func TestPostTurn_NewSlashIsCoherentWithConcurrentSessionReaders(t *testing.T) {
 	}
 }
 
-func TestCanonicalTerminalStatusPublishesAfterAdmissionRelease(t *testing.T) {
+func TestCanonicalTerminalStatusRejectsAdmissionUntilPublicationCompletes(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -2788,43 +2788,40 @@ func TestCanonicalTerminalStatusPublishesAfterAdmissionRelease(t *testing.T) {
 		t.Fatalf("canonical status = %+v, want completed turn", status)
 	}
 
-	type responseResult struct {
-		status int
-		body   []byte
-		err    error
+	second, err := http.Post(
+		ts.URL+"/api/sessions/"+sessionID+"/turns",
+		"application/json",
+		strings.NewReader(`{"prompt":"/new"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-	secondResult := make(chan responseResult, 1)
-	go func() {
-		second, err := http.Post(
-			ts.URL+"/api/sessions/"+sessionID+"/turns",
-			"application/json",
-			strings.NewReader(`{"prompt":"/new"}`),
-		)
-		if err != nil {
-			secondResult <- responseResult{err: err}
-			return
-		}
-		body, readErr := io.ReadAll(second.Body)
-		second.Body.Close()
-		secondResult <- responseResult{status: second.StatusCode, body: body, err: readErr}
-	}()
+	var conflict errorJSON
+	decodeErr = json.NewDecoder(second.Body).Decode(&conflict)
+	second.Body.Close()
+	if second.StatusCode != http.StatusConflict || decodeErr != nil {
+		t.Fatalf("new-session conflict = %d, decode=%v", second.StatusCode, decodeErr)
+	}
+	if !conflict.Retryable {
+		t.Fatalf("new-session conflict = %+v, want retryable", conflict)
+	}
 
-	select {
-	case result := <-secondResult:
-		release()
-		if result.err != nil {
-			t.Fatal(result.err)
-		}
-		t.Fatalf("new-session request completed before admission release: status=%d body=%s", result.status, result.body)
-	case <-time.After(100 * time.Millisecond):
-	}
 	release()
-	result := <-secondResult
-	if result.err != nil {
-		t.Fatal(result.err)
+	retry, err := http.Post(
+		ts.URL+"/api/sessions/"+sessionID+"/turns",
+		"application/json",
+		strings.NewReader(`{"prompt":"/new"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if result.status != http.StatusOK {
-		t.Fatalf("new-session status = %d, want %d; body=%s", result.status, http.StatusOK, result.body)
+	retryBody, readErr := io.ReadAll(retry.Body)
+	retry.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if retry.StatusCode != http.StatusOK {
+		t.Fatalf("new-session retry status = %d, want %d; body=%s", retry.StatusCode, http.StatusOK, retryBody)
 	}
 }
 

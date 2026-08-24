@@ -22,6 +22,8 @@ type turnLifecycle struct {
 	lastText        string
 	retriedOverflow bool
 	activeClosed    bool
+
+	pendingLifecycleHeld bool
 }
 
 type turnLifecycleResult struct {
@@ -50,6 +52,8 @@ func (l *turnLifecycle) runLocked(ctx context.Context) (turnLifecycleResult, err
 		return turnLifecycleResult{}, err
 	}
 	if err := l.engine.restorePendingInput(ctx, l.turnID, l.userMsg.ID); err != nil {
+		l.engine.pendingLifecycleMu.Lock()
+		l.pendingLifecycleHeld = true
 		if preserveErr := l.engine.preservePendingInputAfterFailureLocked(l.turnID); preserveErr != nil {
 			err = errors.Join(err, fmt.Errorf("preserve accepted input order after pending-input restore failure: %w", preserveErr))
 		}
@@ -78,10 +82,6 @@ func (l *turnLifecycle) runLocked(ctx context.Context) (turnLifecycleResult, err
 		if l.activeClosed {
 			break
 		}
-	}
-
-	if err := l.engine.recordTurnCompletionLocked(l.turnID, l.start, l.lastText); err != nil {
-		return turnLifecycleResult{}, fmt.Errorf("commit turn completion: %w", err)
 	}
 	return turnLifecycleResult{output: l.lastText}, nil
 }
@@ -192,11 +192,11 @@ func (l *turnLifecycle) applyFinishPolicyLocked(ctx context.Context, recorded re
 				return turnFinishOutcome{}, err
 			}
 			runtimemodule.ObserveFinishContinuation(ctx, request, candidate)
-			return l.finishOrContinueLocked(finalText), nil
+			return l.finishOrContinueLocked(finalText)
 		}
 		return turnFinishOutcome{action: turnFinishContinue, output: finalText}, nil
 	}
-	return l.finishOrContinueLocked(finalText), nil
+	return l.finishOrContinueLocked(finalText)
 }
 
 func (l *turnLifecycle) enqueueContinuationLocked(ctx context.Context, prompt string) error {
@@ -206,9 +206,23 @@ func (l *turnLifecycle) enqueueContinuationLocked(ctx context.Context, prompt st
 	return err
 }
 
-func (l *turnLifecycle) finishOrContinueLocked(output string) turnFinishOutcome {
-	if !l.engine.finishActiveTurnIfNoPending(l.turnID) {
-		return turnFinishOutcome{action: turnFinishContinue, output: output}
+func (l *turnLifecycle) finishOrContinueLocked(output string) (turnFinishOutcome, error) {
+	l.engine.pendingLifecycleMu.Lock()
+	if !l.engine.activeTurnHasNoPending(l.turnID) {
+		l.engine.pendingLifecycleMu.Unlock()
+		return turnFinishOutcome{action: turnFinishContinue, output: output}, nil
 	}
-	return turnFinishOutcome{action: turnFinishComplete, output: output, activeClosed: true}
+	l.engine.beginTerminalPublication(l.turnID)
+	l.engine.pendingLifecycleMu.Unlock()
+	completion, completeCommit, err := l.engine.recordTurnCompletionForPublication(l.turnID, l.start, output)
+	if err != nil {
+		completionErr := fmt.Errorf("commit turn completion: %w", err)
+		l.activeClosed = true
+		if publishErr := l.engine.commitAndPublishTurnError(l.turnID, completionErr); publishErr != nil {
+			return turnFinishOutcome{}, errors.Join(completionErr, publishErr)
+		}
+		return turnFinishOutcome{}, completionErr
+	}
+	l.engine.publishTerminalEvent(l.turnID, completion, completeCommit)
+	return turnFinishOutcome{action: turnFinishComplete, output: output, activeClosed: true}, nil
 }

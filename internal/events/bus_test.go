@@ -36,6 +36,27 @@ func TestBus_DoesNotPublishFailedCommit(t *testing.T) {
 	}
 }
 
+func TestBus_CommitAndPublishCommittedAreSeparate(t *testing.T) {
+	b := NewBus()
+	published := 0
+	b.Subscribe("turn.completed", func(Event) { published++ })
+
+	committed, err := b.Commit(Event{Type: "turn.completed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if committed.ID == "" || committed.Timestamp.IsZero() {
+		t.Fatalf("committed event = %+v, want normalized identity", committed)
+	}
+	if published != 0 {
+		t.Fatalf("published during Commit = %d, want 0", published)
+	}
+	b.PublishCommitted(committed)
+	if published != 1 {
+		t.Fatalf("published after PublishCommitted = %d, want 1", published)
+	}
+}
+
 type failingCommitter struct{ err error }
 
 func (c failingCommitter) Commit(Event) (Event, error) {

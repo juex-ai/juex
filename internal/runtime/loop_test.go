@@ -548,6 +548,118 @@ func TestAdmitTurnMessage_RepeatedAdmissionKeepsCommittedRecord(t *testing.T) {
 	}
 }
 
+func TestAdmitTurnMessage_CommitFailurePreservesReentrantPendingInput(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	queue := eng.currentPendingInputQueue()
+	originalWrite := queue.fileOps.write
+	wantErr := errors.New("commit turn input failed")
+	writes := 0
+	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
+		writes++
+		if writes == 3 {
+			return 0, wantErr
+		}
+		return originalWrite(file, body)
+	}
+	t.Cleanup(func() { queue.fileOps.write = originalWrite })
+
+	var enqueueErr, terminalAdmissionErr error
+	bus.Subscribe(TurnAdmittedType, func(events.Event) {
+		_, enqueueErr = eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "accepted during admission"), PendingInputOptions{
+			ID:  "reentrant-admission-input",
+			TTL: time.Hour,
+		})
+	})
+	bus.Subscribe("turn.errored", func(events.Event) {
+		_, terminalAdmissionErr = eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+			Message: llm.TextMessage(llm.RoleUser, "after failed admission terminal"),
+		})
+	})
+
+	admissionDone := make(chan error, 1)
+	go func() {
+		_, err := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "failed trigger"))
+		admissionDone <- err
+	}()
+	var admissionErr error
+	select {
+	case admissionErr = <-admissionDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn.errored subscriber deadlocked while receiving after failed admission")
+	}
+	if !errors.Is(admissionErr, wantErr) {
+		t.Fatalf("AdmitTurnMessage() error = %v, want %v", admissionErr, wantErr)
+	}
+	if enqueueErr != nil {
+		t.Fatalf("reentrant enqueue error = %v", enqueueErr)
+	}
+	if !errors.Is(terminalAdmissionErr, ErrActiveTurnExists) {
+		t.Fatalf("terminal subscriber admission error = %v, want %v", terminalAdmissionErr, ErrActiveTurnExists)
+	}
+	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "accepted during admission" {
+		t.Fatalf("preserved history = %+v, want accepted reentrant input", eng.Session.History)
+	}
+	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want failed reservation released after preservation", status)
+	}
+	records, err := queue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record := records["reentrant-admission-input"]; record.State != PendingInputStateProcessed {
+		t.Fatalf("reentrant record = %+v, want state %q", record, PendingInputStateProcessed)
+	}
+	for _, record := range records {
+		if record.Message.FirstText() == "failed trigger" && record.State != PendingInputStateDropped {
+			t.Fatalf("failed trigger record = %+v, want state %q", record, PendingInputStateDropped)
+		}
+	}
+}
+
+func TestReserveTurnID_CommitFailurePreservesConcurrentPendingInput(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	wantErr := errors.New("reservation commit failed")
+	commitStarted := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	bus.SetCommitter(blockingFailCommitter{
+		eventType: TurnAdmittedType,
+		err:       wantErr,
+		started:   commitStarted,
+		release:   releaseCommit,
+	})
+
+	reserveDone := make(chan error, 1)
+	go func() {
+		reserveDone <- eng.ReserveCompactionTurnID("failed-compact")
+	}()
+	select {
+	case <-commitStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reservation commit did not start")
+	}
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "accepted during reservation"), PendingInputOptions{
+		ID:  "reentrant-reservation-input",
+		TTL: time.Hour,
+	}); err != nil {
+		close(releaseCommit)
+		t.Fatal(err)
+	}
+	close(releaseCommit)
+	if err := <-reserveDone; !errors.Is(err, wantErr) {
+		t.Fatalf("ReserveCompactionTurnID() error = %v, want %v", err, wantErr)
+	}
+
+	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "accepted during reservation" {
+		t.Fatalf("preserved history = %+v, want accepted concurrent input", eng.Session.History)
+	}
+	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want failed reservation released after preservation", status)
+	}
+	if record := pendingLifecycleTestRecord(t, eng, "reentrant-reservation-input"); record.State != PendingInputStateProcessed {
+		t.Fatalf("concurrent record = %+v, want processed", record)
+	}
+}
+
 func TestAdmitTurnMessage_AdmissionAndCompensationFailureCannotReplayInput(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
@@ -1386,6 +1498,22 @@ type selectiveFailCommitter struct {
 type interceptCommitter struct {
 	eventType    string
 	beforeCommit func() error
+}
+
+type blockingFailCommitter struct {
+	eventType string
+	err       error
+	started   chan<- struct{}
+	release   <-chan struct{}
+}
+
+func (c blockingFailCommitter) Commit(event events.Event) (events.Event, error) {
+	if event.Type == c.eventType {
+		close(c.started)
+		<-c.release
+		return events.Event{}, c.err
+	}
+	return events.Normalize(event), nil
 }
 
 func (c interceptCommitter) Commit(event events.Event) (events.Event, error) {
@@ -5811,6 +5939,20 @@ func TestTurn_PendingInputRestoreFailureTerminallyPersistsAcceptedInput(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var acceptedRecordID string
+	for id, record := range records {
+		if record.MessageID == accepted.ID {
+			acceptedRecordID = id
+			break
+		}
+	}
+	if acceptedRecordID == "" {
+		t.Fatalf("pending record for accepted message %q not found: %+v", accepted.ID, records)
+	}
 	queue := eng.currentPendingInputQueue()
 	pendingPath := queue.path
 	backupPath := pendingPath + ".restore-failure"
@@ -5853,6 +5995,24 @@ func TestTurn_PendingInputRestoreFailureTerminallyPersistsAcceptedInput(t *testi
 	}
 
 	if err := restoreJournal(); err != nil {
+		t.Fatal(err)
+	}
+	discardDone := make(chan error, 1)
+	go func() {
+		_, err := eng.DiscardPendingInput(acceptedRecordID)
+		discardDone <- err
+	}()
+	select {
+	case err := <-discardDone:
+		t.Fatalf("discard completed before restore-failure lifecycle terminal handling: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if !lifecycle.pendingLifecycleHeld {
+		t.Fatal("restore-failure cleanup did not retain the pending lifecycle lock")
+	}
+	eng.pendingLifecycleMu.Unlock()
+	lifecycle.pendingLifecycleHeld = false
+	if err := <-discardDone; err != nil {
 		t.Fatal(err)
 	}
 	eng.finishActiveTurn("failed-turn")
@@ -6035,7 +6195,10 @@ func TestPreservePendingInputAfterFailureRepairsInterruptedToolCall(t *testing.T
 		t.Fatal(err)
 	}
 
-	if err := eng.preservePendingInputAfterFailureLocked(turnID); err != nil {
+	eng.pendingLifecycleMu.Lock()
+	err := eng.preservePendingInputAfterFailureLocked(turnID)
+	eng.pendingLifecycleMu.Unlock()
+	if err != nil {
 		t.Fatal(err)
 	}
 	if got := len(eng.Session.History); got != 4 {
@@ -7083,6 +7246,91 @@ func TestPromotePendingInputFailsBeforeObserverWhenDurableAdmissionFails(t *test
 	}
 }
 
+func TestPromotePendingInputFailurePreservesReentrantPendingInput(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	if err := eng.ReserveTurnID("compact-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "promotion trigger"), PendingInputOptions{
+		ID:  "promotion-trigger",
+		TTL: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queue := eng.currentPendingInputQueue()
+	originalWrite := queue.fileOps.write
+	wantErr := errors.New("promote turn input failed")
+	writes := 0
+	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
+		writes++
+		if writes == 2 {
+			return 0, wantErr
+		}
+		return originalWrite(file, body)
+	}
+	t.Cleanup(func() { queue.fileOps.write = originalWrite })
+
+	var enqueueErr, terminalPromotionErr error
+	bus.Subscribe(TurnAdmittedType, func(events.Event) {
+		_, enqueueErr = eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "accepted during promotion"), PendingInputOptions{
+			ID:  "reentrant-promotion-input",
+			TTL: time.Hour,
+		})
+	})
+	bus.Subscribe("turn.errored", func(events.Event) {
+		_, terminalPromotionErr = eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+			Message: llm.TextMessage(llm.RoleUser, "after failed promotion terminal"),
+		})
+	})
+
+	type promotionOutcome struct {
+		status   PendingInputStatus
+		promoted bool
+		err      error
+	}
+	promotionDone := make(chan promotionOutcome, 1)
+	go func() {
+		_, status, promoted, err := eng.PromotePendingInputTurn("compact-1", "turn-1")
+		promotionDone <- promotionOutcome{status: status, promoted: promoted, err: err}
+	}()
+	var outcome promotionOutcome
+	select {
+	case outcome = <-promotionDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn.errored subscriber deadlocked while receiving after failed promotion")
+	}
+	status, promoted, promotionErr := outcome.status, outcome.promoted, outcome.err
+	if !errors.Is(promotionErr, wantErr) {
+		t.Fatalf("PromotePendingInputTurn() error = %v, want %v", promotionErr, wantErr)
+	}
+	if promoted {
+		t.Fatal("pending input was promoted after durable promotion failed")
+	}
+	if enqueueErr != nil {
+		t.Fatalf("reentrant enqueue error = %v", enqueueErr)
+	}
+	if !errors.Is(terminalPromotionErr, ErrActiveTurnExists) {
+		t.Fatalf("terminal subscriber admission error = %v, want %v", terminalPromotionErr, ErrActiveTurnExists)
+	}
+	if status.TurnID != "" || status.PendingCount != 1 {
+		t.Fatalf("promotion status = %+v, want original trigger queued without active Turn", status)
+	}
+	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "accepted during promotion" {
+		t.Fatalf("preserved history = %+v, want accepted reentrant input", eng.Session.History)
+	}
+	records, err := queue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record := records["promotion-trigger"]; record.State != PendingInputStatePending {
+		t.Fatalf("promotion trigger record = %+v, want state %q", record, PendingInputStatePending)
+	}
+	if record := records["reentrant-promotion-input"]; record.State != PendingInputStateProcessed {
+		t.Fatalf("reentrant record = %+v, want state %q", record, PendingInputStateProcessed)
+	}
+}
+
 func TestPromotePendingInputKeepsRecordReplayableWhenTurnAdmissionFails(t *testing.T) {
 	root := t.TempDir()
 	sess, err := session.New(root)
@@ -7226,6 +7474,114 @@ func TestDrainPendingInputReportsMessagesQueuedWhileDraining(t *testing.T) {
 	}
 	if len(eventOrder) < 2 || strings.Join(eventOrder[len(eventOrder)-2:], ",") != PendingInputDrainingType+",pending_input.queued" {
 		t.Fatalf("drain event order = %v", eventOrder)
+	}
+}
+
+func TestPendingDrainedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	if err := eng.ReserveTurnID("turn-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingInput(context.Background(), "first"); err != nil {
+		t.Fatal(err)
+	}
+
+	var nestedErr error
+	bus.Subscribe("pending_input.drained", func(events.Event) {
+		_, nestedErr = eng.EnqueuePendingInput(context.Background(), "second")
+	})
+	done := make(chan error, 1)
+	go func() {
+		eng.mu.Lock()
+		err := eng.drainPendingInputLocked(context.Background(), "turn-1")
+		eng.mu.Unlock()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pending_input.drained subscriber deadlocked while synchronously enqueueing")
+	}
+	if nestedErr != nil {
+		t.Fatalf("nested enqueue: %v", nestedErr)
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 1 {
+		t.Fatalf("pending status = %+v, want subscriber input queued", status)
+	}
+}
+
+func TestPendingQueuedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	eng.MaxPendingInputs = 3
+	if err := eng.ReserveTurnID("turn-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	var nestedErr error
+	var once sync.Once
+	bus.Subscribe("pending_input.queued", func(events.Event) {
+		once.Do(func() {
+			_, nestedErr = eng.EnqueuePendingInput(context.Background(), "second")
+		})
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.EnqueuePendingInput(context.Background(), "first")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pending_input.queued subscriber deadlocked while synchronously enqueueing")
+	}
+	if nestedErr != nil {
+		t.Fatalf("nested enqueue: %v", nestedErr)
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 2 {
+		t.Fatalf("pending status = %+v, want two pending inputs", status)
+	}
+}
+
+func TestPendingRejectedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	eng.MaxPendingInputs = 1
+	if err := eng.ReserveTurnID("turn-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingInput(context.Background(), "first"); err != nil {
+		t.Fatal(err)
+	}
+
+	var nestedErr error
+	var once sync.Once
+	bus.Subscribe("pending_input.rejected", func(events.Event) {
+		once.Do(func() {
+			_, nestedErr = eng.EnqueuePendingInput(context.Background(), "nested")
+		})
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.EnqueuePendingInput(context.Background(), "second")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrPendingInputQueueFull) {
+			t.Fatalf("enqueue error = %v, want %v", err, ErrPendingInputQueueFull)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pending_input.rejected subscriber deadlocked while synchronously enqueueing")
+	}
+	if !errors.Is(nestedErr, ErrPendingInputQueueFull) {
+		t.Fatalf("nested enqueue error = %v, want %v", nestedErr, ErrPendingInputQueueFull)
 	}
 }
 

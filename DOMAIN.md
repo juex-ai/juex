@@ -166,7 +166,10 @@ domain boundary.
    durable `pending` record.
 2. The Framework-owned durable queue is authoritative. Its in-memory queue,
    Event status, browser state, and observer notifications are projections of
-   accepted records and cannot consume or discard them.
+   accepted records and cannot consume or discard them. One runtime lifecycle
+   Interface owns start-versus-queue, Framework Turn identity, expiry,
+   deduplication, final delivery classification, and retry instructions for
+   direct input, MCP notifications, Observations, and Side Session results.
 3. Admission marks the record before its message is appended to active context.
    A failure before a new Turn's admission fact leaves only a non-replayable
    intent; a previously accepted Pending record stays replayable.
@@ -178,8 +181,9 @@ domain boundary.
    message ids: a committed admission can finish an interrupted
    `accepting -> admitted` transition, while an
    uncommitted acceptance intent remains inert.
-   App-level synchronous input and newly delivered external input serialize
-   behind startup recovery, so they cannot overtake the oldest durable record.
+   Runtime returns opaque recovery handles and owns their state classification;
+   App executes those handles behind the startup barrier, so synchronous input
+   and newly delivered external input cannot overtake the oldest durable record.
 5. Expired input becomes inert. Queue overflow is rejected loudly without
    changing an already accepted record.
 6. Turn failure does not silently discard accepted input: retryable Provider
@@ -188,6 +192,11 @@ domain boundary.
 7. Pending is a delivery state, not an input kind. A queued message keeps its
    semantic source classification, including direct input, MCP notification,
    Observation, or runtime continuation.
+8. Source Adapters provide semantic message kind, stable source identity, TTL,
+   and source-specific validity. They do not allocate Turn identity, read
+   Pending states, decide retryability, or reconstruct restart recovery. App
+   retains Session leases, startup producer ordering, and execution of a
+   runtime-issued start action.
 
 ### Active Session Replacement
 

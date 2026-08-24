@@ -114,13 +114,26 @@ type Engine struct {
 	sessionRuntimeMu sync.RWMutex
 	sessionRuntime   *sessionRuntimeState
 
-	pendingMu    sync.Mutex
-	activeTurnID string
-	pendingInput []queuedPendingInput
+	pendingLifecycleMu sync.Mutex
+	pendingMu          sync.Mutex
+	activeTurnID       string
+	// executingTurnID distinguishes an unexecuted start action from a Turn
+	// already claimed by TurnMessageWithID. It is protected by pendingMu.
+	executingTurnID string
+	// terminalPublishing rejects later admissions while a terminal event crosses
+	// its durable commit and synchronous publication outside pendingLifecycleMu.
+	terminalPublishing  string
+	terminalPublishDone chan struct{}
+	pendingInput        []queuedPendingInput
 	// pendingEventAnnouncing keeps queue mutations available while ensuring
 	// their events cannot overtake a queue transition already being announced.
 	pendingEventAnnouncing bool
 	pendingDeferredEvents  []events.Event
+	// pendingEventPublishing marks the interval where a lifecycle event runs
+	// synchronous projections without pendingLifecycleMu. Queue ingress may
+	// join the established Turn; competing lifecycle transitions must retry.
+	pendingEventPublishing  bool
+	pendingEventPublishDone chan struct{}
 
 	activeOperationMu         sync.Mutex
 	activeOperationCancel     context.CancelCauseFunc
@@ -165,53 +178,95 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 }
 
 func (e *Engine) ReserveTurnID(turnID string) error {
+	if e == nil {
+		return ErrNoActiveTurn
+	}
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
 	return e.reserveTurnID(turnID, TurnAdmittedPayload{})
 }
 
 // AdmitTurnMessage durably accepts one main Turn input before establishing the
 // active execution boundary. Repeating admission for the same Turn returns the
 // already accepted message with its stable Framework-owned identity.
-func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Message, error) {
+func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (message llm.Message, err error) {
 	if e == nil {
 		return llm.Message{}, ErrNoActiveTurn
 	}
+	e.pendingLifecycleMu.Lock()
+	defer func() {
+		e.pendingLifecycleMu.Unlock()
+		err = e.publishStagedTerminalError(err)
+	}()
+	record, err := e.admitTurnMessage(turnID, userMsg)
+	return record.Message, err
+}
+
+func (e *Engine) admitTurnMessageForExecution(turnID string, userMsg llm.Message) (message llm.Message, err error) {
+	if e == nil {
+		return llm.Message{}, ErrNoActiveTurn
+	}
+	e.pendingLifecycleMu.Lock()
+	defer func() {
+		e.pendingLifecycleMu.Unlock()
+		err = e.publishStagedTerminalError(err)
+	}()
+	record, err := e.admitTurnMessage(turnID, userMsg)
+	if err != nil {
+		return record.Message, err
+	}
+	e.markTurnExecutionStarted(turnID)
+	return record.Message, nil
+}
+
+func (e *Engine) admitTurnMessage(turnID string, userMsg llm.Message) (PendingInputRecord, error) {
+	if e == nil {
+		return PendingInputRecord{}, ErrNoActiveTurn
+	}
 	if turnID == "" {
-		return llm.Message{}, errors.New("runtime: empty turn id")
+		return PendingInputRecord{}, errors.New("runtime: empty turn id")
 	}
 	queue := e.currentPendingInputQueue()
 	if queue == nil {
-		return llm.Message{}, errors.New("runtime: pending input queue unavailable")
+		return PendingInputRecord{}, errors.New("runtime: pending input queue unavailable")
 	}
 	userMsg = llm.ClassifyUserMessage(userMsg)
 
 	e.pendingMu.Lock()
+	if e.terminalPublishing != "" || e.pendingEventPublishing {
+		e.pendingMu.Unlock()
+		return PendingInputRecord{}, ErrActiveTurnExists
+	}
 	if e.activeTurnID != "" && e.activeTurnID != turnID {
 		e.pendingMu.Unlock()
-		return llm.Message{}, ErrActiveTurnExists
+		return PendingInputRecord{}, ErrActiveTurnExists
 	}
 	alreadyActive := e.activeTurnID == turnID
 	record, err := queue.StageTurnInput(turnID, userMsg, alreadyActive)
 	if err != nil {
 		e.pendingMu.Unlock()
-		return llm.Message{}, fmt.Errorf("persist accepted turn input: %w", err)
+		return PendingInputRecord{}, fmt.Errorf("persist accepted turn input: %w", err)
 	}
 	admitted := e.activeTurnID == ""
 	createdAdmissionIntent := record.Origin == PendingInputOriginTurn && record.State == PendingInputStateAccepting && record.TurnID == turnID
 	e.activeTurnID = turnID
+	if admitted {
+		e.pendingEventAnnouncing = true
+	}
 	e.pendingMu.Unlock()
 
 	if admitted {
-		if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{MessageID: record.MessageID}}); err != nil {
+		defer e.flushPendingEvents(true)
+		if err := e.emitPendingLifecycleEvent(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{MessageID: record.MessageID}}, true); err != nil {
 			var dropErr error
 			if createdAdmissionIntent {
 				dropErr = queue.MarkDropped([]string{record.ID})
 			}
-			e.finishActiveTurn(turnID)
 			commitErr := fmt.Errorf("commit turn admission: %w", err)
 			if dropErr != nil {
-				return llm.Message{}, errors.Join(commitErr, fmt.Errorf("drop rejected turn admission: %w", dropErr))
+				commitErr = errors.Join(commitErr, fmt.Errorf("drop rejected turn admission: %w", dropErr))
 			}
-			return llm.Message{}, commitErr
+			return PendingInputRecord{}, e.preservePendingInputBeforeFailedReservationReleaseLocked(turnID, commitErr)
 		}
 		if err := queue.CommitTurnInput(record.ID, turnID); err != nil {
 			var dropErr error
@@ -222,14 +277,31 @@ func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Messa
 			if dropErr != nil {
 				commitErr = errors.Join(commitErr, fmt.Errorf("drop uncommitted turn admission: %w", dropErr))
 			}
-			e.finishActiveTurn(turnID)
-			return llm.Message{}, e.failTurn(turnID, commitErr)
+			commitErr = e.preservePendingInputBeforeFailedReservationReleaseLocked(turnID, commitErr)
+			return PendingInputRecord{}, e.stageTurnErrorLocked(turnID, commitErr)
 		}
+		record.Origin = PendingInputOriginTurn
+		record.State = PendingInputStateAdmitted
+		record.TurnID = turnID
+		record.ExpiresAt = time.Time{}
 	}
-	return record.Message, nil
+	return record, nil
+}
+
+func (e *Engine) preservePendingInputBeforeFailedReservationReleaseLocked(turnID string, reservationErr error) error {
+	if preserveErr := e.preservePendingInputAfterFailureLocked(turnID); preserveErr != nil {
+		reservationErr = errors.Join(reservationErr, fmt.Errorf("preserve pending input after turn reservation failure: %w", preserveErr))
+	}
+	e.finishActiveTurn(turnID)
+	return reservationErr
 }
 
 func (e *Engine) ReserveCompactionTurnID(turnID string) error {
+	if e == nil {
+		return ErrNoActiveTurn
+	}
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
 	return e.reserveTurnID(turnID, TurnAdmittedPayload{
 		Operation: TurnAdmissionOperationCompact,
 	})
@@ -243,17 +315,24 @@ func (e *Engine) reserveTurnID(turnID string, payload TurnAdmittedPayload) error
 		return fmt.Errorf("runtime: empty turn id")
 	}
 	e.pendingMu.Lock()
+	if e.terminalPublishing != "" || e.pendingEventPublishing {
+		e.pendingMu.Unlock()
+		return ErrActiveTurnExists
+	}
 	if e.activeTurnID != "" && e.activeTurnID != turnID {
 		e.pendingMu.Unlock()
 		return ErrActiveTurnExists
 	}
 	admitted := e.activeTurnID == ""
 	e.activeTurnID = turnID
+	if admitted {
+		e.pendingEventAnnouncing = true
+	}
 	e.pendingMu.Unlock()
 	if admitted {
-		if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: payload}); err != nil {
-			e.finishActiveTurn(turnID)
-			return fmt.Errorf("commit turn admission: %w", err)
+		defer e.flushPendingEvents(true)
+		if err := e.emitPendingLifecycleEvent(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: payload}, true); err != nil {
+			return e.preservePendingInputBeforeFailedReservationReleaseLocked(turnID, fmt.Errorf("commit turn admission: %w", err))
 		}
 	}
 	return nil
@@ -328,6 +407,10 @@ func (e *Engine) PersistedPendingMessage(id string) (PendingInputRecord, bool, e
 // current in-memory turn queue. Queue-full is intentionally event-free because
 // the durable record remains accepted and its owner may retry admission.
 func (e *Engine) EnqueuePersistedPendingMessage(ctx context.Context, record PendingInputRecord) (PendingInputStatus, error) {
+	return e.enqueuePersistedPendingMessage(ctx, record, false)
+}
+
+func (e *Engine) enqueuePersistedPendingMessage(ctx context.Context, record PendingInputRecord, lifecycleHeld bool) (PendingInputStatus, error) {
 	if e == nil {
 		return PendingInputStatus{}, ErrNoActiveTurn
 	}
@@ -382,24 +465,45 @@ func (e *Engine) EnqueuePersistedPendingMessage(ctx context.Context, record Pend
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
 	}}
-	deferred := e.deferPendingEventLocked(event)
+	deferred := e.stagePendingEventLocked(event)
 	e.pendingMu.Unlock()
 	if !deferred {
-		_ = e.emit(event)
+		_ = e.emitPendingLifecycleEvent(event, lifecycleHeld)
+		e.flushPendingEvents(lifecycleHeld)
 	}
 	return status, nil
 }
 
 func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg llm.Message, opts PendingInputOptions) (PendingInputStatus, error) {
-	userMsg = llm.ClassifyUserMessage(userMsg)
 	if e == nil {
 		return PendingInputStatus{}, ErrNoActiveTurn
+	}
+	if e.pendingEventAnnouncementActive() {
+		status, _, err := e.enqueuePendingMessageWithOptions(ctx, userMsg, opts, false)
+		return status, err
+	}
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
+	status, _, err := e.enqueuePendingMessageWithOptions(ctx, userMsg, opts, true)
+	return status, err
+}
+
+func (e *Engine) pendingEventAnnouncementActive() bool {
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	return e.pendingEventAnnouncing
+}
+
+func (e *Engine) enqueuePendingMessageWithOptions(ctx context.Context, userMsg llm.Message, opts PendingInputOptions, lifecycleHeld bool) (PendingInputStatus, PendingInputRecord, error) {
+	userMsg = llm.ClassifyUserMessage(userMsg)
+	if e == nil {
+		return PendingInputStatus{}, PendingInputRecord{}, ErrNoActiveTurn
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return PendingInputStatus{}, err
+		return PendingInputStatus{}, PendingInputRecord{}, err
 	}
 	max := e.effectiveMaxPendingInputs()
 	queue := e.currentPendingInputQueue()
@@ -408,7 +512,7 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 	status := PendingInputStatus{TurnID: turnID, PendingCount: len(e.pendingInput), MaxPendingInputs: max}
 	if turnID == "" {
 		e.pendingMu.Unlock()
-		return status, ErrNoActiveTurn
+		return status, PendingInputRecord{}, ErrNoActiveTurn
 	}
 	if len(e.pendingInput) >= max {
 		event := events.Event{Type: "pending_input.rejected", TurnID: turnID, Payload: PendingInputRejectedPayload{
@@ -418,32 +522,35 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 			MaxPendingInputs: status.MaxPendingInputs,
 			Reason:           "queue_full",
 		}}
-		deferred := e.deferPendingEventLocked(event)
+		deferred := e.stagePendingEventLocked(event)
 		e.pendingMu.Unlock()
 		if !deferred {
-			_ = e.emit(event)
+			_ = e.emitPendingLifecycleEvent(event, lifecycleHeld)
+			e.flushPendingEvents(lifecycleHeld)
 		}
-		return status, ErrPendingInputQueueFull
+		return status, PendingInputRecord{}, ErrPendingInputQueueFull
 	}
 	recordID := ""
+	var acceptedRecord PendingInputRecord
 	if queue != nil {
 		opts = e.defaultPendingInputOptions(userMsg, opts)
 		record, err := queue.Enqueue(userMsg, opts, turnID)
 		if err != nil {
 			e.pendingMu.Unlock()
-			return status, err
+			return status, PendingInputRecord{}, err
 		}
+		acceptedRecord = record
 		recordID = record.ID
 		userMsg = record.Message
 		if !isReplayablePendingState(record.State) {
 			status.PendingCount = len(e.pendingInput)
 			e.pendingMu.Unlock()
-			return status, nil
+			return status, acceptedRecord, nil
 		}
 		if e.hasPendingRecordLocked(record.ID) {
 			status.PendingCount = len(e.pendingInput)
 			e.pendingMu.Unlock()
-			return status, nil
+			return status, acceptedRecord, nil
 		}
 	}
 	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: recordID, Message: userMsg, Origin: PendingInputOriginQueued})
@@ -455,12 +562,13 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
 	}}
-	deferred := e.deferPendingEventLocked(event)
+	deferred := e.stagePendingEventLocked(event)
 	e.pendingMu.Unlock()
 	if !deferred {
-		_ = e.emit(event)
+		_ = e.emitPendingLifecycleEvent(event, lifecycleHeld)
+		e.flushPendingEvents(lifecycleHeld)
 	}
-	return status, nil
+	return status, acceptedRecord, nil
 }
 
 func (e *Engine) PendingInputStatus() PendingInputStatus {
@@ -479,13 +587,38 @@ func (e *Engine) PendingInputStatus() PendingInputStatus {
 
 // PromotePendingInputTurn turns the first queued input from a reserved
 // non-provider phase into the user message for a real provider turn.
-func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.Message, PendingInputStatus, bool, error) {
-	if e == nil || nextTurnID == "" {
+func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (message llm.Message, status PendingInputStatus, promoted bool, err error) {
+	if e == nil {
 		return llm.Message{}, PendingInputStatus{}, false, nil
+	}
+	e.pendingLifecycleMu.Lock()
+	defer func() {
+		e.pendingLifecycleMu.Unlock()
+		err = e.publishStagedTerminalError(err)
+	}()
+	item, status, promoted, err := e.promotePendingInputTurn(currentTurnID, nextTurnID)
+	return item.Message, status, promoted, err
+}
+
+func (e *Engine) promotePendingInputTurn(currentTurnID, nextTurnID string) (queuedPendingInput, PendingInputStatus, bool, error) {
+	if e == nil || nextTurnID == "" {
+		return queuedPendingInput{}, PendingInputStatus{}, false, nil
 	}
 	max := e.effectiveMaxPendingInputs()
 	queue := e.currentPendingInputQueue()
 	e.pendingMu.Lock()
+	if e.terminalPublishing != "" || e.pendingEventPublishing {
+		status := PendingInputStatus{
+			TurnID:           e.activeTurnID,
+			PendingCount:     len(e.pendingInput),
+			MaxPendingInputs: max,
+		}
+		if e.terminalPublishing != "" {
+			status.TurnID = e.terminalPublishing
+		}
+		e.pendingMu.Unlock()
+		return queuedPendingInput{}, status, false, ErrActiveTurnExists
+	}
 	if e.activeTurnID != currentTurnID || len(e.pendingInput) == 0 {
 		if e.activeTurnID == currentTurnID {
 			e.activeTurnID = ""
@@ -496,25 +629,33 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 			MaxPendingInputs: max,
 		}
 		e.pendingMu.Unlock()
-		return llm.Message{}, status, false, nil
+		return queuedPendingInput{}, status, false, nil
 	}
 	item := e.pendingInput[0]
 	e.activeTurnID = nextTurnID
 	e.pendingEventAnnouncing = true
 	e.pendingMu.Unlock()
 
-	if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{MessageID: item.Message.ID}}); err != nil {
+	if err := e.emitPendingLifecycleEvent(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{MessageID: item.Message.ID}}, true); err != nil {
+		admissionErr := fmt.Errorf("commit promoted turn admission: %w", err)
+		if preserveErr := e.preservePendingInputAfterFailedPromotionLocked(nextTurnID); preserveErr != nil {
+			admissionErr = errors.Join(admissionErr, fmt.Errorf("preserve pending input after turn promotion failure: %w", preserveErr))
+		}
 		e.finishActiveTurn(nextTurnID)
-		e.flushPendingEvents()
+		e.flushPendingEvents(true)
 		status := e.PendingInputStatus()
-		return llm.Message{}, status, false, fmt.Errorf("commit promoted turn admission: %w", err)
+		return queuedPendingInput{}, status, false, admissionErr
 	}
 	if item.RecordID != "" && queue != nil {
 		if err := queue.PromoteToTurnInput([]string{item.RecordID}, nextTurnID); err != nil {
+			promotionErr := fmt.Errorf("mark promoted pending input admitted: %w", err)
+			if preserveErr := e.preservePendingInputAfterFailedPromotionLocked(nextTurnID); preserveErr != nil {
+				promotionErr = errors.Join(promotionErr, fmt.Errorf("preserve pending input after turn promotion failure: %w", preserveErr))
+			}
 			e.finishActiveTurn(nextTurnID)
-			promotionErr := e.failTurn(nextTurnID, fmt.Errorf("mark promoted pending input admitted: %w", err))
-			e.flushPendingEvents()
-			return llm.Message{}, e.PendingInputStatus(), false, promotionErr
+			promotionErr = e.stageTurnErrorLocked(nextTurnID, promotionErr)
+			e.flushPendingEvents(true)
+			return queuedPendingInput{}, e.PendingInputStatus(), false, promotionErr
 		}
 	}
 
@@ -527,15 +668,60 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 		MaxPendingInputs: max,
 	}
 	e.pendingMu.Unlock()
-	_ = e.emit(events.Event{Type: PendingInputPromotedType, TurnID: nextTurnID, Payload: PendingInputPromotedPayload{
+	_ = e.emitPendingLifecycleEvent(events.Event{Type: PendingInputPromotedType, TurnID: nextTurnID, Payload: PendingInputPromotedPayload{
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
-	}})
+	}}, true)
 	if item.RecordID != "" {
 		e.notifyPendingInputsAdmitted(context.Background(), nextTurnID, []string{item.RecordID})
 	}
-	e.flushPendingEvents()
-	return item.Message, status, true, nil
+	e.flushPendingEvents(true)
+	return item, status, true, nil
+}
+
+func (e *Engine) preservePendingInputAfterFailedPromotionLocked(turnID string) error {
+	// The promotion trigger must stay replayable after its durable transition
+	// fails; only inputs accepted during the announcement are terminally kept.
+	repairedTranscript := false
+	for {
+		e.pendingMu.Lock()
+		if e.activeTurnID != turnID || len(e.pendingInput) <= 1 {
+			e.pendingMu.Unlock()
+			return nil
+		}
+		pending := append([]queuedPendingInput(nil), e.pendingInput[1:]...)
+		e.pendingInput = e.pendingInput[:1]
+		e.pendingMu.Unlock()
+
+		if !repairedTranscript {
+			if err := e.repairTranscriptLocked(turnID, "turn_promotion_failure_pending_input"); err != nil {
+				e.restorePendingInputAfterPromotionTrigger(pending)
+				return err
+			}
+			repairedTranscript = true
+		}
+		if err := e.commitPendingInputBatchLocked(context.Background(), turnID, pending); err != nil {
+			e.restorePendingInputAfterPromotionTrigger(pending)
+			return err
+		}
+	}
+}
+
+func (e *Engine) restorePendingInputAfterPromotionTrigger(pending []queuedPendingInput) {
+	if len(pending) == 0 {
+		return
+	}
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	if len(e.pendingInput) == 0 {
+		e.pendingInput = append([]queuedPendingInput(nil), pending...)
+		return
+	}
+	restored := make([]queuedPendingInput, 0, len(e.pendingInput)+len(pending))
+	restored = append(restored, e.pendingInput[0])
+	restored = append(restored, pending...)
+	restored = append(restored, e.pendingInput[1:]...)
+	e.pendingInput = restored
 }
 
 // TurnMessage drives one already-constructed user message to completion.
@@ -550,12 +736,22 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	defer e.mu.Unlock()
 
 	if turnID == "" {
-		turnID = newID()
+		result, receiveErr := e.receivePendingInput(ctx, PendingInputRequest{Message: userMsg, RequireStart: true}, true)
+		if receiveErr != nil {
+			return "", receiveErr
+		}
+		if result.Disposition != PendingInputStarted {
+			return "", fmt.Errorf("runtime: synchronous input was not started: %s", result.Disposition)
+		}
+		turnID = result.TurnID
+		userMsg = result.Message
+	} else {
+		userMsg, err = e.admitTurnMessageForExecution(turnID, userMsg)
+		if err != nil {
+			return "", err
+		}
 	}
-	userMsg, err = e.AdmitTurnMessage(turnID, userMsg)
-	if err != nil {
-		return "", err
-	}
+	defer e.finishTurnExecution(turnID)
 	ctx, _, finishOperation := e.beginActiveOperation(ctx)
 	previousFailures := e.toolFailures
 	e.toolFailures = newToolFailureLedger(e.WorkDir)
@@ -576,10 +772,11 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	result, err = lifecycle.runLocked(ctx)
 	if err != nil {
 		err = cancellation.NormalizeErrorWithContext(ctx, err)
-		if preserveErr := e.preservePendingInputAfterFailureLocked(turnID); preserveErr != nil {
-			err = errors.Join(err, fmt.Errorf("preserve pending input after turn failure: %w", preserveErr))
+		if !lifecycle.activeClosed {
+			err = e.failActiveTurnLocked(turnID, err, lifecycle.pendingLifecycleHeld)
 		}
-		return "", e.failTurn(turnID, err)
+		lifecycle.pendingLifecycleHeld = false
+		return "", err
 	}
 	return result.output, nil
 }
@@ -1133,12 +1330,69 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, recor
 	return nil
 }
 
-func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, lastText string) error {
-	return e.emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: TurnCompletedPayload{
+func (e *Engine) recordTurnCompletionForPublication(turnID string, start time.Time, lastText string) (events.Event, func(), error) {
+	event := events.Event{Type: "turn.completed", TurnID: turnID, Payload: TurnCompletedPayload{
 		DurationMS: time.Since(start).Milliseconds(),
 		OutputLen:  len(lastText),
 		TokenUsage: e.currentSession().TokenUsageSnapshot(),
-	}})
+	}}
+	if e.Bus == nil {
+		return events.Normalize(event), func() {}, nil
+	}
+	return e.Bus.CommitForPublication(event)
+}
+
+func (e *Engine) recordTurnErrorForPublication(turnID string, err error) (events.Event, func(), error) {
+	event := events.Event{Type: "turn.errored", TurnID: turnID, Payload: NewTurnErroredPayload(err)}
+	if e.Bus == nil {
+		return events.Normalize(event), func() {}, nil
+	}
+	return e.Bus.CommitForPublication(event)
+}
+
+type stagedTerminalError struct {
+	cause      error
+	publish    func() error
+	publishErr error
+	once       sync.Once
+}
+
+func (e *stagedTerminalError) Error() string {
+	if e == nil || e.cause == nil {
+		return ""
+	}
+	return e.cause.Error()
+}
+
+func (e *stagedTerminalError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func (e *Engine) stageTurnErrorLocked(turnID string, cause error) error {
+	e.beginTerminalPublication(turnID)
+	return &stagedTerminalError{
+		cause: cause,
+		publish: func() error {
+			return e.commitAndPublishTurnError(turnID, cause)
+		},
+	}
+}
+
+func (e *Engine) publishStagedTerminalError(err error) error {
+	var staged *stagedTerminalError
+	if !errors.As(err, &staged) || staged == nil {
+		return err
+	}
+	staged.once.Do(func() {
+		staged.publishErr = staged.publish()
+	})
+	if staged.publishErr != nil {
+		return errors.Join(err, staged.publishErr)
+	}
+	return err
 }
 
 type toolCallResult struct {
@@ -1577,6 +1831,8 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 	if err := cancellation.ContextError(ctx); err != nil {
 		return err
 	}
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
 	queue := e.currentPendingInputQueue()
 	sess := e.currentSession()
 	if queue == nil {
@@ -1796,6 +2052,23 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 	if err := cancellation.ContextError(ctx); err != nil {
 		return err
 	}
+	for {
+		e.pendingLifecycleMu.Lock()
+		_, done, publishing := e.pendingEventPublicationStatus()
+		if !publishing {
+			defer e.pendingLifecycleMu.Unlock()
+			return e.drainPendingInputLifecycleLocked(ctx, turnID)
+		}
+		e.pendingLifecycleMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return cancellation.ContextError(ctx)
+		case <-done:
+		}
+	}
+}
+
+func (e *Engine) drainPendingInputLifecycleLocked(ctx context.Context, turnID string) error {
 	e.pendingMu.Lock()
 	pending := append([]queuedPendingInput(nil), e.pendingInput...)
 	e.pendingInput = nil
@@ -1908,12 +2181,12 @@ func (e *Engine) beginPendingInputDrain(turnID string, count int) int {
 	max := e.effectiveMaxPendingInputs()
 	e.pendingEventAnnouncing = true
 	e.pendingMu.Unlock()
-	_ = e.emit(events.Event{Type: PendingInputDrainingType, TurnID: turnID, Payload: PendingInputDrainingPayload{
+	_ = e.emitPendingLifecycleEvent(events.Event{Type: PendingInputDrainingType, TurnID: turnID, Payload: PendingInputDrainingPayload{
 		Count:            count,
 		PendingCount:     remaining,
 		MaxPendingInputs: max,
-	}})
-	e.flushPendingEvents()
+	}}, true)
+	e.flushPendingEvents(true)
 	return max
 }
 
@@ -1921,11 +2194,11 @@ func (e *Engine) finishPendingInputDrain(turnID string, count, max int) {
 	e.pendingMu.Lock()
 	remaining := len(e.pendingInput)
 	e.pendingMu.Unlock()
-	_ = e.emit(events.Event{Type: "pending_input.drained", TurnID: turnID, Payload: PendingInputDrainedPayload{
+	e.publishPendingEvent(events.Event{Type: "pending_input.drained", TurnID: turnID, Payload: PendingInputDrainedPayload{
 		Count:            count,
 		PendingCount:     remaining,
 		MaxPendingInputs: max,
-	}})
+	}}, true)
 }
 
 func (e *Engine) notifyPendingInputsAdmitted(ctx context.Context, turnID string, recordIDs []string) {
@@ -1940,15 +2213,27 @@ func (e *Engine) notifyPendingInputsAdmitted(ctx context.Context, turnID string,
 	}, e.policySets()...)
 }
 
-func (e *Engine) deferPendingEventLocked(event events.Event) bool {
-	if !e.pendingEventAnnouncing {
-		return false
+func (e *Engine) stagePendingEventLocked(event events.Event) bool {
+	if e.pendingEventAnnouncing {
+		e.pendingDeferredEvents = append(e.pendingDeferredEvents, event)
+		return true
 	}
-	e.pendingDeferredEvents = append(e.pendingDeferredEvents, event)
-	return true
+	e.pendingEventAnnouncing = true
+	return false
 }
 
-func (e *Engine) flushPendingEvents() {
+func (e *Engine) publishPendingEvent(event events.Event, lifecycleHeld bool) {
+	e.pendingMu.Lock()
+	deferred := e.stagePendingEventLocked(event)
+	e.pendingMu.Unlock()
+	if deferred {
+		return
+	}
+	_ = e.emitPendingLifecycleEvent(event, lifecycleHeld)
+	e.flushPendingEvents(lifecycleHeld)
+}
+
+func (e *Engine) flushPendingEvents(lifecycleHeld bool) {
 	for {
 		e.pendingMu.Lock()
 		deferred := e.pendingDeferredEvents
@@ -1960,9 +2245,50 @@ func (e *Engine) flushPendingEvents() {
 		}
 		e.pendingMu.Unlock()
 		for _, event := range deferred {
-			_ = e.emit(event)
+			_ = e.emitPendingLifecycleEvent(event, lifecycleHeld)
 		}
 	}
+}
+
+func (e *Engine) emitPendingLifecycleEvent(event events.Event, lifecycleHeld bool) error {
+	e.beginPendingEventPublication()
+	if lifecycleHeld {
+		e.pendingLifecycleMu.Unlock()
+		err := e.emit(event)
+		e.pendingLifecycleMu.Lock()
+		e.finishPendingEventPublication()
+		return err
+	}
+	err := e.emit(event)
+	e.finishPendingEventPublication()
+	return err
+}
+
+func (e *Engine) beginPendingEventPublication() {
+	e.pendingMu.Lock()
+	e.pendingEventPublishing = true
+	e.pendingEventPublishDone = make(chan struct{})
+	e.pendingMu.Unlock()
+}
+
+func (e *Engine) finishPendingEventPublication() {
+	e.pendingMu.Lock()
+	if e.pendingEventPublishing {
+		e.pendingEventPublishing = false
+		close(e.pendingEventPublishDone)
+		e.pendingEventPublishDone = nil
+	}
+	e.pendingMu.Unlock()
+}
+
+func (e *Engine) pendingEventPublicationStatus() (PendingInputStatus, <-chan struct{}, bool) {
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	return PendingInputStatus{
+		TurnID:           e.activeTurnID,
+		PendingCount:     len(e.pendingInput),
+		MaxPendingInputs: e.effectiveMaxPendingInputs(),
+	}, e.pendingEventPublishDone, e.pendingEventPublishing
 }
 
 func (e *Engine) preservePendingInputAfterFailureLocked(turnID string) error {
@@ -1986,7 +2312,22 @@ func (e *Engine) preservePendingInputAfterFailureLocked(turnID string) error {
 			}
 			repairedTranscript = true
 		}
-		if err := e.drainPendingInputLocked(context.Background(), turnID); err != nil {
+		if err := e.drainPendingInputLifecycleLocked(context.Background(), turnID); err != nil {
+			return err
+		}
+	}
+}
+
+func (e *Engine) drainPendingInputUntilEmptyLifecycleLocked(turnID string) error {
+	for {
+		e.pendingMu.Lock()
+		active := e.activeTurnID == turnID
+		hasPending := len(e.pendingInput) > 0
+		e.pendingMu.Unlock()
+		if !active || !hasPending {
+			return nil
+		}
+		if err := e.drainPendingInputLifecycleLocked(context.Background(), turnID); err != nil {
 			return err
 		}
 	}
@@ -2003,7 +2344,7 @@ func (e *Engine) cachePolicyLocked() llm.CachePolicy {
 	return llm.CachePolicy{StablePrefixKey: "juex:" + sess.ID}
 }
 
-func (e *Engine) finishActiveTurnIfNoPending(turnID string) bool {
+func (e *Engine) activeTurnHasNoPending(turnID string) bool {
 	e.pendingMu.Lock()
 	defer e.pendingMu.Unlock()
 	if e.activeTurnID != turnID {
@@ -2012,7 +2353,6 @@ func (e *Engine) finishActiveTurnIfNoPending(turnID string) bool {
 	if len(e.pendingInput) > 0 {
 		return false
 	}
-	e.activeTurnID = ""
 	return true
 }
 
@@ -2025,6 +2365,95 @@ func (e *Engine) finishActiveTurn(turnID string) {
 	e.activeTurnID = ""
 }
 
+func (e *Engine) markTurnExecutionStarted(turnID string) {
+	e.pendingMu.Lock()
+	if e.activeTurnID == turnID {
+		e.executingTurnID = turnID
+	}
+	e.pendingMu.Unlock()
+}
+
+func (e *Engine) finishTurnExecution(turnID string) {
+	e.pendingMu.Lock()
+	if e.executingTurnID == turnID {
+		e.executingTurnID = ""
+	}
+	e.pendingMu.Unlock()
+}
+
+func (e *Engine) turnExecutionStarted(turnID string) bool {
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	return e.executingTurnID == turnID
+}
+
+func (e *Engine) beginTerminalPublication(turnID string) {
+	e.pendingMu.Lock()
+	if e.activeTurnID == turnID {
+		e.activeTurnID = ""
+	}
+	e.terminalPublishing = turnID
+	e.terminalPublishDone = make(chan struct{})
+	e.pendingMu.Unlock()
+}
+
+func (e *Engine) finishTerminalPublication(turnID string) {
+	e.pendingMu.Lock()
+	if e.terminalPublishing == turnID {
+		e.terminalPublishing = ""
+		close(e.terminalPublishDone)
+		e.terminalPublishDone = nil
+	}
+	e.pendingMu.Unlock()
+}
+
+func (e *Engine) rollbackTerminalPublication(turnID string) {
+	e.pendingMu.Lock()
+	if e.terminalPublishing == turnID {
+		if e.activeTurnID == "" {
+			e.activeTurnID = turnID
+		}
+		e.terminalPublishing = ""
+		close(e.terminalPublishDone)
+		e.terminalPublishDone = nil
+	}
+	e.pendingMu.Unlock()
+}
+
+func (e *Engine) pendingTerminalPublicationStatus() (PendingInputStatus, <-chan struct{}, bool) {
+	if e == nil {
+		return PendingInputStatus{}, nil, false
+	}
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	status := PendingInputStatus{
+		TurnID:           e.terminalPublishing,
+		PendingCount:     len(e.pendingInput),
+		MaxPendingInputs: e.effectiveMaxPendingInputs(),
+	}
+	return status, e.terminalPublishDone, e.terminalPublishing != ""
+}
+
+func (e *Engine) publishTerminalEvent(turnID string, event events.Event, completeCommit func()) {
+	defer e.finishTerminalPublication(turnID)
+	if completeCommit != nil {
+		completeCommit()
+	}
+	if e.Bus != nil {
+		e.Bus.PublishCommitted(event)
+	}
+}
+
+func (e *Engine) commitAndPublishTurnError(turnID string, cause error) error {
+	committed, completeCommit, commitErr := e.recordTurnErrorForPublication(turnID, cause)
+	if commitErr != nil {
+		e.finishTerminalPublication(turnID)
+		return fmt.Errorf("commit turn error: %w", commitErr)
+	}
+	e.publishTerminalEvent(turnID, committed, completeCommit)
+	return nil
+}
+
 func (e *Engine) emit(ev events.Event) error {
 	if e.Bus != nil {
 		return e.Bus.Emit(ev)
@@ -2032,9 +2461,17 @@ func (e *Engine) emit(ev events.Event) error {
 	return nil
 }
 
-func (e *Engine) failTurn(turnID string, err error) error {
-	if emitErr := e.emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: NewTurnErroredPayload(err)}); emitErr != nil {
-		return errors.Join(err, fmt.Errorf("commit turn error: %w", emitErr))
+func (e *Engine) failActiveTurnLocked(turnID string, err error, lifecycleHeld bool) error {
+	if !lifecycleHeld {
+		e.pendingLifecycleMu.Lock()
+	}
+	if preserveErr := e.preservePendingInputAfterFailureLocked(turnID); preserveErr != nil {
+		err = errors.Join(err, fmt.Errorf("preserve pending input after turn failure: %w", preserveErr))
+	}
+	e.beginTerminalPublication(turnID)
+	e.pendingLifecycleMu.Unlock()
+	if publishErr := e.commitAndPublishTurnError(turnID, err); publishErr != nil {
+		return errors.Join(err, publishErr)
 	}
 	return err
 }

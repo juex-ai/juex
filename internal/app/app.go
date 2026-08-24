@@ -517,10 +517,7 @@ func New(opts Options) (*App, error) {
 		hookRunner:             hookRunner,
 		hookBaseRequest:        hookBaseRequest,
 	}
-	statusUnsubscribe = eventSink.AddProjection(turnAdmissionStatusProjection{
-		status:       status,
-		completeTurn: a.CompleteAdmittedTurn,
-	})
+	statusUnsubscribe = eventSink.AddProjection(status)
 	a.statusUnsubscribe = statusUnsubscribe
 	if err := a.attachObservability(sess); err != nil {
 		closeSessionResources()
@@ -688,7 +685,7 @@ func New(opts Options) (*App, error) {
 		_ = a.Close()
 		return nil, err
 	}
-	replayablePendingInput, err := eng.RecoverPendingInputRecords()
+	replayablePendingInput, err := eng.RecoverPendingInputs()
 	if err != nil {
 		_ = a.Close()
 		return nil, err
@@ -1214,7 +1211,7 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	_, err = a.deliverExternalInputLocked(ctx, msg, runtime.PendingInputOptions{
 		ID:  mcpNotificationPendingInputID(n, eventType),
 		TTL: a.Engine.ExternalEventTTL,
-	}, sessionLease)
+	}, sessionLease, true, nil)
 	return err
 }
 
@@ -1251,7 +1248,7 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 	delivery, err := a.deliverExternalInputLocked(ctx, msg, runtime.PendingInputOptions{
 		ID:  pendingID,
 		TTL: a.Engine.ExternalEventTTL,
-	}, sessionLease)
+	}, sessionLease, true, nil)
 	if delivery.Queued {
 		return observable.DeliveryOutcome{
 			State:          observable.ObservationStateQueued,

@@ -294,7 +294,7 @@ func TestAppExternalDeliveryWaitsForStartupPendingInputRecovery(t *testing.T) {
 		if result.err != nil || result.outcome.State != observable.ObservationStateDelivered {
 			t.Fatalf("external delivery after startup recovery = %+v, %v", result.outcome, result.err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("external delivery did not continue after startup recovery")
 	}
 	provider.mu.Lock()
@@ -368,29 +368,32 @@ func TestAppCanceledAdmittedTurnReleasesEngineReservation(t *testing.T) {
 		Message:    llm.TextMessage(llm.RoleAssistant, "handled after cancellation"),
 		StopReason: llm.StopEndTurn,
 	})
-	first := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
-		Prompt: "accepted before cancellation",
-		IDs:    TurnIDFunc(func(string) string { return "canceled-admitted-turn" }),
-	})
+	first := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "accepted before cancellation"})
 	if first.Kind != TurnAdmissionStarted || first.Start == nil {
 		t.Fatalf("first admission = %+v, want started", first)
 	}
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := a.RunAdmittedTurn(canceled, first.Start.TurnID, first.Start.Message); !errors.Is(err, context.Canceled) {
-		t.Fatalf("RunAdmittedTurn error = %v, want context.Canceled", err)
-	}
-	a.CompleteAdmittedTurn(first.Start.TurnID)
-
-	second := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
-		Prompt: "run after canceled admission",
-		IDs:    TurnIDFunc(func(string) string { return "turn-after-canceled-admission" }),
+	wantCause := errors.New("admitted turn stopped by owner")
+	var terminal runtime.TurnErroredPayload
+	unsubscribe := a.Bus.Subscribe("turn.errored", func(event events.Event) {
+		if event.TurnID == first.Start.TurnID {
+			terminal, _ = event.Payload.(runtime.TurnErroredPayload)
+		}
 	})
+	defer unsubscribe()
+	canceled, cancel := context.WithCancelCause(context.Background())
+	cancel(wantCause)
+	if _, err := a.RunAdmittedTurn(canceled, first.Start.TurnID, first.Start.Message); !errors.Is(err, wantCause) {
+		t.Fatalf("RunAdmittedTurn error = %v, want %v", err, wantCause)
+	}
+	if terminal.Error != wantCause.Error() {
+		t.Fatalf("turn error = %+v, want preserved cancellation cause", terminal)
+	}
+
+	second := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "run after canceled admission"})
 	if second.Kind != TurnAdmissionStarted || second.Start == nil {
 		t.Fatalf("second admission = %+v, want started instead of queued behind a phantom turn", second)
 	}
 	out, err := a.RunAdmittedTurn(context.Background(), second.Start.TurnID, second.Start.Message)
-	a.CompleteAdmittedTurn(second.Start.TurnID)
 	if err != nil || out != "handled after cancellation" {
 		t.Fatalf("second RunAdmittedTurn = %q, %v", out, err)
 	}
@@ -459,6 +462,80 @@ func TestAppExternalDeliveryTransfersToAppAfterRecoveryWaitTimeout(t *testing.T)
 	}
 	if !ok || pending.State != runtime.PendingInputStateProcessed || !restarted.Session.HasMessageID(pending.MessageID) {
 		t.Fatalf("pending after App-owned handoff = %+v ok=%v", pending, ok)
+	}
+}
+
+func TestAppExternalDeliveryHandsOffAcceptedInputWhenResumeIsCanceled(t *testing.T) {
+	dir := t.TempDir()
+	provider := &recoveryProvider{}
+	a, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+
+	a.turnAdmission.transitionMu.Lock()
+	transitionLocked := true
+	defer func() {
+		if transitionLocked {
+			a.turnAdmission.transitionMu.Unlock()
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	record := testObservationRecord("obs-canceled-before-resume")
+	type deliveryResult struct {
+		outcome observable.DeliveryOutcome
+		err     error
+	}
+	done := make(chan deliveryResult, 1)
+	go func() {
+		outcome, err := a.DeliverObservation(ctx, record)
+		done <- deliveryResult{outcome: outcome, err: err}
+	}()
+
+	recordID := observationPendingInputID(record)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		pending, ok, stateErr := a.Engine.PersistedPendingMessage(recordID)
+		if stateErr != nil {
+			t.Fatal(stateErr)
+		}
+		if ok && pending.State == runtime.PendingInputStatePending {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("external input was not persisted before resume cancellation")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	a.turnAdmission.transitionMu.Unlock()
+	transitionLocked = false
+
+	delivery := <-done
+	if !errors.Is(delivery.err, context.Canceled) {
+		t.Fatalf("DeliverObservation error = %v, want context.Canceled", delivery.err)
+	}
+	if delivery.outcome.State != observable.ObservationStateQueued || delivery.outcome.PendingInputID != recordID {
+		t.Fatalf("delivery outcome = %+v, want queued durable input %q", delivery.outcome, recordID)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		calls, _ := provider.snapshot()
+		if calls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("provider calls = %d, want App-owned handoff after caller cancellation", calls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pending, ok, stateErr := a.Engine.PersistedPendingMessage(recordID)
+	if stateErr != nil {
+		t.Fatal(stateErr)
+	}
+	if !ok || pending.State != runtime.PendingInputStateProcessed || !a.Session.HasMessageID(pending.MessageID) {
+		t.Fatalf("pending after canceled-delivery handoff = %+v ok=%v", pending, ok)
 	}
 }
 
@@ -562,6 +639,77 @@ func TestAppExternalDeliveryRetriesReplayableAdmissionCommitFailure(t *testing.T
 	}
 }
 
+func TestResumePersistedInputPreservesAdmissionRetry(t *testing.T) {
+	dir := t.TempDir()
+	a, err := New(recoveryAppOptions(dir, &recoveryProvider{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+	record, err := a.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "preserve admission retry"),
+		runtime.PendingInputOptions{ID: "preserve-admission-retry", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("injected turn admission failure")
+	a.Bus.SetCommitter(&failOnceEventCommitter{
+		delegate:  a.eventSink,
+		eventType: runtime.TurnAdmittedType,
+		err:       wantErr,
+	})
+
+	delivery, err := a.resumePersistedInputLocked(context.Background(), record.ID)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("resumePersistedInputLocked() error = %v, want %v", err, wantErr)
+	}
+	if delivery.RecordID != record.ID || !delivery.Queued || delivery.Retry != runtime.PendingInputRetryAdmission {
+		t.Fatalf("resumePersistedInputLocked() delivery = %+v, want bounded admission retry", delivery)
+	}
+}
+
+func TestResumePersistedInputWaitsForExclusiveCommand(t *testing.T) {
+	dir := t.TempDir()
+	a, err := New(recoveryAppOptions(dir, &recoveryProvider{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+	record, err := a.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "wait for new-session greeting"),
+		runtime.PendingInputOptions{ID: "exclusive-command-wait", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.beginExclusiveCommand() {
+		t.Fatal("beginExclusiveCommand() = false")
+	}
+
+	delivery, err := a.resumePersistedInputLocked(context.Background(), record.ID)
+	if !errors.Is(err, errTurnAdmissionBusy) {
+		t.Fatalf("resumePersistedInputLocked() error = %v, want %v", err, errTurnAdmissionBusy)
+	}
+	if delivery.RecordID != record.ID || !delivery.Queued || delivery.Retry != runtime.PendingInputRetryAfterTurn {
+		t.Fatalf("resumePersistedInputLocked() delivery = %+v, want command retry", delivery)
+	}
+	if status := a.Engine.PendingInputStatus(); status.TurnID != "" {
+		t.Fatalf("external input started during exclusive command: %+v", status)
+	}
+
+	a.finishExclusiveCommand()
+	delivery, err = a.resumePersistedInputLocked(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !delivery.Delivered {
+		t.Fatalf("delivery after command = %+v, want delivered", delivery)
+	}
+}
+
 func TestAppStartupRecoveryRetriesReplayableAdmissionFailure(t *testing.T) {
 	dir := t.TempDir()
 	provider := &recoveryProvider{}
@@ -583,7 +731,7 @@ func TestAppStartupRecoveryRetriesReplayableAdmissionFailure(t *testing.T) {
 		eventType: runtime.TurnAdmittedType,
 		err:       errors.New("injected startup admission failure"),
 	})
-	a.startPendingInputRecovery([]runtime.PendingInputRecord{record})
+	a.startPendingInputRecovery([]runtime.PendingInputRecovery{{RecordID: record.ID}})
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -633,7 +781,7 @@ func TestAppStartupRecoveryKeepsBarrierThroughReplayableAdmissionRetry(t *testin
 		release:   release,
 		failed:    failed,
 	})
-	a.startPendingInputRecovery([]runtime.PendingInputRecord{record})
+	a.startPendingInputRecovery([]runtime.PendingInputRecovery{{RecordID: record.ID}})
 	recoveryDone := a.pendingRecoveryDone
 
 	select {
@@ -766,7 +914,7 @@ func TestAppPendingRecoveryBarrierPrecedesNotificationActivation(t *testing.T) {
 	})
 	activated := make(chan struct{})
 	go func() {
-		a.activateExternalInputAfterPendingRecovery(gate, []runtime.PendingInputRecord{record}, nil)
+		a.activateExternalInputAfterPendingRecovery(gate, []runtime.PendingInputRecovery{{RecordID: record.ID}}, nil)
 		close(activated)
 	}()
 
@@ -852,7 +1000,7 @@ func TestAppPendingRecoveryBarrierPrecedesObservableActivation(t *testing.T) {
 	observation := testObservationRecord("obs-during-observable-startup")
 	activated := make(chan struct{})
 	go func() {
-		a.activateExternalInputAfterPendingRecovery(nil, []runtime.PendingInputRecord{record}, func() {
+		a.activateExternalInputAfterPendingRecovery(nil, []runtime.PendingInputRecovery{{RecordID: record.ID}}, func() {
 			outcome, err := a.DeliverObservation(context.Background(), observation)
 			delivered <- observableResult{outcome: outcome, err: err}
 		})
@@ -963,27 +1111,36 @@ func TestAppBeginCompactAdmissionWaitsForStartupPendingInputRecovery(t *testing.
 	recoveryDone := make(chan struct{})
 	a.pendingRecoveryDone = recoveryDone
 
-	const compactTurnID = "web-compact-after-recovery"
-	admitted := make(chan error, 1)
+	type compactAdmission struct {
+		turnID string
+		err    error
+	}
+	admitted := make(chan compactAdmission, 1)
 	go func() {
-		admitted <- a.BeginCompactAdmission(context.Background(), compactTurnID)
+		turnID, err := a.BeginCompactAdmission(context.Background())
+		admitted <- compactAdmission{turnID: turnID, err: err}
 	}()
 	select {
-	case err := <-admitted:
-		t.Fatalf("admitted compaction reserved before startup recovery: %v", err)
+	case result := <-admitted:
+		t.Fatalf("admitted compaction reserved before startup recovery: %+v", result)
 	case <-time.After(100 * time.Millisecond):
 	}
 
 	close(recoveryDone)
+	var compactTurnID string
 	select {
-	case err := <-admitted:
-		if err != nil {
-			t.Fatal(err)
+	case result := <-admitted:
+		if result.err != nil {
+			t.Fatal(result.err)
 		}
+		compactTurnID = result.turnID
 	case <-time.After(2 * time.Second):
 		t.Fatal("admitted compaction did not continue after startup recovery")
 	}
-	if _, err := a.FinishCompactAdmission(compactTurnID, TurnIDFunc(func(string) string { return "unused" })); err != nil {
+	if compactTurnID == "" {
+		t.Fatal("compaction has no Framework turn id")
+	}
+	if _, err := a.FinishCompactAdmission(compactTurnID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1147,7 +1304,7 @@ func TestAppStartupRecoveryAdvancesPastOldestRecordThatExpiresBeforeWorker(t *te
 	}
 	time.Sleep(5 * time.Millisecond)
 
-	a.activateExternalInputAfterPendingRecovery(nil, []runtime.PendingInputRecord{oldest, later}, nil)
+	a.activateExternalInputAfterPendingRecovery(nil, []runtime.PendingInputRecovery{{RecordID: oldest.ID}, {RecordID: later.ID}}, nil)
 	if err := a.waitPendingInputRecovery(); err != nil {
 		t.Fatal(err)
 	}

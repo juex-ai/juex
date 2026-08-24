@@ -85,26 +85,6 @@ func TestWebTurnTransportStartCancelsExistingTurn(t *testing.T) {
 	}
 }
 
-func TestWebTurnTransportResetClearsAdmissionBookkeeping(t *testing.T) {
-	_, as := newTurnTransportTestSession(t, stubProvider{})
-
-	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "hi"))
-	as.turns.wait()
-	as.turns.admissionsMu.Lock()
-	if completed := as.turns.admissions["turn-1"]; !completed {
-		as.turns.admissionsMu.Unlock()
-		t.Fatal("admission was not completed before reset")
-	}
-	as.turns.admissionsMu.Unlock()
-
-	as.turns.reset()
-	as.turns.admissionsMu.Lock()
-	defer as.turns.admissionsMu.Unlock()
-	if len(as.turns.admissions) != 0 {
-		t.Fatalf("admissions after reset = %+v", as.turns.admissions)
-	}
-}
-
 func newTurnTransportTestSession(t *testing.T, provider llm.Provider) (*Server, *activeSession) {
 	t.Helper()
 	work := t.TempDir()

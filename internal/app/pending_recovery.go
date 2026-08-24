@@ -7,16 +7,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 )
 
 type externalInputDelivery struct {
-	Record    runtime.PendingInputRecord
+	RecordID  string
 	Queued    bool
 	Delivered bool
+	Retry     runtime.PendingInputRetry
 }
+
+const maxExternalInputStorageAttempts = 8
 
 type externalInputSessionLease struct {
 	app  *App
@@ -42,121 +44,212 @@ func (l *externalInputSessionLease) Release() {
 	}
 }
 
-// deliverExternalInputLocked persists transport input before asking the
-// process-level admission queue whether to attach it or start an idle Turn.
+// deliverExternalInputLocked durably accepts transport input before asking the
+// runtime lifecycle whether to attach it or start an idle Turn.
 // The caller holds sessionMu.RLock for the complete attached-session lifetime.
 func (a *App) deliverExternalInputLocked(
 	ctx context.Context,
 	message llm.Message,
 	opts runtime.PendingInputOptions,
 	sessionLease *externalInputSessionLease,
+	handoff bool,
+	valid func() error,
 ) (externalInputDelivery, error) {
-	record, err := a.Engine.PersistPendingMessageWithOptions(ctx, message, opts)
+	return a.deliverExternalInputLockedWithStart(ctx, message, opts, sessionLease, handoff, valid, nil)
+}
+
+func (a *App) deliverExternalInputLockedWithStart(
+	ctx context.Context,
+	message llm.Message,
+	opts runtime.PendingInputOptions,
+	sessionLease *externalInputSessionLease,
+	handoff bool,
+	valid func() error,
+	onStarted func(),
+) (externalInputDelivery, error) {
+	accepted, err := a.Engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{
+		Message:       message,
+		Options:       &opts,
+		DeferDelivery: true,
+	})
 	if err != nil {
-		return externalInputDelivery{}, err
+		return externalInputDeliveryFromRuntime(accepted), err
+	}
+	recordID := accepted.RecordID
+	if valid != nil {
+		if err := valid(); err != nil {
+			return externalInputDelivery{RecordID: recordID}, errors.Join(err, a.discardExternalInput(recordID))
+		}
 	}
 	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
-		a.handoffPersistedInputAfterRecovery(record, sessionLease)
-		return externalInputDelivery{Record: record, Queued: true}, err
+		if handoff {
+			a.handoffPersistedInputAfterRecovery(recordID, sessionLease)
+		}
+		return externalInputDelivery{RecordID: recordID, Queued: true, Retry: runtime.PendingInputRetryAfterRecovery}, err
 	}
-	delivery, err := a.resumePersistedInputLocked(ctx, record)
-	if shouldRetryPersistedInputHandoff(delivery, err) {
-		a.handoffPersistedInputAfterRecovery(record, sessionLease)
+	delivery, err := a.resumePersistedInputLockedWithStart(ctx, recordID, onStarted)
+	if delivery.RecordID == "" {
+		delivery.RecordID = recordID
+	}
+	if handoff && shouldStartPersistedInputHandoff(delivery, err) {
+		a.handoffPersistedInputAfterRecovery(recordID, sessionLease)
+		delivery.Queued = true
 	}
 	return delivery, err
 }
 
-// resumePersistedInputLocked classifies delivery from the Framework-owned
-// durable state even when admission or Turn execution also returns an error.
-func (a *App) resumePersistedInputLocked(ctx context.Context, record runtime.PendingInputRecord) (externalInputDelivery, error) {
-	current, ok, err := a.Engine.PersistedPendingMessage(record.ID)
-	if err != nil {
-		return externalInputDelivery{Record: record}, err
-	}
-	if ok {
-		record = current
-	}
-	if record.State == runtime.PendingInputStateProcessed {
-		return externalInputDelivery{Record: record, Delivered: true}, nil
-	}
-	if record.State != runtime.PendingInputStatePending && record.State != runtime.PendingInputStateAdmitted {
-		return externalInputDelivery{Record: record}, externalInputStateError(record)
-	}
-
-	result := a.admitPersistedUserTurn(ctx, record, TurnIDFunc(nextExternalTurnID))
-	var runErr error
-	if result.Start != nil {
-		_, runErr = a.Engine.TurnMessageWithID(ctx, result.Start.Message, result.Start.TurnID)
-		a.CompleteAdmittedTurn(result.Start.TurnID)
-	}
-	cause := errors.Join(result.Err, runErr)
-	current, ok, stateErr := a.Engine.PersistedPendingMessage(record.ID)
-	if stateErr != nil {
-		return externalInputDelivery{Record: record}, errors.Join(cause, stateErr)
-	}
-	if !ok {
-		return externalInputDelivery{Record: record}, errors.Join(cause, fmt.Errorf("app: persisted input %q disappeared", record.ID))
-	}
-	delivery, handled := classifyExternalInputRecord(current)
-	if handled {
-		return delivery, cause
-	}
-	return delivery, errors.Join(cause, externalInputStateError(current))
+// resumePersistedInputLocked follows the Framework-owned lifecycle outcome;
+// App owns only the Session lease and execution of a returned start action.
+func (a *App) resumePersistedInputLocked(ctx context.Context, recordID string) (externalInputDelivery, error) {
+	return a.resumePersistedInputLockedWithStart(ctx, recordID, nil)
 }
 
-func classifyExternalInputRecord(record runtime.PendingInputRecord) (externalInputDelivery, bool) {
-	delivery := externalInputDelivery{Record: record}
-	switch record.State {
-	case runtime.PendingInputStatePending, runtime.PendingInputStateAdmitted:
-		delivery.Queued = true
-		return delivery, true
-	case runtime.PendingInputStateProcessed:
-		delivery.Delivered = true
-		return delivery, true
-	case runtime.PendingInputStateExpired:
-		return delivery, false
-	case runtime.PendingInputStateDropped, runtime.PendingInputStateAccepting:
-		return delivery, false
-	default:
-		return delivery, false
+func (a *App) resumePersistedInputLockedWithStart(ctx context.Context, recordID string, onStarted func()) (externalInputDelivery, error) {
+	queue := a.admissionQueue()
+	queue.state.transitionMu.Lock()
+	queue.state.mu.Lock()
+	phase := queue.state.phase
+	queue.state.mu.Unlock()
+	if phase == turnAdmissionCommand {
+		queue.state.transitionMu.Unlock()
+		return externalInputDelivery{RecordID: recordID, Queued: true, Retry: runtime.PendingInputRetryAfterTurn}, errTurnAdmissionBusy
+	}
+	result, receiveErr := a.Engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{RecordID: recordID})
+	queue.state.transitionMu.Unlock()
+	if result.Disposition != runtime.PendingInputStarted {
+		return externalInputDeliveryFromRuntime(result), receiveErr
+	}
+	if onStarted != nil {
+		onStarted()
+	}
+	_, runErr := a.Engine.TurnMessageWithID(ctx, result.Message, result.TurnID)
+	resolved, err := a.Engine.ResolvePendingInput(recordID, runErr)
+	return externalInputDeliveryFromRuntime(resolved), err
+}
+
+func externalInputDeliveryFromRuntime(result runtime.PendingInputResult) externalInputDelivery {
+	return externalInputDelivery{
+		RecordID:  result.RecordID,
+		Queued:    result.Disposition == runtime.PendingInputQueued,
+		Delivered: result.Disposition == runtime.PendingInputProcessed,
+		Retry:     result.Retry,
 	}
 }
 
-func externalInputStateError(record runtime.PendingInputRecord) error {
-	switch record.State {
-	case runtime.PendingInputStateExpired:
-		return fmt.Errorf("app: persisted input %q: %w", record.ID, runtime.ErrPendingInputExpired)
-	case runtime.PendingInputStateDropped:
-		return fmt.Errorf("app: persisted input %q: %w", record.ID, runtime.ErrPendingInputHandled)
-	default:
-		return fmt.Errorf("app: persisted input %q is not replayable in state %q", record.ID, record.State)
+// deliverExternalInputUntilSettled is the shared App delivery Adapter for
+// sources that must retain their own validity check while following runtime
+// retry instructions. It never interprets durable Pending states.
+func (a *App) deliverExternalInputUntilSettled(
+	ctx context.Context,
+	message llm.Message,
+	opts runtime.PendingInputOptions,
+	valid func() error,
+	onStarted func(),
+) (externalInputDelivery, error) {
+	lease := a.acquireExternalInputSessionLease()
+	defer lease.Release()
+	backoff := 50 * time.Millisecond
+	storageAttempts := 0
+	admissionAttempts := 0
+	var last externalInputDelivery
+	for {
+		if err := ctx.Err(); err != nil {
+			return last, errors.Join(err, a.discardExternalInput(last.RecordID))
+		}
+		a.sessionMu.RLock()
+		delivery, err := a.deliverExternalInputLockedWithStart(ctx, message, opts, lease, false, valid, onStarted)
+		a.sessionMu.RUnlock()
+		last = delivery
+		if err == nil {
+			return delivery, err
+		}
+		if delivery.Retry == runtime.PendingInputNoRetry {
+			if shouldDiscardCanceledExternalInput(delivery, err) {
+				err = errors.Join(err, a.discardExternalInput(delivery.RecordID))
+			}
+			return delivery, err
+		}
+		if delivery.Retry == runtime.PendingInputRetryAfterStorage {
+			storageAttempts++
+			if storageAttempts >= maxExternalInputStorageAttempts {
+				return delivery, err
+			}
+		}
+		if delivery.Retry == runtime.PendingInputRetryAdmission {
+			admissionAttempts++
+			if admissionAttempts >= maxExternalInputStorageAttempts {
+				return delivery, err
+			}
+		}
+		delay := 100 * time.Millisecond
+		if delivery.Retry == runtime.PendingInputRetryAfterStorage || delivery.Retry == runtime.PendingInputRetryAdmission {
+			delay = backoff
+		}
+		if delivery.Retry == runtime.PendingInputRetryAfterRecovery {
+			delay = 25 * time.Millisecond
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return delivery, errors.Join(ctx.Err(), a.discardExternalInput(delivery.RecordID))
+		case <-timer.C:
+		}
+		if delivery.Retry == runtime.PendingInputRetryAfterStorage || delivery.Retry == runtime.PendingInputRetryAdmission {
+			if backoff < time.Second {
+				backoff *= 2
+				if backoff > time.Second {
+					backoff = time.Second
+				}
+			}
+		}
 	}
 }
 
-func nextExternalTurnID(prefix string) string {
-	event := events.Normalize(events.Event{Type: runtime.TurnAdmittedType})
-	return prefix + "-" + event.ID
+func (a *App) discardExternalInput(recordID string) error {
+	if a == nil || a.Engine == nil || recordID == "" {
+		return nil
+	}
+	delay := 50 * time.Millisecond
+	var last error
+	for attempt := 0; attempt < maxExternalInputStorageAttempts; attempt++ {
+		result, err := a.Engine.DiscardPendingInput(recordID)
+		if err == nil || result.Retry == runtime.PendingInputNoRetry {
+			return err
+		}
+		last = err
+		if attempt+1 < maxExternalInputStorageAttempts {
+			time.Sleep(delay)
+			if delay < time.Second {
+				delay *= 2
+				if delay > time.Second {
+					delay = time.Second
+				}
+			}
+		}
+	}
+	return last
 }
 
-func (a *App) startPendingInputRecovery(records []runtime.PendingInputRecord) {
+func (a *App) startPendingInputRecovery(records []runtime.PendingInputRecovery) {
 	if a == nil || a.Engine == nil || len(records) == 0 {
 		return
 	}
-	records = append([]runtime.PendingInputRecord(nil), records...)
+	records = append([]runtime.PendingInputRecovery(nil), records...)
 	done := make(chan struct{})
 	a.pendingRecoveryDone = done
 	a.pendingRecovery.Add(1)
 	go func() {
 		defer a.pendingRecovery.Done()
 		defer close(done)
-		for _, record := range records {
-			if record.ID == "" {
+		for _, recovery := range records {
+			if recovery.RecordID == "" {
 				continue
 			}
-			delivery, err := a.resumePersistedInputDuringRecovery(record)
-			inert := pendingRecoveryRecordInert(delivery.Record)
+			delivery, err := a.resumePersistedInputDuringRecovery(recovery.RecordID)
+			inert := delivery.Retry == runtime.PendingInputNoRetry
 			if err != nil && !inert && a.ctx.Err() == nil && !errors.Is(err, context.Canceled) && a.stderr != nil {
-				fmt.Fprintf(a.stderr, "juex: warning: resume pending input %q: %v\n", record.ID, err)
+				fmt.Fprintf(a.stderr, "juex: warning: resume pending input %q: %v\n", recovery.RecordID, err)
 			}
 			if !inert {
 				return
@@ -169,14 +262,14 @@ func (a *App) startPendingInputRecovery(records []runtime.PendingInputRecord) {
 // ownership until a replayable admission either attaches or becomes inert.
 // A generic handoff cannot own this retry because handoffs wait for the startup
 // barrier and would release newer inputs before they finish.
-func (a *App) resumePersistedInputDuringRecovery(record runtime.PendingInputRecord) (externalInputDelivery, error) {
+func (a *App) resumePersistedInputDuringRecovery(recordID string) (externalInputDelivery, error) {
 	delay := 25 * time.Millisecond
 	for {
 		if err := a.ctx.Err(); err != nil {
-			return externalInputDelivery{Record: record}, err
+			return externalInputDelivery{}, err
 		}
 		a.sessionMu.RLock()
-		delivery, err := a.resumePersistedInputLocked(a.ctx, record)
+		delivery, err := a.resumePersistedInputLocked(a.ctx, recordID)
 		a.sessionMu.RUnlock()
 		if !shouldRetryPersistedInputHandoff(delivery, err) {
 			return delivery, err
@@ -197,20 +290,11 @@ func (a *App) resumePersistedInputDuringRecovery(record runtime.PendingInputReco
 	}
 }
 
-func pendingRecoveryRecordInert(record runtime.PendingInputRecord) bool {
-	switch record.State {
-	case runtime.PendingInputStateExpired, runtime.PendingInputStateDropped, runtime.PendingInputStateProcessed:
-		return true
-	default:
-		return false
-	}
-}
-
 // activateExternalInputAfterPendingRecovery publishes and starts the recovery
 // barrier before a startup notification gate can expose external producers.
 func (a *App) activateExternalInputAfterPendingRecovery(
 	gate *mcpNotificationGate,
-	records []runtime.PendingInputRecord,
+	records []runtime.PendingInputRecovery,
 	activateProducers func(),
 ) {
 	if len(records) > 0 {
@@ -268,10 +352,10 @@ func (a *App) waitPendingInputRecoveryContext(ctx context.Context) error {
 // App-owned work. The durable record remains available for restart if the App
 // is already closing, and duplicate callers share one handoff by record ID.
 func (a *App) handoffPersistedInputAfterRecovery(
-	record runtime.PendingInputRecord,
+	recordID string,
 	sessionLease *externalInputSessionLease,
 ) bool {
-	if a == nil || a.Engine == nil || record.ID == "" || a.ctx == nil {
+	if a == nil || a.Engine == nil || recordID == "" || a.ctx == nil {
 		return false
 	}
 	a.pendingHandoffMu.Lock()
@@ -279,14 +363,14 @@ func (a *App) handoffPersistedInputAfterRecovery(
 		a.pendingHandoffMu.Unlock()
 		return false
 	}
-	if _, ok := a.pendingHandoffIDs[record.ID]; ok {
+	if _, ok := a.pendingHandoffIDs[recordID]; ok {
 		a.pendingHandoffMu.Unlock()
 		return true
 	}
 	if a.pendingHandoffIDs == nil {
 		a.pendingHandoffIDs = make(map[string]struct{})
 	}
-	a.pendingHandoffIDs[record.ID] = struct{}{}
+	a.pendingHandoffIDs[recordID] = struct{}{}
 	a.pendingHandoffs.Add(1)
 	sessionLease.Retain()
 	a.pendingHandoffMu.Unlock()
@@ -294,7 +378,7 @@ func (a *App) handoffPersistedInputAfterRecovery(
 	go func() {
 		defer func() {
 			a.pendingHandoffMu.Lock()
-			delete(a.pendingHandoffIDs, record.ID)
+			delete(a.pendingHandoffIDs, recordID)
 			a.pendingHandoffMu.Unlock()
 			a.pendingHandoffs.Done()
 			sessionLease.Release()
@@ -305,11 +389,11 @@ func (a *App) handoffPersistedInputAfterRecovery(
 				return
 			}
 			a.sessionMu.RLock()
-			delivery, err := a.resumePersistedInputLocked(a.ctx, record)
+			delivery, err := a.resumePersistedInputLocked(a.ctx, recordID)
 			a.sessionMu.RUnlock()
 			if !shouldRetryPersistedInputHandoff(delivery, err) {
 				if err != nil && a.ctx.Err() == nil && !errors.Is(err, context.Canceled) && a.stderr != nil {
-					fmt.Fprintf(a.stderr, "juex: warning: resume handed-off pending input %q: %v\n", record.ID, err)
+					fmt.Fprintf(a.stderr, "juex: warning: resume handed-off pending input %q: %v\n", recordID, err)
 				}
 				return
 			}
@@ -332,7 +416,23 @@ func (a *App) handoffPersistedInputAfterRecovery(
 }
 
 func shouldRetryPersistedInputHandoff(delivery externalInputDelivery, err error) bool {
-	return delivery.Queued && err != nil
+	return delivery.Retry != runtime.PendingInputNoRetry && err != nil
+}
+
+func shouldStartPersistedInputHandoff(delivery externalInputDelivery, err error) bool {
+	if delivery.RecordID == "" || delivery.Delivered || err == nil {
+		return false
+	}
+	if shouldRetryPersistedInputHandoff(delivery, err) {
+		return true
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func shouldDiscardCanceledExternalInput(delivery externalInputDelivery, err error) bool {
+	return delivery.RecordID != "" &&
+		!delivery.Delivered &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
 }
 
 func (a *App) waitPendingInputRecovery() error {
