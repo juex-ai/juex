@@ -66,6 +66,8 @@ type configImportLoader struct {
 	maxBytes      int64
 	maxCacheAge   time.Duration
 	maxRedirects  int
+	fileMemo      map[string][]byte
+	localMemo     map[string]configImportDocument
 	remoteMemo    map[string]configImportDocument
 	cacheLock     *homestore.Lock
 }
@@ -100,6 +102,8 @@ func newConfigImportLoader(homeDir string) *configImportLoader {
 		maxBytes:     configImportMaxBytes,
 		maxCacheAge:  configImportMaxCacheAge,
 		maxRedirects: configImportMaxRedirects,
+		fileMemo:     make(map[string][]byte),
+		localMemo:    make(map[string]configImportDocument),
 		remoteMemo:   make(map[string]configImportDocument),
 	}
 }
@@ -117,6 +121,10 @@ func applyYAMLFileWithImportLoaderAndOptions(cfg *Config, source yamlConfigSourc
 	}
 	if err := loader.recoverConfigImportPublicationIfPresent(); err != nil {
 		return err
+	}
+	identity := declaringConfigIdentity(source.Path)
+	if data, ok := loader.fileMemo[identity]; ok {
+		return applyYAMLContentWithImportLoader(cfg, data, source, loader, opts)
 	}
 	data, err := os.ReadFile(source.Path)
 	if err != nil {
@@ -145,6 +153,7 @@ func applyYAMLFileWithImportLoaderAndOptions(cfg *Config, source yamlConfigSourc
 			return err
 		}
 	}
+	loader.fileMemo[identity] = data
 	return applyYAMLContentWithImportLoader(cfg, data, source, loader, opts)
 }
 
@@ -207,14 +216,18 @@ func applyYAMLContentWithImportLoader(cfg *Config, data []byte, source yamlConfi
 		if err := applyYAMLDataWithOptions(&staged, document.data, document.source, opts); err != nil {
 			return fmt.Errorf("config: %s imports[%d] %s: %w", source.Path, i, document.source.Path, err)
 		}
-		staged.importStatuses = append(staged.importStatuses, document.status)
+		if !opts.SkipImportBookkeeping {
+			staged.importStatuses = append(staged.importStatuses, document.status)
+		}
 	}
 	if err := applyYAMLDataWithOptions(&staged, data, source, opts); err != nil {
 		return err
 	}
-	for _, document := range documents {
-		if document.cacheWrite != nil {
-			staged.pendingImportCache = append(staged.pendingImportCache, *document.cacheWrite)
+	if !opts.SkipImportBookkeeping {
+		for _, document := range documents {
+			if document.cacheWrite != nil {
+				staged.pendingImportCache = append(staged.pendingImportCache, *document.cacheWrite)
+			}
 		}
 	}
 	*cfg = staged
@@ -247,7 +260,7 @@ func (l *configImportLoader) load(declaring yamlConfigSource, rawSource string) 
 		return configImportDocument{}, fmt.Errorf("unsupported URL scheme %q; only http and https are allowed", parsed.Scheme)
 	}
 	identity := parsed.String()
-	if document, ok := l.remoteMemo[identity]; ok {
+	reuseDocument := func(document configImportDocument) configImportDocument {
 		document.source.Scope = declaring.Scope
 		if document.cacheWrite != nil {
 			record := *document.cacheWrite
@@ -256,7 +269,14 @@ func (l *configImportLoader) load(declaring yamlConfigSource, rawSource string) 
 			record.cachePath = l.cachePath(identity, declaring.Path)
 			document.cacheWrite = &record
 		}
-		return document, nil
+		return document
+	}
+	declaringMemoKey := identity + "\x00" + declaringConfigIdentity(declaring.Path)
+	if document, ok := l.remoteMemo[declaringMemoKey]; ok {
+		return reuseDocument(document), nil
+	}
+	if document, ok := l.remoteMemo[identity]; ok {
+		return reuseDocument(document), nil
 	}
 	document, err := l.loadRemote(declaring, parsed)
 	if err != nil {
@@ -264,6 +284,11 @@ func (l *configImportLoader) load(declaring yamlConfigSource, rawSource string) 
 	}
 	if document.status.State == "fresh" {
 		l.remoteMemo[identity] = document
+	} else {
+		// A stale LKG belongs to its declaring config. Reuse it only when the
+		// same declarer is replayed during this load; another declarer may have
+		// a different scoped LKG for the same remote identity.
+		l.remoteMemo[declaringMemoKey] = document
 	}
 	return document, nil
 }
@@ -276,15 +301,22 @@ func (l *configImportLoader) loadLocal(declaring yamlConfigSource, path string) 
 	if err != nil {
 		return configImportDocument{}, fmt.Errorf("resolve local source: %w", err)
 	}
+	memoKey := declaringConfigIdentity(declaring.Path) + "\x00" + declaringConfigIdentity(absPath)
+	if document, ok := l.localMemo[memoKey]; ok {
+		document.source.Scope = declaring.Scope
+		return document, nil
+	}
 	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return configImportDocument{}, fmt.Errorf("read local source: %w", err)
 	}
-	return configImportDocument{
+	document := configImportDocument{
 		data:   data,
 		source: yamlConfigSource{Path: absPath, Scope: declaring.Scope},
 		status: ConfigImportStatus{Source: absPath, State: "fresh", Digest: contentDigest(data)},
-	}, nil
+	}
+	l.localMemo[memoKey] = document
+	return document, nil
 }
 
 func (l *configImportLoader) loadRemote(declaring yamlConfigSource, parsed *url.URL) (configImportDocument, error) {

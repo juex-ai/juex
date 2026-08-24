@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/homestore"
 )
 
@@ -156,6 +157,539 @@ skills:
 	statuses := cfg.ImportStatuses()
 	if len(statuses) != 2 || statuses[0].Source != firstPath || statuses[1].Source != secondPath {
 		t.Fatalf("import statuses = %+v, want resolved sources in declaration order", statuses)
+	}
+}
+
+func TestExplicitLoadedHomeConfigReplaysImportsWithoutDuplicatingAppendOnlyValues(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		setupHome  func(t *testing.T, userHome string) (string, string)
+		hookSource string
+	}{
+		{
+			name: "default home",
+			setupHome: func(_ *testing.T, userHome string) (string, string) {
+				homeDir := filepath.Join(userHome, ".juex")
+				return homeDir, filepath.Join(homeDir, "juex.yaml")
+			},
+			hookSource: "home:default",
+		},
+		{
+			name: "instance home",
+			setupHome: func(t *testing.T, _ string) (string, string) {
+				homeDir := t.TempDir()
+				t.Setenv("JUEX_HOME", homeDir)
+				return homeDir, filepath.Join(homeDir, "juex.yaml")
+			},
+			hookSource: "home:instance",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			userHome := prepareConfigTest(t)
+			homeDir, homePath := tc.setupHome(t, userHome)
+			importPath := filepath.Join(homeDir, "imported.yaml")
+			workDir := t.TempDir()
+
+			writeTextFile(t, importPath, `models: [local:imported]
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: https://imported.example
+    api_key: test-key
+    headers: {X-Layer: imported}
+    models:
+      - id: imported
+      - id: workspace
+runtime:
+  tool_timeout: 17s
+environment:
+  variables: {SHARED_ENV: imported}
+skills:
+  include: [imported]
+hooks:
+  commands:
+    - name: imported
+      events: [UserPromptSubmit]
+      command: [echo, imported]
+sandbox:
+  file_system:
+    blocked_paths: [imported-secret]
+extensions:
+  allow: [imported]
+`)
+			writeTextFile(t, homePath, `imports:
+  - source: imported.yaml
+hooks:
+  commands:
+    - name: home
+      events: [UserPromptSubmit]
+      command: [echo, home]
+sandbox:
+  file_system:
+    blocked_paths: [home-secret]
+extensions:
+  allow: [home]
+`)
+			writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), `models: [local:workspace]
+providers:
+  - id: local
+    headers: {X-Layer: workspace}
+runtime:
+  tool_timeout: 33s
+environment:
+  variables: {SHARED_ENV: workspace}
+skills:
+  include: [workspace]
+hooks:
+  trusted: true
+  commands:
+    - name: workspace
+      events: [UserPromptSubmit]
+      command: [echo, workspace]
+sandbox:
+  file_system:
+    blocked_paths: [workspace-secret]
+extensions:
+  allow: [workspace]
+`)
+
+			cfg, err := LoadWithOptions(LoadOptions{
+				WorkDir:    workDir,
+				ConfigPath: homePath,
+				AgentState: AgentStateNone,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Model != "imported" || !reflect.DeepEqual(cfg.Models, []string{"local:imported"}) {
+				t.Fatalf("models = %v (selected %q), want imported Home replacement", cfg.Models, cfg.Model)
+			}
+			if cfg.ProviderHeaders["X-Layer"] != "imported" {
+				t.Fatalf("provider headers = %v, want imported Home map value", cfg.ProviderHeaders)
+			}
+			if cfg.ToolTimeout != 17*time.Second {
+				t.Fatalf("tool timeout = %s, want imported Home scalar", cfg.ToolTimeout)
+			}
+			if got, _ := cfg.EnvironmentSnapshot().Lookup("SHARED_ENV"); got != "imported" {
+				t.Fatalf("SHARED_ENV = %q, want imported Home value at explicit precedence", got)
+			}
+			var environmentMetadata environment.Metadata
+			for _, item := range cfg.EnvironmentSnapshot().ConfiguredMetadata() {
+				if item.Key == "SHARED_ENV" {
+					environmentMetadata = item
+					break
+				}
+			}
+			if environmentMetadata.Source != environment.SourceExplicitConfig {
+				t.Fatalf("SHARED_ENV metadata = %+v, want explicit config source", environmentMetadata)
+			}
+			sameEnvironmentSource, err := sameConfigPath(environmentMetadata.Path, importPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !sameEnvironmentSource {
+				t.Fatalf("SHARED_ENV metadata path = %q, want imported Home path %q", environmentMetadata.Path, importPath)
+			}
+			if !reflect.DeepEqual(cfg.Skills.Include, []string{"imported"}) {
+				t.Fatalf("skills include = %v, want imported Home replacement", cfg.Skills.Include)
+			}
+			if got, want := cfg.ExtensionPolicy().Allow, []string{"workspace"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("extension allow = %v, want workspace policy %v", got, want)
+			}
+			if got, want := cfg.Sandbox.FileSystem.BlockedPaths, []string{"imported-secret", "home-secret", "workspace-secret"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("blocked paths = %v, want single application %v", got, want)
+			}
+			if len(cfg.Hooks.Commands) != 3 {
+				t.Fatalf("hooks = %+v, want three single-application commands", cfg.Hooks.Commands)
+			}
+			if got, want := []string{cfg.Hooks.Commands[0].Name, cfg.Hooks.Commands[1].Name, cfg.Hooks.Commands[2].Name}, []string{"imported", "home", "workspace"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("hooks = %v, want single application %v", got, want)
+			}
+			if cfg.Hooks.Commands[0].Source != tc.hookSource || cfg.Hooks.Commands[1].Source != tc.hookSource {
+				t.Fatalf("Home hook sources = (%q, %q), want %q", cfg.Hooks.Commands[0].Source, cfg.Hooks.Commands[1].Source, tc.hookSource)
+			}
+			statuses := cfg.ImportStatuses()
+			if len(statuses) != 1 {
+				t.Fatalf("import statuses = %+v, want one original Home import", statuses)
+			}
+			sameImport, err := sameConfigPath(statuses[0].Source, importPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !sameImport {
+				t.Fatalf("import status source = %q, want %q", statuses[0].Source, importPath)
+			}
+		})
+	}
+}
+
+func TestExplicitLoadedHomeConfigReusesStaleRemoteImportDuringReplay(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	homePath := filepath.Join(userHome, ".juex", "juex.yaml")
+	workDir := t.TempDir()
+	var fallbackPhase atomic.Bool
+	var fallbackRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if fallbackPhase.Load() {
+			if fallbackRequests.Add(1) == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`models: [local:imported]
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: https://imported.example
+    api_key: test-key
+    models:
+      - id: imported
+      - id: workspace
+`))
+	}))
+	defer server.Close()
+
+	writeTextFile(t, homePath, "imports:\n  - source: "+server.URL+"/config.yaml\n")
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [local:workspace]\n")
+	load := func() (Config, error) {
+		return LoadWithOptions(LoadOptions{
+			WorkDir:    workDir,
+			ConfigPath: homePath,
+			AgentState: AgentStateNone,
+		})
+	}
+
+	seeded, err := load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seeded.Model != "imported" {
+		t.Fatalf("seeded model = %q, want imported", seeded.Model)
+	}
+
+	fallbackPhase.Store(true)
+	replayed, err := load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fallbackRequests.Load(); got != 1 {
+		t.Fatalf("fallback requests = %d, want one remote resolution for Home load and replay", got)
+	}
+	if replayed.Model != "imported" {
+		t.Fatalf("replayed model = %q, want stale imported Home replacement", replayed.Model)
+	}
+	statuses := replayed.ImportStatuses()
+	if len(statuses) != 1 || statuses[0].State != "stale" {
+		t.Fatalf("import statuses = %+v, want one stale Home import", statuses)
+	}
+}
+
+func TestExplicitLoadedHomeConfigReusesLocalImportBytesDuringReplay(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	homeDir := filepath.Join(userHome, ".juex")
+	homePath := filepath.Join(homeDir, "juex.yaml")
+	importPath := filepath.Join(homeDir, "imported.yaml")
+	firstImport := []byte("runtime:\n  tool_timeout: 11s\n")
+	writeTextFile(t, importPath, string(firstImport))
+	writeTextFile(t, homePath, "imports:\n  - source: imported.yaml\n")
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "runtime:\n  tool_timeout: 33s\n")
+
+	cfg, err := loadConfigFilesForWorkDir(workDir, homePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTextFile(t, importPath, "runtime:\n  tool_timeout: 22s\n")
+	if err := applyExplicitYAMLFile(&cfg, homePath); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ToolTimeout != 11*time.Second {
+		t.Fatalf("tool timeout = %s, want first local import bytes reused during Home replay", cfg.ToolTimeout)
+	}
+	statuses := cfg.ImportStatuses()
+	if len(statuses) != 1 || statuses[0].Digest != contentDigest(firstImport) {
+		t.Fatalf("import statuses = %+v, want one status for first local import bytes", statuses)
+	}
+}
+
+func TestExplicitLoadedHomeConfigReusesDeclaringBytesDuringReplay(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	homeDir := filepath.Join(userHome, ".juex")
+	homePath := filepath.Join(homeDir, "juex.yaml")
+	firstImport := filepath.Join(homeDir, "first.yaml")
+	secondImport := filepath.Join(homeDir, "second.yaml")
+	writeTextFile(t, firstImport, "runtime:\n  tool_timeout: 11s\n")
+	writeTextFile(t, secondImport, "runtime:\n  tool_timeout: 22s\n")
+	writeTextFile(t, homePath, "imports:\n  - source: first.yaml\n")
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "runtime:\n  tool_timeout: 33s\n")
+
+	cfg, err := loadConfigFilesForWorkDir(workDir, homePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTextFile(t, homePath, "imports:\n  - source: second.yaml\n")
+	if err := applyExplicitYAMLFile(&cfg, homePath); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ToolTimeout != 11*time.Second {
+		t.Fatalf("tool timeout = %s, want first declaring Home bytes reused during replay", cfg.ToolTimeout)
+	}
+	statuses := cfg.ImportStatuses()
+	if len(statuses) != 1 {
+		t.Fatalf("import statuses = %+v, want only first declaring Home import", statuses)
+	}
+	sameFirstImport, err := sameConfigPath(statuses[0].Source, firstImport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameFirstImport {
+		t.Fatalf("import status source = %q, want first declaring Home import %q", statuses[0].Source, firstImport)
+	}
+}
+
+func TestExplicitLoadedHomeConfigResolvesRelativeImportsBesideCanonicalHomePath(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	homeDir := filepath.Join(userHome, ".juex")
+	homePath := filepath.Join(homeDir, "juex.yaml")
+	writeTextFile(t, filepath.Join(homeDir, "imported.yaml"), `models: [local:imported]
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: https://imported.example
+    api_key: test-key
+    models:
+      - id: imported
+      - id: workspace
+`)
+	writeTextFile(t, homePath, "imports:\n  - source: imported.yaml\n")
+
+	aliasPath := filepath.Join(t.TempDir(), "home-alias.yaml")
+	if err := os.Link(homePath, aliasPath); err != nil {
+		t.Skipf("create hard-link alias: %v", err)
+	}
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [local:workspace]\n")
+
+	cfg, err := LoadWithOptions(LoadOptions{
+		WorkDir:    workDir,
+		ConfigPath: aliasPath,
+		AgentState: AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model != "imported" {
+		t.Fatalf("model = %q, want import resolved beside canonical Home config", cfg.Model)
+	}
+}
+
+func TestExplicitLoadedHomeConfigSelectsExactOrHighestPriorityMatchingSource(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		configPath   func(defaultPath, instancePath, aliasPath string) string
+		wantTimeout  time.Duration
+		wantLocation string
+	}{
+		{
+			name:         "exact default Home path",
+			configPath:   func(defaultPath, _, _ string) string { return defaultPath },
+			wantTimeout:  11 * time.Second,
+			wantLocation: "default Home",
+		},
+		{
+			name:         "exact instance Home path",
+			configPath:   func(_, instancePath, _ string) string { return instancePath },
+			wantTimeout:  22 * time.Second,
+			wantLocation: "instance Home",
+		},
+		{
+			name:         "same-file alias fallback",
+			configPath:   func(_, _, aliasPath string) string { return aliasPath },
+			wantTimeout:  22 * time.Second,
+			wantLocation: "highest-priority instance Home",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			userHome := prepareConfigTest(t)
+			defaultHomeDir := filepath.Join(userHome, ".juex")
+			defaultHomePath := filepath.Join(defaultHomeDir, "juex.yaml")
+			writeTextFile(t, filepath.Join(defaultHomeDir, "imported.yaml"), "runtime:\n  tool_timeout: 11s\n")
+			writeTextFile(t, defaultHomePath, "imports:\n  - source: imported.yaml\n")
+
+			instanceHomeDir := t.TempDir()
+			t.Setenv("JUEX_HOME", instanceHomeDir)
+			instanceHomePath := filepath.Join(instanceHomeDir, "juex.yaml")
+			writeTextFile(t, filepath.Join(instanceHomeDir, "imported.yaml"), "runtime:\n  tool_timeout: 22s\n")
+			if err := os.Link(defaultHomePath, instanceHomePath); err != nil {
+				t.Skipf("create hard-linked Home configs: %v", err)
+			}
+			aliasPath := filepath.Join(t.TempDir(), "home-alias.yaml")
+			if err := os.Link(defaultHomePath, aliasPath); err != nil {
+				t.Skipf("create hard-linked Home alias: %v", err)
+			}
+
+			workDir := t.TempDir()
+			writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "runtime:\n  tool_timeout: 33s\n")
+			cfg, err := LoadWithOptions(LoadOptions{
+				WorkDir:    workDir,
+				ConfigPath: tc.configPath(defaultHomePath, instanceHomePath, aliasPath),
+				AgentState: AgentStateNone,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.ToolTimeout != tc.wantTimeout {
+				t.Fatalf("tool timeout = %s, want import from %s", cfg.ToolTimeout, tc.wantLocation)
+			}
+		})
+	}
+}
+
+func TestExplicitConfigSelectsExactHomeBeforeSameFileWorkspaceFallback(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	defaultHomeDir := filepath.Join(userHome, ".juex")
+	defaultHomePath := filepath.Join(defaultHomeDir, "juex.yaml")
+	writeTextFile(t, filepath.Join(defaultHomeDir, "imported.yaml"), "runtime:\n  tool_timeout: 11s\n")
+	writeTextFile(t, defaultHomePath, "imports:\n  - source: imported.yaml\n")
+
+	workDir := t.TempDir()
+	workspaceDir := filepath.Join(workDir, ".juex")
+	workspacePath := filepath.Join(workspaceDir, "juex.yaml")
+	writeTextFile(t, filepath.Join(workspaceDir, "imported.yaml"), "runtime:\n  tool_timeout: 33s\n")
+	if err := os.Link(defaultHomePath, workspacePath); err != nil {
+		t.Skipf("create hard-linked Home/workspace configs: %v", err)
+	}
+	aliasPath := filepath.Join(t.TempDir(), "config-alias.yaml")
+	if err := os.Link(defaultHomePath, aliasPath); err != nil {
+		t.Skipf("create hard-linked config alias: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name        string
+		configPath  string
+		wantTimeout time.Duration
+	}{
+		{name: "exact Home path", configPath: defaultHomePath, wantTimeout: 11 * time.Second},
+		{name: "exact workspace path", configPath: workspacePath, wantTimeout: 33 * time.Second},
+		{name: "same-file alias fallback", configPath: aliasPath, wantTimeout: 33 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := LoadWithOptions(LoadOptions{
+				WorkDir:    workDir,
+				ConfigPath: tc.configPath,
+				AgentState: AgentStateNone,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.ToolTimeout != tc.wantTimeout {
+				t.Fatalf("tool timeout = %s, want %s", cfg.ToolTimeout, tc.wantTimeout)
+			}
+		})
+	}
+}
+
+func TestExplicitConfigMatchesHomePathWithFilesystemCaseSemantics(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	defaultHomeDir := filepath.Join(userHome, ".juex")
+	defaultHomePath := filepath.Join(defaultHomeDir, "juex.yaml")
+	writeTextFile(t, filepath.Join(defaultHomeDir, "imported.yaml"), "runtime:\n  tool_timeout: 11s\n")
+	writeTextFile(t, defaultHomePath, "imports:\n  - source: imported.yaml\n")
+	caseVariantHomePath := filepath.Join(defaultHomeDir, "JUEX.YAML")
+	if _, err := os.Stat(caseVariantHomePath); err != nil {
+		if os.IsNotExist(err) {
+			t.Skip("filesystem is case-sensitive")
+		}
+		t.Fatal(err)
+	}
+
+	workDir := t.TempDir()
+	workspaceDir := filepath.Join(workDir, ".juex")
+	workspacePath := filepath.Join(workspaceDir, "juex.yaml")
+	writeTextFile(t, filepath.Join(workspaceDir, "imported.yaml"), "runtime:\n  tool_timeout: 33s\n")
+	if err := os.Link(defaultHomePath, workspacePath); err != nil {
+		t.Skipf("create hard-linked Home/workspace configs: %v", err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{
+		WorkDir:    workDir,
+		ConfigPath: caseVariantHomePath,
+		AgentState: AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ToolTimeout != 11*time.Second {
+		t.Fatalf("tool timeout = %s, want case-variant exact Home import", cfg.ToolTimeout)
+	}
+}
+
+func TestExplicitConfigMatchesCaseVariantOfSymlinkedHomePath(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	defaultHomeDir := filepath.Join(userHome, ".juex")
+	defaultHomePath := filepath.Join(defaultHomeDir, "juex.yaml")
+	targetPath := filepath.Join(t.TempDir(), "target.yaml")
+	writeTextFile(t, targetPath, "imports:\n  - source: imported.yaml\n")
+	writeTextFile(t, filepath.Join(defaultHomeDir, "imported.yaml"), "runtime:\n  tool_timeout: 11s\n")
+	if err := os.MkdirAll(defaultHomeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetPath, defaultHomePath); err != nil {
+		t.Skipf("create symlinked Home config: %v", err)
+	}
+	caseVariantHomePath := filepath.Join(defaultHomeDir, "JUEX.YAML")
+	if _, err := os.Stat(caseVariantHomePath); err != nil {
+		if os.IsNotExist(err) {
+			t.Skip("filesystem is case-sensitive")
+		}
+		t.Fatal(err)
+	}
+
+	workDir := t.TempDir()
+	workspaceDir := filepath.Join(workDir, ".juex")
+	workspacePath := filepath.Join(workspaceDir, "juex.yaml")
+	writeTextFile(t, filepath.Join(workspaceDir, "imported.yaml"), "runtime:\n  tool_timeout: 33s\n")
+	if err := os.Link(targetPath, workspacePath); err != nil {
+		t.Skipf("create same-file workspace config: %v", err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{
+		WorkDir:    workDir,
+		ConfigPath: caseVariantHomePath,
+		AgentState: AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ToolTimeout != 11*time.Second {
+		t.Fatalf("tool timeout = %s, want case-variant symlinked Home import", cfg.ToolTimeout)
+	}
+}
+
+func TestSameConfigPathSpellingDoesNotRequireDirectoryListPermission(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permissions are required")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "juex.yaml")
+	writeTextFile(t, path, "runtime:\n  tool_timeout: 11s\n")
+	if err := os.Chmod(dir, 0o111); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if _, err := os.ReadFile(path); err != nil {
+		t.Skipf("known file is not readable through execute-only directory: %v", err)
+	}
+
+	same, err := sameConfigPathSpelling(path, path)
+	if err != nil {
+		t.Fatalf("sameConfigPathSpelling() error = %v", err)
+	}
+	if !same {
+		t.Fatal("sameConfigPathSpelling() = false, want exact path match")
 	}
 }
 
@@ -1398,6 +1932,8 @@ func TestConfigImportCacheReaderObservesOnePublishedGeneration(t *testing.T) {
 }
 
 func resetImportLoaderMemoForTest(loader *configImportLoader) {
+	loader.fileMemo = make(map[string][]byte)
+	loader.localMemo = make(map[string]configImportDocument)
 	loader.remoteMemo = make(map[string]configImportDocument)
 }
 
