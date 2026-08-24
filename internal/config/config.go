@@ -854,9 +854,9 @@ func configImportLoaderFor(cfg *Config) *configImportLoader {
 func applyExplicitYAMLFile(cfg *Config, path string) error {
 	// A workspace file is already the highest ordinary YAML layer, so naming it
 	// again through --config must not replay append-only values. A loaded Home
-	// file still needs its declaring values replayed above the workspace, but its
-	// imports, append-only hooks/sandbox paths, and durable Extension allowlist
-	// must not be applied twice.
+	// file needs ordinary values from both its imports and declaring document
+	// replayed above the workspace, while append-only hooks/sandbox paths,
+	// durable Extension policy, and import bookkeeping remain single-instance.
 	workspacePath := cfg.RuntimeConfigPath()
 	if workspacePath != "" {
 		sameWorkspaceFile, err := sameConfigPath(path, workspacePath)
@@ -880,14 +880,11 @@ func applyExplicitYAMLFile(cfg *Config, path string) error {
 			return err
 		}
 		if sameLoadedFile {
-			data, readErr := os.ReadFile(path)
-			if readErr != nil {
-				return closeConfigImportLoaderAfterError(cfg, readErr)
-			}
 			loadedSource.Path = path
-			applyErr := applyYAMLDataWithOptions(cfg, data, loadedSource, applyYAMLDataOptions{
-				SkipExtensionPolicy:  true,
-				SkipAppendOnlyValues: true,
+			applyErr := applyYAMLFileWithImportLoaderAndOptions(cfg, loadedSource, configImportLoaderFor(cfg), applyYAMLDataOptions{
+				SkipExtensionPolicy:   true,
+				SkipAppendOnlyValues:  true,
+				SkipImportBookkeeping: true,
 			})
 			return closeConfigImportLoaderAfterError(cfg, applyErr)
 		}
@@ -907,8 +904,9 @@ func applyYAMLData(cfg *Config, data []byte, source yamlConfigSource) error {
 }
 
 type applyYAMLDataOptions struct {
-	SkipExtensionPolicy  bool
-	SkipAppendOnlyValues bool
+	SkipExtensionPolicy   bool
+	SkipAppendOnlyValues  bool
+	SkipImportBookkeeping bool
 }
 
 func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource, opts applyYAMLDataOptions) error {

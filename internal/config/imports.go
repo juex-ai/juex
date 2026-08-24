@@ -207,14 +207,18 @@ func applyYAMLContentWithImportLoader(cfg *Config, data []byte, source yamlConfi
 		if err := applyYAMLDataWithOptions(&staged, document.data, document.source, opts); err != nil {
 			return fmt.Errorf("config: %s imports[%d] %s: %w", source.Path, i, document.source.Path, err)
 		}
-		staged.importStatuses = append(staged.importStatuses, document.status)
+		if !opts.SkipImportBookkeeping {
+			staged.importStatuses = append(staged.importStatuses, document.status)
+		}
 	}
 	if err := applyYAMLDataWithOptions(&staged, data, source, opts); err != nil {
 		return err
 	}
-	for _, document := range documents {
-		if document.cacheWrite != nil {
-			staged.pendingImportCache = append(staged.pendingImportCache, *document.cacheWrite)
+	if !opts.SkipImportBookkeeping {
+		for _, document := range documents {
+			if document.cacheWrite != nil {
+				staged.pendingImportCache = append(staged.pendingImportCache, *document.cacheWrite)
+			}
 		}
 	}
 	*cfg = staged

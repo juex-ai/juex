@@ -159,6 +159,145 @@ skills:
 	}
 }
 
+func TestExplicitLoadedHomeConfigReplaysImportsWithoutDuplicatingAppendOnlyValues(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		setupHome  func(t *testing.T, userHome string) (string, string)
+		hookSource string
+	}{
+		{
+			name: "default home",
+			setupHome: func(_ *testing.T, userHome string) (string, string) {
+				homeDir := filepath.Join(userHome, ".juex")
+				return homeDir, filepath.Join(homeDir, "juex.yaml")
+			},
+			hookSource: "home:default",
+		},
+		{
+			name: "instance home",
+			setupHome: func(t *testing.T, _ string) (string, string) {
+				homeDir := t.TempDir()
+				t.Setenv("JUEX_HOME", homeDir)
+				return homeDir, filepath.Join(homeDir, "juex.yaml")
+			},
+			hookSource: "home:instance",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			userHome := prepareConfigTest(t)
+			homeDir, homePath := tc.setupHome(t, userHome)
+			importPath := filepath.Join(homeDir, "imported.yaml")
+			workDir := t.TempDir()
+
+			writeTextFile(t, importPath, `models: [local:imported]
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: https://imported.example
+    api_key: test-key
+    headers: {X-Layer: imported}
+    models:
+      - id: imported
+      - id: workspace
+runtime:
+  tool_timeout: 17s
+skills:
+  include: [imported]
+hooks:
+  commands:
+    - name: imported
+      events: [UserPromptSubmit]
+      command: [echo, imported]
+sandbox:
+  file_system:
+    blocked_paths: [imported-secret]
+extensions:
+  allow: [imported]
+`)
+			writeTextFile(t, homePath, `imports:
+  - source: imported.yaml
+hooks:
+  commands:
+    - name: home
+      events: [UserPromptSubmit]
+      command: [echo, home]
+sandbox:
+  file_system:
+    blocked_paths: [home-secret]
+extensions:
+  allow: [home]
+`)
+			writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), `models: [local:workspace]
+providers:
+  - id: local
+    headers: {X-Layer: workspace}
+runtime:
+  tool_timeout: 33s
+skills:
+  include: [workspace]
+hooks:
+  trusted: true
+  commands:
+    - name: workspace
+      events: [UserPromptSubmit]
+      command: [echo, workspace]
+sandbox:
+  file_system:
+    blocked_paths: [workspace-secret]
+extensions:
+  allow: [workspace]
+`)
+
+			cfg, err := LoadWithOptions(LoadOptions{
+				WorkDir:    workDir,
+				ConfigPath: homePath,
+				AgentState: AgentStateNone,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Model != "imported" || !reflect.DeepEqual(cfg.Models, []string{"local:imported"}) {
+				t.Fatalf("models = %v (selected %q), want imported Home replacement", cfg.Models, cfg.Model)
+			}
+			if cfg.ProviderHeaders["X-Layer"] != "imported" {
+				t.Fatalf("provider headers = %v, want imported Home map value", cfg.ProviderHeaders)
+			}
+			if cfg.ToolTimeout != 17*time.Second {
+				t.Fatalf("tool timeout = %s, want imported Home scalar", cfg.ToolTimeout)
+			}
+			if !reflect.DeepEqual(cfg.Skills.Include, []string{"imported"}) {
+				t.Fatalf("skills include = %v, want imported Home replacement", cfg.Skills.Include)
+			}
+			if got, want := cfg.ExtensionPolicy().Allow, []string{"workspace"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("extension allow = %v, want workspace policy %v", got, want)
+			}
+			if got, want := cfg.Sandbox.FileSystem.BlockedPaths, []string{"imported-secret", "home-secret", "workspace-secret"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("blocked paths = %v, want single application %v", got, want)
+			}
+			if len(cfg.Hooks.Commands) != 3 {
+				t.Fatalf("hooks = %+v, want three single-application commands", cfg.Hooks.Commands)
+			}
+			if got, want := []string{cfg.Hooks.Commands[0].Name, cfg.Hooks.Commands[1].Name, cfg.Hooks.Commands[2].Name}, []string{"imported", "home", "workspace"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("hooks = %v, want single application %v", got, want)
+			}
+			if cfg.Hooks.Commands[0].Source != tc.hookSource || cfg.Hooks.Commands[1].Source != tc.hookSource {
+				t.Fatalf("Home hook sources = (%q, %q), want %q", cfg.Hooks.Commands[0].Source, cfg.Hooks.Commands[1].Source, tc.hookSource)
+			}
+			statuses := cfg.ImportStatuses()
+			if len(statuses) != 1 {
+				t.Fatalf("import statuses = %+v, want one original Home import", statuses)
+			}
+			sameImport, err := sameConfigPath(statuses[0].Source, importPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !sameImport {
+				t.Fatalf("import status source = %q, want %q", statuses[0].Source, importPath)
+			}
+		})
+	}
+}
+
 func TestConfigImportsTreatColonContainingRelativeFilenameAsLocal(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows filenames cannot contain colons")
