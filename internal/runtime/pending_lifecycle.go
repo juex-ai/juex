@@ -145,7 +145,7 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 	}
 	status, removed := e.removePendingInputRecord(recordID)
 	if removed > 0 {
-		_ = e.emit(events.Event{Type: "pending_input.dropped", TurnID: status.TurnID, Payload: PendingInputDroppedPayload{
+		e.publishPendingEvent(events.Event{Type: "pending_input.dropped", TurnID: status.TurnID, Payload: PendingInputDroppedPayload{
 			Count:            removed,
 			PendingCount:     status.PendingCount,
 			MaxPendingInputs: status.MaxPendingInputs,

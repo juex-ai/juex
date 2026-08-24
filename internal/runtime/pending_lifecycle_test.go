@@ -590,6 +590,44 @@ func TestDiscardPendingInputRemovesAttachedLiveQueueEntry(t *testing.T) {
 	}
 }
 
+func TestPendingDroppedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	if err := eng.ReserveTurnID("active-turn"); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+		Message: llm.TextMessage(llm.RoleUser, "discard me"),
+		Options: &PendingInputOptions{ID: "discard-reentrant", TTL: time.Hour},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var nestedErr error
+	bus.Subscribe("pending_input.dropped", func(events.Event) {
+		_, nestedErr = eng.EnqueuePendingInput(context.Background(), "replacement")
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.DiscardPendingInput(queued.RecordID)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pending_input.dropped subscriber deadlocked while synchronously enqueueing")
+	}
+	if nestedErr != nil {
+		t.Fatalf("nested enqueue: %v", nestedErr)
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 1 {
+		t.Fatalf("pending status = %+v, want replacement input queued", status)
+	}
+}
+
 func TestReceivePendingInputReturnsStorageRetryWhenPersistedRecordCannotBeRead(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	record, err := eng.PersistPendingMessageWithOptions(

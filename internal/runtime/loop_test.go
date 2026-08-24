@@ -7372,6 +7372,42 @@ func TestDrainPendingInputReportsMessagesQueuedWhileDraining(t *testing.T) {
 	}
 }
 
+func TestPendingDrainedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	if err := eng.ReserveTurnID("turn-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingInput(context.Background(), "first"); err != nil {
+		t.Fatal(err)
+	}
+
+	var nestedErr error
+	bus.Subscribe("pending_input.drained", func(events.Event) {
+		_, nestedErr = eng.EnqueuePendingInput(context.Background(), "second")
+	})
+	done := make(chan error, 1)
+	go func() {
+		eng.mu.Lock()
+		err := eng.drainPendingInputLocked(context.Background(), "turn-1")
+		eng.mu.Unlock()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pending_input.drained subscriber deadlocked while synchronously enqueueing")
+	}
+	if nestedErr != nil {
+		t.Fatalf("nested enqueue: %v", nestedErr)
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 1 {
+		t.Fatalf("pending status = %+v, want subscriber input queued", status)
+	}
+}
+
 func TestPendingQueuedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	eng.MaxPendingInputs = 3

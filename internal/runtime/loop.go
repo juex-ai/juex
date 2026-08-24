@@ -2090,7 +2090,7 @@ func (e *Engine) finishPendingInputDrain(turnID string, count, max int) {
 	e.pendingMu.Lock()
 	remaining := len(e.pendingInput)
 	e.pendingMu.Unlock()
-	_ = e.emit(events.Event{Type: "pending_input.drained", TurnID: turnID, Payload: PendingInputDrainedPayload{
+	e.publishPendingEvent(events.Event{Type: "pending_input.drained", TurnID: turnID, Payload: PendingInputDrainedPayload{
 		Count:            count,
 		PendingCount:     remaining,
 		MaxPendingInputs: max,
@@ -2116,6 +2116,17 @@ func (e *Engine) stagePendingEventLocked(event events.Event) bool {
 	}
 	e.pendingEventAnnouncing = true
 	return false
+}
+
+func (e *Engine) publishPendingEvent(event events.Event) {
+	e.pendingMu.Lock()
+	deferred := e.stagePendingEventLocked(event)
+	e.pendingMu.Unlock()
+	if deferred {
+		return
+	}
+	_ = e.emit(event)
+	e.flushPendingEvents()
 }
 
 func (e *Engine) flushPendingEvents() {
