@@ -43,11 +43,11 @@ func readToolDefinition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "read",
 		Group:       ToolGroupFile,
-		Description: "Read a UTF-8 text file or image. Text reads return file contents with optional offset (1-based line) and limit (max lines). Image reads return a media reference visible to vision-capable models; offset and limit are not supported for images.",
+		Description: "Read a UTF-8 text file or image from an absolute path, a working-dir-relative path, or a read-only artifact:// URI advertised in projected context. Text reads return file contents with optional offset (1-based line) and limit (max lines). Image reads return a media reference visible to vision-capable models; offset and limit are not supported for images.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path":   map[string]any{"type": "string", "description": "Absolute or working-dir-relative path"},
+				"path":   map[string]any{"type": "string", "description": "Absolute path, working-dir-relative path, or read-only artifact:// URI advertised in projected context"},
 				"offset": map[string]any{"type": "integer", "description": "1-based line to start at"},
 				"limit":  map[string]any{"type": "integer", "description": "Max number of lines to return"},
 			},

@@ -134,6 +134,27 @@ func TestDefaultBuiltinToolGroups(t *testing.T) {
 	}
 }
 
+func TestReadToolDefinitionAdvertisesArtifactURI(t *testing.T) {
+	definition := readToolDefinition()
+	properties, ok := definition.Schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("read properties = %#v", definition.Schema["properties"])
+	}
+	path, ok := properties["path"].(map[string]any)
+	if !ok {
+		t.Fatalf("read path schema = %#v", properties["path"])
+	}
+	pathDescription, _ := path["description"].(string)
+	for label, description := range map[string]string{
+		"tool": definition.Description,
+		"path": pathDescription,
+	} {
+		if !strings.Contains(description, "artifact://") || !strings.Contains(description, "read-only") {
+			t.Fatalf("read %s description does not advertise read-only Artifact URIs: %q", label, description)
+		}
+	}
+}
+
 func TestToolGroupGuideSkill(t *testing.T) {
 	tests := []struct {
 		name  string
