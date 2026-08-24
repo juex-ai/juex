@@ -1,11 +1,14 @@
 package runtime
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/provenance"
 )
 
 func TestCompactionModelSummaryStripsDeterministicReferenceSuffix(t *testing.T) {
@@ -174,6 +177,98 @@ func TestBuildCompactionSummaryRequest_BoundsOversizedTranscript(t *testing.T) {
 	}
 	if !strings.Contains(body, "user-request") || !strings.Contains(body, "preserve this user request") {
 		t.Fatalf("user request should be retained when tool exchanges are omitted:\n%s", body)
+	}
+}
+
+func TestBuildProvenanceBoundedCompactionSummaryRequestFitsDerivedSnapshot(t *testing.T) {
+	input := []llm.Message{testMsg("user-request", llm.RoleUser, "保留用户输入 🚀 with quotes \" and JSON-sensitive <>&\nnext line")}
+	for i := 0; i < 6; i++ {
+		input = append(input, runtimeSummaryToolExchange(i, 40_000)...)
+	}
+	policy := compactionPolicy{
+		ToolResultMaxChars:   40_000,
+		SummaryRequestTokens: 1_000_000,
+		SummaryMaxTokens:     100,
+	}
+
+	_, unbounded := buildCompactionSummaryRequest("base", llm.Message{}, input, compactionSummaryState{}, policy, "")
+	unboundedRaw, err := json.Marshal(unbounded[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unboundedRaw) <= provenance.MaxInlineSnapshotBytes {
+		t.Fatalf("test setup invalid: unbounded summary snapshot = %d bytes, want > %d", len(unboundedRaw), provenance.MaxInlineSnapshotBytes)
+	}
+
+	_, history, err := buildProvenanceBoundedCompactionSummaryRequest("base", llm.Message{}, input, compactionSummaryState{}, policy, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].ID == "" {
+		t.Fatalf("bounded summary history = %+v, want one stable derived message", history)
+	}
+	raw, err := json.Marshal(history[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > provenance.MaxInlineSnapshotBytes {
+		t.Fatalf("bounded summary snapshot = %d bytes, want <= %d", len(raw), provenance.MaxInlineSnapshotBytes)
+	}
+	if !strings.Contains(history[0].FirstText(), "保留用户输入") {
+		t.Fatalf("bounded summary dropped user input:\n%s", history[0].FirstText())
+	}
+	epoch, err := provenance.BuildRequestEpoch(provenance.RequestInput{
+		Purpose:  "compaction",
+		Provider: provenance.SafeProvider{ID: "test", Model: "model"},
+		History:  history,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch.EpochID = "epoch-compaction-snapshot"
+	if err := provenance.ValidateRequestEpoch(provenance.RequestEpochPayload{Epoch: epoch}); err != nil {
+		t.Fatalf("ValidateRequestEpoch() error = %v", err)
+	}
+}
+
+func TestBuildProvenanceBoundedCompactionSummaryRequestRejectsIrreducibleSnapshot(t *testing.T) {
+	input := []llm.Message{testMsg("user-request", llm.RoleUser, strings.Repeat("界🚀<>&\"\n", 40_000))}
+	policy := compactionPolicy{
+		ToolResultMaxChars:   1,
+		SummaryRequestTokens: 1_000_000,
+		SummaryMaxTokens:     100,
+	}
+
+	_, _, err := buildProvenanceBoundedCompactionSummaryRequest("base", llm.Message{}, input, compactionSummaryState{}, policy, "")
+	if err == nil || !strings.Contains(err.Error(), "cannot fit compaction summary snapshot") {
+		t.Fatalf("buildProvenanceBoundedCompactionSummaryRequest() error = %v", err)
+	}
+}
+
+func TestGenerateCompactionSummaryRejectsIrreducibleSnapshotBeforeProvider(t *testing.T) {
+	provider := &namedCompactionProvider{name: "must-not-run"}
+	eng, _ := newEngine(t, provider, false)
+	policy := effectiveCompactionPolicy(DefaultCompactionPolicy(), DefaultContextWindowTokens)
+	previous := testMsg("compact-previous", llm.RoleUser, strings.Repeat("界🚀<>&\"\n", 40_000))
+	previous.Kind = llm.MessageKindCompact
+
+	_, err := eng.generateCompactionSummaryLocked(
+		context.Background(),
+		"compact-turn",
+		"base",
+		previous,
+		[]llm.Message{testMsg("user-request", llm.RoleUser, "preserve me")},
+		compactionSummaryState{},
+		policy,
+		"",
+		DefaultContextWindowTokens,
+		"",
+	)
+	if err == nil || !strings.Contains(err.Error(), "cannot fit compaction summary snapshot") {
+		t.Fatalf("generateCompactionSummaryLocked() error = %v", err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("provider calls = %d, want 0", provider.calls)
 	}
 }
 
