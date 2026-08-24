@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"path"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -113,6 +114,10 @@ func (e *Engine) projectMessagesForProviderLocked(msgs []llm.Message, policy com
 		if err != nil {
 			return nil, total, err
 		}
+		projected, err = e.renderProjectedArtifactReadPaths(projected)
+		if err != nil {
+			return nil, total, err
+		}
 		projected = projectToolUseInputsForProvider(projected)
 		out[i] = projected
 		total.UserInputsExternalized += stats.UserInputsExternalized
@@ -142,7 +147,11 @@ func (e *Engine) projectOversizedCompactionInputsLocked(msgs []llm.Message, ids 
 		if err != nil {
 			return nil, nil, total, err
 		}
-		out[i] = projected
+		providerProjected, err := e.renderProjectedArtifactReadPaths(projected)
+		if err != nil {
+			return nil, nil, total, err
+		}
+		out[i] = providerProjected
 		if hasRetainedInputReference(projected) {
 			retained = append(retained, projected)
 		}
@@ -388,7 +397,7 @@ func (e *Engine) tightenProjectedUserInput(block llm.Block, policy compactionPol
 	updated := *projection
 	updated.HeadBytes = len(head)
 	updated.TailBytes = len(tail)
-	block.Text = providerVisibleArtifactText(updated, head, tail)
+	block.Text = providerVisibleArtifactText(updated, updated.StoredPath, head, tail)
 	block.Artifact = &updated
 	return block, true, nil
 }
@@ -419,7 +428,80 @@ func (e *Engine) writeProjectedArtifact(sourceKind, messageID string, blockIndex
 		TailBytes:     len(tail),
 		Truncated:     true,
 	}
-	return projection, providerVisibleArtifactText(projection, head, tail), nil
+	return projection, providerVisibleArtifactText(projection, projection.StoredPath, head, tail), nil
+}
+
+func projectedArtifactReadPath(artifactDir, storedPath string) (string, error) {
+	absoluteArtifactDir, err := filepath.Abs(artifactDir)
+	if err != nil {
+		return "", fmt.Errorf("context artifact read path: %w", err)
+	}
+	return filepath.Join(absoluteArtifactDir, filepath.FromSlash(storedPath)), nil
+}
+
+func (e *Engine) renderProjectedArtifactReadPaths(msg llm.Message) (llm.Message, error) {
+	rendered, err := e.renderProjectedArtifactBlockReadPaths(msg)
+	if err != nil {
+		return msg, err
+	}
+	if msg.Kind != llm.MessageKindCompact || msg.Compaction == nil || msg.Compaction.SummaryChars <= 0 || len(msg.Compaction.RetainedInputReferences) == 0 {
+		return rendered, nil
+	}
+
+	references := make([]llm.Message, len(msg.Compaction.RetainedInputReferences))
+	for index, reference := range msg.Compaction.RetainedInputReferences {
+		references[index], err = e.renderProjectedArtifactBlockReadPaths(reference)
+		if err != nil {
+			return msg, err
+		}
+	}
+	summary := appendCompactionInputReferences(compactionModelSummary(msg).FirstText(), references)
+	out := rendered
+	out.Blocks = append([]llm.Block(nil), rendered.Blocks...)
+	for index := range out.Blocks {
+		if out.Blocks[index].Type == llm.BlockText {
+			out.Blocks[index].Text = compactMessageText(summary)
+			break
+		}
+	}
+	return out, nil
+}
+
+func (e *Engine) renderProjectedArtifactBlockReadPaths(msg llm.Message) (llm.Message, error) {
+	var blocks []llm.Block
+	for index, block := range msg.Blocks {
+		if block.Artifact == nil {
+			if blocks != nil {
+				blocks = append(blocks, block)
+			}
+			continue
+		}
+		readPath, err := projectedArtifactReadPath(e.ArtifactDir, block.Artifact.StoredPath)
+		if err != nil {
+			return msg, err
+		}
+		if blocks == nil {
+			blocks = make([]llm.Block, index, len(msg.Blocks))
+			copy(blocks, msg.Blocks[:index])
+		}
+		switch block.Type {
+		case llm.BlockText:
+			block.Text = replaceProjectedArtifactPath(block.Text, block.Artifact.StoredPath, readPath)
+		case llm.BlockToolResult:
+			block.Content = replaceProjectedArtifactPath(block.Content, block.Artifact.StoredPath, readPath)
+		}
+		blocks = append(blocks, block)
+	}
+	if blocks != nil {
+		msg.Blocks = blocks
+	}
+	return msg, nil
+}
+
+func replaceProjectedArtifactPath(text, storedPath, readPath string) string {
+	stored := "path: " + storedPath + "\n\nPreview:\n"
+	readable := "path: " + readPath + "\n\nPreview:\n"
+	return strings.Replace(text, stored, readable, 1)
 }
 
 func (e *Engine) projectedArtifactStore() (artifact.Store, error) {
@@ -515,7 +597,7 @@ func utf8BoundaryStart(s string, n int) int {
 	return n
 }
 
-func providerVisibleArtifactText(artifact llm.ContextArtifactProjection, head, tail string) string {
+func providerVisibleArtifactText(artifact llm.ContextArtifactProjection, readPath, head, tail string) string {
 	var b strings.Builder
 	if artifact.SourceKind == "tool_result" {
 		b.WriteString("Tool output stored outside context.\n")
@@ -527,7 +609,7 @@ func providerVisibleArtifactText(artifact llm.ContextArtifactProjection, head, t
 		b.WriteString("User input stored outside context.\n")
 		fmt.Fprintf(&b, "message_id: %s\n", artifact.MessageID)
 	}
-	fmt.Fprintf(&b, "bytes: %d\nsha256: %s\npath: %s\n\n", artifact.OriginalBytes, artifact.SHA256, artifact.StoredPath)
+	fmt.Fprintf(&b, "bytes: %d\nsha256: %s\npath: %s\n\n", artifact.OriginalBytes, artifact.SHA256, readPath)
 	b.WriteString("Preview:\n")
 	b.WriteString(head)
 	if tail != "" {

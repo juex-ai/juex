@@ -1589,7 +1589,7 @@ func TestTurn_CompactionSummarizesRealInputThatExceedsRetentionBudget(t *testing
 		t.Fatalf("active context has unterminated artifact path:\n%s", activeText)
 	}
 	artifactPath := strings.TrimSpace(activeText[pathStart+len("path: ") : pathStart+pathEnd])
-	artifactData, err := os.ReadFile(filepath.Join(eng.ArtifactDir, filepath.FromSlash(artifactPath)))
+	artifactData, err := os.ReadFile(artifactPath)
 	if err != nil {
 		t.Fatalf("read retained input artifact: %v", err)
 	}
@@ -1756,6 +1756,9 @@ func TestTurn_CompactionCarriesRetainedInputReferencesAcrossCompactions(t *testi
 	firstArtifact := firstReference.Blocks[0].Artifact
 	if firstArtifact == nil {
 		t.Fatalf("first retained reference = %+v", firstReference)
+	}
+	if strings.Contains(firstReference.FirstText(), eng.ArtifactDir) {
+		t.Fatalf("durable retained reference contains runtime-specific Artifact root: %s", firstReference.FirstText())
 	}
 
 	secondInput := "second-head " + strings.Repeat("second-private ", 1600) + " SECOND-TAIL"

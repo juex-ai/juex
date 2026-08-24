@@ -2654,8 +2654,10 @@ the current Agent's Artifact root, appends compact boundary messages with metada
 assembles provider context as latest compact summary, retained recent tail, and
 messages after the compact marker. Large user inputs and tool results are
 materialized to `sessions/<session-id>/user-inputs/` and
-`sessions/<session-id>/tool-results/` relative to that root; provider-visible messages keep a
-stable replacement with path, byte count, SHA-256, and head/tail preview.
+`sessions/<session-id>/tool-results/` relative to that root. Projection metadata
+keeps that portable root-relative reference; provider-visible messages render
+its absolute, directly readable path together with byte count, SHA-256, and a
+head/tail preview.
 For each selected model candidate, the configured context window determines the
 effective budgets: automatic compaction triggers at 70%, the complete summary
 request envelope fits within 80%, summary output and Tool Result limits each use
