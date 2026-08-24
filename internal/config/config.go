@@ -857,22 +857,28 @@ func applyExplicitYAMLFile(cfg *Config, path string) error {
 	// file needs ordinary values from both its imports and declaring document
 	// replayed above the workspace, while append-only hooks/sandbox paths,
 	// durable Extension policy, and import bookkeeping remain single-instance.
-	workspacePath := cfg.RuntimeConfigPath()
-	if workspacePath != "" {
-		sameWorkspaceFile, err := sameConfigPath(path, workspacePath)
-		if err != nil {
-			return err
+	defaultHomeSource := yamlConfigSource{Path: cfg.DefaultHomeRuntimeConfigPath(), Scope: configScopeDefaultHome}
+	loadedSources := []yamlConfigSource{defaultHomeSource}
+	instanceHomeSource := yamlConfigSource{Path: cfg.HomeRuntimeConfigPath(), Scope: configScopeInstanceHome}
+	if instanceHomeSource.Path != "" {
+		sameDefaultPath := false
+		var err error
+		if defaultHomeSource.Path != "" {
+			sameDefaultPath, err = sameConfigPathSpelling(instanceHomeSource.Path, defaultHomeSource.Path)
+			if err != nil {
+				return err
+			}
 		}
-		if sameWorkspaceFile {
-			return nil
+		if !sameDefaultPath {
+			loadedSources = append(loadedSources, instanceHomeSource)
 		}
 	}
-	loadedSources := []yamlConfigSource{
-		{Path: cfg.DefaultHomeRuntimeConfigPath(), Scope: configScopeDefaultHome},
-		{Path: cfg.HomeRuntimeConfigPath(), Scope: configScopeInstanceHome},
+	if workspacePath := cfg.RuntimeConfigPath(); workspacePath != "" {
+		loadedSources = append(loadedSources, workspaceYAMLSource(workspacePath))
 	}
 	selectedSource := yamlConfigSource{}
-	for _, loadedSource := range loadedSources {
+	for i := len(loadedSources) - 1; i >= 0; i-- {
+		loadedSource := loadedSources[i]
 		if loadedSource.Path == "" {
 			continue
 		}
@@ -902,6 +908,9 @@ func applyExplicitYAMLFile(cfg *Config, path string) error {
 		}
 	}
 	if selectedSource.Path != "" {
+		if selectedSource.Scope == configScopeWorkspace {
+			return nil
+		}
 		applyErr := applyYAMLFileWithImportLoaderAndOptions(cfg, selectedSource, configImportLoaderFor(cfg), applyYAMLDataOptions{
 			SkipExtensionPolicy:   true,
 			SkipAppendOnlyValues:  true,

@@ -484,6 +484,50 @@ func TestExplicitLoadedHomeConfigSelectsExactOrHighestPriorityMatchingSource(t *
 	}
 }
 
+func TestExplicitConfigSelectsExactHomeBeforeSameFileWorkspaceFallback(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	defaultHomeDir := filepath.Join(userHome, ".juex")
+	defaultHomePath := filepath.Join(defaultHomeDir, "juex.yaml")
+	writeTextFile(t, filepath.Join(defaultHomeDir, "imported.yaml"), "runtime:\n  tool_timeout: 11s\n")
+	writeTextFile(t, defaultHomePath, "imports:\n  - source: imported.yaml\n")
+
+	workDir := t.TempDir()
+	workspaceDir := filepath.Join(workDir, ".juex")
+	workspacePath := filepath.Join(workspaceDir, "juex.yaml")
+	writeTextFile(t, filepath.Join(workspaceDir, "imported.yaml"), "runtime:\n  tool_timeout: 33s\n")
+	if err := os.Link(defaultHomePath, workspacePath); err != nil {
+		t.Skipf("create hard-linked Home/workspace configs: %v", err)
+	}
+	aliasPath := filepath.Join(t.TempDir(), "config-alias.yaml")
+	if err := os.Link(defaultHomePath, aliasPath); err != nil {
+		t.Skipf("create hard-linked config alias: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name        string
+		configPath  string
+		wantTimeout time.Duration
+	}{
+		{name: "exact Home path", configPath: defaultHomePath, wantTimeout: 11 * time.Second},
+		{name: "exact workspace path", configPath: workspacePath, wantTimeout: 33 * time.Second},
+		{name: "same-file alias fallback", configPath: aliasPath, wantTimeout: 33 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := LoadWithOptions(LoadOptions{
+				WorkDir:    workDir,
+				ConfigPath: tc.configPath,
+				AgentState: AgentStateNone,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.ToolTimeout != tc.wantTimeout {
+				t.Fatalf("tool timeout = %s, want %s", cfg.ToolTimeout, tc.wantTimeout)
+			}
+		})
+	}
+}
+
 func TestConfigImportsTreatColonContainingRelativeFilenameAsLocal(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows filenames cannot contain colons")
