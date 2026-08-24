@@ -163,7 +163,11 @@ func TestTurnRejectsSynchronousInputBeforeQueueingWhenTurnIsReserved(t *testing.
 }
 
 func TestDiscardPendingInputRemovesAttachedLiveQueueEntry(t *testing.T) {
-	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	eng.MaxPendingInputs = 1
+	statusStore := NewStatusStore(StatusSeed{SessionID: "discard-session", MaxPendingInputs: 1})
+	unsubscribe := bus.Subscribe("*", statusStore.Publish)
+	defer unsubscribe()
 	if err := eng.ReserveTurnID("active-turn"); err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +183,9 @@ func TestDiscardPendingInputRemovesAttachedLiveQueueEntry(t *testing.T) {
 	if queued.Disposition != PendingInputQueued || queued.Status.PendingCount != 1 {
 		t.Fatalf("queued input = %+v", queued)
 	}
+	if snapshot := statusStore.Snapshot(); snapshot.Session.PendingCount != 1 || snapshot.Session.CanAcceptInput {
+		t.Fatalf("queued status projection = %+v, want full queue", snapshot.Session)
+	}
 
 	discarded, err := eng.DiscardPendingInput(queued.RecordID)
 	if err != nil {
@@ -189,6 +196,9 @@ func TestDiscardPendingInputRemovesAttachedLiveQueueEntry(t *testing.T) {
 	}
 	if record := pendingLifecycleTestRecord(t, eng, queued.RecordID); record.State != PendingInputStateDropped {
 		t.Fatalf("durable record = %+v, want dropped", record)
+	}
+	if snapshot := statusStore.Snapshot(); snapshot.Session.PendingCount != 0 || !snapshot.Session.CanAcceptInput {
+		t.Fatalf("discarded status projection = %+v, want available queue", snapshot.Session)
 	}
 }
 
@@ -223,6 +233,64 @@ func TestReceivePendingInputReturnsStorageRetryWhenPersistedRecordCannotBeRead(t
 	if result.RecordID != record.ID || result.Retry != PendingInputRetryAfterStorage {
 		t.Fatalf("ReceivePendingInput() result = %+v, want record %q with storage retry", result, record.ID)
 	}
+}
+
+func TestReceivePendingInputReturnsStorageRetryWhenPersistedEnqueueWriteFails(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	record, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "retry enqueue write"),
+		PendingInputOptions{ID: "enqueue-write-retry", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := eng.currentPendingInputQueue()
+	queue.now = func() time.Time { return record.ExpiresAt.Add(time.Second) }
+	wantErr := errors.New("journal append failed")
+	queue.fileOps.write = func(*os.File, []byte) (int, error) { return 0, wantErr }
+
+	result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{RecordID: record.ID})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("ReceivePendingInput() error = %v, want %v", err, wantErr)
+	}
+	if result.RecordID != record.ID || result.Retry != PendingInputRetryAfterStorage {
+		t.Fatalf("ReceivePendingInput() result = %+v, want record %q with storage retry", result, record.ID)
+	}
+}
+
+func TestReceivePendingInputDoesNotRetryCanceledPersistedEnqueue(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	record, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "cancel enqueue"),
+		PendingInputOptions{ID: "cancel-enqueue", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &cancelOnSecondErrContext{Context: context.Background()}
+
+	result, err := eng.ReceivePendingInput(ctx, PendingInputRequest{RecordID: record.ID})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ReceivePendingInput() error = %v, want %v", err, context.Canceled)
+	}
+	if result.RecordID != record.ID || result.Retry != PendingInputNoRetry {
+		t.Fatalf("ReceivePendingInput() result = %+v, want canceled record without retry", result)
+	}
+}
+
+type cancelOnSecondErrContext struct {
+	context.Context
+	calls int
+}
+
+func (c *cancelOnSecondErrContext) Err() error {
+	c.calls++
+	if c.calls > 1 {
+		return context.Canceled
+	}
+	return nil
 }
 
 func pendingLifecycleTestRecord(t *testing.T, eng *Engine, recordID string) PendingInputRecord {

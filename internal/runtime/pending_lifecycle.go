@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -139,7 +140,14 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 	if err := e.DropPersistedPendingMessage(recordID); err != nil {
 		return PendingInputResult{Retry: PendingInputRetryAfterStorage}, err
 	}
-	status := e.removePendingInputRecord(recordID)
+	status, removed := e.removePendingInputRecord(recordID)
+	if removed > 0 {
+		_ = e.emit(events.Event{Type: "pending_input.dropped", TurnID: status.TurnID, Payload: PendingInputDroppedPayload{
+			Count:            removed,
+			PendingCount:     status.PendingCount,
+			MaxPendingInputs: status.MaxPendingInputs,
+		}})
+	}
 	record, ok, err := e.PersistedPendingMessage(recordID)
 	if err != nil {
 		return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage, Status: status}, err
@@ -266,25 +274,25 @@ func (e *Engine) receivePersistedPendingInput(ctx context.Context, recordID stri
 		case enqueueErr == nil:
 			current, _, stateErr := e.PersistedPendingMessage(record.ID)
 			if stateErr != nil {
-				return PendingInputResult{}, stateErr
+				return PendingInputResult{RecordID: record.ID, Retry: PendingInputRetryAfterStorage, Status: status}, stateErr
 			}
 			return PendingInputResult{Disposition: PendingInputQueued, RecordID: current.ID, Status: status}, nil
 		case errors.Is(enqueueErr, ErrPendingInputQueueFull):
 			current, _, stateErr := e.PersistedPendingMessage(record.ID)
 			if stateErr != nil {
-				return PendingInputResult{}, errors.Join(enqueueErr, stateErr)
+				return PendingInputResult{RecordID: record.ID, Retry: PendingInputRetryAfterStorage, Status: status}, errors.Join(enqueueErr, stateErr)
 			}
 			return PendingInputResult{Disposition: PendingInputQueued, Retry: PendingInputRetryAfterTurn, RecordID: current.ID, Status: status}, enqueueErr
 		case errors.Is(enqueueErr, ErrPendingInputExpired):
 			current, _, stateErr := e.PersistedPendingMessage(record.ID)
 			if stateErr != nil {
-				return PendingInputResult{}, errors.Join(enqueueErr, stateErr)
+				return PendingInputResult{RecordID: record.ID, Retry: PendingInputRetryAfterStorage, Status: status}, errors.Join(enqueueErr, stateErr)
 			}
 			return PendingInputResult{Disposition: PendingInputExpired, RecordID: current.ID, Status: status}, enqueueErr
 		case errors.Is(enqueueErr, ErrPendingInputHandled):
 			current, _, stateErr := e.PersistedPendingMessage(record.ID)
 			if stateErr != nil {
-				return PendingInputResult{}, errors.Join(enqueueErr, stateErr)
+				return PendingInputResult{RecordID: record.ID, Retry: PendingInputRetryAfterStorage, Status: status}, errors.Join(enqueueErr, stateErr)
 			}
 			disposition := PendingInputDropped
 			if current.State == PendingInputStateProcessed {
@@ -292,7 +300,7 @@ func (e *Engine) receivePersistedPendingInput(ctx context.Context, recordID stri
 			}
 			return PendingInputResult{Disposition: disposition, RecordID: current.ID, Status: status}, enqueueErr
 		case !errors.Is(enqueueErr, ErrNoActiveTurn):
-			return PendingInputResult{RecordID: record.ID, Status: status}, enqueueErr
+			return PendingInputResult{RecordID: record.ID, Retry: pendingInputEnqueueRetry(enqueueErr), Status: status}, enqueueErr
 		}
 
 		turnID := pendingInputTurnID("turn")
@@ -302,11 +310,14 @@ func (e *Engine) receivePersistedPendingInput(ctx context.Context, recordID stri
 		}
 		if admitErr != nil {
 			current, _, stateErr := e.PersistedPendingMessage(record.ID)
+			if stateErr != nil {
+				return PendingInputResult{Disposition: PendingInputQueued, Retry: PendingInputRetryAfterStorage, RecordID: record.ID, Status: e.PendingInputStatus()}, errors.Join(admitErr, stateErr)
+			}
 			return PendingInputResult{Disposition: PendingInputQueued, Retry: PendingInputRetryAdmission, RecordID: current.ID}, errors.Join(admitErr, stateErr)
 		}
 		current, _, stateErr := e.PersistedPendingMessage(record.ID)
 		if stateErr != nil {
-			return PendingInputResult{}, stateErr
+			return PendingInputResult{RecordID: record.ID, Retry: PendingInputRetryAfterStorage, Status: e.PendingInputStatus()}, stateErr
 		}
 		return PendingInputResult{
 			Disposition: PendingInputStarted,
@@ -336,14 +347,17 @@ func (e *Engine) pendingInputRecordIDByMessageID(messageID string) (string, erro
 	return "", fmt.Errorf("runtime: pending input for message %q not found", messageID)
 }
 
-func (e *Engine) removePendingInputRecord(recordID string) PendingInputStatus {
+func (e *Engine) removePendingInputRecord(recordID string) (PendingInputStatus, int) {
 	max := e.effectiveMaxPendingInputs()
 	e.pendingMu.Lock()
 	kept := e.pendingInput[:0]
+	removed := 0
 	for _, item := range e.pendingInput {
-		if item.RecordID != recordID {
-			kept = append(kept, item)
+		if item.RecordID == recordID {
+			removed++
+			continue
 		}
+		kept = append(kept, item)
 	}
 	clear(e.pendingInput[len(kept):])
 	e.pendingInput = kept
@@ -353,7 +367,14 @@ func (e *Engine) removePendingInputRecord(recordID string) PendingInputStatus {
 		MaxPendingInputs: max,
 	}
 	e.pendingMu.Unlock()
-	return status
+	return status, removed
+}
+
+func pendingInputEnqueueRetry(err error) PendingInputRetry {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return PendingInputNoRetry
+	}
+	return PendingInputRetryAfterStorage
 }
 
 func pendingInputTurnID(prefix string) string {
