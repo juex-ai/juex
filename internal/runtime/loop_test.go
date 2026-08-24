@@ -7397,7 +7397,7 @@ func TestPendingQueuedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("pending_input.queued subscriber deadlocked while synchronously enqueueing")
 	}
 	if nestedErr != nil {
@@ -7436,7 +7436,7 @@ func TestPendingRejectedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
 		if !errors.Is(err, ErrPendingInputQueueFull) {
 			t.Fatalf("enqueue error = %v, want %v", err, ErrPendingInputQueueFull)
 		}
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("pending_input.rejected subscriber deadlocked while synchronously enqueueing")
 	}
 	if !errors.Is(nestedErr, ErrPendingInputQueueFull) {

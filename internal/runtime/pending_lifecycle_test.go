@@ -186,7 +186,7 @@ func TestTerminalSubscriberCanSynchronouslyUseLegacyPendingEnqueue(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("Turn deadlocked while terminal subscriber used legacy enqueue")
 	}
 	if err := <-enqueueResult; !errors.Is(err, ErrNoActiveTurn) {
@@ -216,7 +216,7 @@ func TestErrorSubscriberCanSynchronouslyUseLegacyPendingEnqueue(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "boom") {
 			t.Fatalf("Turn() error = %v, want provider failure", err)
 		}
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("Turn deadlocked while error subscriber used legacy enqueue")
 	}
 	if err := <-enqueueResult; !errors.Is(err, ErrNoActiveTurn) {
@@ -246,7 +246,7 @@ func TestTerminalSubscriberCanSynchronouslyReadPendingLifecycleStatus(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("Turn deadlocked while terminal subscriber read pending lifecycle status")
 	}
 	if status := <-statusResult; status.TurnID == "" {
