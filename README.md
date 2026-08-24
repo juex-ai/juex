@@ -806,10 +806,14 @@ requirements; a missing `status_reason` has no behavioral effect. The model
 accesses this state only through `get_goal`, `create_goal`, and `update_goal`;
 ordinary input does not create goals, and command hook output cannot mutate
 goals. The built-in `goal-completion-gate` queues one continuation when the
-persisted status is `in_progress`. `wait_for_user` allows the Turn to finish;
-new input does not mutate the model-owned contract, so the model explicitly
-updates the status after evaluating that input. Project-specific hooks can
-still add plain-text context or request Stop continuation with exit code `2`.
+persisted status is `in_progress` and a durable assistant response reaches a
+finish attempt. A Provider failure before that boundary leaves the Goal
+unchanged and does not synthesize a second retry loop; Provider adapters and
+model fallback own bounded request retry. `wait_for_user` allows the Turn to
+finish; new input does not mutate the model-owned contract, so the model
+explicitly updates the status after evaluating that input. Project-specific
+hooks can still add plain-text context or request Stop continuation with exit
+code `2`.
 
 Lifecycle command hooks can be configured under `hooks.commands` to observe or
 gate session start, user prompt submission, tool use, compaction, and stop

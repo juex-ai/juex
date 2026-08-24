@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2378,7 +2379,9 @@ func TestOpenAIResponses_TruncatedEventBeforeTerminalFails(t *testing.T) {
 }
 
 func TestOpenAIResponses_StreamIdleTimeout(t *testing.T) {
+	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
@@ -2390,8 +2393,71 @@ func TestOpenAIResponses_StreamIdleTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{StreamIdleTimeout: 20 * time.Millisecond})
+	var diagnostics []ProviderRetryDiagnostic
+	_, err = CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		StreamIdleTimeout: 20 * time.Millisecond,
+		RetryObserver:     func(d ProviderRetryDiagnostic) { diagnostics = append(diagnostics, d) },
+	})
 	requireStreamIdleTimeout(t, err)
+	if !strings.Contains(err.Error(), "retry exhausted after 2 attempts") {
+		t.Fatalf("err = %v, want retry exhaustion detail", err)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("requests = %d, want 2", got)
+	}
+	if len(diagnostics) != 2 {
+		t.Fatalf("diagnostics = %+v, want retry and exhaustion", diagnostics)
+	}
+	if first := diagnostics[0]; !first.WillRetry || first.Exhausted || first.Attempt != 1 {
+		t.Fatalf("first diagnostic = %+v", first)
+	}
+	if final := diagnostics[1]; final.WillRetry || !final.Exhausted || final.Attempt != 2 || final.MaxAttempts != 2 || final.DelayMS != 0 {
+		t.Fatalf("final diagnostic = %+v", final)
+	}
+}
+
+func TestOpenAIResponses_RetriesStreamIdleTimeout(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if requests.Add(1) == 1 {
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		}
+		fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"recovered","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`+"\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{ID: "openai", BaseURL: srv.URL, APIKey: "k", Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var diagnostics []ProviderRetryDiagnostic
+	resp, err := CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		StreamIdleTimeout: 20 * time.Millisecond,
+		RetryObserver:     func(d ProviderRetryDiagnostic) { diagnostics = append(diagnostics, d) },
+	})
+	if err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("requests = %d, want 2", got)
+	}
+	if got := resp.Message.FirstText(); got != "recovered" {
+		t.Fatalf("text = %q, want recovered", got)
+	}
+	if len(diagnostics) != 1 {
+		t.Fatalf("diagnostics = %+v, want one retry", diagnostics)
+	}
+	got := diagnostics[0]
+	if !got.WillRetry || got.Exhausted || got.Attempt != 1 || got.MaxAttempts != 2 || got.RetryReason != "openai_responses_stream_idle_timeout" {
+		t.Fatalf("retry diagnostic = %+v", got)
+	}
+	if got.Provider != "openai" || got.Model != "gpt-test" || got.Protocol != ProtocolOpenAIResponses || got.Transport != "sse" || got.Operation != "responses.sse" {
+		t.Fatalf("retry diagnostic identity = %+v", got)
+	}
 }
 
 func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing.T) {
