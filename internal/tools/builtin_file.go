@@ -126,6 +126,10 @@ func readTool(workDir, artifactDir string, guard sandbox.PathGuard) Tool {
 			if err != nil {
 				return Result{}, fmt.Errorf("read: %w", err)
 			}
+			physicalPath := filepath.Join(artifactDir, filepath.FromSlash(artifactPath))
+			if err := guard.CheckRead(physicalPath); err != nil {
+				return Result{}, fmt.Errorf("read: %w", err)
+			}
 			data, err = store.Read(artifact.Ref{Path: artifactPath})
 			if err != nil {
 				return Result{}, fmt.Errorf("read: %w", err)

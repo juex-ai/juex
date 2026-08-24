@@ -2,6 +2,8 @@ package builtintools
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
@@ -38,6 +40,24 @@ func TestModuleContributesDefaultBuiltinTools(t *testing.T) {
 	}
 	if err := mod.CloseRuntime(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestModuleStartCreatesArtifactRootBeforeShellSessions(t *testing.T) {
+	artifactDir := filepath.Join(t.TempDir(), "agent", "artifacts")
+	if err := os.MkdirAll(filepath.Dir(artifactDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mod := New(context.Background(), tools.BuiltinOptions{
+		ArtifactDir: artifactDir,
+		Shell:       tools.DefaultShellProfile(),
+	})
+	if err := mod.StartRuntime(context.Background(), runtimemodule.RuntimeContext{}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mod.CloseRuntime(context.Background()) }()
+	if info, err := os.Stat(artifactDir); err != nil || !info.IsDir() {
+		t.Fatalf("Artifact root stat = %+v, %v", info, err)
 	}
 }
 

@@ -14,6 +14,7 @@ type FilePolicyOptions struct {
 	Policy        Policy
 	WorkDir       string
 	AgentStateDir string
+	ReadOnlyPaths []string
 }
 
 type FilePolicy struct {
@@ -22,6 +23,7 @@ type FilePolicy struct {
 	base              string
 	blockedPaths      []blockedPath
 	canonicalRoots    []string
+	readOnlyRoots     []string
 	scratchRoot       string
 	commandWriteCheck *commandWriteCheckState
 }
@@ -34,10 +36,20 @@ type blockedPath struct {
 }
 
 func NewFilePolicy(opts FilePolicyOptions) FilePolicy {
-	if !opts.Policy.Enabled {
-		return FilePolicy{}
-	}
 	base := sandboxPathBase(opts.WorkDir)
+	readOnlyRoots := make([]string, 0, len(opts.ReadOnlyPaths))
+	for _, raw := range opts.ReadOnlyPaths {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		if canonical, ok := canonicalPath(base, raw); ok {
+			readOnlyRoots = append(readOnlyRoots, canonical)
+		}
+	}
+	readOnlyRoots = dedupePaths(readOnlyRoots)
+	if !opts.Policy.Enabled {
+		return FilePolicy{base: base, readOnlyRoots: readOnlyRoots}
+	}
 	writable := []string{opts.WorkDir}
 	if strings.TrimSpace(opts.AgentStateDir) != "" {
 		writable = append(writable, opts.AgentStateDir)
@@ -77,6 +89,7 @@ func NewFilePolicy(opts FilePolicyOptions) FilePolicy {
 		base:              base,
 		blockedPaths:      roots,
 		canonicalRoots:    canonicalRoots,
+		readOnlyRoots:     readOnlyRoots,
 		scratchRoot:       scratchRoot,
 		commandWriteCheck: &commandWriteCheckState{},
 	}
@@ -106,18 +119,23 @@ func (g FilePolicy) CheckRead(path string) error {
 }
 
 func (g FilePolicy) CheckWrite(path string) error {
-	if !g.enabled {
-		return nil
-	}
 	if err := g.CheckRead(path); err != nil {
 		return err
 	}
-	if !g.restrictWrites {
+	if !g.enabled && len(g.readOnlyRoots) == 0 {
 		return nil
 	}
 	target, ok := canonicalPath(g.base, path)
 	if !ok {
 		return fmt.Errorf("sandbox: invalid write path %q", path)
+	}
+	for _, root := range g.readOnlyRoots {
+		if pathWithinOrEqualFilesystem(root, target) {
+			return fmt.Errorf("sandbox: write path %s is inside read-only root %s", target, root)
+		}
+	}
+	if !g.restrictWrites {
+		return nil
 	}
 	for _, root := range g.canonicalRoots {
 		if pathWithinOrEqualFilesystem(root, target) {
@@ -233,6 +251,9 @@ func (g FilePolicy) hardLinkIndex(ctx context.Context) (map[hardLinkIdentity]*ha
 			if walkErr != nil {
 				return walkErr
 			}
+			if entry.IsDir() && g.isReadOnlyPath(path) {
+				return filepath.SkipDir
+			}
 			if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 				return nil
 			}
@@ -299,6 +320,10 @@ func (g FilePolicy) WritableRoots() []string {
 	return append([]string(nil), g.canonicalRoots...)
 }
 
+func (g FilePolicy) ReadOnlyRoots() []string {
+	return append([]string(nil), g.readOnlyRoots...)
+}
+
 func (g FilePolicy) ScratchRoot() string {
 	return g.scratchRoot
 }
@@ -306,6 +331,19 @@ func (g FilePolicy) ScratchRoot() string {
 func (g FilePolicy) IsBlocked(path string) bool {
 	_, _, ok := g.blockedPath(path)
 	return ok
+}
+
+func (g FilePolicy) isReadOnlyPath(path string) bool {
+	target, ok := canonicalPath(g.base, path)
+	if !ok {
+		return false
+	}
+	for _, root := range g.readOnlyRoots {
+		if pathWithinOrEqualFilesystem(root, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func (g FilePolicy) blockedPath(path string) (string, string, bool) {

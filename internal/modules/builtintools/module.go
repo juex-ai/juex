@@ -5,8 +5,10 @@ package builtintools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -60,6 +62,15 @@ func (m *Module) StartRuntime(context.Context, runtimemodule.RuntimeContext) err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if strings.TrimSpace(m.options.ArtifactDir) != "" {
+		store, err := artifact.NewStore(m.options.ArtifactDir)
+		if err != nil {
+			return fmt.Errorf("builtin tools: initialize Artifact Store: %w", err)
+		}
+		if err := store.EnsureRoot(); err != nil {
+			return fmt.Errorf("builtin tools: initialize Artifact Store: %w", err)
+		}
+	}
 	if m.options.ShellSessions == nil {
 		m.ownedSession = tools.NewShellSessionManager(m.baseContext)
 		m.options.ShellSessions = m.ownedSession

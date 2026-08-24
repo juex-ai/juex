@@ -73,6 +73,20 @@ func TestStoreRootIsLazyUntilFirstWrite(t *testing.T) {
 	}
 }
 
+func TestStoreEnsureRootCreatesValidatedDirectory(t *testing.T) {
+	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	store, err := NewStore(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureRoot(); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(artifactDir); err != nil || !info.IsDir() {
+		t.Fatalf("Artifact root stat = %+v, %v", info, err)
+	}
+}
+
 func TestStoreRejectsArtifactRootSymlink(t *testing.T) {
 	parent := t.TempDir()
 	outside := t.TempDir()

@@ -36,6 +36,11 @@ func prepareLinux(lookPath func(string) (string, error), req Request) (ExecSpec,
 			args = append(args, "--bind", root, root)
 		}
 	}
+	readOnlyArgs, err := linuxReadOnlyPathArgs(req.FilePolicy.ReadOnlyRoots())
+	if err != nil {
+		return ExecSpec{}, NewError(ErrorCodePolicyUnavailable, "linux", "bubblewrap", "mount", req.Policy, "Unable to protect internal read-only paths for the requested sandbox policy.", err)
+	}
+	args = append(args, readOnlyArgs...)
 	blockedArgs, err := linuxBlockedPathArgs(normalizedBlockedPaths(normalizedWorkDir(req.WorkDir), req.Policy.FileSystem.BlockedPaths))
 	if err != nil {
 		return ExecSpec{}, NewError(ErrorCodePolicyUnavailable, "linux", "bubblewrap", "mount", req.Policy, "Unable to prepare blocked_paths mask mounts for the requested sandbox policy.", err)
@@ -65,6 +70,17 @@ func prepareLinux(lookPath func(string) (string, error), req Request) (ExecSpec,
 		}
 	}
 	return wrapped, nil
+}
+
+func linuxReadOnlyPathArgs(paths []string) ([]string, error) {
+	args := make([]string, 0, len(paths)*3)
+	for _, path := range normalizedRoots(paths) {
+		if _, err := os.Stat(path); err != nil {
+			return nil, fmt.Errorf("read-only path %q: %w", path, err)
+		}
+		args = append(args, "--ro-bind", path, path)
+	}
+	return args, nil
 }
 
 func linuxBlockedPathArgs(paths []string) ([]string, error) {

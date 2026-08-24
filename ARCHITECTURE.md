@@ -860,6 +860,11 @@ AgentStateDir. Restricted command launch builds the same index once per shared
 policy and caches only a safe result. Builtin writes, Shell, grep subprocesses,
 and Command Observables consume that shared value; backend deny/mask rules are
 applied after broader writable grants.
+The current Agent Artifact root is an internal read-only carve-out from those
+writable roots. Builtin mutations reject both its logical URI and physical
+path, while Linux and macOS command backends apply the read-only rule after the
+broader AgentStateDir grant. The builtin Tool module creates and validates that
+root before any long-lived shell session can start.
 This grants state owned by that Agent but never another AgentStateDir. Trusted
 hooks and MCP server processes are separate execution boundaries and are not
 covered by this policy.
@@ -2658,8 +2663,9 @@ materialized to `sessions/<session-id>/user-inputs/` and
 keeps that portable root-relative reference; provider-visible messages render a
 read-only `artifact://<root-relative-path>` reference together with byte count,
 SHA-256, and a head/tail preview. The builtin `read` tool resolves that scheme
-through the current Agent Artifact store; mutation tools do not treat it as a
-filesystem path.
+through the current Agent Artifact store after applying `blocked_paths` to its
+resolved physical path. Mutation tools do not treat it as a filesystem path,
+and the shared file policy protects the physical Artifact root from writes.
 For each selected model candidate, the configured context window determines the
 effective budgets: automatic compaction triggers at 70%, the complete summary
 request envelope fits within 80%, summary output and Tool Result limits each use
