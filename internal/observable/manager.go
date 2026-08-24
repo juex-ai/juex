@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/eventmedia"
@@ -199,6 +200,15 @@ type ScheduleStatus struct {
 
 func NewManager(opts ManagerOptions) (*Manager, error) {
 	opts.ReadOnlyConfigSources = cloneReadOnlyConfigSources(opts.ReadOnlyConfigSources)
+	if strings.TrimSpace(opts.ArtifactDir) != "" {
+		store, err := artifact.NewStore(opts.ArtifactDir)
+		if err != nil {
+			return nil, fmt.Errorf("observable: initialize Artifact Store: %w", err)
+		}
+		if err := store.EnsureRoot(); err != nil {
+			return nil, fmt.Errorf("observable: initialize Artifact Store: %w", err)
+		}
+	}
 	cfg, issues, err := LoadConfigLenient(opts.ConfigPath)
 	if err != nil {
 		return nil, err
