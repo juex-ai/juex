@@ -22,6 +22,8 @@ type turnLifecycle struct {
 	lastText        string
 	retriedOverflow bool
 	activeClosed    bool
+
+	pendingLifecycleHeld bool
 }
 
 type turnLifecycleResult struct {
@@ -204,12 +206,15 @@ func (l *turnLifecycle) enqueueContinuationLocked(ctx context.Context, prompt st
 
 func (l *turnLifecycle) finishOrContinueLocked(output string) (turnFinishOutcome, error) {
 	l.engine.pendingLifecycleMu.Lock()
-	defer l.engine.pendingLifecycleMu.Unlock()
-	if !l.engine.finishActiveTurnIfNoPending(l.turnID) {
+	if !l.engine.activeTurnHasNoPending(l.turnID) {
+		l.engine.pendingLifecycleMu.Unlock()
 		return turnFinishOutcome{action: turnFinishContinue, output: output}, nil
 	}
 	if err := l.engine.recordTurnCompletionLocked(l.turnID, l.start, output); err != nil {
+		l.pendingLifecycleHeld = true
 		return turnFinishOutcome{}, fmt.Errorf("commit turn completion: %w", err)
 	}
+	l.engine.finishActiveTurn(l.turnID)
+	l.engine.pendingLifecycleMu.Unlock()
 	return turnFinishOutcome{action: turnFinishComplete, output: output, activeClosed: true}, nil
 }

@@ -179,6 +179,17 @@ func (e *Engine) ReservePendingInputCompaction() (string, error) {
 	return turnID, nil
 }
 
+// PendingInputLifecycleStatus waits for an in-flight admission or terminal
+// commit before reporting whether App may begin an exclusive command.
+func (e *Engine) PendingInputLifecycleStatus() PendingInputStatus {
+	if e == nil {
+		return PendingInputStatus{}
+	}
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
+	return e.PendingInputStatus()
+}
+
 // FinishPendingInputCompaction releases a completed compaction and promotes
 // the oldest queued input with a new Framework-owned Turn identity.
 func (e *Engine) FinishPendingInputCompaction(compactTurnID string) (PendingInputResult, error) {

@@ -627,10 +627,9 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	result, err = lifecycle.runLocked(ctx)
 	if err != nil {
 		err = cancellation.NormalizeErrorWithContext(ctx, err)
-		if preserveErr := e.preservePendingInputAfterFailureLocked(turnID); preserveErr != nil {
-			err = errors.Join(err, fmt.Errorf("preserve pending input after turn failure: %w", preserveErr))
-		}
-		return "", e.failTurn(turnID, err)
+		err = e.failActiveTurnLocked(turnID, err, lifecycle.pendingLifecycleHeld)
+		lifecycle.pendingLifecycleHeld = false
+		return "", err
 	}
 	return result.output, nil
 }
@@ -1851,6 +1850,10 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 	}
 	e.pendingLifecycleMu.Lock()
 	defer e.pendingLifecycleMu.Unlock()
+	return e.drainPendingInputLifecycleLocked(ctx, turnID)
+}
+
+func (e *Engine) drainPendingInputLifecycleLocked(ctx context.Context, turnID string) error {
 	e.pendingMu.Lock()
 	pending := append([]queuedPendingInput(nil), e.pendingInput...)
 	e.pendingInput = nil
@@ -2041,7 +2044,7 @@ func (e *Engine) preservePendingInputAfterFailureLocked(turnID string) error {
 			}
 			repairedTranscript = true
 		}
-		if err := e.drainPendingInputLocked(context.Background(), turnID); err != nil {
+		if err := e.drainPendingInputLifecycleLocked(context.Background(), turnID); err != nil {
 			return err
 		}
 	}
@@ -2058,7 +2061,7 @@ func (e *Engine) cachePolicyLocked() llm.CachePolicy {
 	return llm.CachePolicy{StablePrefixKey: "juex:" + sess.ID}
 }
 
-func (e *Engine) finishActiveTurnIfNoPending(turnID string) bool {
+func (e *Engine) activeTurnHasNoPending(turnID string) bool {
 	e.pendingMu.Lock()
 	defer e.pendingMu.Unlock()
 	if e.activeTurnID != turnID {
@@ -2067,7 +2070,6 @@ func (e *Engine) finishActiveTurnIfNoPending(turnID string) bool {
 	if len(e.pendingInput) > 0 {
 		return false
 	}
-	e.activeTurnID = ""
 	return true
 }
 
@@ -2092,6 +2094,17 @@ func (e *Engine) failTurn(turnID string, err error) error {
 		return errors.Join(err, fmt.Errorf("commit turn error: %w", emitErr))
 	}
 	return err
+}
+
+func (e *Engine) failActiveTurnLocked(turnID string, err error, lifecycleHeld bool) error {
+	if !lifecycleHeld {
+		e.pendingLifecycleMu.Lock()
+	}
+	defer e.pendingLifecycleMu.Unlock()
+	if preserveErr := e.preservePendingInputAfterFailureLocked(turnID); preserveErr != nil {
+		err = errors.Join(err, fmt.Errorf("preserve pending input after turn failure: %w", preserveErr))
+	}
+	return e.failTurn(turnID, err)
 }
 
 func newID() string {

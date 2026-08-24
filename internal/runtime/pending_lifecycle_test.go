@@ -93,6 +93,82 @@ func TestReceivePendingInputWaitsForPreviousTerminalCommit(t *testing.T) {
 	eng.finishActiveTurn(result.TurnID)
 }
 
+func TestReceivePendingInputWaitsForFallbackTerminalCommit(t *testing.T) {
+	provider := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "completion will fail"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, provider, false)
+	completionErr := errors.New("completion commit failed")
+	errorStarted := make(chan struct{})
+	releaseError := make(chan struct{})
+	bus.SetCommitter(&blockingFallbackTerminalCommitter{
+		delegate:      selectiveSessionCommitter{session: eng.Session},
+		completionErr: completionErr,
+		errorStarted:  errorStarted,
+		releaseError:  releaseError,
+	})
+
+	turnDone := make(chan error, 1)
+	go func() {
+		_, err := eng.Turn(context.Background(), "first")
+		turnDone <- err
+	}()
+	select {
+	case <-errorStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fallback terminal commit did not start")
+	}
+
+	nextResult := make(chan PendingInputResult, 1)
+	nextErr := make(chan error, 1)
+	go func() {
+		result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+			Message: llm.TextMessage(llm.RoleUser, "second"),
+		})
+		nextResult <- result
+		nextErr <- err
+	}()
+	select {
+	case result := <-nextResult:
+		close(releaseError)
+		t.Fatalf("next admission completed before fallback terminal commit: %+v", result)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseError)
+	if err := <-turnDone; !errors.Is(err, completionErr) {
+		t.Fatalf("first turn error = %v, want %v", err, completionErr)
+	}
+	result := <-nextResult
+	if err := <-nextErr; err != nil {
+		t.Fatal(err)
+	}
+	if result.Disposition != PendingInputStarted || result.TurnID == "" {
+		t.Fatalf("next admission = %+v, want started after fallback terminal commit", result)
+	}
+	eng.finishActiveTurn(result.TurnID)
+}
+
+type blockingFallbackTerminalCommitter struct {
+	delegate      events.Committer
+	completionErr error
+	errorStarted  chan struct{}
+	releaseError  chan struct{}
+	once          sync.Once
+}
+
+func (c *blockingFallbackTerminalCommitter) Commit(event events.Event) (events.Event, error) {
+	if event.Type == "turn.completed" {
+		return events.Event{}, c.completionErr
+	}
+	if event.Type == "turn.errored" {
+		c.once.Do(func() { close(c.errorStarted) })
+		<-c.releaseError
+	}
+	return c.delegate.Commit(event)
+}
+
 func TestReceivePendingInputReturnsStartedAfterCommittedAdmissionWithoutJournalReread(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	queue := eng.currentPendingInputQueue()

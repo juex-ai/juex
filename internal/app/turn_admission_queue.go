@@ -78,7 +78,7 @@ func (q turnAdmissionQueue) beginCompact() (string, error) {
 	q.state.mu.Lock()
 	busy := q.state.phase != turnAdmissionIdle
 	q.state.mu.Unlock()
-	if busy || q.engine.PendingInputStatus().TurnID != "" {
+	if busy {
 		return "", errTurnAdmissionBusy
 	}
 	turnID, err := q.engine.ReservePendingInputCompaction()
@@ -118,7 +118,7 @@ func (q turnAdmissionQueue) beginExclusiveCommand() bool {
 
 	q.state.mu.Lock()
 	defer q.state.mu.Unlock()
-	if q.state.phase != turnAdmissionIdle || q.engine.PendingInputStatus().TurnID != "" {
+	if q.state.phase != turnAdmissionIdle || q.engine.PendingInputLifecycleStatus().TurnID != "" {
 		return false
 	}
 	q.state.phase = turnAdmissionCommand
