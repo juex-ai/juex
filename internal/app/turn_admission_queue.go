@@ -99,6 +99,9 @@ func (q turnAdmissionQueue) finishCompact(compactTurnID string) (*AdmittedTurn, 
 	if q.state == nil || q.engine == nil {
 		return nil, nil
 	}
+	q.state.transitionMu.Lock()
+	defer q.state.transitionMu.Unlock()
+
 	result, err := q.engine.FinishPendingInputCompaction(compactTurnID)
 	q.state.mu.Lock()
 	if q.state.phase == turnAdmissionCompacting && q.state.turnID == compactTurnID {

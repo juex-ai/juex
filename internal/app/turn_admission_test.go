@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
@@ -192,6 +194,66 @@ func TestAdmitTurnQueuesDuringCompactAndPromotesWithFrameworkIdentity(t *testing
 	}
 	if promoted == nil || promoted.TurnID == "" || promoted.TurnID == compactID || promoted.Message.FirstText() != "after compact" {
 		t.Fatalf("promoted = %+v", promoted)
+	}
+}
+
+func TestFinishCompactWaitsForConcurrentQueuedAdmissionPublication(t *testing.T) {
+	a, _ := newStubApp(t)
+	compactID, err := a.beginCompactAdmission()
+	if err != nil {
+		t.Fatal(err)
+	}
+	queuedPublishing := make(chan struct{})
+	releaseQueued := make(chan struct{})
+	var publishOnce sync.Once
+	unsubscribe := a.Bus.Subscribe("pending_input.queued", func(events.Event) {
+		publishOnce.Do(func() { close(queuedPublishing) })
+		<-releaseQueued
+	})
+	defer unsubscribe()
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseQueued) }) }
+	defer release()
+
+	queuedDone := make(chan TurnAdmissionResult, 1)
+	go func() {
+		queuedDone <- a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "after compact"})
+	}()
+	select {
+	case <-queuedPublishing:
+	case <-time.After(2 * time.Second):
+		t.Fatal("queued admission did not reach publication")
+	}
+	type compactFinishResult struct {
+		start *AdmittedTurn
+		err   error
+	}
+	finishDone := make(chan compactFinishResult, 1)
+	go func() {
+		start, err := a.finishCompactAdmission(compactID)
+		finishDone <- compactFinishResult{start: start, err: err}
+	}()
+	select {
+	case result := <-finishDone:
+		release()
+		t.Fatalf("compaction finish bypassed queued admission publication: %+v", result)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	release()
+	queued := <-queuedDone
+	if queued.Kind != TurnAdmissionQueued || queued.TurnID != compactID {
+		t.Fatalf("queued admission = %+v", queued)
+	}
+	finished := <-finishDone
+	if finished.err != nil {
+		t.Fatal(finished.err)
+	}
+	if finished.start == nil || finished.start.TurnID == "" || finished.start.TurnID == compactID || finished.start.Message.FirstText() != "after compact" {
+		t.Fatalf("promoted start = %+v", finished.start)
+	}
+	if phase, turnID := a.admissionQueue().snapshot(); phase != turnAdmissionIdle || turnID != "" {
+		t.Fatalf("App compaction phase after promotion = (%q, %q)", phase, turnID)
 	}
 }
 
