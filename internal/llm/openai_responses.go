@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -16,6 +17,8 @@ import (
 const (
 	openAIResponsesToolCallIDMaxLength  = 64
 	openAIResponsesToolCallIDHashPrefix = "juex_"
+	openAIResponsesIdleMaxAttempts      = 2
+	openAIResponsesRetryBaseDelay       = 100 * time.Millisecond
 )
 
 type openAIResponsesProvider struct {
@@ -99,6 +102,35 @@ func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys s
 
 func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params responses.ResponseNewParams, opts CompleteOptions) (Response, error) {
 	idleTimeout := streamIdleTimeout(opts)
+	for attempt := 1; ; attempt++ {
+		resp, err, idleExpired := p.completeStreamingAttempt(ctx, params, opts, idleTimeout)
+		if err == nil {
+			return resp, nil
+		}
+		if !idleExpired {
+			return Response{}, err
+		}
+		if ctx.Err() != nil {
+			return Response{}, ctx.Err()
+		}
+		idleErr := newStreamIdleTimeoutError("openai responses stream", idleTimeout, err)
+		if attempt >= openAIResponsesIdleMaxAttempts {
+			p.emitOpenAIResponsesRetryDiagnostic(opts, idleErr, attempt, 0, false, true)
+			return Response{}, fmt.Errorf("openai responses stream retry exhausted after %d attempts (max_attempts=%d): %w", attempt, openAIResponsesIdleMaxAttempts, idleErr)
+		}
+		delay := time.Duration(attempt) * openAIResponsesRetryBaseDelay
+		p.emitOpenAIResponsesRetryDiagnostic(opts, idleErr, attempt, delay, true, false)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return Response{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (p *openAIResponsesProvider) completeStreamingAttempt(ctx context.Context, params responses.ResponseNewParams, opts CompleteOptions, idleTimeout time.Duration) (Response, error, bool) {
 	streamCtx, resetIdle, stopIdle, idleExpired := newStreamIdleContext(ctx, idleTimeout)
 	defer stopIdle()
 	stream := p.client.Responses.NewStreaming(streamCtx, params)
@@ -111,12 +143,12 @@ func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params 
 		emitResponsesStreamDelta(opts.OnDelta, event)
 		switch event.Type {
 		case "error":
-			return Response{}, fmt.Errorf("openai responses stream error: %s", firstNonEmpty(event.Message, event.Code, event.RawJSON()))
+			return Response{}, fmt.Errorf("openai responses stream error: %s", firstNonEmpty(event.Message, event.Code, event.RawJSON())), false
 		case "response.failed":
 			if msg := responseErrorMessage(event.Response); msg != "" {
-				return Response{}, fmt.Errorf("openai responses: %s", msg)
+				return Response{}, fmt.Errorf("openai responses: %s", msg), false
 			}
-			return Response{}, fmt.Errorf("openai responses failed")
+			return Response{}, fmt.Errorf("openai responses failed"), false
 		case "response.output_item.done":
 			items = append(items, event.Item)
 		case "response.done", "response.completed", "response.incomplete":
@@ -124,20 +156,40 @@ func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params 
 			if len(finalResp.Output) == 0 && len(items) > 0 {
 				finalResp.Output = items
 			}
-			return p.responseFromResponses(&finalResp), nil
+			return p.responseFromResponses(&finalResp), nil, false
 		}
 	}
 	if err := stream.Err(); err != nil {
 		if idleExpired() {
-			return Response{}, newStreamIdleTimeoutError("openai responses stream", idleTimeout, err)
+			return Response{}, err, true
 		}
-		return Response{}, fmt.Errorf("openai responses stream: %w", err)
+		return Response{}, fmt.Errorf("openai responses stream: %w", err), false
 	}
 	if len(items) == 0 {
-		return Response{}, fmt.Errorf("openai responses stream closed before response.completed")
+		return Response{}, fmt.Errorf("openai responses stream closed before response.completed"), false
 	}
 	finalResp := responses.Response{Status: responses.ResponseStatusCompleted, Output: items}
-	return p.responseFromResponses(&finalResp), nil
+	return p.responseFromResponses(&finalResp), nil, false
+}
+
+func (p *openAIResponsesProvider) emitOpenAIResponsesRetryDiagnostic(opts CompleteOptions, err error, attempt int, delay time.Duration, willRetry, exhausted bool) {
+	if opts.RetryObserver == nil {
+		return
+	}
+	opts.RetryObserver(ProviderRetryDiagnostic{
+		Provider:    p.profile.ID,
+		Model:       p.profile.Model,
+		Protocol:    p.profile.Protocol,
+		Transport:   "sse",
+		Operation:   "responses.sse",
+		Attempt:     attempt,
+		MaxAttempts: openAIResponsesIdleMaxAttempts,
+		DelayMS:     delay.Milliseconds(),
+		RetryReason: "openai_responses_stream_idle_timeout",
+		RawError:    err.Error(),
+		WillRetry:   willRetry,
+		Exhausted:   exhausted,
+	})
 }
 
 func emitResponsesStreamDelta(onDelta func(StreamDelta), event responses.ResponseStreamEventUnion) {

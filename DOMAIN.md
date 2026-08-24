@@ -250,7 +250,9 @@ domain boundary.
    entered provider-visible processing. This includes a result already queued
    behind the current Provider iteration. The durable subscribed result supplies
    the next external input without changing the Goal status or continuation
-   count.
+   count. A Provider failure before a durable assistant response is not a
+   finish attempt: bounded Provider retry and model fallback own that failure,
+   while the Goal stays `in_progress` without a synthetic continuation.
 3. `wait_for_user` means the Goal is unfinished but useful progress requires
    new external input. It allows the current Turn to finish without recording
    a continuation.

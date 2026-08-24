@@ -623,10 +623,13 @@ emits `llm.retry` diagnostics with provider, model,
 transport, attempt, delay, reason, and exhaustion state so session event logs
 and debug bundles can explain retry behavior. Semantic stream events such as
 `response.failed` are returned without retry.
-The Codex SSE adapter retries one stream-idle timeout, including a stall after
+The ordinary OpenAI Responses and Codex SSE adapters each retry one
+stream-idle timeout by replaying the full request, including a stall after
 transient reasoning or text deltas. Completed assistant messages and tool
-effects remain untouched. An exhausted idle retry is classified as a deadline
-timeout rather than user cancellation.
+effects remain untouched. Each attempt and terminal exhaustion emits the same
+`llm.retry` diagnostic contract, and the final error names the exhausted
+two-attempt budget. An exhausted idle retry is classified as a deadline timeout
+rather than user cancellation.
 OpenAI Responses request encoding maps provider-history tool call IDs longer
 than the protocol's 64-character limit to stable hashed wire IDs. Matching
 tool calls and results receive the same mapping, while canonical session

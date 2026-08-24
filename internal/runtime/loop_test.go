@@ -5496,6 +5496,36 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	}
 }
 
+func TestTurn_ExhaustedProviderFailureDoesNotBecomeGoalContinuation(t *testing.T) {
+	providerErr := fmt.Errorf("openai responses stream retry exhausted after 2 attempts: %w", context.DeadlineExceeded)
+	prov := &mockProviderWithErrors{errs: []error{providerErr}}
+	eng, bus := newEngine(t, prov, false)
+	goalState := workmem.NewGoalStateStore(eng.Session.Dir, workmem.GoalStateOptions{})
+	if _, err := goalState.Create("finish the release", "all release checks pass"); err != nil {
+		t.Fatal(err)
+	}
+	installSessionStateModulesWithStores(t, eng, goalState, nil)
+	var continued int32
+	bus.Subscribe("goal.continued", func(events.Event) { atomic.AddInt32(&continued, 1) })
+
+	if _, err := eng.Turn(context.Background(), "continue the release"); err == nil || !strings.Contains(err.Error(), "retry exhausted") {
+		t.Fatalf("Turn error = %v, want exhausted provider failure", err)
+	}
+	if got := atomic.LoadInt32(&continued); got != 0 {
+		t.Fatalf("goal.continued events = %d, want 0", got)
+	}
+	state, err := goalState.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != workmem.GoalStatusInProgress || state.ContinuationCount != 0 {
+		t.Fatalf("goal state = %+v, want unchanged in-progress goal", state)
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 0 {
+		t.Fatalf("pending count = %d, want no synthetic Goal continuation", status.PendingCount)
+	}
+}
+
 func TestTurn_GoalCompletionGateAcceptsMaximumGoalContract(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
