@@ -93,20 +93,41 @@ func (b *Bus) Emit(e Event) error {
 	if b == nil {
 		return nil
 	}
+	committed, err := b.Commit(e)
+	if err != nil {
+		return err
+	}
+	b.PublishCommitted(committed)
+	return nil
+}
+
+// Commit crosses the configured durable boundary without notifying live
+// subscribers. Callers that need an atomic state transition can publish the
+// committed fact after releasing their transition lock.
+func (b *Bus) Commit(e Event) (Event, error) {
+	if b == nil {
+		return Normalize(e), nil
+	}
 	b.mu.RLock()
 	committer := b.committer
 	b.mu.RUnlock()
 	if committer != nil {
 		committed, err := committer.Commit(e)
 		if err != nil {
-			return err
+			return Event{}, err
 		}
-		e = committed
-	} else {
-		e = Normalize(e)
+		return committed, nil
+	}
+	return Normalize(e), nil
+}
+
+// PublishCommitted synchronously notifies subscribers about an event that has
+// already crossed its configured commit boundary.
+func (b *Bus) PublishCommitted(e Event) {
+	if b == nil {
+		return
 	}
 	b.publish(e)
-	return nil
 }
 
 func (b *Bus) publish(e Event) {

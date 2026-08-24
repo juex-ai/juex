@@ -72,6 +72,9 @@ func (e *Engine) ReceivePendingInput(ctx context.Context, request PendingInputRe
 
 	e.pendingLifecycleMu.Lock()
 	defer e.pendingLifecycleMu.Unlock()
+	if status, publishing := e.pendingTerminalPublicationStatus(); publishing {
+		return PendingInputResult{Retry: PendingInputRetryAfterTurn, Status: status}, ErrActiveTurnExists
+	}
 
 	if request.RecordID != "" {
 		return e.receivePersistedPendingInput(ctx, request.RecordID)
@@ -187,6 +190,9 @@ func (e *Engine) PendingInputLifecycleStatus() PendingInputStatus {
 	}
 	e.pendingLifecycleMu.Lock()
 	defer e.pendingLifecycleMu.Unlock()
+	if status, publishing := e.pendingTerminalPublicationStatus(); publishing {
+		return status
+	}
 	return e.PendingInputStatus()
 }
 
