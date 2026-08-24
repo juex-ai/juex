@@ -85,7 +85,17 @@ func (a *App) deliverExternalInputLocked(
 // resumePersistedInputLocked follows the Framework-owned lifecycle outcome;
 // App owns only the Session lease and execution of a returned start action.
 func (a *App) resumePersistedInputLocked(ctx context.Context, recordID string) (externalInputDelivery, error) {
+	queue := a.admissionQueue()
+	queue.state.transitionMu.Lock()
+	queue.state.mu.Lock()
+	phase := queue.state.phase
+	queue.state.mu.Unlock()
+	if phase == turnAdmissionCommand {
+		queue.state.transitionMu.Unlock()
+		return externalInputDelivery{RecordID: recordID, Queued: true, Retry: runtime.PendingInputRetryAfterTurn}, errTurnAdmissionBusy
+	}
 	result, receiveErr := a.Engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{RecordID: recordID})
+	queue.state.transitionMu.Unlock()
 	if result.Disposition != runtime.PendingInputStarted {
 		return externalInputDeliveryFromRuntime(result), receiveErr
 	}

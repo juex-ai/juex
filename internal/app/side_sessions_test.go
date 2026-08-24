@@ -1082,6 +1082,54 @@ func TestSideSessionPermanentNotificationFailureIsObservableAndBounded(t *testin
 	}
 }
 
+func TestSideSessionAdmissionRetryExhaustionIsObservableAndReleasesHandoff(t *testing.T) {
+	parent := newSideSessionTestApp(t, &scriptedSideProvider{}, &scriptedSideProvider{})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	wantErr := errors.New("persistent side notification admission failure")
+	parent.Bus.SetCommitter(&retryUntilReleasedEventCommitter{
+		delegate:  parent.eventSink,
+		eventType: runtime.TurnAdmittedType,
+		err:       wantErr,
+		release:   release,
+		failed:    make(chan struct{}),
+	})
+	failed := make(chan events.Event, 1)
+	unsubscribe := parent.Bus.Subscribe("side_session.notification_failed", func(event events.Event) { failed <- event })
+	defer unsubscribe()
+
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{"query": "exhaust admission retries", "subscribe": true})
+	id := created["session_id"].(string)
+	status := waitForSideState(t, parent, id, SideSessionStateIdle)
+	handoffID := "side-session-result:" + id + ":" + status.LastTurnID
+	select {
+	case event := <-failed:
+		if !strings.Contains(fmt.Sprint(event.Payload), wantErr.Error()) {
+			t.Fatalf("notification failure event = %+v", event)
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("exhausted admission retries did not report notification failure")
+	}
+	status, err := parent.sideSessions.Status(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status.NotificationError, wantErr.Error()) {
+		t.Fatalf("notification error = %q, want exhausted admission failure", status.NotificationError)
+	}
+	parent.sideSessions.mu.Lock()
+	_, retained := parent.sideSessions.resultHandoffs[handoffID]
+	managed := parent.sideSessions.sessions[id]
+	retainedCount := 0
+	if managed != nil {
+		retainedCount = managed.resultHandoffs
+	}
+	parent.sideSessions.mu.Unlock()
+	if retained || retainedCount != 0 || parent.sideSessions.shouldDeferGoalContinuation() {
+		t.Fatalf("exhausted handoff retained: registered=%v count=%d", retained, retainedCount)
+	}
+}
+
 func TestSideSessionStopAllDoesNotDeadlockWhenDeliveryCallsSideTool(t *testing.T) {
 	provider := &sideToolDuringDeliveryProvider{started: make(chan struct{}, 1), release: make(chan struct{})}
 	parent := newSideSessionTestApp(t, provider, &scriptedSideProvider{})

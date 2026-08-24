@@ -771,7 +771,7 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 		ID:  handoffID,
 		TTL: m.parent.Engine.ExternalEventTTL,
 	}, m.ensureParentActive)
-	if delivery.Queued {
+	if delivery.Queued && err == nil {
 		finishOnReturn = false
 		return
 	}

@@ -280,6 +280,35 @@ func TestReceivePendingInputDoesNotRetryCanceledPersistedEnqueue(t *testing.T) {
 	}
 }
 
+func TestRestorePendingInputSerializesWithLifecycleDiscard(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.pendingLifecycleMu.Lock()
+	locked := true
+	t.Cleanup(func() {
+		if locked {
+			eng.pendingLifecycleMu.Unlock()
+		}
+	})
+	done := make(chan error, 1)
+	go func() { done <- eng.restorePendingInput(context.Background(), "restore-turn", "") }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("restorePendingInput() completed outside lifecycle serialization: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	eng.pendingLifecycleMu.Unlock()
+	locked = false
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("restorePendingInput() did not continue after lifecycle serialization released")
+	}
+}
+
 type cancelOnSecondErrContext struct {
 	context.Context
 	calls int

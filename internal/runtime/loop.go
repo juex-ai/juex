@@ -1594,6 +1594,8 @@ func (e *Engine) restorePendingInput(ctx context.Context, turnID, skipMessageID 
 	if err := cancellation.ContextError(ctx); err != nil {
 		return err
 	}
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
 	queue := e.currentPendingInputQueue()
 	sess := e.currentSession()
 	if queue == nil {

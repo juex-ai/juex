@@ -585,6 +585,46 @@ func TestResumePersistedInputPreservesAdmissionRetry(t *testing.T) {
 	}
 }
 
+func TestResumePersistedInputWaitsForExclusiveCommand(t *testing.T) {
+	dir := t.TempDir()
+	a, err := New(recoveryAppOptions(dir, &recoveryProvider{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+	record, err := a.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "wait for new-session greeting"),
+		runtime.PendingInputOptions{ID: "exclusive-command-wait", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.beginExclusiveCommand() {
+		t.Fatal("beginExclusiveCommand() = false")
+	}
+
+	delivery, err := a.resumePersistedInputLocked(context.Background(), record.ID)
+	if !errors.Is(err, errTurnAdmissionBusy) {
+		t.Fatalf("resumePersistedInputLocked() error = %v, want %v", err, errTurnAdmissionBusy)
+	}
+	if delivery.RecordID != record.ID || !delivery.Queued || delivery.Retry != runtime.PendingInputRetryAfterTurn {
+		t.Fatalf("resumePersistedInputLocked() delivery = %+v, want command retry", delivery)
+	}
+	if status := a.Engine.PendingInputStatus(); status.TurnID != "" {
+		t.Fatalf("external input started during exclusive command: %+v", status)
+	}
+
+	a.finishExclusiveCommand()
+	delivery, err = a.resumePersistedInputLocked(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !delivery.Delivered {
+		t.Fatalf("delivery after command = %+v, want delivered", delivery)
+	}
+}
+
 func TestAppStartupRecoveryRetriesReplayableAdmissionFailure(t *testing.T) {
 	dir := t.TempDir()
 	provider := &recoveryProvider{}
