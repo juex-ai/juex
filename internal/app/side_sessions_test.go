@@ -972,6 +972,75 @@ func TestSideSessionDropsPersistedNotificationWhenRecoveryWaitIsCanceled(t *test
 	}
 }
 
+func TestSideSessionDropsPersistedNotificationWhenResumeIsCanceled(t *testing.T) {
+	primary := &scriptedSideProvider{}
+	parent := newSideSessionTestApp(t, primary)
+	status := SideSessionStatus{
+		SessionID:  "side-canceled-before-resume",
+		LastTurnID: "side-turn-canceled-before-resume",
+		Model:      "child-model",
+		State:      SideSessionStateIdle,
+		LastResult: "stale result",
+	}
+	managed := &managedSideSession{status: status}
+	handoffID := "side-session-result:" + status.SessionID + ":" + status.LastTurnID
+	parent.sideSessions.mu.Lock()
+	parent.sideSessions.sessions[status.SessionID] = managed
+	parent.sideSessions.resultHandoffs[handoffID] = managed
+	managed.resultHandoffs = 1
+	parent.sideSessions.mu.Unlock()
+
+	parent.turnAdmission.transitionMu.Lock()
+	transitionLocked := true
+	defer func() {
+		if transitionLocked {
+			parent.turnAdmission.transitionMu.Unlock()
+		}
+	}()
+	deliveryCtx, cancelDelivery := context.WithCancel(context.Background())
+	delivered := make(chan struct{})
+	go func() {
+		parent.sideSessions.deliverResult(deliveryCtx, managed, status, handoffID)
+		close(delivered)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		records, err := parent.Engine.PendingInputQueue.Records()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record, ok := records[handoffID]; ok && record.State == runtime.PendingInputStatePending {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("side result %q was not persisted before resume cancellation", handoffID)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancelDelivery()
+	parent.turnAdmission.transitionMu.Unlock()
+	transitionLocked = false
+	select {
+	case <-delivered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("side result delivery did not stop after resume cancellation")
+	}
+	records, err := parent.Engine.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records[handoffID].State; got != runtime.PendingInputStateDropped {
+		t.Fatalf("canceled side result state = %q, want %q", got, runtime.PendingInputStateDropped)
+	}
+	primary.mu.Lock()
+	calls := primary.calls
+	primary.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("primary provider calls = %d, want canceled result to remain inert", calls)
+	}
+}
+
 func TestSideSessionRetriesTransientStaleNotificationDropFailure(t *testing.T) {
 	parent := newSideSessionTestApp(t, &scriptedSideProvider{})
 	identity, ok := parent.SessionIdentity()

@@ -160,7 +160,13 @@ func (a *App) deliverExternalInputUntilSettled(
 		delivery, err := a.deliverExternalInputLockedWithStart(ctx, message, opts, lease, false, valid, onStarted)
 		a.sessionMu.RUnlock()
 		last = delivery
-		if err == nil || delivery.Retry == runtime.PendingInputNoRetry {
+		if err == nil {
+			return delivery, err
+		}
+		if delivery.Retry == runtime.PendingInputNoRetry {
+			if shouldDiscardCanceledExternalInput(delivery, err) {
+				err = errors.Join(err, a.discardExternalInput(delivery.RecordID))
+			}
 			return delivery, err
 		}
 		if delivery.Retry == runtime.PendingInputRetryAfterStorage {
@@ -421,6 +427,12 @@ func shouldStartPersistedInputHandoff(delivery externalInputDelivery, err error)
 		return true
 	}
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func shouldDiscardCanceledExternalInput(delivery externalInputDelivery, err error) bool {
+	return delivery.RecordID != "" &&
+		!delivery.Delivered &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
 }
 
 func (a *App) waitPendingInputRecovery() error {
