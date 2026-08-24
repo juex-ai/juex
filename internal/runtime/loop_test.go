@@ -6195,7 +6195,10 @@ func TestPreservePendingInputAfterFailureRepairsInterruptedToolCall(t *testing.T
 		t.Fatal(err)
 	}
 
-	if err := eng.preservePendingInputAfterFailureLocked(turnID); err != nil {
+	eng.pendingLifecycleMu.Lock()
+	err := eng.preservePendingInputAfterFailureLocked(turnID)
+	eng.pendingLifecycleMu.Unlock()
+	if err != nil {
 		t.Fatal(err)
 	}
 	if got := len(eng.Session.History); got != 4 {

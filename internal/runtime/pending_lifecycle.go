@@ -159,6 +159,14 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 	}
 	e.pendingLifecycleMu.Lock()
 	defer e.pendingLifecycleMu.Unlock()
+	if status, _, publishing := e.pendingEventPublicationStatus(); publishing {
+		return PendingInputResult{
+			Disposition: PendingInputQueued,
+			Retry:       PendingInputRetryAfterTurn,
+			RecordID:    recordID,
+			Status:      status,
+		}, ErrActiveTurnExists
+	}
 	previous, existed, err := e.PersistedPendingMessage(recordID)
 	if err != nil {
 		return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage}, err
@@ -196,7 +204,7 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 			Count:            removed,
 			PendingCount:     status.PendingCount,
 			MaxPendingInputs: status.MaxPendingInputs,
-		}})
+		}}, true)
 	}
 	if invalidateStarted {
 		if preserveErr := e.drainPendingInputUntilEmptyLifecycleLocked(previous.TurnID); preserveErr != nil {
@@ -303,7 +311,7 @@ func (e *Engine) receiveNewPendingInput(ctx context.Context, message llm.Message
 			if requireStart {
 				return PendingInputResult{Status: status}, ErrActiveTurnExists
 			}
-			queued, record, err := e.enqueuePendingMessageWithOptions(ctx, message, PendingInputOptions{})
+			queued, record, err := e.enqueuePendingMessageWithOptions(ctx, message, PendingInputOptions{}, true)
 			if errors.Is(err, ErrNoActiveTurn) {
 				continue
 			}
@@ -355,7 +363,7 @@ func (e *Engine) receivePersistedPendingInput(ctx context.Context, recordID stri
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
-		status, enqueueErr := e.EnqueuePersistedPendingMessage(ctx, record)
+		status, enqueueErr := e.enqueuePersistedPendingMessage(ctx, record, true)
 		switch {
 		case enqueueErr == nil:
 			current, _, stateErr := e.PersistedPendingMessage(record.ID)

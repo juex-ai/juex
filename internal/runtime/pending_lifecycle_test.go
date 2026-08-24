@@ -439,6 +439,108 @@ func TestErrorDurableProjectionCanSynchronouslyUseLegacyPendingEnqueue(t *testin
 	}
 }
 
+func TestAdmissionDurableProjectionCanSynchronouslyReceivePendingInput(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	sink := events.NewDurableSink(eng.Session)
+	bus.SetCommitter(sink)
+	projectionResult := make(chan PendingInputResult, 1)
+	projectionErr := make(chan error, 1)
+	sink.AddProjection(events.DeliveryFunc(func(event events.Event) {
+		if event.Type != TurnAdmittedType {
+			return
+		}
+		result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+			Message: llm.TextMessage(llm.RoleUser, "projection follow-up"),
+		})
+		projectionResult <- result
+		projectionErr <- err
+	}))
+
+	admissionDone := make(chan PendingInputResult, 1)
+	admissionErr := make(chan error, 1)
+	go func() {
+		result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+			Message: llm.TextMessage(llm.RoleUser, "first"),
+		})
+		admissionDone <- result
+		admissionErr <- err
+	}()
+	var admitted PendingInputResult
+	select {
+	case admitted = <-admissionDone:
+		if err := <-admissionErr; err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn.admitted projection deadlocked while synchronously receiving follow-up input")
+	}
+	if admitted.Disposition != PendingInputStarted || admitted.TurnID == "" {
+		t.Fatalf("admission = %+v, want started", admitted)
+	}
+	projected := <-projectionResult
+	if err := <-projectionErr; err != nil {
+		t.Fatal(err)
+	}
+	if projected.Disposition != PendingInputQueued || projected.Status.TurnID != admitted.TurnID {
+		t.Fatalf("projection input = %+v, want queued behind %q", projected, admitted.TurnID)
+	}
+	eng.finishActiveTurn(admitted.TurnID)
+	bus.SetCommitter(nil)
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDiscardPendingInputRejectsDuringAdmissionPublication(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	publicationStarted := make(chan struct{})
+	releasePublication := make(chan struct{})
+	var once sync.Once
+	unsubscribe := bus.Subscribe(TurnAdmittedType, func(events.Event) {
+		once.Do(func() { close(publicationStarted) })
+		<-releasePublication
+	})
+	defer unsubscribe()
+
+	admissionDone := make(chan PendingInputResult, 1)
+	admissionErr := make(chan error, 1)
+	go func() {
+		result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+			Message: llm.TextMessage(llm.RoleUser, "first"),
+			Options: &PendingInputOptions{ID: "publishing-start", TTL: time.Hour},
+		})
+		admissionDone <- result
+		admissionErr <- err
+	}()
+	select {
+	case <-publicationStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn admission publication did not start")
+	}
+	discarded, err := eng.DiscardPendingInput("publishing-start")
+	if !errors.Is(err, ErrActiveTurnExists) {
+		close(releasePublication)
+		t.Fatalf("discard error = %v, want %v", err, ErrActiveTurnExists)
+	}
+	if discarded.Disposition != PendingInputQueued || discarded.Retry != PendingInputRetryAfterTurn || discarded.Status.TurnID == "" {
+		close(releasePublication)
+		t.Fatalf("discard during admission publication = %+v", discarded)
+	}
+
+	close(releasePublication)
+	admitted := <-admissionDone
+	if err := <-admissionErr; err != nil {
+		t.Fatal(err)
+	}
+	if admitted.Disposition != PendingInputStarted || admitted.TurnID != discarded.Status.TurnID {
+		t.Fatalf("admission = %+v, want started Turn %q", admitted, discarded.Status.TurnID)
+	}
+	if record := pendingLifecycleTestRecord(t, eng, "publishing-start"); record.State != PendingInputStateAdmitted {
+		t.Fatalf("record after rejected discard = %+v, want admitted", record)
+	}
+	eng.finishActiveTurn(admitted.TurnID)
+}
+
 func TestTerminalErrorCommitDoesNotWaitForProjectionHoldingCommitBarrier(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	sink := events.NewDurableSink(eng.Session)
