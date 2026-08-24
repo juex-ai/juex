@@ -190,6 +190,7 @@ func (q *PendingInputQueue) storeTurnInput(turnID string, msg llm.Message, reuse
 				}
 				return q.promoteTurnInputLocked(record, turnID, state)
 			}
+			return PendingInputRecord{}, ErrPendingInputHandled
 		}
 	}
 

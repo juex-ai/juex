@@ -110,6 +110,36 @@ func TestDurableSink_ProjectsSynchronouslyAfterJournalCommit(t *testing.T) {
 	}
 }
 
+func TestBusCommitForPublicationDefersDurableProjection(t *testing.T) {
+	journal := &recordingJournal{}
+	sink := NewDurableSink(journal)
+	t.Cleanup(func() { _ = sink.Close() })
+	bus := NewBus()
+	bus.SetCommitter(sink)
+
+	var projected []Event
+	sink.AddProjection(DeliveryFunc(func(event Event) {
+		projected = append(projected, event)
+	}))
+
+	committed, complete, err := bus.CommitForPublication(Event{ID: "evt-1", Type: "turn.completed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.events) != 1 || journal.events[0].ID != committed.ID {
+		t.Fatalf("journal events = %+v, want committed event %+v", journal.events, committed)
+	}
+	if len(projected) != 0 {
+		t.Fatalf("projected before completion = %+v, want none", projected)
+	}
+
+	complete()
+	complete()
+	if len(projected) != 1 || projected[0].ID != committed.ID {
+		t.Fatalf("projected after completion = %+v, want committed event %+v once", projected, committed)
+	}
+}
+
 func TestDurableSink_ProjectsInRegistrationOrder(t *testing.T) {
 	sink := NewDurableSink(&recordingJournal{})
 	t.Cleanup(func() { _ = sink.Close() })

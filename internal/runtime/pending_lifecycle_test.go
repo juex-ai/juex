@@ -254,6 +254,82 @@ func TestTerminalSubscriberCanSynchronouslyReadPendingLifecycleStatus(t *testing
 	}
 }
 
+func TestTerminalDurableProjectionCanSynchronouslyUseLegacyPendingEnqueue(t *testing.T) {
+	provider := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "complete"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, provider, false)
+	sink := events.NewDurableSink(eng.Session)
+	bus.SetCommitter(sink)
+	defer func() {
+		bus.SetCommitter(nil)
+		_ = sink.Close()
+	}()
+
+	projectionResult := make(chan error, 1)
+	sink.AddProjection(events.DeliveryFunc(func(event events.Event) {
+		if event.Type != "turn.completed" {
+			return
+		}
+		_, err := eng.EnqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "projection input"))
+		projectionResult <- err
+	}))
+
+	turnDone := make(chan error, 1)
+	go func() {
+		_, err := eng.Turn(context.Background(), "first")
+		turnDone <- err
+	}()
+	select {
+	case err := <-turnDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Turn deadlocked while terminal durable projection used legacy enqueue")
+	}
+	if err := <-projectionResult; !errors.Is(err, ErrNoActiveTurn) {
+		t.Fatalf("projection enqueue error = %v, want %v", err, ErrNoActiveTurn)
+	}
+}
+
+func TestErrorDurableProjectionCanSynchronouslyUseLegacyPendingEnqueue(t *testing.T) {
+	eng, bus := newEngine(t, errorProvider{}, false)
+	sink := events.NewDurableSink(eng.Session)
+	bus.SetCommitter(sink)
+	defer func() {
+		bus.SetCommitter(nil)
+		_ = sink.Close()
+	}()
+
+	projectionResult := make(chan error, 1)
+	sink.AddProjection(events.DeliveryFunc(func(event events.Event) {
+		if event.Type != "turn.errored" {
+			return
+		}
+		_, err := eng.EnqueuePendingMessage(context.Background(), llm.TextMessage(llm.RoleUser, "projection input"))
+		projectionResult <- err
+	}))
+
+	turnDone := make(chan error, 1)
+	go func() {
+		_, err := eng.Turn(context.Background(), "first")
+		turnDone <- err
+	}()
+	select {
+	case err := <-turnDone:
+		if err == nil || !strings.Contains(err.Error(), "boom") {
+			t.Fatalf("Turn() error = %v, want provider failure", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Turn deadlocked while error durable projection used legacy enqueue")
+	}
+	if err := <-projectionResult; !errors.Is(err, ErrNoActiveTurn) {
+		t.Fatalf("projection enqueue error = %v, want %v", err, ErrNoActiveTurn)
+	}
+}
+
 func TestReceivePendingInputWaitsForFallbackTerminalCommit(t *testing.T) {
 	provider := &mockProvider{script: []llm.Response{{
 		Message:    llm.TextMessage(llm.RoleAssistant, "completion will fail"),
@@ -625,6 +701,43 @@ func TestPendingDroppedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
 	}
 	if status := eng.PendingInputStatus(); status.PendingCount != 1 {
 		t.Fatalf("pending status = %+v, want replacement input queued", status)
+	}
+}
+
+func TestDiscardPendingInputInvalidatesOutstandingStart(t *testing.T) {
+	provider := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "must not run"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, _ := newEngine(t, provider, false)
+	started, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+		Message: llm.TextMessage(llm.RoleUser, "discard before execution"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Disposition != PendingInputStarted {
+		t.Fatalf("started input = %+v", started)
+	}
+	if _, err := eng.DiscardPendingInput(started.RecordID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.TurnMessageWithID(context.Background(), started.Message, started.TurnID); !errors.Is(err, ErrPendingInputHandled) {
+		t.Fatalf("discarded start execution error = %v, want %v", err, ErrPendingInputHandled)
+	}
+	if provider.called != 0 {
+		t.Fatalf("provider calls = %d, want none", provider.called)
+	}
+	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want released discarded start", status)
+	}
+	records, err := eng.currentPendingInputQueue().Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[started.RecordID].State != PendingInputStateDropped {
+		t.Fatalf("pending records = %+v, want only original dropped record", records)
 	}
 }
 

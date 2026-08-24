@@ -1290,16 +1290,16 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, recor
 	return nil
 }
 
-func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, lastText string) (events.Event, error) {
+func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, lastText string) (events.Event, func(), error) {
 	event := events.Event{Type: "turn.completed", TurnID: turnID, Payload: TurnCompletedPayload{
 		DurationMS: time.Since(start).Milliseconds(),
 		OutputLen:  len(lastText),
 		TokenUsage: e.currentSession().TokenUsageSnapshot(),
 	}}
 	if e.Bus == nil {
-		return events.Normalize(event), nil
+		return events.Normalize(event), func() {}, nil
 	}
-	return e.Bus.Commit(event)
+	return e.Bus.CommitForPublication(event)
 }
 
 type toolCallResult struct {
@@ -2239,8 +2239,11 @@ func (e *Engine) pendingTerminalPublicationStatus() (PendingInputStatus, <-chan 
 	return status, e.terminalPublishDone, e.terminalPublishing != ""
 }
 
-func (e *Engine) publishTerminalEvent(turnID string, event events.Event) {
+func (e *Engine) publishTerminalEvent(turnID string, event events.Event, completeCommit func()) {
 	defer e.finishTerminalPublication(turnID)
+	if completeCommit != nil {
+		completeCommit()
+	}
 	if e.Bus != nil {
 		e.Bus.PublishCommitted(event)
 	}
@@ -2269,13 +2272,15 @@ func (e *Engine) failActiveTurnLocked(turnID string, err error, lifecycleHeld bo
 	}
 	event := events.Event{Type: "turn.errored", TurnID: turnID, Payload: NewTurnErroredPayload(err)}
 	var (
-		committed events.Event
-		commitErr error
+		committed      events.Event
+		completeCommit func()
+		commitErr      error
 	)
 	if e.Bus == nil {
 		committed = events.Normalize(event)
+		completeCommit = func() {}
 	} else {
-		committed, commitErr = e.Bus.Commit(event)
+		committed, completeCommit, commitErr = e.Bus.CommitForPublication(event)
 	}
 	if commitErr != nil {
 		e.finishActiveTurn(turnID)
@@ -2284,7 +2289,7 @@ func (e *Engine) failActiveTurnLocked(turnID string, err error, lifecycleHeld bo
 	}
 	e.beginTerminalPublication(turnID)
 	e.pendingLifecycleMu.Unlock()
-	e.publishTerminalEvent(turnID, committed)
+	e.publishTerminalEvent(turnID, committed, completeCommit)
 	return err
 }
 

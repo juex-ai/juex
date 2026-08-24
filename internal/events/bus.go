@@ -31,6 +31,10 @@ type Committer interface {
 	Commit(Event) (Event, error)
 }
 
+type stagedCommitter interface {
+	commitForPublication(Event) (Event, func(), error)
+}
+
 type subscription struct {
 	id      uint64
 	pattern string
@@ -105,20 +109,36 @@ func (b *Bus) Emit(e Event) error {
 // subscribers. Callers that need an atomic state transition can publish the
 // committed fact after releasing their transition lock.
 func (b *Bus) Commit(e Event) (Event, error) {
+	committed, complete, err := b.CommitForPublication(e)
+	if err != nil {
+		return Event{}, err
+	}
+	complete()
+	return committed, nil
+}
+
+// CommitForPublication crosses the durable boundary while allowing a staged
+// committer to defer synchronous projections until complete is called. The
+// caller must call complete, including when no live subscribers will be
+// published. Repeated calls are harmless for staged committers.
+func (b *Bus) CommitForPublication(e Event) (Event, func(), error) {
 	if b == nil {
-		return Normalize(e), nil
+		return Normalize(e), func() {}, nil
 	}
 	b.mu.RLock()
 	committer := b.committer
 	b.mu.RUnlock()
+	if staged, ok := committer.(stagedCommitter); ok {
+		return staged.commitForPublication(e)
+	}
 	if committer != nil {
 		committed, err := committer.Commit(e)
 		if err != nil {
-			return Event{}, err
+			return Event{}, nil, err
 		}
-		return committed, nil
+		return committed, func() {}, nil
 	}
-	return Normalize(e), nil
+	return Normalize(e), func() {}, nil
 }
 
 // PublishCommitted synchronously notifies subscribers about an event that has

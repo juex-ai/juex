@@ -140,12 +140,23 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 	}
 	e.pendingLifecycleMu.Lock()
 	defer e.pendingLifecycleMu.Unlock()
+	previous, existed, err := e.PersistedPendingMessage(recordID)
+	if err != nil {
+		return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage}, err
+	}
 	if err := e.DropPersistedPendingMessage(recordID); err != nil {
 		return PendingInputResult{Retry: PendingInputRetryAfterStorage}, err
 	}
+	if existed && previous.Origin == PendingInputOriginTurn && previous.State == PendingInputStateAdmitted && previous.TurnID != "" {
+		e.finishActiveTurn(previous.TurnID)
+	}
 	status, removed := e.removePendingInputRecord(recordID)
 	if removed > 0 {
-		e.publishPendingEvent(events.Event{Type: "pending_input.dropped", TurnID: status.TurnID, Payload: PendingInputDroppedPayload{
+		eventTurnID := status.TurnID
+		if previous.TurnID != "" {
+			eventTurnID = previous.TurnID
+		}
+		e.publishPendingEvent(events.Event{Type: "pending_input.dropped", TurnID: eventTurnID, Payload: PendingInputDroppedPayload{
 			Count:            removed,
 			PendingCount:     status.PendingCount,
 			MaxPendingInputs: status.MaxPendingInputs,
