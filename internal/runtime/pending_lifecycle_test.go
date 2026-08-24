@@ -93,6 +93,64 @@ func TestReceivePendingInputWaitsForPreviousTerminalCommit(t *testing.T) {
 	eng.finishActiveTurn(result.TurnID)
 }
 
+func TestLegacyPendingEnqueueWaitsForTerminalCompletion(t *testing.T) {
+	provider := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "first complete"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, provider, false)
+	completionStarted := make(chan struct{})
+	releaseCompletion := make(chan struct{})
+	var completionOnce sync.Once
+	unsubscribe := bus.Subscribe("turn.completed", func(events.Event) {
+		completionOnce.Do(func() { close(completionStarted) })
+		<-releaseCompletion
+	})
+	defer unsubscribe()
+
+	turnDone := make(chan error, 1)
+	go func() {
+		_, err := eng.Turn(context.Background(), "first")
+		turnDone <- err
+	}()
+	select {
+	case <-completionStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first turn did not begin its terminal commit")
+	}
+
+	enqueueDone := make(chan error, 1)
+	go func() {
+		_, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "late legacy input"), PendingInputOptions{
+			ID:  "late-legacy-input",
+			TTL: time.Hour,
+		})
+		enqueueDone <- err
+	}()
+	select {
+	case err := <-enqueueDone:
+		close(releaseCompletion)
+		t.Fatalf("legacy enqueue completed inside terminal commit window: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseCompletion)
+	if err := <-turnDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-enqueueDone; !errors.Is(err, ErrNoActiveTurn) {
+		t.Fatalf("legacy enqueue error = %v, want %v after completed Turn", err, ErrNoActiveTurn)
+	}
+	if _, ok, err := eng.PersistedPendingMessage("late-legacy-input"); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatal("legacy enqueue persisted input against a completed Turn")
+	}
+	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want no stranded input", status)
+	}
+}
+
 func TestReceivePendingInputWaitsForFallbackTerminalCommit(t *testing.T) {
 	provider := &mockProvider{script: []llm.Response{{
 		Message:    llm.TextMessage(llm.RoleAssistant, "completion will fail"),

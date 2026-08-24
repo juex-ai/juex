@@ -214,9 +214,13 @@ func (e *Engine) admitTurnMessage(turnID string, userMsg llm.Message) (PendingIn
 	admitted := e.activeTurnID == ""
 	createdAdmissionIntent := record.Origin == PendingInputOriginTurn && record.State == PendingInputStateAccepting && record.TurnID == turnID
 	e.activeTurnID = turnID
+	if admitted {
+		e.pendingEventAnnouncing = true
+	}
 	e.pendingMu.Unlock()
 
 	if admitted {
+		defer e.flushPendingEvents()
 		if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{MessageID: record.MessageID}}); err != nil {
 			var dropErr error
 			if createdAdmissionIntent {
@@ -274,8 +278,12 @@ func (e *Engine) reserveTurnID(turnID string, payload TurnAdmittedPayload) error
 	}
 	admitted := e.activeTurnID == ""
 	e.activeTurnID = turnID
+	if admitted {
+		e.pendingEventAnnouncing = true
+	}
 	e.pendingMu.Unlock()
 	if admitted {
+		defer e.flushPendingEvents()
 		if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: payload}); err != nil {
 			e.finishActiveTurn(turnID)
 			return fmt.Errorf("commit turn admission: %w", err)
@@ -416,8 +424,23 @@ func (e *Engine) EnqueuePersistedPendingMessage(ctx context.Context, record Pend
 }
 
 func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg llm.Message, opts PendingInputOptions) (PendingInputStatus, error) {
+	if e == nil {
+		return PendingInputStatus{}, ErrNoActiveTurn
+	}
+	if e.pendingEventAnnouncementActive() {
+		status, _, err := e.enqueuePendingMessageWithOptions(ctx, userMsg, opts)
+		return status, err
+	}
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
 	status, _, err := e.enqueuePendingMessageWithOptions(ctx, userMsg, opts)
 	return status, err
+}
+
+func (e *Engine) pendingEventAnnouncementActive() bool {
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	return e.pendingEventAnnouncing
 }
 
 func (e *Engine) enqueuePendingMessageWithOptions(ctx context.Context, userMsg llm.Message, opts PendingInputOptions) (PendingInputStatus, PendingInputRecord, error) {
