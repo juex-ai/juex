@@ -2370,13 +2370,6 @@ func (e *Engine) emit(ev events.Event) error {
 	return nil
 }
 
-func (e *Engine) failTurn(turnID string, err error) error {
-	if emitErr := e.emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: NewTurnErroredPayload(err)}); emitErr != nil {
-		return errors.Join(err, fmt.Errorf("commit turn error: %w", emitErr))
-	}
-	return err
-}
-
 func (e *Engine) failActiveTurnLocked(turnID string, err error, lifecycleHeld bool) error {
 	if !lifecycleHeld {
 		e.pendingLifecycleMu.Lock()
