@@ -60,8 +60,7 @@ type sessionReplacementResult struct {
 
 type activeSessionReplacementOptions struct {
 	prepareCandidate func(config.Config) (SessionAttachment, *session.Lock, error)
-	commitActive     func(string, string, session.Info) (bool, error)
-	restoreActive    func(string, string, session.Info) (bool, error)
+	commitActive     func(string, string, session.Info, func()) (bool, error)
 	deleteCandidate  func(config.Config, string, SessionDeleteOptions) (bool, error)
 }
 
@@ -73,9 +72,6 @@ func (opts activeSessionReplacementOptions) withDefaults() activeSessionReplacem
 	}
 	if opts.commitActive == nil {
 		opts.commitActive = session.CompareAndSetActive
-	}
-	if opts.restoreActive == nil {
-		opts.restoreActive = session.CompareAndSetActive
 	}
 	if opts.deleteCandidate == nil {
 		opts.deleteCandidate = deleteSessionIfInactive
@@ -101,6 +97,9 @@ type activeSessionReplacementTransaction struct {
 	oldRuntime           runtime.SessionRuntimeSnapshot
 	oldLock              *session.Lock
 	oldSession           *session.Session
+	rollbackPrepared     bool
+	rollbackRuntimeReady bool
+	rollbackErr          error
 }
 
 func (a *App) executeActiveSessionReplacement(ctx context.Context, opts activeSessionReplacementOptions) (sessionReplacementResult, error) {
@@ -251,15 +250,23 @@ func (tx *activeSessionReplacementTransaction) publishAndCommit() error {
 
 	if a.Engine != nil {
 		if err := a.Engine.RunSessionStartPolicies(tx.ctx); err != nil {
-			return tx.rollbackLocked(sessionReplacementPhasePolicy, err, false)
+			return tx.rollbackLocked(sessionReplacementPhasePolicy, err)
 		}
 	}
 	if err := tx.ctx.Err(); err != nil {
-		return tx.rollbackLocked(sessionReplacementPhasePolicy, err, false)
+		return tx.rollbackLocked(sessionReplacementPhasePolicy, err)
 	}
-	historyReplaced, err := tx.opts.commitActive(a.cfg.HistoryPath(), tx.result.Old.ID, tx.candidate.Session.Info())
+	_, err := tx.opts.commitActive(
+		a.cfg.HistoryPath(),
+		tx.result.Old.ID,
+		tx.candidate.Session.Info(),
+		tx.prepareRuntimeRollbackLocked,
+	)
 	if err != nil {
-		return tx.rollbackLocked(sessionReplacementPhaseHistoryCommit, err, historyReplaced)
+		if tx.rollbackPrepared {
+			return tx.finishRollbackLocked(sessionReplacementPhaseHistoryCommit, err)
+		}
+		return tx.rollbackLocked(sessionReplacementPhaseHistoryCommit, err)
 	}
 
 	a.Session = tx.candidate.Session
@@ -285,44 +292,51 @@ func (tx *activeSessionReplacementTransaction) publishAndCommit() error {
 	return nil
 }
 
-func (tx *activeSessionReplacementTransaction) rollbackLocked(phase sessionReplacementPhase, cause error, restoreHistory bool) error {
-	a := tx.app
-	var rollbackErr error
-	if tx.result.ObservabilityErr != nil {
-		rollbackErr = errors.Join(rollbackErr, fmt.Errorf("replace observability: %w", tx.result.ObservabilityErr))
+func (tx *activeSessionReplacementTransaction) rollbackLocked(phase sessionReplacementPhase, cause error) error {
+	tx.prepareRuntimeRollbackLocked()
+	return tx.finishRollbackLocked(phase, cause)
+}
+
+func (tx *activeSessionReplacementTransaction) prepareRuntimeRollbackLocked() {
+	if tx.rollbackPrepared {
+		return
 	}
-	runtimeRestored := a.Engine == nil
+	tx.rollbackPrepared = true
+	a := tx.app
+	if tx.result.ObservabilityErr != nil {
+		tx.rollbackErr = errors.Join(tx.rollbackErr, fmt.Errorf("replace observability: %w", tx.result.ObservabilityErr))
+	}
+	tx.rollbackRuntimeReady = a.Engine == nil
 	if err := a.detachObservability(); err != nil {
-		rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore observability: detach replacement: %w", err))
+		tx.rollbackErr = errors.Join(tx.rollbackErr, fmt.Errorf("restore observability: detach replacement: %w", err))
 	}
 	if a.eventSink != nil {
 		a.eventSink.SetJournal(tx.oldSession)
 	}
 	if a.Engine != nil {
 		if err := a.Engine.RestoreSessionRuntimeCheckpoint(tx.oldRuntimeCheckpoint); err != nil {
-			rollbackErr = errors.Join(rollbackErr, err)
+			tx.rollbackErr = errors.Join(tx.rollbackErr, err)
 		} else {
-			runtimeRestored = true
+			tx.rollbackRuntimeReady = true
 		}
 	}
 	if err := a.attachObservability(tx.oldSession); err != nil {
-		rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore observability: attach previous session: %w", err))
+		tx.rollbackErr = errors.Join(tx.rollbackErr, fmt.Errorf("restore observability: attach previous session: %w", err))
 	}
-	if restoreHistory {
-		if _, err := tx.opts.restoreActive(a.cfg.HistoryPath(), tx.result.New.ID, tx.result.Old); err != nil && !errors.Is(err, session.ErrActiveSessionChanged) {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore active history: %w", err))
-		}
-	}
+}
+
+func (tx *activeSessionReplacementTransaction) finishRollbackLocked(phase sessionReplacementPhase, cause error) error {
+	a := tx.app
 	a.sessionMu.Unlock()
 
 	primaryErr := replacementPhaseError(phase, cause)
-	if !runtimeRestored {
-		return errors.Join(primaryErr, replacementPhaseError(sessionReplacementPhaseRollback, rollbackErr))
+	if !tx.rollbackRuntimeReady {
+		return errors.Join(primaryErr, replacementPhaseError(sessionReplacementPhaseRollback, tx.rollbackErr))
 	}
 	cleanupErr := tx.cleanupCandidate()
 	tx.result.CleanupErr = cleanupErr
-	if rollbackErr != nil {
-		primaryErr = errors.Join(primaryErr, replacementPhaseError(sessionReplacementPhaseRollback, rollbackErr))
+	if tx.rollbackErr != nil {
+		primaryErr = errors.Join(primaryErr, replacementPhaseError(sessionReplacementPhaseRollback, tx.rollbackErr))
 	}
 	if cleanupErr != nil {
 		primaryErr = errors.Join(primaryErr, replacementPhaseError(sessionReplacementPhaseCleanup, cleanupErr))

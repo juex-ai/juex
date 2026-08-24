@@ -1297,10 +1297,12 @@ and locks the candidate under the same Session-root guard without writing
 history, and retains candidate identity on lock failure so the transaction can
 conditionally delete it. The replacement coordinator commits that candidate to
 active history only after runtime publication and Session-start policy have
-succeeded, using compare-and-set against the resident Session so a concurrent
-explicit selection wins. Activation and conditional candidate deletion share
-the Session-root guard, preventing a selected candidate directory from being
-removed.
+succeeded, comparing against the resident Session and retaining the history
+lock through any post-replacement write reconciliation. An explicit activation
+therefore runs wholly before the commit or after rollback, including when it
+selects the same candidate ID. Activation and conditional candidate deletion
+share the Session-root guard, preventing a selected candidate directory from
+being removed.
 Web startup and MCP
 notification routing use exported app helpers for active-primary records and
 ids instead of duplicating those rules.
@@ -1467,16 +1469,17 @@ set and complete Tool registry while existing App readers remain on the old
 Session. Under the App write lock it captures the exact Engine checkpoint,
 installs the Engine bundle, redirects the durable Event sink and observability
 recorder, and runs Session-start policy. Persisting the candidate in active
-history is the final fallible pre-commit gate and uses compare-and-set against
-the resident Session; only after it succeeds does the coordinator publish the
-App Session, runtime status, chunked-write state, and Session lock before
-releasing readers. A pre-commit failure restores the Engine checkpoint and old
-Event and observability targets. If the history write may have replaced its
-target, rollback restores the resident selection only while the candidate is
-still active, preserving any newer explicit selection. It closes candidate
-resources after the Engine no longer references them and deletes persistence
-only when that candidate is not active. Rejections retain their typed failure
-phase; rollback or rejection-cleanup failures are joined with the primary error.
+history is the final fallible pre-commit gate and compares against the resident
+Session; only after it succeeds does the coordinator publish the App Session,
+runtime status, chunked-write state, and Session lock before releasing readers.
+A pre-commit failure restores the Engine checkpoint and old Event and
+observability targets. If the history write may have replaced its target, the
+history lock remains held while the runtime rolls back and the exact previous
+history is restored, preventing a different-ID or same-ID activation from being
+overwritten by reconciliation. It closes candidate resources after the Engine
+no longer references them and deletes persistence only when that candidate is
+not active. Rejections retain their typed failure phase; rollback or
+rejection-cleanup failures are joined with the primary error.
 `ReadSession` and
 higher-level App status/context/pending-input/turn methods hold the matching
 read lock, so an old Session and lock cannot close underneath an in-flight

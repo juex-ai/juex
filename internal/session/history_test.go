@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/homestore"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -408,11 +409,11 @@ func TestCompareAndSetActiveRejectsStaleExpectedSelection(t *testing.T) {
 	if err := SetActive(historyPath, old); err != nil {
 		t.Fatal(err)
 	}
-	replaced, err := CompareAndSetActive(historyPath, old.ID, candidate)
+	replaced, err := CompareAndSetActive(historyPath, old.ID, candidate, nil)
 	if err != nil || !replaced {
 		t.Fatalf("first CompareAndSetActive = replaced %t, err %v; want true, nil", replaced, err)
 	}
-	replaced, err = CompareAndSetActive(historyPath, old.ID, newer)
+	replaced, err = CompareAndSetActive(historyPath, old.ID, newer, nil)
 	if !errors.Is(err, ErrActiveSessionChanged) || replaced {
 		t.Fatalf("stale CompareAndSetActive = replaced %t, err %v; want false, ErrActiveSessionChanged", replaced, err)
 	}
@@ -422,6 +423,80 @@ func TestCompareAndSetActiveRejectsStaleExpectedSelection(t *testing.T) {
 	}
 	if history.Active == nil || history.Active.ID != candidate.ID {
 		t.Fatalf("active = %+v, want %q", history.Active, candidate.ID)
+	}
+}
+
+func TestCompareAndSetActiveHoldsHistoryLockThroughFailedWriteRollback(t *testing.T) {
+	root := t.TempDir()
+	sessionsRoot := filepath.Join(root, "sessions")
+	historyPath := filepath.Join(root, "history.json")
+	old := Info{ID: "old", Kind: KindPrimary}
+	if err := SetActive(historyPath, old); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := New(sessionsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateInfo := candidate.Info()
+	if err := candidate.Close(); err != nil {
+		t.Fatal(err)
+	}
+	commitErr := errors.New("history sync failed after replacement")
+	activateStarted := make(chan struct{})
+	activateDone := make(chan error, 1)
+	writes := 0
+
+	replaced, err := compareAndSetActive(
+		historyPath,
+		old.ID,
+		candidateInfo,
+		func() {
+			go func() {
+				close(activateStarted)
+				_, err := Activate(sessionsRoot, historyPath, candidate.ID)
+				activateDone <- err
+			}()
+			<-activateStarted
+			select {
+			case err := <-activateDone:
+				t.Fatalf("Activate completed before failed publication was reconciled: %v", err)
+			case <-time.After(50 * time.Millisecond):
+			}
+		},
+		func(path string, history History) error {
+			writes++
+			if err := writeHistory(path, history); err != nil {
+				return err
+			}
+			if writes == 1 {
+				return &homestore.AtomicWriteError{
+					Operation: "sync directory",
+					Path:      path,
+					Replaced:  true,
+					Err:       commitErr,
+				}
+			}
+			return nil
+		},
+	)
+	if !replaced || !errors.Is(err, commitErr) {
+		t.Fatalf("CompareAndSetActive = replaced %t, err %v; want replaced post-write error", replaced, err)
+	}
+	select {
+	case err := <-activateDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Activate did not continue after history rollback released the lock")
+	}
+	history, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history.Active == nil || history.Active.ID != candidate.ID {
+		t.Fatalf("active = %+v, want later same-ID activation %q", history.Active, candidate.ID)
 	}
 }
 

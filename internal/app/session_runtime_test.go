@@ -209,13 +209,18 @@ func TestActiveSessionReplacementHistoryCommitFailureRollsBackPublication(t *tes
 	if !ok {
 		t.Fatal("missing initial session")
 	}
+	oldInfo := a.Session.Info()
 	commitErr := errors.New("active history commit failed")
 
 	result, err := a.executeActiveSessionReplacement(context.Background(), activeSessionReplacementOptions{
-		commitActive: func(path, expectedID string, info session.Info) (bool, error) {
-			replaced, err := session.CompareAndSetActive(path, expectedID, info)
+		commitActive: func(path, expectedID string, info session.Info, beforeRollback func()) (bool, error) {
+			replaced, err := session.CompareAndSetActive(path, expectedID, info, nil)
 			if err != nil {
 				return replaced, err
+			}
+			beforeRollback()
+			if _, err := session.CompareAndSetActive(path, info.ID, oldInfo, nil); err != nil {
+				return true, err
 			}
 			return true, &homestore.AtomicWriteError{
 				Operation: "sync directory",
@@ -260,6 +265,7 @@ func TestActiveSessionReplacementRollbackPreservesNewerActiveSelection(t *testin
 	if !ok {
 		t.Fatal("missing initial session")
 	}
+	oldInfo := a.Session.Info()
 	newer, err := session.NewWithOptions(a.cfg.SessionsDir(), session.Options{
 		Kind:        session.KindPrimary,
 		HistoryPath: a.cfg.HistoryPath(),
@@ -274,10 +280,14 @@ func TestActiveSessionReplacementRollbackPreservesNewerActiveSelection(t *testin
 	commitErr := errors.New("active history commit failed after replacement")
 
 	result, err := a.executeActiveSessionReplacement(context.Background(), activeSessionReplacementOptions{
-		commitActive: func(path, expectedID string, info session.Info) (bool, error) {
-			replaced, err := session.CompareAndSetActive(path, expectedID, info)
+		commitActive: func(path, expectedID string, info session.Info, beforeRollback func()) (bool, error) {
+			replaced, err := session.CompareAndSetActive(path, expectedID, info, nil)
 			if err != nil {
 				return replaced, err
+			}
+			beforeRollback()
+			if _, err := session.CompareAndSetActive(path, info.ID, oldInfo, nil); err != nil {
+				return true, err
 			}
 			if _, err := session.Activate(a.cfg.SessionsDir(), path, newerID); err != nil {
 				return true, err

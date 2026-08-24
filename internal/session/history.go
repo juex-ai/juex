@@ -339,10 +339,18 @@ func SetActive(path string, info Info) error {
 	return err
 }
 
+type activeHistoryWriter func(string, History) error
+
 // CompareAndSetActive records info as active only while expectedID remains the
-// selected Session. replaced reports whether the history file may already
-// contain the requested selection when an atomic publication error is returned.
-func CompareAndSetActive(path, expectedID string, info Info) (replaced bool, err error) {
+// selected Session. If publication fails after replacing history, beforeRollback
+// runs and the exact previous history is restored before the history lock is
+// released. The callback must not reenter Session history APIs. replaced reports
+// whether publication reached the replacement point.
+func CompareAndSetActive(path, expectedID string, info Info, beforeRollback func()) (replaced bool, err error) {
+	return compareAndSetActive(path, expectedID, info, beforeRollback, writeHistory)
+}
+
+func compareAndSetActive(path, expectedID string, info Info, beforeRollback func(), write activeHistoryWriter) (replaced bool, err error) {
 	info = normalizeInfo(info)
 	if info.Kind != KindPrimary {
 		return false, fmt.Errorf("%w: %s", ErrCannotActivateSide, info.ID)
@@ -364,14 +372,26 @@ func CompareAndSetActive(path, expectedID string, info Info) (replaced bool, err
 		if activeID != expectedID {
 			return fmt.Errorf("%w: got %q, want %q", ErrActiveSessionChanged, activeID, expectedID)
 		}
+		previous := h
 		upsertHistorySession(&h, info)
 		h.Active = &active
-		return writeHistory(path, h)
+		if err := write(path, h); err != nil {
+			if !homestore.ReplacementOccurred(err) {
+				return err
+			}
+			replaced = true
+			if beforeRollback != nil {
+				beforeRollback()
+			}
+			if restoreErr := write(path, previous); restoreErr != nil {
+				return errors.Join(err, fmt.Errorf("restore previous active history: %w", restoreErr))
+			}
+			return err
+		}
+		replaced = true
+		return nil
 	})
-	if err != nil {
-		return homestore.ReplacementOccurred(err), err
-	}
-	return true, nil
+	return replaced, err
 }
 
 // Activate loads id from root and records it as the active primary session.
