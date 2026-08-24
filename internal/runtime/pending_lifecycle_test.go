@@ -863,6 +863,45 @@ func TestDiscardPendingInputInvalidatesOutstandingStart(t *testing.T) {
 	}
 }
 
+func TestDiscardPendingInputPreservesQueuedTailBeforeTerminalError(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	statusStore := NewStatusStore(StatusSeed{SessionID: "discard-start-tail"})
+	unsubscribe := bus.Subscribe("*", statusStore.Publish)
+	defer unsubscribe()
+	started, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+		Message: llm.TextMessage(llm.RoleUser, "discard before execution"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+		Message: llm.TextMessage(llm.RoleUser, "preserve queued tail"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.Disposition != PendingInputQueued || queued.Status.PendingCount != 1 {
+		t.Fatalf("queued tail = %+v, want one pending input", queued)
+	}
+	queuedRecord := pendingLifecycleTestRecord(t, eng, queued.RecordID)
+
+	if _, err := eng.DiscardPendingInput(started.RecordID); err != nil {
+		t.Fatal(err)
+	}
+	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want discarded start and preserved tail released", status)
+	}
+	if record := pendingLifecycleTestRecord(t, eng, queued.RecordID); record.State != PendingInputStateProcessed {
+		t.Fatalf("queued tail record = %+v, want processed preservation", record)
+	}
+	if len(eng.Session.History) != 1 || eng.Session.History[0].ID != queuedRecord.MessageID {
+		t.Fatalf("durable history = %+v, want queued tail preserved once", eng.Session.History)
+	}
+	if snapshot := statusStore.Snapshot(); snapshot.Turn == nil || snapshot.Turn.State != TurnLifecycleErrored || snapshot.Session.PendingCount != 0 {
+		t.Fatalf("live status = %+v, want terminal error with empty queue", snapshot)
+	}
+}
+
 func TestDiscardPendingInputRetriesStartedTurnTerminalCommit(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	started, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{

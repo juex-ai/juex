@@ -173,6 +173,14 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 		}})
 	}
 	if invalidateStarted {
+		if preserveErr := e.drainPendingInputUntilEmptyLifecycleLocked(previous.TurnID); preserveErr != nil {
+			return PendingInputResult{
+				Disposition: PendingInputDropped,
+				Retry:       PendingInputRetryAfterStorage,
+				RecordID:    recordID,
+				Status:      e.PendingInputStatus(),
+			}, fmt.Errorf("preserve pending input after discarded start: %w", preserveErr)
+		}
 		committed, completeCommit, commitErr := e.recordTurnErrorLocked(
 			previous.TurnID,
 			fmt.Errorf("pending input %q discarded before execution: %w", recordID, ErrPendingInputHandled),

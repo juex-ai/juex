@@ -2180,6 +2180,21 @@ func (e *Engine) preservePendingInputAfterFailureLocked(turnID string) error {
 	}
 }
 
+func (e *Engine) drainPendingInputUntilEmptyLifecycleLocked(turnID string) error {
+	for {
+		e.pendingMu.Lock()
+		active := e.activeTurnID == turnID
+		hasPending := len(e.pendingInput) > 0
+		e.pendingMu.Unlock()
+		if !active || !hasPending {
+			return nil
+		}
+		if err := e.drainPendingInputLifecycleLocked(context.Background(), turnID); err != nil {
+			return err
+		}
+	}
+}
+
 func (e *Engine) cachePolicyLocked() llm.CachePolicy {
 	if e == nil {
 		return llm.CachePolicy{}
