@@ -148,6 +148,46 @@ func TestFilePolicyReadOnlyRootsAllowReadsAndRejectWrites(t *testing.T) {
 	}
 }
 
+func TestFilePolicyReadOnlyRootsRejectHardLinkAliasesWhenWritesAreUnrestricted(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("hard-link count enforcement is supported by the sandbox platforms")
+	}
+	root := t.TempDir()
+	work := filepath.Join(root, "work")
+	artifactDir := filepath.Join(root, "agent", "artifacts")
+	for _, path := range []string{work, artifactDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifactPath := filepath.Join(artifactDir, "result.txt")
+	if err := os.WriteFile(artifactPath, []byte("durable result"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(work, "artifact-alias.txt")
+	if err := os.Link(artifactPath, alias); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+
+	readWrite := DefaultPolicyForOS(runtime.GOOS)
+	readWrite.FileSystem.OutsideWorkspace = OutsideWorkspaceReadWrite
+	for name, policy := range map[string]Policy{
+		"disabled":   LegacyDefaultPolicy(),
+		"read_write": readWrite,
+	} {
+		t.Run(name, func(t *testing.T) {
+			guard := NewFilePolicy(FilePolicyOptions{
+				Policy:        policy,
+				WorkDir:       work,
+				ReadOnlyPaths: []string{artifactDir},
+			})
+			if err := guard.CheckWrite(alias); err == nil || !strings.Contains(err.Error(), "hard-link alias of read-only root") {
+				t.Fatalf("CheckWrite(%q) = %v, want read-only hard-link rejection", alias, err)
+			}
+		})
+	}
+}
+
 func TestFilePolicyRejectsExistingFilesWithMultipleHardLinks(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("hard-link count enforcement is supported by the sandbox platforms")
