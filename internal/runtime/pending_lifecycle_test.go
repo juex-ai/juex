@@ -11,6 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -899,6 +900,67 @@ func TestDiscardPendingInputPreservesQueuedTailBeforeTerminalError(t *testing.T)
 	}
 	if snapshot := statusStore.Snapshot(); snapshot.Turn == nil || snapshot.Turn.State != TurnLifecycleErrored || snapshot.Session.PendingCount != 0 {
 		t.Fatalf("live status = %+v, want terminal error with empty queue", snapshot)
+	}
+}
+
+func TestDiscardPendingInputDoesNotInvalidateExecutingTurn(t *testing.T) {
+	provider := &mockProvider{script: []llm.Response{{
+		Message: llm.TextMessage(llm.RoleAssistant, "completed once"), StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, provider, false)
+	started, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+		Message: llm.TextMessage(llm.RoleUser, "execute once"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executionStarted := make(chan struct{})
+	releaseExecution := make(chan struct{})
+	installRuntimeTestModules(t, eng, &runtimeTurnInputPolicyModule{id: "block-before-turn-start", apply: func(runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
+		close(executionStarted)
+		<-releaseExecution
+		return runtimemodule.TurnInputDecision{Action: runtimemodule.TurnInputAllow}, nil
+	}})
+	var completed, errored int
+	bus.Subscribe("turn.completed", func(events.Event) { completed++ })
+	bus.Subscribe("turn.errored", func(events.Event) { errored++ })
+	turnDone := make(chan error, 1)
+	go func() {
+		_, err := eng.TurnMessageWithID(context.Background(), started.Message, started.TurnID)
+		turnDone <- err
+	}()
+	select {
+	case <-executionStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("TurnMessageWithID() did not reach its pre-start policy boundary")
+	}
+
+	discarded, err := eng.DiscardPendingInput(started.RecordID)
+	if !errors.Is(err, ErrActiveTurnExists) {
+		close(releaseExecution)
+		t.Fatalf("discard executing Turn error = %v, want %v", err, ErrActiveTurnExists)
+	}
+	if discarded.Disposition != PendingInputQueued || discarded.Retry != PendingInputRetryAfterTurn || discarded.TurnID != started.TurnID {
+		close(releaseExecution)
+		t.Fatalf("discard executing Turn = %+v, want after-turn retry", discarded)
+	}
+	if record := pendingLifecycleTestRecord(t, eng, started.RecordID); record.State != PendingInputStateAdmitted {
+		close(releaseExecution)
+		t.Fatalf("executing record = %+v, want admitted and unchanged", record)
+	}
+	close(releaseExecution)
+	if err := <-turnDone; err != nil {
+		t.Fatal(err)
+	}
+	if provider.called != 1 || completed != 1 || errored != 0 {
+		t.Fatalf("execution outcome: provider=%d completed=%d errored=%d, want 1/1/0", provider.called, completed, errored)
+	}
+	resolved, err := eng.DiscardPendingInput(started.RecordID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Disposition != PendingInputProcessed {
+		t.Fatalf("discard completed record = %+v, want processed", resolved)
 	}
 }
 

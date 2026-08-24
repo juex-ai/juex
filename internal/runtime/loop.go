@@ -117,6 +117,9 @@ type Engine struct {
 	pendingLifecycleMu sync.Mutex
 	pendingMu          sync.Mutex
 	activeTurnID       string
+	// executingTurnID distinguishes an unexecuted start action from a Turn
+	// already claimed by TurnMessageWithID. It is protected by pendingMu.
+	executingTurnID string
 	// terminalPublishing keeps later admissions behind a durably committed
 	// terminal event while its synchronous subscribers run outside pendingLifecycleMu.
 	terminalPublishing  string
@@ -189,6 +192,20 @@ func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Messa
 	defer e.pendingLifecycleMu.Unlock()
 	record, err := e.admitTurnMessage(turnID, userMsg)
 	return record.Message, err
+}
+
+func (e *Engine) admitTurnMessageForExecution(turnID string, userMsg llm.Message) (llm.Message, error) {
+	if e == nil {
+		return llm.Message{}, ErrNoActiveTurn
+	}
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
+	record, err := e.admitTurnMessage(turnID, userMsg)
+	if err != nil {
+		return record.Message, err
+	}
+	e.markTurnExecutionStarted(turnID)
+	return record.Message, nil
 }
 
 func (e *Engine) admitTurnMessage(turnID string, userMsg llm.Message) (PendingInputRecord, error) {
@@ -698,7 +715,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	defer e.mu.Unlock()
 
 	if turnID == "" {
-		result, receiveErr := e.ReceivePendingInput(ctx, PendingInputRequest{Message: userMsg, RequireStart: true})
+		result, receiveErr := e.receivePendingInput(ctx, PendingInputRequest{Message: userMsg, RequireStart: true}, true)
 		if receiveErr != nil {
 			return "", receiveErr
 		}
@@ -708,11 +725,12 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		turnID = result.TurnID
 		userMsg = result.Message
 	} else {
-		userMsg, err = e.AdmitTurnMessage(turnID, userMsg)
+		userMsg, err = e.admitTurnMessageForExecution(turnID, userMsg)
 		if err != nil {
 			return "", err
 		}
 	}
+	defer e.finishTurnExecution(turnID)
 	ctx, _, finishOperation := e.beginActiveOperation(ctx)
 	previousFailures := e.toolFailures
 	e.toolFailures = newToolFailureLedger(e.WorkDir)
@@ -2225,6 +2243,28 @@ func (e *Engine) finishActiveTurn(turnID string) {
 		return
 	}
 	e.activeTurnID = ""
+}
+
+func (e *Engine) markTurnExecutionStarted(turnID string) {
+	e.pendingMu.Lock()
+	if e.activeTurnID == turnID {
+		e.executingTurnID = turnID
+	}
+	e.pendingMu.Unlock()
+}
+
+func (e *Engine) finishTurnExecution(turnID string) {
+	e.pendingMu.Lock()
+	if e.executingTurnID == turnID {
+		e.executingTurnID = ""
+	}
+	e.pendingMu.Unlock()
+}
+
+func (e *Engine) turnExecutionStarted(turnID string) bool {
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	return e.executingTurnID == turnID
 }
 
 func (e *Engine) beginTerminalPublication(turnID string) {

@@ -60,6 +60,10 @@ type PendingInputResult struct {
 // external input. Calls are serialized so App does not need a mirrored running
 // state or a transport-owned Turn identity.
 func (e *Engine) ReceivePendingInput(ctx context.Context, request PendingInputRequest) (PendingInputResult, error) {
+	return e.receivePendingInput(ctx, request, false)
+}
+
+func (e *Engine) receivePendingInput(ctx context.Context, request PendingInputRequest, claimExecution bool) (PendingInputResult, error) {
 	if e == nil {
 		return PendingInputResult{}, ErrNoActiveTurn
 	}
@@ -98,10 +102,19 @@ func (e *Engine) ReceivePendingInput(ctx context.Context, request PendingInputRe
 		return result, ErrActiveTurnExists
 	}
 
+	var (
+		result PendingInputResult
+		err    error
+	)
 	if request.RecordID != "" {
-		return e.receivePersistedPendingInput(ctx, request.RecordID)
+		result, err = e.receivePersistedPendingInput(ctx, request.RecordID)
+	} else {
+		result, err = e.receiveNewPendingInput(ctx, request.Message, request.RequireStart)
 	}
-	return e.receiveNewPendingInput(ctx, request.Message, request.RequireStart)
+	if claimExecution && result.Disposition == PendingInputStarted {
+		e.markTurnExecutionStarted(result.TurnID)
+	}
+	return result, err
 }
 
 // ResolvePendingInput classifies the authoritative durable result after an
@@ -152,6 +165,20 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 		return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage}, err
 	}
 	activeStatus := e.PendingInputStatus()
+	if existed &&
+		previous.Origin == PendingInputOriginTurn &&
+		previous.State == PendingInputStateAdmitted &&
+		previous.TurnID != "" &&
+		activeStatus.TurnID == previous.TurnID &&
+		e.turnExecutionStarted(previous.TurnID) {
+		return PendingInputResult{
+			Disposition: PendingInputQueued,
+			Retry:       PendingInputRetryAfterTurn,
+			RecordID:    recordID,
+			TurnID:      previous.TurnID,
+			Status:      activeStatus,
+		}, ErrActiveTurnExists
+	}
 	invalidateStarted := existed &&
 		previous.Origin == PendingInputOriginTurn &&
 		(previous.State == PendingInputStateAdmitted || previous.State == PendingInputStateDropped) &&
