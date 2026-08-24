@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -121,7 +122,7 @@ func TestProjectMessageLockedBoundsToolResultWhenCompactionEnabled(t *testing.T)
 	}
 }
 
-func TestProjectMessagesForProviderLockedAdvertisesReadableToolResultPath(t *testing.T) {
+func TestProjectMessagesForProviderLockedAdvertisesReadOnlyToolResultURI(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	eng.ToolOutput = ToolOutputPolicy{
 		InlineMaxBytes:   16,
@@ -148,17 +149,20 @@ func TestProjectMessagesForProviderLockedAdvertisesReadableToolResultPath(t *tes
 	if projection == nil {
 		t.Fatal("projected Tool Result is missing artifact metadata")
 	}
-	readPath := artifactPathFromProviderText(t, projected.Blocks[0].Content)
-	wantPath := filepath.Join(eng.ArtifactDir, filepath.FromSlash(projection.StoredPath))
-	if readPath != wantPath {
-		t.Fatalf("provider-visible path = %q, want readable Artifact path %q", readPath, wantPath)
-	}
-	data, err := os.ReadFile(readPath)
+	readURI := artifactPathFromProviderText(t, projected.Blocks[0].Content)
+	wantURI, err := artifact.FormatReadURI(projection.StoredPath)
 	if err != nil {
-		t.Fatalf("read advertised path: %v", err)
+		t.Fatal(err)
 	}
-	if string(data) != original {
-		t.Fatalf("advertised artifact = %q, want original Tool Result", data)
+	if readURI != wantURI {
+		t.Fatalf("provider-visible path = %q, want read-only Artifact URI %q", readURI, wantURI)
+	}
+	parsedPath, recognized, err := artifact.ParseReadURI(readURI)
+	if err != nil || !recognized || parsedPath != projection.StoredPath {
+		t.Fatalf("parse advertised path = (%q, %t, %v), want (%q, true, nil)", parsedPath, recognized, err, projection.StoredPath)
+	}
+	if got := string(readProjectedArtifact(t, eng, projection)); got != original {
+		t.Fatalf("advertised artifact = %q, want original Tool Result", got)
 	}
 	if filepath.IsAbs(projection.StoredPath) {
 		t.Fatalf("stored path = %q, want Artifact-root-relative metadata", projection.StoredPath)
@@ -307,9 +311,12 @@ func TestProjectMessagesForProviderLockedPreservesExistingUserInputPreview(t *te
 	}
 	storedPath := artifactPathFromProviderText(t, projected.Blocks[0].Text)
 	readPath := artifactPathFromProviderText(t, got[0].Blocks[0].Text)
-	wantReadPath := filepath.Join(eng.ArtifactDir, filepath.FromSlash(projected.Blocks[0].Artifact.StoredPath))
-	if storedPath != projected.Blocks[0].Artifact.StoredPath || readPath != wantReadPath {
-		t.Fatalf("durable/provider paths = %q / %q, want %q / %q", storedPath, readPath, projected.Blocks[0].Artifact.StoredPath, wantReadPath)
+	wantReadURI, err := artifact.FormatReadURI(projected.Blocks[0].Artifact.StoredPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedPath != projected.Blocks[0].Artifact.StoredPath || readPath != wantReadURI {
+		t.Fatalf("durable/provider paths = %q / %q, want %q / %q", storedPath, readPath, projected.Blocks[0].Artifact.StoredPath, wantReadURI)
 	}
 	if strings.Replace(got[0].Blocks[0].Text, readPath, storedPath, 1) != projected.Blocks[0].Text {
 		t.Fatalf("provider projection changed more than the readable path:\ngot: %s\nwant: %s", got[0].Blocks[0].Text, projected.Blocks[0].Text)

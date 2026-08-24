@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/sandbox"
 )
 
@@ -114,17 +115,35 @@ func readTool(workDir, artifactDir string, guard sandbox.PathGuard) Tool {
 		if path == "" {
 			return Result{}, fmt.Errorf("read: missing path")
 		}
-		path = resolveWorkPath(workDir, path)
-		if err := guard.CheckRead(path); err != nil {
-			return Result{}, fmt.Errorf("read: %w", err)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return Result{}, err
+		readPath := path
+		artifactPath, artifactURI, err := artifact.ParseReadURI(path)
+		var data []byte
+		if artifactURI {
+			if err != nil {
+				return Result{}, fmt.Errorf("read: %w", err)
+			}
+			store, err := artifact.NewStore(artifactDir)
+			if err != nil {
+				return Result{}, fmt.Errorf("read: %w", err)
+			}
+			data, err = store.Read(artifact.Ref{Path: artifactPath})
+			if err != nil {
+				return Result{}, fmt.Errorf("read: %w", err)
+			}
+			readPath = artifactPath
+		} else {
+			readPath = resolveWorkPath(workDir, path)
+			if err := guard.CheckRead(readPath); err != nil {
+				return Result{}, fmt.Errorf("read: %w", err)
+			}
+			data, err = os.ReadFile(readPath)
+			if err != nil {
+				return Result{}, err
+			}
 		}
 		offset, _ := toInt(in["offset"])
 		limit, _ := toInt(in["limit"])
-		if kind, ok := detectReadImage(path, data); ok {
+		if kind, ok := detectReadImage(readPath, data); ok {
 			if offset > 0 || limit > 0 {
 				return Result{}, fmt.Errorf("read: offset and limit are not supported for image files")
 			}
@@ -155,6 +174,9 @@ func writeTool(workDir string, guard sandbox.PathGuard) Tool {
 		content, _ := in["content"].(string)
 		if path == "" {
 			return "", fmt.Errorf("write: missing path")
+		}
+		if _, artifactURI, _ := artifact.ParseReadURI(path); artifactURI {
+			return "", fmt.Errorf("write: artifact references are read-only")
 		}
 		path = resolveWorkPath(workDir, path)
 		if err := guard.CheckWrite(path); err != nil {
@@ -191,6 +213,9 @@ func editTool(workDir string, guard sandbox.PathGuard) Tool {
 		}
 		if missing := missingEditRequiredArgs(path, oldStr, newOK); len(missing) > 0 {
 			return "", fmt.Errorf("edit: missing required argument(s): %s (expected keys: path, old, new; received keys: %s)", strings.Join(missing, ", "), receivedArgumentKeys(in))
+		}
+		if _, artifactURI, _ := artifact.ParseReadURI(path); artifactURI {
+			return "", fmt.Errorf("edit: artifact references are read-only")
 		}
 		path = resolveWorkPath(workDir, path)
 		if err := guard.CheckWrite(path); err != nil {

@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/llm"
@@ -939,6 +940,55 @@ func TestBuiltins_ReadWriteEdit(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if string(data) != "hello Juex" {
 		t.Fatalf("after edit: %q", string(data))
+	}
+}
+
+func TestBuiltins_ArtifactReadURIIsReadableAndReadOnly(t *testing.T) {
+	root := t.TempDir()
+	workDir := filepath.Join(root, "work")
+	artifactDir := filepath.Join(root, "artifacts")
+	if err := os.Mkdir(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := artifact.NewStore(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Put("sessions/session-1/tool-results/call-1.txt", []byte("complete tool output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uri, err := artifact.FormatReadURI(ref.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry()
+	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, ArtifactDir: artifactDir, Shell: DefaultShellProfile()})
+	out, err := r.Call(context.Background(), "read", map[string]any{"path": uri})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "complete tool output" {
+		t.Fatalf("read output = %q, want complete Artifact content", out)
+	}
+	for _, call := range []struct {
+		name  string
+		input map[string]any
+	}{
+		{name: "write", input: map[string]any{"path": uri, "content": "overwritten"}},
+		{name: "edit", input: map[string]any{"path": uri, "old": "complete", "new": "overwritten"}},
+	} {
+		if _, err := r.Call(context.Background(), call.name, call.input); err == nil || !strings.Contains(err.Error(), "artifact references are read-only") {
+			t.Fatalf("%s error = %v, want read-only Artifact rejection", call.name, err)
+		}
+	}
+	data, err := store.Read(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "complete tool output" {
+		t.Fatalf("Artifact changed after rejected writes: %q", data)
 	}
 }
 

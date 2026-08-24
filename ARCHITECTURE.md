@@ -2655,9 +2655,11 @@ assembles provider context as latest compact summary, retained recent tail, and
 messages after the compact marker. Large user inputs and tool results are
 materialized to `sessions/<session-id>/user-inputs/` and
 `sessions/<session-id>/tool-results/` relative to that root. Projection metadata
-keeps that portable root-relative reference; provider-visible messages render
-its absolute, directly readable path together with byte count, SHA-256, and a
-head/tail preview.
+keeps that portable root-relative reference; provider-visible messages render a
+read-only `artifact://<root-relative-path>` reference together with byte count,
+SHA-256, and a head/tail preview. The builtin `read` tool resolves that scheme
+through the current Agent Artifact store; mutation tools do not treat it as a
+filesystem path.
 For each selected model candidate, the configured context window determines the
 effective budgets: automatic compaction triggers at 70%, the complete summary
 request envelope fits within 80%, summary output and Tool Result limits each use

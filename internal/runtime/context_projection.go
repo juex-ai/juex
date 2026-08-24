@@ -3,7 +3,6 @@ package runtime
 import (
 	"fmt"
 	"path"
-	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -114,7 +113,7 @@ func (e *Engine) projectMessagesForProviderLocked(msgs []llm.Message, policy com
 		if err != nil {
 			return nil, total, err
 		}
-		projected, err = e.renderProjectedArtifactReadPaths(projected)
+		projected, err = e.renderProjectedArtifactReadURIs(projected)
 		if err != nil {
 			return nil, total, err
 		}
@@ -147,7 +146,7 @@ func (e *Engine) projectOversizedCompactionInputsLocked(msgs []llm.Message, ids 
 		if err != nil {
 			return nil, nil, total, err
 		}
-		providerProjected, err := e.renderProjectedArtifactReadPaths(projected)
+		providerProjected, err := e.renderProjectedArtifactReadURIs(projected)
 		if err != nil {
 			return nil, nil, total, err
 		}
@@ -431,16 +430,8 @@ func (e *Engine) writeProjectedArtifact(sourceKind, messageID string, blockIndex
 	return projection, providerVisibleArtifactText(projection, projection.StoredPath, head, tail), nil
 }
 
-func projectedArtifactReadPath(artifactDir, storedPath string) (string, error) {
-	absoluteArtifactDir, err := filepath.Abs(artifactDir)
-	if err != nil {
-		return "", fmt.Errorf("context artifact read path: %w", err)
-	}
-	return filepath.Join(absoluteArtifactDir, filepath.FromSlash(storedPath)), nil
-}
-
-func (e *Engine) renderProjectedArtifactReadPaths(msg llm.Message) (llm.Message, error) {
-	rendered, err := e.renderProjectedArtifactBlockReadPaths(msg)
+func (e *Engine) renderProjectedArtifactReadURIs(msg llm.Message) (llm.Message, error) {
+	rendered, err := renderProjectedArtifactBlockReadURIs(msg)
 	if err != nil {
 		return msg, err
 	}
@@ -450,7 +441,7 @@ func (e *Engine) renderProjectedArtifactReadPaths(msg llm.Message) (llm.Message,
 
 	references := make([]llm.Message, len(msg.Compaction.RetainedInputReferences))
 	for index, reference := range msg.Compaction.RetainedInputReferences {
-		references[index], err = e.renderProjectedArtifactBlockReadPaths(reference)
+		references[index], err = renderProjectedArtifactBlockReadURIs(reference)
 		if err != nil {
 			return msg, err
 		}
@@ -467,7 +458,7 @@ func (e *Engine) renderProjectedArtifactReadPaths(msg llm.Message) (llm.Message,
 	return out, nil
 }
 
-func (e *Engine) renderProjectedArtifactBlockReadPaths(msg llm.Message) (llm.Message, error) {
+func renderProjectedArtifactBlockReadURIs(msg llm.Message) (llm.Message, error) {
 	var blocks []llm.Block
 	for index, block := range msg.Blocks {
 		if block.Artifact == nil {
@@ -476,7 +467,7 @@ func (e *Engine) renderProjectedArtifactBlockReadPaths(msg llm.Message) (llm.Mes
 			}
 			continue
 		}
-		readPath, err := projectedArtifactReadPath(e.ArtifactDir, block.Artifact.StoredPath)
+		readURI, err := artifact.FormatReadURI(block.Artifact.StoredPath)
 		if err != nil {
 			return msg, err
 		}
@@ -486,9 +477,9 @@ func (e *Engine) renderProjectedArtifactBlockReadPaths(msg llm.Message) (llm.Mes
 		}
 		switch block.Type {
 		case llm.BlockText:
-			block.Text = replaceProjectedArtifactPath(block.Text, block.Artifact.StoredPath, readPath)
+			block.Text = replaceProjectedArtifactPath(block.Text, block.Artifact.StoredPath, readURI)
 		case llm.BlockToolResult:
-			block.Content = replaceProjectedArtifactPath(block.Content, block.Artifact.StoredPath, readPath)
+			block.Content = replaceProjectedArtifactPath(block.Content, block.Artifact.StoredPath, readURI)
 		}
 		blocks = append(blocks, block)
 	}
