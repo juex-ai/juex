@@ -576,15 +576,23 @@ func (e *Engine) promotePendingInputTurn(currentTurnID, nextTurnID string) (queu
 	e.pendingMu.Unlock()
 
 	if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{MessageID: item.Message.ID}}); err != nil {
+		admissionErr := fmt.Errorf("commit promoted turn admission: %w", err)
+		if preserveErr := e.preservePendingInputAfterFailedPromotionLocked(nextTurnID); preserveErr != nil {
+			admissionErr = errors.Join(admissionErr, fmt.Errorf("preserve pending input after turn promotion failure: %w", preserveErr))
+		}
 		e.finishActiveTurn(nextTurnID)
 		e.flushPendingEvents()
 		status := e.PendingInputStatus()
-		return queuedPendingInput{}, status, false, fmt.Errorf("commit promoted turn admission: %w", err)
+		return queuedPendingInput{}, status, false, admissionErr
 	}
 	if item.RecordID != "" && queue != nil {
 		if err := queue.PromoteToTurnInput([]string{item.RecordID}, nextTurnID); err != nil {
+			promotionErr := fmt.Errorf("mark promoted pending input admitted: %w", err)
+			if preserveErr := e.preservePendingInputAfterFailedPromotionLocked(nextTurnID); preserveErr != nil {
+				promotionErr = errors.Join(promotionErr, fmt.Errorf("preserve pending input after turn promotion failure: %w", preserveErr))
+			}
 			e.finishActiveTurn(nextTurnID)
-			promotionErr := e.failTurn(nextTurnID, fmt.Errorf("mark promoted pending input admitted: %w", err))
+			promotionErr = e.failTurn(nextTurnID, promotionErr)
 			e.flushPendingEvents()
 			return queuedPendingInput{}, e.PendingInputStatus(), false, promotionErr
 		}
@@ -608,6 +616,51 @@ func (e *Engine) promotePendingInputTurn(currentTurnID, nextTurnID string) (queu
 	}
 	e.flushPendingEvents()
 	return item, status, true, nil
+}
+
+func (e *Engine) preservePendingInputAfterFailedPromotionLocked(turnID string) error {
+	// The promotion trigger must stay replayable after its durable transition
+	// fails; only inputs accepted during the announcement are terminally kept.
+	repairedTranscript := false
+	for {
+		e.pendingMu.Lock()
+		if e.activeTurnID != turnID || len(e.pendingInput) <= 1 {
+			e.pendingMu.Unlock()
+			return nil
+		}
+		pending := append([]queuedPendingInput(nil), e.pendingInput[1:]...)
+		e.pendingInput = e.pendingInput[:1]
+		e.pendingMu.Unlock()
+
+		if !repairedTranscript {
+			if err := e.repairTranscriptLocked(turnID, "turn_promotion_failure_pending_input"); err != nil {
+				e.restorePendingInputAfterPromotionTrigger(pending)
+				return err
+			}
+			repairedTranscript = true
+		}
+		if err := e.commitPendingInputBatchLocked(context.Background(), turnID, pending); err != nil {
+			e.restorePendingInputAfterPromotionTrigger(pending)
+			return err
+		}
+	}
+}
+
+func (e *Engine) restorePendingInputAfterPromotionTrigger(pending []queuedPendingInput) {
+	if len(pending) == 0 {
+		return
+	}
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	if len(e.pendingInput) == 0 {
+		e.pendingInput = append([]queuedPendingInput(nil), pending...)
+		return
+	}
+	restored := make([]queuedPendingInput, 0, len(e.pendingInput)+len(pending))
+	restored = append(restored, e.pendingInput[0])
+	restored = append(restored, pending...)
+	restored = append(restored, e.pendingInput[1:]...)
+	e.pendingInput = restored
 }
 
 // TurnMessage drives one already-constructed user message to completion.

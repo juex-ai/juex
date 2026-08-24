@@ -7165,6 +7165,67 @@ func TestPromotePendingInputFailsBeforeObserverWhenDurableAdmissionFails(t *test
 	}
 }
 
+func TestPromotePendingInputFailurePreservesReentrantPendingInput(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	if err := eng.ReserveTurnID("compact-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "promotion trigger"), PendingInputOptions{
+		ID:  "promotion-trigger",
+		TTL: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queue := eng.currentPendingInputQueue()
+	originalWrite := queue.fileOps.write
+	wantErr := errors.New("promote turn input failed")
+	writes := 0
+	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
+		writes++
+		if writes == 2 {
+			return 0, wantErr
+		}
+		return originalWrite(file, body)
+	}
+	t.Cleanup(func() { queue.fileOps.write = originalWrite })
+
+	var enqueueErr error
+	bus.Subscribe(TurnAdmittedType, func(events.Event) {
+		_, enqueueErr = eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "accepted during promotion"), PendingInputOptions{
+			ID:  "reentrant-promotion-input",
+			TTL: time.Hour,
+		})
+	})
+
+	_, status, promoted, promotionErr := eng.PromotePendingInputTurn("compact-1", "turn-1")
+	if !errors.Is(promotionErr, wantErr) {
+		t.Fatalf("PromotePendingInputTurn() error = %v, want %v", promotionErr, wantErr)
+	}
+	if promoted {
+		t.Fatal("pending input was promoted after durable promotion failed")
+	}
+	if enqueueErr != nil {
+		t.Fatalf("reentrant enqueue error = %v", enqueueErr)
+	}
+	if status.TurnID != "" || status.PendingCount != 1 {
+		t.Fatalf("promotion status = %+v, want original trigger queued without active Turn", status)
+	}
+	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "accepted during promotion" {
+		t.Fatalf("preserved history = %+v, want accepted reentrant input", eng.Session.History)
+	}
+	records, err := queue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record := records["promotion-trigger"]; record.State != PendingInputStatePending {
+		t.Fatalf("promotion trigger record = %+v, want state %q", record, PendingInputStatePending)
+	}
+	if record := records["reentrant-promotion-input"]; record.State != PendingInputStateProcessed {
+		t.Fatalf("reentrant record = %+v, want state %q", record, PendingInputStateProcessed)
+	}
+}
+
 func TestPromotePendingInputKeepsRecordReplayableWhenTurnAdmissionFails(t *testing.T) {
 	root := t.TempDir()
 	sess, err := session.New(root)
