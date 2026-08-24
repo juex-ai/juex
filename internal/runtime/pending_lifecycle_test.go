@@ -35,6 +35,33 @@ func TestReceivePendingInputStartsIdleTurnWithFrameworkIdentity(t *testing.T) {
 	}
 }
 
+func TestReceivePendingInputReturnsStartedAfterCommittedAdmissionWithoutJournalReread(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	queue := eng.currentPendingInputQueue()
+	originalPath := queue.path
+	writes := 0
+	originalWrite := queue.fileOps.write
+	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
+		n, err := originalWrite(file, body)
+		writes++
+		if err == nil && writes == 2 {
+			queue.path = originalPath + ".unavailable"
+		}
+		return n, err
+	}
+	t.Cleanup(func() { queue.path = originalPath })
+
+	result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+		Message: llm.TextMessage(llm.RoleUser, "start despite journal reread failure"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Disposition != PendingInputStarted || result.RecordID == "" || result.TurnID == "" || result.Message.ID == "" {
+		t.Fatalf("ReceivePendingInput() result = %+v, want committed start action", result)
+	}
+}
+
 func TestResolvePendingInputTreatsTranscriptAsDeliveredAfterTerminalFailure(t *testing.T) {
 	eng, _ := newEngine(t, errorProvider{}, false)
 	opts := PendingInputOptions{ID: "mcp-event-1", TTL: time.Hour}
@@ -232,6 +259,94 @@ func TestReceivePendingInputReturnsStorageRetryWhenPersistedRecordCannotBeRead(t
 	}
 	if result.RecordID != record.ID || result.Retry != PendingInputRetryAfterStorage {
 		t.Fatalf("ReceivePendingInput() result = %+v, want record %q with storage retry", result, record.ID)
+	}
+}
+
+func TestReceivePersistedPendingInputReturnsStartedAfterCommittedAdmissionWithoutJournalReread(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	record, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "resume despite journal reread failure"),
+		PendingInputOptions{ID: "resume-without-reread", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := eng.currentPendingInputQueue()
+	originalPath := queue.path
+	originalWrite := queue.fileOps.write
+	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
+		n, err := originalWrite(file, body)
+		if err == nil {
+			queue.path = originalPath + ".unavailable"
+		}
+		return n, err
+	}
+	t.Cleanup(func() { queue.path = originalPath })
+
+	result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{RecordID: record.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Disposition != PendingInputStarted || result.RecordID != record.ID || result.TurnID == "" || result.Message.ID != record.MessageID {
+		t.Fatalf("ReceivePendingInput() result = %+v, want committed persisted start action", result)
+	}
+}
+
+func TestFinishPendingInputCompactionReturnsPromotedStartWithoutJournalReread(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	compactTurnID, err := eng.ReservePendingInputCompaction()
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+		Message: llm.TextMessage(llm.RoleUser, "promote despite journal reread failure"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := eng.currentPendingInputQueue()
+	originalPath := queue.path
+	originalWrite := queue.fileOps.write
+	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
+		n, err := originalWrite(file, body)
+		if err == nil {
+			queue.path = originalPath + ".unavailable"
+		}
+		return n, err
+	}
+	t.Cleanup(func() { queue.path = originalPath })
+
+	result, err := eng.FinishPendingInputCompaction(compactTurnID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Disposition != PendingInputStarted || result.RecordID != queued.RecordID || result.TurnID == "" || result.Message.ID == "" {
+		t.Fatalf("FinishPendingInputCompaction() result = %+v, want promoted start action", result)
+	}
+}
+
+func TestResolvePendingInputReturnsStorageRetryWhenRecordCannotBeRead(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	record, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "resolve after storage recovers"),
+		PendingInputOptions{ID: "resolve-read-retry", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := eng.currentPendingInputQueue()
+	originalPath := queue.path
+	queue.path = originalPath + ".unavailable"
+	t.Cleanup(func() { queue.path = originalPath })
+
+	result, err := eng.ResolvePendingInput(record.ID, errors.New("provider failed"))
+	if err == nil {
+		t.Fatal("ResolvePendingInput() error = nil, want journal read failure")
+	}
+	if result.RecordID != record.ID || result.Retry != PendingInputRetryAfterStorage {
+		t.Fatalf("ResolvePendingInput() result = %+v, want record %q with storage retry", result, record.ID)
 	}
 }
 

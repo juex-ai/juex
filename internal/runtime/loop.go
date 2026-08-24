@@ -173,28 +173,33 @@ func (e *Engine) ReserveTurnID(turnID string) error {
 // active execution boundary. Repeating admission for the same Turn returns the
 // already accepted message with its stable Framework-owned identity.
 func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Message, error) {
+	record, err := e.admitTurnMessage(turnID, userMsg)
+	return record.Message, err
+}
+
+func (e *Engine) admitTurnMessage(turnID string, userMsg llm.Message) (PendingInputRecord, error) {
 	if e == nil {
-		return llm.Message{}, ErrNoActiveTurn
+		return PendingInputRecord{}, ErrNoActiveTurn
 	}
 	if turnID == "" {
-		return llm.Message{}, errors.New("runtime: empty turn id")
+		return PendingInputRecord{}, errors.New("runtime: empty turn id")
 	}
 	queue := e.currentPendingInputQueue()
 	if queue == nil {
-		return llm.Message{}, errors.New("runtime: pending input queue unavailable")
+		return PendingInputRecord{}, errors.New("runtime: pending input queue unavailable")
 	}
 	userMsg = llm.ClassifyUserMessage(userMsg)
 
 	e.pendingMu.Lock()
 	if e.activeTurnID != "" && e.activeTurnID != turnID {
 		e.pendingMu.Unlock()
-		return llm.Message{}, ErrActiveTurnExists
+		return PendingInputRecord{}, ErrActiveTurnExists
 	}
 	alreadyActive := e.activeTurnID == turnID
 	record, err := queue.StageTurnInput(turnID, userMsg, alreadyActive)
 	if err != nil {
 		e.pendingMu.Unlock()
-		return llm.Message{}, fmt.Errorf("persist accepted turn input: %w", err)
+		return PendingInputRecord{}, fmt.Errorf("persist accepted turn input: %w", err)
 	}
 	admitted := e.activeTurnID == ""
 	createdAdmissionIntent := record.Origin == PendingInputOriginTurn && record.State == PendingInputStateAccepting && record.TurnID == turnID
@@ -210,9 +215,9 @@ func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Messa
 			e.finishActiveTurn(turnID)
 			commitErr := fmt.Errorf("commit turn admission: %w", err)
 			if dropErr != nil {
-				return llm.Message{}, errors.Join(commitErr, fmt.Errorf("drop rejected turn admission: %w", dropErr))
+				return PendingInputRecord{}, errors.Join(commitErr, fmt.Errorf("drop rejected turn admission: %w", dropErr))
 			}
-			return llm.Message{}, commitErr
+			return PendingInputRecord{}, commitErr
 		}
 		if err := queue.CommitTurnInput(record.ID, turnID); err != nil {
 			var dropErr error
@@ -224,10 +229,14 @@ func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Messa
 				commitErr = errors.Join(commitErr, fmt.Errorf("drop uncommitted turn admission: %w", dropErr))
 			}
 			e.finishActiveTurn(turnID)
-			return llm.Message{}, e.failTurn(turnID, commitErr)
+			return PendingInputRecord{}, e.failTurn(turnID, commitErr)
 		}
+		record.Origin = PendingInputOriginTurn
+		record.State = PendingInputStateAdmitted
+		record.TurnID = turnID
+		record.ExpiresAt = time.Time{}
 	}
-	return record.Message, nil
+	return record, nil
 }
 
 func (e *Engine) ReserveCompactionTurnID(turnID string) error {
@@ -488,8 +497,13 @@ func (e *Engine) PendingInputStatus() PendingInputStatus {
 // PromotePendingInputTurn turns the first queued input from a reserved
 // non-provider phase into the user message for a real provider turn.
 func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.Message, PendingInputStatus, bool, error) {
+	item, status, promoted, err := e.promotePendingInputTurn(currentTurnID, nextTurnID)
+	return item.Message, status, promoted, err
+}
+
+func (e *Engine) promotePendingInputTurn(currentTurnID, nextTurnID string) (queuedPendingInput, PendingInputStatus, bool, error) {
 	if e == nil || nextTurnID == "" {
-		return llm.Message{}, PendingInputStatus{}, false, nil
+		return queuedPendingInput{}, PendingInputStatus{}, false, nil
 	}
 	max := e.effectiveMaxPendingInputs()
 	queue := e.currentPendingInputQueue()
@@ -504,7 +518,7 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 			MaxPendingInputs: max,
 		}
 		e.pendingMu.Unlock()
-		return llm.Message{}, status, false, nil
+		return queuedPendingInput{}, status, false, nil
 	}
 	item := e.pendingInput[0]
 	e.activeTurnID = nextTurnID
@@ -515,14 +529,14 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 		e.finishActiveTurn(nextTurnID)
 		e.flushPendingEvents()
 		status := e.PendingInputStatus()
-		return llm.Message{}, status, false, fmt.Errorf("commit promoted turn admission: %w", err)
+		return queuedPendingInput{}, status, false, fmt.Errorf("commit promoted turn admission: %w", err)
 	}
 	if item.RecordID != "" && queue != nil {
 		if err := queue.PromoteToTurnInput([]string{item.RecordID}, nextTurnID); err != nil {
 			e.finishActiveTurn(nextTurnID)
 			promotionErr := e.failTurn(nextTurnID, fmt.Errorf("mark promoted pending input admitted: %w", err))
 			e.flushPendingEvents()
-			return llm.Message{}, e.PendingInputStatus(), false, promotionErr
+			return queuedPendingInput{}, e.PendingInputStatus(), false, promotionErr
 		}
 	}
 
@@ -543,7 +557,7 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 		e.notifyPendingInputsAdmitted(context.Background(), nextTurnID, []string{item.RecordID})
 	}
 	e.flushPendingEvents()
-	return item.Message, status, true, nil
+	return item, status, true, nil
 }
 
 // TurnMessage drives one already-constructed user message to completion.

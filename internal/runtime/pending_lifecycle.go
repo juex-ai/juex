@@ -101,7 +101,7 @@ func (e *Engine) ReceivePendingInput(ctx context.Context, request PendingInputRe
 func (e *Engine) ResolvePendingInput(recordID string, cause error) (PendingInputResult, error) {
 	record, ok, err := e.PersistedPendingMessage(recordID)
 	if err != nil {
-		return PendingInputResult{}, errors.Join(cause, err)
+		return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage, Status: e.PendingInputStatus()}, errors.Join(cause, err)
 	}
 	if !ok {
 		return PendingInputResult{}, errors.Join(cause, fmt.Errorf("runtime: persisted input %q not found", recordID))
@@ -185,22 +185,18 @@ func (e *Engine) FinishPendingInputCompaction(compactTurnID string) (PendingInpu
 	e.pendingLifecycleMu.Lock()
 	defer e.pendingLifecycleMu.Unlock()
 	nextTurnID := pendingInputTurnID("turn")
-	message, status, promoted, err := e.PromotePendingInputTurn(compactTurnID, nextTurnID)
+	item, status, promoted, err := e.promotePendingInputTurn(compactTurnID, nextTurnID)
 	if err != nil {
 		return PendingInputResult{Status: status}, err
 	}
 	if !promoted {
 		return PendingInputResult{Status: status}, nil
 	}
-	recordID, recordErr := e.pendingInputRecordIDByMessageID(message.ID)
-	if recordErr != nil {
-		return PendingInputResult{}, recordErr
-	}
 	return PendingInputResult{
 		Disposition: PendingInputStarted,
-		RecordID:    recordID,
+		RecordID:    item.RecordID,
 		TurnID:      nextTurnID,
-		Message:     message,
+		Message:     item.Message,
 		Status:      status,
 	}, nil
 }
@@ -225,22 +221,18 @@ func (e *Engine) receiveNewPendingInput(ctx context.Context, message llm.Message
 		}
 
 		turnID := pendingInputTurnID("turn")
-		accepted, err := e.AdmitTurnMessage(turnID, message)
+		accepted, err := e.admitTurnMessage(turnID, message)
 		if errors.Is(err, ErrActiveTurnExists) {
 			continue
 		}
 		if err != nil {
 			return PendingInputResult{}, err
 		}
-		recordID, err := e.pendingInputRecordIDByMessageID(accepted.ID)
-		if err != nil {
-			return PendingInputResult{}, err
-		}
 		return PendingInputResult{
 			Disposition: PendingInputStarted,
-			RecordID:    recordID,
+			RecordID:    accepted.ID,
 			TurnID:      turnID,
-			Message:     accepted,
+			Message:     accepted.Message,
 			Status:      e.PendingInputStatus(),
 		}, nil
 	}
@@ -304,7 +296,7 @@ func (e *Engine) receivePersistedPendingInput(ctx context.Context, recordID stri
 		}
 
 		turnID := pendingInputTurnID("turn")
-		accepted, admitErr := e.AdmitTurnMessage(turnID, record.Message)
+		accepted, admitErr := e.admitTurnMessage(turnID, record.Message)
 		if errors.Is(admitErr, ErrActiveTurnExists) {
 			continue
 		}
@@ -315,36 +307,15 @@ func (e *Engine) receivePersistedPendingInput(ctx context.Context, recordID stri
 			}
 			return PendingInputResult{Disposition: PendingInputQueued, Retry: PendingInputRetryAdmission, RecordID: current.ID}, errors.Join(admitErr, stateErr)
 		}
-		current, _, stateErr := e.PersistedPendingMessage(record.ID)
-		if stateErr != nil {
-			return PendingInputResult{RecordID: record.ID, Retry: PendingInputRetryAfterStorage, Status: e.PendingInputStatus()}, stateErr
-		}
 		return PendingInputResult{
 			Disposition: PendingInputStarted,
-			RecordID:    current.ID,
+			RecordID:    record.ID,
 			TurnID:      turnID,
-			Message:     accepted,
+			Message:     accepted.Message,
 			Status:      e.PendingInputStatus(),
 		}, nil
 	}
 	return PendingInputResult{Disposition: PendingInputQueued, Retry: PendingInputRetryAfterTurn, RecordID: record.ID, Status: e.PendingInputStatus()}, fmt.Errorf("runtime: active turn changed while receiving persisted input")
-}
-
-func (e *Engine) pendingInputRecordIDByMessageID(messageID string) (string, error) {
-	queue := e.currentPendingInputQueue()
-	if queue == nil {
-		return "", fmt.Errorf("runtime: pending input queue unavailable")
-	}
-	records, err := queue.Records()
-	if err != nil {
-		return "", err
-	}
-	for _, record := range records {
-		if record.MessageID == messageID {
-			return record.ID, nil
-		}
-	}
-	return "", fmt.Errorf("runtime: pending input for message %q not found", messageID)
 }
 
 func (e *Engine) removePendingInputRecord(recordID string) (PendingInputStatus, int) {
