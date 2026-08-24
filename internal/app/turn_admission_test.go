@@ -252,6 +252,29 @@ func TestAdmitTurnNewSlashStartsGreetingWithFrameworkIdentity(t *testing.T) {
 	}
 }
 
+func TestAdmitTurnNewSlashPreservesSessionChangeWhenGreetingCanceled(t *testing.T) {
+	a, _ := newStubApp(t)
+	oldID := a.Session.ID
+	command, err := a.ExecuteParsedSlashCommand(context.Background(), SlashCommand{Name: SlashNew})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := a.admitNewSlashGreeting(ctx, command, oldID)
+	if result.Kind != TurnAdmissionError || !errors.Is(result.Err, context.Canceled) {
+		t.Fatalf("result = %+v, want canceled greeting admission", result)
+	}
+	current, ok := a.SessionIdentity()
+	if !ok || current.ID == oldID {
+		t.Fatalf("current session = %+v, want committed replacement", current)
+	}
+	if result.SessionChanged == nil || result.SessionChanged.OldID != oldID || result.SessionChanged.NewID != current.ID {
+		t.Fatalf("session change = %+v, want %s -> %s", result.SessionChanged, oldID, current.ID)
+	}
+}
+
 func TestAdmitTurnMapsQueueFull(t *testing.T) {
 	a, _ := newStubApp(t)
 	a.Engine.MaxPendingInputs = 1

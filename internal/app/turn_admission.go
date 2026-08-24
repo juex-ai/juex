@@ -189,17 +189,25 @@ func (a *App) admitNewSlash(ctx context.Context, cmd SlashCommand) TurnAdmission
 		return errorResult(err, nil)
 	}
 
-	admission := admissionResultFromPendingInput(a.Engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{Message: NewSessionGreetingMessage()}))
+	admission := a.admitNewSlashGreeting(ctx, result, oldID)
 	a.finishExclusiveCommand()
+	return admission
+}
+
+func (a *App) admitNewSlashGreeting(ctx context.Context, result SlashCommandResult, oldID string) TurnAdmissionResult {
+	var change *TurnAdmissionSessionChange
+	if current, ok := a.SessionIdentity(); ok && current.ID != oldID {
+		change = &TurnAdmissionSessionChange{OldID: oldID, NewID: current.ID}
+	}
+	admission := admissionResultFromPendingInput(a.Engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{Message: NewSessionGreetingMessage()}))
 	if admission.Kind != TurnAdmissionStarted || admission.Start == nil {
+		admission.SessionChanged = change
 		return admission
 	}
 	start := admission.Start
 
 	admitted := commandResult(result, start)
-	if current, ok := a.SessionIdentity(); ok && current.ID != oldID {
-		admitted.SessionChanged = &TurnAdmissionSessionChange{OldID: oldID, NewID: current.ID}
-	}
+	admitted.SessionChanged = change
 	return admitted
 }
 
