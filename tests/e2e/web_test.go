@@ -682,11 +682,12 @@ func (p *pendingWebProvider) secondHistory() []llm.Message {
 	return append([]llm.Message(nil), p.histories[1]...)
 }
 
-func TestWeb_PendingInputQueuesDuringActiveTurn(t *testing.T) {
+func TestWeb_CentralizedPendingInputLifecycle(t *testing.T) {
 	work := t.TempDir()
 	prov := newPendingWebProvider()
+	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
 	srv := web.NewServer(web.Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      cfg,
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -713,7 +714,17 @@ func TestWeb_PendingInputQueuesDuringActiveTurn(t *testing.T) {
 		start.Body.Close()
 		t.Fatalf("start status = %d body=%s", start.StatusCode, body)
 	}
+	var startedBody struct {
+		TurnID string `json:"turn_id"`
+		Queued bool   `json:"queued"`
+	}
+	if err := json.NewDecoder(start.Body).Decode(&startedBody); err != nil {
+		t.Fatal(err)
+	}
 	start.Body.Close()
+	if startedBody.TurnID == "" || startedBody.Queued {
+		t.Fatalf("started body = %+v, want Framework-owned start action", startedBody)
+	}
 	select {
 	case <-prov.started:
 	case <-time.After(2 * time.Second):
@@ -741,6 +752,11 @@ func TestWeb_PendingInputQueuesDuringActiveTurn(t *testing.T) {
 	if !queuedBody.Queued || queuedBody.PendingCount != 1 {
 		t.Fatalf("queued body = %+v", queuedBody)
 	}
+	queue := juexruntime.NewPendingInputQueue(filepath.Join(cfg.SessionsDir(), c.ID), juexruntime.PendingInputQueueOptions{})
+	assertPendingInputStates(t, queue, map[string]juexruntime.PendingInputState{
+		"hi":        juexruntime.PendingInputStateProcessed,
+		"steer now": juexruntime.PendingInputStatePending,
+	})
 
 	close(prov.release)
 	deadline := time.Now().Add(2 * time.Second)
@@ -750,11 +766,44 @@ func TestWeb_PendingInputQueuesDuringActiveTurn(t *testing.T) {
 			if got := history[len(history)-1].FirstText(); got != "steer now" {
 				t.Fatalf("second provider call last message = %q", got)
 			}
-			return
+			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("pending input never reached second provider call")
+	if len(prov.secondHistory()) == 0 {
+		t.Fatal("pending input never reached second provider call")
+	}
+	waitForWebTranscript(t, ts.URL, c.ID, startedBody.TurnID, 2*time.Second, "second assistant reply", func(messages []webTranscriptMessage) bool {
+		for _, message := range messages {
+			for _, block := range message.Blocks {
+				if block.Type == "text" && block.Text == "second" {
+					return true
+				}
+			}
+		}
+		return false
+	})
+	assertPendingInputStates(t, queue, map[string]juexruntime.PendingInputState{
+		"hi":        juexruntime.PendingInputStateProcessed,
+		"steer now": juexruntime.PendingInputStateProcessed,
+	})
+}
+
+func assertPendingInputStates(t *testing.T, queue *juexruntime.PendingInputQueue, want map[string]juexruntime.PendingInputState) {
+	t.Helper()
+	records, err := queue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]juexruntime.PendingInputState, len(records))
+	for _, record := range records {
+		got[record.Message.FirstText()] = record.State
+	}
+	for input, state := range want {
+		if got[input] != state {
+			t.Fatalf("pending input %q state = %q, want %q; all states=%v", input, got[input], state, got)
+		}
+	}
 }
 
 func TestWeb_PendingInputQueuesDuringObservableTurn(t *testing.T) {
