@@ -95,7 +95,7 @@ func TestSwitchToNewPrimarySessionWaitsForStartupPendingInputRecovery(t *testing
 	}
 }
 
-func TestSwitchToNewPrimarySessionBusyRestoresHistory(t *testing.T) {
+func TestSwitchToNewPrimarySessionBusyKeepsHistory(t *testing.T) {
 	a, _ := newStubApp(t)
 	oldIdentity, ok := a.SessionIdentity()
 	if !ok {
@@ -122,6 +122,190 @@ func TestSwitchToNewPrimarySessionBusyRestoresHistory(t *testing.T) {
 	}
 	if len(history.Sessions) != 1 || history.Sessions[0].ID != oldIdentity.ID {
 		t.Fatalf("history sessions = %+v, want only original session", history.Sessions)
+	}
+}
+
+func TestSwitchToNewPrimarySessionCommitsHistoryWithAppAndRuntime(t *testing.T) {
+	a, _ := newStubApp(t)
+	oldIdentity, ok := a.SessionIdentity()
+	if !ok {
+		t.Fatal("missing initial session")
+	}
+
+	if err := a.SwitchToNewPrimarySession(); err != nil {
+		t.Fatal(err)
+	}
+	newIdentity, ok := a.SessionIdentity()
+	if !ok || newIdentity.ID == oldIdentity.ID {
+		t.Fatalf("replacement identity = %+v, want a new Session", newIdentity)
+	}
+	if got := a.Engine.SessionRuntimeSnapshot().Session.ID; got != newIdentity.ID {
+		t.Fatalf("Engine Session = %q, want committed Session %q", got, newIdentity.ID)
+	}
+	history, err := session.LoadHistory(a.cfg.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history.Active == nil || history.Active.ID != newIdentity.ID {
+		t.Fatalf("history active = %+v, want committed Session %q", history.Active, newIdentity.ID)
+	}
+}
+
+func TestActiveSessionReplacementLockRejectionKeepsOldHistory(t *testing.T) {
+	a, _ := newStubApp(t)
+	oldIdentity, ok := a.SessionIdentity()
+	if !ok {
+		t.Fatal("missing initial session")
+	}
+	lockErr := errors.New("replacement lock rejected")
+	var candidateDir string
+
+	result, err := a.executeActiveSessionReplacement(context.Background(), activeSessionReplacementOptions{
+		prepareCandidate: func(cfg config.Config) (SessionAttachment, *session.Lock, error) {
+			attachment, sessLock, err := prepareAndLockNewPrimarySession(
+				cfg,
+				SessionAttachmentRequest{},
+				func(string, string) (*session.Lock, error) { return nil, lockErr },
+			)
+			if attachment.Session != nil {
+				candidateDir = attachment.Session.Dir
+			}
+			return attachment, sessLock, err
+		},
+	})
+	if !errors.Is(err, lockErr) {
+		t.Fatalf("replacement error = %v, want lock rejection", err)
+	}
+	var phaseErr *sessionReplacementError
+	if !errors.As(err, &phaseErr) || phaseErr.Phase != sessionReplacementPhasePrepare {
+		t.Fatalf("replacement phase error = %#v, want prepare", phaseErr)
+	}
+	if result.New.ID == "" || result.New.Dir != candidateDir {
+		t.Fatalf("replacement result = %+v, want rejected candidate %q", result, candidateDir)
+	}
+	identity, ok := a.SessionIdentity()
+	if !ok || identity.ID != oldIdentity.ID {
+		t.Fatalf("active App Session = %+v, want %q", identity, oldIdentity.ID)
+	}
+	if got := a.Engine.SessionRuntimeSnapshot().Session.ID; got != oldIdentity.ID {
+		t.Fatalf("Engine Session = %q, want %q", got, oldIdentity.ID)
+	}
+	history, loadErr := session.LoadHistory(a.cfg.HistoryPath())
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if history.Active == nil || history.Active.ID != oldIdentity.ID || len(history.Sessions) != 1 {
+		t.Fatalf("history after lock rejection = %+v, want only active %q", history, oldIdentity.ID)
+	}
+	if _, statErr := os.Stat(candidateDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("candidate directory stat error = %v, want not exist", statErr)
+	}
+}
+
+func TestActiveSessionReplacementHistoryCommitFailureRollsBackPublication(t *testing.T) {
+	a, _ := newStubApp(t)
+	oldIdentity, ok := a.SessionIdentity()
+	if !ok {
+		t.Fatal("missing initial session")
+	}
+	commitErr := errors.New("active history commit failed")
+
+	result, err := a.executeActiveSessionReplacement(context.Background(), activeSessionReplacementOptions{
+		commitActive: func(path string, info session.Info) error {
+			if err := session.SetActive(path, info); err != nil {
+				return err
+			}
+			return commitErr
+		},
+	})
+	if !errors.Is(err, commitErr) {
+		t.Fatalf("replacement error = %v, want history commit failure", err)
+	}
+	var phaseErr *sessionReplacementError
+	if !errors.As(err, &phaseErr) || phaseErr.Phase != sessionReplacementPhaseHistoryCommit {
+		t.Fatalf("replacement phase error = %#v, want history_commit", phaseErr)
+	}
+	if result.New.ID == "" || result.New.ID == oldIdentity.ID {
+		t.Fatalf("replacement result = %+v, want distinct rejected candidate", result)
+	}
+	identity, ok := a.SessionIdentity()
+	if !ok || identity.ID != oldIdentity.ID {
+		t.Fatalf("active App Session = %+v, want %q", identity, oldIdentity.ID)
+	}
+	if got := a.Engine.SessionRuntimeSnapshot().Session.ID; got != oldIdentity.ID {
+		t.Fatalf("Engine Session = %q, want %q", got, oldIdentity.ID)
+	}
+	history, loadErr := session.LoadHistory(a.cfg.HistoryPath())
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if history.Active == nil || history.Active.ID != oldIdentity.ID || len(history.Sessions) != 1 {
+		t.Fatalf("history after failed commit = %+v, want only active %q", history, oldIdentity.ID)
+	}
+	if _, statErr := os.Stat(result.New.Dir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("candidate directory stat error = %v, want not exist", statErr)
+	}
+}
+
+func TestActiveSessionReplacementCatalogValidationRejectsCandidate(t *testing.T) {
+	dir := t.TempDir()
+	constructed := 0
+	starts := 0
+	closes := 0
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID:    "openai",
+			APIKey:        "x",
+			Model:         "m",
+			WorkDir:       dir,
+			AgentStateDir: filepath.Join(dir, ".juex"),
+		},
+		Provider:           &stubProvider{},
+		WorkDir:            dir,
+		DisableMCP:         true,
+		disableObservables: true,
+		sessionModuleFactories: []runtimemodule.SessionFactorySpec{{
+			ID:      "replacement-catalog",
+			Enabled: true,
+			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+				constructed++
+				return &replacementCatalogModule{
+					duplicateBuiltin: constructed == 2,
+					starts:           &starts,
+					closes:           &closes,
+				}, nil
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	oldID := a.Session.ID
+
+	result, err := a.executeActiveSessionReplacement(context.Background(), activeSessionReplacementOptions{})
+	if err == nil || !strings.Contains(err.Error(), `tool "read"`) {
+		t.Fatalf("replacement error = %v, want duplicate tool validation", err)
+	}
+	var phaseErr *sessionReplacementError
+	if !errors.As(err, &phaseErr) || phaseErr.Phase != sessionReplacementPhaseBuild {
+		t.Fatalf("replacement phase error = %#v, want build", phaseErr)
+	}
+	if constructed != 2 || starts != 2 || closes != 1 {
+		t.Fatalf("candidate lifecycle = constructed %d, starts %d, closes %d; want 2, 2, 1", constructed, starts, closes)
+	}
+	if got := a.Session.ID; got != oldID {
+		t.Fatalf("App Session = %q, want %q", got, oldID)
+	}
+	history, loadErr := session.LoadHistory(a.cfg.HistoryPath())
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if history.Active == nil || history.Active.ID != oldID || len(history.Sessions) != 1 {
+		t.Fatalf("history after validation rejection = %+v, want only active %q", history, oldID)
+	}
+	if _, statErr := os.Stat(result.New.Dir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("candidate directory stat error = %v, want not exist", statErr)
 	}
 }
 
@@ -237,6 +421,34 @@ func (m *trackedSessionModule) CloseSession(context.Context) error {
 type duplicateSessionToolModule struct {
 	starts *int
 	closes *int
+}
+
+type replacementCatalogModule struct {
+	duplicateBuiltin bool
+	starts           *int
+	closes           *int
+}
+
+func (*replacementCatalogModule) ID() runtimemodule.ID { return "replacement-catalog" }
+
+func (m *replacementCatalogModule) Tools(context.Context, runtimemodule.ToolContext) ([]tools.Tool, error) {
+	if !m.duplicateBuiltin {
+		return nil, nil
+	}
+	return []tools.Tool{{
+		Name:    "read",
+		Handler: func(context.Context, map[string]any) (string, error) { return "duplicate", nil },
+	}}, nil
+}
+
+func (m *replacementCatalogModule) StartSession(context.Context, runtimemodule.SessionContext) error {
+	*m.starts = *m.starts + 1
+	return nil
+}
+
+func (m *replacementCatalogModule) CloseSession(context.Context) error {
+	*m.closes = *m.closes + 1
+	return nil
 }
 
 func (*duplicateSessionToolModule) ID() runtimemodule.ID { return "duplicate-session-tool" }
@@ -665,6 +877,13 @@ func TestSwitchToNewPrimarySessionCancellationStopsSessionStartPolicy(t *testing
 		done <- a.SwitchToNewPrimarySessionContext(ctx)
 	}()
 	<-tracker.replacementStarted
+	historyDuringPolicy, err := session.LoadHistory(a.cfg.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if historyDuringPolicy.Active == nil || historyDuringPolicy.Active.ID != oldID || len(historyDuringPolicy.Sessions) != 1 {
+		t.Fatalf("history during Session-start policy = %+v, want only active %q", historyDuringPolicy, oldID)
+	}
 	cancel()
 
 	select {
@@ -935,7 +1154,12 @@ func TestReplaceSessionPublishesOnlyRestartRecoveredStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.replaceSession(context.Background(), sess, lock); err != nil {
+	_, err = a.executeActiveSessionReplacement(context.Background(), activeSessionReplacementOptions{
+		prepareCandidate: func(config.Config) (SessionAttachment, *session.Lock, error) {
+			return SessionAttachment{Session: sess, LockMode: "test-replace"}, lock, nil
+		},
+	})
+	if err != nil {
 		_ = lock.Close()
 		t.Fatal(err)
 	}

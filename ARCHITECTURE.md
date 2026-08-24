@@ -352,12 +352,12 @@ The Framework lifecycle is:
    the candidate Tool catalog. A startup or catalog failure closes only
    successfully started resources in reverse order and joins cleanup failures
    with the primary error.
-4. Attach and lock a Session. A new Primary attachment may provisionally update
-   persisted active history here; this selection record is distinct from App
-   runtime publication. If its later lock acquisition fails, the candidate and
-   selection may remain for reconciliation. After attachment succeeds,
-   construct, freeze, start, and validate the Session candidate before
-   publishing it to App readers.
+4. Attach and lock a Session. Startup and explicit standalone `new_primary`
+   attachment may update persisted active history as part of attachment. A
+   resident App replacement instead prepares and locks its candidate without
+   changing active history. After attachment succeeds, construct, freeze,
+   start, and validate the Session candidate before publishing it to App
+   readers.
 5. Build one complete Tool registry from the sealed Runtime and Session
    catalogs, then publish the Session, sealed Session set, registry, prompt
    builder, and other Session dependencies together through `runtime.Engine`'s
@@ -1288,19 +1288,15 @@ returns the lock mode (`attach_active`, `new_primary`, `new_side`, or
 `resume`) that the app lifetime must acquire. The policy prefers a valid
 `history.active_id` primary when it still appears in the canonical disk list,
 then other disk-listed primary sessions before creating a new active primary.
-`new_primary` creates the candidate, records it as the provisional persisted
-active selection, and then attempts its single-writer lock under the
-Session-root guard before the caller builds or validates Session Modules. Other
-processes may therefore observe the candidate in history before the current App
-runtime publishes it. If lock acquisition fails, attachment closes the Session
-handle and returns an empty result, but does not delete the candidate or restore
-active history; the caller has no candidate id and returns the lock error. That
-history must be reconciled before another attachment trusts it. After attachment
-succeeds, a later replacement rejection deletes the candidate and reasserts the
-previously resident App Session as the persisted selection. This is not a
-compare-and-swap restore: a selection written by another process after the
-replacement began may be overwritten. A restore failure is joined with the
-original error and also requires history reconciliation.
+The general `new_primary` attachment path creates the candidate, records it as
+the persisted active selection, and then attempts its single-writer lock under
+the Session-root guard. That behavior serves startup and explicit standalone
+attachment, where selecting the new Primary is the requested durable action.
+Resident App replacement uses a narrower internal preparation path: it creates
+and locks the candidate under the same Session-root guard without writing
+history, and retains candidate identity on lock failure so the transaction can
+delete it. Only the replacement coordinator may commit that candidate to active
+history after runtime publication and Session-start policy have succeeded.
 Web startup and MCP
 notification routing use exported app helpers for active-primary records and
 ids instead of duplicating those rules.
@@ -1460,22 +1456,20 @@ and compaction and rejects an active reservation or in-memory pending input.
 Production readers use snapshot methods such as `ActiveContext`,
 `PromptSections`, and `SessionStateStatus`.
 
-`internal/app` owns the wider lifecycle boundary. It builds, validates, and
-starts the candidate Module set and complete Tool registry after attachment has
-provisionally selected the candidate in persisted history but before App runtime
-publication. Existing App readers remain on the old Session during this phase;
-another process that reads history may observe the candidate selection.
-Under the App write lock it installs the Engine bundle, redirects the durable
-event sink and observability recorder, runs Session-start policy, and then
-publishes the App Session, runtime status, chunked-write state, and Session
-lock. A pre-commit failure rolls back the captured Engine checkpoint and old
-event/observability targets before closing candidate resources no longer
-referenced by the Engine. The attachment caller then deletes the candidate and
-reasserts the previously resident App Session in active history. This is not a
-compare-and-swap restore of concurrent history changes. Either rollback or
-history restore failure is joined with the original error; a failed history
-restore leaves persisted selection uncertain, and a failed Engine rollback
-leaves the candidate Module set open because it may still be published.
+`internal/app` owns the wider lifecycle boundary through one narrow Active
+Session replacement coordinator. It prepares and locks the candidate without
+changing active history, then builds, validates, and starts the candidate Module
+set and complete Tool registry while existing App readers remain on the old
+Session. Under the App write lock it captures the exact Engine checkpoint,
+installs the Engine bundle, redirects the durable Event sink and observability
+recorder, and runs Session-start policy. Persisting the candidate in active
+history is the final fallible pre-commit gate; only after it succeeds does the
+coordinator publish the App Session, runtime status, chunked-write state, and
+Session lock before releasing readers. A pre-commit failure restores the Engine
+checkpoint and old Event and observability targets, reconciles history if its
+commit was attempted, and closes and deletes candidate resources only after the
+Engine no longer references them. Rejections retain their typed failure phase;
+rollback or rejection-cleanup failures are joined with the primary error.
 `ReadSession` and
 higher-level App status/context/pending-input/turn methods hold the matching
 read lock, so an old Session and lock cannot close underneath an in-flight
@@ -1496,7 +1490,7 @@ failure cases and exact test names live in
 | Turn admission | `internal/app` classifies transport input and executes start actions; `internal/runtime` owns start-versus-queue and Framework Turn identity, then applies typed input policy | `internal/runtime.PendingInputQueue`, `turn.admitted`, then the Session transcript | App admission results, runtime status, Web, and pending-input observers |
 | Pending input | `internal/runtime` owns receive, durable state, retry/recovery classification, safe-boundary drain, processing, and completion checks | Session-local `pending_input.jsonl` plus the transcript's stable message ids | App follows typed outcomes; the in-memory queue, `pending_input.*` Events, status, Web, and Module observers are projections |
 | Tool execution | `internal/runtime` orders the batch and policies; `internal/tools` owns handler execution; `internal/toolevents` owns payload constructors | `llm.responded`, the complete ordered `tool.requested` set, per-call `tool.running` and input-resolution facts, then one terminal outcome containing the exact Provider-visible Tool Result | Status, Web, logs, and failure-ledger diagnostics consume cataloged Events; raw handler diagnostics do not replace the terminal outcome |
-| Session replacement | `internal/app` owns the candidate transaction and lifetime locks; `internal/runtime` atomically publishes one `SessionRuntimeSnapshot`; `internal/session` owns active-history selection, the single-writer lock, and journals | The provisional candidate active-history selection, candidate Session journals, then the published Engine checkpoint and App Session reference | Another process may observe provisional active history; status replay, observability, chunked-write state, and current App readers switch only under the App lifecycle boundary |
+| Session replacement | `internal/app` owns the candidate transaction and lifetime locks; `internal/runtime` atomically publishes one `SessionRuntimeSnapshot`; `internal/session` owns active-history selection, the single-writer lock, and journals | The prepared candidate journals remain private; active history is the final fallible gate, followed by the App Session reference committed under the same reader boundary | Current App readers see the complete old or new App and Engine bundle; status replay, observability, and old-resource cleanup failures are post-commit diagnostics |
 | Finish and completion | `internal/runtime.turnLifecycle` orders the attempt; `internal/runtime/module` evaluates typed policies and commits only a selected candidate | The assistant response, selected policy-owned state, durable continuation Pending input, and finally `turn.completed` or `turn.errored` | Policy completion observers, continuation observers, status, Web, and logs cannot choose or alter the action |
 
 For a new main input, `PendingInputQueue.StageTurnInput` writes a non-replayable

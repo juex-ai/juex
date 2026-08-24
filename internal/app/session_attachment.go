@@ -49,6 +49,34 @@ func attachAndLockWorkspaceSession(cfg config.Config, req SessionAttachmentReque
 	return attachment, sessLock, err
 }
 
+// prepareAndLockNewPrimarySession creates and locks a replacement candidate
+// without publishing it to active history. The App replacement transaction is
+// the only owner allowed to commit that durable selection.
+//
+// The attachment is retained on lock failure so the transaction can clean up
+// the candidate directory without losing its identity.
+func prepareAndLockNewPrimarySession(cfg config.Config, req SessionAttachmentRequest, acquire sessionLockAcquirer) (SessionAttachment, *session.Lock, error) {
+	var attachment SessionAttachment
+	var sessLock *session.Lock
+	err := session.WithSessionRootGuard(cfg.SessionsDir(), func() error {
+		sess, err := session.NewWithOptions(cfg.SessionsDir(), session.Options{
+			Alias:        req.Alias,
+			Kind:         session.KindPrimary,
+			Active:       true,
+			HistoryPath:  cfg.HistoryPath(),
+			Lazy:         req.Lazy,
+			EventCatalog: eventcatalog.Default(),
+		})
+		if err != nil {
+			return err
+		}
+		attachment = SessionAttachment{Session: sess, LockMode: string(SessionModeNewPrimary)}
+		sessLock, err = acquire(sess.Dir, attachment.LockMode)
+		return err
+	})
+	return attachment, sessLock, err
+}
+
 // AttachWorkspaceSession opens or creates the session requested by CLI/web
 // inputs and returns the lock mode that matches that attachment decision.
 func AttachWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (SessionAttachment, error) {

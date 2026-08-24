@@ -2,12 +2,14 @@ package e2e
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
+	"github.com/juex-ai/juex/internal/session"
 )
 
 func TestModuleLifecycle_AllCompiledModulesDisabled(t *testing.T) {
@@ -73,8 +75,9 @@ func TestModuleLifecycle_PrimarySessionReplacementPublishesNewScopedSet(t *testi
 		t.Skip("e2e is slow")
 	}
 	work := t.TempDir()
+	cfg := config.Config{WorkDir: work, AgentStateDir: filepath.Join(work, ".juex")}
 	application, err := app.New(app.Options{
-		Config:     config.Config{WorkDir: work},
+		Config:     cfg,
 		Provider:   &bareScriptProvider{},
 		WorkDir:    work,
 		DisableMCP: true,
@@ -104,6 +107,13 @@ func TestModuleLifecycle_PrimarySessionReplacementPublishesNewScopedSet(t *testi
 	}
 	if after.Session.ID == before.Session.ID || after.Modules == before.Modules {
 		t.Fatalf("replacement reused old Session set: before=%s after=%s", before.Session.ID, after.Session.ID)
+	}
+	history, err := session.LoadHistory(cfg.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history.Active == nil || history.Active.ID != after.Session.ID {
+		t.Fatalf("active history = %+v, want committed replacement %q", history.Active, after.Session.ID)
 	}
 	if got := after.Modules.Descriptors(); !equalModuleDescriptors(got, beforeDescriptors) {
 		t.Fatalf("replacement descriptors = %#v, want %#v", got, beforeDescriptors)

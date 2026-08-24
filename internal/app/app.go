@@ -739,194 +739,24 @@ func (a *App) SwitchToNewPrimarySession() error {
 }
 
 func (a *App) SwitchToNewPrimarySessionContext(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
-		return err
-	}
-	a.sessionHandoffMu.Lock()
-	defer a.sessionHandoffMu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	a.lifecycleMu.RLock()
-	defer a.lifecycleMu.RUnlock()
-	a.sessionReplaceMu.Lock()
-	defer a.sessionReplaceMu.Unlock()
-	var oldInfo session.Info
-	err := a.ReadSession(func(sess *session.Session) error {
-		oldInfo = sess.Info()
-		return nil
-	})
+	result, err := a.executeActiveSessionReplacement(ctx, activeSessionReplacementOptions{})
 	if err != nil {
-		return fmt.Errorf("app: nil session")
-	}
-	if oldInfo.Kind == session.KindSide {
-		return fmt.Errorf("side sessions cannot switch workspace active session")
-	}
-	replace := func() error {
-		attachment, sessLock, err := AttachAndLockWorkspaceSession(a.cfg, SessionAttachmentRequest{Mode: SessionModeNewPrimary})
-		if err != nil {
-			return err
-		}
-		sess := attachment.Session
-		if err := a.replaceSession(ctx, sess, sessLock); err != nil {
-			_ = sessLock.Close()
-			_ = sess.Close()
-			cleanupErr := DeleteSession(a.cfg, sess.ID, SessionDeleteOptions{AllowMissingSession: true})
-			restoreErr := session.SetActive(a.cfg.HistoryPath(), oldInfo)
-			return errors.Join(err, cleanupErr, restoreErr)
-		}
-		return nil
-	}
-	if a.sideSessions != nil {
-		return a.sideSessions.replacePrimary(ctx, replace)
-	}
-	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return replace()
+	a.reportSessionReplacementDiagnostics(result)
+	return nil
 }
 
-func (a *App) replaceSession(ctx context.Context, sess *session.Session, sessLock *session.Lock) error {
-	if ctx == nil {
-		ctx = context.Background()
+func (a *App) reportSessionReplacementDiagnostics(result sessionReplacementResult) {
+	if result.StatusErr != nil {
+		fmt.Fprintf(a.stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", result.StatusErr)
 	}
-	nextModules, err := buildSessionModules(
-		ctx,
-		a.cfg,
-		a.sessionModuleFactories,
-		a.runtimeModuleContext,
-		sess,
-		a.Engine,
-		a.cfg.WorkDir,
-		promptcontext.ShellProfileFromConfig(a.cfg.Shell),
-		a.shellSessions,
-		sessionModuleOptions{
-			hookRunner:               a.hookRunner,
-			hookBaseRequest:          a.hookBaseRequest,
-			goalContinuation:         true,
-			goalContinuationDeferrer: a.sideSessions,
-		},
-	)
-	if err != nil {
-		return err
+	if result.ObservabilityErr != nil {
+		fmt.Fprintf(a.stderr, "juex: warning: session observability after committed replacement: %v\n", result.ObservabilityErr)
 	}
-	if err := validateSessionModuleContext(ctx, a.runtimeModules, nextModules, a.runtimeModuleContext, sess); err != nil {
-		return errors.Join(err, nextModules.CloseSession(context.Background()))
+	if result.CleanupErr != nil {
+		fmt.Fprintf(a.stderr, "juex: warning: committed session replacement cleanup: %v\n", result.CleanupErr)
 	}
-	var nextTools *tools.Registry
-	var oldRuntime runtime.SessionRuntimeSnapshot
-	var oldRuntimeCheckpoint runtime.SessionRuntimeCheckpoint
-	if a.Engine != nil {
-		oldRuntimeCheckpoint = a.Engine.CaptureSessionRuntimeCheckpoint()
-		oldRuntime = oldRuntimeCheckpoint.Snapshot()
-		nextTools, err = runtimemodule.BuildToolRegistry(
-			tools.RegistryOptions{DefaultTimeoutSeconds: durationSeconds(a.cfg.RuntimeLimits().ToolTimeout)},
-			a.runtimeModules,
-			nextModules,
-		)
-		if err != nil {
-			return errors.Join(err, nextModules.CloseSession(context.Background()))
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return errors.Join(err, nextModules.CloseSession(context.Background()))
-	}
-
-	a.sessionMu.Lock()
-	if a.Engine != nil {
-		if err := a.Engine.ReplaceSessionRuntimeBundle(sess, runtime.SessionRuntimeReplacement{Modules: nextModules, Tools: nextTools}); err != nil {
-			a.sessionMu.Unlock()
-			return errors.Join(err, nextModules.CloseSession(context.Background()))
-		}
-	}
-	if a.eventSink != nil {
-		a.eventSink.SetJournal(sess)
-	}
-	oldLock := a.sessionLock
-	oldSession := a.sessionResource
-	observabilityErr := a.detachObservability()
-	observabilityErr = errors.Join(observabilityErr, a.attachObservability(sess))
-	rollbackReplacement := func(cause error) error {
-		var rollbackErr error
-		runtimeRestored := a.Engine == nil
-		if err := a.detachObservability(); err != nil {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore observability: detach replacement: %w", err))
-		}
-		if a.eventSink != nil {
-			a.eventSink.SetJournal(oldRuntime.Session)
-		}
-		if a.Engine != nil {
-			err := a.Engine.RestoreSessionRuntimeCheckpoint(oldRuntimeCheckpoint)
-			if err != nil {
-				rollbackErr = errors.Join(rollbackErr, err)
-			} else {
-				runtimeRestored = true
-			}
-		}
-		if err := a.attachObservability(oldSession); err != nil {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore observability: attach previous session: %w", err))
-		}
-		a.sessionMu.Unlock()
-		if runtimeRestored {
-			rollbackErr = errors.Join(rollbackErr, nextModules.CloseSession(context.Background()))
-		}
-		if rollbackErr != nil {
-			return errors.Join(cause, fmt.Errorf("app: roll back rejected session replacement: %w", rollbackErr))
-		}
-		return cause
-	}
-	if a.Engine != nil {
-		if err := a.Engine.RunSessionStartPolicies(ctx); err != nil {
-			return rollbackReplacement(err)
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return rollbackReplacement(err)
-	}
-
-	a.Session = sess
-	a.sessionLock = sessLock
-	a.sessionResource = sess
-	if a.chunkedWrites != nil {
-		a.chunkedWrites.RestoreActiveFromHistory(sess.History)
-	}
-	if a.Status != nil {
-		err := a.Status.ResetFromReplayWithRestartRecovery(
-			runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput),
-			func(visit func(events.Event)) error {
-				return session.ReplayEventsWithCatalog(sess.Dir, a.eventCatalog, visit)
-			},
-		)
-		if err != nil {
-			fmt.Fprintf(a.stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", err)
-		}
-	}
-	if observabilityErr != nil {
-		// Recorder failures do not reject an otherwise committed replacement.
-		fmt.Fprintf(a.stderr, "juex: warning: session observability after committed replacement: %v\n", observabilityErr)
-	}
-	a.sessionMu.Unlock()
-
-	var cleanupErr error
-	if oldRuntime.Modules != nil {
-		cleanupErr = errors.Join(cleanupErr, oldRuntime.Modules.CloseSession(context.Background()))
-	}
-	if oldLock != nil {
-		cleanupErr = errors.Join(cleanupErr, oldLock.Close())
-	}
-	if oldSession != nil {
-		cleanupErr = errors.Join(cleanupErr, oldSession.Close())
-	}
-	if cleanupErr != nil {
-		fmt.Fprintf(a.stderr, "juex: warning: committed session replacement cleanup: %v\n", cleanupErr)
-	}
-	return nil
 }
 
 func (a *App) closeActiveSessionResources() error {
