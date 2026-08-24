@@ -136,6 +136,12 @@ func sameConfigPathSpelling(left, right string) (bool, error) {
 	if err != nil || !sameParent {
 		return false, err
 	}
+	if leftBase == rightBase {
+		return true, nil
+	}
+	if !strings.EqualFold(leftBase, rightBase) {
+		return false, nil
+	}
 	leftName, err := filesystemEntryName(leftParent, leftBase)
 	if err != nil {
 		return false, err
@@ -162,7 +168,7 @@ func canonicalConfigPathParts(path string) (string, string, error) {
 func filesystemEntryName(parent, base string) (string, error) {
 	entries, err := os.ReadDir(parent)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
 			return base, nil
 		}
 		return "", err
@@ -183,7 +189,7 @@ func filesystemEntryName(parent, base string) (string, error) {
 		if !strings.EqualFold(entry.Name(), base) {
 			continue
 		}
-		entryInfo, err := entry.Info()
+		entryInfo, err := os.Stat(filepath.Join(parent, entry.Name()))
 		if err != nil {
 			return "", err
 		}

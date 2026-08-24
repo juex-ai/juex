@@ -627,6 +627,72 @@ func TestExplicitConfigMatchesHomePathWithFilesystemCaseSemantics(t *testing.T) 
 	}
 }
 
+func TestExplicitConfigMatchesCaseVariantOfSymlinkedHomePath(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	defaultHomeDir := filepath.Join(userHome, ".juex")
+	defaultHomePath := filepath.Join(defaultHomeDir, "juex.yaml")
+	targetPath := filepath.Join(t.TempDir(), "target.yaml")
+	writeTextFile(t, targetPath, "imports:\n  - source: imported.yaml\n")
+	writeTextFile(t, filepath.Join(defaultHomeDir, "imported.yaml"), "runtime:\n  tool_timeout: 11s\n")
+	if err := os.MkdirAll(defaultHomeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetPath, defaultHomePath); err != nil {
+		t.Skipf("create symlinked Home config: %v", err)
+	}
+	caseVariantHomePath := filepath.Join(defaultHomeDir, "JUEX.YAML")
+	if _, err := os.Stat(caseVariantHomePath); err != nil {
+		if os.IsNotExist(err) {
+			t.Skip("filesystem is case-sensitive")
+		}
+		t.Fatal(err)
+	}
+
+	workDir := t.TempDir()
+	workspaceDir := filepath.Join(workDir, ".juex")
+	workspacePath := filepath.Join(workspaceDir, "juex.yaml")
+	writeTextFile(t, filepath.Join(workspaceDir, "imported.yaml"), "runtime:\n  tool_timeout: 33s\n")
+	if err := os.Link(targetPath, workspacePath); err != nil {
+		t.Skipf("create same-file workspace config: %v", err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{
+		WorkDir:    workDir,
+		ConfigPath: caseVariantHomePath,
+		AgentState: AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ToolTimeout != 11*time.Second {
+		t.Fatalf("tool timeout = %s, want case-variant symlinked Home import", cfg.ToolTimeout)
+	}
+}
+
+func TestSameConfigPathSpellingDoesNotRequireDirectoryListPermission(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permissions are required")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "juex.yaml")
+	writeTextFile(t, path, "runtime:\n  tool_timeout: 11s\n")
+	if err := os.Chmod(dir, 0o111); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if _, err := os.ReadFile(path); err != nil {
+		t.Skipf("known file is not readable through execute-only directory: %v", err)
+	}
+
+	same, err := sameConfigPathSpelling(path, path)
+	if err != nil {
+		t.Fatalf("sameConfigPathSpelling() error = %v", err)
+	}
+	if !same {
+		t.Fatal("sameConfigPathSpelling() = false, want exact path match")
+	}
+}
+
 func TestConfigImportsTreatColonContainingRelativeFilenameAsLocal(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows filenames cannot contain colons")
