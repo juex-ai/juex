@@ -221,12 +221,13 @@ domain boundary.
 5. Persisting the candidate as the Active Session is the final fallible
    pre-commit gate. The commit compares against the resident Session. If a
    write reports failure after replacement, the transaction restores the
-   runtime and exact previous history before releasing the history lock, so an
-   explicit selection cannot interleave with reconciliation, including a
-   same-ID reactivation. Candidate cleanup likewise deletes only a Session that
-   is not selected; any selection made after reconciliation remains
-   authoritative. History is never used as provisional publication by this App
-   replacement path.
+   runtime and exact previous history before releasing the process-owned
+   history lock, so elapsed time cannot make that lock stealable and an explicit
+   selection cannot interleave with reconciliation, including a same-ID
+   reactivation. Candidate cleanup likewise deletes only a Session that is not
+   selected; any selection made after reconciliation remains authoritative.
+   History is never used as provisional publication by this App replacement
+   path.
 6. After the history gate succeeds, the transaction publishes the App Session,
    lock, status, and chunked-write state before releasing readers. Readers
    therefore observe either the complete old App and Engine state or the

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/juex-ai/juex/internal/homestore"
 )
@@ -19,10 +18,6 @@ const (
 )
 
 var (
-	historyLockTimeout    = 35 * time.Second
-	historyLockStaleAfter = 30 * time.Second
-	historyLockPoll       = 10 * time.Millisecond
-
 	// ErrCannotActivateSide is returned when a caller tries to make a side
 	// session the workspace active session.
 	ErrCannotActivateSide = errors.New("session: side sessions cannot become active")
@@ -790,26 +785,12 @@ func withHistoryLock(path string, fn func() error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	deadline := time.Now().Add(historyLockTimeout)
-	for {
-		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-		if err == nil {
-			f.Close()
-			defer func() { _ = os.Remove(lockPath) }()
-			return fn()
-		}
-		if !errors.Is(err, os.ErrExist) && !errors.Is(err, os.ErrPermission) {
-			return err
-		}
-		if st, statErr := os.Stat(lockPath); statErr == nil && time.Since(st.ModTime()) > historyLockStaleAfter {
-			_ = os.Remove(lockPath)
-			continue
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("session: timed out waiting for history lock %s", lockPath)
-		}
-		time.Sleep(historyLockPoll)
+	guard, err := acquireLockGuard(lockPath)
+	if err != nil {
+		return err
 	}
+	defer func() { _ = guard.Close() }()
+	return fn()
 }
 
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
