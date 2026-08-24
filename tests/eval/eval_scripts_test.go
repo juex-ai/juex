@@ -19,7 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestCIWorkflowSerializesWindowsRacePackages(t *testing.T) {
+func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 	root, err := findRepoRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -47,6 +47,17 @@ func TestCIWorkflowSerializesWindowsRacePackages(t *testing.T) {
 		condition string
 		command   string
 	}{
+		"Build Juex evaluator binary": {
+			command: strings.Join([]string{
+				"set -euo pipefail",
+				`juex_bin="$PWD/.tmp/ci-juex$(go env GOEXE)"`,
+				`go build -o "$juex_bin" ./cmd/juex`,
+				`if [[ "$(go env GOOS)" == "windows" ]]; then`,
+				`  juex_bin="$(cygpath -w "$juex_bin")"`,
+				"fi",
+				`printf 'JUEX_BIN=%s\n' "$juex_bin" >> "$GITHUB_ENV"`,
+			}, "\n"),
+		},
 		"Run Go race tests": {
 			condition: "matrix.os != 'windows-latest'",
 			command:   "go test ./... -race -count=1",
@@ -56,7 +67,14 @@ func TestCIWorkflowSerializesWindowsRacePackages(t *testing.T) {
 			command:   "go test ./... -race -count=1 -p=1",
 		},
 	}
-	for _, step := range workflow.Jobs.Test.Steps {
+	buildAt, firstRaceAt := -1, -1
+	for index, step := range workflow.Jobs.Test.Steps {
+		if step.Name == "Build Juex evaluator binary" {
+			buildAt = index
+		}
+		if strings.HasPrefix(step.Name, "Run Go race tests") && firstRaceAt < 0 {
+			firstRaceAt = index
+		}
 		expectation, ok := want[step.Name]
 		if !ok {
 			continue
@@ -68,6 +86,9 @@ func TestCIWorkflowSerializesWindowsRacePackages(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("missing CI race steps: %#v", want)
+	}
+	if buildAt < 0 || firstRaceAt < 0 || buildAt >= firstRaceAt {
+		t.Fatalf("Juex evaluator build step index = %d, first race step index = %d", buildAt, firstRaceAt)
 	}
 }
 
