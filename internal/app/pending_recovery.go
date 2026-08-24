@@ -88,8 +88,12 @@ func (a *App) deliverExternalInputLockedWithStart(
 		return externalInputDelivery{RecordID: recordID, Queued: true, Retry: runtime.PendingInputRetryAfterRecovery}, err
 	}
 	delivery, err := a.resumePersistedInputLockedWithStart(ctx, recordID, onStarted)
-	if handoff && shouldRetryPersistedInputHandoff(delivery, err) {
+	if delivery.RecordID == "" {
+		delivery.RecordID = recordID
+	}
+	if handoff && shouldStartPersistedInputHandoff(delivery, err) {
 		a.handoffPersistedInputAfterRecovery(recordID, sessionLease)
+		delivery.Queued = true
 	}
 	return delivery, err
 }
@@ -407,6 +411,16 @@ func (a *App) handoffPersistedInputAfterRecovery(
 
 func shouldRetryPersistedInputHandoff(delivery externalInputDelivery, err error) bool {
 	return delivery.Retry != runtime.PendingInputNoRetry && err != nil
+}
+
+func shouldStartPersistedInputHandoff(delivery externalInputDelivery, err error) bool {
+	if delivery.RecordID == "" || delivery.Delivered || err == nil {
+		return false
+	}
+	if shouldRetryPersistedInputHandoff(delivery, err) {
+		return true
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (a *App) waitPendingInputRecovery() error {

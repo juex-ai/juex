@@ -465,6 +465,80 @@ func TestAppExternalDeliveryTransfersToAppAfterRecoveryWaitTimeout(t *testing.T)
 	}
 }
 
+func TestAppExternalDeliveryHandsOffAcceptedInputWhenResumeIsCanceled(t *testing.T) {
+	dir := t.TempDir()
+	provider := &recoveryProvider{}
+	a, err := New(recoveryAppOptions(dir, provider))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+
+	a.turnAdmission.transitionMu.Lock()
+	transitionLocked := true
+	defer func() {
+		if transitionLocked {
+			a.turnAdmission.transitionMu.Unlock()
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	record := testObservationRecord("obs-canceled-before-resume")
+	type deliveryResult struct {
+		outcome observable.DeliveryOutcome
+		err     error
+	}
+	done := make(chan deliveryResult, 1)
+	go func() {
+		outcome, err := a.DeliverObservation(ctx, record)
+		done <- deliveryResult{outcome: outcome, err: err}
+	}()
+
+	recordID := observationPendingInputID(record)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		pending, ok, stateErr := a.Engine.PersistedPendingMessage(recordID)
+		if stateErr != nil {
+			t.Fatal(stateErr)
+		}
+		if ok && pending.State == runtime.PendingInputStatePending {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("external input was not persisted before resume cancellation")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	a.turnAdmission.transitionMu.Unlock()
+	transitionLocked = false
+
+	delivery := <-done
+	if !errors.Is(delivery.err, context.Canceled) {
+		t.Fatalf("DeliverObservation error = %v, want context.Canceled", delivery.err)
+	}
+	if delivery.outcome.State != observable.ObservationStateQueued || delivery.outcome.PendingInputID != recordID {
+		t.Fatalf("delivery outcome = %+v, want queued durable input %q", delivery.outcome, recordID)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		calls, _ := provider.snapshot()
+		if calls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("provider calls = %d, want App-owned handoff after caller cancellation", calls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pending, ok, stateErr := a.Engine.PersistedPendingMessage(recordID)
+	if stateErr != nil {
+		t.Fatal(stateErr)
+	}
+	if !ok || pending.State != runtime.PendingInputStateProcessed || !a.Session.HasMessageID(pending.MessageID) {
+		t.Fatalf("pending after canceled-delivery handoff = %+v ok=%v", pending, ok)
+	}
+}
+
 func TestAppExternalDeliveryRetriesDurableInputAfterLiveQueueFull(t *testing.T) {
 	dir := t.TempDir()
 	provider := newBlockingAppProvider()
