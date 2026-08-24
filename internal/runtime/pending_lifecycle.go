@@ -235,7 +235,7 @@ func (e *Engine) receiveNewPendingInput(ctx context.Context, message llm.Message
 func (e *Engine) receivePersistedPendingInput(ctx context.Context, recordID string) (PendingInputResult, error) {
 	record, ok, err := e.PersistedPendingMessage(recordID)
 	if err != nil {
-		return PendingInputResult{}, err
+		return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage}, err
 	}
 	if !ok {
 		return PendingInputResult{}, fmt.Errorf("runtime: persisted input %q not found", recordID)

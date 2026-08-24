@@ -86,11 +86,11 @@ func (a *App) deliverExternalInputLocked(
 // App owns only the Session lease and execution of a returned start action.
 func (a *App) resumePersistedInputLocked(ctx context.Context, recordID string) (externalInputDelivery, error) {
 	result, receiveErr := a.Engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{RecordID: recordID})
-	var runErr error
-	if result.Disposition == runtime.PendingInputStarted {
-		_, runErr = a.Engine.TurnMessageWithID(ctx, result.Message, result.TurnID)
+	if result.Disposition != runtime.PendingInputStarted {
+		return externalInputDeliveryFromRuntime(result), receiveErr
 	}
-	resolved, err := a.Engine.ResolvePendingInput(recordID, errors.Join(receiveErr, runErr))
+	_, runErr := a.Engine.TurnMessageWithID(ctx, result.Message, result.TurnID)
+	resolved, err := a.Engine.ResolvePendingInput(recordID, runErr)
 	return externalInputDeliveryFromRuntime(resolved), err
 }
 

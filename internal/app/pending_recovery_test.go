@@ -554,6 +554,37 @@ func TestAppExternalDeliveryRetriesReplayableAdmissionCommitFailure(t *testing.T
 	}
 }
 
+func TestResumePersistedInputPreservesAdmissionRetry(t *testing.T) {
+	dir := t.TempDir()
+	a, err := New(recoveryAppOptions(dir, &recoveryProvider{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.CloseAndWait() })
+	record, err := a.Engine.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "preserve admission retry"),
+		runtime.PendingInputOptions{ID: "preserve-admission-retry", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("injected turn admission failure")
+	a.Bus.SetCommitter(&failOnceEventCommitter{
+		delegate:  a.eventSink,
+		eventType: runtime.TurnAdmittedType,
+		err:       wantErr,
+	})
+
+	delivery, err := a.resumePersistedInputLocked(context.Background(), record.ID)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("resumePersistedInputLocked() error = %v, want %v", err, wantErr)
+	}
+	if delivery.RecordID != record.ID || !delivery.Queued || delivery.Retry != runtime.PendingInputRetryAdmission {
+		t.Fatalf("resumePersistedInputLocked() delivery = %+v, want bounded admission retry", delivery)
+	}
+}
+
 func TestAppStartupRecoveryRetriesReplayableAdmissionFailure(t *testing.T) {
 	dir := t.TempDir()
 	provider := &recoveryProvider{}

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -133,6 +134,39 @@ func TestReceivePendingInputQueuesBehindActiveTurn(t *testing.T) {
 	record := pendingLifecycleTestRecord(t, eng, queued.RecordID)
 	if record.ID == "" || record.MessageID == "" || record.Message.FirstText() != "second" || record.State != PendingInputStatePending {
 		t.Fatalf("durable queued record = %+v", record)
+	}
+}
+
+func TestReceivePendingInputReturnsStorageRetryWhenPersistedRecordCannotBeRead(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	record, err := eng.PersistPendingMessageWithOptions(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "retry journal read"),
+		PendingInputOptions{ID: "journal-read-retry", TTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := eng.currentPendingInputQueue()
+	pendingPath := queue.path
+	backupPath := pendingPath + ".before-read-failure"
+	if err := os.Rename(pendingPath, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(pendingPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(pendingPath)
+		_ = os.Rename(backupPath, pendingPath)
+	})
+
+	result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{RecordID: record.ID})
+	if err == nil {
+		t.Fatal("ReceivePendingInput() error = nil, want journal read failure")
+	}
+	if result.RecordID != record.ID || result.Retry != PendingInputRetryAfterStorage {
+		t.Fatalf("ReceivePendingInput() result = %+v, want record %q with storage retry", result, record.ID)
 	}
 }
 
