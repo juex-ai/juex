@@ -3217,9 +3217,9 @@ doctor` exposes the selected source, version, and path.
     runs `go test ./... -race -count=1`. Generic command execution behavior runs on
     Windows; Unix process-group timeout coverage lives in `!windows` test files.
 - `integration.yml` — `workflow_dispatch` only. Runs an Anthropic/OpenAI
-  matrix, hydrates one `$JUEX_HOME/juex.yaml` from repo secrets, exports that
-  path through `JUEX_PROVIDER_CONFIG`, then runs `make integration`. Required
-  secrets:
+  matrix, writes `$RUNNER_TEMP/juex-integration-<provider>.yaml` from repo
+  secrets, exports that path through `JUEX_PROVIDER_CONFIG`, then runs `make
+  integration`. Required secrets:
 
   ```
   PROVIDER_API_PROTOCOL_ANTHROPIC
