@@ -2675,9 +2675,12 @@ actual attempt refits the bounded summary request to that candidate's context
 window and checkpoints a fresh Request Epoch. Request fitting lowers the
 existing block serialization cap and removes the oldest complete assistant Tool
 Call plus matching user-role Tool Result batches atomically until the estimate
-fits. It preserves every user-authored message and never changes the durable
-transcript or compact selection metadata. If the irreducible request still
-exceeds a candidate's summary-request envelope, the runtime skips that candidate
+fits. The synthesized summary message must also fit the Request Epoch's exact
+derived-message snapshot limit; the same Tool-exchange reduction runs against
+its final stable-ID JSON encoding before Provider dispatch. It preserves every
+user-authored message and never changes the durable transcript or compact
+selection metadata. If the irreducible request still exceeds a candidate's
+summary-request envelope or snapshot limit, the runtime skips that candidate
 without dispatching a Provider request. Generic provider failures advance
 directly through the chain. The first candidate anywhere in the chain that
 returns no text or a max-token-truncated summary receives one semantic retry

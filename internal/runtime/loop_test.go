@@ -2484,6 +2484,57 @@ func TestTurn_OverflowCompactsAndRetriesOnce(t *testing.T) {
 	}
 }
 
+func TestTurn_LaterIterationOverflowCompactsAndRetriesOnce(t *testing.T) {
+	prov := &scriptedCompactionProvider{
+		name: "later-overflow",
+		attempts: []scriptedCompactionAttempt{
+			{response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+				Type: llm.BlockToolUse, ToolUseID: "call-once", ToolName: "counted",
+			}}}, StopReason: llm.StopToolUse}},
+			{err: errors.New("context_length_exceeded: later provider iteration")},
+			{response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "summary"), StopReason: llm.StopEndTurn}},
+			{response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "after retry"), StopReason: llm.StopEndTurn}},
+		},
+	}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 10_000
+	eng.Compaction = DefaultCompactionPolicy()
+	var toolCalls atomic.Int32
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "counted",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			toolCalls.Add(1)
+			return "tool result", nil
+		},
+	})
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := eng.Turn(context.Background(), "latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "after retry" {
+		t.Fatalf("out = %q, want after retry", out)
+	}
+	if prov.calls != 4 {
+		t.Fatalf("provider calls = %d, want tool iteration + overflow + compact + retry", prov.calls)
+	}
+	if got := toolCalls.Load(); got != 1 {
+		t.Fatalf("tool calls = %d, want exactly one", got)
+	}
+	compactMarkers := 0
+	for _, message := range eng.Session.History {
+		if message.Kind == llm.MessageKindCompact {
+			compactMarkers++
+		}
+	}
+	if compactMarkers != 1 {
+		t.Fatalf("compact markers = %d, want one", compactMarkers)
+	}
+}
+
 func TestTurn_SecondOverflowDoesNotRetryForPendingInput(t *testing.T) {
 	var eng *Engine
 	var enqueueErr error

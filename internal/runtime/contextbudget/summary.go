@@ -2,12 +2,20 @@ package contextbudget
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/llm"
 )
+
+// ErrCompactionSummaryMessageCannotFit reports that removable Tool exchanges
+// were exhausted before all request constraints could be satisfied.
+var ErrCompactionSummaryMessageCannotFit = errors.New("compaction summary message cannot fit immutable content")
+
+// SummaryMessageConstraint validates the final Provider-visible summary message.
+type SummaryMessageConstraint func(llm.Message) error
 
 type SummaryState struct {
 	Goal  *SummaryGoal
@@ -22,6 +30,43 @@ type SummaryGoal struct {
 }
 
 func BuildCompactionSummaryRequest(base string, previous llm.Message, input []llm.Message, state SummaryState, policy Policy, instructions string) (string, []llm.Message) {
+	sys := buildCompactionSummarySystem(base, instructions)
+	omitted := 0
+	maxChars := policy.ToolResultMaxChars
+	if limit := CompactionSummaryRequestTokenLimit(policy); limit > 0 {
+		input, omitted, maxChars = FitCompactionSummaryInput(sys, previous, input, state, policy, limit)
+	}
+	body := BuildCompactionSummaryBody(previous, input, state, maxChars, omitted)
+	return sys, []llm.Message{llm.TextMessage(llm.RoleUser, body)}
+}
+
+// BuildCompactionSummaryRequestWithConstraint fits both the token budget and an
+// additional caller-owned message constraint before returning Provider input.
+func BuildCompactionSummaryRequestWithConstraint(base string, previous llm.Message, input []llm.Message, state SummaryState, policy Policy, instructions string, constraint SummaryMessageConstraint) (string, []llm.Message, error) {
+	sys := buildCompactionSummarySystem(base, instructions)
+	input, omitted, maxChars, err := FitCompactionSummaryInputWithConstraint(
+		sys,
+		previous,
+		input,
+		state,
+		policy,
+		CompactionSummaryRequestTokenLimit(policy),
+		constraint,
+	)
+	if err != nil {
+		return sys, nil, err
+	}
+	body := BuildCompactionSummaryBody(previous, input, state, maxChars, omitted)
+	message := llm.TextMessage(llm.RoleUser, body)
+	if constraint != nil {
+		if err := constraint(message); err != nil {
+			return sys, nil, fmt.Errorf("%w: %v", ErrCompactionSummaryMessageCannotFit, err)
+		}
+	}
+	return sys, []llm.Message{message}, nil
+}
+
+func buildCompactionSummarySystem(base, instructions string) string {
 	sys := strings.TrimSpace(base + "\n\n" + `You are preparing a compact summary for continuing this conversation.
 
 Return only a structured summary with these exact headings:
@@ -41,14 +86,7 @@ Preserve exact file paths, commands, error strings, identifiers, decisions, and 
 	if focus := strings.TrimSpace(instructions); focus != "" {
 		sys += "\n\nCompact Instructions:\n" + focus
 	}
-
-	omitted := 0
-	maxChars := policy.ToolResultMaxChars
-	if limit := CompactionSummaryRequestTokenLimit(policy); limit > 0 {
-		input, omitted, maxChars = FitCompactionSummaryInput(sys, previous, input, state, policy, limit)
-	}
-	body := BuildCompactionSummaryBody(previous, input, state, maxChars, omitted)
-	return sys, []llm.Message{llm.TextMessage(llm.RoleUser, body)}
+	return sys
 }
 
 func BuildCompactionSummaryBody(previous llm.Message, input []llm.Message, state SummaryState, maxChars, omitted int) string {
@@ -112,33 +150,63 @@ func CompactionSummaryRequestTokenLimit(policy Policy) int {
 }
 
 func FitCompactionSummaryInput(sys string, previous llm.Message, input []llm.Message, state SummaryState, policy Policy, limit int) ([]llm.Message, int, int) {
+	selected, omitted, maxChars, _ := fitCompactionSummaryInput(sys, previous, input, state, policy, limit, nil)
+	return selected, omitted, maxChars
+}
+
+// FitCompactionSummaryInputWithConstraint preserves immutable summary content
+// while tightening Tool serialization and removing only complete Tool exchanges.
+func FitCompactionSummaryInputWithConstraint(sys string, previous llm.Message, input []llm.Message, state SummaryState, policy Policy, limit int, constraint SummaryMessageConstraint) ([]llm.Message, int, int, error) {
+	return fitCompactionSummaryInput(sys, previous, input, state, policy, limit, constraint)
+}
+
+func fitCompactionSummaryInput(sys string, previous llm.Message, input []llm.Message, state SummaryState, policy Policy, limit int, constraint SummaryMessageConstraint) ([]llm.Message, int, int, error) {
 	maxChars := policy.ToolResultMaxChars
 	if maxChars <= 0 {
 		maxChars = 2000
 	}
 	exchanges := closedToolExchangeStarts(input)
+	var lastConstraintErr error
 	for _, capChars := range compactionSummaryCaps(maxChars) {
-		if CompactionSummaryFits(sys, previous, input, state, capChars, 0, limit) {
-			return input, 0, capChars
+		fits, constraintErr := compactionSummaryFitsWithConstraint(sys, previous, input, state, capChars, 0, limit, constraint)
+		if fits {
+			return input, 0, capChars, nil
+		}
+		if constraintErr != nil {
+			lastConstraintErr = constraintErr
 		}
 		best := -1
 		for low, high := 1, len(exchanges); low <= high; {
 			count := low + (high-low)/2
 			trimmed := omitOldestClosedToolExchanges(input, exchanges, count)
 			omitted := count * 2
-			if CompactionSummaryFits(sys, previous, trimmed, state, capChars, omitted, limit) {
+			fits, constraintErr := compactionSummaryFitsWithConstraint(sys, previous, trimmed, state, capChars, omitted, limit, constraint)
+			if fits {
 				best = count
 				high = count - 1
 			} else {
+				if constraintErr != nil {
+					lastConstraintErr = constraintErr
+				}
 				low = count + 1
 			}
 		}
 		if best >= 0 {
-			return omitOldestClosedToolExchanges(input, exchanges, best), best * 2, capChars
+			return omitOldestClosedToolExchanges(input, exchanges, best), best * 2, capChars, nil
 		}
 	}
 	fallbackCap := 1
-	return omitOldestClosedToolExchanges(input, exchanges, len(exchanges)), len(exchanges) * 2, fallbackCap
+	selected := omitOldestClosedToolExchanges(input, exchanges, len(exchanges))
+	omitted := len(exchanges) * 2
+	if fits, constraintErr := compactionSummaryFitsWithConstraint(sys, previous, selected, state, fallbackCap, omitted, limit, constraint); fits {
+		return selected, omitted, fallbackCap, nil
+	} else if constraintErr != nil {
+		lastConstraintErr = constraintErr
+	}
+	if lastConstraintErr != nil {
+		return selected, omitted, fallbackCap, fmt.Errorf("%w: %v", ErrCompactionSummaryMessageCannotFit, lastConstraintErr)
+	}
+	return selected, omitted, fallbackCap, fmt.Errorf("%w: token budget %d", ErrCompactionSummaryMessageCannotFit, limit)
 }
 
 func closedToolExchangeStarts(input []llm.Message) []int {
@@ -231,9 +299,22 @@ func compactionSummaryCaps(maxChars int) []int {
 }
 
 func CompactionSummaryFits(sys string, previous llm.Message, input []llm.Message, state SummaryState, maxChars, omitted, limit int) bool {
+	fits, _ := compactionSummaryFitsWithConstraint(sys, previous, input, state, maxChars, omitted, limit, nil)
+	return fits
+}
+
+func compactionSummaryFitsWithConstraint(sys string, previous llm.Message, input []llm.Message, state SummaryState, maxChars, omitted, limit int, constraint SummaryMessageConstraint) (bool, error) {
 	body := BuildCompactionSummaryBody(previous, input, state, maxChars, omitted)
-	hist := []llm.Message{llm.TextMessage(llm.RoleUser, body)}
-	return EstimateContextTokens(sys, nil, hist) <= limit
+	message := llm.TextMessage(llm.RoleUser, body)
+	if limit > 0 && EstimateContextTokens(sys, nil, []llm.Message{message}) > limit {
+		return false, nil
+	}
+	if constraint != nil {
+		if err := constraint(message); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func serializeMessageForSummary(msg llm.Message, toolResultMaxChars int) string {

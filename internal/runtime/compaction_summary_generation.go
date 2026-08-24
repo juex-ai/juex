@@ -74,11 +74,13 @@ func (e *Engine) generateCompactionSummaryLocked(
 	candidatePolicy, contextWindow := e.compactionSummaryPolicyForCandidateLocked(candidate, defaultContextWindow)
 	candidatePolicy.SummaryMaxTokens = e.compactionSummaryInitialMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
 	maxOutputTokens := candidatePolicy.SummaryMaxTokens
-	summarySystem, summaryHistory := buildCompactionSummaryRequest(baseSystem, previous, input, state, candidatePolicy, instructions)
+	summarySystem, summaryHistory, err := buildProvenanceBoundedCompactionSummaryRequest(baseSystem, previous, input, state, candidatePolicy, instructions)
 	attempt := 1
 	var resp llm.Response
 	var epoch provenance.RequestEpoch
-	err := compactionSummaryRequestFitError(summarySystem, summaryHistory, candidatePolicy, maxOutputTokens)
+	if err == nil {
+		err = compactionSummaryRequestFitError(summarySystem, summaryHistory, candidatePolicy, maxOutputTokens)
+	}
 	if err == nil {
 		resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 	}
@@ -112,10 +114,12 @@ func (e *Engine) generateCompactionSummaryLocked(
 		retryPolicy := candidatePolicy
 		retryPolicy.SummaryMaxTokens = retryMaxOutputTokens
 		useRetryBudget = true
-		summarySystem, summaryHistory = buildCompactionSummaryRequest(baseSystem, previous, input, state, retryPolicy, instructions)
+		summarySystem, summaryHistory, err = buildProvenanceBoundedCompactionSummaryRequest(baseSystem, previous, input, state, retryPolicy, instructions)
 		maxOutputTokens = retryMaxOutputTokens
 		attempt++
-		err = compactionSummaryRequestFitError(summarySystem, summaryHistory, retryPolicy, maxOutputTokens)
+		if err == nil {
+			err = compactionSummaryRequestFitError(summarySystem, summaryHistory, retryPolicy, maxOutputTokens)
+		}
 		if err == nil {
 			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 		}
@@ -177,14 +181,16 @@ func (e *Engine) generateCompactionSummaryLocked(
 			candidatePolicy.SummaryMaxTokens = e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, candidatePolicy, instructions)
 		}
 		maxOutputTokens = candidatePolicy.SummaryMaxTokens
-		summarySystem, summaryHistory = buildCompactionSummaryRequest(baseSystem, previous, input, state, candidatePolicy, instructions)
+		summarySystem, summaryHistory, err = buildProvenanceBoundedCompactionSummaryRequest(baseSystem, previous, input, state, candidatePolicy, instructions)
 		candidate = nextCandidate
 		ticket = selection.Ticket
 		provider = nextCandidate.Provider
 		attempt++
 		resp = llm.Response{}
 		epoch = provenance.RequestEpoch{}
-		err = compactionSummaryRequestFitError(summarySystem, summaryHistory, candidatePolicy, maxOutputTokens)
+		if err == nil {
+			err = compactionSummaryRequestFitError(summarySystem, summaryHistory, candidatePolicy, maxOutputTokens)
+		}
 		if err == nil {
 			resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 		}
@@ -217,10 +223,12 @@ func (e *Engine) generateCompactionSummaryLocked(
 				retryPolicy := candidatePolicy
 				retryPolicy.SummaryMaxTokens = retryMaxOutputTokens
 				useRetryBudget = true
-				summarySystem, summaryHistory = buildCompactionSummaryRequest(baseSystem, previous, input, state, retryPolicy, instructions)
+				summarySystem, summaryHistory, err = buildProvenanceBoundedCompactionSummaryRequest(baseSystem, previous, input, state, retryPolicy, instructions)
 				maxOutputTokens = retryMaxOutputTokens
 				attempt++
-				err = compactionSummaryRequestFitError(summarySystem, summaryHistory, retryPolicy, maxOutputTokens)
+				if err == nil {
+					err = compactionSummaryRequestFitError(summarySystem, summaryHistory, retryPolicy, maxOutputTokens)
+				}
 				if err == nil {
 					resp, epoch, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, contextWindow, maxOutputTokens, attempt)
 				}
