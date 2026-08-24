@@ -4267,19 +4267,6 @@ func isolateWriteModelConfigHomes(t *testing.T) {
 	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-home"))
 }
 
-func assertEvalBashExecutable(t *testing.T, executable string) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		if !strings.EqualFold(filepath.Base(executable), "bash.exe") || !strings.Contains(strings.ToLower(executable), `\git\`) {
-			t.Fatalf("Windows bash executable = %q, want Git Bash", executable)
-		}
-		return
-	}
-	if executable != "bash" {
-		t.Fatalf("bash executable = %q, want bash", executable)
-	}
-}
-
 func assertHelpContains(t *testing.T, help string, wants ...string) {
 	t.Helper()
 	for _, want := range wants {
