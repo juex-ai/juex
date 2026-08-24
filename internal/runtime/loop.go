@@ -119,8 +119,9 @@ type Engine struct {
 	activeTurnID       string
 	// terminalPublishing keeps later admissions behind a durably committed
 	// terminal event while its synchronous subscribers run outside pendingLifecycleMu.
-	terminalPublishing string
-	pendingInput       []queuedPendingInput
+	terminalPublishing  string
+	terminalPublishDone chan struct{}
+	pendingInput        []queuedPendingInput
 	// pendingEventAnnouncing keeps queue mutations available while ensuring
 	// their events cannot overtake a queue transition already being announced.
 	pendingEventAnnouncing bool
@@ -2195,6 +2196,7 @@ func (e *Engine) beginTerminalPublication(turnID string) {
 		e.activeTurnID = ""
 	}
 	e.terminalPublishing = turnID
+	e.terminalPublishDone = make(chan struct{})
 	e.pendingMu.Unlock()
 }
 
@@ -2202,13 +2204,15 @@ func (e *Engine) finishTerminalPublication(turnID string) {
 	e.pendingMu.Lock()
 	if e.terminalPublishing == turnID {
 		e.terminalPublishing = ""
+		close(e.terminalPublishDone)
+		e.terminalPublishDone = nil
 	}
 	e.pendingMu.Unlock()
 }
 
-func (e *Engine) pendingTerminalPublicationStatus() (PendingInputStatus, bool) {
+func (e *Engine) pendingTerminalPublicationStatus() (PendingInputStatus, <-chan struct{}, bool) {
 	if e == nil {
-		return PendingInputStatus{}, false
+		return PendingInputStatus{}, nil, false
 	}
 	e.pendingMu.Lock()
 	defer e.pendingMu.Unlock()
@@ -2217,7 +2221,7 @@ func (e *Engine) pendingTerminalPublicationStatus() (PendingInputStatus, bool) {
 		PendingCount:     len(e.pendingInput),
 		MaxPendingInputs: e.effectiveMaxPendingInputs(),
 	}
-	return status, e.terminalPublishing != ""
+	return status, e.terminalPublishDone, e.terminalPublishing != ""
 }
 
 func (e *Engine) publishTerminalEvent(turnID string, event events.Event) {

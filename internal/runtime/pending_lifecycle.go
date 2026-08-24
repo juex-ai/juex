@@ -72,7 +72,7 @@ func (e *Engine) ReceivePendingInput(ctx context.Context, request PendingInputRe
 
 	e.pendingLifecycleMu.Lock()
 	defer e.pendingLifecycleMu.Unlock()
-	if status, publishing := e.pendingTerminalPublicationStatus(); publishing {
+	if status, _, publishing := e.pendingTerminalPublicationStatus(); publishing {
 		return PendingInputResult{Retry: PendingInputRetryAfterTurn, Status: status}, ErrActiveTurnExists
 	}
 
@@ -188,12 +188,17 @@ func (e *Engine) PendingInputLifecycleStatus() PendingInputStatus {
 	if e == nil {
 		return PendingInputStatus{}
 	}
-	e.pendingLifecycleMu.Lock()
-	defer e.pendingLifecycleMu.Unlock()
-	if status, publishing := e.pendingTerminalPublicationStatus(); publishing {
-		return status
+	for {
+		e.pendingLifecycleMu.Lock()
+		_, done, publishing := e.pendingTerminalPublicationStatus()
+		if !publishing {
+			status := e.PendingInputStatus()
+			e.pendingLifecycleMu.Unlock()
+			return status
+		}
+		e.pendingLifecycleMu.Unlock()
+		<-done
 	}
-	return e.PendingInputStatus()
 }
 
 // FinishPendingInputCompaction releases a completed compaction and promotes
