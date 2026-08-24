@@ -184,22 +184,28 @@ func (e *Engine) ReserveTurnID(turnID string) error {
 // AdmitTurnMessage durably accepts one main Turn input before establishing the
 // active execution boundary. Repeating admission for the same Turn returns the
 // already accepted message with its stable Framework-owned identity.
-func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Message, error) {
+func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (message llm.Message, err error) {
 	if e == nil {
 		return llm.Message{}, ErrNoActiveTurn
 	}
 	e.pendingLifecycleMu.Lock()
-	defer e.pendingLifecycleMu.Unlock()
+	defer func() {
+		e.pendingLifecycleMu.Unlock()
+		e.publishStagedTerminalError(err)
+	}()
 	record, err := e.admitTurnMessage(turnID, userMsg)
 	return record.Message, err
 }
 
-func (e *Engine) admitTurnMessageForExecution(turnID string, userMsg llm.Message) (llm.Message, error) {
+func (e *Engine) admitTurnMessageForExecution(turnID string, userMsg llm.Message) (message llm.Message, err error) {
 	if e == nil {
 		return llm.Message{}, ErrNoActiveTurn
 	}
 	e.pendingLifecycleMu.Lock()
-	defer e.pendingLifecycleMu.Unlock()
+	defer func() {
+		e.pendingLifecycleMu.Unlock()
+		e.publishStagedTerminalError(err)
+	}()
 	record, err := e.admitTurnMessage(turnID, userMsg)
 	if err != nil {
 		return record.Message, err
@@ -267,7 +273,7 @@ func (e *Engine) admitTurnMessage(turnID string, userMsg llm.Message) (PendingIn
 				commitErr = errors.Join(commitErr, fmt.Errorf("drop uncommitted turn admission: %w", dropErr))
 			}
 			commitErr = e.preservePendingInputBeforeFailedReservationReleaseLocked(turnID, commitErr)
-			return PendingInputRecord{}, e.failTurn(turnID, commitErr)
+			return PendingInputRecord{}, e.stageTurnErrorLocked(turnID, commitErr)
 		}
 		record.Origin = PendingInputOriginTurn
 		record.State = PendingInputStateAdmitted
@@ -572,12 +578,15 @@ func (e *Engine) PendingInputStatus() PendingInputStatus {
 
 // PromotePendingInputTurn turns the first queued input from a reserved
 // non-provider phase into the user message for a real provider turn.
-func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.Message, PendingInputStatus, bool, error) {
+func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (message llm.Message, status PendingInputStatus, promoted bool, err error) {
 	if e == nil {
 		return llm.Message{}, PendingInputStatus{}, false, nil
 	}
 	e.pendingLifecycleMu.Lock()
-	defer e.pendingLifecycleMu.Unlock()
+	defer func() {
+		e.pendingLifecycleMu.Unlock()
+		e.publishStagedTerminalError(err)
+	}()
 	item, status, promoted, err := e.promotePendingInputTurn(currentTurnID, nextTurnID)
 	return item.Message, status, promoted, err
 }
@@ -632,7 +641,7 @@ func (e *Engine) promotePendingInputTurn(currentTurnID, nextTurnID string) (queu
 				promotionErr = errors.Join(promotionErr, fmt.Errorf("preserve pending input after turn promotion failure: %w", preserveErr))
 			}
 			e.finishActiveTurn(nextTurnID)
-			promotionErr = e.failTurn(nextTurnID, promotionErr)
+			promotionErr = e.stageTurnErrorLocked(nextTurnID, promotionErr)
 			e.flushPendingEvents()
 			return queuedPendingInput{}, e.PendingInputStatus(), false, promotionErr
 		}
@@ -1325,6 +1334,49 @@ func (e *Engine) recordTurnErrorLocked(turnID string, err error) (events.Event, 
 		return events.Normalize(event), func() {}, nil
 	}
 	return e.Bus.CommitForPublication(event)
+}
+
+type stagedTerminalError struct {
+	cause   error
+	publish func()
+	once    sync.Once
+}
+
+func (e *stagedTerminalError) Error() string {
+	if e == nil || e.cause == nil {
+		return ""
+	}
+	return e.cause.Error()
+}
+
+func (e *stagedTerminalError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func (e *Engine) stageTurnErrorLocked(turnID string, cause error) error {
+	committed, completeCommit, commitErr := e.recordTurnErrorLocked(turnID, cause)
+	if commitErr != nil {
+		e.finishActiveTurn(turnID)
+		return errors.Join(cause, fmt.Errorf("commit turn error: %w", commitErr))
+	}
+	e.beginTerminalPublication(turnID)
+	return &stagedTerminalError{
+		cause: cause,
+		publish: func() {
+			e.publishTerminalEvent(turnID, committed, completeCommit)
+		},
+	}
+}
+
+func (e *Engine) publishStagedTerminalError(err error) {
+	var staged *stagedTerminalError
+	if !errors.As(err, &staged) || staged == nil {
+		return
+	}
+	staged.once.Do(staged.publish)
 }
 
 type toolCallResult struct {

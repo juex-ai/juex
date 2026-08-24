@@ -63,7 +63,7 @@ func (e *Engine) ReceivePendingInput(ctx context.Context, request PendingInputRe
 	return e.receivePendingInput(ctx, request, false)
 }
 
-func (e *Engine) receivePendingInput(ctx context.Context, request PendingInputRequest, claimExecution bool) (PendingInputResult, error) {
+func (e *Engine) receivePendingInput(ctx context.Context, request PendingInputRequest, claimExecution bool) (result PendingInputResult, err error) {
 	if e == nil {
 		return PendingInputResult{}, ErrNoActiveTurn
 	}
@@ -75,7 +75,10 @@ func (e *Engine) receivePendingInput(ctx context.Context, request PendingInputRe
 	}
 
 	e.pendingLifecycleMu.Lock()
-	defer e.pendingLifecycleMu.Unlock()
+	defer func() {
+		e.pendingLifecycleMu.Unlock()
+		e.publishStagedTerminalError(err)
+	}()
 	if err := ctx.Err(); err != nil {
 		return PendingInputResult{RecordID: request.RecordID}, err
 	}
@@ -102,10 +105,6 @@ func (e *Engine) receivePendingInput(ctx context.Context, request PendingInputRe
 		return result, ErrActiveTurnExists
 	}
 
-	var (
-		result PendingInputResult
-		err    error
-	)
 	if request.RecordID != "" {
 		result, err = e.receivePersistedPendingInput(ctx, request.RecordID)
 	} else {
@@ -273,9 +272,12 @@ func (e *Engine) PendingInputLifecycleStatus() PendingInputStatus {
 
 // FinishPendingInputCompaction releases a completed compaction and promotes
 // the oldest queued input with a new Framework-owned Turn identity.
-func (e *Engine) FinishPendingInputCompaction(compactTurnID string) (PendingInputResult, error) {
+func (e *Engine) FinishPendingInputCompaction(compactTurnID string) (result PendingInputResult, err error) {
 	e.pendingLifecycleMu.Lock()
-	defer e.pendingLifecycleMu.Unlock()
+	defer func() {
+		e.pendingLifecycleMu.Unlock()
+		e.publishStagedTerminalError(err)
+	}()
 	nextTurnID := pendingInputTurnID("turn")
 	item, status, promoted, err := e.promotePendingInputTurn(compactTurnID, nextTurnID)
 	if err != nil {

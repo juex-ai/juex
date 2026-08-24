@@ -563,20 +563,38 @@ func TestAdmitTurnMessage_CommitFailurePreservesReentrantPendingInput(t *testing
 	}
 	t.Cleanup(func() { queue.fileOps.write = originalWrite })
 
-	var enqueueErr error
+	var enqueueErr, terminalAdmissionErr error
 	bus.Subscribe(TurnAdmittedType, func(events.Event) {
 		_, enqueueErr = eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "accepted during admission"), PendingInputOptions{
 			ID:  "reentrant-admission-input",
 			TTL: time.Hour,
 		})
 	})
+	bus.Subscribe("turn.errored", func(events.Event) {
+		_, terminalAdmissionErr = eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+			Message: llm.TextMessage(llm.RoleUser, "after failed admission terminal"),
+		})
+	})
 
-	_, admissionErr := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "failed trigger"))
+	admissionDone := make(chan error, 1)
+	go func() {
+		_, err := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "failed trigger"))
+		admissionDone <- err
+	}()
+	var admissionErr error
+	select {
+	case admissionErr = <-admissionDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn.errored subscriber deadlocked while receiving after failed admission")
+	}
 	if !errors.Is(admissionErr, wantErr) {
 		t.Fatalf("AdmitTurnMessage() error = %v, want %v", admissionErr, wantErr)
 	}
 	if enqueueErr != nil {
 		t.Fatalf("reentrant enqueue error = %v", enqueueErr)
+	}
+	if !errors.Is(terminalAdmissionErr, ErrActiveTurnExists) {
+		t.Fatalf("terminal subscriber admission error = %v, want %v", terminalAdmissionErr, ErrActiveTurnExists)
 	}
 	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "accepted during admission" {
 		t.Fatalf("preserved history = %+v, want accepted reentrant input", eng.Session.History)
@@ -7250,15 +7268,36 @@ func TestPromotePendingInputFailurePreservesReentrantPendingInput(t *testing.T) 
 	}
 	t.Cleanup(func() { queue.fileOps.write = originalWrite })
 
-	var enqueueErr error
+	var enqueueErr, terminalPromotionErr error
 	bus.Subscribe(TurnAdmittedType, func(events.Event) {
 		_, enqueueErr = eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "accepted during promotion"), PendingInputOptions{
 			ID:  "reentrant-promotion-input",
 			TTL: time.Hour,
 		})
 	})
+	bus.Subscribe("turn.errored", func(events.Event) {
+		_, terminalPromotionErr = eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+			Message: llm.TextMessage(llm.RoleUser, "after failed promotion terminal"),
+		})
+	})
 
-	_, status, promoted, promotionErr := eng.PromotePendingInputTurn("compact-1", "turn-1")
+	type promotionOutcome struct {
+		status   PendingInputStatus
+		promoted bool
+		err      error
+	}
+	promotionDone := make(chan promotionOutcome, 1)
+	go func() {
+		_, status, promoted, err := eng.PromotePendingInputTurn("compact-1", "turn-1")
+		promotionDone <- promotionOutcome{status: status, promoted: promoted, err: err}
+	}()
+	var outcome promotionOutcome
+	select {
+	case outcome = <-promotionDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn.errored subscriber deadlocked while receiving after failed promotion")
+	}
+	status, promoted, promotionErr := outcome.status, outcome.promoted, outcome.err
 	if !errors.Is(promotionErr, wantErr) {
 		t.Fatalf("PromotePendingInputTurn() error = %v, want %v", promotionErr, wantErr)
 	}
@@ -7267,6 +7306,9 @@ func TestPromotePendingInputFailurePreservesReentrantPendingInput(t *testing.T) 
 	}
 	if enqueueErr != nil {
 		t.Fatalf("reentrant enqueue error = %v", enqueueErr)
+	}
+	if !errors.Is(terminalPromotionErr, ErrActiveTurnExists) {
+		t.Fatalf("terminal subscriber admission error = %v, want %v", terminalPromotionErr, ErrActiveTurnExists)
 	}
 	if status.TurnID != "" || status.PendingCount != 1 {
 		t.Fatalf("promotion status = %+v, want original trigger queued without active Turn", status)
