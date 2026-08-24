@@ -1301,6 +1301,14 @@ func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, last
 	return e.Bus.CommitForPublication(event)
 }
 
+func (e *Engine) recordTurnErrorLocked(turnID string, err error) (events.Event, func(), error) {
+	event := events.Event{Type: "turn.errored", TurnID: turnID, Payload: NewTurnErroredPayload(err)}
+	if e.Bus == nil {
+		return events.Normalize(event), func() {}, nil
+	}
+	return e.Bus.CommitForPublication(event)
+}
+
 type toolCallResult struct {
 	Call             llm.Block
 	Block            llm.Block
@@ -2269,18 +2277,7 @@ func (e *Engine) failActiveTurnLocked(turnID string, err error, lifecycleHeld bo
 	if preserveErr := e.preservePendingInputAfterFailureLocked(turnID); preserveErr != nil {
 		err = errors.Join(err, fmt.Errorf("preserve pending input after turn failure: %w", preserveErr))
 	}
-	event := events.Event{Type: "turn.errored", TurnID: turnID, Payload: NewTurnErroredPayload(err)}
-	var (
-		committed      events.Event
-		completeCommit func()
-		commitErr      error
-	)
-	if e.Bus == nil {
-		committed = events.Normalize(event)
-		completeCommit = func() {}
-	} else {
-		committed, completeCommit, commitErr = e.Bus.CommitForPublication(event)
-	}
+	committed, completeCommit, commitErr := e.recordTurnErrorLocked(turnID, err)
 	if commitErr != nil {
 		e.finishActiveTurn(turnID)
 		e.pendingLifecycleMu.Unlock()

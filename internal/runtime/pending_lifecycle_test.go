@@ -11,7 +11,20 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/session"
 )
+
+type observedContext struct {
+	context.Context
+	firstErr chan struct{}
+	once     sync.Once
+}
+
+func (c *observedContext) Err() error {
+	err := c.Context.Err()
+	c.once.Do(func() { close(c.firstErr) })
+	return err
+}
 
 func TestReceivePendingInputStartsIdleTurnWithFrameworkIdentity(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
@@ -34,6 +47,51 @@ func TestReceivePendingInputStartsIdleTurnWithFrameworkIdentity(t *testing.T) {
 	record := pendingLifecycleTestRecord(t, eng, result.RecordID)
 	if record.State != PendingInputStateAdmitted || record.TurnID != result.TurnID || record.MessageID != result.Message.ID {
 		t.Fatalf("durable record = %+v", record)
+	}
+}
+
+func TestReceivePendingInputRechecksCancellationAfterLifecycleLock(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	baseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &observedContext{Context: baseCtx, firstErr: make(chan struct{})}
+	type receiveOutcome struct {
+		result PendingInputResult
+		err    error
+	}
+	outcome := make(chan receiveOutcome, 1)
+	eng.pendingLifecycleMu.Lock()
+	go func() {
+		result, err := eng.ReceivePendingInput(ctx, PendingInputRequest{
+			Message: llm.TextMessage(llm.RoleUser, "canceled while waiting"),
+		})
+		outcome <- receiveOutcome{result: result, err: err}
+	}()
+	select {
+	case <-ctx.firstErr:
+	case <-time.After(5 * time.Second):
+		eng.pendingLifecycleMu.Unlock()
+		t.Fatal("ReceivePendingInput() did not check its context before waiting for the lifecycle lock")
+	}
+	cancel()
+	eng.pendingLifecycleMu.Unlock()
+	got := <-outcome
+	result, err := got.result, got.err
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ReceivePendingInput() error = %v, want %v", err, context.Canceled)
+	}
+	if result.Disposition != "" || result.Retry != "" || result.RecordID != "" || result.TurnID != "" || result.Message.ID != "" {
+		t.Fatalf("ReceivePendingInput() result = %+v, want empty", result)
+	}
+	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want no admitted input", status)
+	}
+	records, err := eng.currentPendingInputQueue().Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("pending records = %+v, want none", records)
 	}
 }
 
@@ -759,7 +817,10 @@ func TestDiscardPendingInputInvalidatesOutstandingStart(t *testing.T) {
 		Message:    llm.TextMessage(llm.RoleAssistant, "must not run"),
 		StopReason: llm.StopEndTurn,
 	}}}
-	eng, _ := newEngine(t, provider, false)
+	eng, bus := newEngine(t, provider, false)
+	statusStore := NewStatusStore(StatusSeed{SessionID: "discard-start"})
+	unsubscribe := bus.Subscribe("*", statusStore.Publish)
+	defer unsubscribe()
 	started, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
 		Message: llm.TextMessage(llm.RoleUser, "discard before execution"),
 	})
@@ -788,6 +849,63 @@ func TestDiscardPendingInputInvalidatesOutstandingStart(t *testing.T) {
 	}
 	if len(records) != 1 || records[started.RecordID].State != PendingInputStateDropped {
 		t.Fatalf("pending records = %+v, want only original dropped record", records)
+	}
+	if snapshot := statusStore.Snapshot(); snapshot.Turn == nil || snapshot.Turn.ID != started.TurnID || snapshot.Turn.State != TurnLifecycleErrored {
+		t.Fatalf("live status = %+v, want discarded turn errored", snapshot.Turn)
+	}
+	journal, err := session.ReadEvents(eng.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed := NewStatusStoreFromJournal(StatusSeed{SessionID: "discard-start"}, journal).Snapshot()
+	if replayed.Turn == nil || replayed.Turn.ID != started.TurnID || replayed.Turn.State != TurnLifecycleErrored {
+		t.Fatalf("replayed status = %+v, want discarded turn errored", replayed.Turn)
+	}
+}
+
+func TestDiscardPendingInputRetriesStartedTurnTerminalCommit(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	started, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+		Message: llm.TextMessage(llm.RoleUser, "retry discarded terminal"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCommitErr := errors.New("terminal journal unavailable")
+	bus.SetCommitter(selectiveFailCommitter{eventType: "turn.errored", err: wantCommitErr})
+
+	result, err := eng.DiscardPendingInput(started.RecordID)
+	if !errors.Is(err, wantCommitErr) {
+		t.Fatalf("first discard error = %v, want %v", err, wantCommitErr)
+	}
+	if result.Disposition != PendingInputDropped || result.Retry != PendingInputRetryAfterStorage {
+		t.Fatalf("first discard = %+v, want dropped storage retry", result)
+	}
+	if status := eng.PendingInputStatus(); status.TurnID != started.TurnID {
+		t.Fatalf("pending status = %+v, want active Turn retained for terminal retry", status)
+	}
+	if record := pendingLifecycleTestRecord(t, eng, started.RecordID); record.State != PendingInputStateDropped {
+		t.Fatalf("durable record = %+v, want dropped before terminal retry", record)
+	}
+
+	bus.SetCommitter(selectiveSessionCommitter{session: eng.Session})
+	result, err = eng.DiscardPendingInput(started.RecordID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Disposition != PendingInputDropped || result.Retry != PendingInputNoRetry {
+		t.Fatalf("retried discard = %+v, want terminally dropped", result)
+	}
+	if status := eng.PendingInputStatus(); status.TurnID != "" {
+		t.Fatalf("pending status = %+v, want released after terminal retry", status)
+	}
+	journal, err := session.ReadEvents(eng.Session.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed := NewStatusStoreFromJournal(StatusSeed{SessionID: "discard-retry"}, journal).Snapshot()
+	if replayed.Turn == nil || replayed.Turn.ID != started.TurnID || replayed.Turn.State != TurnLifecycleErrored {
+		t.Fatalf("replayed status = %+v, want retried terminal error", replayed.Turn)
 	}
 }
 

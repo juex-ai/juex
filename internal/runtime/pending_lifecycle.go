@@ -72,6 +72,9 @@ func (e *Engine) ReceivePendingInput(ctx context.Context, request PendingInputRe
 
 	e.pendingLifecycleMu.Lock()
 	defer e.pendingLifecycleMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return PendingInputResult{RecordID: request.RecordID}, err
+	}
 	if request.RecordID == "" && request.Options != nil {
 		record, err := e.PersistPendingMessageWithOptions(ctx, request.Message, *request.Options)
 		if err != nil {
@@ -148,11 +151,14 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 	if err != nil {
 		return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage}, err
 	}
+	activeStatus := e.PendingInputStatus()
+	invalidateStarted := existed &&
+		previous.Origin == PendingInputOriginTurn &&
+		(previous.State == PendingInputStateAdmitted || previous.State == PendingInputStateDropped) &&
+		previous.TurnID != "" &&
+		activeStatus.TurnID == previous.TurnID
 	if err := e.DropPersistedPendingMessage(recordID); err != nil {
 		return PendingInputResult{Retry: PendingInputRetryAfterStorage}, err
-	}
-	if existed && previous.Origin == PendingInputOriginTurn && previous.State == PendingInputStateAdmitted && previous.TurnID != "" {
-		e.finishActiveTurn(previous.TurnID)
 	}
 	status, removed := e.removePendingInputRecord(recordID)
 	if removed > 0 {
@@ -165,6 +171,25 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 			PendingCount:     status.PendingCount,
 			MaxPendingInputs: status.MaxPendingInputs,
 		}})
+	}
+	if invalidateStarted {
+		committed, completeCommit, commitErr := e.recordTurnErrorLocked(
+			previous.TurnID,
+			fmt.Errorf("pending input %q discarded before execution: %w", recordID, ErrPendingInputHandled),
+		)
+		if commitErr != nil {
+			return PendingInputResult{
+				Disposition: PendingInputDropped,
+				Retry:       PendingInputRetryAfterStorage,
+				RecordID:    recordID,
+				Status:      status,
+			}, fmt.Errorf("commit discarded turn error: %w", commitErr)
+		}
+		e.beginTerminalPublication(previous.TurnID)
+		e.pendingLifecycleMu.Unlock()
+		e.publishTerminalEvent(previous.TurnID, committed, completeCommit)
+		e.pendingLifecycleMu.Lock()
+		status = e.PendingInputStatus()
 	}
 	record, ok, err := e.PersistedPendingMessage(recordID)
 	if err != nil {
