@@ -386,6 +386,34 @@ providers:
 	}
 }
 
+func TestExplicitLoadedHomeConfigReusesLocalImportBytesDuringReplay(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	homeDir := filepath.Join(userHome, ".juex")
+	homePath := filepath.Join(homeDir, "juex.yaml")
+	importPath := filepath.Join(homeDir, "imported.yaml")
+	firstImport := []byte("runtime:\n  tool_timeout: 11s\n")
+	writeTextFile(t, importPath, string(firstImport))
+	writeTextFile(t, homePath, "imports:\n  - source: imported.yaml\n")
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "runtime:\n  tool_timeout: 33s\n")
+
+	cfg, err := loadConfigFilesForWorkDir(workDir, homePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTextFile(t, importPath, "runtime:\n  tool_timeout: 22s\n")
+	if err := applyExplicitYAMLFile(&cfg, homePath); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ToolTimeout != 11*time.Second {
+		t.Fatalf("tool timeout = %s, want first local import bytes reused during Home replay", cfg.ToolTimeout)
+	}
+	statuses := cfg.ImportStatuses()
+	if len(statuses) != 1 || statuses[0].Digest != contentDigest(firstImport) {
+		t.Fatalf("import statuses = %+v, want one status for first local import bytes", statuses)
+	}
+}
+
 func TestExplicitLoadedHomeConfigResolvesRelativeImportsBesideCanonicalHomePath(t *testing.T) {
 	userHome := prepareConfigTest(t)
 	homeDir := filepath.Join(userHome, ".juex")
@@ -1767,6 +1795,7 @@ func TestConfigImportCacheReaderObservesOnePublishedGeneration(t *testing.T) {
 }
 
 func resetImportLoaderMemoForTest(loader *configImportLoader) {
+	loader.localMemo = make(map[string]configImportDocument)
 	loader.remoteMemo = make(map[string]configImportDocument)
 }
 

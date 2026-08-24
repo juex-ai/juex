@@ -66,6 +66,7 @@ type configImportLoader struct {
 	maxBytes      int64
 	maxCacheAge   time.Duration
 	maxRedirects  int
+	localMemo     map[string]configImportDocument
 	remoteMemo    map[string]configImportDocument
 	cacheLock     *homestore.Lock
 }
@@ -100,6 +101,7 @@ func newConfigImportLoader(homeDir string) *configImportLoader {
 		maxBytes:     configImportMaxBytes,
 		maxCacheAge:  configImportMaxCacheAge,
 		maxRedirects: configImportMaxRedirects,
+		localMemo:    make(map[string]configImportDocument),
 		remoteMemo:   make(map[string]configImportDocument),
 	}
 }
@@ -292,15 +294,22 @@ func (l *configImportLoader) loadLocal(declaring yamlConfigSource, path string) 
 	if err != nil {
 		return configImportDocument{}, fmt.Errorf("resolve local source: %w", err)
 	}
+	memoKey := declaringConfigIdentity(declaring.Path) + "\x00" + declaringConfigIdentity(absPath)
+	if document, ok := l.localMemo[memoKey]; ok {
+		document.source.Scope = declaring.Scope
+		return document, nil
+	}
 	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return configImportDocument{}, fmt.Errorf("read local source: %w", err)
 	}
-	return configImportDocument{
+	document := configImportDocument{
 		data:   data,
 		source: yamlConfigSource{Path: absPath, Scope: declaring.Scope},
 		status: ConfigImportStatus{Source: absPath, State: "fresh", Digest: contentDigest(data)},
-	}, nil
+	}
+	l.localMemo[memoKey] = document
+	return document, nil
 }
 
 func (l *configImportLoader) loadRemote(declaring yamlConfigSource, parsed *url.URL) (configImportDocument, error) {
