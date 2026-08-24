@@ -548,6 +548,56 @@ func TestAdmitTurnMessage_RepeatedAdmissionKeepsCommittedRecord(t *testing.T) {
 	}
 }
 
+func TestAdmitTurnMessage_CommitFailurePreservesReentrantPendingInput(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	queue := eng.currentPendingInputQueue()
+	originalWrite := queue.fileOps.write
+	wantErr := errors.New("commit turn input failed")
+	writes := 0
+	queue.fileOps.write = func(file *os.File, body []byte) (int, error) {
+		writes++
+		if writes == 3 {
+			return 0, wantErr
+		}
+		return originalWrite(file, body)
+	}
+	t.Cleanup(func() { queue.fileOps.write = originalWrite })
+
+	var enqueueErr error
+	bus.Subscribe(TurnAdmittedType, func(events.Event) {
+		_, enqueueErr = eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "accepted during admission"), PendingInputOptions{
+			ID:  "reentrant-admission-input",
+			TTL: time.Hour,
+		})
+	})
+
+	_, admissionErr := eng.AdmitTurnMessage("failed-turn", llm.TextMessage(llm.RoleUser, "failed trigger"))
+	if !errors.Is(admissionErr, wantErr) {
+		t.Fatalf("AdmitTurnMessage() error = %v, want %v", admissionErr, wantErr)
+	}
+	if enqueueErr != nil {
+		t.Fatalf("reentrant enqueue error = %v", enqueueErr)
+	}
+	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "accepted during admission" {
+		t.Fatalf("preserved history = %+v, want accepted reentrant input", eng.Session.History)
+	}
+	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want failed reservation released after preservation", status)
+	}
+	records, err := queue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record := records["reentrant-admission-input"]; record.State != PendingInputStateProcessed {
+		t.Fatalf("reentrant record = %+v, want state %q", record, PendingInputStateProcessed)
+	}
+	for _, record := range records {
+		if record.Message.FirstText() == "failed trigger" && record.State != PendingInputStateDropped {
+			t.Fatalf("failed trigger record = %+v, want state %q", record, PendingInputStateDropped)
+		}
+	}
+}
+
 func TestAdmitTurnMessage_AdmissionAndCompensationFailureCannotReplayInput(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,

@@ -226,12 +226,11 @@ func (e *Engine) admitTurnMessage(turnID string, userMsg llm.Message) (PendingIn
 			if createdAdmissionIntent {
 				dropErr = queue.MarkDropped([]string{record.ID})
 			}
-			e.finishActiveTurn(turnID)
 			commitErr := fmt.Errorf("commit turn admission: %w", err)
 			if dropErr != nil {
-				return PendingInputRecord{}, errors.Join(commitErr, fmt.Errorf("drop rejected turn admission: %w", dropErr))
+				commitErr = errors.Join(commitErr, fmt.Errorf("drop rejected turn admission: %w", dropErr))
 			}
-			return PendingInputRecord{}, commitErr
+			return PendingInputRecord{}, e.preservePendingInputBeforeFailedAdmissionReleaseLocked(turnID, commitErr)
 		}
 		if err := queue.CommitTurnInput(record.ID, turnID); err != nil {
 			var dropErr error
@@ -242,7 +241,7 @@ func (e *Engine) admitTurnMessage(turnID string, userMsg llm.Message) (PendingIn
 			if dropErr != nil {
 				commitErr = errors.Join(commitErr, fmt.Errorf("drop uncommitted turn admission: %w", dropErr))
 			}
-			e.finishActiveTurn(turnID)
+			commitErr = e.preservePendingInputBeforeFailedAdmissionReleaseLocked(turnID, commitErr)
 			return PendingInputRecord{}, e.failTurn(turnID, commitErr)
 		}
 		record.Origin = PendingInputOriginTurn
@@ -251,6 +250,14 @@ func (e *Engine) admitTurnMessage(turnID string, userMsg llm.Message) (PendingIn
 		record.ExpiresAt = time.Time{}
 	}
 	return record, nil
+}
+
+func (e *Engine) preservePendingInputBeforeFailedAdmissionReleaseLocked(turnID string, admissionErr error) error {
+	if preserveErr := e.preservePendingInputAfterFailureLocked(turnID); preserveErr != nil {
+		admissionErr = errors.Join(admissionErr, fmt.Errorf("preserve pending input after turn admission failure: %w", preserveErr))
+	}
+	e.finishActiveTurn(turnID)
+	return admissionErr
 }
 
 func (e *Engine) ReserveCompactionTurnID(turnID string) error {
