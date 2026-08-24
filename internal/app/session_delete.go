@@ -127,6 +127,30 @@ func (p *SessionDeletePlan) Commit() error {
 	return nil
 }
 
+// commitIfInactive removes the Session and its Artifact namespace only when
+// the Session is not the selected active Session at the commit point.
+func (p *SessionDeletePlan) commitIfInactive() (bool, error) {
+	if p == nil {
+		return false, os.ErrInvalid
+	}
+	if p.sessionPlan == nil {
+		// A replacement candidate is expected to have a complete on-disk
+		// Session. Preserve any incomplete target rather than deleting it
+		// without an atomic active-history check.
+		return false, nil
+	}
+	deleted, err := p.sessionPlan.CommitIfInactive()
+	if err != nil || !deleted {
+		return deleted, err
+	}
+	if p.artifactEnabled {
+		if err := p.artifactStore.RemoveNamespace(path.Join("sessions", p.id)); err != nil {
+			return true, &PartialSessionDeleteError{SessionID: p.id, Err: err}
+		}
+	}
+	return true, nil
+}
+
 // DeleteSession prepares and commits application-level Session deletion.
 func DeleteSession(cfg config.Config, id string, opts SessionDeleteOptions) error {
 	plan, err := PrepareSessionDelete(cfg, id, opts)
@@ -134,4 +158,14 @@ func DeleteSession(cfg config.Config, id string, opts SessionDeleteOptions) erro
 		return err
 	}
 	return plan.Commit()
+}
+
+// deleteSessionIfInactive conditionally removes an application Session and its
+// Artifact namespace without racing with external Session activation.
+func deleteSessionIfInactive(cfg config.Config, id string, opts SessionDeleteOptions) (bool, error) {
+	plan, err := PrepareSessionDelete(cfg, id, opts)
+	if err != nil {
+		return false, err
+	}
+	return plan.commitIfInactive()
 }
