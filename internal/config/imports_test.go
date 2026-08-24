@@ -414,6 +414,42 @@ func TestExplicitLoadedHomeConfigReusesLocalImportBytesDuringReplay(t *testing.T
 	}
 }
 
+func TestExplicitLoadedHomeConfigReusesDeclaringBytesDuringReplay(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	homeDir := filepath.Join(userHome, ".juex")
+	homePath := filepath.Join(homeDir, "juex.yaml")
+	firstImport := filepath.Join(homeDir, "first.yaml")
+	secondImport := filepath.Join(homeDir, "second.yaml")
+	writeTextFile(t, firstImport, "runtime:\n  tool_timeout: 11s\n")
+	writeTextFile(t, secondImport, "runtime:\n  tool_timeout: 22s\n")
+	writeTextFile(t, homePath, "imports:\n  - source: first.yaml\n")
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "runtime:\n  tool_timeout: 33s\n")
+
+	cfg, err := loadConfigFilesForWorkDir(workDir, homePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTextFile(t, homePath, "imports:\n  - source: second.yaml\n")
+	if err := applyExplicitYAMLFile(&cfg, homePath); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ToolTimeout != 11*time.Second {
+		t.Fatalf("tool timeout = %s, want first declaring Home bytes reused during replay", cfg.ToolTimeout)
+	}
+	statuses := cfg.ImportStatuses()
+	if len(statuses) != 1 {
+		t.Fatalf("import statuses = %+v, want only first declaring Home import", statuses)
+	}
+	sameFirstImport, err := sameConfigPath(statuses[0].Source, firstImport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameFirstImport {
+		t.Fatalf("import status source = %q, want first declaring Home import %q", statuses[0].Source, firstImport)
+	}
+}
+
 func TestExplicitLoadedHomeConfigResolvesRelativeImportsBesideCanonicalHomePath(t *testing.T) {
 	userHome := prepareConfigTest(t)
 	homeDir := filepath.Join(userHome, ".juex")
@@ -553,6 +589,41 @@ func TestExplicitConfigSelectsExactHomeBeforeSameFileWorkspaceFallback(t *testin
 				t.Fatalf("tool timeout = %s, want %s", cfg.ToolTimeout, tc.wantTimeout)
 			}
 		})
+	}
+}
+
+func TestExplicitConfigMatchesHomePathWithFilesystemCaseSemantics(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	defaultHomeDir := filepath.Join(userHome, ".juex")
+	defaultHomePath := filepath.Join(defaultHomeDir, "juex.yaml")
+	writeTextFile(t, filepath.Join(defaultHomeDir, "imported.yaml"), "runtime:\n  tool_timeout: 11s\n")
+	writeTextFile(t, defaultHomePath, "imports:\n  - source: imported.yaml\n")
+	caseVariantHomePath := filepath.Join(defaultHomeDir, "JUEX.YAML")
+	if _, err := os.Stat(caseVariantHomePath); err != nil {
+		if os.IsNotExist(err) {
+			t.Skip("filesystem is case-sensitive")
+		}
+		t.Fatal(err)
+	}
+
+	workDir := t.TempDir()
+	workspaceDir := filepath.Join(workDir, ".juex")
+	workspacePath := filepath.Join(workspaceDir, "juex.yaml")
+	writeTextFile(t, filepath.Join(workspaceDir, "imported.yaml"), "runtime:\n  tool_timeout: 33s\n")
+	if err := os.Link(defaultHomePath, workspacePath); err != nil {
+		t.Skipf("create hard-linked Home/workspace configs: %v", err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{
+		WorkDir:    workDir,
+		ConfigPath: caseVariantHomePath,
+		AgentState: AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ToolTimeout != 11*time.Second {
+		t.Fatalf("tool timeout = %s, want case-variant exact Home import", cfg.ToolTimeout)
 	}
 }
 
@@ -1795,6 +1866,7 @@ func TestConfigImportCacheReaderObservesOnePublishedGeneration(t *testing.T) {
 }
 
 func resetImportLoaderMemoForTest(loader *configImportLoader) {
+	loader.fileMemo = make(map[string][]byte)
 	loader.localMemo = make(map[string]configImportDocument)
 	loader.remoteMemo = make(map[string]configImportDocument)
 }

@@ -66,6 +66,7 @@ type configImportLoader struct {
 	maxBytes      int64
 	maxCacheAge   time.Duration
 	maxRedirects  int
+	fileMemo      map[string][]byte
 	localMemo     map[string]configImportDocument
 	remoteMemo    map[string]configImportDocument
 	cacheLock     *homestore.Lock
@@ -101,6 +102,7 @@ func newConfigImportLoader(homeDir string) *configImportLoader {
 		maxBytes:     configImportMaxBytes,
 		maxCacheAge:  configImportMaxCacheAge,
 		maxRedirects: configImportMaxRedirects,
+		fileMemo:     make(map[string][]byte),
 		localMemo:    make(map[string]configImportDocument),
 		remoteMemo:   make(map[string]configImportDocument),
 	}
@@ -119,6 +121,10 @@ func applyYAMLFileWithImportLoaderAndOptions(cfg *Config, source yamlConfigSourc
 	}
 	if err := loader.recoverConfigImportPublicationIfPresent(); err != nil {
 		return err
+	}
+	identity := declaringConfigIdentity(source.Path)
+	if data, ok := loader.fileMemo[identity]; ok {
+		return applyYAMLContentWithImportLoader(cfg, data, source, loader, opts)
 	}
 	data, err := os.ReadFile(source.Path)
 	if err != nil {
@@ -147,6 +153,7 @@ func applyYAMLFileWithImportLoaderAndOptions(cfg *Config, source yamlConfigSourc
 			return err
 		}
 	}
+	loader.fileMemo[identity] = data
 	return applyYAMLContentWithImportLoader(cfg, data, source, loader, opts)
 }
 

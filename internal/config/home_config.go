@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/environment"
@@ -123,27 +124,74 @@ func sameConfigPath(left, right string) (bool, error) {
 }
 
 func sameConfigPathSpelling(left, right string) (bool, error) {
-	leftPath, err := canonicalConfigParent(left)
+	leftParent, leftBase, err := canonicalConfigPathParts(left)
 	if err != nil {
 		return false, err
 	}
-	rightPath, err := canonicalConfigParent(right)
+	rightParent, rightBase, err := canonicalConfigPathParts(right)
 	if err != nil {
 		return false, err
 	}
-	return leftPath == rightPath, nil
+	sameParent, err := sameConfigPath(leftParent, rightParent)
+	if err != nil || !sameParent {
+		return false, err
+	}
+	leftName, err := filesystemEntryName(leftParent, leftBase)
+	if err != nil {
+		return false, err
+	}
+	rightName, err := filesystemEntryName(rightParent, rightBase)
+	if err != nil {
+		return false, err
+	}
+	return leftName == rightName, nil
 }
 
-func canonicalConfigParent(path string) (string, error) {
+func canonicalConfigPathParts(path string) (string, string, error) {
 	abs, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	dir, err := canonicalHomeConfigDir(filepath.Dir(abs))
 	if err != nil {
+		return "", "", err
+	}
+	return dir, filepath.Base(abs), nil
+}
+
+func filesystemEntryName(parent, base string) (string, error) {
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return base, nil
+		}
 		return "", err
 	}
-	return filepath.Join(dir, filepath.Base(abs)), nil
+	for _, entry := range entries {
+		if entry.Name() == base {
+			return base, nil
+		}
+	}
+	pathInfo, err := os.Stat(filepath.Join(parent, base))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return base, nil
+		}
+		return "", err
+	}
+	for _, entry := range entries {
+		if !strings.EqualFold(entry.Name(), base) {
+			continue
+		}
+		entryInfo, err := entry.Info()
+		if err != nil {
+			return "", err
+		}
+		if os.SameFile(pathInfo, entryInfo) {
+			return entry.Name(), nil
+		}
+	}
+	return base, nil
 }
 
 func canonicalHomeConfigDir(path string) (string, error) {
