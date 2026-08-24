@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -218,6 +219,21 @@ func TestAdmitTurnNewSlashRejectsWhileBusy(t *testing.T) {
 	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "/new"})
 	if result.Kind != TurnAdmissionConflict || result.Error.Message != "session busy" {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestPendingInputTerminalPublicationMapsToRetryableConflict(t *testing.T) {
+	status := runtime.PendingInputStatus{TurnID: "turn-1", PendingCount: 1, MaxPendingInputs: 4}
+	result := admissionResultFromPendingInput(runtime.PendingInputResult{
+		Retry:  runtime.PendingInputRetryAfterTurn,
+		Status: status,
+	}, runtime.ErrActiveTurnExists)
+
+	if result.Kind != TurnAdmissionConflict || !result.Error.Retryable || !errors.Is(result.Err, runtime.ErrActiveTurnExists) {
+		t.Fatalf("result = %+v, want retryable conflict", result)
+	}
+	if result.TurnID != status.TurnID || result.PendingCount != status.PendingCount || result.MaxPendingInputs != status.MaxPendingInputs {
+		t.Fatalf("result status = %+v, want %+v", result, status)
 	}
 }
 

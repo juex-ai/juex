@@ -224,6 +224,36 @@ func TestErrorSubscriberCanSynchronouslyUseLegacyPendingEnqueue(t *testing.T) {
 	}
 }
 
+func TestTerminalSubscriberCanSynchronouslyReadPendingLifecycleStatus(t *testing.T) {
+	provider := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "complete"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, provider, false)
+	statusResult := make(chan PendingInputStatus, 1)
+	unsubscribe := bus.Subscribe("turn.completed", func(events.Event) {
+		statusResult <- eng.PendingInputLifecycleStatus()
+	})
+	defer unsubscribe()
+
+	turnDone := make(chan error, 1)
+	go func() {
+		_, err := eng.Turn(context.Background(), "first")
+		turnDone <- err
+	}()
+	select {
+	case err := <-turnDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Turn deadlocked while terminal subscriber read pending lifecycle status")
+	}
+	if status := <-statusResult; status.TurnID == "" {
+		t.Fatalf("terminal publication status = %+v, want publishing Turn", status)
+	}
+}
+
 func TestReceivePendingInputWaitsForFallbackTerminalCommit(t *testing.T) {
 	provider := &mockProvider{script: []llm.Response{{
 		Message:    llm.TextMessage(llm.RoleAssistant, "completion will fail"),

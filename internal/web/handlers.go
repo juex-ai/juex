@@ -771,7 +771,12 @@ func (s *Server) writeTurnAdmissionResult(w http.ResponseWriter, result app.Turn
 			Retryable:  result.Error.Retryable,
 		})
 	case app.TurnAdmissionConflict:
-		writeErr(w, http.StatusConflict, result.Error.Kind, result.Error.Message)
+		writeJSON(w, http.StatusConflict, errorJSON{
+			Error:      result.Error.Kind,
+			Message:    result.Error.Message,
+			Suggestion: result.Error.Suggestion,
+			Retryable:  result.Error.Retryable,
+		})
 	case app.TurnAdmissionError:
 		writeErr(w, http.StatusInternalServerError, result.Error.Kind, result.Error.Message)
 	default:

@@ -434,10 +434,11 @@ func (e *Engine) EnqueuePersistedPendingMessage(ctx context.Context, record Pend
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
 	}}
-	deferred := e.deferPendingEventLocked(event)
+	deferred := e.stagePendingEventLocked(event)
 	e.pendingMu.Unlock()
 	if !deferred {
 		_ = e.emit(event)
+		e.flushPendingEvents()
 	}
 	return status, nil
 }
@@ -490,10 +491,11 @@ func (e *Engine) enqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 			MaxPendingInputs: status.MaxPendingInputs,
 			Reason:           "queue_full",
 		}}
-		deferred := e.deferPendingEventLocked(event)
+		deferred := e.stagePendingEventLocked(event)
 		e.pendingMu.Unlock()
 		if !deferred {
 			_ = e.emit(event)
+			e.flushPendingEvents()
 		}
 		return status, PendingInputRecord{}, ErrPendingInputQueueFull
 	}
@@ -529,10 +531,11 @@ func (e *Engine) enqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
 	}}
-	deferred := e.deferPendingEventLocked(event)
+	deferred := e.stagePendingEventLocked(event)
 	e.pendingMu.Unlock()
 	if !deferred {
 		_ = e.emit(event)
+		e.flushPendingEvents()
 	}
 	return status, acceptedRecord, nil
 }
@@ -2106,12 +2109,13 @@ func (e *Engine) notifyPendingInputsAdmitted(ctx context.Context, turnID string,
 	}, e.policySets()...)
 }
 
-func (e *Engine) deferPendingEventLocked(event events.Event) bool {
-	if !e.pendingEventAnnouncing {
-		return false
+func (e *Engine) stagePendingEventLocked(event events.Event) bool {
+	if e.pendingEventAnnouncing {
+		e.pendingDeferredEvents = append(e.pendingDeferredEvents, event)
+		return true
 	}
-	e.pendingDeferredEvents = append(e.pendingDeferredEvents, event)
-	return true
+	e.pendingEventAnnouncing = true
+	return false
 }
 
 func (e *Engine) flushPendingEvents() {

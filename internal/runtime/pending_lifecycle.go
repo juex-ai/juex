@@ -182,23 +182,18 @@ func (e *Engine) ReservePendingInputCompaction() (string, error) {
 	return turnID, nil
 }
 
-// PendingInputLifecycleStatus waits for an in-flight admission or terminal
-// commit before reporting whether App may begin an exclusive command.
+// PendingInputLifecycleStatus reports the active or terminally publishing Turn
+// without waiting, so synchronous event subscribers can inspect it safely.
 func (e *Engine) PendingInputLifecycleStatus() PendingInputStatus {
 	if e == nil {
 		return PendingInputStatus{}
 	}
-	for {
-		e.pendingLifecycleMu.Lock()
-		_, done, publishing := e.pendingTerminalPublicationStatus()
-		if !publishing {
-			status := e.PendingInputStatus()
-			e.pendingLifecycleMu.Unlock()
-			return status
-		}
-		e.pendingLifecycleMu.Unlock()
-		<-done
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
+	if status, _, publishing := e.pendingTerminalPublicationStatus(); publishing {
+		return status
 	}
+	return e.PendingInputStatus()
 }
 
 // FinishPendingInputCompaction releases a completed compaction and promotes

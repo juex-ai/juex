@@ -41,6 +41,9 @@ func (q turnAdmissionQueue) admitUser(ctx context.Context, message llm.Message) 
 }
 
 func admissionResultFromPendingInput(result runtime.PendingInputResult, err error) TurnAdmissionResult {
+	if result.Retry == runtime.PendingInputRetryAfterTurn && errors.Is(err, runtime.ErrActiveTurnExists) {
+		return conflictResult("session busy", err, result.Status)
+	}
 	switch result.Disposition {
 	case runtime.PendingInputStarted:
 		start := &AdmittedTurn{TurnID: result.TurnID, Message: result.Message}

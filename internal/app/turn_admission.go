@@ -257,7 +257,7 @@ func conflictResult(msg string, err error, status runtime.PendingInputStatus) Tu
 		TurnID:           status.TurnID,
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
-		Error:            TurnAdmissionErrorInfo{Kind: "conflict", Message: msg},
+		Error:            TurnAdmissionErrorInfo{Kind: "conflict", Message: msg, Retryable: true},
 		Err:              err,
 	}
 }

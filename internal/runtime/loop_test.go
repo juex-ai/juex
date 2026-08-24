@@ -7372,6 +7372,78 @@ func TestDrainPendingInputReportsMessagesQueuedWhileDraining(t *testing.T) {
 	}
 }
 
+func TestPendingQueuedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	eng.MaxPendingInputs = 3
+	if err := eng.ReserveTurnID("turn-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	var nestedErr error
+	var once sync.Once
+	bus.Subscribe("pending_input.queued", func(events.Event) {
+		once.Do(func() {
+			_, nestedErr = eng.EnqueuePendingInput(context.Background(), "second")
+		})
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.EnqueuePendingInput(context.Background(), "first")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("pending_input.queued subscriber deadlocked while synchronously enqueueing")
+	}
+	if nestedErr != nil {
+		t.Fatalf("nested enqueue: %v", nestedErr)
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 2 {
+		t.Fatalf("pending status = %+v, want two pending inputs", status)
+	}
+}
+
+func TestPendingRejectedSubscriberCanSynchronouslyEnqueue(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	eng.MaxPendingInputs = 1
+	if err := eng.ReserveTurnID("turn-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingInput(context.Background(), "first"); err != nil {
+		t.Fatal(err)
+	}
+
+	var nestedErr error
+	var once sync.Once
+	bus.Subscribe("pending_input.rejected", func(events.Event) {
+		once.Do(func() {
+			_, nestedErr = eng.EnqueuePendingInput(context.Background(), "nested")
+		})
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.EnqueuePendingInput(context.Background(), "second")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrPendingInputQueueFull) {
+			t.Fatalf("enqueue error = %v, want %v", err, ErrPendingInputQueueFull)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("pending_input.rejected subscriber deadlocked while synchronously enqueueing")
+	}
+	if !errors.Is(nestedErr, ErrPendingInputQueueFull) {
+		t.Fatalf("nested enqueue error = %v, want %v", nestedErr, ErrPendingInputQueueFull)
+	}
+}
+
 func TestEngine_PendingInputBackpressure(t *testing.T) {
 	prov := &mockProvider{
 		delay: 80 * time.Millisecond,
