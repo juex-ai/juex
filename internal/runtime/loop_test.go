@@ -5811,6 +5811,20 @@ func TestTurn_PendingInputRestoreFailureTerminallyPersistsAcceptedInput(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var acceptedRecordID string
+	for id, record := range records {
+		if record.MessageID == accepted.ID {
+			acceptedRecordID = id
+			break
+		}
+	}
+	if acceptedRecordID == "" {
+		t.Fatalf("pending record for accepted message %q not found: %+v", accepted.ID, records)
+	}
 	queue := eng.currentPendingInputQueue()
 	pendingPath := queue.path
 	backupPath := pendingPath + ".restore-failure"
@@ -5853,6 +5867,24 @@ func TestTurn_PendingInputRestoreFailureTerminallyPersistsAcceptedInput(t *testi
 	}
 
 	if err := restoreJournal(); err != nil {
+		t.Fatal(err)
+	}
+	discardDone := make(chan error, 1)
+	go func() {
+		_, err := eng.DiscardPendingInput(acceptedRecordID)
+		discardDone <- err
+	}()
+	select {
+	case err := <-discardDone:
+		t.Fatalf("discard completed before restore-failure lifecycle terminal handling: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if !lifecycle.pendingLifecycleHeld {
+		t.Fatal("restore-failure cleanup did not retain the pending lifecycle lock")
+	}
+	eng.pendingLifecycleMu.Unlock()
+	lifecycle.pendingLifecycleHeld = false
+	if err := <-discardDone; err != nil {
 		t.Fatal(err)
 	}
 	eng.finishActiveTurn("failed-turn")

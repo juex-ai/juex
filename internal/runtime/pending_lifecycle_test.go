@@ -150,6 +150,72 @@ func TestReceivePendingInputWaitsForFallbackTerminalCommit(t *testing.T) {
 	eng.finishActiveTurn(result.TurnID)
 }
 
+func TestFailedPendingPreservationClearsReservationBeforeAdmissionUnlock(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	turnID := eng.beginActiveTurn("failed-preservation-turn")
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "preserve me"), PendingInputOptions{
+		ID:  "pending-before-preservation-failure",
+		TTL: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	queue := eng.currentPendingInputQueue()
+	originalWrite := queue.fileOps.write
+	wantStorageErr := errors.New("pending terminal storage failure")
+	queue.fileOps.write = func(*os.File, []byte) (int, error) { return 0, wantStorageErr }
+	t.Cleanup(func() { queue.fileOps.write = originalWrite })
+	errorStarted := make(chan struct{})
+	releaseError := make(chan struct{})
+	bus.SetCommitter(&blockingFallbackTerminalCommitter{
+		delegate:     selectiveSessionCommitter{session: eng.Session},
+		errorStarted: errorStarted,
+		releaseError: releaseError,
+	})
+
+	wantTurnErr := errors.New("provider failed")
+	failDone := make(chan error, 1)
+	go func() { failDone <- eng.failActiveTurnLocked(turnID, wantTurnErr, false) }()
+	select {
+	case <-errorStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fallback terminal commit did not start")
+	}
+
+	nextResult := make(chan PendingInputResult, 1)
+	nextErr := make(chan error, 1)
+	go func() {
+		result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+			Message: llm.TextMessage(llm.RoleUser, "next input"),
+		})
+		nextResult <- result
+		nextErr <- err
+	}()
+	select {
+	case result := <-nextResult:
+		close(releaseError)
+		t.Fatalf("next admission completed before failed turn released its reservation: %+v", result)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	queue.fileOps.write = originalWrite
+	close(releaseError)
+	if err := <-failDone; !errors.Is(err, wantTurnErr) || !errors.Is(err, wantStorageErr) {
+		t.Fatalf("failed turn error = %v, want joined turn and storage failures", err)
+	}
+	result := <-nextResult
+	if err := <-nextErr; err != nil {
+		t.Fatal(err)
+	}
+	if result.Disposition != PendingInputStarted || result.TurnID == "" {
+		t.Fatalf("next admission = %+v, want a fresh started turn", result)
+	}
+	if status := eng.PendingInputStatus(); status.TurnID != result.TurnID {
+		t.Fatalf("active turn = %+v, want only fresh reservation %q", status, result.TurnID)
+	}
+	eng.finishActiveTurn(result.TurnID)
+}
+
 type blockingFallbackTerminalCommitter struct {
 	delegate      events.Committer
 	completionErr error

@@ -770,7 +770,9 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 	delivery, err := m.parent.deliverExternalInputUntilSettled(ctx, msg, runtime.PendingInputOptions{
 		ID:  handoffID,
 		TTL: m.parent.Engine.ExternalEventTTL,
-	}, m.ensureParentActive)
+	}, m.ensureParentActive, func() {
+		m.finishResultHandoffs([]string{handoffID})
+	})
 	if delivery.Queued && err == nil {
 		finishOnReturn = false
 		return

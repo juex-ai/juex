@@ -52,6 +52,8 @@ func (l *turnLifecycle) runLocked(ctx context.Context) (turnLifecycleResult, err
 		return turnLifecycleResult{}, err
 	}
 	if err := l.engine.restorePendingInput(ctx, l.turnID, l.userMsg.ID); err != nil {
+		l.engine.pendingLifecycleMu.Lock()
+		l.pendingLifecycleHeld = true
 		if preserveErr := l.engine.preservePendingInputAfterFailureLocked(l.turnID); preserveErr != nil {
 			err = errors.Join(err, fmt.Errorf("preserve accepted input order after pending-input restore failure: %w", preserveErr))
 		}

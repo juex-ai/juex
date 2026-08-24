@@ -2104,7 +2104,9 @@ func (e *Engine) failActiveTurnLocked(turnID string, err error, lifecycleHeld bo
 	if preserveErr := e.preservePendingInputAfterFailureLocked(turnID); preserveErr != nil {
 		err = errors.Join(err, fmt.Errorf("preserve pending input after turn failure: %w", preserveErr))
 	}
-	return e.failTurn(turnID, err)
+	terminalErr := e.failTurn(turnID, err)
+	e.finishActiveTurn(turnID)
+	return terminalErr
 }
 
 func newID() string {

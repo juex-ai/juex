@@ -55,6 +55,18 @@ func (a *App) deliverExternalInputLocked(
 	handoff bool,
 	valid func() error,
 ) (externalInputDelivery, error) {
+	return a.deliverExternalInputLockedWithStart(ctx, message, opts, sessionLease, handoff, valid, nil)
+}
+
+func (a *App) deliverExternalInputLockedWithStart(
+	ctx context.Context,
+	message llm.Message,
+	opts runtime.PendingInputOptions,
+	sessionLease *externalInputSessionLease,
+	handoff bool,
+	valid func() error,
+	onStarted func(),
+) (externalInputDelivery, error) {
 	accepted, err := a.Engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{
 		Message:       message,
 		Options:       &opts,
@@ -75,7 +87,7 @@ func (a *App) deliverExternalInputLocked(
 		}
 		return externalInputDelivery{RecordID: recordID, Queued: true, Retry: runtime.PendingInputRetryAfterRecovery}, err
 	}
-	delivery, err := a.resumePersistedInputLocked(ctx, recordID)
+	delivery, err := a.resumePersistedInputLockedWithStart(ctx, recordID, onStarted)
 	if handoff && shouldRetryPersistedInputHandoff(delivery, err) {
 		a.handoffPersistedInputAfterRecovery(recordID, sessionLease)
 	}
@@ -85,6 +97,10 @@ func (a *App) deliverExternalInputLocked(
 // resumePersistedInputLocked follows the Framework-owned lifecycle outcome;
 // App owns only the Session lease and execution of a returned start action.
 func (a *App) resumePersistedInputLocked(ctx context.Context, recordID string) (externalInputDelivery, error) {
+	return a.resumePersistedInputLockedWithStart(ctx, recordID, nil)
+}
+
+func (a *App) resumePersistedInputLockedWithStart(ctx context.Context, recordID string, onStarted func()) (externalInputDelivery, error) {
 	queue := a.admissionQueue()
 	queue.state.transitionMu.Lock()
 	queue.state.mu.Lock()
@@ -98,6 +114,9 @@ func (a *App) resumePersistedInputLocked(ctx context.Context, recordID string) (
 	queue.state.transitionMu.Unlock()
 	if result.Disposition != runtime.PendingInputStarted {
 		return externalInputDeliveryFromRuntime(result), receiveErr
+	}
+	if onStarted != nil {
+		onStarted()
 	}
 	_, runErr := a.Engine.TurnMessageWithID(ctx, result.Message, result.TurnID)
 	resolved, err := a.Engine.ResolvePendingInput(recordID, runErr)
@@ -121,6 +140,7 @@ func (a *App) deliverExternalInputUntilSettled(
 	message llm.Message,
 	opts runtime.PendingInputOptions,
 	valid func() error,
+	onStarted func(),
 ) (externalInputDelivery, error) {
 	lease := a.acquireExternalInputSessionLease()
 	defer lease.Release()
@@ -133,7 +153,7 @@ func (a *App) deliverExternalInputUntilSettled(
 			return last, errors.Join(err, a.discardExternalInput(last.RecordID))
 		}
 		a.sessionMu.RLock()
-		delivery, err := a.deliverExternalInputLocked(ctx, message, opts, lease, false, valid)
+		delivery, err := a.deliverExternalInputLockedWithStart(ctx, message, opts, lease, false, valid, onStarted)
 		a.sessionMu.RUnlock()
 		last = delivery
 		if err == nil || delivery.Retry == runtime.PendingInputNoRetry {
