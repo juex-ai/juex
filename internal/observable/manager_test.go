@@ -185,6 +185,27 @@ func TestManagerCommandResolvesRelativeExecutableFromWorkDir(t *testing.T) {
 	}
 }
 
+func TestManagerInitializesArtifactRoot(t *testing.T) {
+	dir := t.TempDir()
+	artifactDir := filepath.Join(dir, "agent", "artifacts")
+	if err := os.MkdirAll(filepath.Dir(artifactDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath:  configPath(dir),
+		StateDir:    stateDir(dir),
+		WorkDir:     dir,
+		ArtifactDir: artifactDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if info, err := os.Stat(artifactDir); err != nil || !info.IsDir() {
+		t.Fatalf("Artifact root stat = %+v, %v", info, err)
+	}
+}
+
 func TestManager_StartAllContinuesAfterOneStartError(t *testing.T) {
 	dir := t.TempDir()
 	bad := validSpec("bad-start")

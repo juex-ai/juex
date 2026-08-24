@@ -14,6 +14,7 @@ type FilePolicyOptions struct {
 	Policy        Policy
 	WorkDir       string
 	AgentStateDir string
+	ReadOnlyPaths []string
 }
 
 type FilePolicy struct {
@@ -22,6 +23,7 @@ type FilePolicy struct {
 	base              string
 	blockedPaths      []blockedPath
 	canonicalRoots    []string
+	readOnlyRoots     []string
 	scratchRoot       string
 	commandWriteCheck *commandWriteCheckState
 }
@@ -34,10 +36,20 @@ type blockedPath struct {
 }
 
 func NewFilePolicy(opts FilePolicyOptions) FilePolicy {
-	if !opts.Policy.Enabled {
-		return FilePolicy{}
-	}
 	base := sandboxPathBase(opts.WorkDir)
+	readOnlyRoots := make([]string, 0, len(opts.ReadOnlyPaths))
+	for _, raw := range opts.ReadOnlyPaths {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		if canonical, ok := canonicalPath(base, raw); ok {
+			readOnlyRoots = append(readOnlyRoots, canonical)
+		}
+	}
+	readOnlyRoots = dedupePaths(readOnlyRoots)
+	if !opts.Policy.Enabled {
+		return FilePolicy{base: base, readOnlyRoots: readOnlyRoots}
+	}
 	writable := []string{opts.WorkDir}
 	if strings.TrimSpace(opts.AgentStateDir) != "" {
 		writable = append(writable, opts.AgentStateDir)
@@ -77,6 +89,7 @@ func NewFilePolicy(opts FilePolicyOptions) FilePolicy {
 		base:              base,
 		blockedPaths:      roots,
 		canonicalRoots:    canonicalRoots,
+		readOnlyRoots:     readOnlyRoots,
 		scratchRoot:       scratchRoot,
 		commandWriteCheck: &commandWriteCheckState{},
 	}
@@ -106,18 +119,38 @@ func (g FilePolicy) CheckRead(path string) error {
 }
 
 func (g FilePolicy) CheckWrite(path string) error {
-	if !g.enabled {
-		return nil
-	}
 	if err := g.CheckRead(path); err != nil {
 		return err
 	}
-	if !g.restrictWrites {
+	if !g.enabled && len(g.readOnlyRoots) == 0 {
 		return nil
 	}
 	target, ok := canonicalPath(g.base, path)
 	if !ok {
 		return fmt.Errorf("sandbox: invalid write path %q", path)
+	}
+	for _, root := range g.readOnlyRoots {
+		if pathWithinOrEqualFilesystem(root, target) {
+			return fmt.Errorf("sandbox: write path %s is inside read-only root %s", target, root)
+		}
+	}
+	if len(g.readOnlyRoots) > 0 {
+		metadata, multiple, err := readHardLinkMetadata(target)
+		if err != nil {
+			return fmt.Errorf("sandbox: inspect write path %s: %w", target, err)
+		}
+		if multiple {
+			root, matched, err := g.hardLinkReadOnlyRoot(context.Background(), metadata)
+			if err != nil {
+				return fmt.Errorf("sandbox: inspect read-only hard links for write path %s: %w", target, err)
+			}
+			if matched {
+				return fmt.Errorf("sandbox: write path %s is a hard-link alias of read-only root %s", target, root)
+			}
+		}
+	}
+	if !g.restrictWrites {
+		return nil
 	}
 	for _, root := range g.canonicalRoots {
 		if pathWithinOrEqualFilesystem(root, target) {
@@ -142,7 +175,7 @@ func (g FilePolicy) CheckWrite(path string) error {
 }
 
 func (g FilePolicy) CheckCommandWrites(ctx context.Context) error {
-	if !g.enabled || !g.restrictWrites {
+	if !g.enabled || (!g.restrictWrites && len(g.readOnlyRoots) == 0) {
 		return nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -192,6 +225,14 @@ type hardLinkRecord struct {
 }
 
 func (g FilePolicy) scanCommandHardLinks(ctx context.Context) error {
+	if len(g.readOnlyRoots) > 0 {
+		if err := g.scanCommandReadOnlyHardLinks(ctx); err != nil {
+			return err
+		}
+	}
+	if !g.restrictWrites {
+		return nil
+	}
 	index, err := g.hardLinkIndex(ctx)
 	if err != nil {
 		return err
@@ -199,6 +240,47 @@ func (g FilePolicy) scanCommandHardLinks(ctx context.Context) error {
 	for _, record := range index {
 		if record.aliases < record.links {
 			return fmt.Errorf("writable root file with multiple hard links has %d of %d aliases inside writable roots: %s", record.aliases, record.links, record.path)
+		}
+	}
+	return nil
+}
+
+func (g FilePolicy) scanCommandReadOnlyHardLinks(ctx context.Context) error {
+	readOnly, err := g.readOnlyHardLinks(ctx)
+	if err != nil {
+		return err
+	}
+	if len(readOnly) == 0 {
+		return nil
+	}
+	for _, root := range g.commandWritableRoots() {
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() && g.isReadOnlyPath(path) {
+				return filepath.SkipDir
+			}
+			if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+				return nil
+			}
+			metadata, multiple, err := readHardLinkMetadata(path)
+			if err != nil {
+				return err
+			}
+			if readOnlyRoot, matched := readOnly[metadata.identity]; multiple && matched {
+				return fmt.Errorf("writable root path is a hard-link alias of read-only root %s: %s", readOnlyRoot, path)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
 		}
 	}
 	return nil
@@ -220,6 +302,47 @@ func (g FilePolicy) hardLinkContained(ctx context.Context, target hardLinkMetada
 	return record.aliases >= links, nil
 }
 
+func (g FilePolicy) hardLinkReadOnlyRoot(ctx context.Context, target hardLinkMetadata) (string, bool, error) {
+	readOnly, err := g.readOnlyHardLinks(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	root, matched := readOnly[target.identity]
+	return root, matched, nil
+}
+
+func (g FilePolicy) readOnlyHardLinks(ctx context.Context) (map[hardLinkIdentity]string, error) {
+	readOnly := map[hardLinkIdentity]string{}
+	for _, root := range g.readOnlyRoots {
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+				return nil
+			}
+			metadata, multiple, err := readHardLinkMetadata(path)
+			if err != nil {
+				return err
+			}
+			if multiple {
+				readOnly[metadata.identity] = root
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return readOnly, nil
+}
+
 func (g FilePolicy) hardLinkIndex(ctx context.Context) (map[hardLinkIdentity]*hardLinkRecord, error) {
 	index := map[hardLinkIdentity]*hardLinkRecord{}
 	for _, root := range g.commandWritableRoots() {
@@ -232,6 +355,9 @@ func (g FilePolicy) hardLinkIndex(ctx context.Context) (map[hardLinkIdentity]*ha
 			}
 			if walkErr != nil {
 				return walkErr
+			}
+			if entry.IsDir() && g.isReadOnlyPath(path) {
+				return filepath.SkipDir
 			}
 			if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 				return nil
@@ -299,6 +425,10 @@ func (g FilePolicy) WritableRoots() []string {
 	return append([]string(nil), g.canonicalRoots...)
 }
 
+func (g FilePolicy) ReadOnlyRoots() []string {
+	return append([]string(nil), g.readOnlyRoots...)
+}
+
 func (g FilePolicy) ScratchRoot() string {
 	return g.scratchRoot
 }
@@ -306,6 +436,19 @@ func (g FilePolicy) ScratchRoot() string {
 func (g FilePolicy) IsBlocked(path string) bool {
 	_, _, ok := g.blockedPath(path)
 	return ok
+}
+
+func (g FilePolicy) isReadOnlyPath(path string) bool {
+	target, ok := canonicalPath(g.base, path)
+	if !ok {
+		return false
+	}
+	for _, root := range g.readOnlyRoots {
+		if pathWithinOrEqualFilesystem(root, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func (g FilePolicy) blockedPath(path string) (string, string, bool) {

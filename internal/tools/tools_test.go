@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/llm"
@@ -129,6 +130,27 @@ func TestDefaultBuiltinToolGroups(t *testing.T) {
 		}
 		if got := registered.Definition(); !reflect.DeepEqual(got, definition) {
 			t.Errorf("%s registered definition = %#v, want %#v", definition.Name, got, definition)
+		}
+	}
+}
+
+func TestReadToolDefinitionAdvertisesArtifactURI(t *testing.T) {
+	definition := readToolDefinition()
+	properties, ok := definition.Schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("read properties = %#v", definition.Schema["properties"])
+	}
+	path, ok := properties["path"].(map[string]any)
+	if !ok {
+		t.Fatalf("read path schema = %#v", properties["path"])
+	}
+	pathDescription, _ := path["description"].(string)
+	for label, description := range map[string]string{
+		"tool": definition.Description,
+		"path": pathDescription,
+	} {
+		if !strings.Contains(description, "artifact://") || !strings.Contains(description, "read-only") {
+			t.Fatalf("read %s description does not advertise read-only Artifact URIs: %q", label, description)
 		}
 	}
 }
@@ -939,6 +961,103 @@ func TestBuiltins_ReadWriteEdit(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if string(data) != "hello Juex" {
 		t.Fatalf("after edit: %q", string(data))
+	}
+}
+
+func TestBuiltins_ArtifactReadURIIsReadableAndReadOnly(t *testing.T) {
+	root := t.TempDir()
+	workDir := filepath.Join(root, "work")
+	artifactDir := filepath.Join(root, "artifacts")
+	if err := os.Mkdir(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := artifact.NewStore(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Put("sessions/session-1/tool-results/call-1.txt", []byte("complete tool output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uri, err := artifact.FormatReadURI(ref.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry()
+	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, ArtifactDir: artifactDir, Shell: DefaultShellProfile()})
+	out, err := r.Call(context.Background(), "read", map[string]any{"path": uri})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "complete tool output" {
+		t.Fatalf("read output = %q, want complete Artifact content", out)
+	}
+	for _, call := range []struct {
+		name  string
+		input map[string]any
+	}{
+		{name: "write", input: map[string]any{"path": uri, "content": "overwritten"}},
+		{name: "edit", input: map[string]any{"path": uri, "old": "complete", "new": "overwritten"}},
+	} {
+		if _, err := r.Call(context.Background(), call.name, call.input); err == nil || !strings.Contains(err.Error(), "artifact references are read-only") {
+			t.Fatalf("%s error = %v, want read-only Artifact rejection", call.name, err)
+		}
+	}
+	for _, call := range []struct {
+		name  string
+		input map[string]any
+	}{
+		{name: "write", input: map[string]any{"path": filepath.Join(artifactDir, filepath.FromSlash(ref.Path)), "content": "overwritten"}},
+		{name: "edit", input: map[string]any{"path": filepath.Join(artifactDir, filepath.FromSlash(ref.Path)), "old": "complete", "new": "overwritten"}},
+	} {
+		if _, err := r.Call(context.Background(), call.name, call.input); err == nil || !strings.Contains(err.Error(), "read-only root") {
+			t.Fatalf("%s physical Artifact error = %v, want read-only root rejection", call.name, err)
+		}
+	}
+	data, err := store.Read(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "complete tool output" {
+		t.Fatalf("Artifact changed after rejected writes: %q", data)
+	}
+}
+
+func TestBuiltins_ArtifactReadURIRespectsSandboxBlockedPaths(t *testing.T) {
+	root := t.TempDir()
+	workDir := filepath.Join(root, "work")
+	agentStateDir := filepath.Join(root, "agent")
+	artifactDir := filepath.Join(agentStateDir, "artifacts")
+	for _, path := range []string{workDir, agentStateDir} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := artifact.NewStore(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Put("sessions/session-1/tool-results/call-1.txt", []byte("blocked tool output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uri, err := artifact.FormatReadURI(ref.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := sandbox.DefaultPolicyForOS("linux")
+	policy.FileSystem.BlockedPaths = []string{artifactDir}
+	r := NewRegistry()
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir:       workDir,
+		AgentStateDir: agentStateDir,
+		ArtifactDir:   artifactDir,
+		Shell:         DefaultShellProfile(),
+		Sandbox:       policy,
+	})
+	if _, err := r.Call(context.Background(), "read", map[string]any{"path": uri}); err == nil || !strings.Contains(err.Error(), "blocked path") {
+		t.Fatalf("Artifact URI read = %v, want blocked path rejection", err)
 	}
 }
 
@@ -3008,6 +3127,10 @@ func TestBuiltins_ExecCommandGrantsAgentStateDir(t *testing.T) {
 	if err := os.MkdirAll(agentStateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	artifactDir := filepath.Join(agentStateDir, "artifacts")
+	if err := os.Mkdir(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	runner := &fakeSandboxRunner{}
 	policy := sandbox.DefaultPolicy()
 	policy.Enabled = true
@@ -3015,6 +3138,7 @@ func TestBuiltins_ExecCommandGrantsAgentStateDir(t *testing.T) {
 	RegisterBuiltins(r, BuiltinOptions{
 		WorkDir:       workDir,
 		AgentStateDir: agentStateDir,
+		ArtifactDir:   artifactDir,
 		Shell:         fakeShellProfile(),
 		Sandbox:       policy,
 		SandboxRunner: runner,
@@ -3028,6 +3152,9 @@ func TestBuiltins_ExecCommandGrantsAgentStateDir(t *testing.T) {
 	}
 	if got := runner.requests[0].FilePolicy.WritableRoots(); len(got) != 2 || got[0] != canonicalPathForTest(t, workDir) || got[1] != canonicalPathForTest(t, agentStateDir) {
 		t.Fatalf("writable roots = %#v, want Workspace and AgentStateDir", got)
+	}
+	if got := runner.requests[0].FilePolicy.ReadOnlyRoots(); len(got) != 1 || got[0] != canonicalPathForTest(t, artifactDir) {
+		t.Fatalf("read-only roots = %#v, want Artifact root %q", got, canonicalPathForTest(t, artifactDir))
 	}
 }
 

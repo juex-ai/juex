@@ -84,6 +84,18 @@ func NewStore(artifactDir string) (Store, error) {
 	return Store{artifactDir: rootPath, parentDir: parentDir, parentInfo: info, rootName: rootName}, nil
 }
 
+// EnsureRoot creates and validates the Artifact root without storing data.
+func (s Store) EnsureRoot() error {
+	root, err := s.openRoot(true)
+	if err != nil {
+		return fmt.Errorf("artifact store open: %w", err)
+	}
+	if err := root.Close(); err != nil {
+		return fmt.Errorf("artifact store close: %w", err)
+	}
+	return nil
+}
+
 // Put atomically stores data at a logical path relative to the Artifact root.
 func (s Store) Put(relativePath string, data []byte) (Ref, error) {
 	relativePath, err := normalizeRelativePath(relativePath)

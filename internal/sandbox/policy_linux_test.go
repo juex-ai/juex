@@ -208,6 +208,63 @@ func TestLinuxBlockedPathMaskFollowsWritableAgentStateBind(t *testing.T) {
 	}
 }
 
+func TestLinuxReadOnlyPathFollowsWritableAgentStateBind(t *testing.T) {
+	workspace := t.TempDir()
+	agentStateDir := t.TempDir()
+	artifactDir := filepath.Join(agentStateDir, "artifacts")
+	if err := os.Mkdir(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	policy := DefaultPolicy()
+	policy.Enabled = true
+	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
+	filePolicy := NewFilePolicy(FilePolicyOptions{
+		Policy:        policy,
+		WorkDir:       workspace,
+		AgentStateDir: agentStateDir,
+		ReadOnlyPaths: []string{artifactDir},
+	})
+	got, err := (DefaultRunner{
+		RuntimeOS: "linux",
+		LookPath:  sandboxLookPathForTest("/usr/bin/bwrap", "/bin/true"),
+	}).Prepare(context.Background(), Request{
+		Policy:     policy,
+		WorkDir:    workspace,
+		FilePolicy: filePolicy,
+		Spec:       ExecSpec{Binary: "/bin/true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Join(got.Args, "\x00")
+	bind := "--bind\x00" + agentStateDir + "\x00" + agentStateDir
+	readOnly := "--ro-bind\x00" + artifactDir + "\x00" + artifactDir
+	bindAt, readOnlyAt := strings.Index(args, bind), strings.Index(args, readOnly)
+	if bindAt < 0 || readOnlyAt < 0 || readOnlyAt < bindAt {
+		t.Fatalf("read-only Artifact bind must follow AgentStateDir bind: %#v", got.Args)
+	}
+}
+
+func TestLinuxReadOnlyPathMustExist(t *testing.T) {
+	workspace := t.TempDir()
+	missing := filepath.Join(t.TempDir(), "missing-artifacts")
+	policy := DefaultPolicy()
+	policy.Enabled = true
+	filePolicy := NewFilePolicy(FilePolicyOptions{Policy: policy, WorkDir: workspace, ReadOnlyPaths: []string{missing}})
+	_, err := (DefaultRunner{
+		RuntimeOS: "linux",
+		LookPath:  sandboxLookPathForTest("/usr/bin/bwrap", "/bin/true"),
+	}).Prepare(context.Background(), Request{
+		Policy:     policy,
+		WorkDir:    workspace,
+		FilePolicy: filePolicy,
+		Spec:       ExecSpec{Binary: "/bin/true"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "read-only path") {
+		t.Fatalf("err = %v, want missing read-only path error", err)
+	}
+}
+
 func TestLinuxBlockedPathsRejectMissingPaths(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing-secret")
 	policy := DefaultPolicy()

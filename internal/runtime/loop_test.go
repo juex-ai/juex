@@ -1589,7 +1589,15 @@ func TestTurn_CompactionSummarizesRealInputThatExceedsRetentionBudget(t *testing
 		t.Fatalf("active context has unterminated artifact path:\n%s", activeText)
 	}
 	artifactPath := strings.TrimSpace(activeText[pathStart+len("path: ") : pathStart+pathEnd])
-	artifactData, err := os.ReadFile(filepath.Join(eng.ArtifactDir, filepath.FromSlash(artifactPath)))
+	relativePath, recognized, err := artifact.ParseReadURI(artifactPath)
+	if err != nil || !recognized {
+		t.Fatalf("parse retained input Artifact URI = (%q, %t, %v)", relativePath, recognized, err)
+	}
+	store, err := eng.projectedArtifactStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactData, err := store.Read(artifact.Ref{Path: relativePath})
 	if err != nil {
 		t.Fatalf("read retained input artifact: %v", err)
 	}
@@ -1642,7 +1650,8 @@ func TestTurn_CompactionRetightensPreviouslyProjectedOversizedInput(t *testing.T
 	if strings.Contains(activeText, strings.Repeat("private-detail ", 20)) {
 		t.Fatalf("active context kept the original large preview:\n%s", activeText)
 	}
-	for _, want := range []string{"summary of projected request", "TAIL-SAFETY-GUARD", projected.Artifact.StoredPath, "latest"} {
+	readPath := mustProjectedArtifactReadURI(t, projected.Artifact)
+	for _, want := range []string{"summary of projected request", "TAIL-SAFETY-GUARD", readPath, "latest"} {
 		if !strings.Contains(activeText, want) {
 			t.Fatalf("active context missing %q:\n%s", want, activeText)
 		}
@@ -1704,7 +1713,7 @@ func TestTurn_CompactionBoundsSharedPreviewForMultipleProjectedBlocks(t *testing
 		t.Fatalf("active context kept a per-block full preview:\n%s", activeText)
 	}
 	for i, block := range projected.Blocks {
-		if block.Artifact == nil || !strings.Contains(activeText, block.Artifact.StoredPath) {
+		if block.Artifact == nil || !strings.Contains(activeText, mustProjectedArtifactReadURI(t, block.Artifact)) {
 			t.Fatalf("active context missing artifact path for block %d: %+v\n%s", i, block.Artifact, activeText)
 		}
 	}
@@ -1757,6 +1766,9 @@ func TestTurn_CompactionCarriesRetainedInputReferencesAcrossCompactions(t *testi
 	if firstArtifact == nil {
 		t.Fatalf("first retained reference = %+v", firstReference)
 	}
+	if strings.Contains(firstReference.FirstText(), eng.ArtifactDir) {
+		t.Fatalf("durable retained reference contains runtime-specific Artifact root: %s", firstReference.FirstText())
+	}
 
 	secondInput := "second-head " + strings.Repeat("second-private ", 1600) + " SECOND-TAIL"
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, secondInput)); err != nil {
@@ -1772,7 +1784,8 @@ func TestTurn_CompactionCarriesRetainedInputReferencesAcrossCompactions(t *testi
 		t.Fatalf("provider histories = %d, want two summary and two answer requests", len(prov.histories))
 	}
 	secondSummaryRequest := messagesText(prov.histories[2])
-	if strings.Contains(secondSummaryRequest, "Retained Input References") || strings.Contains(secondSummaryRequest, firstArtifact.StoredPath) {
+	firstReadPath := mustProjectedArtifactReadURI(t, firstArtifact)
+	if strings.Contains(secondSummaryRequest, "Retained Input References") || strings.Contains(secondSummaryRequest, firstReadPath) {
 		t.Fatalf("second summary request replayed deterministic retained references:\n%s", secondSummaryRequest)
 	}
 	if !strings.Contains(secondSummaryRequest, "first summary without references") {
@@ -1792,7 +1805,7 @@ func TestTurn_CompactionCarriesRetainedInputReferencesAcrossCompactions(t *testi
 		t.Fatalf("latest compact references = %+v, want inherited and current", latest.Compaction)
 	}
 	activeText := messagesText(prov.histories[3])
-	for _, want := range []string{"second summary without references", firstArtifact.StoredPath, firstArtifact.SHA256, "FIRST-TAIL", "SECOND-TAIL", "second-latest"} {
+	for _, want := range []string{"second summary without references", firstReadPath, firstArtifact.SHA256, "FIRST-TAIL", "SECOND-TAIL", "second-latest"} {
 		if !strings.Contains(activeText, want) {
 			t.Fatalf("active context missing carried reference %q:\n%s", want, activeText)
 		}
@@ -2052,6 +2065,18 @@ func readProjectedArtifact(t *testing.T, eng *Engine, projection *llm.ContextArt
 		t.Fatalf("read artifact: %v", err)
 	}
 	return data
+}
+
+func mustProjectedArtifactReadURI(t *testing.T, projection *llm.ContextArtifactProjection) string {
+	t.Helper()
+	if projection == nil {
+		t.Fatal("missing context artifact projection")
+	}
+	uri, err := artifact.FormatReadURI(projection.StoredPath)
+	if err != nil {
+		t.Fatalf("format projected artifact read URI: %v", err)
+	}
+	return uri
 }
 
 func TestTurn_ProjectsLargeUnprojectedHistoryBeforeProviderRequest(t *testing.T) {

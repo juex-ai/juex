@@ -103,6 +103,91 @@ func TestFilePolicyAllowsOnlyCanonicalWritableRoots(t *testing.T) {
 	}
 }
 
+func TestFilePolicyReadOnlyRootsAllowReadsAndRejectWrites(t *testing.T) {
+	root := t.TempDir()
+	work := filepath.Join(root, "work")
+	agentState := filepath.Join(root, "agent")
+	artifactDir := filepath.Join(agentState, "artifacts")
+	for _, path := range []string{work, artifactDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifactPath := filepath.Join(artifactDir, "sessions", "result.txt")
+	guard := NewFilePolicy(FilePolicyOptions{
+		Policy:        DefaultPolicyForOS("linux"),
+		WorkDir:       work,
+		AgentStateDir: agentState,
+		ReadOnlyPaths: []string{artifactDir},
+	})
+	if err := guard.CheckRead(artifactPath); err != nil {
+		t.Fatalf("Artifact read = %v, want allowed", err)
+	}
+	if err := guard.CheckWrite(artifactPath); err == nil || !strings.Contains(err.Error(), "read-only root") {
+		t.Fatalf("Artifact write = %v, want read-only root rejection", err)
+	}
+	if err := guard.CheckWrite(filepath.Join(agentState, "memory", "note.txt")); err != nil {
+		t.Fatalf("other Agent state write = %v, want allowed", err)
+	}
+	roots := guard.ReadOnlyRoots()
+	wantRoot, ok := canonicalPath(work, artifactDir)
+	if !ok {
+		t.Fatalf("canonicalPath(%q) failed", artifactDir)
+	}
+	if len(roots) != 1 || roots[0] != wantRoot {
+		t.Fatalf("read-only roots = %#v, want %q", roots, wantRoot)
+	}
+
+	disabled := NewFilePolicy(FilePolicyOptions{
+		Policy:        LegacyDefaultPolicy(),
+		WorkDir:       work,
+		ReadOnlyPaths: []string{artifactDir},
+	})
+	if err := disabled.CheckWrite(artifactPath); err == nil || !strings.Contains(err.Error(), "read-only root") {
+		t.Fatalf("disabled sandbox Artifact write = %v, want builtin read-only root rejection", err)
+	}
+}
+
+func TestFilePolicyReadOnlyRootsRejectHardLinkAliasesWhenWritesAreUnrestricted(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("hard-link count enforcement is supported by the sandbox platforms")
+	}
+	root := t.TempDir()
+	work := filepath.Join(root, "work")
+	artifactDir := filepath.Join(root, "agent", "artifacts")
+	for _, path := range []string{work, artifactDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifactPath := filepath.Join(artifactDir, "result.txt")
+	if err := os.WriteFile(artifactPath, []byte("durable result"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(work, "artifact-alias.txt")
+	if err := os.Link(artifactPath, alias); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+
+	readWrite := DefaultPolicyForOS(runtime.GOOS)
+	readWrite.FileSystem.OutsideWorkspace = OutsideWorkspaceReadWrite
+	for name, policy := range map[string]Policy{
+		"disabled":   LegacyDefaultPolicy(),
+		"read_write": readWrite,
+	} {
+		t.Run(name, func(t *testing.T) {
+			guard := NewFilePolicy(FilePolicyOptions{
+				Policy:        policy,
+				WorkDir:       work,
+				ReadOnlyPaths: []string{artifactDir},
+			})
+			if err := guard.CheckWrite(alias); err == nil || !strings.Contains(err.Error(), "hard-link alias of read-only root") {
+				t.Fatalf("CheckWrite(%q) = %v, want read-only hard-link rejection", alias, err)
+			}
+		})
+	}
+}
+
 func TestFilePolicyRejectsExistingFilesWithMultipleHardLinks(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("hard-link count enforcement is supported by the sandbox platforms")
@@ -188,6 +273,39 @@ func TestFilePolicyRejectsCommandWritesWhenWritableRootContainsHardLinks(t *test
 	guard = NewFilePolicy(FilePolicyOptions{Policy: readWrite, WorkDir: work})
 	if err := guard.CheckCommandWrites(context.Background()); err != nil {
 		t.Fatalf("read_write CheckCommandWrites() = %v, want allowed", err)
+	}
+}
+
+func TestFilePolicyRejectsUnrestrictedCommandWritesThroughReadOnlyHardLinkAliases(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("hard-link count enforcement is supported by the sandbox platforms")
+	}
+	root := t.TempDir()
+	work := filepath.Join(root, "work")
+	artifactDir := filepath.Join(root, "agent", "artifacts")
+	for _, path := range []string{work, artifactDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifactPath := filepath.Join(artifactDir, "result.txt")
+	if err := os.WriteFile(artifactPath, []byte("durable result"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(work, "artifact-alias.txt")
+	if err := os.Link(artifactPath, alias); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+
+	policy := DefaultPolicyForOS(runtime.GOOS)
+	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadWrite
+	guard := NewFilePolicy(FilePolicyOptions{
+		Policy:        policy,
+		WorkDir:       work,
+		ReadOnlyPaths: []string{artifactDir},
+	})
+	if err := guard.CheckCommandWrites(context.Background()); err == nil || !strings.Contains(err.Error(), "hard-link alias of read-only root") {
+		t.Fatalf("CheckCommandWrites() = %v, want read-only hard-link rejection", err)
 	}
 }
 

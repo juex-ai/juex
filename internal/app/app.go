@@ -346,7 +346,12 @@ func New(opts Options) (*App, error) {
 	reg := tools.NewRegistryWithOptions(tools.RegistryOptions{
 		DefaultTimeoutSeconds: toolTimeoutSeconds,
 	})
-	filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: cfg.SandboxPolicy(), WorkDir: runtimePaths.WorkDir, AgentStateDir: runtimePaths.StateDir})
+	filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{
+		Policy:        cfg.SandboxPolicy(),
+		WorkDir:       runtimePaths.WorkDir,
+		AgentStateDir: runtimePaths.StateDir,
+		ReadOnlyPaths: []string{runtimePaths.ArtifactDir},
+	})
 	chunkedWrites := tools.NewChunkedWriteManager(runtimePaths.WorkDir, filePolicy)
 	runtimeEnvironment := agentRuntime.Environment()
 	sandboxRunner := sandbox.DefaultRunner{LookPath: cfg.LaunchEnvironmentSnapshot().LookPath}

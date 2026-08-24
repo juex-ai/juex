@@ -44,7 +44,12 @@ type runner struct {
 
 func newRunner(opts runnerOptions) *runner {
 	pipe, _ := newCommandPipeline(opts.spec)
-	filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{Policy: opts.sandboxPolicy, WorkDir: opts.workDir, AgentStateDir: opts.agentStateDir})
+	filePolicy := sandbox.NewFilePolicy(sandbox.FilePolicyOptions{
+		Policy:        opts.sandboxPolicy,
+		WorkDir:       opts.workDir,
+		AgentStateDir: opts.agentStateDir,
+		ReadOnlyPaths: []string{opts.artifactDir},
+	})
 	return &runner{
 		opts:       opts,
 		filePolicy: filePolicy,

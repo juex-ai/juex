@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/sandbox"
 )
 
@@ -42,11 +43,11 @@ func readToolDefinition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "read",
 		Group:       ToolGroupFile,
-		Description: "Read a UTF-8 text file or image. Text reads return file contents with optional offset (1-based line) and limit (max lines). Image reads return a media reference visible to vision-capable models; offset and limit are not supported for images.",
+		Description: "Read a UTF-8 text file or image from an absolute path, a working-dir-relative path, or a read-only artifact:// URI advertised in projected context. Text reads return file contents with optional offset (1-based line) and limit (max lines). Image reads return a media reference visible to vision-capable models; offset and limit are not supported for images.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path":   map[string]any{"type": "string", "description": "Absolute or working-dir-relative path"},
+				"path":   map[string]any{"type": "string", "description": "Absolute path, working-dir-relative path, or read-only artifact:// URI advertised in projected context"},
 				"offset": map[string]any{"type": "integer", "description": "1-based line to start at"},
 				"limit":  map[string]any{"type": "integer", "description": "Max number of lines to return"},
 			},
@@ -114,17 +115,39 @@ func readTool(workDir, artifactDir string, guard sandbox.PathGuard) Tool {
 		if path == "" {
 			return Result{}, fmt.Errorf("read: missing path")
 		}
-		path = resolveWorkPath(workDir, path)
-		if err := guard.CheckRead(path); err != nil {
-			return Result{}, fmt.Errorf("read: %w", err)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return Result{}, err
+		var readPath string
+		artifactPath, artifactURI, err := artifact.ParseReadURI(path)
+		var data []byte
+		if artifactURI {
+			if err != nil {
+				return Result{}, fmt.Errorf("read: %w", err)
+			}
+			store, err := artifact.NewStore(artifactDir)
+			if err != nil {
+				return Result{}, fmt.Errorf("read: %w", err)
+			}
+			physicalPath := filepath.Join(artifactDir, filepath.FromSlash(artifactPath))
+			if err := guard.CheckRead(physicalPath); err != nil {
+				return Result{}, fmt.Errorf("read: %w", err)
+			}
+			data, err = store.Read(artifact.Ref{Path: artifactPath})
+			if err != nil {
+				return Result{}, fmt.Errorf("read: %w", err)
+			}
+			readPath = artifactPath
+		} else {
+			readPath = resolveWorkPath(workDir, path)
+			if err := guard.CheckRead(readPath); err != nil {
+				return Result{}, fmt.Errorf("read: %w", err)
+			}
+			data, err = os.ReadFile(readPath)
+			if err != nil {
+				return Result{}, err
+			}
 		}
 		offset, _ := toInt(in["offset"])
 		limit, _ := toInt(in["limit"])
-		if kind, ok := detectReadImage(path, data); ok {
+		if kind, ok := detectReadImage(readPath, data); ok {
 			if offset > 0 || limit > 0 {
 				return Result{}, fmt.Errorf("read: offset and limit are not supported for image files")
 			}
@@ -155,6 +178,9 @@ func writeTool(workDir string, guard sandbox.PathGuard) Tool {
 		content, _ := in["content"].(string)
 		if path == "" {
 			return "", fmt.Errorf("write: missing path")
+		}
+		if _, artifactURI, _ := artifact.ParseReadURI(path); artifactURI {
+			return "", fmt.Errorf("write: artifact references are read-only")
 		}
 		path = resolveWorkPath(workDir, path)
 		if err := guard.CheckWrite(path); err != nil {
@@ -191,6 +217,9 @@ func editTool(workDir string, guard sandbox.PathGuard) Tool {
 		}
 		if missing := missingEditRequiredArgs(path, oldStr, newOK); len(missing) > 0 {
 			return "", fmt.Errorf("edit: missing required argument(s): %s (expected keys: path, old, new; received keys: %s)", strings.Join(missing, ", "), receivedArgumentKeys(in))
+		}
+		if _, artifactURI, _ := artifact.ParseReadURI(path); artifactURI {
+			return "", fmt.Errorf("edit: artifact references are read-only")
 		}
 		path = resolveWorkPath(workDir, path)
 		if err := guard.CheckWrite(path); err != nil {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 func TestCommandRunnerEnvironmentPrecedence(t *testing.T) {
@@ -52,6 +53,39 @@ func TestCommandRunnerEnvironmentPrecedence(t *testing.T) {
 	}
 	if got["WORKDIR"] != "/work" || got["JUEX_WORKDIR"] != "/work" {
 		t.Fatalf("reserved environment did not win: %#v", got)
+	}
+}
+
+func TestCommandRunnerProtectsArtifactRoot(t *testing.T) {
+	root := t.TempDir()
+	workDir := filepath.Join(root, "work")
+	agentStateDir := filepath.Join(root, "agent")
+	artifactDir := filepath.Join(agentStateDir, "artifacts")
+	for _, path := range []string{workDir, artifactDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := newRunner(runnerOptions{
+		workDir:       workDir,
+		agentStateDir: agentStateDir,
+		artifactDir:   artifactDir,
+		sandboxPolicy: sandbox.DefaultPolicyForOS("linux"),
+	})
+	physical := filepath.Join(artifactDir, "sessions", "result.txt")
+	if err := r.filePolicy.CheckRead(physical); err != nil {
+		t.Fatalf("Artifact read = %v, want allowed", err)
+	}
+	if err := r.filePolicy.CheckWrite(physical); err == nil || !strings.Contains(err.Error(), "read-only root") {
+		t.Fatalf("Artifact write = %v, want read-only root rejection", err)
+	}
+	roots := r.filePolicy.ReadOnlyRoots()
+	wantRoot, err := filepath.EvalSymlinks(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roots) != 1 || roots[0] != wantRoot {
+		t.Fatalf("read-only roots = %#v, want %q", roots, wantRoot)
 	}
 }
 

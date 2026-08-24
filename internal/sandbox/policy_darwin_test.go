@@ -15,7 +15,7 @@ func TestDarwinReadOnlyProfileRestrictsWritesOutsideWorkspace(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
-	profile, err := darwinProfile(policy, "/tmp/workspace", []string{"/tmp/workspace"})
+	profile, err := darwinProfile(policy, "/tmp/workspace", []string{"/tmp/workspace"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestDarwinProfileBlocksConfiguredPaths(t *testing.T) {
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadWrite
 	policy.FileSystem.BlockedPaths = []string{"/tmp/secret"}
-	profile, err := darwinProfile(policy, "/tmp/workspace", []string{"/tmp/workspace"})
+	profile, err := darwinProfile(policy, "/tmp/workspace", []string{"/tmp/workspace"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,6 +49,28 @@ func TestDarwinProfileBlocksConfiguredPaths(t *testing.T) {
 		if !strings.Contains(profile, want) {
 			t.Fatalf("profile missing %q:\n%s", want, profile)
 		}
+	}
+}
+
+func TestDarwinProfileMakesArtifactRootWriteOnlyDenied(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.Enabled = true
+	artifactDir := "/tmp/agent/artifacts"
+	profile, err := darwinProfile(policy, "/tmp/workspace", []string{"/tmp/workspace", "/tmp/agent"}, []string{artifactDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"(deny file-write* (literal \"" + artifactDir + "\"))",
+		"(deny file-write* (subpath \"" + artifactDir + "\"))",
+		"(deny file-write-unlink (subpath \"" + artifactDir + "\"))",
+	} {
+		if !strings.Contains(profile, want) {
+			t.Fatalf("profile missing %q:\n%s", want, profile)
+		}
+	}
+	if strings.Contains(profile, "(deny file-read* (subpath \""+artifactDir+"\"))") {
+		t.Fatalf("read-only root unexpectedly denies reads:\n%s", profile)
 	}
 }
 
@@ -277,7 +299,7 @@ func TestDarwinProfileLetsBlockedPathsOverrideAgentWritableRoot(t *testing.T) {
 	} {
 		policy := policy
 		policy.FileSystem.BlockedPaths = []string{blocked}
-		profile, err := darwinProfile(policy, root, []string{root, dataDir})
+		profile, err := darwinProfile(policy, root, []string{root, dataDir}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -301,7 +323,7 @@ func TestDarwinProfileResolvesSymlinkedBlockedPathInsideWritableRoot(t *testing.
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	policy.FileSystem.BlockedPaths = []string{physical}
-	profile, err := darwinProfile(policy, root, []string{root, logical})
+	profile, err := darwinProfile(policy, root, []string{root, logical}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +343,7 @@ func TestDarwinProfileRelativeBlockedPathUsesWorkDirNotWritableRootOrder(t *test
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
 	policy.FileSystem.BlockedPaths = []string{"secret"}
-	profile, err := darwinProfile(policy, workspace, []string{agentStateDir, workspace})
+	profile, err := darwinProfile(policy, workspace, []string{agentStateDir, workspace}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

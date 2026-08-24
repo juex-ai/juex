@@ -140,6 +140,7 @@ func newBuiltinProviderContext(r *Registry, opts BuiltinOptions) BuiltinProvider
 		Policy:        opts.Sandbox,
 		WorkDir:       workDir,
 		AgentStateDir: opts.AgentStateDir,
+		ReadOnlyPaths: []string{opts.ArtifactDir},
 	})
 	return BuiltinProviderContext{
 		WorkDir:            workDir,
