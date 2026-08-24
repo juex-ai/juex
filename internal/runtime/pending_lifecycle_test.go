@@ -104,6 +104,56 @@ func TestReceivePendingInputRejectsDuringTerminalPublication(t *testing.T) {
 	eng.finishActiveTurn(result.TurnID)
 }
 
+func TestReceivePendingInputPersistsDeferredExternalInputDuringTerminalPublication(t *testing.T) {
+	provider := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "first complete"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, provider, false)
+	completionStarted := make(chan struct{})
+	releaseCompletion := make(chan struct{})
+	var completionOnce sync.Once
+	unsubscribe := bus.Subscribe("turn.completed", func(events.Event) {
+		completionOnce.Do(func() { close(completionStarted) })
+		<-releaseCompletion
+	})
+	defer unsubscribe()
+
+	turnDone := make(chan error, 1)
+	go func() {
+		_, err := eng.Turn(context.Background(), "first")
+		turnDone <- err
+	}()
+	select {
+	case <-completionStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first turn did not begin terminal publication")
+	}
+
+	result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+		Message:       llm.TextMessage(llm.RoleUser, "external during terminal publication"),
+		Options:       &PendingInputOptions{ID: "terminal-external", TTL: time.Hour},
+		DeferDelivery: true,
+	})
+	if err != nil {
+		close(releaseCompletion)
+		t.Fatal(err)
+	}
+	if result.Disposition != PendingInputQueued || result.RecordID != "terminal-external" || result.Retry != PendingInputRetryAfterRecovery {
+		close(releaseCompletion)
+		t.Fatalf("deferred external input = %+v", result)
+	}
+	if record := pendingLifecycleTestRecord(t, eng, result.RecordID); record.State != PendingInputStatePending {
+		close(releaseCompletion)
+		t.Fatalf("durable external input = %+v, want pending", record)
+	}
+
+	close(releaseCompletion)
+	if err := <-turnDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLegacyPendingEnqueueRejectsDuringTerminalPublication(t *testing.T) {
 	provider := &mockProvider{script: []llm.Response{{
 		Message:    llm.TextMessage(llm.RoleAssistant, "first complete"),

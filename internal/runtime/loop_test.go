@@ -598,6 +598,50 @@ func TestAdmitTurnMessage_CommitFailurePreservesReentrantPendingInput(t *testing
 	}
 }
 
+func TestReserveTurnID_CommitFailurePreservesConcurrentPendingInput(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	wantErr := errors.New("reservation commit failed")
+	commitStarted := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	bus.SetCommitter(blockingFailCommitter{
+		eventType: TurnAdmittedType,
+		err:       wantErr,
+		started:   commitStarted,
+		release:   releaseCommit,
+	})
+
+	reserveDone := make(chan error, 1)
+	go func() {
+		reserveDone <- eng.ReserveCompactionTurnID("failed-compact")
+	}()
+	select {
+	case <-commitStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reservation commit did not start")
+	}
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "accepted during reservation"), PendingInputOptions{
+		ID:  "reentrant-reservation-input",
+		TTL: time.Hour,
+	}); err != nil {
+		close(releaseCommit)
+		t.Fatal(err)
+	}
+	close(releaseCommit)
+	if err := <-reserveDone; !errors.Is(err, wantErr) {
+		t.Fatalf("ReserveCompactionTurnID() error = %v, want %v", err, wantErr)
+	}
+
+	if len(eng.Session.History) != 1 || eng.Session.History[0].FirstText() != "accepted during reservation" {
+		t.Fatalf("preserved history = %+v, want accepted concurrent input", eng.Session.History)
+	}
+	if status := eng.PendingInputStatus(); status.TurnID != "" || status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want failed reservation released after preservation", status)
+	}
+	if record := pendingLifecycleTestRecord(t, eng, "reentrant-reservation-input"); record.State != PendingInputStateProcessed {
+		t.Fatalf("concurrent record = %+v, want processed", record)
+	}
+}
+
 func TestAdmitTurnMessage_AdmissionAndCompensationFailureCannotReplayInput(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn,
@@ -1436,6 +1480,22 @@ type selectiveFailCommitter struct {
 type interceptCommitter struct {
 	eventType    string
 	beforeCommit func() error
+}
+
+type blockingFailCommitter struct {
+	eventType string
+	err       error
+	started   chan<- struct{}
+	release   <-chan struct{}
+}
+
+func (c blockingFailCommitter) Commit(event events.Event) (events.Event, error) {
+	if event.Type == c.eventType {
+		close(c.started)
+		<-c.release
+		return events.Event{}, c.err
+	}
+	return events.Normalize(event), nil
 }
 
 func (c interceptCommitter) Commit(event events.Event) (events.Event, error) {

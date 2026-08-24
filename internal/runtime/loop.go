@@ -238,7 +238,7 @@ func (e *Engine) admitTurnMessage(turnID string, userMsg llm.Message) (PendingIn
 			if dropErr != nil {
 				commitErr = errors.Join(commitErr, fmt.Errorf("drop rejected turn admission: %w", dropErr))
 			}
-			return PendingInputRecord{}, e.preservePendingInputBeforeFailedAdmissionReleaseLocked(turnID, commitErr)
+			return PendingInputRecord{}, e.preservePendingInputBeforeFailedReservationReleaseLocked(turnID, commitErr)
 		}
 		if err := queue.CommitTurnInput(record.ID, turnID); err != nil {
 			var dropErr error
@@ -249,7 +249,7 @@ func (e *Engine) admitTurnMessage(turnID string, userMsg llm.Message) (PendingIn
 			if dropErr != nil {
 				commitErr = errors.Join(commitErr, fmt.Errorf("drop uncommitted turn admission: %w", dropErr))
 			}
-			commitErr = e.preservePendingInputBeforeFailedAdmissionReleaseLocked(turnID, commitErr)
+			commitErr = e.preservePendingInputBeforeFailedReservationReleaseLocked(turnID, commitErr)
 			return PendingInputRecord{}, e.failTurn(turnID, commitErr)
 		}
 		record.Origin = PendingInputOriginTurn
@@ -260,12 +260,12 @@ func (e *Engine) admitTurnMessage(turnID string, userMsg llm.Message) (PendingIn
 	return record, nil
 }
 
-func (e *Engine) preservePendingInputBeforeFailedAdmissionReleaseLocked(turnID string, admissionErr error) error {
+func (e *Engine) preservePendingInputBeforeFailedReservationReleaseLocked(turnID string, reservationErr error) error {
 	if preserveErr := e.preservePendingInputAfterFailureLocked(turnID); preserveErr != nil {
-		admissionErr = errors.Join(admissionErr, fmt.Errorf("preserve pending input after turn admission failure: %w", preserveErr))
+		reservationErr = errors.Join(reservationErr, fmt.Errorf("preserve pending input after turn reservation failure: %w", preserveErr))
 	}
 	e.finishActiveTurn(turnID)
-	return admissionErr
+	return reservationErr
 }
 
 func (e *Engine) ReserveCompactionTurnID(turnID string) error {
@@ -304,8 +304,7 @@ func (e *Engine) reserveTurnID(turnID string, payload TurnAdmittedPayload) error
 	if admitted {
 		defer e.flushPendingEvents()
 		if err := e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: payload}); err != nil {
-			e.finishActiveTurn(turnID)
-			return fmt.Errorf("commit turn admission: %w", err)
+			return e.preservePendingInputBeforeFailedReservationReleaseLocked(turnID, fmt.Errorf("commit turn admission: %w", err))
 		}
 	}
 	return nil

@@ -72,18 +72,12 @@ func (e *Engine) ReceivePendingInput(ctx context.Context, request PendingInputRe
 
 	e.pendingLifecycleMu.Lock()
 	defer e.pendingLifecycleMu.Unlock()
-	if status, _, publishing := e.pendingTerminalPublicationStatus(); publishing {
-		return PendingInputResult{Retry: PendingInputRetryAfterTurn, Status: status}, ErrActiveTurnExists
-	}
-
-	if request.RecordID != "" {
-		return e.receivePersistedPendingInput(ctx, request.RecordID)
-	}
-	if request.Options != nil {
+	if request.RecordID == "" && request.Options != nil {
 		record, err := e.PersistPendingMessageWithOptions(ctx, request.Message, *request.Options)
 		if err != nil {
 			return PendingInputResult{Retry: PendingInputRetryAfterStorage}, err
 		}
+		request.RecordID = record.ID
 		if request.DeferDelivery {
 			return PendingInputResult{
 				Disposition: PendingInputQueued,
@@ -92,7 +86,17 @@ func (e *Engine) ReceivePendingInput(ctx context.Context, request PendingInputRe
 				Status:      e.PendingInputStatus(),
 			}, nil
 		}
-		return e.receivePersistedPendingInput(ctx, record.ID)
+	}
+	if status, _, publishing := e.pendingTerminalPublicationStatus(); publishing {
+		result := PendingInputResult{Retry: PendingInputRetryAfterTurn, RecordID: request.RecordID, Status: status}
+		if request.RecordID != "" {
+			result.Disposition = PendingInputQueued
+		}
+		return result, ErrActiveTurnExists
+	}
+
+	if request.RecordID != "" {
+		return e.receivePersistedPendingInput(ctx, request.RecordID)
 	}
 	return e.receiveNewPendingInput(ctx, request.Message, request.RequireStart)
 }
