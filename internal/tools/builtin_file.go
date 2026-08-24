@@ -115,7 +115,7 @@ func readTool(workDir, artifactDir string, guard sandbox.PathGuard) Tool {
 		if path == "" {
 			return Result{}, fmt.Errorf("read: missing path")
 		}
-		readPath := path
+		var readPath string
 		artifactPath, artifactURI, err := artifact.ParseReadURI(path)
 		var data []byte
 		if artifactURI {
