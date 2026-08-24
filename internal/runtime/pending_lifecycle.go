@@ -77,7 +77,7 @@ func (e *Engine) receivePendingInput(ctx context.Context, request PendingInputRe
 	e.pendingLifecycleMu.Lock()
 	defer func() {
 		e.pendingLifecycleMu.Unlock()
-		e.publishStagedTerminalError(err)
+		err = e.publishStagedTerminalError(err)
 	}()
 	if err := ctx.Err(); err != nil {
 		return PendingInputResult{RecordID: request.RecordID}, err
@@ -207,20 +207,20 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 				Status:      e.PendingInputStatus(),
 			}, fmt.Errorf("preserve pending input after discarded start: %w", preserveErr)
 		}
-		committed, completeCommit, commitErr := e.recordTurnErrorLocked(
-			previous.TurnID,
-			fmt.Errorf("pending input %q discarded before execution: %w", recordID, ErrPendingInputHandled),
-		)
+		turnErr := fmt.Errorf("pending input %q discarded before execution: %w", recordID, ErrPendingInputHandled)
+		e.beginTerminalPublication(previous.TurnID)
+		e.pendingLifecycleMu.Unlock()
+		committed, completeCommit, commitErr := e.recordTurnErrorForPublication(previous.TurnID, turnErr)
 		if commitErr != nil {
+			e.pendingLifecycleMu.Lock()
+			e.rollbackTerminalPublication(previous.TurnID)
 			return PendingInputResult{
 				Disposition: PendingInputDropped,
 				Retry:       PendingInputRetryAfterStorage,
 				RecordID:    recordID,
-				Status:      status,
+				Status:      e.PendingInputStatus(),
 			}, fmt.Errorf("commit discarded turn error: %w", commitErr)
 		}
-		e.beginTerminalPublication(previous.TurnID)
-		e.pendingLifecycleMu.Unlock()
 		e.publishTerminalEvent(previous.TurnID, committed, completeCommit)
 		e.pendingLifecycleMu.Lock()
 		status = e.PendingInputStatus()
@@ -276,7 +276,7 @@ func (e *Engine) FinishPendingInputCompaction(compactTurnID string) (result Pend
 	e.pendingLifecycleMu.Lock()
 	defer func() {
 		e.pendingLifecycleMu.Unlock()
-		e.publishStagedTerminalError(err)
+		err = e.publishStagedTerminalError(err)
 	}()
 	nextTurnID := pendingInputTurnID("turn")
 	item, status, promoted, err := e.promotePendingInputTurn(compactTurnID, nextTurnID)

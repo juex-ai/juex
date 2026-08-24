@@ -439,7 +439,57 @@ func TestErrorDurableProjectionCanSynchronouslyUseLegacyPendingEnqueue(t *testin
 	}
 }
 
-func TestReceivePendingInputWaitsForFallbackTerminalCommit(t *testing.T) {
+func TestTerminalErrorCommitDoesNotWaitForProjectionHoldingCommitBarrier(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	sink := events.NewDurableSink(eng.Session)
+	bus.SetCommitter(sink)
+	if err := eng.ReserveTurnID("terminal-lock-order"); err != nil {
+		t.Fatal(err)
+	}
+	projectionStarted := make(chan struct{})
+	projectionResult := make(chan error, 1)
+	sink.AddProjection(events.DeliveryFunc(func(event events.Event) {
+		if event.Type != "projection.blocker" {
+			return
+		}
+		close(projectionStarted)
+		_, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+			Message: llm.TextMessage(llm.RoleUser, "projection response"),
+		})
+		projectionResult <- err
+	}))
+
+	eng.pendingLifecycleMu.Lock()
+	emitDone := make(chan error, 1)
+	go func() { emitDone <- bus.Emit(events.Event{Type: "projection.blocker"}) }()
+	select {
+	case <-projectionStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocking projection did not start")
+	}
+	wantTurnErr := errors.New("terminal failure")
+	failDone := make(chan error, 1)
+	go func() { failDone <- eng.failActiveTurnLocked("terminal-lock-order", wantTurnErr, true) }()
+	select {
+	case err := <-failDone:
+		if !errors.Is(err, wantTurnErr) {
+			t.Fatalf("terminal failure = %v, want %v", err, wantTurnErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("terminal error commit deadlocked with an earlier durable projection")
+	}
+	if err := <-emitDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-projectionResult; !errors.Is(err, ErrActiveTurnExists) {
+		t.Fatalf("projection admission error = %v, want terminal barrier conflict", err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReceivePendingInputRejectsDuringFallbackTerminalCommit(t *testing.T) {
 	provider := &mockProvider{script: []llm.Response{{
 		Message:    llm.TextMessage(llm.RoleAssistant, "completion will fail"),
 		StopReason: llm.StopEndTurn,
@@ -477,17 +527,27 @@ func TestReceivePendingInputWaitsForFallbackTerminalCommit(t *testing.T) {
 	}()
 	select {
 	case result := <-nextResult:
+		if err := <-nextErr; !errors.Is(err, ErrActiveTurnExists) {
+			close(releaseError)
+			t.Fatalf("next admission error = %v, want %v", err, ErrActiveTurnExists)
+		}
+		if result.Retry != PendingInputRetryAfterTurn || result.Status.TurnID == "" {
+			close(releaseError)
+			t.Fatalf("next admission = %+v, want retry after fallback terminal commit", result)
+		}
+	case <-time.After(time.Second):
 		close(releaseError)
-		t.Fatalf("next admission completed before fallback terminal commit: %+v", result)
-	case <-time.After(50 * time.Millisecond):
+		t.Fatal("next admission blocked behind fallback terminal commit")
 	}
 
 	close(releaseError)
 	if err := <-turnDone; !errors.Is(err, completionErr) {
 		t.Fatalf("first turn error = %v, want %v", err, completionErr)
 	}
-	result := <-nextResult
-	if err := <-nextErr; err != nil {
+	result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+		Message: llm.TextMessage(llm.RoleUser, "second"),
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Disposition != PendingInputStarted || result.TurnID == "" {
@@ -496,7 +556,7 @@ func TestReceivePendingInputWaitsForFallbackTerminalCommit(t *testing.T) {
 	eng.finishActiveTurn(result.TurnID)
 }
 
-func TestFailedPendingPreservationClearsReservationBeforeAdmissionUnlock(t *testing.T) {
+func TestFailedPendingPreservationRejectsAdmissionDuringTerminalCommit(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	turnID := eng.beginActiveTurn("failed-preservation-turn")
 	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "preserve me"), PendingInputOptions{
@@ -539,9 +599,17 @@ func TestFailedPendingPreservationClearsReservationBeforeAdmissionUnlock(t *test
 	}()
 	select {
 	case result := <-nextResult:
+		if err := <-nextErr; !errors.Is(err, ErrActiveTurnExists) {
+			close(releaseError)
+			t.Fatalf("next admission error = %v, want %v", err, ErrActiveTurnExists)
+		}
+		if result.Retry != PendingInputRetryAfterTurn || result.Status.TurnID != turnID {
+			close(releaseError)
+			t.Fatalf("next admission = %+v, want retry after failed turn %q", result, turnID)
+		}
+	case <-time.After(time.Second):
 		close(releaseError)
-		t.Fatalf("next admission completed before failed turn released its reservation: %+v", result)
-	case <-time.After(50 * time.Millisecond):
+		t.Fatal("next admission blocked behind failed turn terminal commit")
 	}
 
 	queue.fileOps.write = originalWrite
@@ -549,8 +617,10 @@ func TestFailedPendingPreservationClearsReservationBeforeAdmissionUnlock(t *test
 	if err := <-failDone; !errors.Is(err, wantTurnErr) || !errors.Is(err, wantStorageErr) {
 		t.Fatalf("failed turn error = %v, want joined turn and storage failures", err)
 	}
-	result := <-nextResult
-	if err := <-nextErr; err != nil {
+	result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+		Message: llm.TextMessage(llm.RoleUser, "next input"),
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Disposition != PendingInputStarted || result.TurnID == "" {

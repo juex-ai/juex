@@ -212,13 +212,17 @@ func (l *turnLifecycle) finishOrContinueLocked(output string) (turnFinishOutcome
 		l.engine.pendingLifecycleMu.Unlock()
 		return turnFinishOutcome{action: turnFinishContinue, output: output}, nil
 	}
-	completion, completeCommit, err := l.engine.recordTurnCompletionLocked(l.turnID, l.start, output)
-	if err != nil {
-		l.pendingLifecycleHeld = true
-		return turnFinishOutcome{}, fmt.Errorf("commit turn completion: %w", err)
-	}
 	l.engine.beginTerminalPublication(l.turnID)
 	l.engine.pendingLifecycleMu.Unlock()
+	completion, completeCommit, err := l.engine.recordTurnCompletionForPublication(l.turnID, l.start, output)
+	if err != nil {
+		completionErr := fmt.Errorf("commit turn completion: %w", err)
+		l.activeClosed = true
+		if publishErr := l.engine.commitAndPublishTurnError(l.turnID, completionErr); publishErr != nil {
+			return turnFinishOutcome{}, errors.Join(completionErr, publishErr)
+		}
+		return turnFinishOutcome{}, completionErr
+	}
 	l.engine.publishTerminalEvent(l.turnID, completion, completeCommit)
 	return turnFinishOutcome{action: turnFinishComplete, output: output, activeClosed: true}, nil
 }
