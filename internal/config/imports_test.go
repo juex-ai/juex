@@ -397,6 +397,36 @@ providers:
 	}
 }
 
+func TestExplicitLoadedHomeConfigPrefersHighestPriorityMatchingSource(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	defaultHomeDir := filepath.Join(userHome, ".juex")
+	defaultHomePath := filepath.Join(defaultHomeDir, "juex.yaml")
+	writeTextFile(t, filepath.Join(defaultHomeDir, "imported.yaml"), "runtime:\n  tool_timeout: 11s\n")
+	writeTextFile(t, defaultHomePath, "imports:\n  - source: imported.yaml\n")
+
+	instanceHomeDir := t.TempDir()
+	t.Setenv("JUEX_HOME", instanceHomeDir)
+	instanceHomePath := filepath.Join(instanceHomeDir, "juex.yaml")
+	writeTextFile(t, filepath.Join(instanceHomeDir, "imported.yaml"), "runtime:\n  tool_timeout: 22s\n")
+	if err := os.Link(defaultHomePath, instanceHomePath); err != nil {
+		t.Skipf("create hard-linked Home configs: %v", err)
+	}
+
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "runtime:\n  tool_timeout: 33s\n")
+	cfg, err := LoadWithOptions(LoadOptions{
+		WorkDir:    workDir,
+		ConfigPath: instanceHomePath,
+		AgentState: AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ToolTimeout != 22*time.Second {
+		t.Fatalf("tool timeout = %s, want import from highest-priority matching Home source", cfg.ToolTimeout)
+	}
+}
+
 func TestConfigImportsTreatColonContainingRelativeFilenameAsLocal(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows filenames cannot contain colons")

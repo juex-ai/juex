@@ -871,7 +871,8 @@ func applyExplicitYAMLFile(cfg *Config, path string) error {
 		{Path: cfg.DefaultHomeRuntimeConfigPath(), Scope: configScopeDefaultHome},
 		{Path: cfg.HomeRuntimeConfigPath(), Scope: configScopeInstanceHome},
 	}
-	for _, loadedSource := range loadedSources {
+	for i := len(loadedSources) - 1; i >= 0; i-- {
+		loadedSource := loadedSources[i]
 		if loadedSource.Path == "" {
 			continue
 		}
