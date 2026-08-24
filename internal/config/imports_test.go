@@ -298,6 +298,105 @@ extensions:
 	}
 }
 
+func TestExplicitLoadedHomeConfigReusesStaleRemoteImportDuringReplay(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	homePath := filepath.Join(userHome, ".juex", "juex.yaml")
+	workDir := t.TempDir()
+	var fallbackPhase atomic.Bool
+	var fallbackRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if fallbackPhase.Load() {
+			if fallbackRequests.Add(1) == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`models: [local:imported]
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: https://imported.example
+    api_key: test-key
+    models:
+      - id: imported
+      - id: workspace
+`))
+	}))
+	defer server.Close()
+
+	writeTextFile(t, homePath, "imports:\n  - source: "+server.URL+"/config.yaml\n")
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [local:workspace]\n")
+	load := func() (Config, error) {
+		return LoadWithOptions(LoadOptions{
+			WorkDir:    workDir,
+			ConfigPath: homePath,
+			AgentState: AgentStateNone,
+		})
+	}
+
+	seeded, err := load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seeded.Model != "imported" {
+		t.Fatalf("seeded model = %q, want imported", seeded.Model)
+	}
+
+	fallbackPhase.Store(true)
+	replayed, err := load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fallbackRequests.Load(); got != 1 {
+		t.Fatalf("fallback requests = %d, want one remote resolution for Home load and replay", got)
+	}
+	if replayed.Model != "imported" {
+		t.Fatalf("replayed model = %q, want stale imported Home replacement", replayed.Model)
+	}
+	statuses := replayed.ImportStatuses()
+	if len(statuses) != 1 || statuses[0].State != "stale" {
+		t.Fatalf("import statuses = %+v, want one stale Home import", statuses)
+	}
+}
+
+func TestExplicitLoadedHomeConfigResolvesRelativeImportsBesideCanonicalHomePath(t *testing.T) {
+	userHome := prepareConfigTest(t)
+	homeDir := filepath.Join(userHome, ".juex")
+	homePath := filepath.Join(homeDir, "juex.yaml")
+	writeTextFile(t, filepath.Join(homeDir, "imported.yaml"), `models: [local:imported]
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: https://imported.example
+    api_key: test-key
+    models:
+      - id: imported
+      - id: workspace
+`)
+	writeTextFile(t, homePath, "imports:\n  - source: imported.yaml\n")
+
+	aliasPath := filepath.Join(t.TempDir(), "home-alias.yaml")
+	if err := os.Link(homePath, aliasPath); err != nil {
+		t.Skipf("create hard-link alias: %v", err)
+	}
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "models: [local:workspace]\n")
+
+	cfg, err := LoadWithOptions(LoadOptions{
+		WorkDir:    workDir,
+		ConfigPath: aliasPath,
+		AgentState: AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Model != "imported" {
+		t.Fatalf("model = %q, want import resolved beside canonical Home config", cfg.Model)
+	}
+}
+
 func TestConfigImportsTreatColonContainingRelativeFilenameAsLocal(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows filenames cannot contain colons")

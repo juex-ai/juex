@@ -251,7 +251,7 @@ func (l *configImportLoader) load(declaring yamlConfigSource, rawSource string) 
 		return configImportDocument{}, fmt.Errorf("unsupported URL scheme %q; only http and https are allowed", parsed.Scheme)
 	}
 	identity := parsed.String()
-	if document, ok := l.remoteMemo[identity]; ok {
+	reuseDocument := func(document configImportDocument) configImportDocument {
 		document.source.Scope = declaring.Scope
 		if document.cacheWrite != nil {
 			record := *document.cacheWrite
@@ -260,7 +260,14 @@ func (l *configImportLoader) load(declaring yamlConfigSource, rawSource string) 
 			record.cachePath = l.cachePath(identity, declaring.Path)
 			document.cacheWrite = &record
 		}
-		return document, nil
+		return document
+	}
+	declaringMemoKey := identity + "\x00" + declaringConfigIdentity(declaring.Path)
+	if document, ok := l.remoteMemo[declaringMemoKey]; ok {
+		return reuseDocument(document), nil
+	}
+	if document, ok := l.remoteMemo[identity]; ok {
+		return reuseDocument(document), nil
 	}
 	document, err := l.loadRemote(declaring, parsed)
 	if err != nil {
@@ -268,6 +275,11 @@ func (l *configImportLoader) load(declaring yamlConfigSource, rawSource string) 
 	}
 	if document.status.State == "fresh" {
 		l.remoteMemo[identity] = document
+	} else {
+		// A stale LKG belongs to its declaring config. Reuse it only when the
+		// same declarer is replayed during this load; another declarer may have
+		// a different scoped LKG for the same remote identity.
+		l.remoteMemo[declaringMemoKey] = document
 	}
 	return document, nil
 }

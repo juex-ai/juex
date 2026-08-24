@@ -880,7 +880,6 @@ func applyExplicitYAMLFile(cfg *Config, path string) error {
 			return err
 		}
 		if sameLoadedFile {
-			loadedSource.Path = path
 			applyErr := applyYAMLFileWithImportLoaderAndOptions(cfg, loadedSource, configImportLoaderFor(cfg), applyYAMLDataOptions{
 				SkipExtensionPolicy:   true,
 				SkipAppendOnlyValues:  true,
