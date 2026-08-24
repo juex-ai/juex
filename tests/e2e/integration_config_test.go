@@ -51,16 +51,11 @@ func TestResolveLiveProviderConfigPath(t *testing.T) {
 }
 
 func TestLiveProviderConfigMissingPolicy(t *testing.T) {
-	t.Setenv(liveProviderConfigDefaultEnv, "")
 	if liveProviderConfigMissingIsFatal("") {
 		t.Fatal("missing implicit provider config was treated as fatal")
 	}
 	if !liveProviderConfigMissingIsFatal("/explicit/missing.yaml") {
 		t.Fatal("missing explicit provider config was not treated as fatal")
-	}
-	t.Setenv(liveProviderConfigDefaultEnv, "1")
-	if liveProviderConfigMissingIsFatal("/original/home/.juex/juex.yaml") {
-		t.Fatal("missing wrapper-resolved default provider config was treated as fatal")
 	}
 }
 
@@ -288,7 +283,6 @@ func isolateLiveConfigTest(t *testing.T) {
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	for _, key := range []string{
 		liveProviderConfigEnv,
-		liveProviderConfigDefaultEnv,
 		liveProviderModelEnv,
 		"PROVIDER_API_ID",
 		"PROVIDER_API_PROTOCOL",

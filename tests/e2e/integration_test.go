@@ -33,9 +33,8 @@ var liveConfigSelectorEnvKeys = []string{
 }
 
 const (
-	liveProviderConfigEnv        = "JUEX_PROVIDER_CONFIG"
-	liveProviderConfigDefaultEnv = "JUEX_TEST_PROVIDER_CONFIG_DEFAULT"
-	liveProviderModelEnv         = "JUEX_PROVIDER_SMOKE_ONLY"
+	liveProviderConfigEnv = "JUEX_PROVIDER_CONFIG"
+	liveProviderModelEnv  = "JUEX_PROVIDER_SMOKE_ONLY"
 )
 
 type liveConfig struct {
@@ -112,7 +111,7 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 }
 
 func liveProviderConfigMissingIsFatal(configuredPath string) bool {
-	return configuredPath != "" && os.Getenv(liveProviderConfigDefaultEnv) != "1"
+	return configuredPath != ""
 }
 
 func resolveLiveProviderConfigPath(root, home, configured string) string {

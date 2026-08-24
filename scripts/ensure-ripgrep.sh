@@ -18,8 +18,8 @@
 # package source never matches under `go test` (the test binary lives in the Go
 # build cache, not a release package), so local runs rely on PATH.
 #
-# Make expands this script before the test-home wrapper starts. Keep any `go
-# env` telemetry writes disposable here instead of relying on the later wrapper.
+# Make expands this script before starting Go tests. Keep its bootstrap `go env`
+# telemetry writes disposable without changing the caller's test environment.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

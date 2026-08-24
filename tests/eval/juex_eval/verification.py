@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Iterable, Protocol
 
@@ -46,6 +47,13 @@ GO_ENV_FINGERPRINT_KEYS = (
     "GOEXPERIMENT",
     "GOWORK",
     "GOTOOLCHAIN",
+)
+INHERITED_TEST_ENVIRONMENT_KEYS = (
+    "HOME",
+    "USERPROFILE",
+    "JUEX_HOME",
+    "CODEX_HOME",
+    "JUEX_PROVIDER_CONFIG",
 )
 
 
@@ -166,6 +174,7 @@ def environment_fingerprint(
     repo_root: pathlib.Path | None = None,
     test_environment: dict[str, str] | None = None,
 ) -> str:
+    environment = test_environment if test_environment is not None else os.environ
     projection = {
         "platform": sys.platform,
         "platform_release": platform.release(),
@@ -180,11 +189,86 @@ def environment_fingerprint(
             else "unavailable:not-requested"
         ),
         "ripgrep": executable_fingerprint("rg", test_environment),
+        "inherited_test_inputs": inherited_test_inputs(environment, repo_root),
     }
     if web:
         projection["node"] = _version_output(["node", "--version"])
         projection["pnpm"] = _version_output(["pnpm", "--version"])
     return stable_fingerprint(projection)
+
+
+def inherited_test_inputs(
+    environment: Mapping[str, str],
+    repo_root: pathlib.Path | None,
+) -> dict[str, Any]:
+    variables = {name: environment.get(name, "") for name in INHERITED_TEST_ENVIRONMENT_KEYS}
+    home_value = (
+        environment.get("USERPROFILE", "") if os.name == "nt" else environment.get("HOME", "")
+    ) or environment.get("HOME", "") or environment.get("USERPROFILE", "")
+    home = environment_path(home_value, environment, repo_root)
+    effective_home = environment_path(environment.get("JUEX_HOME", ""), environment, repo_root)
+    if effective_home is None and home is not None:
+        effective_home = home / ".juex"
+    codex_home = environment_path(environment.get("CODEX_HOME", ""), environment, repo_root)
+    if codex_home is None and home is not None:
+        codex_home = home / ".codex"
+    provider_config = environment_path(environment.get("JUEX_PROVIDER_CONFIG", ""), environment, repo_root)
+
+    config_paths: dict[str, pathlib.Path] = {}
+    if home is not None:
+        config_paths["default_juex"] = home / ".juex" / "juex.yaml"
+    if effective_home is not None:
+        config_paths["effective_juex"] = effective_home / "juex.yaml"
+    if provider_config is not None:
+        config_paths["provider"] = provider_config
+    if codex_home is not None:
+        config_paths["codex_config"] = codex_home / "config.toml"
+        config_paths["codex_auth"] = codex_home / "auth.json"
+    if repo_root is not None:
+        config_paths["workspace_juex"] = repo_root / ".juex" / "juex.yaml"
+    return {
+        "environment": variables,
+        "config_files": {name: file_fingerprint(path) for name, path in sorted(config_paths.items())},
+    }
+
+
+def environment_path(
+    raw: str,
+    environment: Mapping[str, str],
+    repo_root: pathlib.Path | None,
+) -> pathlib.Path | None:
+    value = raw.strip()
+    if not value:
+        return None
+    home = (
+        environment.get("USERPROFILE", "") if os.name == "nt" else environment.get("HOME", "")
+    ) or environment.get("HOME", "") or environment.get("USERPROFILE", "")
+    if value == "~" and home:
+        value = home
+    elif home and (value.startswith("~/") or value.startswith("~\\")):
+        value = str(pathlib.Path(home) / value[2:])
+    path = pathlib.Path(value)
+    if not path.is_absolute() and repo_root is not None:
+        path = repo_root / path
+    return path
+
+
+def file_fingerprint(path: pathlib.Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    try:
+        digest = hashlib.sha256()
+        with resolved.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return {
+            "path": str(resolved),
+            "sha256": "sha256:" + digest.hexdigest(),
+            "size": resolved.stat().st_size,
+        }
+    except FileNotFoundError:
+        return {"path": str(resolved), "status": "missing"}
+    except OSError as exc:
+        return {"path": str(resolved), "status": f"unreadable:{exc.__class__.__name__}"}
 
 
 def artifact_fingerprints(repo_root: pathlib.Path) -> dict[str, dict[str, Any]]:

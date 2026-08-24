@@ -53,8 +53,8 @@ help:
 	@echo "  verify-focused PKGS=... or PLANNED=1 [BASE=...]  explicit scope or dirty diff plan"
 	@echo "  verify-candidate [RACE=1] [WEB=1] [BASE=...]  planned commit-bound deterministic PR gate"
 	@echo "  verify-final [RACE=1] [WEB=1] [COMPACTION=1] [BASE=...]  reuse candidate and run planned live gates"
-	@echo "  test          go test ./... (isolated HOME/JUEX_HOME, auto-provisions ripgrep)"
-	@echo "  race          go test ./... -race (isolated HOME/JUEX_HOME, auto-provisions ripgrep)"
+	@echo "  test          go test ./... (caller environment, auto-provisions ripgrep)"
+	@echo "  race          go test ./... -race (caller environment, auto-provisions ripgrep)"
 	@echo "  ripgrep       ensure a resolvable ripgrep and print its path"
 	@echo "  lint          golangci-lint run"
 	@echo "  build         produce $(DIST_BIN) with embedded version metadata"
@@ -64,17 +64,17 @@ help:
 	@echo "  cross         build all 7 platform archives in dist/ (no goreleaser)"
 	@echo "  snapshot      goreleaser cross-platform snapshot (dist/)"
 	@echo "  release-dry   goreleaser release without publishing"
-	@echo "  integration   isolated runtime with explicit live provider/Codex sources"
+	@echo "  integration   direct runtime with explicit live provider config support"
 	@echo "  provider-smoke live provider:model smoke selected from provider config"
 	@echo "  development-eval standard post-development validation record"
 	@echo "  web-check     install, type-check, test, lint, and build the frontend"
 	@echo "  clean         remove dist/"
 
 test:
-	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" ./scripts/with-test-juex-home.sh go test ./... -count=1
+	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" go test ./...
 
 race:
-	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" ./scripts/with-test-juex-home.sh go test ./... -race -count=1
+	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" go test ./... -race -count=1
 
 verify-plan:
 	$(PLAN_CMD) --tier $(or $(TIER),focused) $(VERIFY_BASE_FLAG) $(VERIFY_EXPLAIN_FLAG)
@@ -116,10 +116,10 @@ release-dry:
 integration: integration-contracts integration-live
 
 integration-contracts:
-	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" ./scripts/with-test-juex-home.sh go test -tags=integration ./tests/e2e/... -skip '^TestLiveConfigs_' -count=1 -v
+	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" go test -tags=integration ./tests/e2e/... -skip '^TestLiveConfigs_' -count=1 -v
 
 integration-live:
-	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" ./scripts/with-test-juex-home.sh --live go test -tags=integration ./tests/e2e/... -run '^TestLiveConfigs_' -count=1 -v
+	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" go test -tags=integration ./tests/e2e/... -run '^TestLiveConfigs_' -count=1 -v
 
 provider-smoke: build
 	bash tests/eval/provider_model_smoke.sh --juex $(DIST_BIN)

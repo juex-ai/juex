@@ -881,19 +881,17 @@ embedded-web stub
 before Go-only checks, so focused web packages and full suites work in a fresh
 checkout without a prior frontend build.
 
-The lower-level `make test` and `make race` targets run with temporary `HOME`, `JUEX_HOME`, XDG
-config/cache, Windows application-data, global Git config, Go telemetry, and
-Codex directories, so personal default-home provider config, Fleet, Agent, and
-tool state cannot affect deterministic results. Fresh-checkout ripgrep
-provisioning redirects its bootstrap Go telemetry to a disposable path, and
-mise runtime discovery keeps installations available while redirecting mise
-state/cache writes.
+The lower-level `make test` and `make race` targets inherit the caller's local
+environment, including `HOME`, `JUEX_HOME`, `CODEX_HOME`, default provider
+configuration, and tool caches. `make test` uses the normal Go test cache;
+candidate, final, race, and integration gates retain their explicit rerun
+semantics. Fresh-checkout ripgrep provisioning redirects only its bootstrap Go
+telemetry to a disposable path.
 `make integration` composes `integration-contracts` and `integration-live`.
 The first runs build-tagged deterministic e2e contracts without credentials;
-the second uses the same writable-state isolation but resolves
-`JUEX_PROVIDER_CONFIG` and `CODEX_HOME` from the original native user home
-(`HOME` on Unix, `USERPROFILE` on Windows) first and passes those paths to the
-credential-backed tests as read-only inputs.
+the second reads `JUEX_PROVIDER_CONFIG` when set or the caller's
+`~/.juex/juex.yaml` otherwise. The live test cases preserve selected provider
+and Codex inputs while using their own temporary runtime state.
 
 The frontend lives in `frontend/`; `make build` runs the frontend build,
 copies it into `internal/web/dist`, and embeds it into `dist/juex`. `make
