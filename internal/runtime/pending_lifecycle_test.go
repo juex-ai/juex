@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -134,6 +135,60 @@ func TestReceivePendingInputQueuesBehindActiveTurn(t *testing.T) {
 	record := pendingLifecycleTestRecord(t, eng, queued.RecordID)
 	if record.ID == "" || record.MessageID == "" || record.Message.FirstText() != "second" || record.State != PendingInputStatePending {
 		t.Fatalf("durable queued record = %+v", record)
+	}
+}
+
+func TestTurnRejectsSynchronousInputBeforeQueueingWhenTurnIsReserved(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	if err := eng.ReserveTurnID("external-turn"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { eng.finishActiveTurn("external-turn") })
+
+	if _, err := eng.Turn(context.Background(), "synchronous input"); !errors.Is(err, ErrActiveTurnExists) {
+		t.Fatalf("Turn() error = %v, want %v", err, ErrActiveTurnExists)
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 0 {
+		t.Fatalf("pending status = %+v, want rejected synchronous input to remain unqueued", status)
+	}
+	records, err := eng.currentPendingInputQueue().Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if record.Message.FirstText() == "synchronous input" {
+			t.Fatalf("synchronous input was durably accepted before Turn() returned an error: %+v", record)
+		}
+	}
+}
+
+func TestDiscardPendingInputRemovesAttachedLiveQueueEntry(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	if err := eng.ReserveTurnID("active-turn"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { eng.finishActiveTurn("active-turn") })
+	opts := PendingInputOptions{ID: "discard-attached", TTL: time.Hour}
+	queued, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+		Message: llm.TextMessage(llm.RoleUser, "discard me"),
+		Options: &opts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.Disposition != PendingInputQueued || queued.Status.PendingCount != 1 {
+		t.Fatalf("queued input = %+v", queued)
+	}
+
+	discarded, err := eng.DiscardPendingInput(queued.RecordID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if discarded.Disposition != PendingInputDropped || discarded.Status.PendingCount != 0 {
+		t.Fatalf("discarded input = %+v, want inert record removed from live queue", discarded)
+	}
+	if record := pendingLifecycleTestRecord(t, eng, queued.RecordID); record.State != PendingInputStateDropped {
+		t.Fatalf("durable record = %+v, want dropped", record)
 	}
 }
 

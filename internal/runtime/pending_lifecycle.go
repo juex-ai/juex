@@ -35,6 +35,9 @@ type PendingInputRequest struct {
 	Message  llm.Message
 	Options  *PendingInputOptions
 	RecordID string
+	// RequireStart preserves synchronous all-or-error semantics by rejecting a
+	// new input before durable acceptance when another Turn is already active.
+	RequireStart bool
 	// DeferDelivery durably accepts a new external input without publishing it
 	// to the live queue. App uses it before the startup recovery barrier.
 	DeferDelivery bool
@@ -87,7 +90,7 @@ func (e *Engine) ReceivePendingInput(ctx context.Context, request PendingInputRe
 		}
 		return e.receivePersistedPendingInput(ctx, record.ID)
 	}
-	return e.receiveNewPendingInput(ctx, request.Message)
+	return e.receiveNewPendingInput(ctx, request.Message, request.RequireStart)
 }
 
 // ResolvePendingInput classifies the authoritative durable result after an
@@ -136,14 +139,15 @@ func (e *Engine) DiscardPendingInput(recordID string) (PendingInputResult, error
 	if err := e.DropPersistedPendingMessage(recordID); err != nil {
 		return PendingInputResult{Retry: PendingInputRetryAfterStorage}, err
 	}
+	status := e.removePendingInputRecord(recordID)
 	record, ok, err := e.PersistedPendingMessage(recordID)
 	if err != nil {
-		return PendingInputResult{Retry: PendingInputRetryAfterStorage}, err
+		return PendingInputResult{RecordID: recordID, Retry: PendingInputRetryAfterStorage, Status: status}, err
 	}
 	if !ok {
-		return PendingInputResult{}, nil
+		return PendingInputResult{Status: status}, nil
 	}
-	result := PendingInputResult{RecordID: record.ID, Status: e.PendingInputStatus()}
+	result := PendingInputResult{RecordID: record.ID, Status: status}
 	switch record.State {
 	case PendingInputStateProcessed:
 		result.Disposition = PendingInputProcessed
@@ -193,11 +197,14 @@ func (e *Engine) FinishPendingInputCompaction(compactTurnID string) (PendingInpu
 	}, nil
 }
 
-func (e *Engine) receiveNewPendingInput(ctx context.Context, message llm.Message) (PendingInputResult, error) {
+func (e *Engine) receiveNewPendingInput(ctx context.Context, message llm.Message, requireStart bool) (PendingInputResult, error) {
 	message = llm.ClassifyUserMessage(message)
 	for attempt := 0; attempt < 2; attempt++ {
 		status := e.PendingInputStatus()
 		if status.TurnID != "" {
+			if requireStart {
+				return PendingInputResult{Status: status}, ErrActiveTurnExists
+			}
 			queued, record, err := e.enqueuePendingMessageWithOptions(ctx, message, PendingInputOptions{})
 			if errors.Is(err, ErrNoActiveTurn) {
 				continue
@@ -327,6 +334,26 @@ func (e *Engine) pendingInputRecordIDByMessageID(messageID string) (string, erro
 		}
 	}
 	return "", fmt.Errorf("runtime: pending input for message %q not found", messageID)
+}
+
+func (e *Engine) removePendingInputRecord(recordID string) PendingInputStatus {
+	max := e.effectiveMaxPendingInputs()
+	e.pendingMu.Lock()
+	kept := e.pendingInput[:0]
+	for _, item := range e.pendingInput {
+		if item.RecordID != recordID {
+			kept = append(kept, item)
+		}
+	}
+	clear(e.pendingInput[len(kept):])
+	e.pendingInput = kept
+	status := PendingInputStatus{
+		TurnID:           e.activeTurnID,
+		PendingCount:     len(e.pendingInput),
+		MaxPendingInputs: max,
+	}
+	e.pendingMu.Unlock()
+	return status
 }
 
 func pendingInputTurnID(prefix string) string {

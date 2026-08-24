@@ -558,7 +558,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	defer e.mu.Unlock()
 
 	if turnID == "" {
-		result, receiveErr := e.ReceivePendingInput(ctx, PendingInputRequest{Message: userMsg})
+		result, receiveErr := e.ReceivePendingInput(ctx, PendingInputRequest{Message: userMsg, RequireStart: true})
 		if receiveErr != nil {
 			return "", receiveErr
 		}
@@ -1813,6 +1813,8 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 	if err := cancellation.ContextError(ctx); err != nil {
 		return err
 	}
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
 	e.pendingMu.Lock()
 	pending := append([]queuedPendingInput(nil), e.pendingInput...)
 	e.pendingInput = nil
