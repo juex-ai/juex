@@ -122,6 +122,30 @@ func sameConfigPath(left, right string) (bool, error) {
 	return os.SameFile(leftInfo, rightInfo), nil
 }
 
+func sameConfigPathSpelling(left, right string) (bool, error) {
+	leftPath, err := canonicalConfigParent(left)
+	if err != nil {
+		return false, err
+	}
+	rightPath, err := canonicalConfigParent(right)
+	if err != nil {
+		return false, err
+	}
+	return leftPath == rightPath, nil
+}
+
+func canonicalConfigParent(path string) (string, error) {
+	abs, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	dir, err := canonicalHomeConfigDir(filepath.Dir(abs))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, filepath.Base(abs)), nil
+}
+
 func canonicalHomeConfigDir(path string) (string, error) {
 	abs, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {

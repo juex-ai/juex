@@ -871,23 +871,44 @@ func applyExplicitYAMLFile(cfg *Config, path string) error {
 		{Path: cfg.DefaultHomeRuntimeConfigPath(), Scope: configScopeDefaultHome},
 		{Path: cfg.HomeRuntimeConfigPath(), Scope: configScopeInstanceHome},
 	}
-	for i := len(loadedSources) - 1; i >= 0; i-- {
-		loadedSource := loadedSources[i]
+	selectedSource := yamlConfigSource{}
+	for _, loadedSource := range loadedSources {
 		if loadedSource.Path == "" {
 			continue
 		}
-		sameLoadedFile, err := sameConfigPath(path, loadedSource.Path)
+		exactPath, err := sameConfigPathSpelling(path, loadedSource.Path)
 		if err != nil {
 			return err
 		}
-		if sameLoadedFile {
-			applyErr := applyYAMLFileWithImportLoaderAndOptions(cfg, loadedSource, configImportLoaderFor(cfg), applyYAMLDataOptions{
-				SkipExtensionPolicy:   true,
-				SkipAppendOnlyValues:  true,
-				SkipImportBookkeeping: true,
-			})
-			return closeConfigImportLoaderAfterError(cfg, applyErr)
+		if exactPath {
+			selectedSource = loadedSource
+			break
 		}
+	}
+	if selectedSource.Path == "" {
+		for i := len(loadedSources) - 1; i >= 0; i-- {
+			loadedSource := loadedSources[i]
+			if loadedSource.Path == "" {
+				continue
+			}
+			sameLoadedFile, err := sameConfigPath(path, loadedSource.Path)
+			if err != nil {
+				return err
+			}
+			if sameLoadedFile {
+				selectedSource = loadedSource
+				break
+			}
+		}
+	}
+	if selectedSource.Path != "" {
+		applyErr := applyYAMLFileWithImportLoaderAndOptions(cfg, selectedSource, configImportLoaderFor(cfg), applyYAMLDataOptions{
+			SkipExtensionPolicy:   true,
+			SkipAppendOnlyValues:  true,
+			SkipImportBookkeeping: true,
+			EnvironmentSource:     environment.SourceExplicitConfig,
+		})
+		return closeConfigImportLoaderAfterError(cfg, applyErr)
 	}
 	return applyYAMLFile(cfg, explicitYAMLSource(path))
 }
@@ -907,6 +928,7 @@ type applyYAMLDataOptions struct {
 	SkipExtensionPolicy   bool
 	SkipAppendOnlyValues  bool
 	SkipImportBookkeeping bool
+	EnvironmentSource     environment.Source
 }
 
 func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource, opts applyYAMLDataOptions) error {
@@ -930,8 +952,12 @@ func applyYAMLDataWithOptions(cfg *Config, data []byte, source yamlConfigSource,
 		cfg.loadDotenv = fc.Environment.LoadDotenv.Value
 	}
 	if fc.Environment.Variables != nil {
+		environmentSource := source.environmentSource()
+		if opts.EnvironmentSource != "" {
+			environmentSource = opts.EnvironmentSource
+		}
 		cfg.environmentLayers = append(cfg.environmentLayers, environment.Layer{
-			Source: source.environmentSource(),
+			Source: environmentSource,
 			Path:   source.Path,
 			Values: cloneEnvironmentVariables(fc.Environment.Variables),
 			Strict: true,

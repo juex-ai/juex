@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/homestore"
 )
 
@@ -201,6 +202,8 @@ providers:
       - id: workspace
 runtime:
   tool_timeout: 17s
+environment:
+  variables: {SHARED_ENV: imported}
 skills:
   include: [imported]
 hooks:
@@ -233,6 +236,8 @@ providers:
     headers: {X-Layer: workspace}
 runtime:
   tool_timeout: 33s
+environment:
+  variables: {SHARED_ENV: workspace}
 skills:
   include: [workspace]
 hooks:
@@ -264,6 +269,26 @@ extensions:
 			}
 			if cfg.ToolTimeout != 17*time.Second {
 				t.Fatalf("tool timeout = %s, want imported Home scalar", cfg.ToolTimeout)
+			}
+			if got, _ := cfg.EnvironmentSnapshot().Lookup("SHARED_ENV"); got != "imported" {
+				t.Fatalf("SHARED_ENV = %q, want imported Home value at explicit precedence", got)
+			}
+			var environmentMetadata environment.Metadata
+			for _, item := range cfg.EnvironmentSnapshot().ConfiguredMetadata() {
+				if item.Key == "SHARED_ENV" {
+					environmentMetadata = item
+					break
+				}
+			}
+			if environmentMetadata.Source != environment.SourceExplicitConfig {
+				t.Fatalf("SHARED_ENV metadata = %+v, want explicit config source", environmentMetadata)
+			}
+			sameEnvironmentSource, err := sameConfigPath(environmentMetadata.Path, importPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !sameEnvironmentSource {
+				t.Fatalf("SHARED_ENV metadata path = %q, want imported Home path %q", environmentMetadata.Path, importPath)
 			}
 			if !reflect.DeepEqual(cfg.Skills.Include, []string{"imported"}) {
 				t.Fatalf("skills include = %v, want imported Home replacement", cfg.Skills.Include)
@@ -397,33 +422,65 @@ providers:
 	}
 }
 
-func TestExplicitLoadedHomeConfigPrefersHighestPriorityMatchingSource(t *testing.T) {
-	userHome := prepareConfigTest(t)
-	defaultHomeDir := filepath.Join(userHome, ".juex")
-	defaultHomePath := filepath.Join(defaultHomeDir, "juex.yaml")
-	writeTextFile(t, filepath.Join(defaultHomeDir, "imported.yaml"), "runtime:\n  tool_timeout: 11s\n")
-	writeTextFile(t, defaultHomePath, "imports:\n  - source: imported.yaml\n")
+func TestExplicitLoadedHomeConfigSelectsExactOrHighestPriorityMatchingSource(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		configPath   func(defaultPath, instancePath, aliasPath string) string
+		wantTimeout  time.Duration
+		wantLocation string
+	}{
+		{
+			name:         "exact default Home path",
+			configPath:   func(defaultPath, _, _ string) string { return defaultPath },
+			wantTimeout:  11 * time.Second,
+			wantLocation: "default Home",
+		},
+		{
+			name:         "exact instance Home path",
+			configPath:   func(_, instancePath, _ string) string { return instancePath },
+			wantTimeout:  22 * time.Second,
+			wantLocation: "instance Home",
+		},
+		{
+			name:         "same-file alias fallback",
+			configPath:   func(_, _, aliasPath string) string { return aliasPath },
+			wantTimeout:  22 * time.Second,
+			wantLocation: "highest-priority instance Home",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			userHome := prepareConfigTest(t)
+			defaultHomeDir := filepath.Join(userHome, ".juex")
+			defaultHomePath := filepath.Join(defaultHomeDir, "juex.yaml")
+			writeTextFile(t, filepath.Join(defaultHomeDir, "imported.yaml"), "runtime:\n  tool_timeout: 11s\n")
+			writeTextFile(t, defaultHomePath, "imports:\n  - source: imported.yaml\n")
 
-	instanceHomeDir := t.TempDir()
-	t.Setenv("JUEX_HOME", instanceHomeDir)
-	instanceHomePath := filepath.Join(instanceHomeDir, "juex.yaml")
-	writeTextFile(t, filepath.Join(instanceHomeDir, "imported.yaml"), "runtime:\n  tool_timeout: 22s\n")
-	if err := os.Link(defaultHomePath, instanceHomePath); err != nil {
-		t.Skipf("create hard-linked Home configs: %v", err)
-	}
+			instanceHomeDir := t.TempDir()
+			t.Setenv("JUEX_HOME", instanceHomeDir)
+			instanceHomePath := filepath.Join(instanceHomeDir, "juex.yaml")
+			writeTextFile(t, filepath.Join(instanceHomeDir, "imported.yaml"), "runtime:\n  tool_timeout: 22s\n")
+			if err := os.Link(defaultHomePath, instanceHomePath); err != nil {
+				t.Skipf("create hard-linked Home configs: %v", err)
+			}
+			aliasPath := filepath.Join(t.TempDir(), "home-alias.yaml")
+			if err := os.Link(defaultHomePath, aliasPath); err != nil {
+				t.Skipf("create hard-linked Home alias: %v", err)
+			}
 
-	workDir := t.TempDir()
-	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "runtime:\n  tool_timeout: 33s\n")
-	cfg, err := LoadWithOptions(LoadOptions{
-		WorkDir:    workDir,
-		ConfigPath: instanceHomePath,
-		AgentState: AgentStateNone,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.ToolTimeout != 22*time.Second {
-		t.Fatalf("tool timeout = %s, want import from highest-priority matching Home source", cfg.ToolTimeout)
+			workDir := t.TempDir()
+			writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "runtime:\n  tool_timeout: 33s\n")
+			cfg, err := LoadWithOptions(LoadOptions{
+				WorkDir:    workDir,
+				ConfigPath: tc.configPath(defaultHomePath, instanceHomePath, aliasPath),
+				AgentState: AgentStateNone,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.ToolTimeout != tc.wantTimeout {
+				t.Fatalf("tool timeout = %s, want import from %s", cfg.ToolTimeout, tc.wantLocation)
+			}
+		})
 	}
 }
 
