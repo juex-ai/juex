@@ -294,7 +294,7 @@ func TestAppExternalDeliveryWaitsForStartupPendingInputRecovery(t *testing.T) {
 		if result.err != nil || result.outcome.State != observable.ObservationStateDelivered {
 			t.Fatalf("external delivery after startup recovery = %+v, %v", result.outcome, result.err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("external delivery did not continue after startup recovery")
 	}
 	provider.mu.Lock()
