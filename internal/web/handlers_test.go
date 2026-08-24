@@ -2677,15 +2677,6 @@ func TestPostTurn_NewSlashIsCoherentWithConcurrentSessionReaders(t *testing.T) {
 	var switchErr error
 	for i := 0; i < 12; i++ {
 		oldID := readID()
-		resp, err := http.Post(
-			ts.URL+"/api/sessions/"+oldID+"/turns",
-			"application/json",
-			strings.NewReader(`{"prompt":"/new"}`),
-		)
-		if err != nil {
-			switchErr = fmt.Errorf("switch %d: %w", i, err)
-			break
-		}
 		var parsed struct {
 			Command struct {
 				Status struct {
@@ -2694,18 +2685,46 @@ func TestPostTurn_NewSlashIsCoherentWithConcurrentSessionReaders(t *testing.T) {
 			} `json:"command"`
 			TurnID string `json:"turn_id"`
 		}
-		decodeErr := json.NewDecoder(resp.Body).Decode(&parsed)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK || decodeErr != nil ||
-			parsed.Command.Status.SessionID == "" || parsed.Command.Status.SessionID == oldID {
-			switchErr = fmt.Errorf(
-				"switch %d response: status=%d decode=%v old=%q new=%q",
-				i,
-				resp.StatusCode,
-				decodeErr,
-				oldID,
-				parsed.Command.Status.SessionID,
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			resp, err := http.Post(
+				ts.URL+"/api/sessions/"+oldID+"/turns",
+				"application/json",
+				strings.NewReader(`{"prompt":"/new"}`),
 			)
+			if err != nil {
+				switchErr = fmt.Errorf("switch %d: %w", i, err)
+				break
+			}
+			body, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr != nil {
+				switchErr = fmt.Errorf("switch %d response body: %w", i, readErr)
+				break
+			}
+			if resp.StatusCode == http.StatusConflict {
+				var conflict errorJSON
+				if json.Unmarshal(body, &conflict) == nil && conflict.Retryable && time.Now().Before(deadline) {
+					time.Sleep(25 * time.Millisecond)
+					continue
+				}
+			}
+			decodeErr := json.Unmarshal(body, &parsed)
+			if resp.StatusCode != http.StatusOK || decodeErr != nil ||
+				parsed.Command.Status.SessionID == "" || parsed.Command.Status.SessionID == oldID {
+				switchErr = fmt.Errorf(
+					"switch %d response: status=%d decode=%v old=%q new=%q body=%s",
+					i,
+					resp.StatusCode,
+					decodeErr,
+					oldID,
+					parsed.Command.Status.SessionID,
+					body,
+				)
+			}
+			break
+		}
+		if switchErr != nil {
 			break
 		}
 		writeID(parsed.Command.Status.SessionID)
