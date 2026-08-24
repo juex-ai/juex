@@ -166,6 +166,11 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 }
 
 func (e *Engine) ReserveTurnID(turnID string) error {
+	if e == nil {
+		return ErrNoActiveTurn
+	}
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
 	return e.reserveTurnID(turnID, TurnAdmittedPayload{})
 }
 
@@ -173,6 +178,11 @@ func (e *Engine) ReserveTurnID(turnID string) error {
 // active execution boundary. Repeating admission for the same Turn returns the
 // already accepted message with its stable Framework-owned identity.
 func (e *Engine) AdmitTurnMessage(turnID string, userMsg llm.Message) (llm.Message, error) {
+	if e == nil {
+		return llm.Message{}, ErrNoActiveTurn
+	}
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
 	record, err := e.admitTurnMessage(turnID, userMsg)
 	return record.Message, err
 }
@@ -240,6 +250,11 @@ func (e *Engine) admitTurnMessage(turnID string, userMsg llm.Message) (PendingIn
 }
 
 func (e *Engine) ReserveCompactionTurnID(turnID string) error {
+	if e == nil {
+		return ErrNoActiveTurn
+	}
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
 	return e.reserveTurnID(turnID, TurnAdmittedPayload{
 		Operation: TurnAdmissionOperationCompact,
 	})
@@ -497,6 +512,11 @@ func (e *Engine) PendingInputStatus() PendingInputStatus {
 // PromotePendingInputTurn turns the first queued input from a reserved
 // non-provider phase into the user message for a real provider turn.
 func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.Message, PendingInputStatus, bool, error) {
+	if e == nil {
+		return llm.Message{}, PendingInputStatus{}, false, nil
+	}
+	e.pendingLifecycleMu.Lock()
+	defer e.pendingLifecycleMu.Unlock()
 	item, status, promoted, err := e.promotePendingInputTurn(currentTurnID, nextTurnID)
 	return item.Message, status, promoted, err
 }

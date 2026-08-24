@@ -372,10 +372,21 @@ func TestAppCanceledAdmittedTurnReleasesEngineReservation(t *testing.T) {
 	if first.Kind != TurnAdmissionStarted || first.Start == nil {
 		t.Fatalf("first admission = %+v, want started", first)
 	}
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := a.RunAdmittedTurn(canceled, first.Start.TurnID, first.Start.Message); !errors.Is(err, context.Canceled) {
-		t.Fatalf("RunAdmittedTurn error = %v, want context.Canceled", err)
+	wantCause := errors.New("admitted turn stopped by owner")
+	var terminal runtime.TurnErroredPayload
+	unsubscribe := a.Bus.Subscribe("turn.errored", func(event events.Event) {
+		if event.TurnID == first.Start.TurnID {
+			terminal, _ = event.Payload.(runtime.TurnErroredPayload)
+		}
+	})
+	defer unsubscribe()
+	canceled, cancel := context.WithCancelCause(context.Background())
+	cancel(wantCause)
+	if _, err := a.RunAdmittedTurn(canceled, first.Start.TurnID, first.Start.Message); !errors.Is(err, wantCause) {
+		t.Fatalf("RunAdmittedTurn error = %v, want %v", err, wantCause)
+	}
+	if terminal.Error != wantCause.Error() {
+		t.Fatalf("turn error = %+v, want preserved cancellation cause", terminal)
 	}
 
 	second := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "run after canceled admission"})

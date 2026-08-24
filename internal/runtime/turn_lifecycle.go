@@ -79,10 +79,6 @@ func (l *turnLifecycle) runLocked(ctx context.Context) (turnLifecycleResult, err
 			break
 		}
 	}
-
-	if err := l.engine.recordTurnCompletionLocked(l.turnID, l.start, l.lastText); err != nil {
-		return turnLifecycleResult{}, fmt.Errorf("commit turn completion: %w", err)
-	}
 	return turnLifecycleResult{output: l.lastText}, nil
 }
 
@@ -192,11 +188,11 @@ func (l *turnLifecycle) applyFinishPolicyLocked(ctx context.Context, recorded re
 				return turnFinishOutcome{}, err
 			}
 			runtimemodule.ObserveFinishContinuation(ctx, request, candidate)
-			return l.finishOrContinueLocked(finalText), nil
+			return l.finishOrContinueLocked(finalText)
 		}
 		return turnFinishOutcome{action: turnFinishContinue, output: finalText}, nil
 	}
-	return l.finishOrContinueLocked(finalText), nil
+	return l.finishOrContinueLocked(finalText)
 }
 
 func (l *turnLifecycle) enqueueContinuationLocked(ctx context.Context, prompt string) error {
@@ -206,9 +202,14 @@ func (l *turnLifecycle) enqueueContinuationLocked(ctx context.Context, prompt st
 	return err
 }
 
-func (l *turnLifecycle) finishOrContinueLocked(output string) turnFinishOutcome {
+func (l *turnLifecycle) finishOrContinueLocked(output string) (turnFinishOutcome, error) {
+	l.engine.pendingLifecycleMu.Lock()
+	defer l.engine.pendingLifecycleMu.Unlock()
 	if !l.engine.finishActiveTurnIfNoPending(l.turnID) {
-		return turnFinishOutcome{action: turnFinishContinue, output: output}
+		return turnFinishOutcome{action: turnFinishContinue, output: output}, nil
 	}
-	return turnFinishOutcome{action: turnFinishComplete, output: output, activeClosed: true}
+	if err := l.engine.recordTurnCompletionLocked(l.turnID, l.start, output); err != nil {
+		return turnFinishOutcome{}, fmt.Errorf("commit turn completion: %w", err)
+	}
+	return turnFinishOutcome{action: turnFinishComplete, output: output, activeClosed: true}, nil
 }

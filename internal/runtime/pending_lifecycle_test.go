@@ -5,9 +5,11 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -33,6 +35,62 @@ func TestReceivePendingInputStartsIdleTurnWithFrameworkIdentity(t *testing.T) {
 	if record.State != PendingInputStateAdmitted || record.TurnID != result.TurnID || record.MessageID != result.Message.ID {
 		t.Fatalf("durable record = %+v", record)
 	}
+}
+
+func TestReceivePendingInputWaitsForPreviousTerminalCommit(t *testing.T) {
+	provider := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "first complete"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, provider, false)
+	completionStarted := make(chan struct{})
+	releaseCompletion := make(chan struct{})
+	var completionOnce sync.Once
+	unsubscribe := bus.Subscribe("turn.completed", func(events.Event) {
+		completionOnce.Do(func() { close(completionStarted) })
+		<-releaseCompletion
+	})
+	defer unsubscribe()
+
+	turnDone := make(chan error, 1)
+	go func() {
+		_, err := eng.Turn(context.Background(), "first")
+		turnDone <- err
+	}()
+	select {
+	case <-completionStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first turn did not begin its terminal commit")
+	}
+
+	nextResult := make(chan PendingInputResult, 1)
+	nextErr := make(chan error, 1)
+	go func() {
+		result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
+			Message: llm.TextMessage(llm.RoleUser, "second"),
+		})
+		nextResult <- result
+		nextErr <- err
+	}()
+	select {
+	case result := <-nextResult:
+		close(releaseCompletion)
+		t.Fatalf("next admission completed before previous terminal commit: %+v", result)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseCompletion)
+	if err := <-turnDone; err != nil {
+		t.Fatal(err)
+	}
+	result := <-nextResult
+	if err := <-nextErr; err != nil {
+		t.Fatal(err)
+	}
+	if result.Disposition != PendingInputStarted || result.TurnID == "" {
+		t.Fatalf("next admission = %+v, want started after terminal commit", result)
+	}
+	eng.finishActiveTurn(result.TurnID)
 }
 
 func TestReceivePendingInputReturnsStartedAfterCommittedAdmissionWithoutJournalReread(t *testing.T) {

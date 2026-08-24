@@ -173,7 +173,7 @@ func (e *Engine) ReservePendingInputCompaction() (string, error) {
 	e.pendingLifecycleMu.Lock()
 	defer e.pendingLifecycleMu.Unlock()
 	turnID := pendingInputTurnID("compact")
-	if err := e.ReserveCompactionTurnID(turnID); err != nil {
+	if err := e.reserveTurnID(turnID, TurnAdmittedPayload{Operation: TurnAdmissionOperationCompact}); err != nil {
 		return "", err
 	}
 	return turnID, nil
