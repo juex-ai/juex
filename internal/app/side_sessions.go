@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
@@ -66,8 +65,6 @@ const (
 	SideSessionToolSend      = "side_session_send"
 	SideSessionToolSubscribe = "side_session_subscribe"
 	SideSessionToolStop      = "side_session_stop"
-
-	sideSessionPersistAttempts = 8
 )
 
 var (
@@ -148,7 +145,6 @@ type sideSessionManager struct {
 	closeStartErr   error
 	cleanupErrMu    sync.Mutex
 	cleanupErr      error
-	turnSeq         atomic.Uint64
 }
 
 func newSideSessionManager(parent *App) *sideSessionManager {
@@ -319,7 +315,7 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 		_ = stopManagedSideSession(managed)
 		return SideSessionStatus{}, err
 	}
-	result := child.admitUserTurn(createCtx, userTurnMessage(query, nil), TurnIDFunc(func(string) string { return m.nextTurnID() }))
+	result := child.admitUserTurn(createCtx, userTurnMessage(query, nil))
 	if result.Kind != TurnAdmissionStarted || result.Start == nil {
 		m.removeIfCurrent(managed)
 		_ = stopManagedSideSession(managed)
@@ -329,13 +325,11 @@ func (m *sideSessionManager) Create(ctx context.Context, query, model string, su
 		return SideSessionStatus{}, fmt.Errorf("start side session: unexpected admission %q", result.Kind)
 	}
 	if err := createCtx.Err(); err != nil {
-		child.CompleteAdmittedTurn(result.Start.TurnID)
 		m.removeIfCurrent(managed)
 		_ = stopManagedSideSession(managed)
 		return SideSessionStatus{}, err
 	}
 	if err := m.startRun(createCtx, managed, result.Start); err != nil {
-		child.CompleteAdmittedTurn(result.Start.TurnID)
 		m.removeIfCurrent(managed)
 		_ = stopManagedSideSession(managed)
 		return SideSessionStatus{}, err
@@ -438,15 +432,10 @@ func (m *sideSessionManager) Send(id, message string) (SideSessionStatus, bool, 
 		return SideSessionStatus{}, false, err
 	}
 	defer unlock()
-	result := managed.app.admitUserTurn(
-		managed.ctx,
-		userTurnMessage(message, nil),
-		TurnIDFunc(func(string) string { return m.nextTurnID() }),
-	)
+	result := managed.app.admitUserTurn(managed.ctx, userTurnMessage(message, nil))
 	switch result.Kind {
 	case TurnAdmissionStarted:
 		if err := m.startRun(managed.ctx, managed, result.Start); err != nil {
-			managed.app.CompleteAdmittedTurn(result.Start.TurnID)
 			return SideSessionStatus{}, false, err
 		}
 		return m.snapshot(managed), false, nil
@@ -697,7 +686,6 @@ func (m *sideSessionManager) run(managed *managedSideSession, generation uint64,
 	go func() {
 		defer managed.done.Done()
 		out, err := managed.app.RunAdmittedTurn(managed.ctx, turnID, message)
-		managed.app.CompleteAdmittedTurn(turnID)
 
 		m.mu.Lock()
 		current := m.sessions[managed.status.SessionID]
@@ -779,156 +767,24 @@ func (m *sideSessionManager) deliverResult(ctx context.Context, managed *managed
 	data, _ := json.Marshal(payload)
 	msg := llm.TextMessage(llm.RoleUser, "Side Session result:\n"+string(data))
 	msg.Kind = llm.MessageKindSideSession
-	var record runtime.PendingInputRecord
-	delay := 50 * time.Millisecond
-	var persistErr error
-	for attempt := 0; attempt < sideSessionPersistAttempts; attempt++ {
-		var err error
-		record, err = m.parent.Engine.PersistPendingMessageWithOptions(ctx, msg, runtime.PendingInputOptions{
-			ID:  handoffID,
-			TTL: m.parent.Engine.ExternalEventTTL,
-		})
-		if err == nil {
-			persistErr = nil
-			break
-		}
-		persistErr = err
-		if attempt+1 == sideSessionPersistAttempts {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(delay):
-			if delay < time.Second {
-				delay *= 2
-				if delay > time.Second {
-					delay = time.Second
-				}
-			}
-		}
-	}
-	if persistErr != nil {
-		m.recordNotificationFailure(managed, status, persistErr)
+	delivery, err := m.parent.deliverExternalInputUntilSettled(ctx, msg, runtime.PendingInputOptions{
+		ID:  handoffID,
+		TTL: m.parent.Engine.ExternalEventTTL,
+	}, m.ensureParentActive)
+	if delivery.Queued {
+		finishOnReturn = false
 		return
 	}
-	if record.State == runtime.PendingInputStateProcessed || record.State == runtime.PendingInputStateExpired || record.State == runtime.PendingInputStateDropped {
+	if delivery.Delivered {
 		return
 	}
-	if err := m.parent.waitPendingInputRecoveryContext(ctx); err != nil {
-		dropErr := m.dropPersistedNotification(record.ID)
-		m.recordNotificationFailure(managed, status, errors.Join(err, dropErr))
-		return
-	}
-
-	admissionErrorAttempts := 0
-	admissionErrorDelay := 50 * time.Millisecond
-	for {
-		if err := ctx.Err(); err != nil {
-			m.dropStaleNotification(managed, status, record.ID)
-			return
-		}
-		if err := m.ensureParentActive(); err != nil {
-			m.dropStaleNotification(managed, status, record.ID)
-			return
-		}
-		result := m.parent.admitPersistedUserTurn(ctx, record, TurnIDFunc(func(string) string { return m.nextTurnID() }))
-		switch result.Kind {
-		case TurnAdmissionQueued:
-			finishOnReturn = false
-			return
-		case TurnAdmissionStarted:
-			m.finishResultHandoffs([]string{handoffID})
-			_, runErr := m.parent.RunAdmittedTurn(ctx, result.Start.TurnID, result.Start.Message)
-			m.parent.CompleteAdmittedTurn(result.Start.TurnID)
-			if runErr != nil {
-				current, ok, stateErr := m.parent.Engine.PersistedPendingMessage(record.ID)
-				if stateErr != nil {
-					dropErr := m.dropPersistedNotification(record.ID)
-					m.recordNotificationFailure(managed, status, errors.Join(runErr, stateErr, dropErr))
-					return
-				}
-				if ok && (current.State == runtime.PendingInputStatePending || current.State == runtime.PendingInputStateAdmitted) {
-					dropErr := m.dropPersistedNotification(record.ID)
-					m.recordNotificationFailure(managed, status, errors.Join(runErr, dropErr))
-				}
-			}
-			return
-		case TurnAdmissionRejected:
-			if !errors.Is(result.Err, runtime.ErrPendingInputQueueFull) {
-				return
-			}
-		case TurnAdmissionConflict:
-			// A turn can close between admission snapshots. Retry while the
-			// subscription and owning App are still active.
-		case TurnAdmissionError:
-			if errors.Is(result.Err, runtime.ErrPendingInputExpired) {
-				m.recordNotificationFailure(managed, status, result.Err)
-				return
-			}
-			if errors.Is(result.Err, runtime.ErrPendingInputHandled) {
-				return
-			}
-			admissionErr := result.Err
-			if admissionErr == nil {
-				message := strings.TrimSpace(result.Error.Message)
-				if message == "" {
-					message = "unknown persisted admission error"
-				}
-				admissionErr = errors.New(message)
-			}
-			admissionErrorAttempts++
-			if admissionErrorAttempts >= sideSessionPersistAttempts {
-				m.recordNotificationFailure(managed, status, fmt.Errorf("admit persisted side session notification: %w", admissionErr))
-				return
-			}
-		default:
-			return
-		}
-		delay := 100 * time.Millisecond
-		if result.Kind == TurnAdmissionError {
-			delay = admissionErrorDelay
-			if admissionErrorDelay < time.Second {
-				admissionErrorDelay *= 2
-				if admissionErrorDelay > time.Second {
-					admissionErrorDelay = time.Second
-				}
-			}
-		}
-		select {
-		case <-ctx.Done():
-			m.dropStaleNotification(managed, status, record.ID)
-			return
-		case <-time.After(delay):
-		}
-	}
-}
-
-func (m *sideSessionManager) dropStaleNotification(managed *managedSideSession, status SideSessionStatus, id string) {
-	if err := m.dropPersistedNotification(id); err != nil {
-		m.recordNotificationFailure(managed, status, fmt.Errorf("drop stale side session notification: %w", err))
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, ErrSessionUnavailable) {
+		m.recordNotificationFailure(managed, status, fmt.Errorf("admit persisted side session notification: %w", err))
 	}
 }
 
 func (m *sideSessionManager) dropPersistedNotification(id string) error {
-	delay := 50 * time.Millisecond
-	var result error
-	for attempt := 0; attempt < sideSessionPersistAttempts; attempt++ {
-		result = m.parent.Engine.DropPersistedPendingMessage(id)
-		if result == nil {
-			return nil
-		}
-		if attempt+1 < sideSessionPersistAttempts {
-			time.Sleep(delay)
-			if delay < time.Second {
-				delay *= 2
-				if delay > time.Second {
-					delay = time.Second
-				}
-			}
-		}
-	}
-	return result
+	return m.parent.discardExternalInput(id)
 }
 
 func (m *sideSessionManager) recordNotificationFailure(managed *managedSideSession, status SideSessionStatus, err error) {
@@ -1115,11 +971,6 @@ func (m *sideSessionManager) ensureParentActive() error {
 		return errors.New("side session tools require the workspace active primary session")
 	}
 	return nil
-}
-
-func (m *sideSessionManager) nextTurnID() string {
-	event := events.Normalize(events.Event{Type: "side_session.turn"})
-	return fmt.Sprintf("side-%s-%d", event.ID, m.turnSeq.Add(1))
 }
 
 func sideSessionTools(manager *sideSessionManager) []tools.Tool {

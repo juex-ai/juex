@@ -368,10 +368,7 @@ func TestAppCanceledAdmittedTurnReleasesEngineReservation(t *testing.T) {
 		Message:    llm.TextMessage(llm.RoleAssistant, "handled after cancellation"),
 		StopReason: llm.StopEndTurn,
 	})
-	first := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
-		Prompt: "accepted before cancellation",
-		IDs:    TurnIDFunc(func(string) string { return "canceled-admitted-turn" }),
-	})
+	first := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "accepted before cancellation"})
 	if first.Kind != TurnAdmissionStarted || first.Start == nil {
 		t.Fatalf("first admission = %+v, want started", first)
 	}
@@ -380,17 +377,12 @@ func TestAppCanceledAdmittedTurnReleasesEngineReservation(t *testing.T) {
 	if _, err := a.RunAdmittedTurn(canceled, first.Start.TurnID, first.Start.Message); !errors.Is(err, context.Canceled) {
 		t.Fatalf("RunAdmittedTurn error = %v, want context.Canceled", err)
 	}
-	a.CompleteAdmittedTurn(first.Start.TurnID)
 
-	second := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
-		Prompt: "run after canceled admission",
-		IDs:    TurnIDFunc(func(string) string { return "turn-after-canceled-admission" }),
-	})
+	second := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "run after canceled admission"})
 	if second.Kind != TurnAdmissionStarted || second.Start == nil {
 		t.Fatalf("second admission = %+v, want started instead of queued behind a phantom turn", second)
 	}
 	out, err := a.RunAdmittedTurn(context.Background(), second.Start.TurnID, second.Start.Message)
-	a.CompleteAdmittedTurn(second.Start.TurnID)
 	if err != nil || out != "handled after cancellation" {
 		t.Fatalf("second RunAdmittedTurn = %q, %v", out, err)
 	}
@@ -583,7 +575,7 @@ func TestAppStartupRecoveryRetriesReplayableAdmissionFailure(t *testing.T) {
 		eventType: runtime.TurnAdmittedType,
 		err:       errors.New("injected startup admission failure"),
 	})
-	a.startPendingInputRecovery([]runtime.PendingInputRecord{record})
+	a.startPendingInputRecovery([]runtime.PendingInputRecovery{{RecordID: record.ID}})
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -633,7 +625,7 @@ func TestAppStartupRecoveryKeepsBarrierThroughReplayableAdmissionRetry(t *testin
 		release:   release,
 		failed:    failed,
 	})
-	a.startPendingInputRecovery([]runtime.PendingInputRecord{record})
+	a.startPendingInputRecovery([]runtime.PendingInputRecovery{{RecordID: record.ID}})
 	recoveryDone := a.pendingRecoveryDone
 
 	select {
@@ -766,7 +758,7 @@ func TestAppPendingRecoveryBarrierPrecedesNotificationActivation(t *testing.T) {
 	})
 	activated := make(chan struct{})
 	go func() {
-		a.activateExternalInputAfterPendingRecovery(gate, []runtime.PendingInputRecord{record}, nil)
+		a.activateExternalInputAfterPendingRecovery(gate, []runtime.PendingInputRecovery{{RecordID: record.ID}}, nil)
 		close(activated)
 	}()
 
@@ -852,7 +844,7 @@ func TestAppPendingRecoveryBarrierPrecedesObservableActivation(t *testing.T) {
 	observation := testObservationRecord("obs-during-observable-startup")
 	activated := make(chan struct{})
 	go func() {
-		a.activateExternalInputAfterPendingRecovery(nil, []runtime.PendingInputRecord{record}, func() {
+		a.activateExternalInputAfterPendingRecovery(nil, []runtime.PendingInputRecovery{{RecordID: record.ID}}, func() {
 			outcome, err := a.DeliverObservation(context.Background(), observation)
 			delivered <- observableResult{outcome: outcome, err: err}
 		})
@@ -963,27 +955,36 @@ func TestAppBeginCompactAdmissionWaitsForStartupPendingInputRecovery(t *testing.
 	recoveryDone := make(chan struct{})
 	a.pendingRecoveryDone = recoveryDone
 
-	const compactTurnID = "web-compact-after-recovery"
-	admitted := make(chan error, 1)
+	type compactAdmission struct {
+		turnID string
+		err    error
+	}
+	admitted := make(chan compactAdmission, 1)
 	go func() {
-		admitted <- a.BeginCompactAdmission(context.Background(), compactTurnID)
+		turnID, err := a.BeginCompactAdmission(context.Background())
+		admitted <- compactAdmission{turnID: turnID, err: err}
 	}()
 	select {
-	case err := <-admitted:
-		t.Fatalf("admitted compaction reserved before startup recovery: %v", err)
+	case result := <-admitted:
+		t.Fatalf("admitted compaction reserved before startup recovery: %+v", result)
 	case <-time.After(100 * time.Millisecond):
 	}
 
 	close(recoveryDone)
+	var compactTurnID string
 	select {
-	case err := <-admitted:
-		if err != nil {
-			t.Fatal(err)
+	case result := <-admitted:
+		if result.err != nil {
+			t.Fatal(result.err)
 		}
+		compactTurnID = result.turnID
 	case <-time.After(2 * time.Second):
 		t.Fatal("admitted compaction did not continue after startup recovery")
 	}
-	if _, err := a.FinishCompactAdmission(compactTurnID, TurnIDFunc(func(string) string { return "unused" })); err != nil {
+	if compactTurnID == "" {
+		t.Fatal("compaction has no Framework turn id")
+	}
+	if _, err := a.FinishCompactAdmission(compactTurnID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1147,7 +1148,7 @@ func TestAppStartupRecoveryAdvancesPastOldestRecordThatExpiresBeforeWorker(t *te
 	}
 	time.Sleep(5 * time.Millisecond)
 
-	a.activateExternalInputAfterPendingRecovery(nil, []runtime.PendingInputRecord{oldest, later}, nil)
+	a.activateExternalInputAfterPendingRecovery(nil, []runtime.PendingInputRecovery{{RecordID: oldest.ID}, {RecordID: later.ID}}, nil)
 	if err := a.waitPendingInputRecovery(); err != nil {
 		t.Fatal(err)
 	}

@@ -466,13 +466,13 @@ func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request, id
 		req.Reason = "manual"
 	}
 
-	compactTurnID := s.nextTurnID("compact")
-	if err := as.app.BeginCompactAdmission(r.Context(), compactTurnID); err != nil {
+	compactTurnID, err := as.app.BeginCompactAdmission(r.Context())
+	if err != nil {
 		writeErr(w, http.StatusConflict, "conflict", "session busy")
 		return
 	}
 	result, err := as.app.CompactAdmittedWithInstructions(r.Context(), compactTurnID, req.Reason, false, req.Instructions)
-	start, promotionErr := as.app.FinishCompactAdmission(compactTurnID, app.TurnIDFunc(s.nextTurnID))
+	start, promotionErr := as.app.FinishCompactAdmission(compactTurnID)
 	if start != nil {
 		as.turns.start(start.TurnID, start.Message)
 	}
@@ -624,7 +624,6 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 		Prompt:      req.Prompt,
 		Kind:        req.Kind,
 		Attachments: req.Attachments,
-		IDs:         app.TurnIDFunc(s.nextTurnID),
 	}
 	var result app.TurnAdmissionResult
 	if isNewSessionCommand(req.Prompt) {
@@ -735,18 +734,10 @@ func writeSessionAttachmentStoreError(w http.ResponseWriter, err error) {
 	writeErr(w, status, kind, msg)
 }
 
-func (s *Server) nextTurnID(prefix string) string {
-	if prefix == "" {
-		prefix = "turn"
-	}
-	return fmt.Sprintf("%s-%d", prefix, s.nextTurn.Add(1))
-}
-
 func (s *Server) applyTurnAdmissionResult(as *activeSession, result app.TurnAdmissionResult) {
 	if change := result.SessionChanged; change != nil && change.OldID != "" && change.NewID != "" {
 		s.sessions.Delete(change.OldID)
 		as.StartedAt = time.Now()
-		as.turns.reset()
 		s.sessions.Store(change.NewID, as)
 	}
 	if result.Start != nil {

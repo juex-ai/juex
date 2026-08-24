@@ -114,9 +114,10 @@ type Engine struct {
 	sessionRuntimeMu sync.RWMutex
 	sessionRuntime   *sessionRuntimeState
 
-	pendingMu    sync.Mutex
-	activeTurnID string
-	pendingInput []queuedPendingInput
+	pendingLifecycleMu sync.Mutex
+	pendingMu          sync.Mutex
+	activeTurnID       string
+	pendingInput       []queuedPendingInput
 	// pendingEventAnnouncing keeps queue mutations available while ensuring
 	// their events cannot overtake a queue transition already being announced.
 	pendingEventAnnouncing bool
@@ -391,15 +392,20 @@ func (e *Engine) EnqueuePersistedPendingMessage(ctx context.Context, record Pend
 }
 
 func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg llm.Message, opts PendingInputOptions) (PendingInputStatus, error) {
+	status, _, err := e.enqueuePendingMessageWithOptions(ctx, userMsg, opts)
+	return status, err
+}
+
+func (e *Engine) enqueuePendingMessageWithOptions(ctx context.Context, userMsg llm.Message, opts PendingInputOptions) (PendingInputStatus, PendingInputRecord, error) {
 	userMsg = llm.ClassifyUserMessage(userMsg)
 	if e == nil {
-		return PendingInputStatus{}, ErrNoActiveTurn
+		return PendingInputStatus{}, PendingInputRecord{}, ErrNoActiveTurn
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return PendingInputStatus{}, err
+		return PendingInputStatus{}, PendingInputRecord{}, err
 	}
 	max := e.effectiveMaxPendingInputs()
 	queue := e.currentPendingInputQueue()
@@ -408,7 +414,7 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 	status := PendingInputStatus{TurnID: turnID, PendingCount: len(e.pendingInput), MaxPendingInputs: max}
 	if turnID == "" {
 		e.pendingMu.Unlock()
-		return status, ErrNoActiveTurn
+		return status, PendingInputRecord{}, ErrNoActiveTurn
 	}
 	if len(e.pendingInput) >= max {
 		event := events.Event{Type: "pending_input.rejected", TurnID: turnID, Payload: PendingInputRejectedPayload{
@@ -423,27 +429,29 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 		if !deferred {
 			_ = e.emit(event)
 		}
-		return status, ErrPendingInputQueueFull
+		return status, PendingInputRecord{}, ErrPendingInputQueueFull
 	}
 	recordID := ""
+	var acceptedRecord PendingInputRecord
 	if queue != nil {
 		opts = e.defaultPendingInputOptions(userMsg, opts)
 		record, err := queue.Enqueue(userMsg, opts, turnID)
 		if err != nil {
 			e.pendingMu.Unlock()
-			return status, err
+			return status, PendingInputRecord{}, err
 		}
+		acceptedRecord = record
 		recordID = record.ID
 		userMsg = record.Message
 		if !isReplayablePendingState(record.State) {
 			status.PendingCount = len(e.pendingInput)
 			e.pendingMu.Unlock()
-			return status, nil
+			return status, acceptedRecord, nil
 		}
 		if e.hasPendingRecordLocked(record.ID) {
 			status.PendingCount = len(e.pendingInput)
 			e.pendingMu.Unlock()
-			return status, nil
+			return status, acceptedRecord, nil
 		}
 	}
 	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: recordID, Message: userMsg, Origin: PendingInputOriginQueued})
@@ -460,7 +468,7 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 	if !deferred {
 		_ = e.emit(event)
 	}
-	return status, nil
+	return status, acceptedRecord, nil
 }
 
 func (e *Engine) PendingInputStatus() PendingInputStatus {
@@ -550,11 +558,20 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	defer e.mu.Unlock()
 
 	if turnID == "" {
-		turnID = newID()
-	}
-	userMsg, err = e.AdmitTurnMessage(turnID, userMsg)
-	if err != nil {
-		return "", err
+		result, receiveErr := e.ReceivePendingInput(ctx, PendingInputRequest{Message: userMsg})
+		if receiveErr != nil {
+			return "", receiveErr
+		}
+		if result.Disposition != PendingInputStarted {
+			return "", fmt.Errorf("runtime: synchronous input was not started: %s", result.Disposition)
+		}
+		turnID = result.TurnID
+		userMsg = result.Message
+	} else {
+		userMsg, err = e.AdmitTurnMessage(turnID, userMsg)
+		if err != nil {
+			return "", err
+		}
 	}
 	ctx, _, finishOperation := e.beginActiveOperation(ctx)
 	previousFailures := e.toolFailures

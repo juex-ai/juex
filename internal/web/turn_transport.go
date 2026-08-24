@@ -19,16 +19,10 @@ type webTurnTransport struct {
 	cancel     context.CancelCauseFunc
 	activeTurn string
 	wg         sync.WaitGroup
-
-	admissionsMu sync.Mutex
-	admissions   map[string]bool
 }
 
 func newWebTurnTransport(a *app.App) *webTurnTransport {
-	return &webTurnTransport{
-		app:        a,
-		admissions: map[string]bool{},
-	}
+	return &webTurnTransport{app: a}
 }
 
 func (t *webTurnTransport) start(turnID string, msg llm.Message) {
@@ -43,23 +37,16 @@ func (t *webTurnTransport) start(turnID string, msg llm.Message) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 
 	var previousCancel context.CancelCauseFunc
-	var previousTurnID string
 	t.cancelMu.Lock()
 	previousCancel = t.cancel
-	previousTurnID = t.activeTurn
 	t.cancel = cancel
 	t.activeTurn = turnID
 	t.cancelMu.Unlock()
-
-	t.admissionsMu.Lock()
-	t.admissions[turnID] = false
-	t.admissionsMu.Unlock()
 
 	t.wg.Add(1)
 	t.lifecycleMu.Unlock()
 	if previousCancel != nil {
 		previousCancel(cancellation.ErrUserCancelled)
-		t.completeAdmission(previousTurnID)
 	}
 	go t.run(ctx, turnID, msg)
 }
@@ -75,7 +62,6 @@ func (t *webTurnTransport) interruptWithCause(cause error) bool {
 	runtimeCancelled := t.app != nil && t.app.CancelActiveTurn(cause)
 	t.cancelMu.Lock()
 	cancel := t.cancel
-	turnID := t.activeTurn
 	if cancel != nil {
 		t.cancel = nil
 		t.activeTurn = ""
@@ -86,18 +72,8 @@ func (t *webTurnTransport) interruptWithCause(cause error) bool {
 	}
 	if cancel != nil {
 		cancel(cause)
-		t.completeAdmission(turnID)
 	}
 	return true
-}
-
-func (t *webTurnTransport) reset() {
-	if t == nil {
-		return
-	}
-	t.admissionsMu.Lock()
-	t.admissions = map[string]bool{}
-	t.admissionsMu.Unlock()
 }
 
 func (t *webTurnTransport) close() {
@@ -125,7 +101,6 @@ func (t *webTurnTransport) wait() {
 
 func (t *webTurnTransport) run(ctx context.Context, turnID string, msg llm.Message) {
 	defer t.wg.Done()
-	defer t.completeAdmission(turnID)
 	_, _ = t.app.RunAdmittedTurn(ctx, turnID, msg)
 
 	t.cancelMu.Lock()
@@ -134,18 +109,4 @@ func (t *webTurnTransport) run(ctx context.Context, turnID string, msg llm.Messa
 		t.activeTurn = ""
 	}
 	t.cancelMu.Unlock()
-}
-
-func (t *webTurnTransport) completeAdmission(turnID string) {
-	if t == nil || t.app == nil || turnID == "" {
-		return
-	}
-	t.admissionsMu.Lock()
-	if t.admissions[turnID] {
-		t.admissionsMu.Unlock()
-		return
-	}
-	t.admissions[turnID] = true
-	t.admissionsMu.Unlock()
-	t.app.CompleteAdmittedTurn(turnID)
 }

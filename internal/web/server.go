@@ -50,7 +50,6 @@ type Server struct {
 	opts         Options
 	modelHealth  *llm.ModelHealth
 	sessions     sync.Map // session id (string) → *activeSession
-	nextTurn     atomic.Uint64
 	startedAt    time.Time
 	statusStream *statusapi.ActivityStore
 	resources    *resourceEventHub

@@ -1386,15 +1386,15 @@ opening waits for the in-flight MCP startup so every web session registers
 proxy handlers against the shared manager instead of starting its own MCP
 subprocesses.
 
-`internal/app` also owns turn admission for transports that need a domain
-decision before starting work. `App.AdmitTurn` classifies user input into
-started, queued, command-completed, conflict, rejected, or error outcomes.
-`turn_admission.go` keeps the stable app-facing contract and slash-command
-entrypoint, while the unexported `turn_admission_queue.go` domain service owns
-admission phase transitions, runtime pending-input coordination, turn id
-reservation, and compact-command promotion. Transports render that result and
-start any returned turn message; they should not duplicate busy, compact,
-pending-input, or slash-command policy. Manual compact reservation marks its
+`internal/app` exposes turn admission for transports that need a domain result
+before starting work. `App.AdmitTurn` classifies user input and maps the
+runtime lifecycle outcome into started, queued, command-completed, conflict,
+rejected, or error. `turn_admission.go` retains the app-facing contract and
+slash-command entrypoint. The small `turn_admission_queue.go` Adapter keeps
+only App-owned command and compaction exclusion; it delegates ordinary
+start-versus-queue, durable state, retry classification, and Framework Turn
+identity to `runtime.Engine.ReceivePendingInput`. Transports render the result
+and execute any returned start action. Manual compact reservation marks its
 `turn.admitted` event with `operation: "compact"` so transcript projection can
 preserve queued input even when a pre-compact hook fails before compaction
 starts.
@@ -1425,11 +1425,13 @@ index on first access. Later admission and state transitions update that index
 and verify the journal file fingerprint without rescanning the append-only
 history. Ordinary Turn admission advances `accepting` to `admitted` only after
 its admission event commits; queued records use `pending` until they are
-drained or promoted to a main Turn input. Session attachment reconciles the
-latest journal records against committed admission message ids and the complete
-transcript index, then App resumes the oldest unexpired replayable record. The
-normal Turn restore path drains later records in acceptance order, so startup
-does not need a transport retry and cannot duplicate a transcript message.
+drained or promoted to a main Turn input. Session attachment asks runtime to
+reconcile the latest journal records against committed admission message ids
+and the complete transcript index. Runtime returns opaque recovery handles in
+acceptance order; App executes them behind the startup barrier and follows
+runtime retry instructions without reading their Pending states. The normal
+Turn restore path drains later records in acceptance order, so startup cannot
+duplicate a transcript message.
 
 ```go
 // internal/runtime/loop.go
@@ -1491,8 +1493,8 @@ failure cases and exact test names live in
 
 | Concern | Control owner | Durable authority | Live or derived readers |
 | --- | --- | --- | --- |
-| Turn admission | `internal/app` classifies transport input; `internal/runtime` reserves the Turn and applies typed input policy | `internal/runtime.PendingInputQueue`, `turn.admitted`, then the Session transcript | App admission results, runtime status, Web, and pending-input observers |
-| Pending input | `internal/runtime` owns queue admission, safe-boundary drain, processing, and completion checks | Session-local `pending_input.jsonl` plus the transcript's stable message ids | The in-memory queue, `pending_input.*` Events, status, Web, and Module observers |
+| Turn admission | `internal/app` classifies transport input and executes start actions; `internal/runtime` owns start-versus-queue and Framework Turn identity, then applies typed input policy | `internal/runtime.PendingInputQueue`, `turn.admitted`, then the Session transcript | App admission results, runtime status, Web, and pending-input observers |
+| Pending input | `internal/runtime` owns receive, durable state, retry/recovery classification, safe-boundary drain, processing, and completion checks | Session-local `pending_input.jsonl` plus the transcript's stable message ids | App follows typed outcomes; the in-memory queue, `pending_input.*` Events, status, Web, and Module observers are projections |
 | Tool execution | `internal/runtime` orders the batch and policies; `internal/tools` owns handler execution; `internal/toolevents` owns payload constructors | `llm.responded`, the complete ordered `tool.requested` set, per-call `tool.running` and input-resolution facts, then one terminal outcome containing the exact Provider-visible Tool Result | Status, Web, logs, and failure-ledger diagnostics consume cataloged Events; raw handler diagnostics do not replace the terminal outcome |
 | Session replacement | `internal/app` owns the candidate transaction and lifetime locks; `internal/runtime` atomically publishes one `SessionRuntimeSnapshot`; `internal/session` owns active-history selection, the single-writer lock, and journals | The provisional candidate active-history selection, candidate Session journals, then the published Engine checkpoint and App Session reference | Another process may observe provisional active history; status replay, observability, chunked-write state, and current App readers switch only under the App lifecycle boundary |
 | Finish and completion | `internal/runtime.turnLifecycle` orders the attempt; `internal/runtime/module` evaluates typed policies and commits only a selected candidate | The assistant response, selected policy-owned state, durable continuation Pending input, and finally `turn.completed` or `turn.errored` | Policy completion observers, continuation observers, status, Web, and logs cannot choose or alter the action |
@@ -1598,9 +1600,10 @@ uncommitted `accepting` intents, promotes an `accepting` record when a matching
 durable `turn.admitted` Event with the same message id proves admission, skips
 records whose stable message id is already present in conversation history,
 and marks processed
-records so the same user input or external event is not executed twice. App
-starts the oldest replayable record after Session startup; the Turn restore
-path drains the remaining records in acceptance order. Synchronous App turns,
+records so the same user input or external event is not executed twice. Runtime
+returns ordered opaque recovery handles after Session startup; App executes the
+first start action and the Turn restore path drains the remaining records in
+acceptance order. Synchronous App turns,
 transport admission, and newly persisted external delivery wait on the startup
 recovery completion signal before reserving or running another Turn. That keeps
 assistant `tool_use` and user `tool_result` adjacency intact
@@ -2017,10 +2020,13 @@ stopping children, and closed children do not defer the gate.
 
 Create and idle send operations start child turns asynchronously; busy send
 uses the child's normal durable pending-input admission. Subscription is on by
-default. Each subscribed completion or failure is admitted to the Primary as a
-user-role `side_session` message, starting a turn when idle or queuing while
-busy. Subscription is sampled at the child Turn's terminal boundary, and
-durable acceptance retries transient persistence failures with bounded backoff.
+default. Each subscribed completion or failure is translated into a user-role
+`side_session` message and passed through the same shared App/runtime delivery
+Interface as MCP notifications and Observations, starting a turn when idle or
+queuing while busy. The Side Session Adapter only supplies stable handoff
+identity and Primary-generation validity. Subscription is sampled at the child
+Turn's terminal boundary, while the shared delivery Adapter follows runtime
+retry instructions and applies bounded storage backoff.
 An exhausted delivery records `notification_error` on the child status and
 emits `side_session.notification_failed`. Stopping closes the child without
 deleting its durable Session. The

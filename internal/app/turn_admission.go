@@ -22,19 +22,10 @@ const (
 	TurnAdmissionError            TurnAdmissionKind = "error"
 )
 
-type TurnIDAllocator interface {
-	NextTurnID(prefix string) string
-}
-
-type TurnIDFunc func(prefix string) string
-
-func (f TurnIDFunc) NextTurnID(prefix string) string { return f(prefix) }
-
 type TurnAdmissionRequest struct {
 	Prompt      string
 	Kind        string
 	Attachments []llm.MediaRef
-	IDs         TurnIDAllocator
 }
 
 type AdmittedTurn struct {
@@ -72,7 +63,6 @@ type turnAdmissionPhase string
 
 const (
 	turnAdmissionIdle       turnAdmissionPhase = ""
-	turnAdmissionRunning    turnAdmissionPhase = "running"
 	turnAdmissionCompacting turnAdmissionPhase = "compacting"
 	turnAdmissionCommand    turnAdmissionPhase = "command"
 )
@@ -101,9 +91,6 @@ func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmis
 	if req.Prompt == "" && len(req.Attachments) == 0 {
 		return rejectedResult("bad_request", "expected non-empty prompt or attachment", "", false, nil, runtime.PendingInputStatus{})
 	}
-	if req.IDs == nil {
-		return errorResult(fmt.Errorf("turn admission: missing turn id allocator"), nil)
-	}
 	if req.Kind != "" && req.Kind != llm.MessageKindSystemNotice {
 		return rejectedResult("bad_request", "unsupported turn kind", "", false, nil, runtime.PendingInputStatus{})
 	}
@@ -111,14 +98,14 @@ func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmis
 		if len(req.Attachments) > 0 {
 			return rejectedResult("bad_request", "system notices cannot include attachments", "", false, nil, runtime.PendingInputStatus{})
 		}
-		return a.admitUserTurn(ctx, userTurnMessageWithKind(req.Prompt, nil, req.Kind), req.IDs)
+		return a.admitUserTurn(ctx, userTurnMessageWithKind(req.Prompt, nil, req.Kind))
 	}
 
 	if len(req.Attachments) > 0 {
 		if _, handled, err := ParseSlashCommand(req.Prompt); handled || err != nil {
 			return rejectedResult("bad_request", "slash commands cannot include attachments", "send the image as a normal message or run the slash command without attachments", false, nil, runtime.PendingInputStatus{})
 		}
-		result := a.admitUserTurn(ctx, userTurnMessage(req.Prompt, req.Attachments), req.IDs)
+		result := a.admitUserTurn(ctx, userTurnMessage(req.Prompt, req.Attachments))
 		if result.Kind == TurnAdmissionStarted || result.Kind == TurnAdmissionQueued {
 			result.Warnings = a.AttachmentWarnings(len(req.Attachments))
 		}
@@ -130,35 +117,27 @@ func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmis
 		return rejectedResult("bad_request", err.Error(), "available slash commands: "+AvailableSlashCommandsText(), false, err, runtime.PendingInputStatus{})
 	}
 	if handled {
-		return a.admitSlashTurn(ctx, cmd, req.IDs)
+		return a.admitSlashTurn(ctx, cmd)
 	}
-	return a.admitUserTurn(ctx, userTurnMessage(req.Prompt, nil), req.IDs)
+	return a.admitUserTurn(ctx, userTurnMessage(req.Prompt, nil))
 }
 
-func (a *App) CompleteAdmittedTurn(turnID string) {
-	a.admissionQueue().complete(turnID)
-}
-
-func (a *App) BeginCompactAdmission(ctx context.Context, turnID string) error {
+func (a *App) BeginCompactAdmission(ctx context.Context) (string, error) {
 	if err := a.waitPendingInputRecoveryContext(ctx); err != nil {
-		return err
+		return "", err
 	}
-	return a.beginCompactAdmission(turnID)
+	return a.beginCompactAdmission()
 }
 
-func (a *App) FinishCompactAdmission(compactTurnID string, ids TurnIDAllocator) (*AdmittedTurn, error) {
-	return a.finishCompactAdmission(compactTurnID, ids)
+func (a *App) FinishCompactAdmission(compactTurnID string) (*AdmittedTurn, error) {
+	return a.finishCompactAdmission(compactTurnID)
 }
 
-func (a *App) admitUserTurn(ctx context.Context, msg llm.Message, ids TurnIDAllocator) TurnAdmissionResult {
-	return a.admissionQueue().admitUser(ctx, msg, ids)
+func (a *App) admitUserTurn(ctx context.Context, msg llm.Message) TurnAdmissionResult {
+	return a.admissionQueue().admitUser(ctx, msg)
 }
 
-func (a *App) admitPersistedUserTurn(ctx context.Context, record runtime.PendingInputRecord, ids TurnIDAllocator) TurnAdmissionResult {
-	return a.admissionQueue().admitPersisted(ctx, record, ids)
-}
-
-func (a *App) admitSlashTurn(ctx context.Context, cmd SlashCommand, ids TurnIDAllocator) TurnAdmissionResult {
+func (a *App) admitSlashTurn(ctx context.Context, cmd SlashCommand) TurnAdmissionResult {
 	switch cmd.Name {
 	case SlashStatus:
 		result, err := a.ExecuteParsedSlashCommand(ctx, cmd)
@@ -167,13 +146,13 @@ func (a *App) admitSlashTurn(ctx context.Context, cmd SlashCommand, ids TurnIDAl
 		}
 		return commandResult(result, nil)
 	case SlashNew:
-		return a.admitNewSlash(ctx, cmd, ids)
+		return a.admitNewSlash(ctx, cmd)
 	case SlashCompact:
-		return a.admitCompactSlash(ctx, cmd, ids)
+		return a.admitCompactSlash(ctx, cmd)
 	case SlashGoal:
 		msg := llm.TextMessage(llm.RoleUser, GoalInstructionPrompt(cmd.Args))
 		msg.Kind = llm.MessageKindDirect
-		return a.admitUserTurn(ctx, msg, ids)
+		return a.admitUserTurn(ctx, msg)
 	default:
 		return errorResult(&UnknownSlashCommandError{Input: cmd.Name}, nil)
 	}
@@ -194,7 +173,7 @@ func userTurnMessageWithKind(prompt string, attachments []llm.MediaRef, kind str
 	return llm.Message{Role: llm.RoleUser, Kind: kind, Blocks: blocks}
 }
 
-func (a *App) admitNewSlash(ctx context.Context, cmd SlashCommand, ids TurnIDAllocator) TurnAdmissionResult {
+func (a *App) admitNewSlash(ctx context.Context, cmd SlashCommand) TurnAdmissionResult {
 	if !a.beginExclusiveCommand() {
 		return conflictResult("session busy", errTurnAdmissionBusy, runtime.PendingInputStatus{})
 	}
@@ -210,14 +189,12 @@ func (a *App) admitNewSlash(ctx context.Context, cmd SlashCommand, ids TurnIDAll
 		return errorResult(err, nil)
 	}
 
-	turnID := ids.NextTurnID("turn")
-	message, err := a.Engine.AdmitTurnMessage(turnID, NewSessionGreetingMessage())
-	if err != nil {
-		a.finishExclusiveCommand()
-		return errorResult(err, nil)
+	admission := admissionResultFromPendingInput(a.Engine.ReceivePendingInput(ctx, runtime.PendingInputRequest{Message: NewSessionGreetingMessage()}))
+	a.finishExclusiveCommand()
+	if admission.Kind != TurnAdmissionStarted || admission.Start == nil {
+		return admission
 	}
-	start := &AdmittedTurn{TurnID: turnID, Message: message}
-	a.finishExclusiveCommandAsRunning(turnID)
+	start := admission.Start
 
 	admitted := commandResult(result, start)
 	if current, ok := a.SessionIdentity(); ok && current.ID != oldID {
@@ -226,25 +203,25 @@ func (a *App) admitNewSlash(ctx context.Context, cmd SlashCommand, ids TurnIDAll
 	return admitted
 }
 
-func (a *App) admitCompactSlash(ctx context.Context, cmd SlashCommand, ids TurnIDAllocator) TurnAdmissionResult {
-	compactTurnID := ids.NextTurnID("compact")
-	if err := a.beginCompactAdmission(compactTurnID); err != nil {
+func (a *App) admitCompactSlash(ctx context.Context, cmd SlashCommand) TurnAdmissionResult {
+	compactTurnID, err := a.beginCompactAdmission()
+	if err != nil {
 		return conflictResult("session busy", err, runtime.PendingInputStatus{})
 	}
 	result, err := a.executeCompactSlashCommand(ctx, cmd, compactTurnID)
-	start, promotionErr := a.finishCompactAdmission(compactTurnID, ids)
+	start, promotionErr := a.finishCompactAdmission(compactTurnID)
 	if err := errors.Join(err, promotionErr); err != nil {
 		return errorResult(err, start)
 	}
 	return commandResult(result, start)
 }
 
-func (a *App) beginCompactAdmission(turnID string) error {
-	return a.admissionQueue().beginCompact(turnID)
+func (a *App) beginCompactAdmission() (string, error) {
+	return a.admissionQueue().beginCompact()
 }
 
-func (a *App) finishCompactAdmission(compactTurnID string, ids TurnIDAllocator) (*AdmittedTurn, error) {
-	return a.admissionQueue().finishCompact(compactTurnID, ids)
+func (a *App) finishCompactAdmission(compactTurnID string) (*AdmittedTurn, error) {
+	return a.admissionQueue().finishCompact(compactTurnID)
 }
 
 func (a *App) beginExclusiveCommand() bool {
@@ -253,10 +230,6 @@ func (a *App) beginExclusiveCommand() bool {
 
 func (a *App) finishExclusiveCommand() {
 	a.admissionQueue().finishExclusiveCommand()
-}
-
-func (a *App) finishExclusiveCommandAsRunning(turnID string) {
-	a.admissionQueue().finishExclusiveCommandAsRunning(turnID)
 }
 
 func queuedResult(status runtime.PendingInputStatus) TurnAdmissionResult {

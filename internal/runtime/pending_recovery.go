@@ -7,11 +7,15 @@ import (
 	"github.com/juex-ai/juex/internal/session"
 )
 
-// RecoverPendingInputRecords reconciles the pending journal against committed
-// admission events and the complete transcript, then returns unexpired records
-// in stable acceptance order. It does not reserve or run a Turn; App owns that
-// process-level scheduling decision.
-func (e *Engine) RecoverPendingInputRecords() ([]PendingInputRecord, error) {
+type PendingInputRecovery struct {
+	RecordID string
+}
+
+// RecoverPendingInputs reconciles the pending journal against committed
+// admission events and the complete transcript, then returns opaque recovery
+// handles in stable acceptance order. App executes them behind its startup
+// barrier; ReceivePendingInput owns all state and retry classification.
+func (e *Engine) RecoverPendingInputs() ([]PendingInputRecovery, error) {
 	if e == nil {
 		return nil, nil
 	}
@@ -52,5 +56,9 @@ func (e *Engine) RecoverPendingInputRecords() ([]PendingInputRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runtime: list replayable pending input: %w", err)
 	}
-	return replayable, nil
+	result := make([]PendingInputRecovery, 0, len(replayable))
+	for _, record := range replayable {
+		result = append(result, PendingInputRecovery{RecordID: record.ID})
+	}
+	return result, nil
 }
