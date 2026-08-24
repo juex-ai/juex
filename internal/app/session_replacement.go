@@ -60,9 +60,9 @@ type sessionReplacementResult struct {
 
 type activeSessionReplacementOptions struct {
 	prepareCandidate func(config.Config) (SessionAttachment, *session.Lock, error)
-	commitActive     func(string, session.Info) error
-	restoreActive    func(string, session.Info) error
-	deleteCandidate  func(config.Config, string, SessionDeleteOptions) error
+	commitActive     func(string, string, session.Info) (bool, error)
+	restoreActive    func(string, string, session.Info) (bool, error)
+	deleteCandidate  func(config.Config, string, SessionDeleteOptions) (bool, error)
 }
 
 func (opts activeSessionReplacementOptions) withDefaults() activeSessionReplacementOptions {
@@ -72,13 +72,13 @@ func (opts activeSessionReplacementOptions) withDefaults() activeSessionReplacem
 		}
 	}
 	if opts.commitActive == nil {
-		opts.commitActive = session.SetActive
+		opts.commitActive = session.CompareAndSetActive
 	}
 	if opts.restoreActive == nil {
-		opts.restoreActive = session.SetActive
+		opts.restoreActive = session.CompareAndSetActive
 	}
 	if opts.deleteCandidate == nil {
-		opts.deleteCandidate = DeleteSession
+		opts.deleteCandidate = deleteSessionIfInactive
 	}
 	return opts
 }
@@ -257,8 +257,9 @@ func (tx *activeSessionReplacementTransaction) publishAndCommit() error {
 	if err := tx.ctx.Err(); err != nil {
 		return tx.rollbackLocked(sessionReplacementPhasePolicy, err, false)
 	}
-	if err := tx.opts.commitActive(a.cfg.HistoryPath(), tx.candidate.Session.Info()); err != nil {
-		return tx.rollbackLocked(sessionReplacementPhaseHistoryCommit, err, true)
+	historyReplaced, err := tx.opts.commitActive(a.cfg.HistoryPath(), tx.result.Old.ID, tx.candidate.Session.Info())
+	if err != nil {
+		return tx.rollbackLocked(sessionReplacementPhaseHistoryCommit, err, historyReplaced)
 	}
 
 	a.Session = tx.candidate.Session
@@ -308,7 +309,7 @@ func (tx *activeSessionReplacementTransaction) rollbackLocked(phase sessionRepla
 		rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore observability: attach previous session: %w", err))
 	}
 	if restoreHistory {
-		if err := tx.opts.restoreActive(a.cfg.HistoryPath(), tx.result.Old); err != nil {
+		if _, err := tx.opts.restoreActive(a.cfg.HistoryPath(), tx.result.New.ID, tx.result.Old); err != nil && !errors.Is(err, session.ErrActiveSessionChanged) {
 			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore active history: %w", err))
 		}
 	}
@@ -355,7 +356,8 @@ func (tx *activeSessionReplacementTransaction) cleanupCandidate() error {
 		return cleanupErr
 	}
 	cleanupErr = errors.Join(cleanupErr, sess.Close())
-	cleanupErr = errors.Join(cleanupErr, tx.opts.deleteCandidate(tx.app.cfg, sess.ID, SessionDeleteOptions{AllowMissingSession: true}))
+	_, deleteErr := tx.opts.deleteCandidate(tx.app.cfg, sess.ID, SessionDeleteOptions{AllowMissingSession: true})
+	cleanupErr = errors.Join(cleanupErr, deleteErr)
 	return cleanupErr
 }
 

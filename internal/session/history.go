@@ -27,6 +27,10 @@ var (
 	// session the workspace active session.
 	ErrCannotActivateSide = errors.New("session: side sessions cannot become active")
 
+	// ErrActiveSessionChanged is returned when a conditional active-session
+	// update loses to a newer explicit selection.
+	ErrActiveSessionChanged = errors.New("session: active session changed")
+
 	// ErrSessionTimeUnavailable identifies pre-release session metadata that
 	// does not contain the session-owned timestamps required by this version.
 	ErrSessionTimeUnavailable = errors.New("session: owned time is unavailable")
@@ -335,17 +339,57 @@ func SetActive(path string, info Info) error {
 	return err
 }
 
+// CompareAndSetActive records info as active only while expectedID remains the
+// selected Session. replaced reports whether the history file may already
+// contain the requested selection when an atomic publication error is returned.
+func CompareAndSetActive(path, expectedID string, info Info) (replaced bool, err error) {
+	info = normalizeInfo(info)
+	if info.Kind != KindPrimary {
+		return false, fmt.Errorf("%w: %s", ErrCannotActivateSide, info.ID)
+	}
+	if path == "" {
+		return true, nil
+	}
+	active := info
+	active.Active = true
+	err = withHistoryLock(path, func() error {
+		h, err := loadHistoryFile(path)
+		if err != nil {
+			return err
+		}
+		activeID := ""
+		if h.Active != nil {
+			activeID = h.Active.ID
+		}
+		if activeID != expectedID {
+			return fmt.Errorf("%w: got %q, want %q", ErrActiveSessionChanged, activeID, expectedID)
+		}
+		upsertHistorySession(&h, info)
+		h.Active = &active
+		return writeHistory(path, h)
+	})
+	if err != nil {
+		return homestore.ReplacementOccurred(err), err
+	}
+	return true, nil
+}
+
 // Activate loads id from root and records it as the active primary session.
 func Activate(root, historyPath, id string) (Info, error) {
-	dir, ok := sessionDir(root, id)
-	if !ok {
-		return Info{}, os.ErrNotExist
-	}
-	info, _, err := LoadInfo(dir)
-	if err != nil {
-		return Info{}, err
-	}
-	return activateInfo(historyPath, info)
+	var active Info
+	err := WithSessionRootGuard(root, func() error {
+		dir, ok := sessionDir(root, id)
+		if !ok {
+			return os.ErrNotExist
+		}
+		info, _, err := LoadInfo(dir)
+		if err != nil {
+			return err
+		}
+		active, err = activateInfo(historyPath, info)
+		return err
+	})
+	return active, err
 }
 
 func activateInfo(path string, info Info) (Info, error) {
@@ -489,6 +533,72 @@ func (p *DeletePlan) Commit() error {
 		}
 		return removeHistory(p.historyPath, p.id, p.fallbackActiveID)
 	})
+}
+
+// CommitIfInactive removes the validated Session only when it is not the
+// selected active Session at the deletion commit point. Selection and removal
+// share the Session root guard, so a successful Activate cannot race with the
+// directory removal.
+func (p *DeletePlan) CommitIfInactive() (bool, error) {
+	if p == nil {
+		return false, os.ErrInvalid
+	}
+	deleted := false
+	err := WithSessionRootGuard(p.root, func() error {
+		var lock *Lock
+		if p.dir != "" {
+			var err error
+			lock, err = AcquireSessionDeleteLock(p.dir, "delete")
+			if err != nil {
+				return err
+			}
+			if lock != nil {
+				defer func() { _ = lock.Close() }()
+			}
+		}
+		commit := func() error {
+			var h History
+			if p.historyPath != "" {
+				var err error
+				h, err = loadHistoryFile(p.historyPath)
+				if err != nil {
+					return err
+				}
+				if h.Active != nil && h.Active.ID == p.id {
+					return nil
+				}
+			}
+			if lock != nil {
+				if err := os.RemoveAll(p.dir); err != nil {
+					return err
+				}
+			}
+			if p.historyPath != "" {
+				kept := h.Sessions[:0]
+				changed := false
+				for _, info := range h.Sessions {
+					if info.ID == p.id {
+						changed = true
+						continue
+					}
+					kept = append(kept, info)
+				}
+				h.Sessions = kept
+				if changed {
+					if err := writeHistory(p.historyPath, h); err != nil {
+						return err
+					}
+				}
+			}
+			deleted = true
+			return nil
+		}
+		if p.historyPath == "" {
+			return commit()
+		}
+		return withHistoryLock(p.historyPath, commit)
+	})
+	return deleted, err
 }
 
 // Delete removes one on-disk session and drops its entry from history.

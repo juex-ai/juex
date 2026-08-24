@@ -193,6 +193,46 @@ func TestSessionDeleteCommitRemovesNamespaceCreatedAfterPreflight(t *testing.T) 
 	}
 }
 
+func TestSessionDeleteCommitIfInactivePreservesSelectedSessionAndArtifacts(t *testing.T) {
+	cfg := testSessionDeleteConfig(t)
+	sess, err := session.New(cfg.SessionsDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := sess.Info()
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := artifact.NewStore(cfg.ArtifactDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put("sessions/"+sess.ID+"/media/image.png", []byte("image")); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareSessionDelete(cfg, sess.ID, SessionDeleteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SetActive(cfg.HistoryPath(), info); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := plan.commitIfInactive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted {
+		t.Fatal("CommitIfInactive deleted the selected Session")
+	}
+	if _, err := os.Stat(sess.Dir); err != nil {
+		t.Fatalf("selected Session directory was removed: %v", err)
+	}
+	if exists, err := store.HasNamespace("sessions/" + sess.ID); err != nil || !exists {
+		t.Fatalf("selected Session Artifact namespace = %t, %v; want preserved", exists, err)
+	}
+}
+
 func testSessionDeleteConfig(t *testing.T) config.Config {
 	t.Helper()
 	stateDir := filepath.Join(t.TempDir(), "agent")

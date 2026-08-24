@@ -16,6 +16,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/eventcatalog"
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/homestore"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
@@ -211,11 +212,17 @@ func TestActiveSessionReplacementHistoryCommitFailureRollsBackPublication(t *tes
 	commitErr := errors.New("active history commit failed")
 
 	result, err := a.executeActiveSessionReplacement(context.Background(), activeSessionReplacementOptions{
-		commitActive: func(path string, info session.Info) error {
-			if err := session.SetActive(path, info); err != nil {
-				return err
+		commitActive: func(path, expectedID string, info session.Info) (bool, error) {
+			replaced, err := session.CompareAndSetActive(path, expectedID, info)
+			if err != nil {
+				return replaced, err
 			}
-			return commitErr
+			return true, &homestore.AtomicWriteError{
+				Operation: "sync directory",
+				Path:      path,
+				Replaced:  true,
+				Err:       commitErr,
+			}
 		},
 	})
 	if !errors.Is(err, commitErr) {
@@ -241,6 +248,64 @@ func TestActiveSessionReplacementHistoryCommitFailureRollsBackPublication(t *tes
 	}
 	if history.Active == nil || history.Active.ID != oldIdentity.ID || len(history.Sessions) != 1 {
 		t.Fatalf("history after failed commit = %+v, want only active %q", history, oldIdentity.ID)
+	}
+	if _, statErr := os.Stat(result.New.Dir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("candidate directory stat error = %v, want not exist", statErr)
+	}
+}
+
+func TestActiveSessionReplacementRollbackPreservesNewerActiveSelection(t *testing.T) {
+	a, _ := newStubApp(t)
+	oldIdentity, ok := a.SessionIdentity()
+	if !ok {
+		t.Fatal("missing initial session")
+	}
+	newer, err := session.NewWithOptions(a.cfg.SessionsDir(), session.Options{
+		Kind:        session.KindPrimary,
+		HistoryPath: a.cfg.HistoryPath(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newerID := newer.ID
+	if err := newer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	commitErr := errors.New("active history commit failed after replacement")
+
+	result, err := a.executeActiveSessionReplacement(context.Background(), activeSessionReplacementOptions{
+		commitActive: func(path, expectedID string, info session.Info) (bool, error) {
+			replaced, err := session.CompareAndSetActive(path, expectedID, info)
+			if err != nil {
+				return replaced, err
+			}
+			if _, err := session.Activate(a.cfg.SessionsDir(), path, newerID); err != nil {
+				return true, err
+			}
+			return true, &homestore.AtomicWriteError{
+				Operation: "sync directory",
+				Path:      path,
+				Replaced:  true,
+				Err:       commitErr,
+			}
+		},
+	})
+	if !errors.Is(err, commitErr) {
+		t.Fatalf("replacement error = %v, want history commit failure", err)
+	}
+	identity, ok := a.SessionIdentity()
+	if !ok || identity.ID != oldIdentity.ID {
+		t.Fatalf("active App Session = %+v, want %q", identity, oldIdentity.ID)
+	}
+	if got := a.Engine.SessionRuntimeSnapshot().Session.ID; got != oldIdentity.ID {
+		t.Fatalf("Engine Session = %q, want %q", got, oldIdentity.ID)
+	}
+	history, loadErr := session.LoadHistory(a.cfg.HistoryPath())
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if history.Active == nil || history.Active.ID != newerID {
+		t.Fatalf("history active = %+v, want newer selection %q", history.Active, newerID)
 	}
 	if _, statErr := os.Stat(result.New.Dir); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("candidate directory stat error = %v, want not exist", statErr)
@@ -693,6 +758,65 @@ func TestSwitchToNewPrimarySessionStartPolicyRejectsReplacement(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "event=test.observability-restored") {
 		t.Fatalf("previous session observability was not restored:\n%s", data)
+	}
+}
+
+func TestSwitchToNewPrimarySessionPolicyRejectionPreservesExternallyActivatedCandidate(t *testing.T) {
+	dir := t.TempDir()
+	tracker := &sessionStartPolicyTracker{rejectCall: 2}
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID:    "openai",
+			APIKey:        "x",
+			Model:         "m",
+			WorkDir:       dir,
+			AgentStateDir: filepath.Join(dir, ".juex"),
+		},
+		Provider:           &stubProvider{},
+		WorkDir:            dir,
+		DisableMCP:         true,
+		disableObservables: true,
+		sessionModuleFactories: []runtimemodule.SessionFactorySpec{{
+			ID:      "tracked-session-start",
+			Enabled: true,
+			New: func(context.Context, runtimemodule.SessionContext) (runtimemodule.Module, error) {
+				return &trackedSessionStartPolicy{tracker: tracker}, nil
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	oldID := a.Session.ID
+	tracker.beforeReject = func() error {
+		started := tracker.snapshot()
+		candidateID := started[len(started)-1]
+		_, err := session.Activate(a.cfg.SessionsDir(), a.cfg.HistoryPath(), candidateID)
+		return err
+	}
+
+	err = a.SwitchToNewPrimarySession()
+	if err == nil || !strings.Contains(err.Error(), "replacement blocked") {
+		t.Fatalf("session replacement error = %v, want policy rejection", err)
+	}
+	started := tracker.snapshot()
+	candidateID := started[len(started)-1]
+	if got := a.Session.ID; got != oldID {
+		t.Fatalf("active App Session after rollback = %q, want %q", got, oldID)
+	}
+	if got := a.Engine.SessionRuntimeSnapshot().Session.ID; got != oldID {
+		t.Fatalf("Engine Session after rollback = %q, want %q", got, oldID)
+	}
+	history, err := session.LoadHistory(a.cfg.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history.Active == nil || history.Active.ID != candidateID {
+		t.Fatalf("history active = %+v, want externally selected candidate %q", history.Active, candidateID)
+	}
+	if _, err := os.Stat(filepath.Join(a.cfg.SessionsDir(), candidateID)); err != nil {
+		t.Fatalf("externally selected candidate was deleted: %v", err)
 	}
 }
 

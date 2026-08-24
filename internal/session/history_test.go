@@ -400,6 +400,31 @@ func TestRecordSessionDoesNotChangeActiveSelection(t *testing.T) {
 	})
 }
 
+func TestCompareAndSetActiveRejectsStaleExpectedSelection(t *testing.T) {
+	historyPath := filepath.Join(t.TempDir(), "history.json")
+	old := Info{ID: "old", Kind: KindPrimary}
+	candidate := Info{ID: "candidate", Kind: KindPrimary}
+	newer := Info{ID: "newer", Kind: KindPrimary}
+	if err := SetActive(historyPath, old); err != nil {
+		t.Fatal(err)
+	}
+	replaced, err := CompareAndSetActive(historyPath, old.ID, candidate)
+	if err != nil || !replaced {
+		t.Fatalf("first CompareAndSetActive = replaced %t, err %v; want true, nil", replaced, err)
+	}
+	replaced, err = CompareAndSetActive(historyPath, old.ID, newer)
+	if !errors.Is(err, ErrActiveSessionChanged) || replaced {
+		t.Fatalf("stale CompareAndSetActive = replaced %t, err %v; want false, ErrActiveSessionChanged", replaced, err)
+	}
+	history, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history.Active == nil || history.Active.ID != candidate.ID {
+		t.Fatalf("active = %+v, want %q", history.Active, candidate.ID)
+	}
+}
+
 func TestActivatePrimarySetsHistoryAndReturnsActive(t *testing.T) {
 	root := t.TempDir()
 	sessionsRoot := filepath.Join(root, "sessions")
@@ -532,6 +557,93 @@ func TestDeleteRemovesDirectoryAndHistoryEntry(t *testing.T) {
 	}
 	if h.Active == nil || h.Active.ID != older.ID {
 		t.Fatalf("active = %+v, want older", h.Active)
+	}
+}
+
+func TestDeletePlanCommitIfInactivePreservesSelectedSession(t *testing.T) {
+	root := t.TempDir()
+	sessionsRoot := filepath.Join(root, "sessions")
+	historyPath := filepath.Join(root, "history.json")
+	sess, err := New(sessionsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareDelete(sessionsRoot, historyPath, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Activate(sessionsRoot, historyPath, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := plan.CommitIfInactive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted {
+		t.Fatal("CommitIfInactive deleted the selected Session")
+	}
+	if _, err := os.Stat(sess.Dir); err != nil {
+		t.Fatalf("selected Session directory was removed: %v", err)
+	}
+}
+
+func TestActivateAndCommitIfInactiveAreAtomic(t *testing.T) {
+	for i := 0; i < 30; i++ {
+		root := t.TempDir()
+		sessionsRoot := filepath.Join(root, "sessions")
+		historyPath := filepath.Join(root, "history.json")
+		sess, err := New(sessionsRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sess.Close(); err != nil {
+			t.Fatal(err)
+		}
+		plan, err := PrepareDelete(sessionsRoot, historyPath, sess.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		start := make(chan struct{})
+		activateDone := make(chan error, 1)
+		deleteDone := make(chan struct {
+			deleted bool
+			err     error
+		}, 1)
+		go func() {
+			<-start
+			_, err := Activate(sessionsRoot, historyPath, sess.ID)
+			activateDone <- err
+		}()
+		go func() {
+			<-start
+			deleted, err := plan.CommitIfInactive()
+			deleteDone <- struct {
+				deleted bool
+				err     error
+			}{deleted: deleted, err: err}
+		}()
+		close(start)
+		activateErr := <-activateDone
+		deleteResult := <-deleteDone
+		if deleteResult.err != nil {
+			t.Fatal(deleteResult.err)
+		}
+		if activateErr == nil {
+			if deleteResult.deleted {
+				t.Fatal("successful activation raced with Session deletion")
+			}
+			if _, err := os.Stat(sess.Dir); err != nil {
+				t.Fatalf("activated Session directory was removed: %v", err)
+			}
+			continue
+		}
+		if !errors.Is(activateErr, os.ErrNotExist) || !deleteResult.deleted {
+			t.Fatalf("activation error = %v, deleted = %t; want activation success with preservation or not-exist after deletion", activateErr, deleteResult.deleted)
+		}
 	}
 }
 
