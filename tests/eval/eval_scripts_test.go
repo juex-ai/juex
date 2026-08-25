@@ -100,6 +100,7 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 				`test_packages=(./internal/web)`,
 				`test_packages=(./tests/e2e)`,
 				`test_packages=(./tests/eval)`,
+				`export GOMAXPROCS=2`,
 				`race_args=("-p=2")`,
 				`go test -json "${test_packages[@]}" -race -count=1`,
 				`go test "${test_packages[@]}" -race -count=1`,

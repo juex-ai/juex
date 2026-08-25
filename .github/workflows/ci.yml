@@ -119,12 +119,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .tmp/windows-race
+          gomaxprocs="${GOMAXPROCS:-auto}"
+          if [[ "${{ matrix.suite }}" == "ordinary" ]]; then
+            gomaxprocs=2
+          fi
           {
             printf 'head_sha=%s\n' "$GITHUB_SHA"
             printf 'topology=%s\n' "${{ inputs.windows_topology || 'split' }}"
             printf 'suite=%s\n' "${{ matrix.suite }}"
             printf 'number_of_processors=%s\n' "${NUMBER_OF_PROCESSORS:-unknown}"
-            printf 'gomaxprocs=%s\n' "${GOMAXPROCS:-auto}"
+            printf 'gomaxprocs=%s\n' "$gomaxprocs"
             printf 'home=%s\n' "$HOME"
             printf 'juex_home=%s\n' "${JUEX_HOME:-<default>}"
             go version
@@ -144,6 +148,7 @@ jobs:
           case "$suite" in
             ordinary)
               mapfile -t test_packages < <(go list ./... | grep -Ev '(/internal/web|/tests/(e2e|eval))$')
+              export GOMAXPROCS=2
               race_args=("-p=2")
               ;;
             web)
