@@ -55,7 +55,7 @@ jobs:
           args: check
 
   test:
-    name: ${{ (matrix.suite == 'all' || matrix.suite == 'ordinary') && format('test ({0})', matrix.os) || format('test ({0}, {1})', matrix.os, matrix.suite) }}
+    name: ${{ matrix.suite == 'all' && format('test ({0})', matrix.os) || format('test ({0}, {1})', matrix.os, matrix.suite) }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -301,3 +301,19 @@ jobs:
           path: .tmp/windows-race
           if-no-files-found: warn
           retention-days: 14
+
+  windows-race-gate:
+    name: test (windows-latest)
+    if: ${{ always() && github.event_name != 'workflow_dispatch' }}
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the complete test matrix
+        env:
+          TEST_MATRIX_RESULT: ${{ needs.test.result }}
+        shell: bash
+        run: |
+          if [[ "$TEST_MATRIX_RESULT" != "success" ]]; then
+            printf 'test matrix result: %s\n' "$TEST_MATRIX_RESULT" >&2
+            exit 1
+          fi

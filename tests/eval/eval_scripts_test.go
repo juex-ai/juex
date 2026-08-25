@@ -41,6 +41,7 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 		} `yaml:"on"`
 		Jobs struct {
 			Test struct {
+				Name     string `yaml:"name"`
 				Strategy struct {
 					Matrix struct {
 						Include string `yaml:"include"`
@@ -53,6 +54,14 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 					Uses string `yaml:"uses"`
 				} `yaml:"steps"`
 			} `yaml:"test"`
+			WindowsRaceGate struct {
+				Name  string `yaml:"name"`
+				If    string `yaml:"if"`
+				Needs string `yaml:"needs"`
+				Steps []struct {
+					Run string `yaml:"run"`
+				} `yaml:"steps"`
+			} `yaml:"windows-race-gate"`
 		} `yaml:"jobs"`
 	}
 	if err := yaml.Unmarshal(data, &workflow); err != nil {
@@ -66,6 +75,9 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 	if benchmarkInput.Type != "choice" || benchmarkInput.Default != "split" ||
 		!reflect.DeepEqual(benchmarkInput.Options, []string{"1", "2", "default", "split", "web-g1", "web-g2"}) {
 		t.Fatalf("Windows topology input = %#v", benchmarkInput)
+	}
+	if strings.Contains(workflow.Jobs.Test.Name, "matrix.suite == 'ordinary'") {
+		t.Fatalf("ordinary shard must not own the stable aggregate check name: %s", workflow.Jobs.Test.Name)
 	}
 	for _, want := range []string{
 		`inputs.windows_topology == 'split'`,
@@ -134,6 +146,12 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 	}
 	if buildAt >= windowsRaceAt || windowsRaceAt >= installerAt || installerAt >= artifactAt {
 		t.Fatalf("CI step order: build=%d windows-race=%d installer=%d artifact=%d", buildAt, windowsRaceAt, installerAt, artifactAt)
+	}
+	gate := workflow.Jobs.WindowsRaceGate
+	if gate.Name != "test (windows-latest)" || gate.Needs != "test" ||
+		!strings.Contains(gate.If, "always()") || !strings.Contains(gate.If, "github.event_name != 'workflow_dispatch'") ||
+		len(gate.Steps) != 1 || !strings.Contains(gate.Steps[0].Run, `TEST_MATRIX_RESULT" != "success`) {
+		t.Fatalf("Windows race aggregate gate = %#v", gate)
 	}
 }
 
