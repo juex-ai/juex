@@ -40,6 +40,11 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 		} `yaml:"on"`
 		Jobs struct {
 			Test struct {
+				Strategy struct {
+					Matrix struct {
+						Include string `yaml:"include"`
+					} `yaml:"matrix"`
+				} `yaml:"strategy"`
 				Steps []struct {
 					Name string `yaml:"name"`
 					If   string `yaml:"if"`
@@ -53,13 +58,23 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 		t.Fatalf("parse CI workflow: %v", err)
 	}
 
-	benchmarkInput, ok := workflow.On.WorkflowDispatch.Inputs["windows_parallelism"]
+	benchmarkInput, ok := workflow.On.WorkflowDispatch.Inputs["windows_topology"]
 	if !ok {
-		t.Fatal("CI workflow is missing the manual Windows parallelism input")
+		t.Fatal("CI workflow is missing the manual Windows topology input")
 	}
-	if benchmarkInput.Type != "choice" || benchmarkInput.Default != "2" ||
-		!reflect.DeepEqual(benchmarkInput.Options, []string{"1", "2", "default"}) {
-		t.Fatalf("Windows parallelism input = %#v", benchmarkInput)
+	if benchmarkInput.Type != "choice" || benchmarkInput.Default != "split" ||
+		!reflect.DeepEqual(benchmarkInput.Options, []string{"1", "2", "default", "split"}) {
+		t.Fatalf("Windows topology input = %#v", benchmarkInput)
+	}
+	for _, want := range []string{
+		`inputs.windows_topology == 'split'`,
+		`"os":"windows-latest","suite":"ordinary"`,
+		`"os":"windows-latest","suite":"e2e"`,
+		`"os":"windows-latest","suite":"eval"`,
+	} {
+		if !strings.Contains(workflow.Jobs.Test.Strategy.Matrix.Include, want) {
+			t.Errorf("CI matrix missing %q:\n%s", want, workflow.Jobs.Test.Strategy.Matrix.Include)
+		}
 	}
 
 	buildAt, windowsRaceAt, installerAt, artifactAt := -1, -1, -1, -1
@@ -77,9 +92,14 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 				t.Errorf("Windows race condition = %q", step.If)
 			}
 			for _, want := range []string{
-				`inputs.windows_parallelism || '2'`,
-				`go test -json ./... -race -count=1`,
-				`go test ./... -race -count=1`,
+				`inputs.windows_topology || 'split'`,
+				`mapfile -t test_packages`,
+				`grep -Ev '/tests/(e2e|eval)$'`,
+				`test_packages=(./tests/e2e)`,
+				`test_packages=(./tests/eval)`,
+				`race_args=("-p=2")`,
+				`go test -json "${test_packages[@]}" -race -count=1`,
+				`go test "${test_packages[@]}" -race -count=1`,
 				`race_args+=("-p=$mode")`,
 			} {
 				if !strings.Contains(step.Run, want) {
@@ -91,6 +111,9 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 			}
 		case "Test PowerShell release installer":
 			installerAt = index
+			if !strings.Contains(step.If, "matrix.suite == 'ordinary' || matrix.suite == 'all'") {
+				t.Errorf("PowerShell installer condition = %q", step.If)
+			}
 		}
 		if step.Uses == "actions/upload-artifact@v4" {
 			artifactAt = index

@@ -5,15 +5,16 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
-      windows_parallelism:
-        description: Windows race package parallelism to benchmark
+      windows_topology:
+        description: Windows race execution topology to benchmark
         required: true
         type: choice
-        default: "2"
+        default: split
         options:
           - "1"
           - "2"
           - default
+          - split
 
 jobs:
   frontend:
@@ -52,11 +53,12 @@ jobs:
           args: check
 
   test:
+    name: ${{ (matrix.suite == 'all' || matrix.suite == 'ordinary') && format('test ({0})', matrix.os) || format('test ({0}, {1})', matrix.os, matrix.suite) }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["windows-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && (inputs.windows_topology == 'split' && '[{"os":"windows-latest","suite":"ordinary"},{"os":"windows-latest","suite":"e2e"},{"os":"windows-latest","suite":"eval"}]' || '[{"os":"windows-latest","suite":"all"}]') || '[{"os":"ubuntu-latest","suite":"all"},{"os":"macos-latest","suite":"all"},{"os":"windows-latest","suite":"ordinary"},{"os":"windows-latest","suite":"e2e"},{"os":"windows-latest","suite":"eval"}]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -119,7 +121,8 @@ jobs:
           mkdir -p .tmp/windows-race
           {
             printf 'head_sha=%s\n' "$GITHUB_SHA"
-            printf 'parallelism=%s\n' "${{ inputs.windows_parallelism }}"
+            printf 'topology=%s\n' "${{ inputs.windows_topology || 'split' }}"
+            printf 'suite=%s\n' "${{ matrix.suite }}"
             printf 'number_of_processors=%s\n' "${NUMBER_OF_PROCESSORS:-unknown}"
             printf 'gomaxprocs=%s\n' "${GOMAXPROCS:-auto}"
             printf 'home=%s\n' "$HOME"
@@ -134,16 +137,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mode="${{ inputs.windows_parallelism || '2' }}"
+          mode="${{ inputs.windows_topology || 'split' }}"
+          suite="${{ matrix.suite }}"
+          test_packages=()
           race_args=()
-          if [[ "$mode" != "default" ]]; then
-            race_args+=("-p=$mode")
-          fi
+          case "$suite" in
+            ordinary)
+              mapfile -t test_packages < <(go list ./... | grep -Ev '/tests/(e2e|eval)$')
+              race_args=("-p=2")
+              ;;
+            e2e)
+              test_packages=(./tests/e2e)
+              ;;
+            eval)
+              test_packages=(./tests/eval)
+              ;;
+            all)
+              test_packages=(./...)
+              if [[ "$mode" != "default" ]]; then
+                race_args+=("-p=$mode")
+              fi
+              ;;
+            *)
+              printf 'unknown Windows race suite: %s\n' "$suite" >&2
+              exit 2
+              ;;
+          esac
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            go test -json ./... -race -count=1 "${race_args[@]}" |
+            go test -json "${test_packages[@]}" -race -count=1 "${race_args[@]}" |
               tee .tmp/windows-race/go-test.jsonl
           else
-            go test ./... -race -count=1 "${race_args[@]}"
+            go test "${test_packages[@]}" -race -count=1 "${race_args[@]}"
           fi
       - name: Test release installer
         if: matrix.os != 'windows-latest'
@@ -198,7 +222,7 @@ jobs:
           package_root="$(cd "$(dirname "$installed_binary")/.." && pwd -P)"
           "$package_root/juex-path/rg" --version
       - name: Test PowerShell release installer
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-latest' && (matrix.suite == 'ordinary' || matrix.suite == 'all')
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -256,7 +280,7 @@ jobs:
         if: always() && matrix.os == 'windows-latest' && github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: windows-race-${{ github.run_id }}-${{ inputs.windows_parallelism }}
+          name: windows-race-${{ github.run_id }}-${{ inputs.windows_topology || 'split' }}-${{ matrix.suite }}
           path: .tmp/windows-race
           if-no-files-found: warn
           retention-days: 14
