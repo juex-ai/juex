@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -502,6 +503,7 @@ providers:
 `))
 	}))
 	defer server.Close()
+	bypassProxyForLoopbackServer(t, server.URL)
 	dir := t.TempDir()
 	source := filepath.Join(dir, "juex.yaml")
 	if err := os.WriteFile(source, []byte("imports:\n  - source: "+server.URL+"/config.yaml?token=request-secret\n"), 0o600); err != nil {
@@ -547,6 +549,7 @@ providers:
 `))
 	}))
 	defer server.Close()
+	bypassProxyForLoopbackServer(t, server.URL)
 	dir := t.TempDir()
 	source := filepath.Join(dir, "juex.yaml")
 	if err := os.WriteFile(source, []byte("imports:\n  - source: "+server.URL+"/config.yaml\n"), 0o600); err != nil {
@@ -1027,6 +1030,7 @@ func TestProviderConfigLoaderEnforcesOverallRemoteImportTimeout(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	bypassProxyForLoopbackServer(t, server.URL)
 	program := strings.Join([]string{
 		"import os",
 		"import sys",
@@ -1086,6 +1090,7 @@ func TestProviderConfigLoaderDoesNotForwardValidatorsAcrossRedirects(t *testing.
 		}
 	}))
 	defer server.Close()
+	bypassProxyForLoopbackServer(t, server.URL)
 	program := strings.Join([]string{
 		"import sys",
 		"import time",
@@ -4342,6 +4347,23 @@ func isolateWriteModelConfigHomes(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("JUEX_HOME", filepath.Join(home, "juex-home"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-home"))
+}
+
+func bypassProxyForLoopbackServer(t *testing.T, rawURL string) {
+	t.Helper()
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse loopback test server URL: %v", err)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		t.Fatalf("loopback test server URL has no host: %q", rawURL)
+	}
+	noProxy := host
+	if inherited := strings.TrimSpace(os.Getenv("NO_PROXY")); inherited != "" {
+		noProxy += "," + inherited
+	}
+	t.Setenv("NO_PROXY", noProxy)
 }
 
 func assertHelpContains(t *testing.T, help string, wants ...string) {
