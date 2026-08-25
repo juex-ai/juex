@@ -181,6 +181,40 @@ providers:
 	}
 }
 
+func TestLoadLiveConfigsPreservesImplicitHomeSourceScope(t *testing.T) {
+	isolateLiveConfigTest(t)
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".juex", "juex.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `models: [alpha:model-a]
+extensions:
+  allow: [demo]
+providers:
+  - id: alpha
+    protocol: openai/chat
+    base_url: https://alpha.example.invalid/v1
+    api_key: test-alpha
+    models:
+      - id: model-a
+`
+	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("JUEX_HOME", filepath.Join(home, ".juex"))
+
+	got := loadLiveConfigs(t)
+	if len(got) != 1 {
+		t.Fatalf("live configs = %d, want 1", len(got))
+	}
+	if got[0].name != "alpha:model-a" {
+		t.Fatalf("name = %q, want alpha:model-a", got[0].name)
+	}
+}
+
 func TestLoadLiveConfigRequiresCompleteProviderModelOverride(t *testing.T) {
 	configPath := writeLiveProviderTestConfig(t)
 	isolateLiveConfigTest(t)

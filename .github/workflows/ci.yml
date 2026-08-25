@@ -3,9 +3,24 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      windows_topology:
+        description: Windows race execution topology to benchmark
+        required: true
+        type: choice
+        default: split
+        options:
+          - "1"
+          - "2"
+          - default
+          - split
+          - web-g1
+          - web-g2
 
 jobs:
   frontend:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,6 +36,7 @@ jobs:
       - run: make web-check
 
   lint:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,11 +55,12 @@ jobs:
           args: check
 
   test:
+    name: ${{ matrix.suite == 'all' && format('test ({0})', matrix.os) || format('test ({0}, {1})', matrix.os, matrix.suite) }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && (inputs.windows_topology == 'split' && '[{"os":"windows-latest","suite":"ordinary"},{"os":"windows-latest","suite":"web"},{"os":"windows-latest","suite":"e2e"},{"os":"windows-latest","suite":"eval"}]' || (startsWith(inputs.windows_topology, 'web-g') && '[{"os":"windows-latest","suite":"web"}]' || '[{"os":"windows-latest","suite":"all"}]')) || '[{"os":"ubuntu-latest","suite":"all"},{"os":"macos-latest","suite":"all"},{"os":"windows-latest","suite":"ordinary"},{"os":"windows-latest","suite":"web"},{"os":"windows-latest","suite":"e2e"},{"os":"windows-latest","suite":"eval"}]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -98,10 +115,77 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: go test ./... -race -count=1
         shell: bash
-      - name: Run Go race tests serially on Windows
-        if: matrix.os == 'windows-latest'
-        run: go test ./... -race -count=1 -p=1
+      - name: Record Windows race benchmark environment
+        if: matrix.os == 'windows-latest' && github.event_name == 'workflow_dispatch'
         shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/windows-race
+          gomaxprocs="${GOMAXPROCS:-auto}"
+          if [[ "${{ inputs.windows_topology }}" == "web-g1" ]]; then
+            gomaxprocs=1
+          elif [[ "${{ matrix.suite }}" == "ordinary" || "${{ matrix.suite }}" == "web" ]]; then
+            gomaxprocs=2
+          fi
+          {
+            printf 'head_sha=%s\n' "$GITHUB_SHA"
+            printf 'topology=%s\n' "${{ inputs.windows_topology || 'split' }}"
+            printf 'suite=%s\n' "${{ matrix.suite }}"
+            printf 'number_of_processors=%s\n' "${NUMBER_OF_PROCESSORS:-unknown}"
+            printf 'gomaxprocs=%s\n' "$gomaxprocs"
+            printf 'home=%s\n' "$HOME"
+            printf 'juex_home=%s\n' "${JUEX_HOME:-<default>}"
+            go version
+            go env GOOS GOARCH GOVERSION GOPATH GOCACHE GOTMPDIR
+            pwsh -NoProfile -Command \
+              'Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory | ConvertTo-Json -Compress'
+          } | tee .tmp/windows-race/environment.txt
+      - name: Run Go race tests on Windows
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode="${{ inputs.windows_topology || 'split' }}"
+          suite="${{ matrix.suite }}"
+          test_packages=()
+          race_args=()
+          case "$suite" in
+            ordinary)
+              mapfile -t test_packages < <(go list ./... | grep -Ev '(/internal/web|/tests/(e2e|eval))$')
+              export GOMAXPROCS=2
+              race_args=("-p=2")
+              ;;
+            web)
+              test_packages=(./internal/web)
+              if [[ "$mode" == "web-g1" ]]; then
+                export GOMAXPROCS=1
+              else
+                export GOMAXPROCS=2
+              fi
+              ;;
+            e2e)
+              test_packages=(./tests/e2e)
+              ;;
+            eval)
+              test_packages=(./tests/eval)
+              ;;
+            all)
+              test_packages=(./...)
+              if [[ "$mode" != "default" ]]; then
+                race_args+=("-p=$mode")
+              fi
+              ;;
+            *)
+              printf 'unknown Windows race suite: %s\n' "$suite" >&2
+              exit 2
+              ;;
+          esac
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            go test -json "${test_packages[@]}" -race -count=1 "${race_args[@]}" |
+              tee .tmp/windows-race/go-test.jsonl
+          else
+            go test "${test_packages[@]}" -race -count=1 "${race_args[@]}"
+          fi
       - name: Test release installer
         if: matrix.os != 'windows-latest'
         shell: bash
@@ -155,7 +239,7 @@ jobs:
           package_root="$(cd "$(dirname "$installed_binary")/.." && pwd -P)"
           "$package_root/juex-path/rg" --version
       - name: Test PowerShell release installer
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-latest' && (matrix.suite == 'ordinary' || matrix.suite == 'all')
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -209,3 +293,27 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "packaged ripgrep failed with exit code $LASTEXITCODE"
           }
+      - name: Upload Windows race benchmark evidence
+        if: always() && matrix.os == 'windows-latest' && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-race-${{ github.run_id }}-${{ inputs.windows_topology || 'split' }}-${{ matrix.suite }}
+          path: .tmp/windows-race
+          if-no-files-found: warn
+          retention-days: 14
+
+  windows-race-gate:
+    name: test (windows-latest)
+    if: ${{ always() && github.event_name != 'workflow_dispatch' }}
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the complete test matrix
+        env:
+          TEST_MATRIX_RESULT: ${{ needs.test.result }}
+        shell: bash
+        run: |
+          if [[ "$TEST_MATRIX_RESULT" != "success" ]]; then
+            printf 'test matrix result: %s\n' "$TEST_MATRIX_RESULT" >&2
+            exit 1
+          fi

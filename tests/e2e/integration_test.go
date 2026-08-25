@@ -88,6 +88,11 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 		}
 		t.Fatalf("check live provider config %s: %v", path, err)
 	}
+	workDir := t.TempDir()
+	selectedPath, err := prepareLiveProviderConfig(root, path, workDir, os.Getenv(liveProviderModelEnv))
+	if err != nil {
+		t.Fatalf("load live provider config: %v", err)
+	}
 
 	runtimeUserHome := t.TempDir()
 	juexHome := filepath.Join(runtimeUserHome, ".juex")
@@ -103,7 +108,7 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 		t.Setenv(k, "")
 	}
 
-	selected, err := loadLiveConfig(root, path, t.TempDir(), os.Getenv(liveProviderModelEnv))
+	selected, err := loadPreparedLiveConfig(path, selectedPath, workDir)
 	if err != nil {
 		t.Fatalf("load live provider config: %v", err)
 	}
@@ -132,16 +137,28 @@ func resolveLiveProviderConfigPath(root, home, configured string) string {
 }
 
 func loadLiveConfig(root, path, workDir, modelOverride string) (liveConfig, error) {
+	selectedPath, err := prepareLiveProviderConfig(root, path, workDir, modelOverride)
+	if err != nil {
+		return liveConfig{}, err
+	}
+	return loadPreparedLiveConfig(path, selectedPath, workDir)
+}
+
+func prepareLiveProviderConfig(root, path, workDir, modelOverride string) (string, error) {
 	modelRef := strings.TrimSpace(modelOverride)
 	if modelRef != "" {
 		if _, err := config.ParseModelRef(modelRef); err != nil {
-			return liveConfig{}, fmt.Errorf("%s must be a complete provider:model for integration: %w", liveProviderModelEnv, err)
+			return "", fmt.Errorf("%s must be a complete provider:model for integration: %w", liveProviderModelEnv, err)
 		}
 	}
 	selectedPath := filepath.Join(workDir, "selected-provider.juex.yaml")
 	if err := writeLiveProviderConfig(root, path, selectedPath, modelRef); err != nil {
-		return liveConfig{}, err
+		return "", err
 	}
+	return selectedPath, nil
+}
+
+func loadPreparedLiveConfig(path, selectedPath, workDir string) (liveConfig, error) {
 	cfg, err := config.LoadWithOptions(config.LoadOptions{
 		WorkDir:    workDir,
 		ConfigPath: selectedPath,

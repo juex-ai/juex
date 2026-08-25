@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,66 +30,128 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 		t.Fatal(err)
 	}
 	var workflow struct {
+		On struct {
+			WorkflowDispatch struct {
+				Inputs map[string]struct {
+					Type    string   `yaml:"type"`
+					Default string   `yaml:"default"`
+					Options []string `yaml:"options"`
+				} `yaml:"inputs"`
+			} `yaml:"workflow_dispatch"`
+		} `yaml:"on"`
 		Jobs struct {
 			Test struct {
+				Name     string `yaml:"name"`
+				Strategy struct {
+					Matrix struct {
+						Include string `yaml:"include"`
+					} `yaml:"matrix"`
+				} `yaml:"strategy"`
 				Steps []struct {
 					Name string `yaml:"name"`
 					If   string `yaml:"if"`
 					Run  string `yaml:"run"`
+					Uses string `yaml:"uses"`
 				} `yaml:"steps"`
 			} `yaml:"test"`
+			WindowsRaceGate struct {
+				Name  string `yaml:"name"`
+				If    string `yaml:"if"`
+				Needs string `yaml:"needs"`
+				Steps []struct {
+					Run string `yaml:"run"`
+				} `yaml:"steps"`
+			} `yaml:"windows-race-gate"`
 		} `yaml:"jobs"`
 	}
 	if err := yaml.Unmarshal(data, &workflow); err != nil {
 		t.Fatalf("parse CI workflow: %v", err)
 	}
 
-	want := map[string]struct {
-		condition string
-		command   string
-	}{
-		"Build Juex evaluator binary": {
-			command: strings.Join([]string{
-				"set -euo pipefail",
-				`juex_bin="$PWD/.tmp/ci-juex$(go env GOEXE)"`,
-				`go build -o "$juex_bin" ./cmd/juex`,
-				`if [[ "$(go env GOOS)" == "windows" ]]; then`,
-				`  juex_bin="$(cygpath -w "$juex_bin")"`,
-				"fi",
-				`printf 'JUEX_BIN=%s\n' "$juex_bin" >> "$GITHUB_ENV"`,
-			}, "\n"),
-		},
-		"Run Go race tests": {
-			condition: "matrix.os != 'windows-latest'",
-			command:   "go test ./... -race -count=1",
-		},
-		"Run Go race tests serially on Windows": {
-			condition: "matrix.os == 'windows-latest'",
-			command:   "go test ./... -race -count=1 -p=1",
-		},
+	benchmarkInput, ok := workflow.On.WorkflowDispatch.Inputs["windows_topology"]
+	if !ok {
+		t.Fatal("CI workflow is missing the manual Windows topology input")
 	}
-	buildAt, firstRaceAt := -1, -1
+	if benchmarkInput.Type != "choice" || benchmarkInput.Default != "split" ||
+		!reflect.DeepEqual(benchmarkInput.Options, []string{"1", "2", "default", "split", "web-g1", "web-g2"}) {
+		t.Fatalf("Windows topology input = %#v", benchmarkInput)
+	}
+	if strings.Contains(workflow.Jobs.Test.Name, "matrix.suite == 'ordinary'") {
+		t.Fatalf("ordinary shard must not own the stable aggregate check name: %s", workflow.Jobs.Test.Name)
+	}
+	for _, want := range []string{
+		`inputs.windows_topology == 'split'`,
+		`startsWith(inputs.windows_topology, 'web-g')`,
+		`"os":"windows-latest","suite":"ordinary"`,
+		`"os":"windows-latest","suite":"web"`,
+		`"os":"windows-latest","suite":"e2e"`,
+		`"os":"windows-latest","suite":"eval"`,
+	} {
+		if !strings.Contains(workflow.Jobs.Test.Strategy.Matrix.Include, want) {
+			t.Errorf("CI matrix missing %q:\n%s", want, workflow.Jobs.Test.Strategy.Matrix.Include)
+		}
+	}
+
+	buildAt, windowsRaceAt, installerAt, artifactAt := -1, -1, -1, -1
 	for index, step := range workflow.Jobs.Test.Steps {
-		if step.Name == "Build Juex evaluator binary" {
+		switch step.Name {
+		case "Build Juex evaluator binary":
 			buildAt = index
+		case "Run Go race tests":
+			if strings.TrimSpace(step.If) != "matrix.os != 'windows-latest'" || strings.TrimSpace(step.Run) != "go test ./... -race -count=1" {
+				t.Errorf("non-Windows race step = if %q run %q", step.If, step.Run)
+			}
+		case "Run Go race tests on Windows":
+			windowsRaceAt = index
+			if strings.TrimSpace(step.If) != "matrix.os == 'windows-latest'" {
+				t.Errorf("Windows race condition = %q", step.If)
+			}
+			for _, want := range []string{
+				`inputs.windows_topology || 'split'`,
+				`mapfile -t test_packages`,
+				`grep -Ev '(/internal/web|/tests/(e2e|eval))$'`,
+				`test_packages=(./internal/web)`,
+				`mode" == "web-g1`,
+				`export GOMAXPROCS=1`,
+				`test_packages=(./tests/e2e)`,
+				`test_packages=(./tests/eval)`,
+				`export GOMAXPROCS=2`,
+				`race_args=("-p=2")`,
+				`go test -json "${test_packages[@]}" -race -count=1`,
+				`go test "${test_packages[@]}" -race -count=1`,
+				`race_args+=("-p=$mode")`,
+			} {
+				if !strings.Contains(step.Run, want) {
+					t.Errorf("Windows race step missing %q:\n%s", want, step.Run)
+				}
+			}
+			if strings.Count(step.Run, `export GOMAXPROCS=2`) != 2 {
+				t.Errorf("Windows race step must bound ordinary and web runtime concurrency:\n%s", step.Run)
+			}
+			if !strings.Contains(step.Run, `if [[ "$mode" != "default" ]]`) {
+				t.Errorf("Windows race step cannot select default package parallelism:\n%s", step.Run)
+			}
+		case "Test PowerShell release installer":
+			installerAt = index
+			if !strings.Contains(step.If, "matrix.suite == 'ordinary' || matrix.suite == 'all'") {
+				t.Errorf("PowerShell installer condition = %q", step.If)
+			}
 		}
-		if strings.HasPrefix(step.Name, "Run Go race tests") && firstRaceAt < 0 {
-			firstRaceAt = index
+		if step.Uses == "actions/upload-artifact@v4" {
+			artifactAt = index
 		}
-		expectation, ok := want[step.Name]
-		if !ok {
-			continue
-		}
-		if strings.TrimSpace(step.If) != expectation.condition || strings.TrimSpace(step.Run) != expectation.command {
-			t.Errorf("CI step %q = if %q run %q, want if %q run %q", step.Name, step.If, step.Run, expectation.condition, expectation.command)
-		}
-		delete(want, step.Name)
 	}
-	if len(want) != 0 {
-		t.Fatalf("missing CI race steps: %#v", want)
+	if buildAt < 0 || windowsRaceAt < 0 || installerAt < 0 || artifactAt < 0 {
+		t.Fatalf("CI step indexes: build=%d windows-race=%d installer=%d artifact=%d", buildAt, windowsRaceAt, installerAt, artifactAt)
 	}
-	if buildAt < 0 || firstRaceAt < 0 || buildAt >= firstRaceAt {
-		t.Fatalf("Juex evaluator build step index = %d, first race step index = %d", buildAt, firstRaceAt)
+	if buildAt >= windowsRaceAt || windowsRaceAt >= installerAt || installerAt >= artifactAt {
+		t.Fatalf("CI step order: build=%d windows-race=%d installer=%d artifact=%d", buildAt, windowsRaceAt, installerAt, artifactAt)
+	}
+	gate := workflow.Jobs.WindowsRaceGate
+	if gate.Name != "test (windows-latest)" || gate.Needs != "test" ||
+		!strings.Contains(gate.If, "always()") || !strings.Contains(gate.If, "github.event_name != 'workflow_dispatch'") ||
+		len(gate.Steps) != 1 || !strings.Contains(gate.Steps[0].Run, `TEST_MATRIX_RESULT" != "success`) {
+		t.Fatalf("Windows race aggregate gate = %#v", gate)
 	}
 }
 
@@ -465,6 +528,7 @@ providers:
 `))
 	}))
 	defer server.Close()
+	bypassProxyForLoopbackServer(t, server.URL)
 	dir := t.TempDir()
 	source := filepath.Join(dir, "juex.yaml")
 	if err := os.WriteFile(source, []byte("imports:\n  - source: "+server.URL+"/config.yaml?token=request-secret\n"), 0o600); err != nil {
@@ -510,6 +574,7 @@ providers:
 `))
 	}))
 	defer server.Close()
+	bypassProxyForLoopbackServer(t, server.URL)
 	dir := t.TempDir()
 	source := filepath.Join(dir, "juex.yaml")
 	if err := os.WriteFile(source, []byte("imports:\n  - source: "+server.URL+"/config.yaml\n"), 0o600); err != nil {
@@ -990,6 +1055,7 @@ func TestProviderConfigLoaderEnforcesOverallRemoteImportTimeout(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	bypassProxyForLoopbackServer(t, server.URL)
 	program := strings.Join([]string{
 		"import os",
 		"import sys",
@@ -1049,6 +1115,7 @@ func TestProviderConfigLoaderDoesNotForwardValidatorsAcrossRedirects(t *testing.
 		}
 	}))
 	defer server.Close()
+	bypassProxyForLoopbackServer(t, server.URL)
 	program := strings.Join([]string{
 		"import sys",
 		"import time",
@@ -4305,6 +4372,23 @@ func isolateWriteModelConfigHomes(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("JUEX_HOME", filepath.Join(home, "juex-home"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-home"))
+}
+
+func bypassProxyForLoopbackServer(t *testing.T, rawURL string) {
+	t.Helper()
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse loopback test server URL: %v", err)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		t.Fatalf("loopback test server URL has no host: %q", rawURL)
+	}
+	noProxy := host
+	if inherited := strings.TrimSpace(os.Getenv("NO_PROXY")); inherited != "" {
+		noProxy += "," + inherited
+	}
+	t.Setenv("NO_PROXY", noProxy)
 }
 
 func assertHelpContains(t *testing.T, help string, wants ...string) {
