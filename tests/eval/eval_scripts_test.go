@@ -69,6 +69,7 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 	for _, want := range []string{
 		`inputs.windows_topology == 'split'`,
 		`"os":"windows-latest","suite":"ordinary"`,
+		`"os":"windows-latest","suite":"web"`,
 		`"os":"windows-latest","suite":"e2e"`,
 		`"os":"windows-latest","suite":"eval"`,
 	} {
@@ -94,7 +95,8 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 			for _, want := range []string{
 				`inputs.windows_topology || 'split'`,
 				`mapfile -t test_packages`,
-				`grep -Ev '/tests/(e2e|eval)$'`,
+				`grep -Ev '(/internal/web|/tests/(e2e|eval))$'`,
+				`test_packages=(./internal/web)`,
 				`test_packages=(./tests/e2e)`,
 				`test_packages=(./tests/eval)`,
 				`race_args=("-p=2")`,

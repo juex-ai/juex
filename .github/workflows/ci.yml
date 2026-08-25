@@ -58,7 +58,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && (inputs.windows_topology == 'split' && '[{"os":"windows-latest","suite":"ordinary"},{"os":"windows-latest","suite":"e2e"},{"os":"windows-latest","suite":"eval"}]' || '[{"os":"windows-latest","suite":"all"}]') || '[{"os":"ubuntu-latest","suite":"all"},{"os":"macos-latest","suite":"all"},{"os":"windows-latest","suite":"ordinary"},{"os":"windows-latest","suite":"e2e"},{"os":"windows-latest","suite":"eval"}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && (inputs.windows_topology == 'split' && '[{"os":"windows-latest","suite":"ordinary"},{"os":"windows-latest","suite":"web"},{"os":"windows-latest","suite":"e2e"},{"os":"windows-latest","suite":"eval"}]' || '[{"os":"windows-latest","suite":"all"}]') || '[{"os":"ubuntu-latest","suite":"all"},{"os":"macos-latest","suite":"all"},{"os":"windows-latest","suite":"ordinary"},{"os":"windows-latest","suite":"web"},{"os":"windows-latest","suite":"e2e"},{"os":"windows-latest","suite":"eval"}]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -143,8 +143,11 @@ jobs:
           race_args=()
           case "$suite" in
             ordinary)
-              mapfile -t test_packages < <(go list ./... | grep -Ev '/tests/(e2e|eval)$')
+              mapfile -t test_packages < <(go list ./... | grep -Ev '(/internal/web|/tests/(e2e|eval))$')
               race_args=("-p=2")
+              ;;
+            web)
+              test_packages=(./internal/web)
               ;;
             e2e)
               test_packages=(./tests/e2e)
