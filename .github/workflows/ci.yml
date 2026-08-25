@@ -122,11 +122,9 @@ jobs:
           set -euo pipefail
           mkdir -p .tmp/windows-race
           gomaxprocs="${GOMAXPROCS:-auto}"
-          if [[ "${{ matrix.suite }}" == "ordinary" ]]; then
-            gomaxprocs=2
-          elif [[ "${{ inputs.windows_topology }}" == "web-g1" ]]; then
+          if [[ "${{ inputs.windows_topology }}" == "web-g1" ]]; then
             gomaxprocs=1
-          elif [[ "${{ inputs.windows_topology }}" == "web-g2" ]]; then
+          elif [[ "${{ matrix.suite }}" == "ordinary" || "${{ matrix.suite }}" == "web" ]]; then
             gomaxprocs=2
           fi
           {
@@ -161,7 +159,7 @@ jobs:
               test_packages=(./internal/web)
               if [[ "$mode" == "web-g1" ]]; then
                 export GOMAXPROCS=1
-              elif [[ "$mode" == "web-g2" ]]; then
+              else
                 export GOMAXPROCS=2
               fi
               ;;

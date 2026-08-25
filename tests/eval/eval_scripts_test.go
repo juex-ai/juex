@@ -100,7 +100,7 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 				`grep -Ev '(/internal/web|/tests/(e2e|eval))$'`,
 				`test_packages=(./internal/web)`,
 				`mode" == "web-g1`,
-				`mode" == "web-g2`,
+				`export GOMAXPROCS=1`,
 				`test_packages=(./tests/e2e)`,
 				`test_packages=(./tests/eval)`,
 				`export GOMAXPROCS=2`,
@@ -112,6 +112,9 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 				if !strings.Contains(step.Run, want) {
 					t.Errorf("Windows race step missing %q:\n%s", want, step.Run)
 				}
+			}
+			if strings.Count(step.Run, `export GOMAXPROCS=2`) != 2 {
+				t.Errorf("Windows race step must bound ordinary and web runtime concurrency:\n%s", step.Run)
 			}
 			if !strings.Contains(step.Run, `if [[ "$mode" != "default" ]]`) {
 				t.Errorf("Windows race step cannot select default package parallelism:\n%s", step.Run)
