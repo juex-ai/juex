@@ -15,6 +15,8 @@ on:
           - "2"
           - default
           - split
+          - web-g1
+          - web-g2
 
 jobs:
   frontend:
@@ -58,7 +60,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && (inputs.windows_topology == 'split' && '[{"os":"windows-latest","suite":"ordinary"},{"os":"windows-latest","suite":"web"},{"os":"windows-latest","suite":"e2e"},{"os":"windows-latest","suite":"eval"}]' || '[{"os":"windows-latest","suite":"all"}]') || '[{"os":"ubuntu-latest","suite":"all"},{"os":"macos-latest","suite":"all"},{"os":"windows-latest","suite":"ordinary"},{"os":"windows-latest","suite":"web"},{"os":"windows-latest","suite":"e2e"},{"os":"windows-latest","suite":"eval"}]') }}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && (inputs.windows_topology == 'split' && '[{"os":"windows-latest","suite":"ordinary"},{"os":"windows-latest","suite":"web"},{"os":"windows-latest","suite":"e2e"},{"os":"windows-latest","suite":"eval"}]' || (startsWith(inputs.windows_topology, 'web-g') && '[{"os":"windows-latest","suite":"web"}]' || '[{"os":"windows-latest","suite":"all"}]')) || '[{"os":"ubuntu-latest","suite":"all"},{"os":"macos-latest","suite":"all"},{"os":"windows-latest","suite":"ordinary"},{"os":"windows-latest","suite":"web"},{"os":"windows-latest","suite":"e2e"},{"os":"windows-latest","suite":"eval"}]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -122,6 +124,10 @@ jobs:
           gomaxprocs="${GOMAXPROCS:-auto}"
           if [[ "${{ matrix.suite }}" == "ordinary" ]]; then
             gomaxprocs=2
+          elif [[ "${{ inputs.windows_topology }}" == "web-g1" ]]; then
+            gomaxprocs=1
+          elif [[ "${{ inputs.windows_topology }}" == "web-g2" ]]; then
+            gomaxprocs=2
           fi
           {
             printf 'head_sha=%s\n' "$GITHUB_SHA"
@@ -153,6 +159,11 @@ jobs:
               ;;
             web)
               test_packages=(./internal/web)
+              if [[ "$mode" == "web-g1" ]]; then
+                export GOMAXPROCS=1
+              elif [[ "$mode" == "web-g2" ]]; then
+                export GOMAXPROCS=2
+              fi
               ;;
             e2e)
               test_packages=(./tests/e2e)

@@ -64,11 +64,12 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 		t.Fatal("CI workflow is missing the manual Windows topology input")
 	}
 	if benchmarkInput.Type != "choice" || benchmarkInput.Default != "split" ||
-		!reflect.DeepEqual(benchmarkInput.Options, []string{"1", "2", "default", "split"}) {
+		!reflect.DeepEqual(benchmarkInput.Options, []string{"1", "2", "default", "split", "web-g1", "web-g2"}) {
 		t.Fatalf("Windows topology input = %#v", benchmarkInput)
 	}
 	for _, want := range []string{
 		`inputs.windows_topology == 'split'`,
+		`startsWith(inputs.windows_topology, 'web-g')`,
 		`"os":"windows-latest","suite":"ordinary"`,
 		`"os":"windows-latest","suite":"web"`,
 		`"os":"windows-latest","suite":"e2e"`,
@@ -98,6 +99,8 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 				`mapfile -t test_packages`,
 				`grep -Ev '(/internal/web|/tests/(e2e|eval))$'`,
 				`test_packages=(./internal/web)`,
+				`mode" == "web-g1`,
+				`mode" == "web-g2`,
 				`test_packages=(./tests/e2e)`,
 				`test_packages=(./tests/eval)`,
 				`export GOMAXPROCS=2`,
