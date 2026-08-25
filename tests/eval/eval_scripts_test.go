@@ -132,7 +132,7 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 	if buildAt < 0 || windowsRaceAt < 0 || installerAt < 0 || artifactAt < 0 {
 		t.Fatalf("CI step indexes: build=%d windows-race=%d installer=%d artifact=%d", buildAt, windowsRaceAt, installerAt, artifactAt)
 	}
-	if !(buildAt < windowsRaceAt && windowsRaceAt < installerAt && installerAt < artifactAt) {
+	if buildAt >= windowsRaceAt || windowsRaceAt >= installerAt || installerAt >= artifactAt {
 		t.Fatalf("CI step order: build=%d windows-race=%d installer=%d artifact=%d", buildAt, windowsRaceAt, installerAt, artifactAt)
 	}
 }
