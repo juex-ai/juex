@@ -158,7 +158,7 @@ juex/
 │       ├── development_eval.sh
 │       └── juex_eval/            # uv-managed Python helpers, including shared provider-config selection
 ├── .github/workflows/
-│   ├── ci.yml                    # push/PR: lint + matrix tests + race
+│   ├── ci.yml                    # push/PR gates + manual Windows race benchmarks
 │   ├── integration.yml           # workflow_dispatch: live LLM tests
 │   └── release.yml               # tag v*: goreleaser publishes 7 archives
 ├── docs/superpowers/
@@ -3246,11 +3246,20 @@ doctor` exposes the selected source, version, and path.
 
 ### CI Workflows
 
-- `ci.yml` — push + PR, two jobs:
+- `ci.yml` — push + PR gates, plus a manual Windows race benchmark entrypoint:
+  - `frontend`: runs `make web-check` independently from Go jobs.
   - `lint`: golangci-lint (default preset) plus `goreleaser check`.
-  - `test`: matrix on `ubuntu-latest`, `macos-latest`, `windows-latest`;
-    runs `go test ./... -race -count=1`. Generic command execution behavior runs on
-    Windows; Unix process-group timeout coverage lives in `!windows` test files.
+  - `test`: Ubuntu and macOS run `go test ./... -race -count=1`. Windows
+    preserves the same race and count coverage across independent ordinary,
+    web, e2e, and eval runners; ordinary package parallelism and web runtime
+    concurrency are bounded to two CPUs. The PowerShell installer remains on
+    the ordinary runner, and `test (windows-latest)` aggregates the complete
+    test matrix so the stable check name cannot pass when a split suite fails.
+  - `workflow_dispatch` selects repeatable Windows benchmark topologies and
+    uploads secret-free environment metadata plus `go test -json` evidence;
+    it skips frontend, lint, and the aggregate gate. Generic command execution
+    behavior runs on Windows; Unix process-group timeout coverage lives in
+    `!windows` test files.
 - `integration.yml` — `workflow_dispatch` only. Runs an Anthropic/OpenAI
   matrix, writes `$RUNNER_TEMP/juex-integration-<provider>.yaml` from repo
   secrets, exports that path through `JUEX_PROVIDER_CONFIG`, then runs `make
