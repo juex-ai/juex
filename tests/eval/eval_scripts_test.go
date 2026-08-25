@@ -29,12 +29,22 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 		t.Fatal(err)
 	}
 	var workflow struct {
+		On struct {
+			WorkflowDispatch struct {
+				Inputs map[string]struct {
+					Type    string   `yaml:"type"`
+					Default string   `yaml:"default"`
+					Options []string `yaml:"options"`
+				} `yaml:"inputs"`
+			} `yaml:"workflow_dispatch"`
+		} `yaml:"on"`
 		Jobs struct {
 			Test struct {
 				Steps []struct {
 					Name string `yaml:"name"`
 					If   string `yaml:"if"`
 					Run  string `yaml:"run"`
+					Uses string `yaml:"uses"`
 				} `yaml:"steps"`
 			} `yaml:"test"`
 		} `yaml:"jobs"`
@@ -43,52 +53,54 @@ func TestCIWorkflowPreparesAndRunsRaceTests(t *testing.T) {
 		t.Fatalf("parse CI workflow: %v", err)
 	}
 
-	want := map[string]struct {
-		condition string
-		command   string
-	}{
-		"Build Juex evaluator binary": {
-			command: strings.Join([]string{
-				"set -euo pipefail",
-				`juex_bin="$PWD/.tmp/ci-juex$(go env GOEXE)"`,
-				`go build -o "$juex_bin" ./cmd/juex`,
-				`if [[ "$(go env GOOS)" == "windows" ]]; then`,
-				`  juex_bin="$(cygpath -w "$juex_bin")"`,
-				"fi",
-				`printf 'JUEX_BIN=%s\n' "$juex_bin" >> "$GITHUB_ENV"`,
-			}, "\n"),
-		},
-		"Run Go race tests": {
-			condition: "matrix.os != 'windows-latest'",
-			command:   "go test ./... -race -count=1",
-		},
-		"Run Go race tests serially on Windows": {
-			condition: "matrix.os == 'windows-latest'",
-			command:   "go test ./... -race -count=1 -p=1",
-		},
+	benchmarkInput, ok := workflow.On.WorkflowDispatch.Inputs["windows_parallelism"]
+	if !ok {
+		t.Fatal("CI workflow is missing the manual Windows parallelism input")
 	}
-	buildAt, firstRaceAt := -1, -1
+	if benchmarkInput.Type != "choice" || benchmarkInput.Default != "2" ||
+		!reflect.DeepEqual(benchmarkInput.Options, []string{"1", "2", "default"}) {
+		t.Fatalf("Windows parallelism input = %#v", benchmarkInput)
+	}
+
+	buildAt, windowsRaceAt, installerAt, artifactAt := -1, -1, -1, -1
 	for index, step := range workflow.Jobs.Test.Steps {
-		if step.Name == "Build Juex evaluator binary" {
+		switch step.Name {
+		case "Build Juex evaluator binary":
 			buildAt = index
+		case "Run Go race tests":
+			if strings.TrimSpace(step.If) != "matrix.os != 'windows-latest'" || strings.TrimSpace(step.Run) != "go test ./... -race -count=1" {
+				t.Errorf("non-Windows race step = if %q run %q", step.If, step.Run)
+			}
+		case "Run Go race tests on Windows":
+			windowsRaceAt = index
+			if strings.TrimSpace(step.If) != "matrix.os == 'windows-latest'" {
+				t.Errorf("Windows race condition = %q", step.If)
+			}
+			for _, want := range []string{
+				`inputs.windows_parallelism || '2'`,
+				`go test -json ./... -race -count=1`,
+				`go test ./... -race -count=1`,
+				`race_args+=("-p=$mode")`,
+			} {
+				if !strings.Contains(step.Run, want) {
+					t.Errorf("Windows race step missing %q:\n%s", want, step.Run)
+				}
+			}
+			if !strings.Contains(step.Run, `if [[ "$mode" != "default" ]]`) {
+				t.Errorf("Windows race step cannot select default package parallelism:\n%s", step.Run)
+			}
+		case "Test PowerShell release installer":
+			installerAt = index
 		}
-		if strings.HasPrefix(step.Name, "Run Go race tests") && firstRaceAt < 0 {
-			firstRaceAt = index
+		if step.Uses == "actions/upload-artifact@v4" {
+			artifactAt = index
 		}
-		expectation, ok := want[step.Name]
-		if !ok {
-			continue
-		}
-		if strings.TrimSpace(step.If) != expectation.condition || strings.TrimSpace(step.Run) != expectation.command {
-			t.Errorf("CI step %q = if %q run %q, want if %q run %q", step.Name, step.If, step.Run, expectation.condition, expectation.command)
-		}
-		delete(want, step.Name)
 	}
-	if len(want) != 0 {
-		t.Fatalf("missing CI race steps: %#v", want)
+	if buildAt < 0 || windowsRaceAt < 0 || installerAt < 0 || artifactAt < 0 {
+		t.Fatalf("CI step indexes: build=%d windows-race=%d installer=%d artifact=%d", buildAt, windowsRaceAt, installerAt, artifactAt)
 	}
-	if buildAt < 0 || firstRaceAt < 0 || buildAt >= firstRaceAt {
-		t.Fatalf("Juex evaluator build step index = %d, first race step index = %d", buildAt, firstRaceAt)
+	if !(buildAt < windowsRaceAt && windowsRaceAt < installerAt && installerAt < artifactAt) {
+		t.Fatalf("CI step order: build=%d windows-race=%d installer=%d artifact=%d", buildAt, windowsRaceAt, installerAt, artifactAt)
 	}
 }
 

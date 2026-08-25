@@ -3,9 +3,21 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      windows_parallelism:
+        description: Windows race package parallelism to benchmark
+        required: true
+        type: choice
+        default: "2"
+        options:
+          - "1"
+          - "2"
+          - default
 
 jobs:
   frontend:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,6 +33,7 @@ jobs:
       - run: make web-check
 
   lint:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +56,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["windows-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -98,10 +111,40 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: go test ./... -race -count=1
         shell: bash
-      - name: Run Go race tests serially on Windows
-        if: matrix.os == 'windows-latest'
-        run: go test ./... -race -count=1 -p=1
+      - name: Record Windows race benchmark environment
+        if: matrix.os == 'windows-latest' && github.event_name == 'workflow_dispatch'
         shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/windows-race
+          {
+            printf 'head_sha=%s\n' "$GITHUB_SHA"
+            printf 'parallelism=%s\n' "${{ inputs.windows_parallelism }}"
+            printf 'number_of_processors=%s\n' "${NUMBER_OF_PROCESSORS:-unknown}"
+            printf 'gomaxprocs=%s\n' "${GOMAXPROCS:-auto}"
+            printf 'home=%s\n' "$HOME"
+            printf 'juex_home=%s\n' "${JUEX_HOME:-<default>}"
+            go version
+            go env GOOS GOARCH GOVERSION GOPATH GOCACHE GOTMPDIR
+            pwsh -NoProfile -Command \
+              'Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory | ConvertTo-Json -Compress'
+          } | tee .tmp/windows-race/environment.txt
+      - name: Run Go race tests on Windows
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode="${{ inputs.windows_parallelism || '2' }}"
+          race_args=()
+          if [[ "$mode" != "default" ]]; then
+            race_args+=("-p=$mode")
+          fi
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            go test -json ./... -race -count=1 "${race_args[@]}" |
+              tee .tmp/windows-race/go-test.jsonl
+          else
+            go test ./... -race -count=1 "${race_args[@]}"
+          fi
       - name: Test release installer
         if: matrix.os != 'windows-latest'
         shell: bash
@@ -209,3 +252,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "packaged ripgrep failed with exit code $LASTEXITCODE"
           }
+      - name: Upload Windows race benchmark evidence
+        if: always() && matrix.os == 'windows-latest' && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-race-${{ github.run_id }}-${{ inputs.windows_parallelism }}
+          path: .tmp/windows-race
+          if-no-files-found: warn
+          retention-days: 14
