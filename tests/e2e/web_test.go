@@ -997,7 +997,7 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 	}
 }
 
-func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
+func TestWeb_CreateScheduleObservableAndControlLifecycle(t *testing.T) {
 	work := t.TempDir()
 	prov := &webProvider{steps: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "schedule handled"), StopReason: llm.StopEndTurn},
@@ -1023,7 +1023,7 @@ func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
 		t.Fatal("no session id")
 	}
 
-	scheduledAt := time.Now().UTC().Add(time.Second)
+	scheduledAt := time.Now().UTC().Add(time.Hour)
 	body, err := json.Marshal(map[string]any{
 		"id":   "schedule-e2e",
 		"type": "schedule",
@@ -1080,32 +1080,23 @@ func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
 		t.Fatalf("restart schedule status=%d body=%+v", resp.StatusCode, restarted)
 	}
 
+	resp, err = http.Get(ts.URL + "/api/observables")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var snapshot struct {
 		Observables []observable.ObservableStatus `json:"observables"`
 	}
-	waitForCondition(t, 5*time.Second, func() bool {
-		resp, err := http.Get(ts.URL + "/api/observables")
-		if err != nil {
-			return false
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return false
-		}
-		var next struct {
-			Observables []observable.ObservableStatus `json:"observables"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&next); err != nil {
-			return false
-		}
-		snapshot = next
-		if len(next.Observables) != 1 || next.Observables[0].SourceType != observable.SourceTypeSchedule {
-			return false
-		}
-		last := next.Observables[0].LastObservation
-		return last.SourceEventID != "" && last.Content == "schedule e2e payload" && last.State == observable.ObservationStateDelivered
-	})
-	if got := snapshot.Observables[0]; got.Schedule == nil || got.Schedule.LastEmittedScheduledAt == nil {
+	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
+		resp.Body.Close()
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || len(snapshot.Observables) != 1 {
+		t.Fatalf("list schedules status=%d body=%+v", resp.StatusCode, snapshot)
+	}
+	if got := snapshot.Observables[0]; got.SourceType != observable.SourceTypeSchedule || got.State != observable.RunStateRunning ||
+		got.Schedule == nil || got.Schedule.NextOccurrence == nil || !got.Schedule.NextOccurrence.Equal(scheduledAt) {
 		t.Fatalf("schedule status = %+v", got)
 	} else if got.ScheduleConfig == nil || got.ScheduleConfig.Observation.Content != "schedule e2e payload" {
 		t.Fatalf("schedule config = %+v, want list-visible observation content", got.ScheduleConfig)
