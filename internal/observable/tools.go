@@ -143,7 +143,7 @@ func ToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:        "schedule_create",
 			Group:       tools.ToolGroupObservable,
-			Description: "Create a Schedule; never use command polling for timed work. " + observableGuidePointer,
+			Description: "List first; reuse equivalents; never probe or command-poll. " + observableGuidePointer,
 			Schema:      scheduleCreateSchema(),
 		},
 		{
