@@ -3979,10 +3979,10 @@ func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	if result.SummaryChars != len("recovered summary") || provider.calls != 2 {
 		t.Fatalf("result/calls = %+v, %d", result, provider.calls)
 	}
-	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 25 || provider.options[1].MaxOutputTokens != 50 {
-		t.Fatalf("max output tokens = %+v, want [25 50]", compactionOptionBudgets(provider.options))
+	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 25 || provider.options[1].MaxOutputTokens != 2000 {
+		t.Fatalf("max output tokens = %+v, want [25 2000]", compactionOptionBudgets(provider.options))
 	}
-	if retry.Attempt != 2 || retry.Reason != "empty_summary" || retry.StopReason != llm.StopMaxTokens || !retry.ReasoningOnly || retry.PreviousMaxOutputTokens != 25 || retry.MaxOutputTokens != 50 {
+	if retry.Attempt != 2 || retry.Reason != "empty_summary" || retry.StopReason != llm.StopMaxTokens || !retry.ReasoningOnly || retry.PreviousMaxOutputTokens != 25 || retry.MaxOutputTokens != 2000 {
 		t.Fatalf("retry payload = %+v", retry)
 	}
 	if len(provider.histories) != 2 || provider.histories[0][0].FirstText() == "" || provider.histories[1][0].FirstText() == "" {
@@ -4036,8 +4036,8 @@ func TestCompactRetriesFirstIncompleteFallbackWithLargerBudget(t *testing.T) {
 	if result.SummaryModel != "backup:model" || primary.calls != 1 || backup.calls != 2 {
 		t.Fatalf("result/primary/backup = %+v/%d/%d, want recovered backup after retry", result, primary.calls, backup.calls)
 	}
-	if len(backup.options) != 2 || backup.options[0].MaxOutputTokens != 25 || backup.options[1].MaxOutputTokens != 50 {
-		t.Fatalf("fallback max output tokens = %+v, want [25 50]", compactionOptionBudgets(backup.options))
+	if len(backup.options) != 2 || backup.options[0].MaxOutputTokens != 25 || backup.options[1].MaxOutputTokens != 2000 {
+		t.Fatalf("fallback max output tokens = %+v, want [25 2000]", compactionOptionBudgets(backup.options))
 	}
 	if len(epochs) != 3 || retry.EpochID != epochs[1].EpochID || retry.RequestDigest != epochs[1].RequestDigest {
 		t.Fatalf("epochs/retry = %+v/%+v, want retry linked to first fallback attempt", epochs, retry)
@@ -4191,8 +4191,8 @@ func TestCompactRetriesPartialSummaryStoppedAtMaxTokens(t *testing.T) {
 	if retry.Reason != "max_tokens" || retry.StopReason != llm.StopMaxTokens || retry.ReasoningOnly {
 		t.Fatalf("retry payload = %+v", retry)
 	}
-	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 25 || provider.options[1].MaxOutputTokens != 50 {
-		t.Fatalf("max output tokens = %+v, want [25 50]", compactionOptionBudgets(provider.options))
+	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 25 || provider.options[1].MaxOutputTokens != 2000 {
+		t.Fatalf("max output tokens = %+v, want [25 2000]", compactionOptionBudgets(provider.options))
 	}
 	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 21, OutputTokens: 1003}) {
 		t.Fatalf("token usage = %+v, want aggregate retry usage", usage)
@@ -4311,8 +4311,8 @@ func TestCompactCapsSummaryRetryToBoundedRequest(t *testing.T) {
 		t.Fatalf("initial input + output = %d + %d, want 0.5%% output budget and total <= summary request budget %d", initialInputTokens, initialBudget, policy.SummaryRequestTokens)
 	}
 	retryBudget := provider.options[1].MaxOutputTokens
-	if retryBudget != 12 {
-		t.Fatalf("retry budget = %d, want bounded semantic retry budget 12", retryBudget)
+	if retryBudget <= 12 || retryBudget >= 1200 {
+		t.Fatalf("retry budget = %d, want recovery room capped below the 1200-token configured retry ceiling", retryBudget)
 	}
 	retryInputTokens := estimateContextTokens(provider.systems[1], nil, provider.histories[1])
 	if retryInputTokens+retryBudget > policy.SummaryRequestTokens {

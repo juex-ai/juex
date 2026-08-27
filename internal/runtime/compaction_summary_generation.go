@@ -469,7 +469,13 @@ func (e *Engine) compactionSummaryRetryMaxOutputTokens(
 	policy compactionPolicy,
 	instructions string,
 ) int {
-	return e.compactionSummaryMaxOutputTokens(baseSystem, previous, input, state, policy, instructions, doubledSummaryMaxTokens(policy.SummaryMaxTokens))
+	// Output includes reasoning as well as visible text. Doubling a small
+	// context-derived budget can still leave no room for a complete summary.
+	desired := max(2048, doubledSummaryMaxTokens(policy.SummaryMaxTokens))
+	if configured := e.Compaction.SummaryMaxTokens; configured > 0 {
+		desired = min(desired, doubledSummaryMaxTokens(configured))
+	}
+	return e.compactionSummaryMaxOutputTokens(baseSystem, previous, input, state, policy, instructions, desired)
 }
 
 func (e *Engine) compactionSummaryInitialMaxOutputTokens(

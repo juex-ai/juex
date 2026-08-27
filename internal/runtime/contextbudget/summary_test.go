@@ -225,6 +225,11 @@ func TestBuildCompactionSummaryRequest_PreservesAuthoritativeStateWhenTranscript
 	if !strings.Contains(sys, "Authoritative session state is provided below") {
 		t.Fatalf("system prompt missing authoritative-state instruction:\n%s", sys)
 	}
+	for _, field := range []string{"description", "acceptance", "status", "status_reason"} {
+		if !strings.Contains(sys, field+": <copy the exact "+field+" value>") {
+			t.Fatalf("system prompt missing the Goal output field %q:\n%s", field, sys)
+		}
+	}
 	if !strings.Contains(sys, "copy every unfinished - [ ] checklist item's text verbatim into Next Steps and do not omit one") {
 		t.Fatalf("system prompt does not require exact unfinished Notes retention:\n%s", sys)
 	}
