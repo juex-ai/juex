@@ -141,10 +141,13 @@ compaction:
 ```
 
 The context-window-derived defaults are a 70% automatic-compaction trigger, an
-80% complete summary request envelope, 0.5% each for summary output, summary
-Tool Result serialization, and ordinary Tool Result projection, plus 5/64 for
-the retained recent tail. Positive absolute values are stricter ceilings, while
-`reserve_tokens` may only move the trigger earlier.
+80% complete summary request envelope, 0.5% each for initial summary output,
+summary Tool Result serialization, and ordinary Tool Result projection, plus
+5/64 for the retained recent tail. Positive absolute values are stricter ceilings, while
+`reserve_tokens` may only move the trigger earlier. The single incomplete-summary
+retry requests at least 2,048 output tokens or twice the initial budget,
+whichever is larger. Twice an explicit positive `summary_max_tokens` remains a
+ceiling, and the complete request must still fit the 80% envelope.
 
 Rationale:
 

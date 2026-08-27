@@ -2428,7 +2428,7 @@ compaction:
 | `compaction.reserve_tokens` | optional absolute reserve that can trigger compaction earlier than the default 70% context-window threshold |
 | `compaction.keep_recent_tokens` | optional stricter ceiling on the default 5/64 context-window budget for retaining recent direct, MCP, and Observable inputs verbatim; a single larger input becomes a bounded artifact reference at compaction |
 | `compaction.summary_model` | optional first `provider:model` candidate used only for compaction summary calls; after failure, compaction continues through the ordered `models` chain without a provider-visible model-change notice |
-| `compaction.summary_max_tokens` | optional stricter ceiling on the default 0.5% context-window summary output budget |
+| `compaction.summary_max_tokens` | optional stricter ceiling on the default 0.5% context-window initial summary output budget; twice this value caps the single semantic retry |
 | `compaction.tool_result_max_chars` | optional stricter ceiling on the default 0.5% context-window per-Tool Result serialization limit in summary input |
 | `compaction.user_input_inline_max_bytes` | user text larger than this is stored under `artifacts/sessions/<session-id>/user-inputs/` in Agent state and replaced by a stable preview before provider calls |
 | `compaction.user_input_preview_head_bytes` | leading bytes kept inline for externalized user input |
@@ -2690,8 +2690,8 @@ resolved physical path. Mutation tools do not treat it as a filesystem path,
 and the shared file policy protects the physical Artifact root from writes.
 For each selected model candidate, the configured context window determines the
 effective budgets: automatic compaction triggers at 70%, the complete summary
-request envelope fits within 80%, summary output and Tool Result limits each use
-0.5%, and recent-tail retention uses 5/64. Positive absolute compaction and tool
+request envelope fits within 80%, initial summary output and Tool Result limits
+each use 0.5%, and recent-tail retention uses 5/64. Positive absolute compaction and tool
 output values are stricter ceilings; `reserve_tokens` may only move the trigger
 earlier. Candidate fallback recomputes every derived budget for the fallback
 model's context window.
@@ -2715,11 +2715,14 @@ selection metadata. If the irreducible request still exceeds a candidate's
 summary-request envelope or snapshot limit, the runtime skips that candidate
 without dispatching a Provider request. Generic provider failures advance
 directly through the chain. The first candidate anywhere in the chain that
-returns no text or a max-token-truncated summary receives one semantic retry
-with up to twice its summary output budget; the retry budget remains capped so
-the fixed prompt and requested output fit the summary-request budget. The
-runtime fails compaction only after the available chain and that bounded retry
-are exhausted, without adding a provider-visible `model_change` message.
+returns no text or a max-token-truncated summary receives one semantic retry.
+Its desired output budget is the larger of twice the initial budget and 2,048
+tokens, allowing room for reasoning before visible summary text. An explicit
+positive `summary_max_tokens` caps that retry at twice the configured value.
+The budget is then capped so the immutable input, fixed prompt, and requested
+output fit the summary-request envelope. The runtime fails compaction only after
+the available chain and that bounded retry are exhausted, without adding a
+provider-visible `model_change` message.
 A canceled or expired parent context stops before fallback and does not emit a
 misleading fallback event. Manual and automatic compaction share the active Turn
 cancellation boundary. Cancellation reports `Compaction canceled` and returns

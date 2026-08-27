@@ -282,8 +282,8 @@ domain boundary.
    Tool Call/Tool Result suffix required for a valid in-progress execution.
    Candidate-specific budgets derive from that model's configured context
    window: automatic compaction triggers at 70%, summary requests fit within
-   80%, summary output and Tool Result limits use 0.5% each, and the retained
-   recent tail uses 5/64.
+   80%, initial summary output and Tool Result limits use 0.5% each, and the
+   retained recent tail uses 5/64.
 2. If that selection exceeds a summary candidate's context window, the
    candidate-specific request may omit the oldest complete Tool Call/Tool Result
    exchanges. It never omits user-authored messages or changes the durable
