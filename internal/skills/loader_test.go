@@ -461,6 +461,28 @@ func TestLoader_LoadsBuiltinGuidesOutsidePromptCatalog(t *testing.T) {
 	}
 }
 
+func TestLoader_ObservableGuideWaitsForInspectionResult(t *testing.T) {
+	l := NewLoaderFromDirs(nil)
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
+	guide, ok := l.Get("juex-observables")
+	if !ok {
+		t.Fatal("observable guide missing")
+	}
+	body := strings.Join(strings.Fields(guide.Body), " ")
+	for _, want := range []string{
+		"wait for its result",
+		"Do not batch",
+		"even if its id differs",
+		"Do not create a duplicate",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("observable guide missing %q", want)
+		}
+	}
+}
+
 func TestLoader_BuiltinGuidesIgnoreFilesystemSkillFilters(t *testing.T) {
 	for _, policy := range []Policy{
 		{Include: []string{"not-a-builtin"}},
