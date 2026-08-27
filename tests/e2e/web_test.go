@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -771,7 +772,8 @@ func TestWeb_CentralizedPendingInputLifecycle(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if len(prov.secondHistory()) == 0 {
-		t.Fatal("pending input never reached second provider call")
+		t.Fatalf("pending input never reached second provider call\n%s",
+			pendingInputFailureContext(filepath.Join(cfg.SessionsDir(), c.ID)))
 	}
 	waitForWebTranscript(t, ts.URL, c.ID, startedBody.TurnID, 2*time.Second, "second assistant reply", func(messages []webTranscriptMessage) bool {
 		for _, message := range messages {
@@ -803,6 +805,51 @@ func assertPendingInputStates(t *testing.T, queue *juexruntime.PendingInputQueue
 		if got[input] != state {
 			t.Fatalf("pending input %q state = %q, want %q; all states=%v", input, got[input], state, got)
 		}
+	}
+}
+
+func pendingInputFailureContext(sessionDir string) string {
+	journalPath := filepath.Join(sessionDir, "events.jsonl")
+	var tail []byte
+	file, err := os.Open(journalPath)
+	if err == nil {
+		defer file.Close()
+		var info os.FileInfo
+		info, err = file.Stat()
+		if err == nil {
+			offset := max(info.Size()-(16<<10), 0)
+			tail = make([]byte, info.Size()-offset)
+			var n int
+			n, err = file.ReadAt(tail, offset)
+			tail = tail[:n]
+		}
+	}
+	stacks := make([]byte, 256<<10)
+	n := runtime.Stack(stacks, true)
+	return fmt.Sprintf("journal=%s journal_error=%v\nevents tail:\n%s\ngoroutines:\n%s",
+		journalPath, err, tail, stacks[:n])
+}
+
+func TestPendingInputFailureContextIncludesJournalTail(t *testing.T) {
+	sessionDir := t.TempDir()
+	terminal := `{"type":"turn.errored","payload":{"message":"injected durable write failure"}}`
+	body := strings.Repeat("old diagnostic padding\n", 2048) + terminal + "\n"
+	if err := os.WriteFile(filepath.Join(sessionDir, "events.jsonl"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	diagnostic := pendingInputFailureContext(sessionDir)
+	if !strings.Contains(diagnostic, terminal) || !strings.Contains(diagnostic, "goroutine ") {
+		t.Fatalf("missing terminal event or goroutine context: %s", diagnostic)
+	}
+	if strings.Contains(diagnostic, body) {
+		t.Fatal("failure context included the complete oversized journal")
+	}
+}
+
+func TestPendingInputFailureContextReportsUnavailableJournal(t *testing.T) {
+	diagnostic := pendingInputFailureContext(t.TempDir())
+	if !strings.Contains(diagnostic, "journal_error=open ") || !strings.Contains(diagnostic, "goroutine ") {
+		t.Fatalf("missing journal error or goroutine context: %s", diagnostic)
 	}
 }
 

@@ -3,9 +3,12 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	goruntime "runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -592,30 +595,14 @@ func TestTerminalErrorCommitDoesNotWaitForProjectionHoldingCommitBarrier(t *test
 }
 
 func TestReceivePendingInputRejectsDuringFallbackTerminalCommit(t *testing.T) {
-	provider := &mockProvider{script: []llm.Response{{
-		Message:    llm.TextMessage(llm.RoleAssistant, "completion will fail"),
-		StopReason: llm.StopEndTurn,
-	}}}
-	eng, bus := newEngine(t, provider, false)
-	completionErr := errors.New("completion commit failed")
-	errorStarted := make(chan struct{})
-	releaseError := make(chan struct{})
-	bus.SetCommitter(&blockingFallbackTerminalCommitter{
-		delegate:      selectiveSessionCommitter{session: eng.Session},
-		completionErr: completionErr,
-		errorStarted:  errorStarted,
-		releaseError:  releaseError,
-	})
-
-	turnDone := make(chan error, 1)
-	go func() {
-		_, err := eng.Turn(context.Background(), "first")
-		turnDone <- err
-	}()
+	turn := startFallbackTerminalTestTurn(t)
+	eng := turn.engine
 	select {
-	case <-errorStarted:
+	case <-turn.started:
+	case err := <-turn.result:
+		t.Fatalf("Turn exited before fallback terminal commit: %v\n%s", err, turn.diagnostics())
 	case <-time.After(2 * time.Second):
-		t.Fatal("fallback terminal commit did not start")
+		t.Fatalf("fallback terminal commit did not start\n%s", turn.diagnostics())
 	}
 
 	nextResult := make(chan PendingInputResult, 1)
@@ -630,21 +617,18 @@ func TestReceivePendingInputRejectsDuringFallbackTerminalCommit(t *testing.T) {
 	select {
 	case result := <-nextResult:
 		if err := <-nextErr; !errors.Is(err, ErrActiveTurnExists) {
-			close(releaseError)
 			t.Fatalf("next admission error = %v, want %v", err, ErrActiveTurnExists)
 		}
 		if result.Retry != PendingInputRetryAfterTurn || result.Status.TurnID == "" {
-			close(releaseError)
 			t.Fatalf("next admission = %+v, want retry after fallback terminal commit", result)
 		}
 	case <-time.After(time.Second):
-		close(releaseError)
-		t.Fatal("next admission blocked behind fallback terminal commit")
+		t.Fatalf("next admission blocked behind fallback terminal commit\n%s", turn.diagnostics())
 	}
 
-	close(releaseError)
-	if err := <-turnDone; !errors.Is(err, completionErr) {
-		t.Fatalf("first turn error = %v, want %v", err, completionErr)
+	turn.release()
+	if err := <-turn.result; !errors.Is(err, turn.completionErr) {
+		t.Fatalf("first turn error = %v, want %v", err, turn.completionErr)
 	}
 	result, err := eng.ReceivePendingInput(context.Background(), PendingInputRequest{
 		Message: llm.TextMessage(llm.RoleUser, "second"),
@@ -656,6 +640,97 @@ func TestReceivePendingInputRejectsDuringFallbackTerminalCommit(t *testing.T) {
 		t.Fatalf("next admission = %+v, want started after fallback terminal commit", result)
 	}
 	eng.finishActiveTurn(result.TurnID)
+}
+
+type fallbackTerminalTestTurn struct {
+	engine        *Engine
+	completionErr error
+	started       <-chan struct{}
+	result        chan error
+	finished      chan struct{}
+	release       func()
+	committer     *blockingFallbackTerminalCommitter
+}
+
+func (turn *fallbackTerminalTestTurn) diagnostics() string {
+	stacks := make([]byte, 256<<10)
+	n := goruntime.Stack(stacks, true)
+	return fmt.Sprintf("session=%s last_commit=%v\ngoroutines:\n%s",
+		turn.engine.Session.Dir, turn.committer.lastEvent.Load(), stacks[:n])
+}
+
+func startFallbackTerminalTestTurn(t *testing.T) *fallbackTerminalTestTurn {
+	t.Helper()
+	provider := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "completion will fail"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, provider, false)
+	completionErr := errors.New("completion commit failed")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	committer := &blockingFallbackTerminalCommitter{
+		delegate:      selectiveSessionCommitter{session: eng.Session},
+		completionErr: completionErr,
+		errorStarted:  started,
+		releaseError:  release,
+	}
+	bus.SetCommitter(committer)
+	turn := &fallbackTerminalTestTurn{
+		engine:        eng,
+		completionErr: completionErr,
+		started:       started,
+		result:        make(chan error, 1),
+		finished:      make(chan struct{}),
+		release:       sync.OnceFunc(func() { close(release) }),
+		committer:     committer,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	// The committer deliberately blocks without observing context cancellation.
+	// Release and join the Turn before newEngine's Session cleanup runs.
+	t.Cleanup(func() {
+		cancel()
+		turn.release()
+		<-turn.finished
+	})
+	go func() {
+		defer close(turn.finished)
+		_, err := eng.Turn(ctx, "first")
+		turn.result <- err
+	}()
+	return turn
+}
+
+func TestFallbackTerminalFixtureCleanupJoinsAbandonedTurn(t *testing.T) {
+	var turn *fallbackTerminalTestTurn
+	t.Cleanup(func() {
+		if turn != nil {
+			turn.release()
+			<-turn.finished
+		}
+	})
+	if !t.Run("abandoned before explicit release", func(t *testing.T) {
+		turn = startFallbackTerminalTestTurn(t)
+		select {
+		case <-turn.started:
+		case err := <-turn.result:
+			t.Fatalf("Turn exited before fallback terminal commit: %v\n%s", err, turn.diagnostics())
+		case <-time.After(2 * time.Second):
+			t.Fatalf("fallback terminal commit did not start\n%s", turn.diagnostics())
+		}
+		if diagnostic := turn.diagnostics(); !strings.Contains(diagnostic, "last_commit=turn.errored") ||
+			!strings.Contains(diagnostic, "goroutine ") {
+			t.Fatalf("missing blocked-phase evidence: %s", diagnostic)
+		}
+		// Return at the failure boundary without the normal explicit release.
+	}) {
+		return
+	}
+	select {
+	case <-turn.finished:
+	default:
+		t.Fatal("fixture cleanup left the fallback Turn running after Session cleanup")
+	}
 }
 
 func TestFailedPendingPreservationRejectsAdmissionDuringTerminalCommit(t *testing.T) {
@@ -740,9 +815,11 @@ type blockingFallbackTerminalCommitter struct {
 	errorStarted  chan struct{}
 	releaseError  chan struct{}
 	once          sync.Once
+	lastEvent     atomic.Value
 }
 
 func (c *blockingFallbackTerminalCommitter) Commit(event events.Event) (events.Event, error) {
+	c.lastEvent.Store(event.Type)
 	if event.Type == "turn.completed" {
 		return events.Event{}, c.completionErr
 	}
