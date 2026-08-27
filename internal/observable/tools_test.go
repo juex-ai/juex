@@ -88,10 +88,8 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 	for _, description := range []string{schedule.Description, providerScheduleDescription} {
 		for _, want := range []string{
 			"Read observable_list results",
-			"create only if no equivalent exists",
-			"never batch list/create",
-			"probe",
-			"command-poll",
+			"reuse matches",
+			"no probe/poll",
 			`Guide available via skill_load("juex-observables").`,
 		} {
 			if !strings.Contains(description, want) {

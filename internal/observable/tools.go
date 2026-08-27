@@ -143,7 +143,7 @@ func ToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:        "schedule_create",
 			Group:       tools.ToolGroupObservable,
-			Description: "Read observable_list results; create only if no equivalent exists; never batch list/create, probe, or command-poll. " + observableGuidePointer,
+			Description: "Read observable_list results; reuse matches; no probe/poll. " + observableGuidePointer,
 			Schema:      scheduleCreateSchema(),
 		},
 		{
