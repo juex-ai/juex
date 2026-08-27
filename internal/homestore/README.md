@@ -10,6 +10,12 @@ state:
 - parent-directory sync that tolerates filesystems where directory fsync is
   unsupported.
 
+Windows replacement tolerates access-denied and sharing-violation errors with
+at most seven attempts on the same temporary file and unchanged durable flags.
+Six exponential delays request 315ms of sleep in total; OS calls and scheduling
+may take additional time. Other errors return immediately, and persistent
+conflicts fail without deleting the destination or reporting replacement.
+
 `agentstate`, `endpoint`, and `fleet` retain their identity and lifecycle
 policies. `fleetservice` retains transactional publication of multiple native
 service files. Atomic-write errors expose whether replacement occurred so that
