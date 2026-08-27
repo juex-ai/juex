@@ -199,6 +199,18 @@ func (p *sideToolDuringDeliveryProvider) Complete(_ context.Context, _ string, h
 	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "primary"), StopReason: llm.StopEndTurn}, nil
 }
 
+func newSideToolDuringDeliveryTestApp(t *testing.T) (*App, *sideToolDuringDeliveryProvider, func()) {
+	t.Helper()
+	provider := &sideToolDuringDeliveryProvider{started: make(chan struct{}, 1), release: make(chan struct{})}
+	parent := newSideSessionTestApp(t, provider, &scriptedSideProvider{})
+	provider.app = parent
+	release := sync.OnceFunc(func() { close(provider.release) })
+	// This provider deliberately ignores cancellation to exercise the side-tool
+	// call. Release it before App cleanup, including after a fatal assertion.
+	t.Cleanup(release)
+	return parent, provider, release
+}
+
 func (p *goalSideQueueProvider) Name() string { return "goal-side-queue" }
 
 func (p *goalSideQueueProvider) Complete(ctx context.Context, _ string, history []llm.Message, _ []llm.ToolSpec) (llm.Response, error) {
@@ -1237,9 +1249,7 @@ func TestSideSessionAdmissionRetryExhaustionIsObservableAndReleasesHandoff(t *te
 }
 
 func TestSideSessionStopAllDoesNotDeadlockWhenDeliveryCallsSideTool(t *testing.T) {
-	provider := &sideToolDuringDeliveryProvider{started: make(chan struct{}, 1), release: make(chan struct{})}
-	parent := newSideSessionTestApp(t, provider, &scriptedSideProvider{})
-	provider.app = parent
+	parent, provider, release := newSideToolDuringDeliveryTestApp(t)
 	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{"query": "complete"})
 	id := created["session_id"].(string)
 	waitForSideState(t, parent, id, SideSessionStateIdle)
@@ -1250,7 +1260,7 @@ func TestSideSessionStopAllDoesNotDeadlockWhenDeliveryCallsSideTool(t *testing.T
 	}
 	stopped := make(chan error, 1)
 	go func() { stopped <- parent.sideSessions.StopAll() }()
-	close(provider.release)
+	release()
 	select {
 	case err := <-stopped:
 		if err != nil {
@@ -1259,6 +1269,19 @@ func TestSideSessionStopAllDoesNotDeadlockWhenDeliveryCallsSideTool(t *testing.T
 	case <-time.After(sideSessionTestTimeout):
 		t.Fatal("StopAll deadlocked with a delivery-side tool call")
 	}
+}
+
+func TestSideSessionDeliveryFixtureCleanupReleasesProvider(t *testing.T) {
+	parent, provider, _ := newSideToolDuringDeliveryTestApp(t)
+	created := callSideTool(t, parent, SideSessionToolCreate, map[string]any{"query": "complete"})
+	id := created["session_id"].(string)
+	waitForSideState(t, parent, id, SideSessionStateIdle)
+	select {
+	case <-provider.started:
+	case <-time.After(sideSessionTestTimeout):
+		t.Fatal("delivery turn did not reach provider")
+	}
+	// Return without explicit release, as an earlier fatal assertion would.
 }
 
 func TestSideSessionFailureNotifiesParent(t *testing.T) {
