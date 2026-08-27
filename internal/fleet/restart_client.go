@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	maxRestartResponseBytes = 64 << 10
-	restartActivityPath     = "/api/status"
-	restartResumePrompt     = "System notice: this agent was restarted while the previous turn was active. Review the session notes and recent tool results, then continue the interrupted work."
+	maxRestartResponseBytes   = 64 << 10
+	restartActivityPath       = "/api/status"
+	restartResumePrompt       = "System notice: this agent was restarted while the previous turn was active. Review the session notes and recent tool results, then continue the interrupted work."
+	restartFailedResumePrompt = "System notice: this agent was restarted after the previous turn failed. Review the session notes and recent tool results, then continue the unfinished work. Do not repeat completed tool actions."
 )
 
 func readRestartActivity(ctx context.Context, state endpoint.Runtime) (restartActivity, error) {
@@ -69,12 +70,12 @@ func readRestartActivity(ctx context.Context, state endpoint.Runtime) (restartAc
 			activity.TurnErrorKind = body.SelectedStatus.Turn.Error.Kind
 		}
 	}
-	if activity.State == statusapi.ActivityWorking {
+	if activity.State == statusapi.ActivityWorking || activity.TurnState == statusapi.TurnErrored {
 		if activity.SessionID == "" {
-			return restartActivity{}, fmt.Errorf("active restart activity omitted session id")
+			return restartActivity{}, fmt.Errorf("restart activity omitted session id")
 		}
 		if activity.TurnID == "" {
-			return restartActivity{}, fmt.Errorf("active restart activity omitted turn id")
+			return restartActivity{}, fmt.Errorf("restart activity omitted turn id")
 		}
 	}
 	return activity, nil

@@ -282,7 +282,8 @@ func (m *Manager) restartEntry(
 			cancel()
 			if activityErr != nil {
 				result.Resume.Error = fmt.Sprintf("detect interrupted turn: %v", activityErr)
-			} else if activity.State == statusapi.ActivityWorking {
+			} else if activity.State == statusapi.ActivityWorking ||
+				(activity.State == statusapi.ActivityIdle && activity.TurnState == statusapi.TurnErrored) {
 				interrupted = &activity
 			}
 		}
@@ -325,12 +326,16 @@ func (m *Manager) restartEntry(
 	}
 	result.Resume.Required = true
 	result.Resume.SessionID = interrupted.SessionID
+	prompt := restartResumePrompt
+	if interrupted.TurnState == statusapi.TurnErrored {
+		prompt = restartFailedResumePrompt
+	}
 	resumeCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
 	turnID, resumeErr := m.deps.postRestartResume(
 		resumeCtx,
 		runtimeState,
 		result.Resume.SessionID,
-		restartResumePrompt,
+		prompt,
 	)
 	cancel()
 	if resumeErr != nil {
@@ -347,6 +352,14 @@ func (m *Manager) confirmRestartInterrupted(
 	runtimeState endpoint.Runtime,
 	expected restartActivity,
 ) (bool, error) {
+	// A Turn that had already failed is not cancelled by graceful shutdown.
+	// Require the same failure after restart, rather than a restart cause.
+	expectedState := statusapi.TurnCancelled
+	expectedKind := statusapi.StatusErrorRuntimeRestart
+	if expected.TurnState == statusapi.TurnErrored {
+		expectedState = statusapi.TurnErrored
+		expectedKind = expected.TurnErrorKind
+	}
 	wait := restartConfirmationMaxWait
 	if m.startTimeout > 0 && m.startTimeout < wait {
 		wait = m.startTimeout
@@ -373,18 +386,21 @@ func (m *Manager) confirmRestartInterrupted(
 					expected.TurnID,
 				)
 			}
-			if actual.TurnState != statusapi.TurnCancelled {
+			if actual.State != statusapi.ActivityIdle {
+				return false, fmt.Errorf("replacement activity state is %q, want %q", actual.State, statusapi.ActivityIdle)
+			}
+			if actual.TurnState != expectedState {
 				return false, fmt.Errorf(
 					"replacement turn state is %q, want %q",
 					actual.TurnState,
-					statusapi.TurnCancelled,
+					expectedState,
 				)
 			}
-			if actual.TurnErrorKind != statusapi.StatusErrorRuntimeRestart {
+			if actual.TurnErrorKind != expectedKind {
 				return false, fmt.Errorf(
 					"replacement turn error kind is %q, want %q",
 					actual.TurnErrorKind,
-					statusapi.StatusErrorRuntimeRestart,
+					expectedKind,
 				)
 			}
 			return true, nil

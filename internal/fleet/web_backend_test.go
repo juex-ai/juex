@@ -293,6 +293,7 @@ func TestUpdateConfigUsesRestartContinuationPolicy(t *testing.T) {
 	tests := []struct {
 		name           string
 		activity       statusapi.ActivityState
+		turnState      statusapi.TurnState
 		resumeErr      error
 		wantRequired   bool
 		wantSent       bool
@@ -309,6 +310,14 @@ func TestUpdateConfigUsesRestartContinuationPolicy(t *testing.T) {
 		{
 			name:     "idle restart does not resume",
 			activity: statusapi.ActivityIdle,
+		},
+		{
+			name:           "failed turn resumes after config change",
+			activity:       statusapi.ActivityIdle,
+			turnState:      statusapi.TurnErrored,
+			wantRequired:   true,
+			wantSent:       true,
+			wantResumeCall: 1,
 		},
 		{
 			name:           "resume failure remains non fatal",
@@ -328,6 +337,7 @@ func TestUpdateConfigUsesRestartContinuationPolicy(t *testing.T) {
 				home,
 				entry,
 				test.activity,
+				test.turnState,
 				test.resumeErr,
 			)
 
@@ -373,6 +383,7 @@ func configRestartTestManager(
 	home string,
 	entry agentstate.RegistryEntry,
 	activity statusapi.ActivityState,
+	turnState statusapi.TurnState,
 	resumeErr error,
 ) (*Manager, endpoint.Runtime, *atomic.Int32) {
 	t.Helper()
@@ -424,8 +435,14 @@ func configRestartTestManager(
 			if !got.Matches(oldRuntime) {
 				t.Fatalf("detect runtime = %+v", got)
 			}
-			if activity == statusapi.ActivityIdle {
+			if activity == statusapi.ActivityIdle && turnState != statusapi.TurnErrored {
 				return restartActivity{State: statusapi.ActivityIdle}, nil
+			}
+			if turnState == statusapi.TurnErrored {
+				return restartActivity{
+					SessionID: "session-one", TurnID: "turn-original", State: activity,
+					TurnState: statusapi.TurnErrored, TurnErrorKind: statusapi.StatusErrorAuth,
+				}, nil
 			}
 			return restartActivity{
 				SessionID: "session-one",
@@ -436,6 +453,12 @@ func configRestartTestManager(
 		}
 		if !got.Matches(newRuntime) {
 			t.Fatalf("confirm runtime = %+v", got)
+		}
+		if turnState == statusapi.TurnErrored {
+			return restartActivity{
+				SessionID: "session-one", TurnID: "turn-original", State: statusapi.ActivityIdle,
+				TurnState: statusapi.TurnErrored, TurnErrorKind: statusapi.StatusErrorAuth,
+			}, nil
 		}
 		return restartActivity{
 			SessionID:     "session-one",

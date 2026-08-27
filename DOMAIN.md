@@ -98,7 +98,10 @@ domain boundary.
    A copied marker that still belongs to another live Workspace is rejected.
 5. A serving process acquires the Agent Address guard and publishes a new
    Runtime Instance. Restart replaces that instance while preserving Agent
-   identity and state.
+   identity and state. An explicit Fleet restart may submit one continuation
+   for interrupted or already-failed work after the replacement confirms the
+   same Session, Turn, and expected terminal cause. This creates a new Turn;
+   it does not replay completed work or override user cancellation.
 6. Fleet stop and service removal preserve Agent state. Explicit Resident
    Agent removal is the destructive boundary and does not delete user-authored
    Workspace files.
