@@ -132,7 +132,9 @@ The highest-signal suites are:
   reader atomicity, Session-start policy, and post-commit cleanup.
 - `internal/runtime/pending_lifecycle_test.go`: source-neutral receive outcomes,
   Framework Turn identity, stable source deduplication, barrier deferral, and
-  terminal delivery classification.
+  terminal delivery classification. The fallback-terminal Turn fixture releases
+  and joins its Turn before Session cleanup; readiness failures retain the last
+  commit phase and a bounded goroutine snapshot.
 - `internal/runtime/pending_queue_test.go`: durable record states, replay order,
   stable identity, expiry, and processed deduplication.
 - `internal/session/tool_execution_recovery_external_test.go` and

@@ -56,6 +56,11 @@ go test ./tests/e2e -count=1
 the repository `pyproject.toml` and `uv.lock`, not by a PEP 723 script header
 or `uvx`.
 
+Pending-input readiness failures include a bounded Session event-journal tail
+and goroutine snapshot. Use the terminal Events and blocked call sites to
+distinguish an early Turn error from IO or scheduling delay; a passing rerun
+alone does not establish the cause of a prior timeout.
+
 ## Live Integration
 
 Build-tagged live integration tests are opt-in because they use credentials
