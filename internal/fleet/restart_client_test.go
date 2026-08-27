@@ -9,7 +9,51 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/endpoint"
+	"github.com/juex-ai/juex/internal/statusapi"
 )
+
+func TestRestartClientReadsFailedTurnAndRequiresIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name, sessionID, turnID, wantError string
+	}{
+		{name: "failed", sessionID: "session-one", turnID: "turn-failed"},
+		{name: "missing session", turnID: "turn-failed", wantError: "omitted session id"},
+		{name: "missing turn", sessionID: "session-one", wantError: "omitted turn id"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(statusapi.AgentActivity{
+					State: statusapi.ActivityIdle,
+					SelectedStatus: &statusapi.Snapshot{
+						Session: statusapi.SessionStatus{ID: test.sessionID, State: statusapi.SessionFailed},
+						Turn: &statusapi.TurnStatus{
+							ID: test.turnID, State: statusapi.TurnErrored,
+							Error: &statusapi.StatusError{Kind: statusapi.StatusErrorAuth, Message: "provider rejected credentials"},
+						},
+					},
+				})
+			}))
+			defer server.Close()
+			activity, err := readRestartActivity(context.Background(), endpoint.Runtime{
+				Endpoint: "tcp://" + strings.TrimPrefix(server.URL, "http://"),
+			})
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("error = %v, want %q", err, test.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if activity.State != statusapi.ActivityIdle || activity.SessionID != test.sessionID ||
+				activity.TurnID != test.turnID || activity.TurnState != statusapi.TurnErrored ||
+				activity.TurnErrorKind != statusapi.StatusErrorAuth {
+				t.Fatalf("failed activity = %+v", activity)
+			}
+		})
+	}
+}
 
 func TestRestartClientReadsActivityAndPostsContinuation(t *testing.T) {
 	var gotPrompt string

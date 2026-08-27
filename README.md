@@ -282,7 +282,11 @@ Before restarting a healthy agent, fleet checks its runtime session state.
 `turn_active` and `draining_pending` work is cancelled cleanly during graceful
 shutdown with an acknowledged `runtime_restart` intent. The healthy replacement
 receives one ordinary continuation turn only when it projects that same session
-and turn as cancelled by the restart. Missing acknowledgement skips
+and turn as cancelled by the restart. A selected Turn that had already failed
+also receives one continuation when the replacement confirms the same failed
+Turn and error kind. Completed and user-cancelled Turns are not continued.
+Both paths preserve prior history and use a new `system_notice` Turn rather
+than replaying the original input or Tool Calls. Missing acknowledgement skips
 continuation, and continuation admission failure is reported without turning a
 successful process restart into a failure. `fleet stop` never submits a
 continuation.
@@ -340,7 +344,7 @@ default config when `JUEX_HOME` is unset) or the current workspace config.
 | `juex fleet add <path> [--name N] [--autostart] [--start]` | Register an existing absolute workspace and optionally start it. |
 | `juex fleet enable\|disable <agent>` | Persist reversible enabled state; disable also stops the agent. |
 | `juex fleet remove <agent> [--yes]` | Confirm and permanently remove registered agent state without deleting workspace files. |
-| `juex fleet start\|stop\|restart <agent>` | Manage one resident agent through verified endpoint identity; restart resumes active session work after the replacement is healthy. |
+| `juex fleet start\|stop\|restart <agent>` | Manage one resident agent through verified endpoint identity; restart continues interrupted or failed session work after the replacement is healthy. |
 | `juex fleet logs <agent> [--lines 200]` | Tail bounded output for fleet-started agents; adopted external processes retain their original logging destination. |
 | `juex fleet gc [--yes]` | Review and explicitly delete definitely orphaned agent state. |
 

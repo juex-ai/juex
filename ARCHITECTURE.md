@@ -1799,10 +1799,15 @@ Per-agent lifecycle operations hold
 `$JUEX_HOME/.locks/fleet/<agent-id>.lock`. Start waits for the spawned PID to
 publish and answer with an exact runtime identity. Stop requests instance-bound
 self-shutdown and never sends a process signal. Restart reads the healthy
-agent's `/api/status` before shutdown and remembers only `turn_active` or
-`draining_pending` session work for that invocation. After the replacement
-process is healthy, it submits one continuation through the existing session
-turn endpoint. Status detection failure continues an ordinary restart with a
+agent's `/api/status` before shutdown and remembers active/pending-drain work
+or the selected errored Turn for that invocation. The restart requires an
+acknowledged, identity-bound graceful shutdown intent. After the replacement
+process is healthy, Fleet confirms the same Session and Turn: active work must
+now be cancelled with `runtime_restart`, while previously failed work must
+remain errored with the same error kind. Only an idle replacement can receive
+the one `system_notice` continuation through the existing Session Turn endpoint.
+Completed, user-cancelled, or superseded Turns are not continued. Status
+detection failure continues an ordinary restart with a
 diagnostic; continuation admission failure is also diagnostic-only. Stop never
 performs either step. Add resolves
 an explicitly supplied absolute workspace through the standard marker rules,

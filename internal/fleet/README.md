@@ -21,10 +21,14 @@ This package owns registry-wide resident-agent health and lifecycle policy.
   workspace YAML and `.env`, preventing cross-agent environment leakage.
 - `Stop` requests instance-bound self-shutdown; it never signals or force-kills
   a recorded PID.
-- `Restart` detects active or pending-drain session work before graceful
+- `Restart` detects active, pending-drain, or already-failed session work before graceful
   shutdown, negotiates an identity-bound `runtime_restart` intent, and submits
   one `system_notice` continuation turn only after the replacement confirms
-  the same interrupted session and turn with the typed restart cause. Missing
+  the same session and turn: active work needs the typed restart cause;
+  previously failed work must still be errored with the same error kind.
+  Completed, user-cancelled, or superseded Turns and a working replacement
+  never receive this continuation. Existing history is retained, and prior
+  Tool Calls are not replayed. Missing
   acknowledgement, status-read failures, and continuation-submit failures are
   reported without changing process restart success; `Stop` never sends
   restart intent or resumes.
@@ -43,7 +47,7 @@ This package owns registry-wide resident-agent health and lifecycle policy.
   process and exact endpoint identity for an immediate proxy request.
 - `Config` reads the bound workspace config without creating identity.
   `UpdateConfig` validates and atomically writes a replacement config, then
-  restarts under the same lifecycle lock and the same active-Turn continuation
+  restarts under the same lifecycle lock and the same Turn continuation
   policy as `Restart`. Fleet HTTP responses replace every
   `environment.variables` value with `[REDACTED_ENV]`; PUT merges unchanged
   placeholders with the existing file before validation so browser edits

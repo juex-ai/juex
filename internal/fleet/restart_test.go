@@ -15,23 +15,109 @@ import (
 
 func TestRestartAutoResumeLifecycle(t *testing.T) {
 	tests := []struct {
-		name           string
-		state          statusapi.ActivityState
-		detectErr      error
-		confirmState   statusapi.TurnState
-		confirmKind    statusapi.StatusErrorKind
-		confirmSession string
-		confirmTurn    string
-		confirmErr     error
-		confirmWarmups int
-		resumeErr      error
-		wantRequired   bool
-		wantSent       bool
-		wantDiagnostic string
+		name            string
+		state           statusapi.ActivityState
+		detectTurnState statusapi.TurnState
+		detectKind      statusapi.StatusErrorKind
+		detectErr       error
+		confirmState    statusapi.TurnState
+		confirmKind     statusapi.StatusErrorKind
+		confirmActivity statusapi.ActivityState
+		confirmSession  string
+		confirmTurn     string
+		confirmErr      error
+		confirmWarmups  int
+		resumeErr       error
+		wantRequired    bool
+		wantSent        bool
+		wantDiagnostic  string
 	}{
 		{
 			name:  "idle does not resume",
 			state: statusapi.ActivityIdle,
+		},
+		{
+			name:            "failed turn resumes without another user message",
+			state:           statusapi.ActivityIdle,
+			detectTurnState: statusapi.TurnErrored,
+			detectKind:      statusapi.StatusErrorAuth,
+			confirmState:    statusapi.TurnErrored,
+			confirmKind:     statusapi.StatusErrorAuth,
+			wantRequired:    true,
+			wantSent:        true,
+		},
+		{
+			name:            "completed turn before restart stays complete",
+			state:           statusapi.ActivityIdle,
+			detectTurnState: statusapi.TurnCompleted,
+		},
+		{
+			name:            "cancelled turn before restart stays cancelled",
+			state:           statusapi.ActivityIdle,
+			detectTurnState: statusapi.TurnCancelled,
+			detectKind:      statusapi.StatusErrorCancelled,
+		},
+		{
+			name:            "failed turn completed during restart is not repeated",
+			state:           statusapi.ActivityIdle,
+			detectTurnState: statusapi.TurnErrored,
+			confirmState:    statusapi.TurnCompleted,
+			wantDiagnostic:  "turn state",
+		},
+		{
+			name:            "failed turn cancelled during restart is not resumed",
+			state:           statusapi.ActivityIdle,
+			detectTurnState: statusapi.TurnErrored,
+			confirmState:    statusapi.TurnCancelled,
+			confirmKind:     statusapi.StatusErrorCancelled,
+			wantDiagnostic:  "turn state",
+		},
+		{
+			name:            "failed turn with different selected session is not resumed",
+			state:           statusapi.ActivityIdle,
+			detectTurnState: statusapi.TurnErrored,
+			confirmSession:  "session-other",
+			wantDiagnostic:  "want session",
+		},
+		{
+			name:            "failed turn with newer selected turn is not resumed",
+			state:           statusapi.ActivityIdle,
+			detectTurnState: statusapi.TurnErrored,
+			confirmTurn:     "turn-newer",
+			wantDiagnostic:  "want session",
+		},
+		{
+			name:            "failed turn with changed error is not resumed",
+			state:           statusapi.ActivityIdle,
+			detectTurnState: statusapi.TurnErrored,
+			detectKind:      statusapi.StatusErrorAuth,
+			confirmState:    statusapi.TurnErrored,
+			confirmKind:     statusapi.StatusErrorPermission,
+			wantDiagnostic:  "error kind",
+		},
+		{
+			name:            "failed turn with new work in progress is not resumed",
+			state:           statusapi.ActivityIdle,
+			detectTurnState: statusapi.TurnErrored,
+			confirmState:    statusapi.TurnErrored,
+			confirmActivity: statusapi.ActivityWorking,
+			wantDiagnostic:  "activity state",
+		},
+		{
+			name:            "failed turn confirmation read failure is diagnostic",
+			state:           statusapi.ActivityIdle,
+			detectTurnState: statusapi.TurnErrored,
+			confirmErr:      errors.New("failed status unavailable"),
+			wantDiagnostic:  "failed status unavailable",
+		},
+		{
+			name:            "failed turn continuation failure is not retried",
+			state:           statusapi.ActivityIdle,
+			detectTurnState: statusapi.TurnErrored,
+			confirmState:    statusapi.TurnErrored,
+			resumeErr:       errors.New("resume rejected"),
+			wantRequired:    true,
+			wantDiagnostic:  "resume rejected",
 		},
 		{
 			name:         "active turn resumes",
@@ -122,11 +208,16 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 					if test.detectErr != nil {
 						return restartActivity{}, test.detectErr
 					}
+					turnState := test.detectTurnState
+					if turnState == "" {
+						turnState = statusapi.TurnActive
+					}
 					return restartActivity{
-						SessionID: "session-one",
-						TurnID:    "turn-original",
-						State:     test.state,
-						TurnState: statusapi.TurnActive,
+						SessionID:     "session-one",
+						TurnID:        "turn-original",
+						State:         test.state,
+						TurnState:     turnState,
+						TurnErrorKind: test.detectKind,
 					}, nil
 				}
 				*events = append(*events, "confirm")
@@ -144,10 +235,14 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 				if turnID == "" {
 					turnID = "turn-original"
 				}
+				activityState := test.confirmActivity
+				if activityState == "" {
+					activityState = statusapi.ActivityIdle
+				}
 				return restartActivity{
 					SessionID:     sessionID,
 					TurnID:        turnID,
-					State:         statusapi.ActivityIdle,
+					State:         activityState,
 					TurnState:     test.confirmState,
 					TurnErrorKind: test.confirmKind,
 				}, nil
@@ -164,6 +259,10 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 				}
 				if !strings.Contains(prompt, "System notice") {
 					t.Fatalf("resume prompt = %q", prompt)
+				}
+				if test.detectTurnState == statusapi.TurnErrored &&
+					(!strings.Contains(prompt, "failed") || !strings.Contains(prompt, "Do not repeat completed tool actions")) {
+					t.Fatalf("failed Turn continuation prompt = %q", prompt)
 				}
 				if test.resumeErr != nil {
 					return "", test.resumeErr
@@ -190,6 +289,9 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 			}
 
 			gotEvents := strings.Join(*events, ",")
+			if strings.Count(gotEvents, "resume") > 1 {
+				t.Fatalf("restart submitted multiple continuations: %s", gotEvents)
+			}
 			if !strings.HasPrefix(gotEvents, "detect,shutdown,spawn") {
 				t.Fatalf("events = %q, want detect before shutdown and spawn", gotEvents)
 			}
@@ -232,45 +334,53 @@ func TestStopNeverDetectsOrPostsResume(t *testing.T) {
 }
 
 func TestRestartWithoutIntentAcknowledgementDoesNotResume(t *testing.T) {
-	manager, _ := restartTestManager(t, []agentstate.RegistryEntry{
-		registryEntry("aaaaaa", "alpha"),
-	})
-	requestRestart := manager.deps.requestRestart
-	manager.deps.requestRestart = func(ctx context.Context, state endpoint.Runtime) (bool, error) {
-		_, err := requestRestart(ctx, state)
-		return false, err
-	}
-	reads := 0
-	manager.deps.readRestartActivity = func(context.Context, endpoint.Runtime) (restartActivity, error) {
-		reads++
-		if reads == 1 {
-			return restartActivity{
-				SessionID: "session-one",
-				TurnID:    "turn-original",
-				State:     statusapi.ActivityWorking,
-				TurnState: statusapi.TurnActive,
-			}, nil
-		}
-		return restartActivity{
-			SessionID:     "session-one",
-			TurnID:        "turn-original",
-			State:         statusapi.ActivityIdle,
-			TurnState:     statusapi.TurnCancelled,
-			TurnErrorKind: statusapi.StatusErrorCancelled,
-		}, nil
-	}
-	manager.deps.postRestartResume = func(context.Context, endpoint.Runtime, string, string) (string, error) {
-		t.Fatal("restart without acknowledgement posted a continuation")
-		return "", nil
-	}
+	for _, turnState := range []statusapi.TurnState{statusapi.TurnActive, statusapi.TurnErrored} {
+		t.Run(string(turnState), func(t *testing.T) {
+			manager, _ := restartTestManager(t, []agentstate.RegistryEntry{
+				registryEntry("aaaaaa", "alpha"),
+			})
+			requestRestart := manager.deps.requestRestart
+			manager.deps.requestRestart = func(ctx context.Context, state endpoint.Runtime) (bool, error) {
+				_, err := requestRestart(ctx, state)
+				return false, err
+			}
+			reads := 0
+			manager.deps.readRestartActivity = func(context.Context, endpoint.Runtime) (restartActivity, error) {
+				reads++
+				if reads == 1 {
+					activityState := statusapi.ActivityWorking
+					if turnState == statusapi.TurnErrored {
+						activityState = statusapi.ActivityIdle
+					}
+					return restartActivity{
+						SessionID: "session-one",
+						TurnID:    "turn-original",
+						State:     activityState,
+						TurnState: turnState,
+					}, nil
+				}
+				return restartActivity{
+					SessionID:     "session-one",
+					TurnID:        "turn-original",
+					State:         statusapi.ActivityIdle,
+					TurnState:     statusapi.TurnCancelled,
+					TurnErrorKind: statusapi.StatusErrorCancelled,
+				}, nil
+			}
+			manager.deps.postRestartResume = func(context.Context, endpoint.Runtime, string, string) (string, error) {
+				t.Fatal("restart without acknowledgement posted a continuation")
+				return "", nil
+			}
 
-	result, err := manager.Restart(context.Background(), "aaaaaa")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Resume.Required || result.Resume.Sent ||
-		!strings.Contains(result.Resume.Error, "not acknowledged") {
-		t.Fatalf("resume = %+v", result.Resume)
+			result, err := manager.Restart(context.Background(), "aaaaaa")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Resume.Required || result.Resume.Sent ||
+				!strings.Contains(result.Resume.Error, "not acknowledged") {
+				t.Fatalf("resume = %+v", result.Resume)
+			}
+		})
 	}
 }
 
