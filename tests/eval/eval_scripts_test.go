@@ -4365,13 +4365,50 @@ func runUV(t *testing.T, root string, args ...string) string {
 	return string(out)
 }
 
+func TestIsolateWriteModelConfigHomesPreservesResolvedGoCaches(t *testing.T) {
+	t.Setenv("GOCACHE", "")
+	t.Setenv("GOMODCACHE", "")
+	want := resolvedGoCacheEnvironment(t)
+
+	isolateWriteModelConfigHomes(t)
+
+	for name, value := range want {
+		if got := os.Getenv(name); got != value {
+			t.Errorf("%s after HOME isolation = %q, want %q", name, got, value)
+		}
+	}
+}
+
+func resolvedGoCacheEnvironment(t *testing.T) map[string]string {
+	t.Helper()
+	cmd := exec.Command("go", "env", "-json", "GOCACHE", "GOMODCACHE")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("resolve Go cache environment: %v", err)
+	}
+	values := map[string]string{}
+	if err := json.Unmarshal(out, &values); err != nil {
+		t.Fatalf("decode Go cache environment: %v", err)
+	}
+	for _, name := range []string{"GOCACHE", "GOMODCACHE"} {
+		if strings.TrimSpace(values[name]) == "" {
+			t.Fatalf("go env %s is empty", name)
+		}
+	}
+	return values
+}
+
 func isolateWriteModelConfigHomes(t *testing.T) {
 	t.Helper()
+	goCaches := resolvedGoCacheEnvironment(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("JUEX_HOME", filepath.Join(home, "juex-home"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, "codex-home"))
+	for name, value := range goCaches {
+		t.Setenv(name, value)
+	}
 }
 
 func bypassProxyForLoopbackServer(t *testing.T, rawURL string) {

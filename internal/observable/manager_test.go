@@ -152,7 +152,15 @@ func TestManagerCommandPropagatesResolvedEnvironment(t *testing.T) {
 
 func TestManagerCommandResolvesRelativeExecutableFromWorkDir(t *testing.T) {
 	dir := t.TempDir()
-	command := copyObservableHelperExecutable(t, dir)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Reuse the running binary so fresh-copy startup does not consume the delivery deadline.
+	command, err := filepath.Rel(dir, executable)
+	if err != nil {
+		t.Fatal(err)
+	}
 	spec := helperSpec("relative-command", "json-once")
 	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) {
 		config.Command = command

@@ -997,7 +997,7 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 	}
 }
 
-func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
+func TestWeb_CreateScheduleObservableAndControlLifecycle(t *testing.T) {
 	work := t.TempDir()
 	prov := &webProvider{steps: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "schedule handled"), StopReason: llm.StopEndTurn},
@@ -1023,7 +1023,7 @@ func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
 		t.Fatal("no session id")
 	}
 
-	scheduledAt := time.Now().UTC().Add(time.Second)
+	scheduledAt := time.Now().UTC().Add(time.Hour)
 	body, err := json.Marshal(map[string]any{
 		"id":   "schedule-e2e",
 		"type": "schedule",
@@ -1080,32 +1080,23 @@ func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
 		t.Fatalf("restart schedule status=%d body=%+v", resp.StatusCode, restarted)
 	}
 
+	resp, err = http.Get(ts.URL + "/api/observables")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var snapshot struct {
 		Observables []observable.ObservableStatus `json:"observables"`
 	}
-	waitForCondition(t, 5*time.Second, func() bool {
-		resp, err := http.Get(ts.URL + "/api/observables")
-		if err != nil {
-			return false
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return false
-		}
-		var next struct {
-			Observables []observable.ObservableStatus `json:"observables"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&next); err != nil {
-			return false
-		}
-		snapshot = next
-		if len(next.Observables) != 1 || next.Observables[0].SourceType != observable.SourceTypeSchedule {
-			return false
-		}
-		last := next.Observables[0].LastObservation
-		return last.SourceEventID != "" && last.Content == "schedule e2e payload" && last.State == observable.ObservationStateDelivered
-	})
-	if got := snapshot.Observables[0]; got.Schedule == nil || got.Schedule.LastEmittedScheduledAt == nil {
+	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
+		resp.Body.Close()
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || len(snapshot.Observables) != 1 {
+		t.Fatalf("list schedules status=%d body=%+v", resp.StatusCode, snapshot)
+	}
+	if got := snapshot.Observables[0]; got.SourceType != observable.SourceTypeSchedule || got.State != observable.RunStateRunning ||
+		got.Schedule == nil || got.Schedule.NextOccurrence == nil || !got.Schedule.NextOccurrence.Equal(scheduledAt) {
 		t.Fatalf("schedule status = %+v", got)
 	} else if got.ScheduleConfig == nil || got.ScheduleConfig.Observation.Content != "schedule e2e payload" {
 		t.Fatalf("schedule config = %+v, want list-visible observation content", got.ScheduleConfig)
@@ -1122,6 +1113,109 @@ func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		t.Fatalf("delete schedule status=%d body=%s", resp.StatusCode, respBody)
+	}
+}
+
+func TestWeb_ScheduleCatchUpAutomaticallySurfacesObservation(t *testing.T) {
+	work := t.TempDir()
+	stateDir := filepath.Join(t.TempDir(), "agent")
+	cfg := config.Config{
+		ProviderID:    "openai",
+		APIKey:        "x",
+		Model:         "m",
+		WorkDir:       work,
+		AgentStateDir: stateDir,
+	}
+	scheduledAt := time.Now().UTC().Add(-time.Minute)
+	body, err := json.Marshal(map[string]any{
+		"observables": []any{
+			map[string]any{
+				"id":   "schedule-auto-e2e",
+				"type": "schedule",
+				"schedule_config": map[string]any{
+					"once": map[string]any{"at": scheduledAt.Format(time.RFC3339Nano)},
+					"catch_up": map[string]any{
+						"mode":                 "latest",
+						"max_lateness_minutes": 1440,
+					},
+					"observation": map[string]any{
+						"kind":     "heartbeat",
+						"severity": "info",
+						"content":  "automatic schedule e2e payload",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.ObservablesConfigPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.ObservablesConfigPath(), append(body, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := observable.NewStore(cfg.ObservablesStateDir(), observable.StoreOptions{})
+	if err := store.RecordScheduleState(observable.ScheduleStateRecord{
+		ObservableID:    "schedule-auto-e2e",
+		LastEvaluatedAt: scheduledAt.Add(-time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &webProvider{steps: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "schedule handled"), StopReason: llm.StopEndTurn},
+	}}
+	srv := web.NewServer(web.Options{Cfg: cfg, Provider: prov})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessionInfo struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&sessionInfo); err != nil {
+		created.Body.Close()
+		t.Fatal(err)
+	}
+	created.Body.Close()
+	if sessionInfo.ID == "" {
+		t.Fatal("no session id")
+	}
+
+	var status *observable.ObservableStatus
+	var records []observable.ObservationRecord
+	waitForCondition(t, 5*time.Second, func() bool {
+		resp, err := http.Get(ts.URL + "/api/observables")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var snapshot struct {
+			Observables []observable.ObservableStatus `json:"observables"`
+		}
+		if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&snapshot) != nil {
+			return false
+		}
+		status = observableStatusByID(snapshot.Observables, "schedule-auto-e2e")
+		if status == nil || status.LastObservation.Content != "automatic schedule e2e payload" {
+			return false
+		}
+		records, err = fetchObservableRecords(ts.URL, "schedule-auto-e2e")
+		return err == nil && len(records) == 1 && records[0].State == observable.ObservationStateDelivered
+	})
+	if status.LastObservation.State != observable.ObservationStateDelivered {
+		t.Fatalf("last observation = %+v", status.LastObservation)
+	}
+	eventsData, err := os.ReadFile(filepath.Join(stateDir, "sessions", sessionInfo.ID, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(eventsData), `"type":"observation.delivered"`) {
+		t.Fatalf("events missing automatic observation delivery:\n%s", eventsData)
 	}
 }
 

@@ -652,8 +652,18 @@ func TestAppShellHelperProcess(t *testing.T) {
 	}
 	fmt.Fprintln(os.Stdout, "app shell start")
 	switch os.Getenv("JUEX_APP_FAKE_SHELL_MODE") {
-	case "delayed":
-		time.Sleep(2 * time.Second)
+	case "controlled":
+		for {
+			_, err := os.Stat("shell-release")
+			if err == nil {
+				break
+			}
+			if !errors.Is(err, os.ErrNotExist) {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	default:
 		time.Sleep(10 * time.Second)
 	}
@@ -1211,7 +1221,7 @@ func TestApp_CloseClosesShellSessionManager(t *testing.T) {
 func TestApp_ActiveShellSessionsAppearInPromptThroughCompaction(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("JUEX_APP_FAKE_SHELL", "1")
-	t.Setenv("JUEX_APP_FAKE_SHELL_MODE", "delayed")
+	t.Setenv("JUEX_APP_FAKE_SHELL_MODE", "controlled")
 	prov := &stubProvider{replies: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "active seen"), StopReason: llm.StopEndTurn},
 		{Message: llm.TextMessage(llm.RoleAssistant, "compact summary"), StopReason: llm.StopEndTurn},
@@ -1242,7 +1252,7 @@ func TestApp_ActiveShellSessionsAppearInPromptThroughCompaction(t *testing.T) {
 	t.Cleanup(func() { a.Close() })
 
 	_, info, err := a.Engine.Tools.CallWithInfo(context.Background(), "exec_command", map[string]any{
-		"cmd":           "delayed active",
+		"cmd":           "controlled active",
 		"yield_time_ms": 250,
 	})
 	if err != nil {
@@ -1272,12 +1282,20 @@ func TestApp_ActiveShellSessionsAppearInPromptThroughCompaction(t *testing.T) {
 	}
 	requireActiveShellPrompt(t, prov.systems[2], started.SessionID)
 
-	_, _, err = a.Engine.Tools.CallWithInfo(context.Background(), "write_stdin", map[string]any{
+	// Keep the process active until every prompt path has observed it.
+	if err := os.WriteFile(filepath.Join(dir, "shell-release"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, info, err = a.Engine.Tools.CallWithInfo(context.Background(), "write_stdin", map[string]any{
 		"session_id":    started.SessionID,
 		"yield_time_ms": 5000,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	completed := shellResultFromAppInfo(t, info)
+	if completed.Running || completed.ExitCode == nil || *completed.ExitCode != 0 {
+		t.Fatalf("completed shell result = %+v, want exit code 0", completed)
 	}
 	if out, err := a.Run(context.Background(), "after shell complete"); err != nil || out != "after complete" {
 		t.Fatalf("final run = %q, %v", out, err)
@@ -1297,7 +1315,7 @@ func requireActiveShellPrompt(t *testing.T, systemPrompt string, sessionID int) 
 		fmt.Sprintf("session_id=%d", sessionID),
 		"running=true",
 		"tty=false",
-		"delayed active",
+		"controlled active",
 		"write_stdin",
 		"list_shell_sessions",
 	} {

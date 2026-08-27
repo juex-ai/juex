@@ -238,6 +238,122 @@ func TestTerminalClaimPreventsWorkerOverwriteAndRollbackRetriesFinish(t *testing
 	}
 }
 
+func TestScheduleStopAndNaturalExitHaveDeterministicTerminalOrdering(t *testing.T) {
+	t.Run("stop claim wins", func(t *testing.T) {
+		spec := mustScheduleSpec("stop-wins", ScheduleSourceSpec{
+			Once:        &OnceSchedule{At: time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)},
+			Observation: ScheduleObservationSpec{Content: "tick"},
+		})
+		source := &fakeSourceRuntime{}
+		mgr := newSourceTestManager(t, spec, source)
+		workerFinishing := make(chan struct{})
+		workerFinished := make(chan bool, 1)
+		stopQuiesced := make(chan struct{})
+		releaseStop := make(chan struct{})
+		source.startFn = func(_ context.Context, run *observableRun) error {
+			status := run.state
+			status.State = RunStateRunning
+			if err := mgr.activateRun(run, status); err != nil {
+				return err
+			}
+			go func() {
+				<-run.ctx.Done()
+				run.closeQuiesced()
+				close(workerFinishing)
+				finished, _ := mgr.finishRun(run, terminalOutcome{State: RunStateExited})
+				workerFinished <- finished
+				run.closeDone()
+			}()
+			return nil
+		}
+		source.stopFn = func(ctx context.Context, run *observableRun, _ sourceStopReason) (sourceStopResult, error) {
+			run.cancel()
+			if err := waitRunQuiesced(ctx, run); err != nil {
+				return sourceStopResult{}, err
+			}
+			close(stopQuiesced)
+			<-releaseStop
+			return sourceStopResult{Quiesced: true}, nil
+		}
+		if err := mgr.Start(context.Background(), spec.ID); err != nil {
+			t.Fatal(err)
+		}
+		stopResult := make(chan error, 1)
+		go func() { stopResult <- mgr.Stop(context.Background(), spec.ID) }()
+		select {
+		case <-stopQuiesced:
+		case <-time.After(time.Second):
+			t.Fatal("Stop did not quiesce the Schedule")
+		}
+		select {
+		case <-workerFinishing:
+		case <-time.After(time.Second):
+			t.Fatal("Schedule worker did not attempt natural exit")
+		}
+		select {
+		case finished := <-workerFinished:
+			t.Fatalf("Schedule worker finished before the Stop claim resolved: %v", finished)
+		default:
+		}
+		close(releaseStop)
+		if err := <-stopResult; err != nil {
+			t.Fatal(err)
+		}
+		if finished := <-workerFinished; finished {
+			t.Fatal("Schedule worker overwrote the claimed Stop terminal")
+		}
+		status, err := mgr.StatusByID(spec.ID)
+		if err != nil || status.State != RunStateStopped {
+			t.Fatalf("status after Stop won = %+v, %v", status, err)
+		}
+	})
+
+	t.Run("natural exit wins before stop", func(t *testing.T) {
+		spec := mustScheduleSpec("exit-wins", ScheduleSourceSpec{
+			Once:        &OnceSchedule{At: time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)},
+			Observation: ScheduleObservationSpec{Content: "tick"},
+		})
+		source := &fakeSourceRuntime{}
+		mgr := newSourceTestManager(t, spec, source)
+		exitNow := make(chan struct{})
+		workerFinished := make(chan bool, 1)
+		source.startFn = func(_ context.Context, run *observableRun) error {
+			status := run.state
+			status.State = RunStateRunning
+			if err := mgr.activateRun(run, status); err != nil {
+				return err
+			}
+			go func() {
+				<-exitNow
+				run.closeQuiesced()
+				finished, _ := mgr.finishRun(run, terminalOutcome{State: RunStateExited})
+				workerFinished <- finished
+				run.closeDone()
+			}()
+			return nil
+		}
+		if err := mgr.Start(context.Background(), spec.ID); err != nil {
+			t.Fatal(err)
+		}
+		close(exitNow)
+		select {
+		case finished := <-workerFinished:
+			if !finished {
+				t.Fatal("Schedule worker did not own the natural terminal")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Schedule worker did not finish")
+		}
+		if err := mgr.Stop(context.Background(), spec.ID); err != nil {
+			t.Fatal(err)
+		}
+		status, err := mgr.StatusByID(spec.ID)
+		if err != nil || status.State != RunStateExited {
+			t.Fatalf("status after natural exit won = %+v, %v", status, err)
+		}
+	})
+}
+
 func TestStopAndDeletePreserveRunWhenSourceDoesNotQuiesceWithoutError(t *testing.T) {
 	for _, operation := range []struct {
 		name string

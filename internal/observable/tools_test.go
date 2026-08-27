@@ -79,7 +79,10 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 	if !ok {
 		t.Fatal("schedule_create missing")
 	}
-	if !strings.Contains(schedule.Description, "command polling") ||
+	if !strings.Contains(schedule.Description, "List first") ||
+		!strings.Contains(schedule.Description, "reuse equivalents") ||
+		!strings.Contains(schedule.Description, "never probe") ||
+		!strings.Contains(schedule.Description, "command-poll") ||
 		!strings.Contains(schedule.Description, `Guide available via skill_load("juex-observables").`) {
 		t.Fatalf("schedule description = %q", schedule.Description)
 	}
