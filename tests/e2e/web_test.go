@@ -1188,6 +1188,7 @@ func TestWeb_ScheduleCatchUpAutomaticallySurfacesObservation(t *testing.T) {
 
 	var status *observable.ObservableStatus
 	var records []observable.ObservationRecord
+	var eventsData []byte
 	waitForCondition(t, 5*time.Second, func() bool {
 		resp, err := http.Get(ts.URL + "/api/observables")
 		if err != nil {
@@ -1205,17 +1206,51 @@ func TestWeb_ScheduleCatchUpAutomaticallySurfacesObservation(t *testing.T) {
 			return false
 		}
 		records, err = fetchObservableRecords(ts.URL, "schedule-auto-e2e")
-		return err == nil && len(records) == 1 && records[0].State == observable.ObservationStateDelivered
+		if err != nil || !scheduleDeliveryVisible(status, records) {
+			return false
+		}
+		// Delivered store snapshots alone do not prove journal publication or
+		// Provider execution.
+		eventsData, err = os.ReadFile(filepath.Join(stateDir, "sessions", sessionInfo.ID, "events.jsonl"))
+		return err == nil && strings.Contains(string(eventsData), `"type":"observation.delivered"`) &&
+			strings.Contains(messagesText(prov.history(0)), "automatic schedule e2e payload")
 	})
 	if status.LastObservation.State != observable.ObservationStateDelivered {
 		t.Fatalf("last observation = %+v", status.LastObservation)
 	}
-	eventsData, err := os.ReadFile(filepath.Join(stateDir, "sessions", sessionInfo.ID, "events.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	if !strings.Contains(string(eventsData), `"type":"observation.delivered"`) {
 		t.Fatalf("events missing automatic observation delivery:\n%s", eventsData)
+	}
+	if got := messagesText(prov.history(0)); !strings.Contains(got, "automatic schedule e2e payload") {
+		t.Fatalf("Provider did not receive the automatic observation:\n%s", got)
+	}
+}
+
+func scheduleDeliveryVisible(status *observable.ObservableStatus, records []observable.ObservationRecord) bool {
+	// The status and record list are separate HTTP snapshots, not one read.
+	return status != nil && status.LastObservation.State == observable.ObservationStateDelivered &&
+		len(records) == 1 && records[0].State == observable.ObservationStateDelivered
+}
+
+func TestScheduleDeliveryVisibleRequiresBothSnapshots(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		statusState string
+		recordState string
+		want        bool
+	}{
+		{name: "both recorded", statusState: observable.ObservationStateRecorded, recordState: observable.ObservationStateRecorded},
+		{name: "delivery between reads", statusState: observable.ObservationStateRecorded, recordState: observable.ObservationStateDelivered},
+		{name: "record not delivered", statusState: observable.ObservationStateDelivered, recordState: observable.ObservationStateQueued},
+		{name: "both delivered", statusState: observable.ObservationStateDelivered, recordState: observable.ObservationStateDelivered, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status := &observable.ObservableStatus{LastObservation: observable.ObservationRecord{State: tc.statusState}}
+			records := []observable.ObservationRecord{{State: tc.recordState}}
+			if got := scheduleDeliveryVisible(status, records); got != tc.want {
+				t.Fatalf("delivery visible = %t, want %t for status=%s record=%s", got, tc.want, tc.statusState, tc.recordState)
+			}
+		})
 	}
 }
 
