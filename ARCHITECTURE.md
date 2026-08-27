@@ -2790,7 +2790,8 @@ renderer. `internal/runtime/contextbudget` includes this block in every fit
 calculation and omits transcript messages before it can omit authoritative
 state. Summary instructions require the `Goal` section to copy the contract
 rather than infer it from history and require `Next Steps` to match unfinished
-Notes items. Configured `compaction.instructions`, per-request instructions,
+Notes items. An explicit per-field Goal template keeps acceptance and status
+visible alongside the description. Configured `compaction.instructions`, per-request instructions,
 and successful `PreCompact` stdout are merged in that order.
 Successful compaction records summary-call token usage and updates the session
 context usage snapshot to the estimated active context after the compact marker.
