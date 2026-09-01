@@ -23,6 +23,7 @@ func TestStoreCreatesAndReplaysMainAndWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = main.Close() }()
 	if main.ID != MainID || main.Alias != MainAlias || main.ParentThreadID != "" {
 		t.Fatalf("Main = %#v", main)
 	}

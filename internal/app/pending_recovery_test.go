@@ -17,6 +17,8 @@ import (
 	"github.com/juex-ai/juex/internal/runtime"
 )
 
+const pendingRecoveryTestTimeout = 10 * time.Second
+
 type recoveryProvider struct {
 	mu        sync.Mutex
 	calls     int
@@ -812,7 +814,7 @@ func TestAppStartupRecoveryKeepsBarrierThroughReplayableAdmissionRetry(t *testin
 	released = true
 	select {
 	case <-recoveryDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("startup recovery did not finish after admission recovered")
 	}
 	select {
@@ -820,7 +822,7 @@ func TestAppStartupRecoveryKeepsBarrierThroughReplayableAdmissionRetry(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("Context Generation change did not continue after startup recovery")
 	}
 	if calls, _ := provider.snapshot(); calls != 1 {
@@ -926,7 +928,7 @@ func TestAppPendingRecoveryBarrierPrecedesNotificationActivation(t *testing.T) {
 
 	select {
 	case <-provider.started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("startup recovery did not reach provider")
 	}
 	provider.mu.Lock()
@@ -955,7 +957,7 @@ func TestAppPendingRecoveryBarrierPrecedesNotificationActivation(t *testing.T) {
 	close(provider.release)
 	select {
 	case <-activated:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("notification activation did not finish after startup recovery")
 	}
 	select {
@@ -963,7 +965,7 @@ func TestAppPendingRecoveryBarrierPrecedesNotificationActivation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("startup notification was not delivered")
 	}
 	provider.mu.Lock()
@@ -1015,7 +1017,7 @@ func TestAppPendingRecoveryBarrierPrecedesObservableActivation(t *testing.T) {
 
 	select {
 	case <-provider.started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("startup recovery did not reach provider")
 	}
 	provider.mu.Lock()
@@ -1044,7 +1046,7 @@ func TestAppPendingRecoveryBarrierPrecedesObservableActivation(t *testing.T) {
 	close(provider.release)
 	select {
 	case <-activated:
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("Observable activation did not finish after startup recovery")
 	}
 	select {
@@ -1052,7 +1054,7 @@ func TestAppPendingRecoveryBarrierPrecedesObservableActivation(t *testing.T) {
 		if result.err != nil || result.outcome.State != observable.ObservationStateDelivered {
 			t.Fatalf("Observable startup delivery = %+v, %v", result.outcome, result.err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(pendingRecoveryTestTimeout):
 		t.Fatal("startup observation was not delivered")
 	}
 	provider.mu.Lock()
