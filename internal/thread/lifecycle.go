@@ -1,7 +1,6 @@
 package thread
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -124,13 +123,9 @@ func (s *Store) RecoverLayout() error {
 				continue
 			}
 			path := filepath.Join(root, entry.Name())
-			data, err := os.ReadFile(filepath.Join(path, projectionFile))
+			projection, err := s.rebuildProjectionLocked(path, entry.Name())
 			if err != nil {
-				continue
-			}
-			var projection Projection
-			if err := json.Unmarshal(data, &projection); err != nil {
-				continue
+				return fmt.Errorf("thread: recover projection %s: %w", entry.Name(), err)
 			}
 			archivedNamespace := root == s.ArchiveDir()
 			shouldArchive := projection.ArchivedAt != nil

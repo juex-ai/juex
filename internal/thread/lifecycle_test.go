@@ -137,6 +137,50 @@ func TestRecoverLayoutFinishesInterruptedTrashOperation(t *testing.T) {
 	}
 }
 
+func TestRecoverLayoutRebuildsProjectionBeforeRelocatingArchivedWorker(t *testing.T) {
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = main.Close() }()
+	worker, err := store.CreateWorker(MainID, "interrupted-archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerID := worker.ID
+	if _, _, err := worker.journal.Append(Fact{Type: FactThreadArchived}); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.RecoverLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(store.ThreadsDir(), workerID)); !os.IsNotExist(err) {
+		t.Fatalf("journal-archived Worker remains active: %v", err)
+	}
+	archived, err := store.OpenArchived(workerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archived.Close() }()
+	if archived.Projection().ArchivedAt == nil {
+		t.Fatal("recovered archived Worker has active projection")
+	}
+	entries, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.ThreadID == workerID && entry.ArchivedAt == nil {
+			t.Fatalf("recovered index entry remains active: %+v", entry)
+		}
+	}
+}
+
 type sequenceReader struct{ next byte }
 
 func (r *sequenceReader) Read(data []byte) (int, error) {

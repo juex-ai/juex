@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -185,12 +186,8 @@ func newThreadsRenameCmd(flags *persistentFlags) *cobra.Command {
 		Use: "rename <thread> <alias>", Short: "Rename a Worker Thread", Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withAgentClient(cmd, flags, func(client *agentClient) error {
-				entry, err := client.resolveThread(cmd.Context(), args[0], false)
+				result, err := client.renameThread(cmd.Context(), args[0], args[1])
 				if err != nil {
-					return err
-				}
-				var result thread.Info
-				if err := client.doJSON(cmd.Context(), http.MethodPatch, "/api/threads/"+entry.ThreadID, map[string]string{"alias": args[1]}, &result); err != nil {
 					return err
 				}
 				cmdPrintln(cmd, mustJSON(result))
@@ -198,6 +195,18 @@ func newThreadsRenameCmd(flags *persistentFlags) *cobra.Command {
 			})
 		},
 	}
+}
+
+func (client *agentClient) renameThread(ctx context.Context, selector, alias string) (thread.Info, error) {
+	entry, err := client.resolveThread(ctx, selector, true)
+	if err != nil {
+		return thread.Info{}, err
+	}
+	var result thread.Info
+	if err := client.doJSON(ctx, http.MethodPatch, "/api/threads/"+entry.ThreadID, map[string]string{"alias": alias}, &result); err != nil {
+		return thread.Info{}, err
+	}
+	return result, nil
 }
 
 func newThreadMutationCmd(flags *persistentFlags, use, short, operation string) *cobra.Command {

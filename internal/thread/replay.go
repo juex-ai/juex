@@ -226,6 +226,7 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 		}
 		state.Activities = append(state.Activities, activity)
 		if fact.Type == FactContextCompacted {
+			state.CompactionCount++
 			state.ProviderMessages = compactProviderMessages(*fact.Summary, state.Messages)
 		} else {
 			state.ProviderMessages = nil

@@ -105,6 +105,7 @@ type ReplayCheckpoint struct {
 	ProviderMessages []llm.Message              `json:"provider_messages,omitempty"`
 	StatusEvents     []events.Event             `json:"status_events,omitempty"`
 	LatestActivity   *Activity                  `json:"latest_activity,omitempty"`
+	CompactionCount  int                        `json:"compaction_count,omitempty"`
 	Inputs           map[string]InputProjection `json:"inputs,omitempty"`
 	InputOrder       []string                   `json:"input_order,omitempty"`
 	InputRecords     map[string]json.RawMessage `json:"input_records,omitempty"`
@@ -251,6 +252,7 @@ type ReplayState struct {
 	ProviderMessages []llm.Message
 	Events           []events.Event
 	Activities       []Activity
+	CompactionCount  int
 	Inputs           map[string]*InputProjection
 	InputOrder       []string
 	InputRecords     map[string]json.RawMessage

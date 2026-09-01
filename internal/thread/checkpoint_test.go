@@ -75,6 +75,38 @@ func TestCheckpointColdOpenRestoresContextAndReplaysSuffix(t *testing.T) {
 	}
 }
 
+func TestCheckpointPreservesCumulativeCompactionCount(t *testing.T) {
+	store := NewStore(t.TempDir())
+	target, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"summary one", "summary two"} {
+		if _, err := target.BeginCompactedGeneration(llm.TextMessage(llm.RoleUser, text), false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := target.ReplaySnapshot().CompactionCount; got != 2 {
+		t.Fatalf("live compaction count = %d, want 2", got)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.OpenActive(MainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	replay := reopened.ReplaySnapshot()
+	if replay.CompactionCount != 2 {
+		t.Fatalf("reopened compaction count = %d, want 2", replay.CompactionCount)
+	}
+	if len(replay.Activities) != 1 || replay.Activities[0].Summary == nil || replay.Activities[0].Summary.FirstText() != "summary two" {
+		t.Fatalf("bounded latest activity = %+v", replay.Activities)
+	}
+}
+
 func TestCheckpointPayloadIsBoundedToActiveContextAndOpenInputs(t *testing.T) {
 	store := NewStore(t.TempDir())
 	target, err := store.EnsureMain()

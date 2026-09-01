@@ -18,6 +18,7 @@ func checkpointFromState(state ReplayState) ReplayCheckpoint {
 		Inputs:           map[string]InputProjection{},
 		InputRecords:     map[string]json.RawMessage{},
 		ContextUsage:     cloneContextUsage(state.ContextUsage),
+		CompactionCount:  state.CompactionCount,
 	}
 	if terminal := latestTerminalStatusEvent(state.Events); terminal != nil {
 		checkpoint.StatusEvents = []events.Event{*terminal}
@@ -68,6 +69,7 @@ func replayStateFromCheckpoint(threadID string, scanned scannedCommit, checkpoin
 		InputRecords:     make(map[string]json.RawMessage, len(checkpoint.InputRecords)),
 		ContextUsage:     cloneContextUsage(checkpoint.ContextUsage),
 		Events:           append([]events.Event(nil), checkpoint.StatusEvents...),
+		CompactionCount:  checkpoint.CompactionCount,
 	}
 	if checkpoint.LatestActivity != nil {
 		state.Activities = []Activity{*checkpoint.LatestActivity}

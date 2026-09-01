@@ -259,7 +259,7 @@ func (a *App) StatusSnapshot() StatusSnapshot {
 			copied.Breakdown = append([]llm.ContextUsagePart(nil), info.ContextUsage.Breakdown...)
 			contextUsage = &copied
 		}
-		compaction = compactionStatusFromActivities(replay.Activities)
+		compaction = compactionStatusFromReplay(replay)
 	}
 	observables := observablesStatusFromManager(a.obsv)
 	pending := runtime.PendingInputStatus{}
@@ -388,13 +388,12 @@ func formatStatusLocalTime(t time.Time) string {
 	return t.Local().Format("2006-01-02 15:04:05")
 }
 
-func compactionStatusFromActivities(activities []thread.Activity) StatusCompactionSnapshot {
-	var status StatusCompactionSnapshot
-	for _, activity := range activities {
+func compactionStatusFromReplay(replay thread.ReplayState) StatusCompactionSnapshot {
+	status := StatusCompactionSnapshot{Count: replay.CompactionCount}
+	for _, activity := range replay.Activities {
 		if activity.Type != thread.FactContextCompacted || activity.Summary == nil {
 			continue
 		}
-		status.Count++
 		status.MemoryTokens = compactMemoryTokens(*activity.Summary)
 	}
 	return status

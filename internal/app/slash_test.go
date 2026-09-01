@@ -85,6 +85,20 @@ func TestStatusSlashReportsThreadAndGeneration(t *testing.T) {
 	}
 }
 
+func TestCompactionStatusUsesCumulativeReplayCount(t *testing.T) {
+	summary := llm.TextMessage(llm.RoleUser, "compact memory")
+	status := compactionStatusFromReplay(thread.ReplayState{
+		CompactionCount: 3,
+		Activities: []thread.Activity{{
+			Type:    thread.FactContextCompacted,
+			Summary: &summary,
+		}},
+	})
+	if status.Count != 3 || status.MemoryTokens == 0 {
+		t.Fatalf("compaction status = %+v", status)
+	}
+}
+
 func TestCompactSlashStartsCompactedGeneration(t *testing.T) {
 	app, _ := newStubApp(t, llm.Response{
 		Message: llm.TextMessage(llm.RoleAssistant, "summary"), StopReason: llm.StopEndTurn,

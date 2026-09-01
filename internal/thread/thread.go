@@ -460,6 +460,7 @@ func cloneReplayState(source ReplayState) ReplayState {
 		ProviderMessages: append([]llm.Message(nil), source.ProviderMessages...),
 		Events:           append([]events.Event(nil), source.Events...),
 		Activities:       append([]Activity(nil), source.Activities...),
+		CompactionCount:  source.CompactionCount,
 		Inputs:           make(map[string]*InputProjection, len(source.Inputs)),
 		InputOrder:       append([]string(nil), source.InputOrder...),
 		InputRecords:     make(map[string]json.RawMessage, len(source.InputRecords)),

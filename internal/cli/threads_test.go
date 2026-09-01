@@ -38,6 +38,37 @@ func TestAgentClientResolvesThreadIDAndAliasAcrossIndexSections(t *testing.T) {
 	}
 }
 
+func TestAgentClientRenamesArchivedThread(t *testing.T) {
+	patched := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/threads":
+			fmt.Fprint(w, `{"active_threads":[{"thread_id":"0","alias":"main"}],"archived_threads":[{"thread_id":"def456","alias":"old"}]}`)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/threads/def456":
+			patched = true
+			fmt.Fprint(w, `{"thread_id":"def456","alias":"renamed"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	target, err := endpoint.Parse(strings.Replace(server.URL, "http://", "tcp://", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := target.NewTransport()
+	defer transport.CloseIdleConnections()
+	client := &agentClient{target: target, client: &http.Client{Transport: transport}}
+
+	result, err := client.renameThread(context.Background(), "old", "renamed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !patched || result.ID != "def456" || result.Alias != "renamed" {
+		t.Fatalf("archived rename result = %+v, patched=%t", result, patched)
+	}
+}
+
 func TestRootExposesSendAndThreadManagement(t *testing.T) {
 	root := newRootCmd()
 	for _, path := range [][]string{{"send"}, {"threads", "list"}, {"threads", "archive"}, {"threads", "delete"}} {
