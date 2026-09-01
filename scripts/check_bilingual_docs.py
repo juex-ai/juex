@@ -94,13 +94,37 @@ def _top_section(document: Path) -> str:
     return "\n".join(lines[start : start + TOP_SECTION_LINES])
 
 
+def _navigation_markdown(document: Path) -> str:
+    top = re.sub(r"<!--.*?(?:-->|$)", "", _top_section(document), flags=re.DOTALL)
+    visible_lines: list[str] = []
+    fence_character = ""
+    fence_length = 0
+
+    for line in top.splitlines():
+        fence = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if fence:
+            marker = fence.group(1)
+            if not fence_character:
+                fence_character = marker[0]
+                fence_length = len(marker)
+            elif marker[0] == fence_character and len(marker) >= fence_length:
+                fence_character = ""
+                fence_length = 0
+            continue
+        if fence_character:
+            continue
+        visible_lines.append(re.sub(r"`+[^`\n]*`+", "", line))
+
+    return "\n".join(visible_lines)
+
+
 def _has_peer_link(document: Path, peer_name: str) -> bool:
     target = re.escape(peer_name)
     pattern = re.compile(
-        rf"\[[^\]\n]+\]\(\s*(?:\./)?{target}(?:#[^)\s]+)?"
+        rf"(?<!!)\[[^\]\n]+\]\(\s*(?:\./)?{target}(?:#[^)\s]+)?"
         rf"(?:\s+\"[^\"]*\")?\s*\)"
     )
-    return pattern.search(_top_section(document)) is not None
+    return pattern.search(_navigation_markdown(document)) is not None
 
 
 def audit_repository(

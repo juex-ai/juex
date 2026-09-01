@@ -371,7 +371,65 @@ Runtime `StatusStore` 按 runtime-status 文档投射 layered state。Status sna
 
 Server 在 durable commit barrier 后 capture journal descriptor/fixed prefix，dedupe replay 与 live handoff。Cursor 是 opaque durable Event ID；empty 表示无 position，若需从头用 namespace 外的 `?replay=journal-start`，不可占用 extension 可能生成的 ID。Stable persisted message ID 用于 initial/live/refresh dedupe；Tool 用 globally unique tool-use ID。Session route 生命周期内 initial cursor 稳定，唯一例外是 empty-journal placeholder 被首个真实 cursor 替换。
 
-Fleet route 包含 SPA `/`、Agent/session/history/runtime/settings/assets，管理 `/api/agents`、dir browser、lifecycle、enable/disable/remove/log/config、Fleet status/events；Agent API 包含 sessions/active/detail/activate/context/scratchpad/compact/attachments/turns/interrupt/status/events，Observable lifecycle/history，workspace file preview/media，runtime catalog/status。Direct route 为 `/api/...`，Fleet proxy 为 `/agents/<id>/api/...`。
+Agent API 可直接通过 `/api/...` 访问，也可经 Fleet proxy 的 `/agents/<id>/api/...` 访问。完整 Fleet browser、management 与 Agent contract 为：
+
+| Method | Path | 用途与行为 |
+|---|---|---|
+| GET | `/healthz` | readiness probe |
+| GET | `/` | Fleet roster SPA 入口 |
+| GET | `/agents/<id>` | 选中 Agent 的 Sessions SPA route |
+| GET | `/agents/<id>/sessions/<session-id>` | 选中 Agent 的 conversation SPA route |
+| GET | `/agents/<id>/history` | 选中 Agent 的 history SPA route |
+| GET | `/agents/<id>/runtime` | Runtime Overview SPA route |
+| GET | `/agents/<id>/runtime/extensions` | Extensions SPA route |
+| GET | `/agents/<id>/runtime/observables[/<observable-id>]` | Observable list/detail SPA route |
+| GET | `/agents/<id>/runtime/logs` | bounded Agent logs SPA route |
+| GET | `/agents/<id>/runtime/config` | Agent config SPA route |
+| GET | `/settings` | Fleet settings SPA route |
+| GET | `/assets/*` | embedded JS/CSS/font asset |
+| GET | `/api/agents` | Fleet roster JSON；healthy Agent 尽力附带 live activity |
+| GET | `/api/fleet/status` | resident Fleet process RSS 与 interval CPU |
+| POST | `/api/agents` | 注册 absolute Workspace，可设置 metadata 并启动 |
+| GET | `/api/fs/dirs?path=&show_hidden=` | 服务端单层目录浏览 |
+| POST | `/api/fs/dirs` | 在已浏览的 absolute parent 下创建一个空 child dir |
+| POST | `/api/agents/<id>/start\|stop\|restart` | Agent lifecycle action |
+| POST | `/api/agents/<id>/enable\|disable` | 保存可逆 enabled state；disable 同时 stop |
+| DELETE | `/api/agents/<id>` | 确认、stop 并有意删除 registered Agent state |
+| GET | `/api/agents/<id>/logs?lines=N` | bounded combined log tail |
+| GET, PUT | `/api/agents/<id>/config` | 读取或 validate/write/restart config，env value 按 redaction contract 往返 |
+| GET | `/api/sessions` | JSON Session list |
+| GET | `/api/sessions/active` | lightweight active primary ID lookup，不扫描 transcript |
+| GET | `/api/status` | authoritative selected-Agent runtime-status snapshot |
+| GET | `/api/status/events` | resumable selected-Agent runtime-status SSE |
+| POST | `/api/sessions` | 创建 active primary Session |
+| GET | `/api/sessions/<id>` | JSON transcript window + safe `event_cursor`；`?before=&limit=` 读取旧页且保持 Tool pair boundary |
+| DELETE | `/api/sessions/<id>` | 删除 Session 并从 history 移除 |
+| POST | `/api/sessions/<id>/activate` | 把 primary Session 设为 active |
+| GET | `/api/sessions/<id>/context` | 单个 Session 的 active Provider context |
+| GET | `/api/sessions/<id>/scratchpad` | active/persisted Session 的 scratchpad-only tree |
+| POST | `/api/sessions/<id>/compact` | 追加 manual compact summary marker |
+| POST | `/api/sessions/<id>/attachments` | 验证并存储 Session-scoped image upload |
+| POST | `/api/sessions/<id>/turns` | 启动 text、image 或 mixed Turn；仅 active primary 可写 |
+| POST | `/api/sessions/<id>/interrupt` | 取消当前 Turn/active operation |
+| GET | `/api/sessions/<id>/status` | authoritative layered status snapshot + durable Event cursor |
+| GET | `/api/sessions/<id>/status/events` | cursor 后的 resumable full-status snapshot SSE |
+| GET | `/api/sessions/<id>/events` | BrowserEvent SSE；`?since=<cursor>` 从该 durable Event 后恢复，`?replay=journal-start` 从 journal 起点 replay；blank/absent `since` 表示无 resume position 且不 replay |
+| GET | `/api/observables` | 列 Workspace Observable 与 runtime status |
+| POST | `/api/observables` | 创建并启动 tagged Command Observable 或 Schedule |
+| GET | `/api/observables/<id>` | Observable status + recent Observations |
+| POST | `/api/observables/<id>/run` | 发一个 durable Schedule Observation，不改变 lifecycle |
+| POST | `/api/observables/<id>/start` | 启动 stopped/exited Observable |
+| POST | `/api/observables/<id>/stop` | 停止 running Observable |
+| DELETE | `/api/observables/<id>` | 删除 project-owned spec 并 stop source；Extension definition 返回 `409` 且不 mutation |
+| GET | `/api/observables/<id>/observations` | recent Observation history |
+| GET | `/api/files/tree` | Web sidebar 的 WorkDir file tree |
+| GET | `/api/files/content?path=<path>` | 单个 WorkDir file 的 bounded text preview 或 image metadata；拒绝越界 path |
+| GET | `/api/files/raw?path=<path>` | bounded-to-WorkDir image bytes |
+| GET | `/api/media?root=artifact\|workspace&path=<path>` | 显式 root 的 image bytes；verified content-addressed Artifact 使用 immutable cache，mutable Workspace file 使用 revalidation |
+| GET | `/api/runtime` | App-assembled Provider、grouped builtin/MCP Tool、shell、Hook、system prompt、Skill status 的 Web DTO |
+| GET | `/api/status` | selected-Agent runtime snapshot，含 idle/working compatibility field |
+| GET | `/api/status/events` | selected-Agent runtime-status SSE |
+| GET | `/api/fleet/events` | Fleet aggregate `agent.status` SSE |
 
 ### 3.10 Observables
 

@@ -78,6 +78,31 @@ class CheckBilingualDocsTest(unittest.TestCase):
 
         self.assertEqual(self.check(), [])
 
+    def test_ignores_non_navigation_peer_syntax(self) -> None:
+        invalid_sources = {
+            "comment": "<!-- [English](comment.md) -->",
+            "fence": "```markdown\n[English](fence.md)\n```",
+            "image": "![English](image.md)",
+        }
+        for name, invalid_source in invalid_sources.items():
+            self.repo.write(
+                f"{name}.md",
+                f"# {name}\n\n> English | [中文]({name}.zh.md)\n",
+            )
+            self.repo.write(
+                f"{name}.zh.md",
+                f"# {name}\n\n{invalid_source}\n",
+            )
+        self.write_whitelist()
+
+        errors = self.check()
+
+        for name in invalid_sources:
+            self.assertIn(
+                f"{name}.zh.md: missing top link to {name}.md",
+                errors,
+            )
+
     def test_reports_whitelist_entries_that_are_not_tracked_markdown(self) -> None:
         self.write_whitelist("missing.md\n")
 
