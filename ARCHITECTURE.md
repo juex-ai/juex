@@ -180,7 +180,9 @@ attempt claims it, then follows that consuming Turn until settlement.
   append `context.renewed`.
 - `/compact`: generate and persist a summary, retain Goal/Notes/Scratchpad,
   start provider history from the compact bootstrap, append
-  `context.compacted`.
+  `context.compacted`. Summary generation uses request-scoped low reasoning
+  effort even when normal Turns use a higher configured effort; request
+  provenance records the effective override.
 
 Archive/unarchive moves the entire Worker directory and updates the Agent
 index. It does not touch Generation state. Delete is checked and restricted to

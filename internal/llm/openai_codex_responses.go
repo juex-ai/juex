@@ -187,9 +187,9 @@ func (p *openAICodexResponsesProvider) codexRequestParams(sys string, history []
 	if opts.CachePolicy.Retention != "" {
 		params.SetExtraFields(map[string]any{"prompt_cache_retention": opts.CachePolicy.Retention})
 	}
-	if p.profile.Capabilities.ReasoningEffort && p.profile.ThinkingEffort != "" {
+	if effort := requestThinkingEffort(p.profile, opts); p.profile.Capabilities.ReasoningEffort && effort != "" {
 		params.Reasoning = shared.ReasoningParam{
-			Effort:  shared.ReasoningEffort(p.profile.ThinkingEffort),
+			Effort:  shared.ReasoningEffort(effort),
 			Summary: shared.ReasoningSummaryAuto,
 		}
 	}

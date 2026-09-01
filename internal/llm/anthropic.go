@@ -68,9 +68,9 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 		params.Tools = toAnthropicTools(tools, cachePrompt, opts.CachePolicy.Retention)
 	}
 	if p.profile.Capabilities.ReasoningEffort {
-		if p.profile.ThinkingEffort != "" {
+		if effort := requestThinkingEffort(p.profile, opts); effort != "" {
 			params.OutputConfig = anthropic.OutputConfigParam{
-				Effort: anthropic.OutputConfigEffort(p.profile.ThinkingEffort),
+				Effort: anthropic.OutputConfigEffort(effort),
 			}
 		}
 		params.Thinking = anthropic.ThinkingConfigParamUnion{

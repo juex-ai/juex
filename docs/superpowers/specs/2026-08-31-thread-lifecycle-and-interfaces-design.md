@@ -279,6 +279,9 @@ Slash inputs and builtin Tools request the same ordered transition:
   cancels active result subscriptions. It also clears current-generation
   Context Usage calibration while preserving cumulative Token Usage.
 - Both preserve Scratchpad files.
+- Compact-summary requests use request-scoped low reasoning effort even when
+  normal Turns use a higher configured effort. The provider request epoch
+  records this effective override.
 - When requested by a Tool Call, its Tool Result is committed first and the
   transition executes at the next protocol-safe boundary.
 - A compact-summary failure appends no boundary and leaves the old Generation

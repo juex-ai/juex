@@ -1955,7 +1955,7 @@ func TestOpenAI_ThinkingEffort(t *testing.T) {
 	}
 }
 
-func TestOpenAI_DeepSeekPresetEnablesThinkingEffort(t *testing.T) {
+func TestOpenAI_CompleteOptionsOverrideDeepSeekThinkingEffort(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf, _ := io.ReadAll(r.Body)
@@ -1972,11 +1972,11 @@ func TestOpenAI_DeepSeekPresetEnablesThinkingEffort(t *testing.T) {
 		Model:          "deepseek-v4-pro",
 		ThinkingEffort: "max",
 	}), nil)
-	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
-		t.Fatalf("Complete: %v", err)
+	if _, err := CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{ThinkingEffort: "low"}); err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
 	}
-	if capturedBody["reasoning_effort"] != "max" {
-		t.Errorf("reasoning_effort = %v, want %q", capturedBody["reasoning_effort"], "max")
+	if capturedBody["reasoning_effort"] != "low" {
+		t.Errorf("reasoning_effort = %v, want request override %q", capturedBody["reasoning_effort"], "low")
 	}
 }
 
@@ -2076,7 +2076,7 @@ func TestOpenAI_CapabilityGateOmitsUnsupportedParams(t *testing.T) {
 		BaseURL:        srv.URL,
 		APIKey:         "k",
 		Model:          "m",
-		ThinkingEffort: "low",
+		ThinkingEffort: "max",
 		Capabilities: CapabilityOverrides{
 			Tools:           &disabled,
 			ReasoningEffort: &disabled,
@@ -2145,14 +2145,14 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 		BaseURL:        srv.URL,
 		APIKey:         "k",
 		Model:          "gpt-test",
-		ThinkingEffort: "low",
+		ThinkingEffort: "max",
 		Headers:        map[string]string{"X-Juex-Test": "yes"},
 		Query:          map[string]string{"trace": "1"},
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := p.Complete(context.Background(), "system",
+	resp, err := CompleteWithOptions(context.Background(), p, "system",
 		[]Message{
 			TextMessage(RoleUser, "hello"),
 			{Role: RoleAssistant, Blocks: []Block{
@@ -2162,6 +2162,7 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 			{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_prev", Content: "old file"}}},
 		},
 		[]ToolSpec{{Name: "read", Description: "read a file", Schema: map[string]any{"type": "object"}}},
+		CompleteOptions{ThinkingEffort: "low"},
 	)
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -2690,13 +2691,13 @@ func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
 		BaseURL:        srv.URL,
 		APIKey:         "codex-token",
 		Model:          "gpt-test",
-		ThinkingEffort: "low",
+		ThinkingEffort: "max",
 		Headers:        map[string]string{"ChatGPT-Account-ID": "acct_1"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := p.Complete(context.Background(), "system",
+	resp, err := CompleteWithOptions(context.Background(), p, "system",
 		[]Message{
 			TextMessage(RoleUser, "hello"),
 			{Role: RoleAssistant, Blocks: []Block{
@@ -2706,6 +2707,7 @@ func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
 			{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_prev", Content: "old file"}}},
 		},
 		[]ToolSpec{{Name: "read", Description: "read a file", Schema: map[string]any{"type": "object"}}},
+		CompleteOptions{ThinkingEffort: "low"},
 	)
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -2719,7 +2721,8 @@ func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
 	if capturedBody["model"] != "gpt-test" || capturedBody["instructions"] != "system" || capturedBody["stream"] != true {
 		t.Fatalf("captured body = %+v", capturedBody)
 	}
-	if capturedBody["reasoning"] == nil || capturedBody["include"] == nil {
+	reasoning, _ := capturedBody["reasoning"].(map[string]any)
+	if reasoning["effort"] != "low" || capturedBody["include"] == nil {
 		t.Fatalf("codex request should include reasoning controls: %+v", capturedBody)
 	}
 	input, _ := capturedBody["input"].([]any)
@@ -3480,9 +3483,9 @@ func TestAnthropic_ThinkingEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(testProfile(t, Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test", ThinkingEffort: "low"}), nil)
-	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
-		t.Fatalf("Complete: %v", err)
+	p := NewAnthropic(testProfile(t, Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test", ThinkingEffort: "max"}), nil)
+	if _, err := CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{ThinkingEffort: "low"}); err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
 	}
 	outputConfig, ok := capturedBody["output_config"].(map[string]any)
 	if !ok {

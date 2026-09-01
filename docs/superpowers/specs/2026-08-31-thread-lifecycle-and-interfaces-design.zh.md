@@ -271,6 +271,8 @@ Slash inputs 与 builtin Tools 请求相同的有序 transition：
   result subscriptions。它同时清除当前 Generation 的 Context Usage calibration，
   但保留 cumulative Token Usage。
 - 两者都保留 Scratchpad 文件。
+- 即使普通 Turn 配置了更高 reasoning effort，compact-summary request 也使用
+  request-scoped low effort；provider request epoch 记录这个实际 override。
 - 由 Tool Call 请求时，必须先 commit Tool Result，再在下一个 protocol-safe
   boundary 执行 transition。
 - Compact summary 失败时不追加 boundary，旧 Generation 仍然权威。

@@ -13,6 +13,8 @@ import (
 
 var errEmptyCompactionSummary = errors.New("empty summary")
 
+const compactionSummaryThinkingEffort = "low"
+
 type compactionSummaryJournalError struct{ err error }
 
 func (e *compactionSummaryJournalError) Error() string { return e.err.Error() }
@@ -356,6 +358,9 @@ func (e *Engine) completeCompactionSummary(
 ) (llm.Response, provenance.RequestEpoch, error) {
 	cachePolicy := e.cachePolicyLocked()
 	descriptor := e.providerProvenanceLocked(provider)
+	if _, supportsOptions := provider.(llm.ProviderWithOptions); descriptor.Capabilities.ReasoningEffort && supportsOptions {
+		descriptor.ThinkingEffort = compactionSummaryThinkingEffort
+	}
 	epoch, err := e.checkpointProviderRequestEpochLocked(turnID, 0, attempt, provenance.RequestInput{
 		Purpose:           "compaction",
 		Provider:          descriptor,
@@ -383,6 +388,7 @@ func (e *Engine) completeCompactionSummary(
 	resp, requestErr := llm.CompleteWithOptions(ctx, provider, system, history, nil, llm.CompleteOptions{
 		Purpose:         "compaction",
 		MaxOutputTokens: maxOutputTokens,
+		ThinkingEffort:  compactionSummaryThinkingEffort,
 		CachePolicy:     cachePolicy,
 		RetryObserver:   e.providerRetryObserverForEpochLocked(turnID, "compaction", nil, epoch.EpochID, epoch.RequestDigest),
 	})

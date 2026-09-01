@@ -65,8 +65,8 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 	if p.profile.Capabilities.Tools {
 		params.Tools = toOpenAITools(tools)
 	}
-	if p.profile.Capabilities.ReasoningEffort && p.profile.ThinkingEffort != "" {
-		params.ReasoningEffort = shared.ReasoningEffort(p.profile.ThinkingEffort)
+	if effort := requestThinkingEffort(p.profile, opts); p.profile.Capabilities.ReasoningEffort && effort != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(effort)
 	}
 	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
 		params.MaxCompletionTokens = openai.Int(int64(opts.MaxOutputTokens))

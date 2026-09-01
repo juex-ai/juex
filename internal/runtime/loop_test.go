@@ -3136,6 +3136,47 @@ func TestCompactUsesSummaryProviderWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestCompactSummaryUsesLowThinkingEffortAndRecordsOverride(t *testing.T) {
+	provider := &scriptedCompactionProvider{
+		name: "thinking:model",
+		attempts: []scriptedCompactionAttempt{{response: llm.Response{
+			Message:    llm.TextMessage(llm.RoleAssistant, "stable compact summary"),
+			StopReason: llm.StopEndTurn,
+		}}},
+	}
+	eng, bus := newEngine(t, provider, false)
+	eng.ModelCandidates = []ModelCandidate{{
+		Ref:      "thinking:model",
+		Provider: provider,
+		Provenance: provenance.SafeProvider{
+			ID: "thinking", Model: "thinking:model", ThinkingEffort: "max",
+			Capabilities: llm.ProviderCapabilities{ReasoningEffort: true},
+		},
+	}}
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Thread.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var epoch provenance.RequestEpoch
+	bus.Subscribe(provenance.RequestEpochType, func(event events.Event) {
+		epoch = event.Payload.(provenance.RequestEpochPayload).Epoch
+	})
+
+	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 1 || len(provider.options) != 1 || provider.options[0].ThinkingEffort != compactionSummaryThinkingEffort {
+		t.Fatalf("provider calls/options = %d/%+v, want one low-effort summary request", provider.calls, provider.options)
+	}
+	if epoch.Provider.ThinkingEffort != compactionSummaryThinkingEffort {
+		t.Fatalf("summary request provenance effort = %q, want %q", epoch.Provider.ThinkingEffort, compactionSummaryThinkingEffort)
+	}
+}
+
 func TestCompactRequestEpochFailurePreventsSummaryProviderAndFallbackCalls(t *testing.T) {
 	main := &namedCompactionProvider{name: "main:model", text: "main summary"}
 	summary := &namedCompactionProvider{name: "summary:model", text: "custom summary"}

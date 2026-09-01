@@ -77,9 +77,9 @@ func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys s
 	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
 		params.MaxOutputTokens = param.NewOpt(int64(opts.MaxOutputTokens))
 	}
-	if p.profile.Capabilities.ReasoningEffort && p.profile.ThinkingEffort != "" {
+	if effort := requestThinkingEffort(p.profile, opts); p.profile.Capabilities.ReasoningEffort && effort != "" {
 		params.Reasoning = shared.ReasoningParam{
-			Effort:  shared.ReasoningEffort(p.profile.ThinkingEffort),
+			Effort:  shared.ReasoningEffort(effort),
 			Summary: shared.ReasoningSummaryAuto,
 		}
 	}
