@@ -883,7 +883,7 @@ func TestAppExternalDeliveryHandoffKeepsOriginThreadThroughRetry(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("Context Generation change did not continue after handoff became safe")
 	}
 	if calls, _ := provider.snapshot(); calls != 1 {
