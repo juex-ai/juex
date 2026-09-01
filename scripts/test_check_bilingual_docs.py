@@ -88,6 +88,19 @@ class CheckBilingualDocsTest(unittest.TestCase):
             errors,
         )
 
+    def test_rejects_whitelist_entry_that_has_a_language_peer(self) -> None:
+        self.write_whitelist("README.md\n")
+        self.repo.write("README.md", "# Project\n")
+        self.repo.write("README.zh.md", "# 项目\n")
+
+        errors = self.check()
+
+        self.assertIn(
+            "whitelist entry has a tracked language peer: README.md "
+            "(peer: README.zh.md)",
+            errors,
+        )
+
     def test_reports_chinese_document_without_english_peer(self) -> None:
         self.write_whitelist()
         self.repo.write("orphan.zh.md", "# 孤立文档\n")

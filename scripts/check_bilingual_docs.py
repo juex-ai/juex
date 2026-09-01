@@ -114,6 +114,13 @@ def audit_repository(
     for entry in sorted(whitelist - tracked):
         errors.append(f"whitelist entry is not a tracked Markdown file: {entry}")
 
+    for entry in sorted(whitelist & tracked):
+        peer = _english_path(entry) if entry.endswith(".zh.md") else _chinese_path(entry)
+        if peer in tracked:
+            errors.append(
+                f"whitelist entry has a tracked language peer: {entry} (peer: {peer})"
+            )
+
     pairs: set[tuple[str, str]] = set()
     for document in sorted(tracked - whitelist):
         if document.endswith(".zh.md"):

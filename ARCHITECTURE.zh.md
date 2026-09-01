@@ -432,14 +432,19 @@ user input -> Engine.Turn -> emit turn.started
 | `runtime.max_output_tokens` | optional normal-turn cap，省略使用 Provider default |
 | `show_builtin_policy_traces` / `notify_model_changes` | 均默认 false |
 | `compaction.enabled` | 控制 auto/manual compaction |
+| `compaction.instructions` | 持久 summary focus；位于 per-request instruction 与 successful `PreCompact` stdout 之前 |
 | `reserve_tokens` | 可比默认 70% context-window threshold 更早触发 |
 | `keep_recent_tokens` | 可收紧默认 5/64 context-window recent direct/MCP/Observable budget |
 | `summary_model` | compaction 首选 candidate；失败沿 normal chain，无 conversation model-change notice |
 | `summary_max_tokens` | 可收紧默认 0.5% window；semantic retry 最多 2 倍 |
 | `tool_result_max_chars` | 可收紧 summary input 中每 Tool Result 默认 0.5% window |
 | `user_input_inline_max_bytes` | 超限写 `artifacts/sessions/<id>/user-inputs/`，Provider 只见 stable preview |
+| `compaction.user_input_preview_head_bytes` | externalized user input 保留在 inline preview 中的 leading byte 数 |
+| `compaction.user_input_preview_tail_bytes` | externalized user input 保留在 inline preview 中的 trailing byte 数 |
 | `max_auto_failures` | 连续 auto-compaction failure 后 pause proactive compaction |
 | `tool_output.inline_max_bytes` | 独立于 compaction，超限写 `tool-results/`；head/tail preview 总和不超过 effective budget |
+| `tool_output.preview_head_bytes` | optional leading-byte preview ceiling；head/tail 均省略时平分 effective inline budget |
+| `tool_output.preview_tail_bytes` | optional trailing-byte preview ceiling；两者总和不超过 effective inline budget |
 
 YAML precedence（后胜）为 defaults → default-home imports/file → distinct instance imports/file → workspace imports/file → explicit imports/`--config` → supported env → CLI。Root `--models` 完整替换 YAML chain，并胜过 `PROVIDER_API_ID/PROTOCOL/MODEL`；Base/Key/Thinking/Window 等 non-conflicting env 仍应用。`PROVIDER_API_MODEL` 只替换 selected provider 内 model ID，保留 tail。所有 ref 必须 unique 且 resolve。
 
