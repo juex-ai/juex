@@ -98,7 +98,10 @@ func stopLiveAgent(t *testing.T, bin, home, work string) {
 		AgentID string `json:"agent_id"`
 	}
 	if json.Unmarshal(markerBytes, &marker) == nil && marker.AgentID != "" {
-		_, _, _ = runAgentStateCommand(bin, home, work, "fleet", "stop", marker.AgentID)
+		stdout, stderr, err := runJuexHomeCommand(bin, home, "fleet", "stop", marker.AgentID)
+		if err != nil {
+			t.Errorf("stop live Agent %s: %v\nstdout:\n%s\nstderr:\n%s", marker.AgentID, err, stdout, stderr)
+		}
 	}
 }
 

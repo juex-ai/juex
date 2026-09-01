@@ -51,18 +51,7 @@ providers:
 	}
 
 	markerPath := filepath.Join(work, ".juex", "juex.local.json")
-	t.Cleanup(func() {
-		data, err := os.ReadFile(markerPath)
-		if err != nil {
-			return
-		}
-		var marker struct {
-			AgentID string `json:"agent_id"`
-		}
-		if json.Unmarshal(data, &marker) == nil && marker.AgentID != "" {
-			_, _, _ = runAgentStateCommand(bin, home, work, "fleet", "stop", marker.AgentID)
-		}
-	})
+	t.Cleanup(func() { stopLiveAgent(t, bin, home, work) })
 
 	stdout, stderr, err := runAgentStateCommand(bin, home, work, "send", "--wait", "--json", "hello Main")
 	if err != nil {
@@ -373,7 +362,11 @@ func sameStringSet(left, right []string) bool {
 
 func runAgentStateCommand(bin, home, work string, args ...string) (string, string, error) {
 	commandArgs := append([]string{"-C", work}, args...)
-	cmd := exec.Command(bin, commandArgs...)
+	return runJuexHomeCommand(bin, home, commandArgs...)
+}
+
+func runJuexHomeCommand(bin, home string, args ...string) (string, string, error) {
+	cmd := exec.Command(bin, args...)
 	cmd.Env = filteredEnv(
 		"HOME", "USERPROFILE", "JUEX_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM",
 	)
