@@ -107,6 +107,35 @@ test("getThread encodes optional transcript pagination params", async () => {
   ]);
 });
 
+test("getThread treats a null empty timeline as no messages", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        thread_id: "worker1",
+        alias: "worker",
+        dir: "/tmp/thread",
+        created_at: "2026-09-01T00:00:00.000Z",
+        last_activity_at: "2026-09-01T00:00:00.000Z",
+        state: "idle",
+        revision: 1,
+        generation_id: "g000001",
+        turn_count: 0,
+        pending_input_count: 0,
+        token_usage: { input_tokens: 0, output_tokens: 0 },
+        items: null,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    )) as typeof fetch;
+
+  try {
+    const result = await getThread("worker1");
+    assert.deepEqual(result.messages, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("startTurn includes uploaded attachments", async () => {
   const originalFetch = globalThis.fetch;
   const calls: Array<{ input: string; init?: RequestInit }> = [];

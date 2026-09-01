@@ -78,7 +78,7 @@ func LoadTimelinePage(dir, cursor string, limit int) (TimelinePage, error) {
 			itemCount += len(items)
 		}
 	}
-	page := TimelinePage{HasMoreBefore: position > 0}
+	page := TimelinePage{Items: make([]TimelineItem, 0), HasMoreBefore: position > 0}
 	for i := len(groups) - 1; i >= 0; i-- {
 		page.Items = append(page.Items, groups[i]...)
 	}

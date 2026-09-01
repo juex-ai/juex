@@ -165,6 +165,29 @@ func TestThreadAPIListCreateShowAndEOFPagination(t *testing.T) {
 	}
 }
 
+func TestThreadAPIEmptyWorkerTimelineSerializesAsArray(t *testing.T) {
+	server := newTestServer(t)
+	httpServer := httptest.NewServer(server.APIHandler())
+	defer httpServer.Close()
+
+	var created thread.Info
+	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads", `{}`, http.StatusCreated, &created)
+	recorder := httptest.NewRecorder()
+	server.APIHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/threads/"+created.ID, nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Items json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if string(response.Items) != "[]" {
+		t.Fatalf("empty timeline was not serialized as an array: %s", recorder.Body.String())
+	}
+}
+
 func TestThreadAPICreatesNestedWorkerWithExplicitParent(t *testing.T) {
 	server := newTestServer(t)
 	httpServer := httptest.NewServer(server.APIHandler())

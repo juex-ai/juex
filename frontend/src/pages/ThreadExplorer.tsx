@@ -7,6 +7,15 @@ import { useShellTitle } from "@/components/AppShell";
 import { AgentRuntimeStateBar } from "@/components/fleet/AgentRuntimeStateBar";
 import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { agentPathFromLocation } from "@/lib/fleet-routes";
 import { threadHref, threadListTitle } from "@/lib/thread-list";
 import { cn } from "@/lib/utils";
@@ -20,6 +29,8 @@ export function ThreadExplorer() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [workerAlias, setWorkerAlias] = useState("");
   const [mutatingID, setMutatingID] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const mutationsEnabled = agentsLoaded && agent?.runtime_health === "healthy";
@@ -50,12 +61,12 @@ export function ThreadExplorer() {
 
   async function handleCreate() {
     if (!mutationsEnabled) return;
-    const answer = window.prompt("Worker Thread alias (optional)");
-    if (answer === null) return;
     setCreating(true);
     setError(null);
     try {
-      const created = await createThread(answer.trim());
+      const created = await createThread(workerAlias.trim());
+      setCreateOpen(false);
+      setWorkerAlias("");
       window.dispatchEvent(new Event("juex:threads-changed"));
       navigate(agentPathFromLocation(`/threads/${encodeURIComponent(created.id)}`));
     } catch (cause) {
@@ -95,7 +106,7 @@ export function ThreadExplorer() {
             <Button variant="outline" size="sm" onClick={() => void refreshThreads()} disabled={refreshing}>
               <RefreshCw className={cn("size-3.5 motion-reduce:animate-none", refreshing && "animate-spin")} /> Refresh
             </Button>
-            <Button size="sm" onClick={() => void handleCreate()} disabled={creating || !mutationsEnabled}>
+            <Button size="sm" onClick={() => setCreateOpen(true)} disabled={creating || !mutationsEnabled}>
               <Plus className="size-3.5" /> New Worker
             </Button>
           </div>
@@ -111,6 +122,40 @@ export function ThreadExplorer() {
           </>
         )}
       </div>
+      <Dialog open={createOpen} onOpenChange={(open) => {
+        if (!creating) {
+          setCreateOpen(open);
+          if (!open) setWorkerAlias("");
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New Worker Thread</DialogTitle>
+            <DialogDescription>
+              Create an idle Worker Thread. Leave the alias empty to use its generated name.
+            </DialogDescription>
+          </DialogHeader>
+          <form className="space-y-4" onSubmit={(event) => {
+            event.preventDefault();
+            void handleCreate();
+          }}>
+            <div className="space-y-1.5">
+              <label htmlFor="worker-thread-alias" className="text-xs font-medium">Alias (optional)</label>
+              <Input
+                id="worker-thread-alias"
+                value={workerAlias}
+                onChange={(event) => setWorkerAlias(event.target.value)}
+                autoComplete="off"
+                autoFocus
+              />
+            </div>
+            <DialogFooter className="mx-0 mb-0 px-0 pb-0">
+              <Button type="button" variant="outline" disabled={creating} onClick={() => setCreateOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={creating || !mutationsEnabled}>{creating ? "Creating..." : "Create Worker"}</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

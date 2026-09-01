@@ -37,6 +37,13 @@ test("runtime and Thread Explorer expose initial request failures", () => {
   assert.match(threadExplorerSource, /setError\(cause instanceof Error/);
 });
 
+test("Thread Explorer creates Workers through an accessible dialog", () => {
+  assert.doesNotMatch(threadExplorerSource, /window\.prompt/);
+  assert.match(threadExplorerSource, /<Dialog open=\{createOpen\}/);
+  assert.match(threadExplorerSource, /htmlFor="worker-thread-alias"/);
+  assert.match(threadExplorerSource, /type="submit"[\s\S]*Create Worker/);
+});
+
 test("failed uncontrolled prompt submission preserves text for retry", () => {
   const resetIndex = promptInputSource.indexOf("form.reset()");
   const submitIndex = promptInputSource.indexOf(

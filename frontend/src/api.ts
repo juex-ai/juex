@@ -233,7 +233,7 @@ function normalizeThreadInfo(raw: RawThreadInfo): ThreadInfo {
 function normalizeThreadShow(raw: RawThreadShowResponse): ThreadShowResponse {
   return {
     ...normalizeThreadInfo(raw),
-    messages: raw.items.flatMap((item) => timelineMessage(item)),
+    messages: (raw.items ?? []).flatMap((item) => timelineMessage(item)),
     event_cursor: raw.event_cursor ?? "",
     has_more_before: raw.has_more_before,
     oldest_message_id: raw.previous_cursor,
