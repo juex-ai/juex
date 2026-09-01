@@ -437,19 +437,6 @@ func formatCompactionStatus(status StatusCompactionSnapshot) string {
 	return fmt.Sprintf("compact: %d, memory: %s", status.Count, memory)
 }
 
-func formatSuccessRates(status StatusSuccessRatesSnapshot) string {
-	return fmt.Sprintf("success: llm %s, tools %s",
-		formatSuccessRate(status.LLMSuccesses, status.LLMRequests),
-		formatSuccessRate(status.ToolSuccesses, status.ToolRequests))
-}
-
-func formatSuccessRate(successes, requests int) string {
-	if requests <= 0 {
-		return "n/a"
-	}
-	return fmt.Sprintf("%d/%d (%s)", successes, requests, percent(successes, requests))
-}
-
 func percent(numerator, denominator int) string {
 	if denominator <= 0 {
 		return "n/a"

@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -25,15 +24,6 @@ import (
 	"github.com/juex-ai/juex/internal/version"
 	"github.com/juex-ai/juex/internal/web"
 )
-
-type warningFailingWriter struct {
-	calls int
-}
-
-func (w *warningFailingWriter) Write([]byte) (int, error) {
-	w.calls++
-	return 0, errors.New("writer unavailable")
-}
 
 func TestVersionCmd_ShortForm(t *testing.T) {
 	root := newRootCmd()
@@ -1525,17 +1515,6 @@ func writeTextFile(path, body string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(body), 0o644)
-}
-
-func writeCLITestPNG(t *testing.T, path string) {
-	t.Helper()
-	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func setHomeForCLITest(t *testing.T) string {

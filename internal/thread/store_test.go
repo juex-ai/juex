@@ -46,7 +46,7 @@ func TestStoreCreatesAndReplaysMainAndWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer func() { _ = reopened.Close() }()
 	if len(reopened.History) != 1 || reopened.History[0].FirstText() != "review this" {
 		t.Fatalf("History = %#v", reopened.History)
 	}
@@ -70,7 +70,7 @@ func TestInputLifecycleAndGenerationProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer main.Close()
+	defer func() { _ = main.Close() }()
 	notes := "keep across compact"
 	goal := json.RawMessage(`{"status":"working"}`)
 	if _, err := main.AppendFacts(
@@ -127,7 +127,7 @@ func TestInvalidInputTransitionIsRejectedBeforeJournalCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer main.Close()
+	defer func() { _ = main.Close() }()
 	before := main.Projection().Revision
 	_, err = main.AppendFacts(Fact{Type: FactInputCompleted, InputID: "missing"})
 	if !errors.Is(err, ErrInvalidTransition) {
@@ -180,7 +180,7 @@ func TestUsageIncludesCachedInputTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer main.Close()
+	defer func() { _ = main.Close() }()
 	main.RecordResponseUsage(llm.Usage{InputTokens: 10, CachedInputTokens: 7, OutputTokens: 3}, &llm.ContextUsage{ContextWindow: 100, TotalTokens: 40})
 	projection := main.Projection()
 	if projection.TokenUsage.CachedInputTokens != 7 || projection.ContextUsage.CurrentTokens != 40 || projection.ContextUsage.Percentage != 40 {
@@ -197,7 +197,7 @@ func TestIndependentStoreHandlesSerializeIndexUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer main.Close()
+	defer func() { _ = main.Close() }()
 
 	const workers = 16
 	var wg sync.WaitGroup
@@ -240,7 +240,7 @@ func TestWorkerAliasMustBeUniqueAcrossActiveAndArchivedThreads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer main.Close()
+	defer func() { _ = main.Close() }()
 	worker, err := store.CreateWorker(MainID, "reviewer")
 	if err != nil {
 		t.Fatal(err)
@@ -262,12 +262,12 @@ func TestWorkerAliasUniquenessMatchesCaseInsensitiveClientResolution(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer main.Close()
+	defer func() { _ = main.Close() }()
 	worker, err := store.CreateWorker(MainID, "Reviewer")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer worker.Close()
+	defer func() { _ = worker.Close() }()
 	if _, err := store.CreateWorker(MainID, "reviewer"); err == nil {
 		t.Fatal("case-insensitive duplicate alias was accepted")
 	}

@@ -1,9 +1,7 @@
 package e2e
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -427,80 +425,6 @@ func buildJuex(t *testing.T) string {
 		t.Fatalf("build juex: %v\n%s", err, buildOut)
 	}
 	return out
-}
-
-func readE2EBundleArchive(t *testing.T, path string) map[string][]byte {
-	t.Helper()
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = gz.Close() }()
-	tr := tar.NewReader(gz)
-	files := map[string][]byte{}
-	for {
-		h, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		if h.FileInfo().IsDir() {
-			continue
-		}
-		body, err := io.ReadAll(tr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		files[h.Name] = body
-	}
-	return files
-}
-
-// pythonMCPScript returns the absolute path to the fake MCP server script.
-func pythonMCPScript(t *testing.T) string {
-	t.Helper()
-	root, err := findRepoRoot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := filepath.Join(root, "tests", "e2e", "testdata", "fake-mcp", "server.py")
-	if _, err := os.Stat(p); err != nil {
-		t.Fatalf("fake MCP script missing at %s: %v", p, err)
-	}
-	return p
-}
-
-func writeSkillFile(workDir, name, description string) error {
-	dir := filepath.Join(workDir, ".agents", "skills", name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	body := "---\nname: " + name + "\ndescription: " + description + "\ntype: model-invocable\n---\nFull skill body."
-	return os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644)
-}
-
-func writeExtensionSkillFile(extensionDir, name, description string) error {
-	dir := filepath.Join(extensionDir, "skills", name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	body := "---\nname: " + name + "\ndescription: " + description + "\ntype: model-invocable\n---\nFull skill body."
-	return os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644)
-}
-
-func writeExtensionManifestFile(extensionDir, name string) error {
-	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
-		return err
-	}
-	body := `{"manifest_version":1,"name":"` + name + `","version":"1.0.0"}`
-	return os.WriteFile(filepath.Join(extensionDir, "juex.extension.json"), []byte(body), 0o644)
 }
 
 func writeMCPConfig(workDir, command string, args []string) error {

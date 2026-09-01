@@ -55,7 +55,7 @@ func TestTimelinePagesFromEOFPreservingChronologicalOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer main.Close()
+	defer func() { _ = main.Close() }()
 	for i := 1; i <= 5; i++ {
 		if err := main.Append(llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%d", i))); err != nil {
 			t.Fatal(err)

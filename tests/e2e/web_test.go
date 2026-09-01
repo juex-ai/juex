@@ -107,7 +107,7 @@ func TestWeb_TranscriptPageReadsLatestItemsFromEOF(t *testing.T) {
 		{ID: "m5", Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockText, Text: "latest"}}},
 	}
 	if err := sess.AppendBatch(messages); err != nil {
-		sess.Close()
+		_ = sess.Close()
 		t.Fatal(err)
 	}
 	if err := sess.Close(); err != nil {

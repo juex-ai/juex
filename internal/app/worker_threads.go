@@ -73,9 +73,9 @@ const (
 )
 
 var (
-	ErrWorkerThreadNotActive     = errors.New("Worker Thread is not active")
-	ErrWorkerThreadManagerClosed = errors.New("Worker Thread manager is closed")
-	ErrWorkerThreadStopped       = errorclass.WithKind(errorclass.KindTerminated, errors.New("Worker Thread stopped"))
+	ErrWorkerThreadNotActive     = errors.New("worker thread is not active")
+	ErrWorkerThreadManagerClosed = errors.New("worker thread manager is closed")
+	ErrWorkerThreadStopped       = errorclass.WithKind(errorclass.KindTerminated, errors.New("worker thread stopped"))
 )
 
 type WorkerThreadState string
@@ -223,7 +223,7 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 	cfg := m.parent.cfg
 	if model != "" {
 		if err := cfg.ApplyModelOverride(model); err != nil {
-			return WorkerThreadStatus{}, fmt.Errorf("Worker Thread model: %w", err)
+			return WorkerThreadStatus{}, fmt.Errorf("worker thread model: %w", err)
 		}
 	} else {
 		model = config.ModelRef{ProviderID: cfg.ProviderID, ModelID: cfg.Model}.String()
@@ -465,7 +465,7 @@ func (m *workerThreadManager) Send(id, message string) (WorkerThreadStatus, bool
 		}
 		return WorkerThreadStatus{}, false, errors.New(result.Error.Message)
 	default:
-		return WorkerThreadStatus{}, false, fmt.Errorf("Worker Thread send: unexpected admission %q", result.Kind)
+		return WorkerThreadStatus{}, false, fmt.Errorf("worker thread send: unexpected admission %q", result.Kind)
 	}
 }
 
@@ -648,7 +648,7 @@ func (m *workerThreadManager) WaitClose() error {
 
 func (m *workerThreadManager) startRun(ctx context.Context, managed *managedWorkerThread, start *AdmittedTurn) error {
 	if start == nil {
-		return errors.New("Worker Thread run: missing admitted turn")
+		return errors.New("worker thread run: missing admitted turn")
 	}
 	m.mu.Lock()
 	if err := ctx.Err(); err != nil {
@@ -771,10 +771,6 @@ func (m *workerThreadManager) deliverResult(ctx context.Context, managed *manage
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, ErrThreadUnavailable) {
 		m.recordNotificationFailure(managed, status, fmt.Errorf("admit persisted Worker Thread notification: %w", err))
 	}
-}
-
-func (m *workerThreadManager) dropPersistedNotification(id string) error {
-	return m.parent.discardExternalInput(id)
 }
 
 func (m *workerThreadManager) recordNotificationFailure(managed *managedWorkerThread, status WorkerThreadStatus, err error) {
@@ -947,11 +943,11 @@ func (m *workerThreadManager) ensureParentActive() error {
 		return ErrWorkerThreadManagerClosed
 	}
 	if transitioning {
-		return errors.New("Worker Thread manager is changing parent Thread")
+		return errors.New("worker thread manager is changing parent Thread")
 	}
 	identity, ok := m.parent.ThreadIdentity()
 	if !ok || !thread.ValidID(identity.ID) {
-		return errors.New("Worker Thread tools require an active parent Thread")
+		return errors.New("worker thread tools require an active parent Thread")
 	}
 	return nil
 }
@@ -959,7 +955,7 @@ func (m *workerThreadManager) ensureParentActive() error {
 func workerThreadTools(manager *workerThreadManager) []tools.Tool {
 	definitions := WorkerThreadToolDefinitions()
 	unavailable := func(context.Context, map[string]any) (string, error) {
-		return "", errors.New("Worker Thread manager is unavailable")
+		return "", errors.New("worker thread manager is unavailable")
 	}
 	if manager == nil {
 		tools := make([]tools.Tool, 0, len(definitions))

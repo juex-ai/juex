@@ -136,7 +136,7 @@ func TestWorkerCreatesNestedChildWithCallingThreadAsParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer grandchild.Close()
+	defer func() { _ = grandchild.Close() }()
 	if grandchild.ParentThreadID != childStatus.ThreadID {
 		t.Fatalf("grandchild parent = %q, want calling Worker %q", grandchild.ParentThreadID, childStatus.ThreadID)
 	}
@@ -268,7 +268,7 @@ func TestFailedWorkerReportsFailedAndCanBeArchived(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer archived.Close()
+	defer func() { _ = archived.Close() }()
 	if archived.Info().ArchivedAt == nil {
 		t.Fatal("failed Worker was not archived")
 	}
@@ -306,7 +306,7 @@ func TestWorkerArchiveRequiresSettledSubscriptionAndMovesHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer archived.Close()
+	defer func() { _ = archived.Close() }()
 	if archived.Info().ArchivedAt == nil || archived.Alias != "archive-me" {
 		t.Fatalf("archived info = %+v", archived.Info())
 	}

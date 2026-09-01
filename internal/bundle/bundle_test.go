@@ -93,7 +93,7 @@ func readBundle(t *testing.T, path string) map[string][]byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	reader := tar.NewReader(gz)
 	files := map[string][]byte{}
 	for {

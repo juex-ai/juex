@@ -223,7 +223,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sess.Close()
+	defer func() { _ = sess.Close() }()
 	sess.SubscribeBus(bus)
 
 	pb := e2ePromptBuilder(
@@ -928,7 +928,7 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sess.Close()
+	defer func() { _ = sess.Close() }()
 	sess.SubscribeBus(bus)
 
 	pb := e2ePromptBuilder(
@@ -2213,15 +2213,6 @@ func readJSONLObjects(t *testing.T, path string) []map[string]any {
 		out = append(out, obj)
 	}
 	return out
-}
-
-func jsonlHasString(rows []map[string]any, key, want string) bool {
-	for _, row := range rows {
-		if row[key] == want {
-			return true
-		}
-	}
-	return false
 }
 
 func jsonlContainsString(rows []map[string]any, want string) bool {

@@ -242,31 +242,6 @@ type runtimeTurnInputPolicyModule struct {
 	apply func(runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error)
 }
 
-type continuationFailureFinishModule struct {
-	committed bool
-	observed  int
-}
-
-func (*continuationFailureFinishModule) ID() runtimemodule.ID {
-	return "continuation-failure-finish"
-}
-
-func (*continuationFailureFinishModule) EvaluateFinish(_ context.Context, _ runtimemodule.FinishRequest) (runtimemodule.FinishDecision, error) {
-	return runtimemodule.FinishDecision{
-		Action:       runtimemodule.FinishContinue,
-		Continuation: "continue after the durable owner checkpoint",
-	}, nil
-}
-
-func (m *continuationFailureFinishModule) CommitFinishDecision(_ context.Context, _ runtimemodule.FinishRequest, _ runtimemodule.FinishDecision) (bool, error) {
-	m.committed = true
-	return true, nil
-}
-
-func (m *continuationFailureFinishModule) FinishContinuationCommitted(_ context.Context, _ runtimemodule.FinishRequest, _ runtimemodule.FinishDecision) {
-	m.observed++
-}
-
 func (m *runtimeTurnInputPolicyModule) ID() runtimemodule.ID { return m.id }
 
 func (m *runtimeTurnInputPolicyModule) ApplyTurnInput(_ context.Context, request runtimemodule.TurnInputRequest) (runtimemodule.TurnInputDecision, error) {
@@ -417,7 +392,7 @@ func newEngineWithToolTimeout(t *testing.T, prov llm.Provider, builtinTools bool
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { sess.Close() })
+	t.Cleanup(func() { _ = sess.Close() })
 	sess.SubscribeBus(bus)
 	pb := newTestPromptBuilder("", func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) })
 	artifactState := t.TempDir()
@@ -1201,11 +1176,6 @@ type selectiveFailCommitter struct {
 	beforeFail func() error
 }
 
-type interceptCommitter struct {
-	eventType    string
-	beforeCommit func() error
-}
-
 type blockingFailCommitter struct {
 	eventType string
 	err       error
@@ -1218,15 +1188,6 @@ func (c blockingFailCommitter) Commit(event events.Event) (events.Event, error) 
 		close(c.started)
 		<-c.release
 		return events.Event{}, c.err
-	}
-	return events.Normalize(event), nil
-}
-
-func (c interceptCommitter) Commit(event events.Event) (events.Event, error) {
-	if event.Type == c.eventType && c.beforeCommit != nil {
-		if err := c.beforeCommit(); err != nil {
-			return events.Event{}, err
-		}
 	}
 	return events.Normalize(event), nil
 }
@@ -5872,7 +5833,7 @@ func TestTurn_ReplaysPersistedPendingInputAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { reloaded.Close() })
+	t.Cleanup(func() { _ = reloaded.Close() })
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
@@ -5927,7 +5888,7 @@ func TestTurn_DoesNotReplayProcessedPendingInputAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { secondReload.Close() })
+	t.Cleanup(func() { _ = secondReload.Close() })
 	secondProvider := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "second done"), StopReason: llm.StopEndTurn},
 	}}
@@ -5966,7 +5927,7 @@ func TestTurn_RepairsDanglingToolUseBeforeAppendingNewUserInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { reloaded.Close() })
+	t.Cleanup(func() { _ = reloaded.Close() })
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}}
@@ -6038,7 +5999,7 @@ func TestTurn_AdmittedPendingInputWithExistingMessageIDIsNotReplayed(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { reloaded.Close() })
+	t.Cleanup(func() { _ = reloaded.Close() })
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
@@ -6089,7 +6050,7 @@ func TestTurn_CompactedAdmittedPendingInputWithExistingMessageIDIsNotReplayed(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { reloaded.Close() })
+	t.Cleanup(func() { _ = reloaded.Close() })
 	if got := len(reloaded.History); got != 1 || reloaded.History[0].ID != "compact-1" {
 		t.Fatalf("active history = %+v, want only compact marker", reloaded.History)
 	}
@@ -6131,7 +6092,7 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { sess.Close() })
+	t.Cleanup(func() { _ = sess.Close() })
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
@@ -7405,7 +7366,7 @@ func TestTurn_ParallelToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { sess.Close() })
+	t.Cleanup(func() { _ = sess.Close() })
 	pb := newTestPromptBuilder("", time.Now)
 	eng := &Engine{Provider: prov, Tools: reg, Bus: bus, Thread: sess, Prompt: pb}
 

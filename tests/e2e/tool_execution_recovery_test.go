@@ -76,7 +76,7 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer recovered.Close()
+	defer func() { _ = recovered.Close() }()
 
 	provider := &bareScriptProvider{steps: []llm.Response{{
 		Message:    llm.TextMessage(llm.RoleAssistant, "continued safely"),
@@ -104,7 +104,7 @@ func TestEndToEnd_DurableToolOutcomeResumesWithoutDuplicateExecution(t *testing.
 		Prompt: e2ePromptBuilder(t, "", []string{root}, root, promptcontext.ShellProfile{}, func() time.Time {
 			return time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)
 		}, recovered),
-		WorkDir:     root,
+		WorkDir:  root,
 		MediaDir: filepath.Join(root, "artifacts"),
 	}
 
@@ -192,7 +192,7 @@ func TestEndToEnd_MixedToolBatchRecoveryPreservesOrderWithoutExecution(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer recovered.Close()
+	defer func() { _ = recovered.Close() }()
 	provider := &bareScriptProvider{steps: []llm.Response{{
 		Message: llm.TextMessage(llm.RoleAssistant, "continued safely"), StopReason: llm.StopEndTurn,
 	}}}

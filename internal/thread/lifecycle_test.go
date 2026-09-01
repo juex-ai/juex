@@ -16,7 +16,7 @@ func TestArchiveUnarchivePreservesGenerationAndScratchpad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer main.Close()
+	defer func() { _ = main.Close() }()
 	worker, err := store.CreateWorker(MainID, "worker")
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +43,7 @@ func TestArchiveUnarchivePreservesGenerationAndScratchpad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer restored.Close()
+	defer func() { _ = restored.Close() }()
 	if generation := restored.Projection().CurrentGeneration.ID; generation != "g000002" {
 		t.Fatalf("restored generation = %s", generation)
 	}
@@ -62,7 +62,7 @@ func TestDeleteArchivedRejectsParentAndRemovesEligibleWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer main.Close()
+	defer func() { _ = main.Close() }()
 	parent, err := store.CreateWorker(MainID, "parent")
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func TestRecoverLayoutFinishesInterruptedTrashOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer main.Close()
+	defer func() { _ = main.Close() }()
 	worker, err := store.CreateWorker(MainID, "delete-me")
 	if err != nil {
 		t.Fatal(err)

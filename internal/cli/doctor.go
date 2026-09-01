@@ -484,18 +484,6 @@ func doctorMCPCheck(ctx context.Context, cfg config.Config, agentRuntime app.Age
 	return check
 }
 
-func doctorMCPCheckWithOptions(
-	ctx context.Context,
-	cfg config.Config,
-	opts mcp.RemoteReadinessOptions,
-) doctorCheck {
-	agentRuntime, err := app.ResolveAgentRuntime(cfg)
-	if err != nil {
-		return doctorCheck{Name: "mcp", Status: doctorStatusFail, Message: err.Error(), Suggestion: "fix selected Extension environment declarations and retry"}
-	}
-	return doctorMCPCheckWithAgentRuntimeOptions(ctx, cfg, agentRuntime, opts)
-}
-
 func doctorMCPCheckWithAgentRuntimeOptions(
 	ctx context.Context,
 	cfg config.Config,

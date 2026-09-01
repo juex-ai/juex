@@ -13,8 +13,8 @@ import (
 
 const (
 	ContextControlModuleID runtimemodule.ID = "context-control"
-	ContextToolNew                          = "context_new"
-	ContextToolCompact                      = "context_compact"
+	ContextToolNew         string           = "context_new"
+	ContextToolCompact     string           = "context_compact"
 )
 
 const contextControlGuide = `Guide available via skill_load("juex-thread-state").`

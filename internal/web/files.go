@@ -235,8 +235,11 @@ func (s *Server) threadScratchpadDir(id string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	defer target.Close()
-	return target.ScratchpadDir(), true
+	scratchpadDir := target.ScratchpadDir()
+	if err := target.Close(); err != nil {
+		return "", false
+	}
+	return scratchpadDir, true
 }
 
 func scratchpadName(dir string) string {

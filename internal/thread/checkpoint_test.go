@@ -52,7 +52,7 @@ func TestCheckpointColdOpenRestoresContextAndReplaysSuffix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer func() { _ = reopened.Close() }()
 	gotProjection, gotHistory := reopened.Snapshot()
 	if gotProjection.Revision != wantProjection.Revision ||
 		gotProjection.Journal.ProjectedOffset != wantProjection.Journal.ProjectedOffset ||
@@ -81,7 +81,7 @@ func TestCheckpointPayloadIsBoundedToActiveContextAndOpenInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer target.Close()
+	defer func() { _ = target.Close() }()
 	if _, err := target.AppendFacts(
 		Fact{Type: FactInputAccepted, InputID: "input-1"},
 		Fact{Type: FactInputAttemptStart, InputID: "input-1", AttemptID: "attempt-1", GenerationID: InitialGeneration, TurnID: "turn-1"},

@@ -1099,11 +1099,6 @@ func (a *App) externalAttachmentOptions() attachmentOptions {
 	}
 }
 
-func observationMessage(record observable.ObservationRecord, opts attachmentOptions) (llm.Message, error) {
-	msg, _, err := buildObservationMessage(record, opts)
-	return msg, err
-}
-
 func buildObservationMessage(record observable.ObservationRecord, opts attachmentOptions) (llm.Message, []string, error) {
 	report := eventmedia.ValidateStoredAttachments(record.Attachments, eventmedia.ValidationOptions{MediaDir: opts.MediaDir})
 	text := renderObservationText(record, report)

@@ -22,7 +22,7 @@ func TestRepairProtocolTailPreservesProviderOrderAndCrashBoundaries(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer target.Close()
+	defer func() { _ = target.Close() }()
 
 	calls := []toolevents.ToolCallPayload{
 		{ToolUseID: "recorded", Name: "read", Input: map[string]any{"path": "a.txt"}, Iter: 2, CallIndex: 0, MessageID: "assistant-1"},

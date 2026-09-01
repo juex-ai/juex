@@ -680,7 +680,8 @@ func (q *PendingInputQueue) inputLifecycleFacts(record PendingInputRecord) []thr
 	if !existed {
 		return facts
 	}
-	if previous.State == PendingInputStateAdmitted {
+	switch previous.State {
+	case PendingInputStateAdmitted:
 		switch record.State {
 		case PendingInputStateDropped:
 			previousAttemptID := fmt.Sprintf("ia_%s_%d", record.ID, max(previous.Attempts, 1))
@@ -689,7 +690,7 @@ func (q *PendingInputQueue) inputLifecycleFacts(record PendingInputRecord) []thr
 				thread.Fact{Type: thread.FactInputCancelled, InputID: record.ID},
 			)
 		}
-	} else if previous.State == PendingInputStatePending {
+	case PendingInputStatePending:
 		switch record.State {
 		case PendingInputStateDropped:
 			facts = append(facts, thread.Fact{Type: thread.FactInputCancelled, InputID: record.ID})

@@ -94,10 +94,13 @@ func LoadInfo(dir string) (Info, []llm.Message, error) {
 	if err != nil {
 		return Info{}, nil, err
 	}
-	defer journal.Close()
-	state, err := replay(id, commits)
-	if err != nil {
-		return Info{}, nil, err
+	state, replayErr := replay(id, commits)
+	closeErr := journal.Close()
+	if replayErr != nil {
+		return Info{}, nil, replayErr
+	}
+	if closeErr != nil {
+		return Info{}, nil, closeErr
 	}
 	target := &Thread{ID: id, Dir: dir, state: state}
 	target.refreshPublicLocked()

@@ -905,14 +905,6 @@ func (s *Server) getThread(ctx context.Context, id string) (*activeThread, error
 	return s.openThreadLocked(ctx, id)
 }
 
-func activeThreadMatches(as *activeThread, id string) bool {
-	if as == nil || as.app == nil || id == "" {
-		return false
-	}
-	identity, ok := as.app.ThreadIdentity()
-	return ok && identity.ID == id
-}
-
 func threadPathID(path string) (id, rest string) {
 	const prefix = "/api/threads/"
 	if !strings.HasPrefix(path, prefix) {

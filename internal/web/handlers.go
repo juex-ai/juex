@@ -183,15 +183,20 @@ func (s *Server) handleThreadShow(w http.ResponseWriter, r *http.Request, id str
 		writeThreadLookupError(w, id, err)
 		return
 	}
-	defer target.Close()
 	page, err := target.Timeline(cursor, limit)
 	if err != nil {
+		_ = target.Close()
 		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
 	goal, notes := threadStateStatus(target, nil)
+	info := target.Info()
+	if err := target.Close(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, threadShowResponse{
-		Info: target.Info(), Items: page.Items, HasMoreBefore: page.HasMoreBefore,
+		Info: info, Items: page.Items, HasMoreBefore: page.HasMoreBefore,
 		PreviousCursor: page.PreviousCursor, Goal: goal, Notes: notes,
 	})
 }
@@ -293,9 +298,12 @@ func (s *Server) handleRenameThread(w http.ResponseWriter, r *http.Request, id s
 			target, err = store.OpenArchived(id)
 		}
 		if err == nil {
-			defer target.Close()
 			err = target.ApplyAlias(strings.TrimSpace(request.Alias))
 			info = target.Info()
+			closeErr := target.Close()
+			if err == nil {
+				err = closeErr
+			}
 		}
 	}
 	if err != nil {
@@ -421,7 +429,7 @@ func (s *Server) handleThreadAttachmentUpload(w http.ResponseWriter, r *http.Req
 		writeErr(w, http.StatusBadRequest, "bad_request", "expected multipart file field named file")
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	filename := ""
 	if header != nil {
 		filename = header.Filename
@@ -488,8 +496,12 @@ func (s *Server) handleThreadContext(w http.ResponseWriter, _ *http.Request, id 
 		writeThreadLookupError(w, id, err)
 		return
 	}
-	defer target.Close()
-	writeJSON(w, http.StatusOK, runtime.ActiveContextFromHistory(target.History))
+	snapshot := runtime.ActiveContextFromHistory(target.History)
+	if err := target.Close(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id string) {
@@ -588,12 +600,15 @@ func (s *Server) statusSnapshotForThread(id string) (runtime.StatusSnapshot, err
 	if err != nil {
 		return runtime.StatusSnapshot{}, err
 	}
-	defer target.Close()
 	status, _ := runtime.NewStatusStoreFromReplay(runtime.StatusSeed{
 		ThreadID: target.ID, ThreadAlias: target.Alias,
 		MaxPendingInputs: runtime.DefaultMaxPendingInput,
 		TokenUsage:       target.TokenUsageSnapshot(), ContextUsage: target.ContextUsageSnapshot(),
 	}, func(visit func(events.Event)) error { target.ReplayEvents(visit); return nil })
 	status.RecoverAfterRestart()
-	return status.Snapshot(), nil
+	snapshot := status.Snapshot()
+	if err := target.Close(); err != nil {
+		return runtime.StatusSnapshot{}, err
+	}
+	return snapshot, nil
 }

@@ -195,12 +195,6 @@ func (s *Store) List() ([]IndexEntry, error) {
 	return append([]IndexEntry(nil), index.Threads...), nil
 }
 
-func (s *Store) updateProjection(projection Projection) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.updateProjectionLocked(projection)
-}
-
 func (s *Store) updateProjectionLocked(projection Projection) error {
 	index, err := s.loadOrRebuildIndexLocked()
 	if err != nil {

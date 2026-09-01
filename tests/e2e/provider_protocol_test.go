@@ -420,7 +420,7 @@ providers:
 		t.Fatal(err)
 	}
 	if projection.ThreadID != thread.MainID || projection.Alias != thread.MainAlias ||
-		projection.CreatedAt.Time.IsZero() || projection.LastActivityAt.Time.Before(projection.CreatedAt.Time) ||
+		projection.CreatedAt.IsZero() || projection.LastActivityAt.Before(projection.CreatedAt.Time) ||
 		projection.Counts.TurnCount != 2 || projection.Revision == 0 {
 		t.Fatalf("Main Thread projection = %+v", projection)
 	}

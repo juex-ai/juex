@@ -88,7 +88,7 @@ func (c *agentClient) doJSON(ctx context.Context, method, path string, body, res
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(response.Body, 16<<10))
-		return fmt.Errorf("Agent API %s %s returned HTTP %d: %s", method, path, response.StatusCode, strings.TrimSpace(string(data)))
+		return fmt.Errorf("agent API %s %s returned HTTP %d: %s", method, path, response.StatusCode, strings.TrimSpace(string(data)))
 	}
 	if result == nil {
 		return nil
@@ -131,7 +131,7 @@ func (c *agentClient) resolveThread(ctx context.Context, selector string, includ
 			continue
 		}
 		if match != nil {
-			return thread.IndexEntry{}, fmt.Errorf("Thread alias %q is ambiguous", selector)
+			return thread.IndexEntry{}, fmt.Errorf("thread alias %q is ambiguous", selector)
 		}
 		candidate := entries[i]
 		match = &candidate

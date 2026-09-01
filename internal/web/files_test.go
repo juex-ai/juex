@@ -829,7 +829,7 @@ func seedScratchpadThread(t *testing.T, workDir, id, _ string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer target.Close()
+	defer func() { _ = target.Close() }()
 	if id != thread.MainID {
 		t.Fatalf("scratchpad fixture id = %q, want Main", id)
 	}

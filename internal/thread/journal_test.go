@@ -46,7 +46,7 @@ func FuzzJournalRepairsArbitraryTornTail(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer reopened.Close()
+		defer func() { _ = reopened.Close() }()
 		if len(commits) != 1 || commits[0].Seq != 1 {
 			t.Fatalf("commits = %#v", commits)
 		}
@@ -85,7 +85,7 @@ func TestJournalRepairsOnlyTornFinalLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer func() { _ = reopened.Close() }()
 	if len(commits) != 1 || commits[0].Seq != 1 {
 		t.Fatalf("commits = %#v", commits)
 	}
@@ -131,7 +131,7 @@ func TestJournalRollsBackPartialWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.Close()
+	defer func() { _ = journal.Close() }()
 	if _, _, err := journal.Append(mainCreatedFact()); err != nil {
 		t.Fatal(err)
 	}
