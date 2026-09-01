@@ -272,9 +272,10 @@ type PendingInputQueuedPayload struct {
 }
 
 type PendingInputDrainingPayload struct {
-	Count            int `json:"count"`
-	PendingCount     int `json:"pending_count"`
-	MaxPendingInputs int `json:"max_pending_inputs"`
+	InputIDs         []string `json:"input_ids,omitempty"`
+	Count            int      `json:"count"`
+	PendingCount     int      `json:"pending_count"`
+	MaxPendingInputs int      `json:"max_pending_inputs"`
 }
 
 type PendingInputPromotedPayload struct {
@@ -284,9 +285,10 @@ type PendingInputPromotedPayload struct {
 }
 
 type PendingInputDrainedPayload struct {
-	Count            int `json:"count"`
-	PendingCount     int `json:"pending_count"`
-	MaxPendingInputs int `json:"max_pending_inputs"`
+	InputIDs         []string `json:"input_ids,omitempty"`
+	Count            int      `json:"count"`
+	PendingCount     int      `json:"pending_count"`
+	MaxPendingInputs int      `json:"max_pending_inputs"`
 }
 
 type PendingInputDroppedPayload struct {

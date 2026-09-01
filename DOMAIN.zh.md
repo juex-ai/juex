@@ -32,7 +32,7 @@ Agent Runtime 可以替换，Agent 与 Thread 的持久状态不会因此消失�
 Worker Thread 与 Main 使用同一种 Thread 模型：
 
 - id 是六位小写 Crockford Base32；
-- alias 在 Agent 内唯一，默认 `worker_#<id>`；
+- id 与 alias 共用 Agent 级唯一身份命名空间，默认 alias 是 `worker_#<id>`；
 - `parent_thread_id` 自动记录调用创建工具的 Thread；
 - Journal、上下文、Goal、Notes、Scratchpad、pending Input、Turn、状态与订阅相互独立；
 - 不接收 Agent 的 Observe 流量。
@@ -93,6 +93,7 @@ Archive/unarchive 针对整个 idle Worker：
 - unarchive 恢复同一个目录和状态；
 - 两者都不会创建 Generation；
 - 归档 Thread 只读，不能接收 Input。
+- 存在 active child 的 Worker 不能归档，必须先归档 child。
 
 Delete 只允许删除没有存活子引用的归档 Worker。实现通过 Agent 本地 trash
 进行校验和移动，避免暴露半删除状态。
@@ -100,7 +101,7 @@ Delete 只允许删除没有存活子引用的归档 Worker。实现通过 Agent
 ## 持久不变量
 
 1. 每个 Agent 恰好有一个 Main `0`。
-2. Thread id 与 alias 在 Agent 内唯一。
+2. Thread id 与 alias 共用 Agent 内唯一身份命名空间。
 3. 每个 Worker 有一个有效 parent。
 4. Thread Journal 是权威；projection 与 index 均可重建。
 5. 顺序由 Journal sequence 决定，而不是时间戳。

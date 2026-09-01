@@ -20,6 +20,15 @@ func (s *Store) Archive(target *Thread) error {
 	if projection.State == StateWorking || projection.Counts.PendingInputCount != 0 {
 		return fmt.Errorf("thread: archive %s: Thread is busy", target.ID)
 	}
+	index, err := s.loadOrRebuildIndexLocked()
+	if err != nil {
+		return err
+	}
+	for _, entry := range index.Threads {
+		if entry.ParentThreadID == target.ID && entry.ArchivedAt == nil {
+			return fmt.Errorf("thread: archive %s: active child %s still references it", target.ID, entry.ThreadID)
+		}
+	}
 	if _, err := target.appendFactsStoreLocked(Fact{Type: FactThreadArchived}); err != nil {
 		return err
 	}
@@ -103,6 +112,55 @@ func (s *Store) DeleteArchived(id string) error {
 	}
 	if err := os.RemoveAll(trash); err != nil {
 		return fmt.Errorf("thread: remove trash %s: %w", trash, err)
+	}
+	return homestore.SyncDir(filepath.Dir(trash))
+}
+
+// RollbackWorkerCreation removes an unpublished Worker whose creation failed.
+// The caller must own the creation transaction and close every handle first.
+func (s *Store) RollbackWorkerCreation(id string) error {
+	if !ValidWorkerID(id) {
+		return fmt.Errorf("%w: rollback id %q", ErrInvalidID, id)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	index, err := s.loadOrRebuildIndexLocked()
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, entry := range index.Threads {
+		if entry.ParentThreadID == id {
+			return fmt.Errorf("thread: rollback %s: child %s still references it", id, entry.ThreadID)
+		}
+		if entry.ThreadID == id {
+			if entry.ArchivedAt != nil {
+				return fmt.Errorf("thread: rollback %s: Thread is archived", id)
+			}
+			found = true
+		}
+	}
+	if !found {
+		return os.ErrNotExist
+	}
+	source := filepath.Join(s.ThreadsDir(), id)
+	trash := filepath.Join(s.TrashDir(), id+"."+newRecordID("rollback_"))
+	if err := durableRename(source, trash); err != nil {
+		return err
+	}
+	filtered := index.Threads[:0]
+	for _, entry := range index.Threads {
+		if entry.ThreadID != id {
+			filtered = append(filtered, entry)
+		}
+	}
+	index.Threads = filtered
+	if err := s.writeIndexLocked(index); err != nil {
+		rollbackErr := durableRename(trash, source)
+		return errors.Join(err, rollbackErr)
+	}
+	if err := os.RemoveAll(trash); err != nil {
+		return fmt.Errorf("thread: remove rollback trash %s: %w", trash, err)
 	}
 	return homestore.SyncDir(filepath.Dir(trash))
 }

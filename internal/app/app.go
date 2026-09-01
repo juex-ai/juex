@@ -204,7 +204,7 @@ type MCPServerStatus struct {
 
 // New wires every subsystem and returns a ready-to-use App.
 // The caller must Close() to flush jsonl and stop MCP subprocesses.
-func New(opts Options) (*App, error) {
+func New(opts Options) (createdApp *App, resultErr error) {
 	startupCtx := opts.startupContext
 	if startupCtx == nil {
 		startupCtx = context.Background()
@@ -387,6 +387,17 @@ func New(opts Options) (*App, error) {
 		}
 		_ = sess.Close()
 	}
+	creationCommitted := !attachment.Created
+	defer func() {
+		if creationCommitted {
+			return
+		}
+		closeThreadResources()
+		if err := attachment.Store.RollbackWorkerCreation(sess.ID); err != nil && !errors.Is(err, os.ErrNotExist) {
+			resultErr = errors.Join(resultErr, fmt.Errorf("app: rollback Worker Thread creation: %w", err))
+		}
+		createdApp = nil
+	}()
 	eventCatalog := eventcatalog.Default()
 	eventSink = events.NewDurableSink(sess)
 	eventSink.SetCatalog(eventCatalog)
@@ -683,6 +694,7 @@ func New(opts Options) (*App, error) {
 		activateObservables = func() { _ = observableRuntimeModule.StartAll(startupCtx) }
 	}
 	a.activateExternalInputAfterPendingRecovery(notificationGate, replayablePendingInput, activateObservables)
+	creationCommitted = true
 	return a, nil
 }
 

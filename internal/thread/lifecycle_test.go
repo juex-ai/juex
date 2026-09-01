@@ -97,6 +97,62 @@ func TestDeleteArchivedRejectsParentAndRemovesEligibleWorker(t *testing.T) {
 	}
 }
 
+func TestArchiveParentRequiresChildrenToBeArchivedFirst(t *testing.T) {
+	store := NewStore(t.TempDir())
+	store.random = &sequenceReader{next: 0}
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = main.Close() }()
+	parent, err := store.CreateWorker(MainID, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.CreateWorker(parent.ID, "child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Archive(parent); err == nil || !strings.Contains(err.Error(), child.ID) {
+		t.Fatalf("archive parent error = %v, want active child %s", err, child.ID)
+	}
+	if err := store.Archive(child); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Archive(parent); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRollbackWorkerCreationRemovesIdentityForRetry(t *testing.T) {
+	store := NewStore(t.TempDir())
+	store.random = &sequenceReader{next: 0}
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = main.Close() }()
+	worker, err := store.CreateWorker(MainID, "retry-me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerID := worker.ID
+	if err := worker.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RollbackWorkerCreation(workerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.OpenActive(workerID); !os.IsNotExist(err) {
+		t.Fatalf("rolled-back Worker still opens: %v", err)
+	}
+	retried, err := store.CreateWorker(MainID, "retry-me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = retried.Close() }()
+}
+
 func TestRecoverLayoutFinishesInterruptedTrashOperation(t *testing.T) {
 	store := NewStore(t.TempDir())
 	main, err := store.EnsureMain()

@@ -12,6 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
+	runtimemodule "github.com/juex-ai/juex/internal/runtime/module"
 	"github.com/juex-ai/juex/internal/thread"
 )
 
@@ -66,7 +67,7 @@ func newWorkerTestApp(t *testing.T, parentProvider llm.Provider, children ...llm
 			next++
 			return New(Options{
 				Config: options.Config, Provider: provider, DisableMCP: true,
-				parentThreadID: thread.MainID, Alias: options.Alias,
+				ThreadID: options.ThreadID, Alias: options.Alias,
 				disableObservables: true, startupContext: options.Context,
 			})
 		},
@@ -153,6 +154,34 @@ func TestWorkerCreatesNestedChildWithCallingThreadAsParent(t *testing.T) {
 	_ = grandchild.Close()
 }
 
+func TestManagedWorkerParentArchiveKeepsRuntimeWhenChildIsActive(t *testing.T) {
+	childProvider := &workerProvider{response: "done"}
+	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, childProvider)
+	parentStatus, err := main.workers.Create(context.Background(), "parent", "parent-worker", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitWorkerState(t, main, parentStatus.ThreadID, WorkerThreadStateIdle)
+	parentApp, ok := main.ManagedWorkerApp(parentStatus.ThreadID)
+	if !ok {
+		t.Fatal("parent Worker is not managed")
+	}
+	childStatus, err := parentApp.workers.Create(context.Background(), "child", "child-worker", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitWorkerState(t, parentApp, childStatus.ThreadID, WorkerThreadStateIdle)
+	if err := main.workers.Archive(context.Background(), parentStatus.ThreadID); err == nil || !strings.Contains(err.Error(), childStatus.ThreadID) {
+		t.Fatalf("archive parent error = %v, want active child %s", err, childStatus.ThreadID)
+	}
+	if managed, ok := main.ManagedWorkerApp(parentStatus.ThreadID); !ok || managed != parentApp {
+		t.Fatalf("parent runtime was lost after rejected archive: %p, %v", managed, ok)
+	}
+	if _, err := parentApp.workers.Status(childStatus.ThreadID); err != nil {
+		t.Fatalf("child manager remained in transition: %v", err)
+	}
+}
+
 func TestWorkerCreationPersistsParentAndIsolatesThreadState(t *testing.T) {
 	child := &workerProvider{response: "review complete"}
 	main := newWorkerTestApp(t, &workerProvider{response: "ack"}, child)
@@ -193,6 +222,114 @@ func TestWorkerCreationPersistsParentAndIsolatesThreadState(t *testing.T) {
 		if strings.Contains(message.FirstText(), "Worker Thread result") {
 			t.Fatal("unsubscribed Worker result reached Main")
 		}
+	}
+}
+
+func TestManagedWorkerLookupWaitsForCreationOwnership(t *testing.T) {
+	main := newWorkerTestApp(t, &workerProvider{response: "ack"})
+	created := make(chan *App, 1)
+	release := make(chan struct{})
+	main.workers.factory = func(options workerThreadChildOptions) (*App, error) {
+		child, err := New(Options{
+			Config: options.Config, Provider: &workerProvider{response: "done"}, DisableMCP: true,
+			ThreadID: options.ThreadID, Alias: options.Alias,
+			disableObservables: true, startupContext: options.Context,
+		})
+		if err != nil {
+			return nil, err
+		}
+		created <- child
+		<-release
+		return child, nil
+	}
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := main.workers.Create(context.Background(), "work", "owned-worker", "", false)
+		createDone <- err
+	}()
+	child := <-created
+	childIdentity, ok := child.ThreadIdentity()
+	if !ok {
+		t.Fatal("created child lost its Thread identity")
+	}
+	type lookupResult struct {
+		app *App
+		ok  bool
+	}
+	lookupDone := make(chan lookupResult, 1)
+	go func() {
+		worker, found := main.ManagedWorkerApp(childIdentity.ID)
+		lookupDone <- lookupResult{app: worker, ok: found}
+	}()
+	select {
+	case result := <-lookupDone:
+		t.Fatalf("lookup escaped creation reservation: %+v", result)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-createDone; err != nil {
+		t.Fatal(err)
+	}
+	result := <-lookupDone
+	if !result.ok || result.app != child {
+		t.Fatalf("managed lookup = %p, %v; want %p, true", result.app, result.ok, child)
+	}
+}
+
+func TestWorkerFactoryInitializationFailureRollsBackReservedIdentity(t *testing.T) {
+	wantErr := errors.New("worker initialization failed")
+	main := newWorkerTestApp(t, &workerProvider{response: "ack"})
+	main.workers.factory = main.workers.newChildApp
+	main.workers.childThreadModuleFactories = []runtimemodule.ThreadFactorySpec{{
+		ID:      "fail-worker-initialization",
+		Enabled: true,
+		New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+			return nil, wantErr
+		},
+	}}
+	if _, err := main.workers.Create(context.Background(), "work", "retry-worker", "", false); !errors.Is(err, wantErr) {
+		t.Fatalf("create error = %v, want %v", err, wantErr)
+	}
+	entries, err := main.ThreadStore.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].ThreadID != thread.MainID {
+		t.Fatalf("failed Worker remains published: %+v", entries)
+	}
+	main.workers.childThreadModuleFactories = nil
+	status, err := main.workers.Create(context.Background(), "work", "retry-worker", "", false)
+	if err != nil {
+		t.Fatalf("retry same alias: %v", err)
+	}
+	if status.Alias != "retry-worker" {
+		t.Fatalf("retry status = %+v", status)
+	}
+}
+
+func TestNewRollsBackWorkerCreatedBeforeThreadInitializationFailure(t *testing.T) {
+	wantErr := errors.New("thread initialization failed")
+	main := newWorkerTestApp(t, &workerProvider{response: "ack"})
+	_, err := New(Options{
+		Config: main.cfg, Provider: &workerProvider{response: "unused"}, DisableMCP: true,
+		parentThreadID: thread.MainID, Alias: "direct-failure",
+		threadModuleFactories: []runtimemodule.ThreadFactorySpec{{
+			ID:      "fail-direct-worker-initialization",
+			Enabled: true,
+			New: func(context.Context, runtimemodule.ThreadContext) (runtimemodule.Module, error) {
+				return nil, wantErr
+			},
+		}},
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("New error = %v, want %v", err, wantErr)
+	}
+	entries, listErr := main.ThreadStore.List()
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(entries) != 1 || entries[0].ThreadID != thread.MainID {
+		t.Fatalf("failed direct Worker remains published: %+v", entries)
 	}
 }
 

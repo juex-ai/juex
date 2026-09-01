@@ -16,8 +16,9 @@ type ThreadAttachmentRequest struct {
 }
 
 type ThreadAttachment struct {
-	Thread *thread.Thread
-	Store  *thread.Store
+	Thread  *thread.Thread
+	Store   *thread.Store
+	Created bool
 }
 
 // AttachWorkspaceThread applies the Agent-owned Thread identity rules. Main
@@ -33,10 +34,12 @@ func AttachWorkspaceThread(cfg config.Config, request ThreadAttachmentRequest) (
 	}
 
 	var target *thread.Thread
+	created := false
 	var err error
 	switch {
 	case request.ParentThreadID != "":
 		target, err = store.CreateWorker(request.ParentThreadID, request.Alias)
+		created = err == nil
 	case request.ThreadID == "" || request.ThreadID == thread.MainID:
 		target, err = store.EnsureMain()
 	default:
@@ -51,7 +54,7 @@ func AttachWorkspaceThread(cfg config.Config, request ThreadAttachmentRequest) (
 			return ThreadAttachment{}, err
 		}
 	}
-	return ThreadAttachment{Thread: target, Store: store}, nil
+	return ThreadAttachment{Thread: target, Store: store, Created: created}, nil
 }
 
 func EnsureMainThread(cfg config.Config) error {

@@ -105,6 +105,7 @@ type WorkerThreadStatus struct {
 type workerThreadChildOptions struct {
 	Context           context.Context
 	Config            config.Config
+	ThreadID          string
 	Alias             string
 	Model             string
 	UseParentProvider bool
@@ -127,6 +128,10 @@ type managedWorkerThread struct {
 	status WorkerThreadStatus
 }
 
+type workerThreadReservation struct {
+	ready chan struct{}
+}
+
 type workerThreadManager struct {
 	parent                     *App
 	factory                    workerThreadFactory
@@ -134,8 +139,10 @@ type workerThreadManager struct {
 
 	lifecycleMu     sync.RWMutex
 	transitionMu    sync.Mutex
+	creationMu      sync.RWMutex
 	mu              sync.Mutex
 	threads         map[string]*managedWorkerThread
+	reservations    map[string]*workerThreadReservation
 	closed          bool
 	transitioning   bool
 	deliveryCtx     context.Context
@@ -154,6 +161,7 @@ func newWorkerThreadManager(parent *App) *workerThreadManager {
 	m := &workerThreadManager{
 		parent:         parent,
 		threads:        map[string]*managedWorkerThread{},
+		reservations:   map[string]*workerThreadReservation{},
 		deliveryDone:   make(chan struct{}),
 		resultHandoffs: map[string]*managedWorkerThread{},
 	}
@@ -189,7 +197,7 @@ func (m *workerThreadManager) newChildApp(child workerThreadChildOptions) (*App,
 		WorkDir:               child.Config.WorkDir,
 		MCPManager:            parent.mcpManager,
 		DisableMCP:            true,
-		parentThreadID:        parent.Thread.ID,
+		ThreadID:              child.ThreadID,
 		Alias:                 child.Alias,
 		AgentRuntime:          &parent.agentRuntime,
 		disableObservables:    true,
@@ -228,6 +236,20 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 	} else {
 		model = config.ModelRef{ProviderID: cfg.ProviderID, ModelID: cfg.Model}.String()
 	}
+	identity, err := m.reserveWorkerThread(strings.TrimSpace(alias))
+	if err != nil {
+		return WorkerThreadStatus{}, fmt.Errorf("create Worker Thread identity: %w", err)
+	}
+	finishReservation := func() {
+		m.finishWorkerThreadReservation(identity.ID)
+	}
+	rollback := func(child *App) error {
+		var closeErr error
+		if child != nil {
+			closeErr = child.CloseAndWait()
+		}
+		return errors.Join(closeErr, m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
+	}
 	type factoryResult struct {
 		child *App
 		err   error
@@ -237,6 +259,7 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 		child, err := m.factory(workerThreadChildOptions{
 			Context:           createCtx,
 			Config:            cfg,
+			ThreadID:          identity.ID,
 			Alias:             strings.TrimSpace(alias),
 			Model:             model,
 			UseParentProvider: useParentProvider,
@@ -244,34 +267,43 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 		resultCh <- factoryResult{child: child, err: err}
 	}()
 	var child *App
-	var err error
+	var factoryErr error
 	select {
 	case result := <-resultCh:
-		child, err = result.child, result.err
+		child, factoryErr = result.child, result.err
 	case <-createCtx.Done():
-		m.deferCleanup(func() {
+		m.deferCleanupError(func() error {
 			result := <-resultCh
-			if result.child != nil {
-				_ = result.child.CloseAndWait()
-			}
+			defer finishReservation()
+			return rollback(result.child)
 		})
 		return WorkerThreadStatus{}, createCtx.Err()
 	}
-	if err != nil {
-		return WorkerThreadStatus{}, fmt.Errorf("create Worker Thread: %w", err)
+	if factoryErr != nil {
+		cleanupErr := rollback(child)
+		finishReservation()
+		return WorkerThreadStatus{}, errors.Join(fmt.Errorf("create Worker Thread: %w", factoryErr), cleanupErr)
+	}
+	if child == nil {
+		cleanupErr := rollback(nil)
+		finishReservation()
+		return WorkerThreadStatus{}, errors.Join(errors.New("create Worker Thread: factory returned no App"), cleanupErr)
 	}
 	if err := createCtx.Err(); err != nil {
-		_ = child.CloseAndWait()
-		return WorkerThreadStatus{}, err
+		cleanupErr := rollback(child)
+		finishReservation()
+		return WorkerThreadStatus{}, errors.Join(err, cleanupErr)
 	}
-	identity, ok := child.ThreadIdentity()
-	if !ok || identity.ParentThreadID != m.parent.Thread.ID {
-		_ = child.CloseAndWait()
-		return WorkerThreadStatus{}, errors.New("create Worker Thread: child runtime is not a Worker Thread")
+	childIdentity, ok := child.ThreadIdentity()
+	if !ok || childIdentity.ID != identity.ID || childIdentity.ParentThreadID != m.parent.Thread.ID {
+		cleanupErr := rollback(child)
+		finishReservation()
+		return WorkerThreadStatus{}, errors.Join(errors.New("create Worker Thread: child runtime does not own the reserved Worker Thread"), cleanupErr)
 	}
 	if err := createCtx.Err(); err != nil {
-		_ = child.CloseAndWait()
-		return WorkerThreadStatus{}, err
+		cleanupErr := rollback(child)
+		finishReservation()
+		return WorkerThreadStatus{}, errors.Join(err, cleanupErr)
 	}
 	now := thread.NewTimestamp(time.Now())
 	managedCtx, cancel := context.WithCancelCause(child.ctx)
@@ -282,8 +314,8 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 		deliveryWait: m.deliveryWait,
 		cancel:       cancel,
 		status: WorkerThreadStatus{
-			ThreadID:   identity.ID,
-			Alias:      identity.Alias,
+			ThreadID:   childIdentity.ID,
+			Alias:      childIdentity.Alias,
 			State:      WorkerThreadStateRunning,
 			Model:      model,
 			Subscribed: subscribe,
@@ -295,37 +327,78 @@ func (m *workerThreadManager) Create(ctx context.Context, query, alias, model st
 	if m.closed {
 		m.mu.Unlock()
 		cancel(ErrWorkerThreadStopped)
-		_ = child.CloseAndWait()
-		return WorkerThreadStatus{}, ErrWorkerThreadManagerClosed
+		cleanupErr := rollback(child)
+		finishReservation()
+		return WorkerThreadStatus{}, errors.Join(ErrWorkerThreadManagerClosed, cleanupErr)
 	}
-	m.threads[identity.ID] = managed
+	m.threads[childIdentity.ID] = managed
 	m.mu.Unlock()
 
 	if err := createCtx.Err(); err != nil {
 		m.removeIfCurrent(managed)
-		_ = stopManagedWorkerThread(managed)
-		return WorkerThreadStatus{}, err
+		cleanupErr := errors.Join(stopManagedWorkerThread(managed), m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
+		finishReservation()
+		return WorkerThreadStatus{}, errors.Join(err, cleanupErr)
 	}
 	result := child.admitUserTurn(createCtx, userTurnMessage(query, nil))
 	if result.Kind != TurnAdmissionStarted || result.Start == nil {
 		m.removeIfCurrent(managed)
-		_ = stopManagedWorkerThread(managed)
+		cleanupErr := errors.Join(stopManagedWorkerThread(managed), m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
+		finishReservation()
 		if result.Err != nil {
-			return WorkerThreadStatus{}, fmt.Errorf("start Worker Thread: %w", result.Err)
+			return WorkerThreadStatus{}, errors.Join(fmt.Errorf("start Worker Thread: %w", result.Err), cleanupErr)
 		}
-		return WorkerThreadStatus{}, fmt.Errorf("start Worker Thread: unexpected admission %q", result.Kind)
+		return WorkerThreadStatus{}, errors.Join(fmt.Errorf("start Worker Thread: unexpected admission %q", result.Kind), cleanupErr)
 	}
 	if err := createCtx.Err(); err != nil {
 		m.removeIfCurrent(managed)
-		_ = stopManagedWorkerThread(managed)
-		return WorkerThreadStatus{}, err
+		cleanupErr := errors.Join(stopManagedWorkerThread(managed), m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
+		finishReservation()
+		return WorkerThreadStatus{}, errors.Join(err, cleanupErr)
 	}
 	if err := m.startRun(createCtx, managed, result.Start); err != nil {
 		m.removeIfCurrent(managed)
-		_ = stopManagedWorkerThread(managed)
-		return WorkerThreadStatus{}, err
+		cleanupErr := errors.Join(stopManagedWorkerThread(managed), m.parent.ThreadStore.RollbackWorkerCreation(identity.ID))
+		finishReservation()
+		return WorkerThreadStatus{}, errors.Join(err, cleanupErr)
 	}
+	finishReservation()
 	return m.snapshot(managed), nil
+}
+
+func (m *workerThreadManager) reserveWorkerThread(alias string) (ThreadIdentitySnapshot, error) {
+	m.creationMu.Lock()
+	defer m.creationMu.Unlock()
+	target, err := m.parent.ThreadStore.CreateWorker(m.parent.Thread.ID, alias)
+	if err != nil {
+		return ThreadIdentitySnapshot{}, err
+	}
+	info := target.Info()
+	identity := ThreadIdentitySnapshot{
+		ID:             info.ID,
+		Dir:            info.Dir,
+		Alias:          info.Alias,
+		ParentThreadID: info.ParentThreadID,
+		ScratchpadDir:  target.ScratchpadDir(),
+	}
+	if err := target.Close(); err != nil {
+		rollbackErr := m.parent.ThreadStore.RollbackWorkerCreation(identity.ID)
+		return ThreadIdentitySnapshot{}, errors.Join(err, rollbackErr)
+	}
+	m.mu.Lock()
+	m.reservations[identity.ID] = &workerThreadReservation{ready: make(chan struct{})}
+	m.mu.Unlock()
+	return identity, nil
+}
+
+func (m *workerThreadManager) finishWorkerThreadReservation(id string) {
+	m.mu.Lock()
+	reservation := m.reservations[id]
+	delete(m.reservations, id)
+	if reservation != nil {
+		close(reservation.ready)
+	}
+	m.mu.Unlock()
 }
 
 func workerThreadCreateContext(callCtx, parentCtx context.Context) (context.Context, context.CancelFunc) {
@@ -424,20 +497,33 @@ func (a *App) managedWorker(id string, visited map[*App]struct{}) (*App, *worker
 	}
 	visited[a] = struct{}{}
 
-	a.workers.mu.Lock()
-	managed := a.workers.threads[id]
-	if managed != nil && managed.status.State != WorkerThreadStateStopping && managed.app != nil {
-		worker := managed.app
-		a.workers.mu.Unlock()
-		return worker, a.workers, true
-	}
-	children := make([]*App, 0, len(a.workers.threads))
-	for _, child := range a.workers.threads {
-		if child != nil && child.status.State != WorkerThreadStateStopping && child.app != nil {
-			children = append(children, child.app)
+	var children []*App
+	for {
+		a.workers.creationMu.RLock()
+		a.workers.mu.Lock()
+		reservation := a.workers.reservations[id]
+		if reservation == nil {
+			managed := a.workers.threads[id]
+			if managed != nil && managed.status.State != WorkerThreadStateStopping && managed.app != nil {
+				worker := managed.app
+				a.workers.mu.Unlock()
+				a.workers.creationMu.RUnlock()
+				return worker, a.workers, true
+			}
+			children = make([]*App, 0, len(a.workers.threads))
+			for _, child := range a.workers.threads {
+				if child != nil && child.status.State != WorkerThreadStateStopping && child.app != nil {
+					children = append(children, child.app)
+				}
+			}
 		}
+		a.workers.mu.Unlock()
+		a.workers.creationMu.RUnlock()
+		if reservation == nil {
+			break
+		}
+		<-reservation.ready
 	}
-	a.workers.mu.Unlock()
 
 	for _, child := range children {
 		if worker, owner, ok := child.managedWorker(id, visited); ok {
@@ -566,9 +652,32 @@ func (m *workerThreadManager) Archive(ctx context.Context, id string) error {
 	if blocked {
 		return fmt.Errorf("thread_archive requires an idle, unsubscribed Thread without pending input or result delivery")
 	}
+	transitioned := false
+	if managed.app.workers != nil {
+		if err := managed.app.workers.beginArchiveTransition(); err != nil {
+			return err
+		}
+		transitioned = true
+	}
+	rollbackTransition := true
+	defer func() {
+		if transitioned && rollbackTransition {
+			managed.app.workers.cancelArchiveTransition()
+		}
+	}()
+	entries, err := m.parent.ThreadStore.List()
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.ParentThreadID == id && entry.ArchivedAt == nil {
+			return fmt.Errorf("thread_archive requires child Thread %s to be archived first", entry.ThreadID)
+		}
+	}
 	if !m.removeCurrent(managed) {
 		return ErrWorkerThreadNotActive
 	}
+	rollbackTransition = false
 	if err := stopManagedWorkerThreadContext(ctx, managed, &m.deferred); err != nil {
 		return err
 	}
@@ -577,6 +686,37 @@ func (m *workerThreadManager) Archive(ctx context.Context, id string) error {
 		return err
 	}
 	return m.parent.ThreadStore.Archive(target)
+}
+
+func (m *workerThreadManager) beginArchiveTransition() error {
+	if m == nil {
+		return nil
+	}
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return ErrWorkerThreadManagerClosed
+	}
+	if m.transitioning {
+		return errors.New("worker thread manager is changing parent Thread")
+	}
+	m.transitioning = true
+	return nil
+}
+
+func (m *workerThreadManager) cancelArchiveTransition() {
+	if m == nil {
+		return
+	}
+	m.lifecycleMu.Lock()
+	m.mu.Lock()
+	if !m.closed {
+		m.transitioning = false
+	}
+	m.mu.Unlock()
+	m.lifecycleMu.Unlock()
 }
 
 func (m *workerThreadManager) beginClose() []*managedWorkerThread {

@@ -2119,7 +2119,8 @@ func (e *Engine) commitPendingInputSequenceLocked(ctx context.Context, turnID st
 		if err := flushQueued(i); err != nil {
 			return err
 		}
-		max := e.beginPendingInputDrain(turnID, 1)
+		recordIDs := pendingRecordIDs([]queuedPendingInput{item})
+		max := e.beginPendingInputDrain(turnID, 1, recordIDs)
 		if threadHasMessageID(e.currentThread(), item.Message.ID) {
 			if queue := e.currentPendingInputQueue(); queue != nil && item.RecordID != "" {
 				if err := queue.MarkProcessed([]string{item.RecordID}); err != nil {
@@ -2138,7 +2139,7 @@ func (e *Engine) commitPendingInputSequenceLocked(ctx context.Context, turnID st
 				return err
 			}
 		}
-		e.finishPendingInputDrain(turnID, 1, max)
+		e.finishPendingInputDrain(turnID, 1, max, recordIDs)
 	}
 	return flushQueued(len(pending))
 }
@@ -2149,8 +2150,8 @@ func (e *Engine) commitPendingInputBatchLocked(ctx context.Context, turnID strin
 	}
 	queue := e.currentPendingInputQueue()
 	sess := e.currentThread()
-	max := e.beginPendingInputDrain(turnID, len(pending))
 	recordIDs := pendingRecordIDs(pending)
+	max := e.beginPendingInputDrain(turnID, len(pending), recordIDs)
 	if queue != nil {
 		if err := queue.MarkAdmitted(recordIDs, turnID); err != nil {
 			return fmt.Errorf("mark pending input admitted: %w", err)
@@ -2187,17 +2188,18 @@ func (e *Engine) commitPendingInputBatchLocked(ctx context.Context, turnID strin
 			return fmt.Errorf("mark pending input processed: %w", err)
 		}
 	}
-	e.finishPendingInputDrain(turnID, len(pending), max)
+	e.finishPendingInputDrain(turnID, len(pending), max, recordIDs)
 	return nil
 }
 
-func (e *Engine) beginPendingInputDrain(turnID string, count int) int {
+func (e *Engine) beginPendingInputDrain(turnID string, count int, inputIDs []string) int {
 	e.pendingMu.Lock()
 	remaining := len(e.pendingInput)
 	max := e.effectiveMaxPendingInputs()
 	e.pendingEventAnnouncing = true
 	e.pendingMu.Unlock()
 	_ = e.emitPendingLifecycleEvent(events.Event{Type: PendingInputDrainingType, TurnID: turnID, Payload: PendingInputDrainingPayload{
+		InputIDs:         append([]string(nil), inputIDs...),
 		Count:            count,
 		PendingCount:     remaining,
 		MaxPendingInputs: max,
@@ -2206,11 +2208,12 @@ func (e *Engine) beginPendingInputDrain(turnID string, count int) int {
 	return max
 }
 
-func (e *Engine) finishPendingInputDrain(turnID string, count, max int) {
+func (e *Engine) finishPendingInputDrain(turnID string, count, max int, inputIDs []string) {
 	e.pendingMu.Lock()
 	remaining := len(e.pendingInput)
 	e.pendingMu.Unlock()
 	e.publishPendingEvent(events.Event{Type: "pending_input.drained", TurnID: turnID, Payload: PendingInputDrainedPayload{
+		InputIDs:         append([]string(nil), inputIDs...),
 		Count:            count,
 		PendingCount:     remaining,
 		MaxPendingInputs: max,

@@ -366,6 +366,15 @@ func TestWorkerAliasUniquenessMatchesCaseInsensitiveClientResolution(t *testing.
 	if _, err := store.CreateWorker(MainID, "MAIN"); err == nil {
 		t.Fatal("case-insensitive reserved Main alias was accepted")
 	}
+	if _, err := store.CreateWorker(MainID, MainID); err == nil {
+		t.Fatal("Main Thread ID was accepted as a Worker alias")
+	}
+	if _, err := store.CreateWorker(MainID, worker.ID); err == nil {
+		t.Fatal("Worker Thread ID was accepted as another Worker alias")
+	}
+	if err := worker.ApplyAlias(worker.ID); err == nil {
+		t.Fatal("Worker was renamed to its own Thread ID")
+	}
 }
 
 func TestCreateWorkerDoesNotReuseArchivedThreadID(t *testing.T) {
@@ -427,5 +436,31 @@ func TestCreateWorkerRetriesGeneratedAliasCollision(t *testing.T) {
 	defer func() { _ = created.Close() }()
 	if created.ID != "111111" || created.Alias != DefaultWorkerAlias("111111") {
 		t.Fatalf("created Worker = id %q alias %q", created.ID, created.Alias)
+	}
+}
+
+func TestCreateWorkerDoesNotGenerateIDReservedByAlias(t *testing.T) {
+	t.Parallel()
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = main.Close() }()
+	store.random = bytes.NewReader(bytes.Repeat([]byte{2}, 6))
+	existing, err := store.CreateWorker(MainID, "000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = existing.Close() }()
+
+	store.random = bytes.NewReader(append(bytes.Repeat([]byte{0}, 6), bytes.Repeat([]byte{1}, 6)...))
+	created, err := store.CreateWorker(MainID, "new-worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = created.Close() }()
+	if created.ID != "111111" {
+		t.Fatalf("created ID = %q, want retry result 111111", created.ID)
 	}
 }

@@ -120,7 +120,7 @@ func waitForInput(cmd *cobra.Command, client *agentClient, receipt sendReceipt, 
 	turnID := receipt.TurnID
 	settled := false
 	err := client.stream(cmd.Context(), receipt.ThreadID, receipt.Cursor, func(event streamEvent) (bool, error) {
-		if turnID == "" && event.Type == "pending_input.promoted" {
+		if turnID == "" && (event.Type == "pending_input.promoted" || event.Type == "pending_input.draining" || event.Type == "pending_input.drained") {
 			var payload struct {
 				InputIDs []string `json:"input_ids"`
 			}

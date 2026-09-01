@@ -35,7 +35,8 @@ An Agent has exactly one Main Thread:
 A Worker Thread uses the same Thread model:
 
 - Its id is six lowercase Crockford Base32 characters.
-- It has a non-empty, Agent-unique alias; the default is `worker_#<id>`.
+- It has a non-empty alias; ids and aliases share one Agent-wide identity
+  namespace, and the default alias is `worker_#<id>`.
 - It records the creating Thread as `parent_thread_id`.
 - It has an independent Journal, context, Goal, Notes, Scratchpad, pending
   Inputs, Turns, status, and subscriptions.
@@ -110,6 +111,7 @@ Archive and unarchive operate on a whole idle Worker Thread:
 - Unarchive restores the same directory and state.
 - Neither action creates a Generation.
 - Archived Threads are read-only and receive no Inputs.
+- A Worker with an active child cannot be archived; archive children first.
 
 Delete is permanent and allowed only for an archived Worker with no live child
 references. Implementation uses checked movement through Agent-local trash so
@@ -118,7 +120,7 @@ partial failures do not expose a half-deleted Thread.
 ## Durable Invariants
 
 1. Main `0` exists exactly once per Agent.
-2. Thread ids and aliases are unique within an Agent.
+2. Thread ids and aliases share one unique identity namespace within an Agent.
 3. Every Worker has one active parent reference.
 4. The Thread Journal is the authority; projections and indexes are rebuildable.
 5. Journal sequence, not timestamp, defines order.

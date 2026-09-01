@@ -44,6 +44,18 @@ func TestWaitForInputFollowsQueuedPromotion(t *testing.T) {
 	}
 }
 
+func TestWaitForInputFollowsInputDrainedIntoActiveTurn(t *testing.T) {
+	client, closeClient := newSendStreamTestClient(t, []string{
+		`{"id":"draining","type":"pending_input.draining","turn_id":"turn-1","payload":{"input_ids":["input-2"],"count":1}}`,
+		`{"id":"terminal","type":"turn.completed","turn_id":"turn-1"}`,
+	})
+	defer closeClient()
+	cmd, _ := sendWaitTestCommand()
+	if err := waitForInput(cmd, client, sendReceipt{ThreadID: "0", InputID: "input-2"}, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWaitForInputReturnsFailureForCancellationAndPrematureEOF(t *testing.T) {
 	tests := []struct {
 		name   string

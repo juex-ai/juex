@@ -166,6 +166,11 @@ Every active Thread exposes Worker Tools for create, send, status, list,
 subscribe, stop, and archive over its direct children. Each Thread manager owns
 its live child Apps and closes them recursively with the Agent Runtime. A Worker
 may outlive the subscriber because subscription is observation, not ownership.
+The manager reserves and indexes a Worker identity before child App
+initialization, keeps transport lookups behind that reservation until the
+initial Turn starts, and removes the unpublished Thread if initialization
+fails. A transport therefore cannot create a second App during the publication
+window.
 
 Generic subscription starts at a caller-provided cursor or at the current
 tail when omitted, then closes the replay/live gap under one stream contract.

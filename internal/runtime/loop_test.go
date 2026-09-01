@@ -6677,10 +6677,18 @@ func TestDrainPendingTurnInputClearsPublishedStatus(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	store := NewStatusStore(StatusSeed{ThreadID: "thread-1", MaxPendingInputs: eng.effectiveMaxPendingInputs()})
 	var lifecycle []string
+	var draining PendingInputDrainingPayload
+	var drained PendingInputDrainedPayload
 	bus.Subscribe("*", func(event events.Event) {
 		store.Publish(event)
 		switch event.Type {
-		case "pending_input.queued", PendingInputDrainingType, "pending_input.drained":
+		case "pending_input.queued":
+			lifecycle = append(lifecycle, event.Type)
+		case PendingInputDrainingType:
+			draining, _ = event.Payload.(PendingInputDrainingPayload)
+			lifecycle = append(lifecycle, event.Type)
+		case "pending_input.drained":
+			drained, _ = event.Payload.(PendingInputDrainedPayload)
 			lifecycle = append(lifecycle, event.Type)
 		}
 	})
@@ -6714,6 +6722,12 @@ func TestDrainPendingTurnInputClearsPublishedStatus(t *testing.T) {
 	}
 	if got, want := lifecycle, []string{"pending_input.queued", PendingInputDrainingType, "pending_input.drained"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("pending lifecycle = %v, want %v", got, want)
+	}
+	if got, want := draining.InputIDs, []string{record.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("draining Input IDs = %v, want %v", got, want)
+	}
+	if got, want := drained.InputIDs, []string{record.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("drained Input IDs = %v, want %v", got, want)
 	}
 }
 

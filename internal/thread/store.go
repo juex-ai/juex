@@ -86,7 +86,7 @@ func (s *Store) CreateWorker(parentID, alias string) (*Thread, error) {
 		if workerAlias == "" {
 			workerAlias = DefaultWorkerAlias(id)
 		}
-		if indexContainsThread(index, id) {
+		if indexContainsIdentity(index, id) || strings.EqualFold(workerAlias, id) {
 			continue
 		}
 		available, err := s.workerIDAvailableLocked(id)
@@ -107,9 +107,9 @@ func (s *Store) CreateWorker(parentID, alias string) (*Thread, error) {
 	return nil, fmt.Errorf("thread: worker identity collision limit reached")
 }
 
-func indexContainsThread(index Index, id string) bool {
+func indexContainsIdentity(index Index, identity string) bool {
 	for _, entry := range index.Threads {
-		if entry.ThreadID == id {
+		if strings.EqualFold(entry.ThreadID, identity) || strings.EqualFold(entry.Alias, identity) {
 			return true
 		}
 	}
@@ -136,6 +136,9 @@ func validateAliasAvailable(index Index, alias, exceptID string) error {
 		return fmt.Errorf("thread: alias is required")
 	}
 	for _, entry := range index.Threads {
+		if strings.EqualFold(entry.ThreadID, alias) {
+			return fmt.Errorf("thread: alias %q conflicts with Thread ID %s", alias, entry.ThreadID)
+		}
 		if entry.ThreadID != exceptID && strings.EqualFold(entry.Alias, alias) {
 			return fmt.Errorf("thread: alias %q is already used by %s", alias, entry.ThreadID)
 		}
