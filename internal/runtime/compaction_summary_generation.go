@@ -418,8 +418,50 @@ func compactionSummaryText(resp llm.Response) string {
 }
 
 func completeCompactionSummaryText(resp llm.Response) (string, bool) {
-	summary := compactionSummaryText(resp)
+	summary := normalizeCompactionSummaryHeadings(compactionSummaryText(resp))
 	return summary, summary != "" && resp.StopReason != llm.StopMaxTokens
+}
+
+var compactionSummaryHeadings = []string{
+	"Goal",
+	"Critical Context",
+	"Constraints & Preferences",
+	"Progress",
+	"Key Decisions",
+	"Next Steps",
+	"Relevant Files",
+	"Tool Failures",
+}
+
+func normalizeCompactionSummaryHeadings(summary string) string {
+	lines := strings.Split(summary, "\n")
+	for index, line := range lines {
+		if heading, ok := canonicalCompactionSummaryHeading(line); ok {
+			lines[index] = heading
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func canonicalCompactionSummaryHeading(line string) (string, bool) {
+	candidate := strings.TrimSpace(line)
+	if strings.HasPrefix(candidate, "#") {
+		candidate = strings.TrimSpace(strings.TrimLeft(candidate, "#"))
+	}
+	candidate = strings.TrimSpace(strings.TrimSuffix(candidate, ":"))
+	for _, marker := range []string{"**", "__"} {
+		if strings.HasPrefix(candidate, marker) && strings.HasSuffix(candidate, marker) && len(candidate) > 2*len(marker) {
+			candidate = strings.TrimSpace(candidate[len(marker) : len(candidate)-len(marker)])
+			break
+		}
+	}
+	candidate = strings.TrimSpace(strings.TrimSuffix(candidate, ":"))
+	for _, heading := range compactionSummaryHeadings {
+		if strings.EqualFold(candidate, heading) {
+			return heading, true
+		}
+	}
+	return "", false
 }
 
 func compactionSummaryRetryReason(resp llm.Response) string {

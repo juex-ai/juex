@@ -29,6 +29,34 @@ func TestCompactionModelSummaryStripsDeterministicReferenceSuffix(t *testing.T) 
 	}
 }
 
+func TestCompleteCompactionSummaryTextCanonicalizesMarkdownHeadings(t *testing.T) {
+	response := llm.Response{
+		Message: llm.TextMessage(llm.RoleAssistant, strings.Join([]string{
+			"**Goal**",
+			"description: keep exact state",
+			"## Critical Context:",
+			"GF1: value",
+			"### **Next Steps**:",
+			"- [ ] finish the work",
+			"**Goal** is mentioned in prose and must not change.",
+		}, "\n")),
+		StopReason: llm.StopEndTurn,
+	}
+
+	got, ok := completeCompactionSummaryText(response)
+	if !ok {
+		t.Fatal("complete summary was rejected")
+	}
+	for _, heading := range []string{"Goal\n", "Critical Context\n", "Next Steps\n"} {
+		if !strings.Contains(got, heading) {
+			t.Fatalf("normalized summary missing %q:\n%s", heading, got)
+		}
+	}
+	if !strings.Contains(got, "**Goal** is mentioned in prose and must not change.") {
+		t.Fatalf("normalization changed prose:\n%s", got)
+	}
+}
+
 func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult(t *testing.T) {
 	prev := testMsg("compact-1", llm.RoleUser, "Summary of earlier conversation:\nGoal\nold")
 	prev.Kind = llm.MessageKindCompact
