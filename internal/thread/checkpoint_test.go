@@ -68,6 +68,11 @@ func TestCheckpointColdOpenRestoresContextAndReplaysSuffix(t *testing.T) {
 			t.Fatalf("history[%d] = %q, want %q", index, gotHistory[index].FirstText(), wantHistory[index].FirstText())
 		}
 	}
+	var replayedEvents []events.Event
+	reopened.ReplayEvents(func(event events.Event) { replayedEvents = append(replayedEvents, event) })
+	if len(replayedEvents) != 1 || replayedEvents[0].Type != "turn.completed" || replayedEvents[0].TurnID != "turn-1" {
+		t.Fatalf("checkpoint status events = %+v, want terminal turn.completed", replayedEvents)
+	}
 }
 
 func TestCheckpointPayloadIsBoundedToActiveContextAndOpenInputs(t *testing.T) {
@@ -111,6 +116,9 @@ func TestCheckpointPayloadIsBoundedToActiveContextAndOpenInputs(t *testing.T) {
 	}
 	if len(checkpoint.Inputs) != 0 || len(checkpoint.InputRecords) != 0 {
 		t.Fatalf("checkpoint retained terminal Input state: inputs=%+v records=%+v", checkpoint.Inputs, checkpoint.InputRecords)
+	}
+	if len(checkpoint.StatusEvents) != 1 || checkpoint.StatusEvents[0].Type != "turn.completed" || checkpoint.StatusEvents[0].TurnID != "turn-1" {
+		t.Fatalf("checkpoint status events = %+v, want one terminal event", checkpoint.StatusEvents)
 	}
 }
 

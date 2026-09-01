@@ -103,6 +103,7 @@ type ReplayCheckpoint struct {
 	Version          int                        `json:"v"`
 	Projection       Projection                 `json:"projection"`
 	ProviderMessages []llm.Message              `json:"provider_messages,omitempty"`
+	StatusEvents     []events.Event             `json:"status_events,omitempty"`
 	LatestActivity   *Activity                  `json:"latest_activity,omitempty"`
 	Inputs           map[string]InputProjection `json:"inputs,omitempty"`
 	InputOrder       []string                   `json:"input_order,omitempty"`

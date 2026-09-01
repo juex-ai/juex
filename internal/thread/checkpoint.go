@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -17,6 +18,9 @@ func checkpointFromState(state ReplayState) ReplayCheckpoint {
 		Inputs:           map[string]InputProjection{},
 		InputRecords:     map[string]json.RawMessage{},
 		ContextUsage:     cloneContextUsage(state.ContextUsage),
+	}
+	if terminal := latestTerminalStatusEvent(state.Events); terminal != nil {
+		checkpoint.StatusEvents = []events.Event{*terminal}
 	}
 	if len(state.Activities) > 0 {
 		activity := state.Activities[len(state.Activities)-1]
@@ -63,6 +67,7 @@ func replayStateFromCheckpoint(threadID string, scanned scannedCommit, checkpoin
 		InputOrder:       append([]string(nil), checkpoint.InputOrder...),
 		InputRecords:     make(map[string]json.RawMessage, len(checkpoint.InputRecords)),
 		ContextUsage:     cloneContextUsage(checkpoint.ContextUsage),
+		Events:           append([]events.Event(nil), checkpoint.StatusEvents...),
 	}
 	if checkpoint.LatestActivity != nil {
 		state.Activities = []Activity{*checkpoint.LatestActivity}
@@ -79,6 +84,17 @@ func replayStateFromCheckpoint(threadID string, scanned scannedCommit, checkpoin
 		return ReplayState{}, fmt.Errorf("%w at checkpoint sequence %d: %v", ErrCorruptJournal, scanned.Seq, err)
 	}
 	return state, nil
+}
+
+func latestTerminalStatusEvent(recorded []events.Event) *events.Event {
+	for index := len(recorded) - 1; index >= 0; index-- {
+		event := recorded[index]
+		switch event.Type {
+		case "turn.completed", "turn.errored", "turn.cancelled":
+			return &event
+		}
+	}
+	return nil
 }
 
 func inputRecordReplayable(raw json.RawMessage) bool {
