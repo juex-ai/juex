@@ -86,11 +86,49 @@ func (s *Store) CreateWorker(parentID, alias string) (*Thread, error) {
 		if workerAlias == "" {
 			workerAlias = DefaultWorkerAlias(id)
 		}
-		if _, err := os.Stat(filepath.Join(s.ThreadsDir(), id)); errors.Is(err, os.ErrNotExist) {
-			return s.createLocked(id, workerAlias, parentID)
+		if indexContainsThread(index, id) {
+			continue
+		}
+		available, err := s.workerIDAvailableLocked(id)
+		if err != nil {
+			return nil, err
+		}
+		if !available {
+			continue
+		}
+		if err := validateAliasAvailable(index, workerAlias, ""); err != nil {
+			if explicitAlias != "" {
+				return nil, err
+			}
+			continue
+		}
+		return s.createLocked(id, workerAlias, parentID)
+	}
+	return nil, fmt.Errorf("thread: worker identity collision limit reached")
+}
+
+func indexContainsThread(index Index, id string) bool {
+	for _, entry := range index.Threads {
+		if entry.ThreadID == id {
+			return true
 		}
 	}
-	return nil, fmt.Errorf("thread: worker id collision limit reached")
+	return false
+}
+
+func (s *Store) workerIDAvailableLocked(id string) (bool, error) {
+	for _, root := range []string{s.ThreadsDir(), s.ArchiveDir()} {
+		_, err := os.Stat(filepath.Join(root, id))
+		switch {
+		case err == nil:
+			return false, nil
+		case errors.Is(err, os.ErrNotExist):
+			continue
+		default:
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func validateAliasAvailable(index Index, alias, exceptID string) error {

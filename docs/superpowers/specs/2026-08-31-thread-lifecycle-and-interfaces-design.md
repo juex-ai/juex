@@ -394,6 +394,11 @@ There is no Generation directory or Generation writer lock. Read-only list,
 history, and replay APIs use immutable snapshots and never hold a writer while
 writing HTTP, SSE, or CLI output.
 
+Committed event replay captures an open read handle and exact Journal EOF
+under the event commit barrier, then releases the barrier before scanning and
+projecting the complete prefix. A bounded checkpoint projection must never be
+used as the durable replay source.
+
 ## Archive, Unarchive, And Delete Lifecycle
 
 Archive validates a non-Main Worker with no active Turn, transition, pending

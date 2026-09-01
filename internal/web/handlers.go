@@ -525,16 +525,21 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 	if since, requested := sseResumeCursorWithPresence(r); requested {
 		replay, replayErr := captureCommittedEventReplay(active.app, id)
 		if replayErr == nil {
-			journal, _ := replay.readJournal()
-			replayed, projectionErr := projectBrowserEvents(replay.seed, journal, since, replay.authoritative)
-			if projectionErr != nil {
-				log.Printf("web: browser replay %s: %v", id, projectionErr)
-			}
-			replayBoundary := active.bcast.replayBoundary(subscription, replayed)
-			replayDeduper = newBrowserReplayDeduplicator(replayed, replayBoundary)
-			for _, event := range replayed {
-				if err := writeBrowserSSEFrame(w, event); err != nil {
-					return
+			journal, journalErr := replay.readJournal()
+			closeErr := replay.Close()
+			if journalErr != nil || closeErr != nil {
+				log.Printf("web: read browser replay %s: %v", id, errors.Join(journalErr, closeErr))
+			} else {
+				replayed, projectionErr := projectBrowserEvents(replay.seed, journal, since, replay.authoritative)
+				if projectionErr != nil {
+					log.Printf("web: browser replay %s: %v", id, projectionErr)
+				}
+				replayBoundary := active.bcast.replayBoundary(subscription, replayed)
+				replayDeduper = newBrowserReplayDeduplicator(replayed, replayBoundary)
+				for _, event := range replayed {
+					if err := writeBrowserSSEFrame(w, event); err != nil {
+						return
+					}
 				}
 			}
 		}

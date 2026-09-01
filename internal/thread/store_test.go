@@ -1,6 +1,7 @@
 package thread
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -273,5 +274,67 @@ func TestWorkerAliasUniquenessMatchesCaseInsensitiveClientResolution(t *testing.
 	}
 	if _, err := store.CreateWorker(MainID, "MAIN"); err == nil {
 		t.Fatal("case-insensitive reserved Main alias was accepted")
+	}
+}
+
+func TestCreateWorkerDoesNotReuseArchivedThreadID(t *testing.T) {
+	t.Parallel()
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = main.Close() }()
+	store.random = bytes.NewReader(bytes.Repeat([]byte{0}, 6))
+	archived, err := store.CreateWorker(MainID, "archived-worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.ID != "000000" {
+		t.Fatalf("archived ID = %q", archived.ID)
+	}
+	if err := store.Archive(archived); err != nil {
+		t.Fatal(err)
+	}
+
+	store.random = bytes.NewReader(append(bytes.Repeat([]byte{0}, 6), bytes.Repeat([]byte{1}, 6)...))
+	created, err := store.CreateWorker(MainID, "new-worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = created.Close() }()
+	if created.ID != "111111" {
+		t.Fatalf("created ID = %q, want retry result 111111", created.ID)
+	}
+	if archivedCopy, err := store.OpenArchived("000000"); err != nil {
+		t.Fatalf("open archived Worker after collision retry: %v", err)
+	} else if err := archivedCopy.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateWorkerRetriesGeneratedAliasCollision(t *testing.T) {
+	t.Parallel()
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = main.Close() }()
+	store.random = bytes.NewReader(bytes.Repeat([]byte{2}, 6))
+	existing, err := store.CreateWorker(MainID, DefaultWorkerAlias("000000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = existing.Close() }()
+
+	store.random = bytes.NewReader(append(bytes.Repeat([]byte{0}, 6), bytes.Repeat([]byte{1}, 6)...))
+	created, err := store.CreateWorker(MainID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = created.Close() }()
+	if created.ID != "111111" || created.Alias != DefaultWorkerAlias("111111") {
+		t.Fatalf("created Worker = id %q alias %q", created.ID, created.Alias)
 	}
 }

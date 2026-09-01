@@ -344,6 +344,11 @@ provider-visible context, nonterminal Inputs and their records, current
 projection, and latest Context activity. It never contains the full
 presentation transcript or terminal Input history.
 
+Checkpoints accelerate projection recovery only. Their bounded status-event
+seed is not a transport replay log and cannot answer an SSE cursor that
+predates the checkpoint. Cursor replay captures a stable Journal EOF and reads
+the complete authoritative prefix through that boundary.
+
 Provider provenance reuse is scoped to one Turn. A terminal Turn resets the
 snapshot-reuse boundary, so the next Turn's first request epoch is
 self-contained and a checkpoint never depends on an unbounded chain of older

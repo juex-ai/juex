@@ -12,7 +12,7 @@ import (
 )
 
 type committedEventReplay struct {
-	journal       []events.Event
+	journal       *thread.EventJournalSnapshot
 	seed          runtime.StatusSeed
 	authoritative *runtime.StatusSnapshot
 }
@@ -21,13 +21,17 @@ func captureCommittedEventReplay(runtimeApp *app.App, threadID string) (*committ
 	var replay *committedEventReplay
 	err := runtimeApp.ReadThreadID(threadID, func(target *thread.Thread) error {
 		return runtimeApp.ReadCommittedEvents(func() error {
+			journal, err := target.CaptureEventJournal()
+			if err != nil {
+				return err
+			}
 			var authoritative *runtime.StatusSnapshot
 			if runtimeApp.Status != nil {
 				snapshot := runtimeApp.Status.Snapshot()
 				authoritative = &snapshot
 			}
 			replay = &committedEventReplay{
-				journal: target.ReplaySnapshot().Events,
+				journal: journal,
 				seed: runtime.StatusSeed{
 					ThreadID: target.ID, ThreadAlias: target.Alias,
 					MaxPendingInputs: runtime.DefaultMaxPendingInput,
@@ -41,10 +45,20 @@ func captureCommittedEventReplay(runtimeApp *app.App, threadID string) (*committ
 }
 
 func (r *committedEventReplay) readJournal() ([]events.Event, error) {
-	return append([]events.Event(nil), r.journal...), nil
+	if r == nil || r.journal == nil {
+		return nil, nil
+	}
+	return r.journal.Events()
 }
 
-func (r *committedEventReplay) Close() error { return nil }
+func (r *committedEventReplay) Close() error {
+	if r == nil || r.journal == nil {
+		return nil
+	}
+	err := r.journal.Close()
+	r.journal = nil
+	return err
+}
 
 type browserReplayDeduplicator struct {
 	durableIDs     map[string]struct{}

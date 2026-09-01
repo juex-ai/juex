@@ -379,6 +379,10 @@ endpoint record。
 不存在 Generation directory 或 Generation writer lock。只读 list、history 与
 replay API 使用 immutable snapshot，在写 HTTP、SSE 或 CLI output 时不持有 writer。
 
+Committed event replay 在 event commit barrier 内捕获已打开的只读 handle 和精确
+Journal EOF，随后释放 barrier，再扫描并投影完整 prefix。Bounded checkpoint
+projection 绝不能作为 durable replay source。
+
 ## Archive、Unarchive 与 Delete Lifecycle
 
 Archive 校验 non-Main Worker 没有 active Turn、transition、Pending Input、active

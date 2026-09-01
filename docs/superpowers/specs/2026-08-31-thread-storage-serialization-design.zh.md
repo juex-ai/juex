@@ -327,6 +327,10 @@ Checkpoint 包含当前 provider-visible context、nonterminal Inputs 及其 rec
 projection 与最近 Context activity；不包含完整 presentation transcript 或 terminal
 Input history。
 
+Checkpoint 只用于加速 projection recovery。其中 bounded status-event seed 不是
+transport replay log，不能回答早于 checkpoint 的 SSE cursor。Cursor replay 必须
+捕获稳定的 Journal EOF，并读取直到该 boundary 为止的完整权威 prefix。
+
 Provider provenance reuse 只跨越一个 Turn。Terminal Turn 会重置 snapshot reuse
 boundary，因此下一个 Turn 的第一次 request epoch 是 self-contained 的，checkpoint
 不会依赖无限延伸的旧 request snapshot 链。
