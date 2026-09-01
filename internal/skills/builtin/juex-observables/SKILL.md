@@ -5,6 +5,8 @@ type: builtin-guide
 ---
 # JueX Observables
 
+> English | [中文](SKILL.zh.md)
+
 Load this guide when you need detailed Observable or Schedule workflows,
 constraints, or examples. Correct tool calls do not require a prior guide load.
 

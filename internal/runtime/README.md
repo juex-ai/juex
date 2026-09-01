@@ -1,5 +1,7 @@
 # Runtime Lifecycle
 
+> English | [中文](README.zh.md)
+
 This package owns Juex's Framework-level Turn loop. The stable product meaning
 is defined in [`DOMAIN.md`](../../DOMAIN.md); the repository boundary and data
 flow are defined in [`ARCHITECTURE.md`](../../ARCHITECTURE.md). This file is the

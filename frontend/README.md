@@ -1,5 +1,7 @@
 # Juex Frontend
 
+> English | [中文](README.zh.md)
+
 This directory contains the React + Vite fleet web UI served by
 `juex fleet serve`. The fleet server owns the fleet JSON API, proxies
 selected-agent JSON/SSE requests to verified resident agent endpoints, and

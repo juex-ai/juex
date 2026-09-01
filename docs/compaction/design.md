@@ -1,5 +1,7 @@
 # Context Compaction V2 Design
 
+> English | [中文](design.zh.md)
+
 Date: 2026-06-04
 
 ## Goal

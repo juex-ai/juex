@@ -7,6 +7,8 @@ metadata:
 
 # Juex Local Test
 
+> English | [中文](SKILL.zh.md)
+
 After completing any code change, run the affected tests first, then finish
 with the repository-level verification that matches this project. Do NOT ask
 the user before running these commands; they are non-destructive.

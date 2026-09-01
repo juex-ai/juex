@@ -1,5 +1,7 @@
 # Process Identity
 
+> English | [中文](README.zh.md)
+
 This package is the leaf operating-system adapter for reading process identity
 from a PID. `Fingerprint` returns an opaque process-incarnation identity for
 exact runtime ownership checks; on Linux it uses the boot ID plus raw process

@@ -1,5 +1,7 @@
 # Juex Domain Model
 
+> English | [中文](DOMAIN.zh.md)
+
 This document is the canonical source for Juex product language, lifecycles,
 and invariants. `ARCHITECTURE.md` maps these concepts to code modules,
 interfaces, storage, and tests; it must not redefine their meaning.

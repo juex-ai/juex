@@ -1,5 +1,7 @@
 # Runtime Environment
 
+> English | [中文](README.zh.md)
+
 This package owns deterministic dotenv parsing, portable configured-name
 validation, immutable runtime snapshots, value-free provenance metadata,
 ordered child overlays, executable lookup against the snapshot, and controlled

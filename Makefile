@@ -1,4 +1,4 @@
-.PHONY: test race verify-plan verify-focused verify-candidate verify-final lint build build-go snapshot release-dry integration integration-contracts integration-live provider-smoke development-eval clean help install-local cross web web-stub web-sync web-check web-dev ripgrep
+.PHONY: test race verify-plan verify-focused verify-candidate verify-final docs-check lint build build-go snapshot release-dry integration integration-contracts integration-live provider-smoke development-eval clean help install-local cross web web-stub web-sync web-check web-dev ripgrep
 
 VERIFY_CMD := uv run --quiet --project . python -m tests.eval.juex_eval verify
 PLAN_CMD := uv run --quiet --project . python -m tests.eval.juex_eval plan
@@ -67,6 +67,7 @@ help:
 	@echo "  integration   direct runtime with explicit live provider config support"
 	@echo "  provider-smoke live provider:model smoke selected from provider config"
 	@echo "  development-eval standard post-development validation record"
+	@echo "  docs-check    test and enforce bilingual Markdown pairing and links"
 	@echo "  web-check     install, type-check, test, lint, and build the frontend"
 	@echo "  clean         remove dist/"
 
@@ -87,6 +88,10 @@ verify-candidate:
 
 verify-final:
 	$(VERIFY_CMD) final $(VERIFY_RACE_FLAG) $(VERIFY_WEB_FLAG) $(VERIFY_COMPACTION_FLAG) $(VERIFY_BASE_FLAG) $(VERIFY_EXPLAIN_FLAG)
+
+docs-check:
+	uv run --quiet --project . python -m unittest scripts.test_check_bilingual_docs
+	uv run --quiet --project . python scripts/check_bilingual_docs.py
 
 ripgrep:
 	@scripts/ensure-ripgrep.sh

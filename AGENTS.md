@@ -118,7 +118,12 @@ redacted development record is required.
 - ADRs hold durable decisions and their alternatives, not implementation logs.
 - Keep docs concise and current; do not use docs as a changelog.
 - If current docs would mislead the next worker, update them in the same change.
-- All documentation is English.
+- Except for exact paths in `docs/bilingual-whitelist.txt`, every tracked
+  Markdown document has an English `.md` file and a Simplified Chinese
+  `.zh.md` peer in the same directory.
+- Put reciprocal relative language links near the top of both files, after YAML
+  frontmatter when present. Keep both language versions semantically aligned in
+  every documentation change and run `make docs-check` before delivery.
 - No emoji in code or docs unless explicitly asked.
 - User-facing product copy may keep explicitly requested icon/emoji prefixes
   when tests cover them; do not remove those as generic cleanup. This exception

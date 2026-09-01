@@ -1,5 +1,7 @@
 # Issue Tracker: Taskline
 
+> English | [中文](issue-tracker.zh.md)
+
 Issues, PRDs, implementation work, and review-stage artifacts for this repo live in Taskline. Use the `taskline` CLI for all operations.
 
 ## Project

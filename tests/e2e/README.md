@@ -1,5 +1,7 @@
 # Juex E2E Coverage
 
+> English | [中文](README.zh.md)
+
 This directory holds cross-package regressions. Unit tests remain the main
 place for edge cases; e2e tests prove that the binary, config loader, runtime,
 provider adapters, sessions, tools, MCP, and web API still compose correctly.

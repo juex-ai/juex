@@ -1,5 +1,7 @@
 # Fleet
 
+> English | [中文](README.zh.md)
+
 This package owns registry-wide resident-agent health and lifecycle policy.
 
 - `Status` preserves workspace binding and runtime health as separate axes,

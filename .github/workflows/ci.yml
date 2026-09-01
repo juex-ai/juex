@@ -19,6 +19,16 @@ on:
           - web-g2
 
 jobs:
+  documentation:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: latest
+      - run: make docs-check
+
   frontend:
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest

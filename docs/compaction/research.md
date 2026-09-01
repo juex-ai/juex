@@ -1,5 +1,7 @@
 # Context Compaction Research
 
+> English | [中文](research.zh.md)
+
 Date: 2026-06-04
 
 This note compares Juex's current compaction behavior with the strongest

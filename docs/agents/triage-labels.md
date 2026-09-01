@@ -1,5 +1,7 @@
 # Triage Labels
 
+> English | [中文](triage-labels.zh.md)
+
 The skills speak in terms of five canonical triage roles. This file maps those roles to the Taskline task labels used in this repo.
 
 | Label in mattpocock/skills | Taskline label | Meaning                                      |

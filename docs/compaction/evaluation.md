@@ -1,5 +1,7 @@
 # Context Compaction Evaluation
 
+> English | [中文](evaluation.zh.md)
+
 Date: 2026-07-13
 
 ## Purpose

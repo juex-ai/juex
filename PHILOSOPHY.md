@@ -1,5 +1,7 @@
 # Juex Philosophy
 
+> English | [中文](PHILOSOPHY.zh.md)
+
 Juex is an agent runtime for local, inspectable work. Its design bias is to
 make the agent loop understandable: inputs are plain files, tools are explicit
 contracts, events are observable, and state is stored where the user can read

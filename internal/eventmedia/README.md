@@ -1,5 +1,7 @@
 # Event Media
 
+> English | [中文](README.zh.md)
+
 `eventmedia` validates file references declared by external event envelopes.
 Observable JSONL records, schedule observations, and MCP notifications share
 this boundary.

@@ -1,5 +1,7 @@
 # Juex
 
+> English | [中文](README.zh.md)
+
 Juex is a small Go agent runtime distributed as a managed CLI package. It provides a CLI,
 a local web UI, Anthropic and OpenAI-compatible providers, builtin file/shell
 tools, workspace Observables, local and remote MCP tools, skills and hooks from
@@ -917,6 +919,5 @@ build-go` compiles only the binary from the already synchronized embed assets.
 | `frontend/README.md` | Frontend-specific development notes. |
 | `tests/e2e/README.md` | Cross-package e2e and live integration coverage. |
 | `tests/eval/README.md` | Local validation, live provider smoke, and evaluation harness guide. |
-| `docs/AGENT_CLI_AUDIT.md` | CLI audit against agent-oriented CLI principles. |
 | `docs/compaction/` | Context compaction research, V2 design, and live evaluation notes. |
 | `docs/superpowers/` | Historical specs and implementation plans. |

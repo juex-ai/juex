@@ -1,5 +1,7 @@
 # Evaluation Harness
 
+> English | [中文](README.zh.md)
+
 This directory contains local evaluation tooling that exercises real providers
 or longer multi-turn behavior. Keep deterministic cross-platform e2e tests in
 `tests/e2e`; put provider-config selection and quality-evaluation helpers here.
