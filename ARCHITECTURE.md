@@ -95,6 +95,11 @@ separate from both.
 All persisted instants use canonical UTC RFC 3339 with exactly millisecond
 precision. Journal sequence remains ordering authority.
 
+When a client uses an explicit `--config`, `agent.json` records its absolute
+`runtime_config_path`. Fleet passes that path to detached `juex listen` and
+reuses it on restart, so a resident Runtime cannot silently fall back to a
+different Workspace or Home configuration.
+
 ## Input And Turn Flow
 
 ```text

@@ -32,12 +32,13 @@ type Marker struct {
 }
 
 type Agent struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Workspace string    `json:"workspace"`
-	Enabled   bool      `json:"enabled"`
-	Autostart bool      `json:"autostart"`
-	CreatedAt time.Time `json:"created_at"`
+	ID                string    `json:"id"`
+	Name              string    `json:"name"`
+	Workspace         string    `json:"workspace"`
+	RuntimeConfigPath string    `json:"runtime_config_path,omitempty"`
+	Enabled           bool      `json:"enabled"`
+	Autostart         bool      `json:"autostart"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type Resolution struct {

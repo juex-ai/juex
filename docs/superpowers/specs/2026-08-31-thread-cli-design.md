@@ -147,11 +147,16 @@ Human wait mode reuses typed execution presentation:
 `send` never constructs an in-process Agent App:
 
 1. Resolve Workspace and Agent identity.
-2. Discover and validate the exact resident endpoint.
-3. If absent and policy allows it, request the existing Agent lifecycle service
+2. Persist an explicit `--config` as the Agent's absolute Runtime launch path.
+3. Discover and validate the exact resident endpoint.
+4. If absent and policy allows it, request the existing Agent lifecycle service
    to start detached `juex listen`.
-4. Wait for the exact identity and endpoint.
-5. Submit through the Runtime API.
+5. Wait for the exact identity and endpoint.
+6. Submit through the Runtime API.
+
+Fleet passes the recorded config path to every start and restart. It rejects a
+different explicit path while that Agent Runtime is active rather than silently
+serving the request with mismatched configuration.
 
 This starts the full Agent Runtime, not a worker-only runtime. Queued
 Observations are processed by normal Main ordering. Deployments that disable

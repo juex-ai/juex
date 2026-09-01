@@ -140,11 +140,15 @@ Human wait mode 复用 typed execution presentation：
 `send` 绝不构造 in-process Agent App：
 
 1. 解析 Workspace 与 Agent identity。
-2. 发现并校验 exact resident endpoint。
-3. 不存在且 policy 允许时，请求已有 Agent lifecycle service detached 启动
+2. 将显式 `--config` 作为 Agent 的绝对 Runtime launch path 持久化。
+3. 发现并校验 exact resident endpoint。
+4. 不存在且 policy 允许时，请求已有 Agent lifecycle service detached 启动
    `juex listen`。
-4. 等待 exact identity 与 endpoint。
-5. 通过 Runtime API 提交。
+5. 等待 exact identity 与 endpoint。
+6. 通过 Runtime API 提交。
+
+Fleet 每次 start/restart 都传递记录的配置路径。若 Agent Runtime 已活跃，则不同的
+显式路径会返回 conflict，不会静默使用不匹配配置处理请求。
 
 这里启动的是完整 Agent Runtime，不是 worker-only Runtime。Queued Observation
 按 Main 正常顺序处理。禁用 CLI-managed startup 的部署收到明确“Agent is not

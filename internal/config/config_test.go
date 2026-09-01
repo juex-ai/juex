@@ -48,6 +48,9 @@ func TestLoadWithOptionsResolvesRuntimeEnvironmentPrecedenceAndMetadata(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got := cfg.ExplicitRuntimeConfigPath(); got != explicitPath {
+		t.Fatalf("explicit runtime config path = %q, want %q", got, explicitPath)
+	}
 	snapshot := cfg.EnvironmentSnapshot()
 	for key, want := range map[string]string{
 		"USER_ONLY":      "user",

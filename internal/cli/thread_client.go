@@ -32,8 +32,14 @@ func connectAgent(ctx context.Context, cfg config.Config) (*agentClient, error) 
 	if err != nil {
 		return nil, err
 	}
-	if _, err := manager.Start(ctx, cfg.AgentID); err != nil {
-		return nil, fmt.Errorf("start Agent Runtime: %w", err)
+	var startErr error
+	if configPath := cfg.ExplicitRuntimeConfigPath(); configPath != "" {
+		_, startErr = manager.StartWithConfig(ctx, cfg.AgentID, configPath)
+	} else {
+		_, startErr = manager.Start(ctx, cfg.AgentID)
+	}
+	if startErr != nil {
+		return nil, fmt.Errorf("start Agent Runtime: %w", startErr)
 	}
 	running, err := endpoint.ReadRuntime(cfg.AgentAddress)
 	if err != nil {

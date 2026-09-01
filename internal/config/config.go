@@ -71,6 +71,7 @@ type Config struct {
 	shellConfig                  ShellConfig
 	providerConfigs              map[string]providerConfig
 	defaultHomeRuntimeConfigPath string
+	explicitRuntimeConfigPath    string
 
 	loadDotenv         bool
 	environmentLayers  []environment.Layer
@@ -400,6 +401,11 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 		if err := applyExplicitYAMLFile(&cfg, opts.ConfigPath); err != nil {
 			return cfg, err
 		}
+		absolute, err := filepath.Abs(opts.ConfigPath)
+		if err != nil {
+			return cfg, fmt.Errorf("config: resolve explicit path: %w", err)
+		}
+		cfg.explicitRuntimeConfigPath = filepath.Clean(absolute)
 	}
 	if err := finalizeConfigLoadWithAgentState(&cfg, opts.ModelRefs, true, opts.AgentState); err != nil {
 		return cfg, err
@@ -775,6 +781,12 @@ func (c Config) MediaDir() string {
 // RuntimeConfigPath returns the work-local runtime config file path.
 func (c Config) RuntimeConfigPath() string {
 	return c.RuntimePaths().RuntimeConfigPath
+}
+
+// ExplicitRuntimeConfigPath returns the absolute --config path that must be
+// reused when a client asks Fleet to start the resident Agent Runtime.
+func (c Config) ExplicitRuntimeConfigPath() string {
+	return c.explicitRuntimeConfigPath
 }
 
 // HomeRuntimeConfigPath returns the effective instance runtime config path.

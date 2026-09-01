@@ -78,6 +78,10 @@ Agent media 与两者分离。
 
 所有持久绝对时间统一为精确到毫秒的 UTC RFC 3339；顺序仍以 Journal sequence 为准。
 
+当 client 使用显式 `--config` 时，`agent.json` 记录其绝对
+`runtime_config_path`。Fleet detached 启动 `juex listen` 与后续 restart 都传递
+同一路径，resident Runtime 不会静默退回另一份 Workspace 或 Home 配置。
+
 ## Input 与 Turn
 
 ```text

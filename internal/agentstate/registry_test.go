@@ -321,18 +321,20 @@ func TestUpdateAgentAppliesOnlyDeclaredMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	name := "renamed"
+	configPath := filepath.Join(home, "runtime.yaml")
 	enabled := false
 	autostart := true
 
 	updated, err := UpdateAgent(home, resolved.Agent.ID, AgentUpdate{
-		Name:      &name,
-		Enabled:   &enabled,
-		Autostart: &autostart,
+		Name:              &name,
+		RuntimeConfigPath: &configPath,
+		Enabled:           &enabled,
+		Autostart:         &autostart,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Name != name || updated.Enabled || !updated.Autostart {
+	if updated.Name != name || updated.RuntimeConfigPath != configPath || updated.Enabled || !updated.Autostart {
 		t.Fatalf("updated agent = %+v", updated)
 	}
 	if updated.ID != resolved.Agent.ID ||
@@ -347,6 +349,25 @@ func TestUpdateAgentAppliesOnlyDeclaredMetadata(t *testing.T) {
 	}
 	if reloaded.Agent != updated {
 		t.Fatalf("persisted agent = %+v, want %+v", reloaded.Agent, updated)
+	}
+}
+
+func TestUpdateAgentRejectsRelativeRuntimeConfigPathWithoutMutation(t *testing.T) {
+	home, workspace := prepareResolveTest(t)
+	resolved, err := Resolve(Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative := "provider.yaml"
+	if _, err := UpdateAgent(home, resolved.Agent.ID, AgentUpdate{RuntimeConfigPath: &relative}); err == nil {
+		t.Fatal("UpdateAgent accepted a relative runtime config path")
+	}
+	reloaded, err := Resolve(Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Agent != resolved.Agent {
+		t.Fatalf("rejected update changed agent: before=%+v after=%+v", resolved.Agent, reloaded.Agent)
 	}
 }
 
