@@ -1,5 +1,7 @@
 # Juex Architecture
 
+> English | [中文](ARCHITECTURE.zh.md)
+
 > Implementation guide. Read alongside `DOMAIN.md` for canonical product
 > language and invariants, `PHILOSOPHY.md` for product and engineering
 > principles, and `DESIGN.md` for the web UI design guide. This document

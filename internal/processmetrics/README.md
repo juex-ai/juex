@@ -1,5 +1,7 @@
 # Process Metrics
 
+> English | [中文](README.zh.md)
+
 This package provides cross-platform, point-in-time process resource sampling.
 
 - RSS is reported in bytes.

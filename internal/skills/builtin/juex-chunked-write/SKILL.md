@@ -5,6 +5,8 @@ type: builtin-guide
 ---
 # JueX Chunked Writes
 
+> English | [中文](SKILL.zh.md)
+
 Load this guide when you need detailed long-file write workflows, constraints,
 or examples. Correct tool calls do not require a prior guide load. Use the
 ordinary `write` tool for generated content up to 2000 characters; use this

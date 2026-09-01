@@ -1,5 +1,7 @@
 # Juex Web UI — Design Guide
 
+> English | [中文](DESIGN.zh.md)
+
 > Purpose: define the visual language, layout, and component vocabulary for
 > the juex fleet web viewer (`juex fleet serve`). North-star is **直观清晰好用** —
 > direct, clear, usable. Anything that touches the web UI follows this guide;

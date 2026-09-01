@@ -1,5 +1,7 @@
 # Runtime Status
 
+> English | [中文](runtime-status.zh.md)
+
 This document defines the authoritative runtime status read model shared by
 the CLI, single-agent web API, browser UI, and Fleet.
 

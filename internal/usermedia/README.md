@@ -1,5 +1,7 @@
 # User Media
 
+> English | [中文](README.zh.md)
+
 `usermedia` owns policy for image input attached to a Juex session.
 
 It validates upload size and image type, stores content-addressed bytes through

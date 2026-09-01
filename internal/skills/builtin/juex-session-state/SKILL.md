@@ -5,6 +5,8 @@ type: builtin-guide
 ---
 # JueX Session State
 
+> English | [中文](SKILL.zh.md)
+
 Load this guide when you need detailed goal or working-note workflows,
 constraints, or examples. Correct tool calls do not require a prior guide load.
 

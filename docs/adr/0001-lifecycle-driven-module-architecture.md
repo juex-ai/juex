@@ -1,5 +1,7 @@
 # ADR-0001: Lifecycle-Driven Module Architecture
 
+> English | [中文](0001-lifecycle-driven-module-architecture.zh.md)
+
 - Status: Accepted
 - Date: 2026-08-21
 

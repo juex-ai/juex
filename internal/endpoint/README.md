@@ -1,5 +1,7 @@
 # Agent Endpoint
 
+> English | [中文](README.zh.md)
+
 This package owns how local processes address one running agent:
 
 - a process-lifetime exclusive binding;

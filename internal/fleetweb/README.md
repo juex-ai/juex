@@ -1,5 +1,7 @@
 # Fleet Web
 
+> English | [中文](README.zh.md)
+
 This package adapts `fleet.Manager` to the loopback browser surface used by
 `juex fleet serve`.
 

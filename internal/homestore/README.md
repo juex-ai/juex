@@ -1,5 +1,7 @@
 # Home Store
 
+> English | [中文](README.zh.md)
+
 This package owns the portable filesystem substrate used for durable JueX
 state:
 

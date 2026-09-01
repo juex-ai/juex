@@ -1,5 +1,7 @@
 # Fleet Service Registration
 
+> English | [中文](README.zh.md)
+
 This package registers the resident fleet supervisor with the current user's
 native service manager. It does not manage individual agents.
 

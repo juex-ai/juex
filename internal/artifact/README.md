@@ -1,5 +1,7 @@
 # Artifact Storage
 
+> English | [中文](README.zh.md)
+
 `artifact` owns safe, durable bytes under `<AgentStateDir>/artifacts`.
 
 Its Store accepts logical paths relative to the artifact directory and returns
