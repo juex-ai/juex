@@ -82,6 +82,11 @@ class CheckBilingualDocsTest(unittest.TestCase):
         invalid_sources = {
             "comment": "<!-- [English](comment.md) -->",
             "fence": "```markdown\n[English](fence.md)\n```",
+            "list_fence": (
+                "- ```markdown\n"
+                "  [English](list_fence.md)\n"
+                "  ```"
+            ),
             "image": "![English](image.md)",
         }
         for name, invalid_source in invalid_sources.items():

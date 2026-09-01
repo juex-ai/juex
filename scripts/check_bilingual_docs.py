@@ -101,7 +101,10 @@ def _navigation_markdown(document: Path) -> str:
     fence_length = 0
 
     for line in top.splitlines():
-        fence = re.match(r"^\s*(`{3,}|~{3,})", line)
+        fence = re.match(
+            r"^\s*(?:(?:[-+*]|\d+[.)])\s+)?(`{3,}|~{3,})",
+            line,
+        )
         if fence:
             marker = fence.group(1)
             if not fence_character:
