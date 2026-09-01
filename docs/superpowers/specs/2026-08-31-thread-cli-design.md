@@ -107,6 +107,11 @@ accepted #0 input=in_7x3ap9k2qn state=queued pending=2
 Generation and Turn are absent until an attempt starts. CLI must not infer
 them.
 
+The receipt cursor is the last durable event before this admission. The server
+captures it before launching asynchronous execution; an empty cursor means
+Journal start. This guarantees wait mode can replay even an immediately
+settled Turn.
+
 ### Wait mode
 
 `--wait` means:

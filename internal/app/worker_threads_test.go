@@ -131,15 +131,26 @@ func TestWorkerCreatesNestedChildWithCallingThreadAsParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitWorkerState(t, childApp, grandchildStatus.ThreadID, WorkerThreadStateIdle)
+	childApp.workers.mu.Lock()
+	grandchildApp := childApp.workers.threads[grandchildStatus.ThreadID].app
+	childApp.workers.mu.Unlock()
+	managedGrandchild, ok := main.ManagedWorkerApp(grandchildStatus.ThreadID)
+	if !ok || managedGrandchild != grandchildApp {
+		t.Fatalf("managed grandchild = %p, %v; want %p, true", managedGrandchild, ok, grandchildApp)
+	}
 
-	grandchild, err := main.ThreadStore.OpenActive(grandchildStatus.ThreadID)
+	if grandchildApp.Thread.ParentThreadID != childStatus.ThreadID {
+		t.Fatalf("grandchild parent = %q, want calling Worker %q", grandchildApp.Thread.ParentThreadID, childStatus.ThreadID)
+	}
+	managed, err := main.ArchiveManagedWorker(context.Background(), grandchildStatus.ThreadID)
+	if err != nil || !managed {
+		t.Fatalf("archive managed grandchild = %v, %v; want true, nil", managed, err)
+	}
+	grandchild, err := main.ThreadStore.OpenArchived(grandchildStatus.ThreadID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = grandchild.Close() }()
-	if grandchild.ParentThreadID != childStatus.ThreadID {
-		t.Fatalf("grandchild parent = %q, want calling Worker %q", grandchild.ParentThreadID, childStatus.ThreadID)
-	}
+	_ = grandchild.Close()
 }
 
 func TestWorkerCreationPersistsParentAndIsolatesThreadState(t *testing.T) {

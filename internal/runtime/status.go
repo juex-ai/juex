@@ -332,6 +332,20 @@ func (s *StatusStore) Publish(event events.Event) {
 	s.projectionMu.Unlock()
 }
 
+// ClearContextUsage projects a committed Context renewal that has no runtime
+// event of its own. It preserves the last durable cursor and cumulative token
+// usage while publishing the new current-Generation pressure to subscribers.
+func (s *StatusStore) ClearContextUsage() {
+	if s == nil {
+		return
+	}
+	s.projectionMu.Lock()
+	snapshot := s.stream.Snapshot()
+	snapshot.ContextUsage = nil
+	s.stream.Publish(snapshot, false)
+	s.projectionMu.Unlock()
+}
+
 func (s *StatusStore) Snapshot() StatusSnapshot {
 	if s == nil {
 		return StatusSnapshot{}

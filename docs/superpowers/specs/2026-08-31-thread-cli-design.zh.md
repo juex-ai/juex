@@ -101,6 +101,10 @@ accepted #0 input=in_7x3ap9k2qn state=queued pending=2
 
 Attempt started 前没有 Generation/Turn，CLI 不得推断。
 
+Receipt cursor 是本次 admission 之前的最后一个 durable event。Server 在启动
+asynchronous execution 前捕获它；空 cursor 表示 Journal start。这样即使 Turn
+立即 settled，wait mode 也能通过 replay 收到结果。
+
 ### Wait mode
 
 `--wait` 表示：

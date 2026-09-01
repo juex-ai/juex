@@ -362,20 +362,29 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 			return
 		}
 	}
+	admissionCursor := latestDurableEventCursor(active)
 	result := active.app.AdmitTurn(r.Context(), app.TurnAdmissionRequest{
 		Prompt: request.Prompt, Kind: request.Kind, Attachments: request.Attachments,
 	})
 	if result.Start != nil {
 		active.turns.start(result.Start.TurnID, result.Start.Message)
 	}
-	writeTurnAdmissionResult(w, active, id, result)
+	writeTurnAdmissionResult(w, id, result, admissionCursor)
 }
 
-func writeTurnAdmissionResult(w http.ResponseWriter, active *activeThread, threadID string, result app.TurnAdmissionResult) {
+func latestDurableEventCursor(active *activeThread) string {
+	if active == nil || active.app == nil || active.app.Thread == nil {
+		return ""
+	}
+	return active.app.Thread.LatestEventCursor()
+}
+
+func writeTurnAdmissionResult(w http.ResponseWriter, threadID string, result app.TurnAdmissionResult, admissionCursor string) {
 	receipt := startTurnResponse{
 		ThreadID: threadID,
 		InputID:  result.InputID,
 		TurnID:   result.TurnID,
+		Cursor:   admissionCursor,
 	}
 	if result.InputID != "" {
 		acceptedAt := thread.NewTimestamp(time.Now())
@@ -383,12 +392,6 @@ func writeTurnAdmissionResult(w http.ResponseWriter, active *activeThread, threa
 		receipt.State = "queued"
 		if result.Kind == app.TurnAdmissionStarted {
 			receipt.State = "assigned"
-		}
-		if active != nil && active.app != nil && active.app.Thread != nil {
-			events := active.app.Thread.ReplaySnapshot().Events
-			if len(events) > 0 {
-				receipt.Cursor = events[len(events)-1].ID
-			}
 		}
 	}
 	switch result.Kind {

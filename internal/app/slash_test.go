@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/thread"
@@ -38,6 +39,11 @@ func TestNewSlashCreatesGenerationWithoutProviderTurn(t *testing.T) {
 	if err := app.Thread.Append(llm.TextMessage(llm.RoleUser, "old")); err != nil {
 		t.Fatal(err)
 	}
+	contextUsage := &llm.ContextUsage{ContextWindow: 100, TotalTokens: 95}
+	app.Thread.RecordResponseUsage(llm.Usage{InputTokens: 10, OutputTokens: 2}, contextUsage)
+	app.Status.Publish(events.Event{ID: "usage-before-new", Type: "llm.responded", Payload: runtime.LLMRespondedPayload{
+		TokenUsage: llm.Usage{InputTokens: 10, OutputTokens: 2}, ContextUsage: contextUsage,
+	}})
 	result := app.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: SlashNew})
 	if result.Kind != TurnAdmissionCommandCompleted || result.Command == nil {
 		t.Fatalf("admission = %+v", result)
@@ -51,6 +57,17 @@ func TestNewSlashCreatesGenerationWithoutProviderTurn(t *testing.T) {
 	}
 	if len(replay.Activities) != 1 || replay.Activities[0].Type != thread.FactContextRenewed || replay.Activities[0].Summary != nil {
 		t.Fatalf("renew activity = %+v", replay.Activities)
+	}
+	if replay.Projection.ContextUsage != nil || app.Thread.ContextUsageSnapshot() != nil || app.Status.Snapshot().ContextUsage != nil {
+		t.Fatalf("new generation retained Context Usage: projection=%+v Thread=%+v status=%+v",
+			replay.Projection.ContextUsage, app.Thread.ContextUsageSnapshot(), app.Status.Snapshot().ContextUsage)
+	}
+	status := app.Status.Snapshot()
+	if status.Cursor != "usage-before-new" {
+		t.Fatalf("new generation changed durable status cursor: %q", status.Cursor)
+	}
+	if got := status.TokenUsage; got.InputTokens != 10 || got.OutputTokens != 2 {
+		t.Fatalf("new generation lost cumulative status Token Usage: %+v", got)
 	}
 }
 

@@ -62,6 +62,9 @@ Agent Runtime 没有可替换的“当前对话”。所有 Thread idle 时仍�
 - Thread projection publication 与 replay/live event handoff。
 
 Main 与 Worker 使用相同 constructor，只有 `ThreadID("0")` 选择 Main。
+Main-owned transport registry 会沿 ownership tree 递归解析 managed Worker App，
+因此 API 不会为嵌套 descendant 打开第二个 Runtime，lifecycle action 也会路由到
+实际 parent manager。
 
 ### Context Generation
 
@@ -265,7 +268,8 @@ Slash inputs 与 builtin Tools 请求相同的有序 transition：
 - `context_compact(instructions?)` 生成并校验 summary，然后追加带下一代 id 的
   `context.compacted`。
 - `context_new(reason?)` 追加 `context.renewed`，清除 Goal 与 Notes，并取消 active
-  result subscriptions。
+  result subscriptions。它同时清除当前 Generation 的 Context Usage calibration，
+  但保留 cumulative Token Usage。
 - 两者都保留 Scratchpad 文件。
 - 由 Tool Call 请求时，必须先 commit Tool Result，再在下一个 protocol-safe
   boundary 执行 transition。

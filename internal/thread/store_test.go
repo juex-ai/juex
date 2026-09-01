@@ -164,6 +164,63 @@ func TestListUsesIndexWithoutOpeningJournal(t *testing.T) {
 	}
 }
 
+func TestListRebuildsMissingOrInvalidProjectionFromJournal(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		breakProjection func(string) error
+	}{
+		{name: "missing", breakProjection: os.Remove},
+		{name: "invalid", breakProjection: func(path string) error { return os.WriteFile(path, []byte("not-json\n"), 0o600) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewStore(t.TempDir())
+			store.now = fixedNow()
+			store.random = zeroReader{}
+			main, err := store.EnsureMain()
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker, err := store.CreateWorker(MainID, "recover-me")
+			if err != nil {
+				t.Fatal(err)
+			}
+			workerID := worker.ID
+			workerDir := worker.Dir
+			if err := worker.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := main.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := test.breakProjection(filepath.Join(workerDir, projectionFile)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(store.IndexPath()); err != nil {
+				t.Fatal(err)
+			}
+
+			entries, err := NewStore(store.AgentStateDir()).List()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 2 || entries[1].ThreadID != workerID || entries[1].Alias != "recover-me" {
+				t.Fatalf("rebuilt entries = %#v", entries)
+			}
+			data, err := os.ReadFile(filepath.Join(workerDir, projectionFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var projection Projection
+			if err := json.Unmarshal(data, &projection); err != nil || projection.ThreadID != workerID {
+				t.Fatalf("regenerated projection = %#v, %v", projection, err)
+			}
+			if _, err := store.CreateWorker(MainID, "recover-me"); err == nil {
+				t.Fatal("duplicate alias unexpectedly succeeded after index rebuild")
+			}
+		})
+	}
+}
+
 type zeroReader struct{}
 
 func (zeroReader) Read(data []byte) (int, error) {
@@ -186,6 +243,40 @@ func TestUsageIncludesCachedInputTokens(t *testing.T) {
 	projection := main.Projection()
 	if projection.TokenUsage.CachedInputTokens != 7 || projection.ContextUsage.CurrentTokens != 40 || projection.ContextUsage.Percentage != 40 {
 		t.Fatalf("usage projection = %#v", projection)
+	}
+}
+
+func TestNewGenerationClearsContextUsageAndPreservesCumulativeTokens(t *testing.T) {
+	t.Parallel()
+	store := NewStore(t.TempDir())
+	main, err := store.EnsureMain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	main.RecordResponseUsage(
+		llm.Usage{InputTokens: 10, CachedInputTokens: 7, OutputTokens: 3},
+		&llm.ContextUsage{ContextWindow: 100, TotalTokens: 95},
+	)
+	if _, err := main.BeginNewGeneration(); err != nil {
+		t.Fatal(err)
+	}
+	projection := main.Projection()
+	if projection.ContextUsage != nil || main.ContextUsageSnapshot() != nil {
+		t.Fatalf("renewed Generation retained Context Usage: projection=%+v runtime=%+v", projection.ContextUsage, main.ContextUsageSnapshot())
+	}
+	if projection.TokenUsage.InputTokens != 10 || projection.TokenUsage.CachedInputTokens != 7 || projection.TokenUsage.OutputTokens != 3 {
+		t.Fatalf("renewed Generation lost cumulative Token Usage: %+v", projection.TokenUsage)
+	}
+	if err := main.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.OpenActive(MainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if reopened.Projection().ContextUsage != nil || reopened.ContextUsageSnapshot() != nil {
+		t.Fatalf("replay restored stale Context Usage: projection=%+v runtime=%+v", reopened.Projection().ContextUsage, reopened.ContextUsageSnapshot())
 	}
 }
 

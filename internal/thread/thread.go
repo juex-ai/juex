@@ -91,6 +91,18 @@ func (t *Thread) ReplaySnapshot() ReplayState {
 	return cloneReplayState(t.state)
 }
 
+func (t *Thread) LatestEventCursor() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.state.Events) == 0 {
+		return ""
+	}
+	return t.state.Events[len(t.state.Events)-1].ID
+}
+
 func (t *Thread) Timeline(cursor string, limit int) (TimelinePage, error) {
 	if t == nil {
 		return TimelinePage{}, fmt.Errorf("thread: nil Thread")

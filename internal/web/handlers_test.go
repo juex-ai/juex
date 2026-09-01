@@ -252,10 +252,19 @@ func TestThreadAPIRenameArchiveUnarchiveAndDelete(t *testing.T) {
 		t.Fatalf("archived list = %+v", list)
 	}
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads/"+created.ID+"/inputs", `{"prompt":"no"}`, http.StatusConflict, nil)
+	var archivedRenamed thread.Info
+	doJSON(t, http.MethodPatch, httpServer.URL+"/api/threads/"+created.ID, `{"alias":"archived-renamed"}`, http.StatusOK, &archivedRenamed)
+	if archivedRenamed.Alias != "archived-renamed" || archivedRenamed.ArchivedAt == nil {
+		t.Fatalf("renamed archived Thread = %+v", archivedRenamed)
+	}
+	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads", "", http.StatusOK, &list)
+	if len(list.Archived) != 1 || list.Archived[0].Alias != "archived-renamed" {
+		t.Fatalf("archived list after rename = %+v", list)
+	}
 
 	var restored thread.Info
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads/"+created.ID+"/unarchive", "", http.StatusOK, &restored)
-	if restored.ArchivedAt != nil || restored.GenerationID != created.GenerationID {
+	if restored.ArchivedAt != nil || restored.GenerationID != created.GenerationID || restored.Alias != "archived-renamed" {
 		t.Fatalf("unarchived Thread changed generation = %+v", restored)
 	}
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads/"+created.ID+"/archive", "", http.StatusOK, nil)
@@ -283,10 +292,15 @@ func TestThreadAPIInputReceiptAndDurableCompletion(t *testing.T) {
 	httpServer := httptest.NewServer(server.APIHandler())
 	defer httpServer.Close()
 
+	var before runtime.StatusSnapshot
+	doJSON(t, http.MethodGet, httpServer.URL+"/api/threads/0/status", "", http.StatusOK, &before)
 	var receipt startTurnResponse
 	doJSON(t, http.MethodPost, httpServer.URL+"/api/threads/0/inputs", `{"prompt":"hello"}`, http.StatusAccepted, &receipt)
-	if receipt.ThreadID != thread.MainID || receipt.InputID == "" || receipt.AcceptedAt == nil || receipt.Cursor == "" {
+	if receipt.ThreadID != thread.MainID || receipt.InputID == "" || receipt.AcceptedAt == nil {
 		t.Fatalf("input receipt = %+v", receipt)
+	}
+	if receipt.Cursor != before.Cursor {
+		t.Fatalf("receipt cursor = %q, want pre-admission cursor %q", receipt.Cursor, before.Cursor)
 	}
 
 	deadline := time.Now().Add(5 * time.Second)

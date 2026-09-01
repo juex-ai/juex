@@ -723,7 +723,13 @@ func (a *App) NewContext(ctx context.Context) error {
 	}
 	a.threadHandoffMu.Lock()
 	defer a.threadHandoffMu.Unlock()
-	return a.Engine.NewContext(ctx)
+	if err := a.Engine.NewContext(ctx); err != nil {
+		return err
+	}
+	if a.Status != nil {
+		a.Status.ClearContextUsage()
+	}
+	return nil
 }
 
 func (a *App) closeActiveThreadResources() error {

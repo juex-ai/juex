@@ -61,7 +61,7 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 		}
 		p.Counts.GenerationCount = 1
 	case FactThreadRenamed:
-		if p.ThreadID == "" || p.ArchivedAt != nil {
+		if p.ThreadID == "" {
 			return fmt.Errorf("%w: rename unavailable", ErrInvalidTransition)
 		}
 		p.Alias = fact.Alias
@@ -238,6 +238,8 @@ func applyFact(threadID string, state *ReplayState, commit scannedCommit, fact F
 		}
 		p.Counts.GenerationCount++
 		if fact.Type == FactContextRenewed {
+			state.ContextUsage = nil
+			p.ContextUsage = nil
 			p.Goal = nil
 			p.Notes = ""
 			p.NotesUpdatedAt = nil

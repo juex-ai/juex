@@ -183,10 +183,13 @@ Web, or Fleet list reads one file rather than every Journal:
 }
 ```
 
-It has no title, preview, last-message text, or generic summary. Missing or
-stale entries are repaired from active and archived `thread.json` files; repair
-never scans message bodies. Alias resolution and revision-checked mutation use
-one snapshot of this projection under the Agent lock.
+It has no title, preview, last-message text, or generic summary. A valid index
+serves normal list requests without opening any Thread Journal. If the index is
+missing or invalid, recovery replays every active and archived authoritative
+Journal, regenerates each `thread.json`, and atomically replaces the index.
+This exceptional rebuild must not trust a missing, corrupt, or stale Thread
+projection. Alias resolution and revision-checked mutation use one snapshot of
+the resulting projection under the Agent lock.
 
 ## Thread Journal Commit Format
 
@@ -455,8 +458,8 @@ Tests must cover:
   summary projection without Provider-visible activity markers.
 - Projection ahead/behind/corrupt cases, checkpoint reverse scan, and full
   replay equivalence.
-- Thread list without opening Journals and rebuild from active/archived
-  `thread.json` files.
+- Thread list without opening Journals on the normal path, plus index and
+  missing/corrupt `thread.json` rebuild from active/archived Journals.
 - EOF-first paging, opaque cursor continuation, viewport-order DTOs, and large
   Journal bounded-read benchmarks.
 - Scratchpad preservation, Spool expiry guards, and missing historical payload

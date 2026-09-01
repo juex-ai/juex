@@ -115,6 +115,11 @@ CLI/Web/Observation
   -> replay/live subscribers
 ```
 
+The receipt cursor is the last durable event captured before admission starts,
+not an event observed after asynchronous execution is launched. An empty cursor
+means Journal start. A waiter therefore replays admission and cannot miss a
+Turn that settles before it opens the stream.
+
 The Journal stores accepted Input records and their attempt transitions, so a
 restart can distinguish pending, retryable, completed, dead-lettered,
 cancelled, and expired Inputs without a second input journal. Acceptance order

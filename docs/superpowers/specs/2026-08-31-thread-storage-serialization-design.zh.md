@@ -175,9 +175,11 @@ list 只读一个文件，不打开每个 Journal：
 }
 ```
 
-它不包含 title、preview、last-message text 或通用 summary。缺失或 stale entry 从
-active/archived `thread.json` 修复；repair 永不扫描 Message body。Alias resolution
-与 revision-checked mutation 在 Agent lock 下使用同一 projection snapshot。
+它不包含 title、preview、last-message text 或通用 summary。正常 list 在 index
+有效时不打开任何 Thread Journal。index 缺失或非法时，recovery replay 所有 active
+与 archived 权威 Journal，重新生成每个 `thread.json`，再原子替换 index。这个异常
+重建路径不能信任缺失、损坏或 stale 的 Thread projection。Alias resolution 与
+revision-checked mutation 在 Agent lock 下使用同一最终 projection snapshot。
 
 ## Thread Journal Commit 格式
 
@@ -425,7 +427,8 @@ move 后失效的 absolute path。
 - New/Compact atomic boundary commit、state carry/clear rule，以及不把 activity
   marker 投影给 Provider 的 compact summary。
 - Projection ahead/behind/corrupt、checkpoint reverse scan 与 full replay equivalence。
-- Thread list 不打开 Journal，以及从 active/archived `thread.json` 重建。
+- 正常 Thread list 不打开 Journal，以及从 active/archived Journal 重建 index 与
+  缺失/损坏的 `thread.json`。
 - EOF-first paging、opaque cursor continuation、viewport-order DTO 与大 Journal
   bounded-read benchmark。
 - Scratchpad preservation、Spool expiry guard 与 missing historical payload UI。

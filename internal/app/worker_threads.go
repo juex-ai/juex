@@ -408,31 +408,56 @@ func (m *workerThreadManager) Status(id string) (WorkerThreadStatus, error) {
 	return status, nil
 }
 
-// ManagedWorkerApp returns the single runtime owner for an active Worker
-// Thread. Transports may borrow this App, but must not close it.
+// ManagedWorkerApp returns the single runtime owner for an active descendant
+// Worker Thread. Transports may borrow this App, but must not close it.
 func (a *App) ManagedWorkerApp(id string) (*App, bool) {
-	if a == nil || a.workers == nil {
-		return nil, false
-	}
-	a.workers.mu.Lock()
-	defer a.workers.mu.Unlock()
-	managed := a.workers.threads[strings.TrimSpace(id)]
-	if managed == nil || managed.status.State == WorkerThreadStateStopping {
-		return nil, false
-	}
-	return managed.app, managed.app != nil
+	worker, _, ok := a.managedWorker(strings.TrimSpace(id), make(map[*App]struct{}))
+	return worker, ok
 }
 
-// ArchiveManagedWorker archives id when this parent Thread owns its runtime.
+func (a *App) managedWorker(id string, visited map[*App]struct{}) (*App, *workerThreadManager, bool) {
+	if a == nil || a.workers == nil || id == "" {
+		return nil, nil, false
+	}
+	if _, seen := visited[a]; seen {
+		return nil, nil, false
+	}
+	visited[a] = struct{}{}
+
+	a.workers.mu.Lock()
+	managed := a.workers.threads[id]
+	if managed != nil && managed.status.State != WorkerThreadStateStopping && managed.app != nil {
+		worker := managed.app
+		a.workers.mu.Unlock()
+		return worker, a.workers, true
+	}
+	children := make([]*App, 0, len(a.workers.threads))
+	for _, child := range a.workers.threads {
+		if child != nil && child.status.State != WorkerThreadStateStopping && child.app != nil {
+			children = append(children, child.app)
+		}
+	}
+	a.workers.mu.Unlock()
+
+	for _, child := range children {
+		if worker, owner, ok := child.managedWorker(id, visited); ok {
+			return worker, owner, true
+		}
+	}
+	return nil, nil, false
+}
+
+// ArchiveManagedWorker archives id when this App owns its runtime tree.
 // The boolean distinguishes a non-managed Worker from an archive failure.
 func (a *App) ArchiveManagedWorker(ctx context.Context, id string) (bool, error) {
-	if a == nil || a.workers == nil {
+	if a == nil {
 		return false, nil
 	}
-	if _, ok := a.ManagedWorkerApp(id); !ok {
+	_, owner, ok := a.managedWorker(strings.TrimSpace(id), make(map[*App]struct{}))
+	if !ok {
 		return false, nil
 	}
-	return true, a.workers.Archive(ctx, id)
+	return true, owner.Archive(ctx, id)
 }
 
 func (m *workerThreadManager) Send(id, message string) (WorkerThreadStatus, bool, error) {

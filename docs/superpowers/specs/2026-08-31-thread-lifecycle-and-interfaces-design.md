@@ -63,6 +63,9 @@ An active Thread has at most one live handle. It owns:
 - Thread projection publication and replay/live event handoff.
 
 Main and Worker use the same constructor. `ThreadID("0")` alone selects Main.
+The Main-owned transport registry resolves managed Worker Apps recursively
+through this ownership tree, so an API never opens a second runtime for a
+nested descendant and lifecycle actions route to its actual parent manager.
 
 ### Context Generation
 
@@ -273,7 +276,8 @@ Slash inputs and builtin Tools request the same ordered transition:
 - `context_compact(instructions?)` generates and validates a summary, then
   appends `context.compacted` with the next Generation id.
 - `context_new(reason?)` appends `context.renewed`, clears Goal and Notes, and
-  cancels active result subscriptions.
+  cancels active result subscriptions. It also clears current-generation
+  Context Usage calibration while preserving cumulative Token Usage.
 - Both preserve Scratchpad files.
 - When requested by a Tool Call, its Tool Result is committed first and the
   transition executes at the next protocol-safe boundary.

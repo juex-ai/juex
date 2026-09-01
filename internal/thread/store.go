@@ -281,13 +281,9 @@ func (s *Store) rebuildIndexLocked() (Index, error) {
 			if !entry.IsDir() || !ValidID(entry.Name()) {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(root, entry.Name(), projectionFile))
+			projection, err := s.rebuildProjectionLocked(filepath.Join(root, entry.Name()), entry.Name())
 			if err != nil {
-				continue
-			}
-			var projection Projection
-			if err := json.Unmarshal(data, &projection); err != nil || projection.ThreadID != entry.Name() {
-				continue
+				return Index{}, fmt.Errorf("thread: rebuild projection %s: %w", entry.Name(), err)
 			}
 			index.Threads = append(index.Threads, indexEntryFromProjection(projection))
 		}
@@ -296,6 +292,25 @@ func (s *Store) rebuildIndexLocked() (Index, error) {
 		return Index{}, err
 	}
 	return index, nil
+}
+
+func (s *Store) rebuildProjectionLocked(dir, id string) (projection Projection, resultErr error) {
+	journal, state, err := openJournalForReplay(filepath.Join(dir, journalFile), id, s.now)
+	if err != nil {
+		return Projection{}, err
+	}
+	target := &Thread{ID: id, Dir: dir, journal: journal, state: state}
+	target.refreshPublicLocked()
+	if err := target.persistProjectionLocked(); err != nil {
+		resultErr = err
+	}
+	if err := journal.Close(); err != nil {
+		resultErr = errors.Join(resultErr, err)
+	}
+	if resultErr != nil {
+		return Projection{}, resultErr
+	}
+	return cloneProjection(state.Projection), nil
 }
 
 func (s *Store) writeIndexLocked(index Index) error {
